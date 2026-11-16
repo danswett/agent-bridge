@@ -189,25 +189,43 @@ public sealed class HookRunnerTests : IDisposable
     }
 
     [Fact]
-    public void Ask_user_is_let_through_before_its_event_is_read_and_is_not_held_by_an_open_stdin()
+    public async Task Ask_user_is_let_through_before_its_event_is_read_and_is_not_held_by_an_open_stdin()
     {
         Heartbeat(TimeSpan.Zero);
-        // Told while it is still reading (here for up to 30 s), stdin still open.
-        var pipe = new OpenPipe("{\"toolName\":\"ask_user\"}"u8.ToArray());
-        var (run, output) = Started(pipe, Env(inputWait: TimeSpan.FromSeconds(30), letThrough: TimeSpan.FromSeconds(30)), "copilot", "ask_user");
-        var told = DateTime.UtcNow;
-        while (output.ToArray().Length == 0 && DateTime.UtcNow - told < TimeSpan.FromSeconds(10)) { Thread.Sleep(10); }
-        Assert.False(run.IsCompleted);
-        Assert.Equal("{\"permissionDecision\":\"allow\"}\n", Encoding.UTF8.GetString(output.ToArray()));
-        pipe.Close_();
-        Assert.True(run.Wait(TimeSpan.FromSeconds(10)));
+        // This half observes ordering, not a deadline: only the test closes stdin. Its
+        // ten-second watchdogs remain bounded even if the runner pauses for over 30 s.
+        using var pipe = new OpenPipe("{\"toolName\":\"ask_user\"}"u8.ToArray(), waitForClose: true);
+        using var output = new FlushedOutput();
+        var run = Started(pipe, output, Env(inputWait: Timeout.InfiniteTimeSpan, letThrough: Timeout.InfiniteTimeSpan), "copilot", "ask_user");
+        try
+        {
+            var reply = await output.Reply.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(run.IsCompleted);
+            Assert.Equal("{\"permissionDecision\":\"allow\"}\n", reply);
+        }
+        finally
+        {
+            pipe.Close_();
+            Assert.True(run.Wait(TimeSpan.FromSeconds(10)));
+        }
+        Assert.Equal(0, run.Result);
+        Assert.Single(SpoolFiles());
 
         // And done long before the 30 s any other hook would wait.
-        var open = new OpenPipe("{\"toolName\":\"ask_user\"}"u8.ToArray());
-        var (bounded, _) = Started(open, Env(inputWait: TimeSpan.FromSeconds(30)), "copilot", "ask_user");
-        Assert.True(bounded.Wait(TimeSpan.FromSeconds(10)), "the hook waited on stdin");
-        open.Close_();
-        Assert.Equal(0, bounded.Result);
+        using var open = new OpenPipe("{\"toolName\":\"ask_user\"}"u8.ToArray());
+        using var boundedOutput = new FlushedOutput();
+        var bounded = Started(open, boundedOutput, Env(inputWait: TimeSpan.FromSeconds(30)), "copilot", "ask_user");
+        try
+        {
+            Assert.True(bounded.Wait(TimeSpan.FromSeconds(10)), "the hook waited on stdin");
+            Assert.Equal(0, bounded.Result);
+            Assert.Equal("{\"permissionDecision\":\"allow\"}\n", await boundedOutput.Reply.WaitAsync(TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            open.Close_();
+            Assert.True(bounded.Wait(TimeSpan.FromSeconds(10)), "the hook did not finish during cleanup");
+        }
     }
 
     [Fact]
@@ -460,7 +478,7 @@ public sealed class HookRunnerTests : IDisposable
     }
     // Stdin as an agent's pipe that has sent what it will and never closes: a read past the
     // data waits until the test ends it.
-    sealed class OpenPipe(byte[] data) : Stream, IDisposable
+    sealed class OpenPipe(byte[] data, bool waitForClose = false) : Stream, IDisposable
     {
         int _at;
         readonly ManualResetEventSlim _closed = new();
@@ -478,7 +496,8 @@ public sealed class HookRunnerTests : IDisposable
                 _at += n;
                 return n;
             }
-            _closed.Wait(TimeSpan.FromSeconds(30));
+            if (waitForClose) { _closed.Wait(); }
+            else { _closed.Wait(TimeSpan.FromSeconds(30)); }
             return 0;
         }
         public void Close_() => _closed.Set();
@@ -488,10 +507,25 @@ public sealed class HookRunnerTests : IDisposable
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
+    sealed class FlushedOutput : MemoryStream
+    {
+        readonly TaskCompletionSource<string> _reply = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<string> Reply => _reply.Task;
+        public override void Flush()
+        {
+            base.Flush();
+            _reply.TrySetResult(Encoding.UTF8.GetString(ToArray()));
+        }
+    }
+
+    // A real hook starts on its own main thread, not behind work queued to the test's pool.
+    static Task<int> Started(Stream stdin, Stream stdout, HookEnvironment env, params string[] args) =>
+        Task.Factory.StartNew(() => HookRunner.Run(args, stdin, stdout, env), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
     static (Task<int> Run, MemoryStream Output) Started(Stream stdin, HookEnvironment env, params string[] args)
     {
         var output = new MemoryStream();
-        return (Task.Run(() => HookRunner.Run(args, stdin, output, env)), output);
+        return (Started(stdin, output, env, args), output);
     }
 
     [Fact]

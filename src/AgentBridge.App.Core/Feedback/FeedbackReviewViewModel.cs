@@ -22,6 +22,7 @@ public sealed class FeedbackReviewViewModel : Observable
     byte[]? screenshot;
     bool includeTurns;
     bool rowsExpanded;
+    string previewText = "";
     IReadOnlyList<FeedbackReviewRow> rows = Array.Empty<FeedbackReviewRow>();
 
     // sessionId and sessionTitle name the session whose last turns the option would attach; with no
@@ -42,6 +43,7 @@ public sealed class FeedbackReviewViewModel : Observable
     public string TurnsLabel => $"Include the last turns of \"{SessionTitle ?? SessionId}\"";
 
     public IReadOnlyList<FeedbackReviewRow> Rows { get => rows; private set => Set(ref rows, value); }
+    public string PreviewText { get => previewText; private set => Set(ref previewText, value); }
 
     // The rows are collapsed until the person opens "What's included".
     public bool RowsExpanded { get => rowsExpanded; set => Set(ref rowsExpanded, value); }
@@ -85,6 +87,7 @@ public sealed class FeedbackReviewViewModel : Observable
         }
         try { cancel?.Cancel(); } catch (ObjectDisposedException) { }
         send.Close();
+        PreviewText = "";
     }
 
     void Regather()
@@ -107,6 +110,7 @@ public sealed class FeedbackReviewViewModel : Observable
         }
         try { previous?.Cancel(); } catch (ObjectDisposedException) { }
         send.BeginGathering();
+        PreviewText = "";
         _ = GatherAsync(request, mine, cancel);
     }
 
@@ -129,14 +133,17 @@ public sealed class FeedbackReviewViewModel : Observable
             switch (result)
             {
                 case FeedbackGatherResult.Ready ready:
+                    PreviewText = ready.Bundle.Text;
                     Rows = ready.Bundle.Items.Select(i => new FeedbackReviewRow(i.Label, i.Summary, i.Optional)).ToList();
                     send.Ready(ready.Bundle);
                     break;
                 case FeedbackGatherResult.Refused refused:
+                    PreviewText = "";
                     Rows = Array.Empty<FeedbackReviewRow>();
                     send.GatherRefused(refused.Reason);
                     break;
                 default:
+                    PreviewText = "";
                     Rows = Array.Empty<FeedbackReviewRow>();
                     send.GatherFailed();
                     break;

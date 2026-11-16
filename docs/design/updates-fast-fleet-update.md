@@ -414,6 +414,15 @@ because each ran past 400 lines.
 size when known, and readiness only after checksum verification. Older updater implementations
 leave these facts absent. Installing, departure, return and failure-step facts are part B.
 
+**Part B split (#2507).** Install/return/step reporting lands first; confirmed departure follows
+separately. Reuse the per-profile preferences' existing attempt (`UpdatedFrom`, target release,
+request and handed-over marker); keep only a bounded return fact after a matching target starts.
+Unreadable preferences mean no return fact, and the host corroborates its own version before
+forwarding it. Failure steps are `downloading`, `installing` before handover, `restarting` when
+the installer returns on the old version, and `host-start` when the post-update host fails.
+Departure is not reported by this first part: today's report reply does not confirm subscriber
+sends. Its follow-up must await the last state's actual send before stop, or leave it absent.
+
 ## 10. Later designs (pointers, not v1)
 
 **10.1 Fleet coordinator (owner-gated, fleet #22).** Product wants a run that outlives the phone, but

@@ -181,6 +181,7 @@ for (const width of [1440, 390]) {
       await expect.poll(() => groupRows(page, 'Personal')).toEqual([CLAUDE, COPILOT]);
       await page.getByRole('button', { name: /^Team, 0 sessions/ }).click();
       await chooseGroup(page, CLAUDE);
+      await page.evaluate(() => window.scrollTo(0, 0));
       await page.evaluate(() => {
         window.groupMotions = [];
         const animate = Element.prototype.animate;

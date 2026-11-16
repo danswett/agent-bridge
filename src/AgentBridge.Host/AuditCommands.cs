@@ -10,12 +10,17 @@ public static class AuditCommands
 {
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     static readonly TimeZoneInfo Pacific = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
-    sealed record Row([property: JsonRequired] DateTimeOffset At, [property: JsonRequired] string Principal,
+    internal sealed record Row([property: JsonRequired] DateTimeOffset At, [property: JsonRequired] string Principal,
         [property: JsonRequired] string Action, [property: JsonRequired] string Outcome, string? Direction = null,
         string? Request = null, string[]? Chain = null, string? Target = null, string? Reason = null,
-        string? DataSha256 = null, int? TextLength = null);
+        string? DataSha256 = null, int? TextLength = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GateAuditMetadata? Gate = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool PreviousTailIncomplete = false);
 
-    public static int Run(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error)
+    public static int Run(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error) =>
+        Read(args, profileRoot, output, error, null);
+
+    internal static int Read(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error, Action<Row>? receive, Action<string>? fault = null, bool alreadyLocked = false, Action<long, bool>? boundary = null)
     {
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 1; i < args.Count; i += 2)
@@ -41,6 +46,15 @@ public static class AuditCommands
             // Directory.Exists also returns false for access failures: only genuinely missing data is empty.
             try { if ((File.GetAttributes(folder) & FileAttributes.Directory) == 0) { throw new IOException(); } }
             catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return 0; }
+            var anchored = AgentAuditLog.HasHeads(folder);
+            using var auditLock = !alreadyLocked && (anchored || File.Exists(folder + ".lock")) ? AgentAuditLog.Lock(folder, read: true) : null;
+            anchored = AgentAuditLog.HasHeads(folder);
+            foreach (var launch in anchored ? new[] { false, true } : Array.Empty<bool>())
+            {
+                var status = AgentAuditLog.Continuity(Path.Combine(profileRoot, profile), launch, error.WriteLine);
+                if (status != "none") { fault?.Invoke(status); error.WriteLine($"audit: {status}; report incomplete."); }
+            }
+            if (anchored) { boundary?.Invoke(AgentAuditLog.RetainedThrough(folder), AgentAuditLog.Adopted(folder)); }
             var files = Directory.GetFiles(folder, "*.jsonl");
             foreach (var file in files.Where(IsDaily).Order(StringComparer.Ordinal))
             {
@@ -52,6 +66,7 @@ public static class AuditCommands
                 while (reader.ReadLine() is { } raw)
                 {
                     number++;
+                    if (reader.EndOfStream && !terminated) { error.WriteLine("audit: unterminated final record; report incomplete."); }
                     try
                     {
                         var bytes = Encoding.UTF8.GetBytes(raw);
@@ -65,10 +80,13 @@ public static class AuditCommands
                         if (jsonReader.Read() || jsonReader.BytesConsumed != bytes.Length) { throw new JsonException(); }
                         var row = Read(doc.RootElement);
                         if (row is null) { continue; }
+                        if (row.Gate is not null && !anchored) { fault?.Invoke("audit-incomplete"); error.WriteLine("audit: missing durable head; report incomplete."); }
+                        if (row.PreviousTailIncomplete) { error.WriteLine("audit: recovered incomplete final record; report incomplete."); }
                         if (since is { } start && row.At < start
                             || options.TryGetValue("--action", out var action) && row.Action != action
                             || options.TryGetValue("--outcome", out var outcome) && row.Outcome != outcome) { continue; }
-                        output.WriteLine(JsonSerializer.Serialize(row with { At = TimeZoneInfo.ConvertTime(row.At, Pacific) }, Json));
+                        if (receive is not null) { receive(row); }
+                        else { output.WriteLine(JsonSerializer.Serialize(row with { At = TimeZoneInfo.ConvertTime(row.At, Pacific) }, Json)); }
                     }
                     catch (JsonException)
                     {
@@ -79,7 +97,7 @@ public static class AuditCommands
             }
             return 0;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or DecoderFallbackException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or DecoderFallbackException or JsonException)
         {
             error.WriteLine("audit: could not read the audit files; report incomplete.");
             return 1;
@@ -105,6 +123,7 @@ public static class AuditCommands
             }
             var row = root.Deserialize<Row>(Json) ?? throw new JsonException();
             if (string.IsNullOrEmpty(row.Principal) || string.IsNullOrEmpty(row.Action) || string.IsNullOrEmpty(row.Outcome)) { throw new JsonException(); }
+            if (row.Gate is { } gate && !gate.Valid(row.Action, row.Target, row.Outcome)) { throw new JsonException(); }
             return row;
         }
         // JsonDocument defers decoding escaped Unicode until a property name or string is read.

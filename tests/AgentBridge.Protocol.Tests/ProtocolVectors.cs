@@ -303,7 +303,8 @@ public static class ProtocolVectors
             .Refused("a-delegate-ordered-twice", turn with { Subagents = turn.Subagents! with { Order = ["agent-3", "agent-3"] } }, "held-at-41")
             .Refused("a-delegate-without-an-id", turn with { Subagents = turn.Subagents! with { Set = [JsonSerializer.SerializeToElement(new { status = "ended" })] } }, "held-at-41")
             // Read with its base left out, a patch would be applied to nothing as if it were the whole session.
-            .Refused("a-base-that-is-not-a-number", Broken(turn, j => j["base"] = "41"));
+            .Refused("a-base-that-is-not-a-number", Broken(turn, j => j["base"] = "41"))
+            .Refused("missing-id", Broken(turn, j => j.Remove("id")));
         f.Record<SubagentsPatch>(Host)
             .Valid("by-id", turn.Subagents!)
             .Valid("one-entry", new SubagentsPatch { Set = [JsonSerializer.SerializeToElement(new { id = "agent-3", status = "ended" })] });

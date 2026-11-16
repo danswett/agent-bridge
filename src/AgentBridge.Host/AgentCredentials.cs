@@ -99,6 +99,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     public int Count { get { lock (gate) { return records.Count; } } }
 
+    internal bool IsCredentialed(IProtocolChannel channel) => connections.TryGetValue(channel, out _);
+
     // The launch id an adopted session's credential carries: it was not launched by the host.
     public const string AdoptedLaunch = "adopted";
     public const int MaxPending = 64;
@@ -446,6 +448,19 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         lock (gate) { return Remove(r => r.Credential.Kind == "session" && r.Credential.Session == session, why); }
     }
 
+    public bool RevokeScript(string name)
+    {
+        if (!ValidScriptPart(name)) { throw new ArgumentException("invalid script name", nameof(name)); }
+        var principal = $"script:{machine}/{name}";
+        lock (gate)
+        {
+            if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
+            var removed = Remove(r => r.Credential.Kind == "script" && r.Credential.Principal == principal, "revoked by a person at this machine");
+            if (problem is not null) { throw new InvalidOperationException("could not save script revocation; the credential store is unavailable"); }
+            return removed;
+        }
+    }
+
     // A session's process ended: whatever it held dies with it (§3.4 "Revocation").
     public int RevokeEnded(Func<int, DateTimeOffset, bool> sameProcessAlive)
     {
@@ -527,7 +542,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             && c.ExpiresAt - c.IssuedAt <= TimeSpan.FromDays(DefaultScriptDays);
     }
 
-    static bool ValidScriptPart(string? value) => value is { Length: > 0 and <= 64 } && value is not "." and not ".."
+    internal static bool ValidScriptPart(string? value) => value is { Length: > 0 and <= 64 } && value is not "." and not ".."
         && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
 
     // A session id is at most 36 characters (a UUID).

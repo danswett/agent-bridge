@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -41,8 +42,8 @@ public sealed class UpdateService
     const string NowKind = "now";
     public static readonly TimeSpan AskKept = UpdateProtocol.Lapses;
     public const int MaxAsks = 8;
-    // Each device may have this many presses of each kind taken in RateWindow; the rest are
-    // refused, saying when to try again. Every new press makes the app ask the feed (or answer
+    // Each device may have this many presses of each kind taken in RateWindow; extra Checks use
+    // the last report, and extra Installs say when to try again. A new ask makes the app ask the feed (or answer
     // from a check a minute old) and an Install look at the machine's processes again.
     public const int RateLimit = 3;
     public static readonly TimeSpan RateWindow = TimeSpan.FromMinutes(10);
@@ -79,7 +80,9 @@ public sealed class UpdateService
     bool busyPushPending;
     DateTimeOffset busyPushedAt;
 
-    sealed record NowPress(SignedPress Signed, string Release, UpdateBusy? Accept);
+    sealed record NowPress(SignedPress Signed, string Release, UpdateBusy? Accept, bool Batch, bool Unchecked);
+    readonly SemaphoreSlim policyTurn = new(1, 1);
+    HaltPolicySnapshot policy = new(null, null, false);
 
     public UpdateService(string hostVersion, Action<string>? log = null, TimeProvider? time = null)
     {
@@ -94,6 +97,8 @@ public sealed class UpdateService
     // The same, perhaps a moment old (SharedAgentHaBridgeProbe), for what hello offers only:
     // everything that acts on an update asks ReadOnly. ReadOnly where not set.
     public Func<string?>? OfferedReadOnly { get; init; }
+    internal Func<CancellationToken, Task<HaltPolicySnapshot>> ReadHaltPolicy { get; init; } =
+        _ => Task.FromResult(new HaltPolicySnapshot(null, null, false));
     // Raised when the asks change, so the host's status (which the app follows) is sent again.
     public event Action? AsksChanged;
 
@@ -260,6 +265,10 @@ public sealed class UpdateService
                 _ = channel.Closed.ContinueWith(_ => Gone(channel), TaskScheduler.Default);
             }
             reported = UpdateProtocol.Fit(report.State);
+            if (reported.Back is { } back && (back.To != HostVersion || back.To != reported.Current))
+            {
+                reported = reported with { Back = null };
+            }
             Volatile.Write(ref carries, report.CarriesUpdateNow);
             foreach (var request in report.Taken ?? [])
             {
@@ -296,19 +305,19 @@ public sealed class UpdateService
         {
             UpdateProtocol.Get => Task.FromResult<object?>(State()),
             UpdateProtocol.Subscribe => Task.FromResult<object?>(Subscribe(channel)),
-            UpdateProtocol.Check => Task.FromResult<object?>(Ask(secure.PeerId, UpdateAskKind.Check, data)),
-            UpdateProtocol.Install => Task.FromResult<object?>(Ask(secure.PeerId, UpdateAskKind.Install, data)),
+            UpdateProtocol.Check => AskAsync(secure.PeerId, UpdateAskKind.Check, data),
+            UpdateProtocol.Install => AskAsync(secure.PeerId, UpdateAskKind.Install, data),
             _ => Task.FromResult<object?>(null),
         };
     }
 
-    UpdateCommandResult Ask(string peer, UpdateAskKind kind, JsonElement data)
+    async Task<object?> AskAsync(string peer, UpdateAskKind kind, JsonElement data)
     {
         UpdateCommand? command = null;
         try { command = data.ValueKind == JsonValueKind.Object ? data.Deserialize<UpdateCommand>(ProtocolJson.Options) : null; }
         catch (JsonException) { }
         var name = kind == UpdateAskKind.Install ? UpdateProtocol.Install : UpdateProtocol.Check;
-        if (kind == UpdateAskKind.Install && command?.Now is { } signed) { return AskNow(peer, command, signed); }
+        if (kind == UpdateAskKind.Install && command?.Now is { } signed) { return await AskNowAsync(peer, command, signed); }
         if (!UpdateProtocol.IsRequest(command?.Request)) { throw new ArgumentException($"{name} needs a request (a UUID)"); }
         var request = Guid.Parse(command!.Request!).ToString();
         var who = Volatile.Read(ref presence) is { } devices ? devices().FirstOrDefault(d => d.Id == peer) : null;
@@ -318,6 +327,7 @@ public sealed class UpdateService
         bool added;
         UpdateState state;
         string? tooMany = null;
+        DateTimeOffset? retryAt = null;
         lock (gate)
         {
             Prune();
@@ -325,15 +335,21 @@ public sealed class UpdateService
             if (!reported.Installer) { return Refused(peer, name, reported.Unavailable ?? "this copy of the app was not installed by its updater, so it cannot update"); }
             // A resend of the same press is the same ask, whether or not the app has taken it.
             added = asks.All(a => a.Request != request) && !taken.ContainsKey(request);
+            // A Check past the guard uses the app's last report, even with a full queue.
+            if (added && kind == UpdateAskKind.Check && Limited(peer, kind.ToString()) is not null)
+            {
+                added = false;
+            }
             // Full: refused, rather than letting go of a press already answered "accepted".
-            if (added && asks.Count >= MaxAsks)
+            else if (added && asks.Count >= MaxAsks)
             {
                 tooMany = Full;
                 added = false;
             }
             else if (added && Limited(peer, kind.ToString()) is { } again)
             {
-                tooMany = $"too many presses of {(kind == UpdateAskKind.Install ? "Install" : "Check")} from this device just now; try again {again}";
+                retryAt = again;
+                tooMany = $"too many presses of {(kind == UpdateAskKind.Install ? "Install" : "Check")} from this device just now; try again {AgainIn(again)}";
                 added = false;
             }
             else if (added)
@@ -344,7 +360,10 @@ public sealed class UpdateService
             }
             state = StateLocked();
         }
-        if (tooMany is not null) { return Refused(peer, name, tooMany); }
+        if (tooMany is not null)
+        {
+            return Refused(peer, name, tooMany) with { Code = retryAt is null ? null : ManageReason.RateLimited, RetryAt = retryAt };
+        }
         if (added)
         {
             log($"update {(kind == UpdateAskKind.Install ? "install" : "check")} asked for by {by}");
@@ -382,7 +401,7 @@ public sealed class UpdateService
     // Update now's own rate limit; then, recorded before anything else, its args, the switch, the
     // app, a sign-in, another Update now, the restart slots, the release shown, and what is busy
     // against what the person confirmed. Only then is the app asked.
-    UpdateCommandResult AskNow(string peer, UpdateCommand command, SignedCommand signed)
+    async Task<UpdateCommandResult> AskNowAsync(string peer, UpdateCommand command, SignedCommand signed)
     {
         if (now is not { } parts || record is null) { return RefusedNow(peer, ManageReason.Unavailable, "this machine's host does not offer Update now"); }
         // A client never sends both (security review, Low): one that did is caught here, rather than
@@ -400,7 +419,7 @@ public sealed class UpdateService
             return RefusedNow(peer, ManageReason.Changed, "this machine could not read its record of presses, so one signed before now is not acted on; press again");
         }
         if (SignedPress.Lifetime(press.Body, at, NowWords) is { } lapsed) { return RefusedNow(peer, lapsed.Code, lapsed.Detail); }
-        string? again;
+        DateTimeOffset? again;
         lock (gate)
         {
             known = record.Find(press.Request, at);
@@ -414,9 +433,12 @@ public sealed class UpdateService
             }
         }
         if (known is not null) { return Again(peer, known); }
-        if (again is not null) { return RefusedNow(peer, ManageReason.RateLimited, $"too many presses of Update now from this device just now; try again {again}"); }
+        if (again is { } retryAt)
+        {
+            return RefusedNow(peer, ManageReason.RateLimited, $"too many presses of Update now from this device just now; try again {AgainIn(retryAt)}") with { RetryAt = retryAt };
+        }
         if (!knows) { return RefusedNow(peer, ManageReason.Unavailable, "this machine could not record the press, so it was not acted on"); }
-        var result = DecideNow(peer, parts, press, signed);
+        var result = await DecideNowAsync(peer, parts, press, signed);
         lock (gate) { record.Answer(press.Request, result.Outcome.ToString().ToLowerInvariant(), result.Code, result.Reason); }
         return result;
     }
@@ -435,7 +457,7 @@ public sealed class UpdateService
         return new(Enum.TryParse<UpdateAck>(e.Outcome, ignoreCase: true, out var outcome) ? outcome : UpdateAck.Refused, e.Reason) { Code = e.Code, State = State() };
     }
 
-    UpdateCommandResult DecideNow(string peer, UpdateNowParts parts, SignedPress press, SignedCommand signed)
+    async Task<UpdateCommandResult> DecideNowAsync(string peer, UpdateNowParts parts, SignedPress press, SignedCommand signed)
     {
         var (args, problem) = UpdateNowRules.Read(press.Body);
         if (args is null) { return RefusedNow(peer, ManageReason.BadArgs, problem!); }
@@ -443,7 +465,8 @@ public sealed class UpdateService
         lock (gate) { state = StateLocked(); }
         // Each the same word as updateNowWhy, read afresh: read-only by the acting answer.
         var (why, next) = WhyNot(state, parts, ReadOnly);
-        if (why is not null)
+        var whenIdle = why == UpdateNowWhy.RestartCap;
+        if (why is not null && !whenIdle)
         {
             return RefusedNow(peer, why, why switch
             {
@@ -460,9 +483,14 @@ public sealed class UpdateService
         {
             return RefusedNow(peer, UpdateCode.ReleaseChanged, "the release offered here is no longer the one the person was shown");
         }
+        var protection = await RefreshPolicyAsync();
+        if (PolicyCode(protection, args.Release!, args.Batch == true, args.Unchecked == true) is { } blocked)
+        {
+            return RefusedNow(peer, blocked, blocked == "halted" ? "this release has been halted" : "bad-release protection is stale or unreadable");
+        }
         // The early answer, from the snapshot now: the same comparison is made again when the
         // host acts, with the lease held (DepartAsync).
-        if (Busy(parts).CoveredBy(args.Accept) != UpdateBusyView.Cover.Covered)
+        if (!whenIdle && Busy(parts).CoveredBy(args.Accept) != UpdateBusyView.Cover.Covered)
         {
             log($"update now from {press.By}: more is busy than the person confirmed; asked to confirm again");
             return new UpdateCommandResult(UpdateAck.Confirm, "more is busy here than the confirmation covered") { State = State() };
@@ -478,14 +506,16 @@ public sealed class UpdateService
             else if (Volatile.Read(ref departing) == 1 || asks.Any(a => a.Now is not null) || Carrying(StateLocked())) { refused = "another Update now is already under way on this machine"; }
             else
             {
-                // Its signed command recorded before the app can have it, so its departure can be
-                // verified again, by this host or one that restarts meanwhile.
-                record!.Answer(press.Request, "accepted", null, null, signed);
-                asks.Add(new UpdateAsk(press.Request, UpdateAskKind.Install, press.By, time.GetUtcNow(), new UpdateNowAsk(args.Release!, args.Accept, until)));
+                // A capped press becomes ordinary Install: no signed departure authority or slot.
+                // Otherwise keep the command so its departure can be verified again after a restart.
+                record!.Answer(press.Request, "accepted", null, null, whenIdle ? null : signed);
+                asks.Add(new UpdateAsk(press.Request, UpdateAskKind.Install, press.By, time.GetUtcNow(),
+                    whenIdle ? null : new UpdateNowAsk(args.Release!, args.Accept, until)));
             }
         }
         if (refused is not null) { return RefusedNow(peer, ManageReason.Busy, refused); }
-        log($"update now asked for by {press.By}{(press.Name.Length > 0 ? $" \"{press.Name}\"" : "")} for {args.Release}");
+        if (!Fresh(protection)) { log("update now: Bad-release protection could not be checked on this machine"); }
+        log($"update {(whenIdle ? "when idle" : "now")} asked for by {press.By}{(press.Name.Length > 0 ? $" \"{press.Name}\"" : "")} for {args.Release}");
         AsksChanged?.Invoke();
         return new UpdateCommandResult(UpdateAck.Accepted) { State = State() };
     }
@@ -530,7 +560,7 @@ public sealed class UpdateService
             // sent back to waiting is given back, and if that can't be recorded it stays spent
             // (the update is offered again for a new press).
             if (!record.Consume(request)) { return UpdateDeparture.Refused(ManageReason.Unavailable); }
-            result = await LeaveAsync(parts, new NowPress(signed, args.Release!, args.Accept), cancellationToken);
+            result = await LeaveAsync(parts, new NowPress(signed, args.Release!, args.Accept, args.Batch == true, args.Unchecked == true), cancellationToken);
             if (result.Outcome == UpdateDepartureOutcome.Waiting && !record.Restore(request))
             {
                 result = UpdateDeparture.Refused(ManageReason.Unavailable);
@@ -569,6 +599,8 @@ public sealed class UpdateService
         bool Lapsed() => time.GetUtcNow() >= ends;
         // Its 15 minutes over: dropped before any lease, cap slot or sign-in is touched.
         if (Lapsed()) { return UpdateDeparture.Refused(ManageReason.Expired); }
+        var protection = await RefreshPolicyAsync(cancellationToken);
+        if (PolicyCode(protection, press.Release, press.Batch, press.Unchecked) is { } blocked) { return UpdateDeparture.Refused(blocked); }
         UpdateState state;
         lock (gate) { state = StateLocked(); }
         if (state.Available != press.Release) { return UpdateDeparture.Refused(UpdateCode.ReleaseChanged); }
@@ -598,6 +630,7 @@ public sealed class UpdateService
             // Outside the fence: read-only may probe processes, and other profiles' hosts are listed.
             // Before the last look at what is busy and at the press's life, so neither can change
             // unseen while these run.
+            protection = await RefreshPolicyAsync(cancellationToken);
             parts.Eligibility.Refresh();
             parts.OtherHosts.Refresh();
             UpdateDeparture? late = null;
@@ -616,6 +649,11 @@ public sealed class UpdateService
                     return null;
                 }
                 BeforeCommit?.Invoke();
+                if (PolicyCode(protection, press.Release, press.Batch, press.Unchecked) is { } changed)
+                {
+                    late = UpdateDeparture.Refused(changed);
+                    return null;
+                }
                 return parts.Lifecycle.CommitDeparture(held);
             });
             if (late is not null) { return late; }
@@ -646,6 +684,30 @@ public sealed class UpdateService
         }
     }
 
+    async Task<HaltPolicySnapshot> RefreshPolicyAsync(CancellationToken cancellationToken = default)
+    {
+        await policyTurn.WaitAsync(cancellationToken);
+        try
+        {
+            try { return policy = await ReadHaltPolicy(cancellationToken); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or HttpRequestException
+                or JsonException or InvalidOperationException or ReleaseDiscoveryException)
+            {
+                log($"update policy: stored protection could not be read ({e.GetType().Name}); known halts retained");
+                return policy = policy with { Fresh = false };
+            }
+        }
+        finally { policyTurn.Release(); }
+    }
+
+    bool Fresh(HaltPolicySnapshot snapshot) =>
+        snapshot.Fresh && snapshot.Policy is { Body.Length: > 0 } && snapshot.At is { } at
+        && at <= time.GetUtcNow() && time.GetUtcNow() - at < ReleaseDiscovery.GithubRevalidateEvery;
+
+    string? PolicyCode(HaltPolicySnapshot snapshot, string release, bool batch, bool uncheckedPolicy) =>
+        snapshot.Policy?.Halted?.Contains(release, StringComparer.Ordinal) == true ? "halted"
+        : !Fresh(snapshot) && (batch || !uncheckedPolicy) ? UpdateCode.PolicyUnreadable : null;
+
     // The Update purpose's eligibility read now, as the press's code: the switch, read-only (the
     // acting answer) and a sign-in; null while eligible.
     string? Ineligible(UpdateNowParts parts) =>
@@ -654,8 +716,8 @@ public sealed class UpdateService
         : parts.Manage.SignInPending ? UpdateCode.SignIn
         : null;
 
-    // Under the gate: when this device may press this kind again, in words, or null if it may now.
-    string? Limited(string peer, string kind)
+    // Under the gate: the exact instant the oldest counted press ages out, or null if allowed.
+    DateTimeOffset? Limited(string peer, string kind)
     {
         var now = time.GetUtcNow();
         if (!pressed.TryGetValue((peer, kind), out var times))
@@ -667,7 +729,12 @@ public sealed class UpdateService
         }
         while (times.Count > 0 && now - times.Peek() >= RateWindow) { times.Dequeue(); }
         if (times.Count < RateLimit) { return null; }
-        var minutes = Math.Max(1, (int)Math.Ceiling((times.Peek() + RateWindow - now).TotalMinutes));
+        return times.Peek() + RateWindow;
+    }
+
+    string AgainIn(DateTimeOffset retryAt)
+    {
+        var minutes = Math.Max(1, (int)Math.Ceiling((retryAt - time.GetUtcNow()).TotalMinutes));
         return $"in {minutes} minute{(minutes == 1 ? "" : "s")}";
     }
 
