@@ -40,9 +40,10 @@ on:
 permissions: {}
 
 # Two runs from main would post twice, so they never overlap; a newer one waits.
+# PR dry runs write only logs/summaries and can supersede each other, never a posting run.
 concurrency:
-  group: weekly-report-${{ github.ref }}
-  cancel-in-progress: false
+  group: weekly-report-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   EPIC: '357'

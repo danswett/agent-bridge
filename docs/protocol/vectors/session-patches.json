@@ -18,7 +18,6 @@
             "branch": "main",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T03:30:00.000Z",
             "processId": 100,
             "activity": {
@@ -55,7 +54,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:00.111Z",
             "processId": 100,
             "activity": {
@@ -93,7 +91,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:01.148Z",
             "processId": 100,
             "activity": {
@@ -131,7 +128,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:03.222Z",
             "processId": 100,
             "activity": {
@@ -192,7 +188,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:03.296Z",
             "processId": 100,
             "activity": {
@@ -258,7 +253,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:04.481Z",
             "processId": 100,
             "activity": {
@@ -340,7 +334,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:04.518Z",
             "processId": 100,
             "activity": {
@@ -412,7 +405,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:05.703Z",
             "processId": 100,
             "activity": {
@@ -506,7 +498,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:07.851Z",
             "processId": 100,
             "activity": {
@@ -607,7 +598,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:08.962Z",
             "processId": 100,
             "activity": {
@@ -684,7 +674,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:09.999Z",
             "processId": 100,
             "activity": {
@@ -777,7 +766,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:10.110Z",
             "processId": 100,
             "activity": {
@@ -865,7 +853,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:11.147Z",
             "processId": 100,
             "activity": {
@@ -959,7 +946,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:12.295Z",
             "processId": 100,
             "activity": {
@@ -1076,7 +1062,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:22.443Z",
             "processId": 100,
             "activity": {
@@ -1195,7 +1180,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:25.702Z",
             "processId": 100,
             "activity": {
@@ -1309,7 +1293,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:27.739Z",
             "processId": 100,
             "activity": {
@@ -1433,7 +1416,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:29.887Z",
             "processId": 100,
             "activity": {
@@ -1544,7 +1526,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:30.961Z",
             "processId": 100,
             "activity": {
@@ -1649,7 +1630,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:40.998Z",
             "processId": 100,
             "activity": {
@@ -1758,7 +1738,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:42.146Z",
             "processId": 100,
             "activity": {
@@ -1854,7 +1833,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:50.220Z",
             "processId": 100,
             "activity": {
@@ -1954,7 +1932,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:51.294Z",
             "processId": 100,
             "activity": {
@@ -2055,7 +2032,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:52.331Z",
             "processId": 100,
             "activity": {
@@ -2163,7 +2139,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:54.405Z",
             "processId": 100,
             "activity": {
@@ -2280,7 +2255,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:55.479Z",
             "processId": 100,
             "activity": {
@@ -2398,7 +2372,6 @@
             "effort": "high",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:56.590Z",
             "processId": 100,
             "activity": {
@@ -2515,7 +2488,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:57.664Z",
             "processId": 100,
             "activity": {
@@ -2630,7 +2602,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:58.738Z",
             "processId": 100,
             "activity": {
@@ -2770,7 +2741,6 @@
             "effort": "high",
             "status": "waiting",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:58.775Z",
             "processId": 100,
             "activity": {
@@ -2912,7 +2882,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:01:10.812Z",
             "processId": 100,
             "activity": {
@@ -3021,7 +2990,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:01:15.849Z",
             "processId": 100,
             "activity": {
@@ -3138,7 +3106,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:01:16.923Z",
             "processId": 100,
             "activity": {
@@ -3244,7 +3211,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:01:20.960Z",
             "processId": 100,
             "activity": {
@@ -3353,7 +3319,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:01:22.108Z",
             "processId": 100,
             "activity": {
@@ -3454,7 +3419,6 @@
             "effort": "high",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:01:40.219Z",
             "processId": 100,
             "activity": {
@@ -3555,7 +3519,6 @@
               "title": "Two delegates and a background command",
               "branch": "HEAD",
               "status": "working",
-              "startedAt": "2026-10-28T04:00:01.004Z",
               "updatedAt": "2026-10-28T04:00:01.004Z",
               "activity": {
                 "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
@@ -3573,7 +3536,6 @@
             "branch": "HEAD",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T04:00:01.004Z",
             "processId": 900,
             "activity": {
@@ -3610,7 +3572,6 @@
             "model": "claude-haiku-5-5",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T04:00:03.363Z",
             "processId": 900,
             "activity": {
@@ -3662,7 +3623,6 @@
             "model": "claude-haiku-5-5",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T04:00:04.089Z",
             "processId": 900,
             "activity": {
@@ -3721,7 +3681,6 @@
             "model": "claude-haiku-5-5",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T04:00:04.992Z",
             "processId": 900,
             "activity": {
@@ -3807,7 +3766,6 @@
             "model": "claude-haiku-5-5",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T04:00:05.233Z",
             "processId": 900,
             "activity": {
@@ -3898,7 +3856,6 @@
             "model": "claude-haiku-5-5",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -3980,7 +3937,6 @@
             "model": "claude-haiku-5-5",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -4054,7 +4010,6 @@
             "model": "claude-haiku-5-5",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -4128,7 +4083,6 @@
             "model": "claude-haiku-5-5",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -4217,7 +4171,6 @@
             "model": "claude-haiku-5-5",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -4312,7 +4265,6 @@
             "model": "claude-haiku-5-5",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -4390,7 +4342,6 @@
             "model": "claude-haiku-5-5",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -4483,7 +4434,6 @@
             "model": "claude-haiku-5-5",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -4564,7 +4514,6 @@
             "model": "claude-haiku-5-5",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -4644,7 +4593,6 @@
             "model": "claude-haiku-5-5",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -4727,7 +4675,6 @@
             "model": "claude-haiku-5-5",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -4804,7 +4751,6 @@
             "model": "claude-haiku-5-5",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -4882,7 +4828,6 @@
             "model": "claude-haiku-5-5",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -4983,7 +4928,6 @@
             "model": "claude-haiku-5-5",
             "status": "waiting",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -5085,7 +5029,6 @@
             "model": "claude-haiku-5-5",
             "status": "working",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -5164,7 +5107,6 @@
             "model": "claude-haiku-5-5",
             "status": "idle",
             "statusSince": "2026-10-28T05:00:00.000Z",
-            "startedAt": "2026-10-28T04:00:01.004Z",
             "updatedAt": "2026-10-28T05:00:00.000Z",
             "processId": 900,
             "activity": {
@@ -5251,7 +5193,6 @@
             "set": {
               "repository": "work/origin",
               "statusSince": "2026-10-28T04:00:01.050Z",
-              "startedAt": "2026-10-28T03:59:57.268Z",
               "updatedAt": "2026-10-28T04:00:01.050Z",
               "activity": {
                 "turnCount": 0,
@@ -5267,7 +5208,6 @@
             "model": "gpt-fixture",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.050Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:01.050Z",
             "processId": 950,
             "activity": {
@@ -5300,7 +5240,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.050Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:02.837Z",
             "processId": 950,
             "activity": {
@@ -5337,7 +5276,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.050Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:04.065Z",
             "processId": 950,
             "activity": {
@@ -5381,7 +5319,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.050Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:07.853Z",
             "processId": 950,
             "activity": {
@@ -5426,7 +5363,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.050Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:10.756Z",
             "processId": 950,
             "activity": {
@@ -5461,7 +5397,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.050Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:11.828Z",
             "processId": 950,
             "activity": {
@@ -5500,7 +5435,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.050Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:12.723Z",
             "processId": 950,
             "activity": {
@@ -5546,7 +5480,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.050Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:12.944Z",
             "processId": 950,
             "activity": {
@@ -5609,7 +5542,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.050Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:13.873Z",
             "processId": 950,
             "activity": {
@@ -5671,7 +5603,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.050Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:15.478Z",
             "processId": 950,
             "activity": {
@@ -5746,7 +5677,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.050Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:22.951Z",
             "processId": 950,
             "activity": {
@@ -5801,7 +5731,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.050Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:23.986Z",
             "processId": 950,
             "activity": {
@@ -5860,7 +5789,6 @@
             "effort": "low",
             "status": "idle",
             "statusSince": "2026-10-28T04:00:24.484Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:00:24.484Z",
             "processId": 950,
             "activity": {
@@ -5919,7 +5847,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:01:13.337Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:01:13.337Z",
             "processId": 950,
             "activity": {
@@ -5974,7 +5901,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:01:13.337Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:01:13.997Z",
             "processId": 950,
             "activity": {
@@ -6029,7 +5955,6 @@
             "effort": "low",
             "status": "working",
             "statusSince": "2026-10-28T04:01:13.337Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:01:15.380Z",
             "processId": 950,
             "activity": {
@@ -6087,7 +6012,6 @@
             "effort": "low",
             "status": "idle",
             "statusSince": "2026-10-28T04:01:15.837Z",
-            "startedAt": "2026-10-28T03:59:57.268Z",
             "updatedAt": "2026-10-28T04:01:15.837Z",
             "processId": 950,
             "activity": {
@@ -6116,6 +6040,43 @@
             ],
             "class": "done",
             "classSince": "2026-10-28T04:01:15.837Z"
+          }
+        }
+      ]
+    },
+    {
+      "name": "negotiated-handle",
+      "recording": "synthetic",
+      "events": [
+        {
+          "seq": 1,
+          "upsert": {
+            "id": "s1",
+            "title": "Before"
+          }
+        },
+        {
+          "seq": 2,
+          "synced": {
+            "revision": 1,
+            "handles": {
+              "s1": 1
+            }
+          }
+        },
+        {
+          "seq": 3,
+          "patch": {
+            "handle": 1,
+            "revision": 2,
+            "set": {
+              "id": "s1",
+              "title": "After"
+            }
+          },
+          "session": {
+            "id": "s1",
+            "title": "After"
           }
         }
       ]

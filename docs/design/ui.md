@@ -1347,7 +1347,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   ([v1-sessions.md](../protocol/v1-sessions.md), strict fields), so no prompt shows at all.
   - **At the column's start, across it,** like an event line; on a phone, a full-width row.
   - **A label line in agent colour, with an icon:** a clock (`icons/clock.svg`) and "Scheduled
-    prompt · #4" for a schedule (its `userMessageLabel`: "#" before a number, anything else in
+    · #4" for a schedule (its `userMessageLabel`: "#" before a number, anything else in
     quotes); the
     `driven-badge` diamond and "Sent by an agent" for an agent, with `driverPrincipal` after it in
     secondary text when the host knows; the diamond and "Automatic prompt" for `other`. Then the
@@ -1367,7 +1367,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     do this; a history turn from a host that doesn't send the sender keeps the plain text.
   - **Repeats fold.** When a schedule's prompt has the same words as the last one shown under the
     same label as drawn (two labels an agent wrote apart but drawn alike are one),
-    the line says "Scheduled prompt · #4 · same as last time" and has no preview; Show prompt still
+    the line says "Scheduled · #4 · same as last time" and has no preview; Show prompt still
     opens it. A session carries only its latest prompt, so the previous one is the one this view
     saw: a new prompt is one whose words or sender changed, or, with the same words, a finished
     turn more (`turnCount` while idle) than this view saw once that prompt had settled (been seen
@@ -1378,16 +1378,16 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **Its words are an agent's.** The label is cleaned as a delegate's name is (§6.3: nothing hidden
     or steering, one line, no middle dot of its own, so it can't add a fact such as "same as last
     time"), cut to 64 bytes at a whole character, and, unless it is a number, in quotes, so no label
-    reads as words of the line's own ("Scheduled prompt · “Main agent”").
+    reads as words of the line's own ("Scheduled · “Main agent”").
     The prompt's hidden and bidi characters are drawn as escapes (`\u202E`). All of it is text.
   - **Accessibility:** the label line is read before the prompt. Show prompt is a real button,
-    toggled with Enter or Space, named for whose prompt it is, then its words: "Scheduled prompt 4,
+    toggled with Enter or Space, named for whose prompt it is, then its words: "Scheduled 4,
     Show prompt" or "Prompt sent by an agent, Show prompt", with `aria-expanded` saying collapsed or
     expanded. The words shown stay in the name (WCAG 2.5.3), and the state is said once.
   - **High contrast:** the agent role maps to a system colour, and the icon and the words carry
     the meaning, never the colour alone.
   - **Lists:** no row shows a prompt (§6.1), so a row is unchanged. Where a card shows the latest
-    prompt, one you didn't type is "Scheduled prompt · #4" or "Sent by an agent" in agent colour
+    prompt, one you didn't type is "Scheduled · #4" or "Sent by an agent" in agent colour
     with a one-line preview, never a quote of yours.
 - **Main agent:** a label line ("Main agent", then the age in meta style), then reading
   text. Reasoning is behind a "Show reasoning" disclosure, and is always the main agent's
@@ -1704,6 +1704,15 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   queued owner's. Live/history deduplication uses ids; delayed pages cannot erase newer live
   replies. Trimmed prompts keep their text and origin; loaded replies refresh the live pane.
   Provisional live messages show no sent time until matching history supplies it.
+  PWA C1 (#2606) also keeps `activity.notice` under its own turn id, preserving distinct
+  reply-part ids across live updates, replay and refetch. Notification and scheduled turns
+  keep non-bubble origin rows labelled "Notification" and "Scheduled"; replies remain outside
+  the prompt disclosure. Neither completes a queued owner's turn.
+  The accepted #2144/#2146 rules also require no automatic view movement or collapse of an
+  unread answer, "N new · Jump to first unread", an owner's "Waiting" or "Queued" with
+  "Starts after the current run" until its own reply, and "Reply not shown. Retry" with a
+  44 px Retry button instead of a gap. Remaining unread/queue/missing-reply UX is C2, not
+  implemented or declared complete by C1; these rules supersede the older H3 wording for C2.
   It opens at the end, on the latest reply, and stays there as replies arrive until the person
   scrolls; once they scroll, a new reply never moves the view (#1635, #1646). Reasoning, tool lines,
   delegate events and questions are still to come. The Windows app loads earlier turns a page
@@ -2190,8 +2199,13 @@ machine, online ones first, then the account's offline machines (#213):
        counts left out. Open: one session row per session (the §5.1 row: title, state; line 2 "model ·
        effort · context"), the first five, then "Show all N" in place. Not reported: the count from
        line 2 only. "Needs you" rows open the session as in the lane (§6.1).
-       The bounded PWA #2188 disclosure opens **Show sessions** through the existing machine
-       callback; the inline session list is a follow-up. Can run stays absent when unreported.
+       PWA #2206 is a names-only presentation: it lists all titles currently held in the existing
+       per-machine store in a stable order, without the first-five/"Show all N" treatment above.
+       Names are available only for already-held links (All machines or the chosen machine);
+       other machines keep their reported count until selected. It opens no new link or request.
+       Empty or missing data produces no list. Last-reported names stay through the reconnect grace
+       (#950), then a still-stale machine's list is hidden. **View sessions** and **Show sessions**
+       keep the existing machine callback. Can run stays absent when unreported.
     6. **Launch here.** In Actions when the machine is Online and not View only. Opens the New
        session flow with this machine chosen. Offline, View only and "Discovery held" hide it, and a
        line says why in text, not only a tooltip.
@@ -3833,7 +3847,7 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
     follows the word "Delegate", which the main agent's own lines never have.
   - "Needs you".
   - "End session" (not "Stop" for the whole session).
-  - A prompt you didn't type (§6.4): "Scheduled prompt · #4", "Sent by an agent", "Automatic
+  - A prompt you didn't type (§6.4): "Scheduled · #4", "Sent by an agent", "Automatic
     prompt", "same as last time", "Show prompt" and "Hide prompt". Never "your message".
 - **Attention words (#253):** "Needs you · N", "Showing N of M", "N on *machine*", "N more on
   other machines", "Nothing else needs you"; on a question, "Main agent asked", "You

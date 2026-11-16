@@ -1271,6 +1271,28 @@ reaches the real host or its profile. Its Settings agents move as a real host's 
 after a setup, without writing anything: a setup that completes leaves the agent set up and not
 tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to set up again.
 
+## Installed self-test exit-cause diagnostics
+
+The existing self-test wrapper redirects only the app process's stderr to
+`app.stderr.log` and records its PID, actual exit code, failure state, stderr and
+capture errors in `app-exit-cause.json`, beside the existing result and artifacts.
+On failure it also prints and records Application Error, .NET Runtime or Windows
+Error Reporting entries in the launch-time window only when their faulting/emitting
+PID and executable name identify that app, not Setup or the host. An entry without
+that process attribution is not evidence of this app's cause. Event timestamps are
+Pacific. Missing stderr, absent matching events and query/read failures remain
+explicit evidence gaps; no event or cause is manufactured.
+
+The installer job adds one behavioral assertion against that actual wrapper
+evidence: a failed self-test must have stderr, its exit code and an app-process
+event message, with no capture errors. A missing evidence file is reported as a
+capture failure, not behavioral RED. A passing app is not RED either. The original
+self-test failure still fails the job even when cause evidence is complete.
+This diagnostic cut changes no app behavior and establishes no root cause or fix;
+only Quality-ordered hosted execution can establish actual RED.
+The reported x64 failure is intermittent: one green run is neither a reproduced
+failure nor proof that it is fixed. Cause capture must come from a failing run.
+
 ## Deferred, explicitly
 
 * **Pairing and a Devices page**: the account's other devices are trusted by signing in to
