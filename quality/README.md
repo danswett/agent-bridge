@@ -634,8 +634,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    - Fast path (#1251): an event about one pull request or head judges only that head
      (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
-     its source, and built (then saved) only when main changed it. Admission coalesces events per
-     head, separately from main sweeps, cron and dispatch (#1922, #2130); skipped events have unique admission keys.
+     its source, and built (then saved) only when main changed it. With `FLEET_MERGERULE`
+     not `off`, `pull_request_target` admission in `.github/workflows/merge-rule.yml`
+     is per pull request, and a new head cancels that pull request's in-progress run (#2577).
+     Other scoped events coalesce per head, separately from main sweeps, cron and dispatch
+     (#1922, #2130); skipped events have unique admission keys.
      Before joining the writer queue, cron checks for other queued, pending or waiting scoped
      evaluations. It yields only to a positively identified fresh scoped job; a queue at least
      30 minutes old, unreadable/incomplete API data, or an unknown queued job name lets it run
@@ -650,10 +653,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      This adds one short read-only job per cron, four paginated active-run lists plus job lists;
      a proposed deferral also reads one page of ten completed cron runs and at most ten job lists,
      stopping when recent writer evidence is found, otherwise warning and proceeding.
-     It is not a resolver job per event. Event cancellation and all triggers stay
-     unchanged; event-admission coalescing remains a follow-up.
-     Every admitted writer then waits in the shared `merge-rule` job group with `queue: max`,
-     reading main only after taking that lock. A scoped event cannot displace a sweep or another
+     It is not a resolver job per event. The PR dry run in
+     `.github/workflows/weekly-report.yml` and the review relay in
+     `.github/workflows/merge-rule-review.yml` also cancel in-progress runs per pull request
+     (#2577). All triggers stay unchanged.
+     Every admitted writer still waits in the shared `merge-rule` job group with
+     `cancel-in-progress: false` and `queue: max`, reading main only after taking that lock.
+     A scoped event cannot displace a sweep or another
      head; a newer sweep replaces only a pending sweep, and still judges every open PR. A scoped run that finds main not
      green judges every open pull request, as `--all` does, so a sweep displaced while main turns
      red can't leave another pull request's success standing (about 15 points, only while main is
