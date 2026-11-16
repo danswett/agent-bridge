@@ -1,6 +1,9 @@
 using System.Text.Json;
 using AgentBridge.App.Core;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
@@ -38,6 +41,53 @@ static partial class SelfTest
             var peakOffset = 0.0;
             var worstRetreat = 0.0;
             var arrivalGap = 0.0;
+            var requiredRows = 0;
+            var growthFloor = 0.0;
+            var extentFloor = 0.0;
+            var invalidSurface = false;
+            (bool Valid, int DrawnHistory, int VisibleHistory, int VisibleResponse) Surface()
+            {
+                bool Drawn(FrameworkElement row) => row.IsLoaded && row.Opacity > 0 && Shown(row, view);
+                bool InView(FrameworkElement row)
+                {
+                    var at = row.TransformToVisual(scroll).TransformPoint(default);
+                    return at.Y < scroll.ViewportHeight && at.Y + row.ActualHeight > 0
+                        && at.X < scroll.ViewportWidth && at.X + row.ActualWidth > 0;
+                }
+                bool Written(Inline inline) => inline is Run run ? !string.IsNullOrWhiteSpace(run.Text)
+                    : inline is Span span && span.Inlines.Any(Written);
+                bool Content(MarkdownView renderer, bool inView) => renderer.Block is not null && Drawn(renderer)
+                    && (Find<RichTextBlock>(renderer).Any(text => Drawn(text) && (!inView || InView(text))
+                        && text.Blocks.OfType<Paragraph>().Any(p => p.Inlines.Any(Written)))
+                    || Find<TextBlock>(renderer).Any(text => AutomationProperties.GetAutomationId(text) == "CodeText"
+                        && !string.IsNullOrWhiteSpace(text.Text) && Drawn(text) && (!inView || InView(text))));
+                var drawnHistory = 0;
+                var visibleHistory = 0;
+                var source = rows.ItemsSourceView;
+                for (var i = 0; source is not null && i < source.Count; i++)
+                {
+                    if (source.GetAt(i) is not HistoryRow history || rows.TryGetElement(i) is not FrameworkElement row || !Drawn(row)) { continue; }
+                    var content = Find<MarkdownView>(row).Where(m => history.Blocks.Any(b => Equals(b.Block, m.Block))).ToList();
+                    if (!content.Any(m => Content(m, false))) { continue; }
+                    drawnHistory++;
+                    if (content.Any(m => Content(m, true))) { visibleHistory++; }
+                }
+                var visibleResponse = 0;
+                for (var i = 0; i < list.Items.Count; i++)
+                {
+                    if (list.ContainerFromIndex(i) is ListViewItem row && row.Content is ConversationBlock block
+                        && Equals(row.Content, list.Items[i]) && Drawn(row) && ById<MarkdownView>(row, "ResponseBlock") is { } renderer
+                        && Equals(renderer.Block, block.Block) && Content(renderer, true)) { visibleResponse++; }
+                }
+                var height = scroll.ScrollableHeight;
+                var valid = double.IsFinite(scroll.ViewportHeight) && scroll.ViewportHeight > 0
+                    && double.IsFinite(scroll.ViewportWidth) && scroll.ViewportWidth > 0
+                    && double.IsFinite(height) && height > 2 * scroll.ViewportHeight && height >= extentFloor && height > growthFloor
+                    && double.IsFinite(scroll.VerticalOffset) && scroll.VerticalOffset >= 0 && Gap() >= -1.5
+                    && requiredRows > 0 && stored.Turns.Count == requiredRows && source?.Count == requiredRows
+                    && drawnHistory > 0 && visibleHistory + visibleResponse > 0;
+                return (valid, drawnHistory, visibleHistory, visibleResponse);
+            }
             void Changed(object? sender, ScrollViewerViewChangedEventArgs e)
             {
                 moving = e.IsIntermediate;
@@ -46,10 +96,12 @@ static partial class SelfTest
             void Record(string kind = "render")
             {
                 var offset = scroll.VerticalOffset;
+                var surface = Surface();
                 if (monitorArrival)
                 {
-                    if (!arrived && Gap() <= 1.5) { arrived = true; peakOffset = offset; }
-                    if (arrived)
+                    invalidSurface |= !surface.Valid;
+                    if (!invalidSurface && !arrived && Gap() <= 1.5) { arrived = true; peakOffset = offset; }
+                    if (!invalidSurface && arrived)
                     {
                         peakOffset = Math.Max(peakOffset, offset);
                         worstRetreat = Math.Max(worstRetreat, peakOffset - offset);
@@ -63,7 +115,9 @@ static partial class SelfTest
                     width = scroll.ViewportWidth, contentHeight = scroll.ExtentHeight,
                     firstBlock = (list.ItemsPanelRoot as ItemsStackPanel)?.FirstVisibleIndex,
                     moving, requestIndex = wheelSteps, arrived, worstRetreat, arrivalGap,
-                    rows = rows.ItemsSourceView?.Count,
+                    rows = rows.ItemsSourceView?.Count, storedRows = stored.Turns.Count, requiredRows, extentFloor, growthFloor,
+                    surfaceValid = surface.Valid, invalidSurface,
+                    drawnHistory = surface.DrawnHistory, visibleHistory = surface.VisibleHistory, visibleResponse = surface.VisibleResponse,
                 });
             }
             async Task Frame()
@@ -118,8 +172,14 @@ static partial class SelfTest
                 check(scroll.ScrollableHeight > startExtent + 1.5, "bottom bounce control: updates really grow the extent without cache eviction");
                 phase = "control-wheel:rapid-burst";
                 var entryGap = Gap();
-                check(entryGap > 1.5, $"bottom bounce rapid setup: starts actually away from end (gap {entryGap:0.##})");
-                if (entryGap <= 1.5) { return; }
+                requiredRows = startCount + 64;
+                growthFloor = startExtent + 1.5;
+                var entry = Surface();
+                Record("reference-prerequisites");
+                check(entry.Valid && entryGap > 1.5,
+                    $"bottom bounce rapid setup: valid long drawn surface away from end (valid {entry.Valid}, gap {entryGap:0.##}, drawn history {entry.DrawnHistory}, in-view history/response {entry.VisibleHistory}/{entry.VisibleResponse})");
+                if (!entry.Valid || entryGap <= 1.5) { return; }
+                extentFloor = scroll.ScrollableHeight - 1.5;
                 monitorArrival = true;
                 Record("burst-entry");
                 var requested = scroll.VerticalOffset;
@@ -138,7 +198,7 @@ static partial class SelfTest
                 phase = "control-wheel:input-free-tail";
                 for (var n = 0; n < 120; n++) { await Frame(); }
                 check(endRequests > 1, $"bottom bounce request-budget coverage: continues endpoint requests ({endRequests}), not proof of accepted movement");
-                check(arrived && !moving && Gap() <= 1.5, $"bottom bounce control reach: reaches bottom within the fixed input-and-tail budget ({scroll.VerticalOffset:0.##}/{scroll.ScrollableHeight:0.##}, arrived {arrived})");
+                check(!invalidSurface && arrived && !moving && Gap() <= 1.5, $"bottom bounce control reach: reaches bottom within the fixed input-and-tail budget ({scroll.VerticalOffset:0.##}/{scroll.ScrollableHeight:0.##}, arrived {arrived}, invalid surface {invalidSurface})");
                 phase = "control-wheel:quiet";
                 var worst = 0.0;
                 var minOffset = scroll.VerticalOffset;
@@ -154,9 +214,12 @@ static partial class SelfTest
                     minExtent = Math.Min(minExtent, scroll.ScrollableHeight);
                     maxExtent = Math.Max(maxExtent, scroll.ScrollableHeight);
                 }
-                check(worst <= 1.5 && maxOffset - minOffset <= 1.5 && maxExtent - minExtent <= 1.5,
+                check(!invalidSurface, "bottom bounce driver-surface coverage: retains a positive viewport, long extent, drawn history and in-view content throughout burst, tail and quiet");
+                check(!invalidSurface && worst <= 1.5 && maxOffset - minOffset <= 1.5 && maxExtent - minExtent <= 1.5,
                     $"bottom bounce control: stays settled without extent feedback (gap {worst:0.##}, travel {maxOffset - minOffset:0.##}, extent change {maxExtent - minExtent:0.##} DIP)");
-                check(arrived && worstRetreat <= 1.5 && arrivalGap <= 1.5, arrived
+                check(!invalidSurface && arrived && worstRetreat <= 1.5 && arrivalGap <= 1.5, invalidSurface
+                    ? "bottom bounce invalid driver surface: post-arrival bounce remains unproven"
+                    : arrived
                     ? $"bottom bounce post-arrival: no reversal through remaining input, tail or quiet (retreat {worstRetreat:0.##}, gap {arrivalGap:0.##} DIP)"
                     : "bottom bounce post-arrival coverage: no actual arrival observed; reversal remains unproven");
                 check(Selected(list) is null, "bottom bounce control: wheel transitions do not select conversation items");
