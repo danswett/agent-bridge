@@ -170,7 +170,7 @@ static partial class SelfTest
             try
             {
                 var settled = await Until(() => frames >= 2, TimeSpan.FromSeconds(5));
-                var baseline = settled && drift <= 1.5 && countKept && contentKept && renderedKept && extentKept && rangeKept;
+                var baseline = settled && drift <= 1.5 && rowsKept && countKept && contentKept && renderedKept && extentKept && rangeKept;
                 check(baseline, $"scroll-preserve setup: chosen NONZERO middle and original content stay stable across two frames BEFORE received updates; {Metrics()}");
                 if (!baseline) { return; }
                 for (var update = 1; update <= 3; update++)
