@@ -131,6 +131,8 @@ let page = null;
 let linked = null;
 // Set once signed in: goes to a link's machine.
 let followLink = null;
+// A worker can hand off a tap while device identity is still loading.
+let earlyLink = null;
 // While a shown link's answers wait to take focus: stops watching for focus moved meanwhile.
 let unwatchFocus = () => {};
 
@@ -275,7 +277,11 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
   try { p = new URL(e.data.url).searchParams; } catch { return; }
   const host = param(p, 'host');
   if (!host || !ID.test(host)) { return; }
-  followLink?.({ host, session: param(p, 'session'), question: param(p, 'question'), signin: signInAgent(p), needsyou: p.get('needsyou') === '1' });
+  const link = { host, session: param(p, 'session'), question: param(p, 'question'), signin: signInAgent(p), needsyou: p.get('needsyou') === '1' };
+  if (followLink) { followLink(link); } else {
+    const token = accountStore.load()?.token;
+    earlyLink = token ? { link, token } : null;
+  }
 });
 navigator.serviceWorker?.startMessages?.();
 
@@ -637,6 +643,8 @@ async function startDemo() {
 let identity;
 
 function showSignIn(error) {
+  earlyLink = null;
+  followLink = null;
   shell.setSignedIn(false);
   $('signin').hidden = false;
   $('sessions').hidden = true;
@@ -815,7 +823,10 @@ function begin(account) {
     }
   };
   drawFeedbackAvailability();
-  const link = takeLink();
+  const addressLink = takeLink();
+  const pending = earlyLink;
+  earlyLink = null;
+  const link = pending && pending.token === account.token ? pending.link : addressLink;
   // A session's link wins over a sign-in's: a push carries one or the other.
   const wanted = (l) => (l?.host && l.session ? { host: l.host, session: l.session, question: l.question } : l?.host && l.signin ? { host: l.host, signin: l.signin } : l?.host && l.needsyou ? { host: l.host, needsyou: true } : null);
   setLinked(wanted(link));
@@ -1079,6 +1090,8 @@ function begin(account) {
 
   $('signout').onclick = async () => {
     await sentImages.clear();
+    earlyLink = null;
+    followLink = null;
     setLinked(null);
     hosts.forget();
     fleet.clear();
