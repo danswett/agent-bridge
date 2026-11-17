@@ -86,7 +86,7 @@ Consume the Engineering chain interfaces, without duplicating their owners:
 
 | Owner | Interface consumed by the role projection |
 |---|---|
-| #2371 C1 | `RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null)`; `Read(IEnumerable<JsonElement> frames)` returns verified `FleetRecord` values |
+| #2371 C1 | `RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null)`; `Read(IEnumerable<JsonElement> frames)` returns `IReadOnlyList<FleetMachine>` |
 | #2462 / #2380 C2 | `FleetRegistryCache(TimeProvider time)`; `Accept(VerifiedRecord)`, `Remove(string machine)`, `Reconcile(IReadOnlySet<string> listed)`, `Purge()`, `Served()` |
 | #2386 | Composes the gated reader and publication signer in the host; this design adds no second wiring path |
 
@@ -96,6 +96,14 @@ never `found`. C2 accepts only C1-verified records, applies opted-in subscriptio
 events/removal/reconciliation, and serves explicit `Stale`/`Online` state with
 24-hour purge. Known-only machines have no sessions. The projection cannot infer
 verification from relay `online`, a key's existence, cached text or display names.
+
+The machine/key binding is the person-approved enrollment in `devices.md`: the
+active host descriptor's `hostSign` and binding proof tie that purpose key to its
+account, generation and DH identity. C1 resolves that enrolled key, never a key
+supplied by the registry record. The person-set session label is then covered by
+that host's registry signature; it is not a new signed-roster role member.
+Person `capSign` enrollment is already designed by #2385 / PR #2408, but neither
+that purpose key nor its verifier-support evidence signs or assigns a session role.
 
 Resolve each label using the shared lookup selector over that snapshot, with its
 completeness and verification diagnostics retained, not reconstructed from only
