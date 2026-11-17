@@ -56,6 +56,9 @@ public sealed class AgentLimitsTests
         for (var i = 0; i < 2; i++)
         { Assert.True(restarted.CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), hash).Allowed); }
         Assert.Equal("rate-limited", restarted.CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), hash).Reason);
+        fixture.Time.Advance(TimeSpan.FromHours(20));
+        Assert.True(RestartGate(fixture).CheckLaunch("agent:machine/origin", request, hash).Duplicate);
+        Assert.True(RestartGate(fixture).CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), hash).Allowed);
     }
 
     [Fact]
@@ -68,11 +71,49 @@ public sealed class AgentLimitsTests
         File.WriteAllText(file, "{broken\n");
         var gate = RestartGate(fixture);
         Assert.Equal("capRebuilding", gate.CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), new string('a', 64)).Reason);
-        Assert.True(JsonSerializer.SerializeToElement(gate, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+        var control = new HostControl(new HostControlOptions
+        {
+            Profile = "test", Folder = fixture.Root, Version = "0.1.0", Running = new(false),
+            Machine = new("machine", "Fixture", "windows", "0.1.0"), CapRebuilding = () => gate.CapRebuilding,
+            SignIn = (_, _, _) => throw new NotSupportedException(), SignedIn = (_, _) => { },
+            Stop = () => { }, Restart = () => { },
+        });
+        Assert.True(JsonSerializer.SerializeToElement(control.Status(), new JsonSerializerOptions(JsonSerializerDefaults.Web))
             .GetProperty("capRebuilding").GetBoolean());
         File.Delete(file);
         fixture.Time.Advance(TimeSpan.FromSeconds(30));
         Assert.True(gate.CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), new string('a', 64)).Allowed);
+        Assert.False(control.Status().CapRebuilding);
+    }
+
+    [Fact]
+    public void Counted_mismatches_survive_restart_and_midnight_without_charging_more_launches()
+    {
+        using var fixture = new Fixture();
+        fixture.Time.SetUtcNow(new DateTimeOffset(2026, 11, 8, 23, 50, 0, TimeSpan.Zero));
+        EnableLaunch(fixture);
+        var gate = RestartGate(fixture);
+        var request = Guid.NewGuid().ToString();
+        var hash = new string('a', 64);
+        Assert.True(gate.CheckLaunch("agent:machine/origin", request, hash).Allowed);
+        for (var i = 0; i < 19; i++)
+        { Assert.Equal("requestReused", gate.CheckLaunch("agent:machine/origin", request, new string('b', 64)).Reason); }
+        fixture.Time.Advance(TimeSpan.FromMinutes(20));
+        gate = RestartGate(fixture);
+        Assert.True(gate.CheckLaunch("agent:machine/origin", request, hash).Duplicate);
+        Assert.Equal("rate-limited", gate.CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), hash).Reason);
+        fixture.Time.Advance(TimeSpan.FromMinutes(40));
+        Assert.True(RestartGate(fixture).CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), hash).Allowed);
+    }
+
+    [Fact]
+    public void A_reservation_without_a_binding_never_opens_the_cap()
+    {
+        using var fixture = new Fixture();
+        EnableLaunch(fixture);
+        var audit = new AgentAuditLog(fixture.Root, fixture.Time);
+        Assert.True(audit.Append(new("local", Guid.NewGuid().ToString(), "agent:machine/origin", [], "session.launch", "", "reserved")));
+        Assert.Equal("capRebuilding", RestartGate(fixture).CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), new string('a', 64)).Reason);
     }
 
     [Fact]

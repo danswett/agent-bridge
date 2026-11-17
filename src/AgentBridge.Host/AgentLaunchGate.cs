@@ -9,9 +9,10 @@ public sealed record AgentLaunchPolicyVerdict(bool Allowed, string? Reason, Agen
 // The pipe stays closed until the caller/content checks and launch-service wiring land.
 public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock = null, TimeProvider? auditTime = null)
 {
-    readonly AgentLimits limits = new(clock);
-    readonly AgentAuditLog audit = new(folder);
+    readonly AgentAuditLog audit = new(folder, auditTime);
+    readonly AgentLimits limits = new(clock, launchAudit: new AgentAuditLog(folder, auditTime));
     readonly LocalApi.RefusalAudits refusals = new(auditTime ?? TimeProvider.System);
+    public bool CapRebuilding => limits.CapRebuilding;
 
     public AgentLaunchPolicyVerdict CheckLaunch(string origin, string request, string requestSha256)
     {

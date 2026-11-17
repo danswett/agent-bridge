@@ -169,6 +169,7 @@ public sealed record HostStatus
     public HostAccount? Account { get; init; }
     public required RelayStatus Relay { get; init; }
     public FleetPublicationStatus? FleetPublication { get; init; }
+    public bool CapRebuilding { get; init; }
     public HostSigningStatus? HostSigning { get; init; }
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public int? StaleFleetReservations { get; init; }
