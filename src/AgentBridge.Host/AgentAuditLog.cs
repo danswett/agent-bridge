@@ -237,7 +237,7 @@ public sealed class AgentAuditLog
                 {
                     var index = 0;
                     var fragment = false;
-                    foreach (var raw in File.ReadLines(file).SkipLast(new FileInfo(file).Length > 0 && EndsWithoutNewline(file) ? 1 : 0))
+                    foreach (var raw in SharedLines(file).SkipLast(new FileInfo(file).Length > 0 && EndsWithoutNewline(file) ? 1 : 0))
                     {
                         var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(raw), isFinalBlock: false, state: default);
                         using var doc = JsonDocument.TryParseValue(ref reader, out var parsed) ? parsed : null;
@@ -281,7 +281,7 @@ public sealed class AgentAuditLog
     internal static bool HasHeads(string folder) => File.Exists(HeadFile(folder, false)) || File.Exists(HeadFile(folder, true));
     static Head? ReadHead(string folder, bool launch)
     {
-        try { return JsonSerializer.Deserialize<Head>(File.ReadAllText(HeadFile(folder, launch)), Json) is
+        try { using var stream = SharedRead(HeadFile(folder, launch)); return JsonSerializer.Deserialize<Head>(stream, Json) is
                 { V: 1, Root: not null, RootSha256: not null, Tail: not null, TailSha256: not null,
                     Length: > 0, Sequence: >= 0, RetainedThrough: >= 0, Fault: "none" or "audit-incomplete" or "coverage-break" } head
                 && head.RetainedThrough <= head.Sequence && (head.RetiringRoot is null
@@ -294,7 +294,7 @@ public sealed class AgentAuditLog
     static Head CaptureHead(string folder, bool launch, string? retiringRoot = null)
     {
         var files = Files(folder, launch).Where(f => Path.GetFileName(f) != retiringRoot).ToArray();
-        return new(1, Path.GetFileName(files.First()), Hash(Encoding.UTF8.GetBytes(File.ReadLines(files.First()).First())),
+        return new(1, Path.GetFileName(files.First()), Hash(Encoding.UTF8.GetBytes(SharedLines(files.First()).First())),
             Path.GetFileName(files.Last()), TailHash(files.Last(), promoteTail: true).Hash, new FileInfo(files.Last()).Length);
     }
     static string HeadFault(string folder, bool launch)
@@ -318,7 +318,7 @@ public sealed class AgentAuditLog
     }
     static bool PrefixIntact(string file, Head expected)
     {
-        using var stream = File.OpenRead(file);
+        using var stream = SharedRead(file);
         if (stream.Length < expected.Length) { return false; }
         var end = expected.Length - 1;
         stream.Position = end;
@@ -335,7 +335,7 @@ public sealed class AgentAuditLog
         {
             var folder = Path.Combine(profile, FolderName);
             var fault = HeadFault(folder, launch);
-            if (ReadHead(folder, launch) is null && Files(folder, launch).SelectMany(File.ReadLines).Any(raw =>
+            if (ReadHead(folder, launch) is null && Files(folder, launch).SelectMany(SharedLines).Any(raw =>
                 JsonSerializer.Deserialize<JsonElement>(raw, Json).TryGetProperty("gate", out var gate) && gate.ValueKind != JsonValueKind.Null))
             { return "audit-incomplete"; }
             return VerifyProfile(profile, launch, log, chainOnly: true).Intact ? fault
@@ -416,6 +416,12 @@ public sealed class AgentAuditLog
         return 0;
     }
     static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    static FileStream SharedRead(string file) => new(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+    static IEnumerable<string> SharedLines(string file)
+    {
+        using var reader = new StreamReader(SharedRead(file));
+        while (reader.ReadLine() is { } line) { yield return line; }
+    }
     static bool CompleteObject(byte[] bytes)
     {
         var reader = new Utf8JsonReader(bytes, isFinalBlock: false, state: default);
@@ -427,7 +433,7 @@ public sealed class AgentAuditLog
     static (string Hash, bool HasLine) TailHash(string? file, bool promoteTail = false)
     {
         if (file is null) { return (Genesis, false); }
-        using var stream = File.OpenRead(file);
+        using var stream = SharedRead(file);
         var end = PreviousNewline(stream, stream.Length);
         stream.Position = end + 1;
         if (promoteTail && (stream.ReadByte() is '{' or ' ' or '\t' or '\r'))

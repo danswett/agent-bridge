@@ -98,6 +98,30 @@ public sealed class HostControl
     long version;
     // The device id the app beside this host gave last (host.relay.account), for its own row.
     string? appDevice;
+    ((string Name, long Length, long Write)[] Stamp, DateTimeOffset[] Reservations)? fleetCache;
+
+    int? StaleFleetReservations()
+    {
+        try
+        {
+            (string, long, long)[] Stamp()
+            {
+                try { return new DirectoryInfo(Path.Combine(options.Folder, AgentAuditLog.FolderName)).GetFiles()
+                    .OrderBy(f => f.Name, StringComparer.Ordinal).Select(f => (f.Name, f.Length, f.LastWriteTimeUtc.Ticks)).ToArray(); }
+                catch (DirectoryNotFoundException) { return []; }
+            }
+            var stamp = Stamp();
+            if (fleetCache is not { } cached || !cached.Stamp.SequenceEqual(stamp))
+            {
+                // This display-only snapshot never takes the writer lock; a racing append makes it unknown.
+                var (rows, complete) = GateAuditProjection.Load(options.Folder, alreadyLocked: true);
+                fleetCache = complete && stamp.SequenceEqual(Stamp()) ? (stamp, GateLaunchAudit.FleetReservations(rows).Select(r => r.At).ToArray()) : null;
+            }
+            return fleetCache?.Reservations.Count(at => options.Time.GetUtcNow() - at >= TimeSpan.FromMinutes(10));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        { log($"fleet reservation status unavailable: {e.GetType().Name}"); return null; }
+    }
 
     public HostControl(HostControlOptions options, Action<string>? log = null)
     {
@@ -157,7 +181,6 @@ public sealed class HostControl
     HostStatus StatusLocked(bool fresh = false)
     {
         var now = Configured();
-        var (rows, complete) = GateAuditProjection.Load(options.Folder);
         return new HostStatus
         {
             Version = options.Version,
@@ -172,8 +195,7 @@ public sealed class HostControl
             Relay = relay,
             FleetPublication = options.FleetPublication(),
             HostSigning = HostSignCustody.Read(options.Folder),
-            StaleFleetReservations = complete ? GateLaunchAudit.FleetReservations(rows)
-                .Count(row => options.Time.GetUtcNow() - row.At >= TimeSpan.FromMinutes(10)) : null,
+            StaleFleetReservations = StaleFleetReservations(),
             SignIn = signIn,
             AgentHaBridge = options.AgentHaBridge(),
             HomeAssistant = options.HomeAssistant(),

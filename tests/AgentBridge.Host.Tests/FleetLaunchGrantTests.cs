@@ -186,6 +186,22 @@ public sealed class FleetLaunchCapacityTests : LaunchFlowFixture
     private protected override bool UsesRelay => false;
 
     [Fact]
+    public async Task Status_does_not_wait_for_or_block_the_audit_writer_and_invalidates_cached_reservations()
+    {
+        var (_, audit) = Setup();
+        var intent = Reserve(audit, FleetRequest());
+        var control = StatusControl(audit, new FakeTimeProvider(clock.GetUtcNow().AddMinutes(10)));
+        using (AgentAuditLog.Lock(Path.Combine(audit.Profile, "audit")))
+        {
+            var status = Task.Run(() => control.Status());
+            Assert.Same(status, await Task.WhenAny(status, Task.Delay(TimeSpan.FromSeconds(1))));
+            Assert.Equal(1, (await status).StaleFleetReservations);
+        }
+        Assert.True(audit.Append(intent with { Outcome = "failed", Gate = intent.Gate! with { Phase = "terminal", ReasonCode = "failed" } }));
+        Assert.Equal(0, control.Status().StaleFleetReservations);
+    }
+
+    [Fact]
     public async Task Concurrent_admission_reserves_hourly_slots_before_registration_and_replay_does_not_consume_another()
     {
         var (service, audit) = Setup();
@@ -305,6 +321,7 @@ public sealed class FleetLaunchCapacityTests : LaunchFlowFixture
         time.Advance(TimeSpan.FromMinutes(10));
         Assert.Equal(6, StaleReservations(audit, time));
         Assert.Equal(LaunchOutcome.Refused, (await FleetLaunch(service, audit)).Outcome);
+        Assert.False(Directory.Exists(Path.Combine(f.Root, "wt")));
         var credentials = new AgentCredentials(audit.Profile, "machine");
         var channel = new FleetLaunchGrantTests.Channel();
         var data = JsonSerializer.SerializeToElement(new { name = request.Request });
@@ -328,15 +345,16 @@ public sealed class FleetLaunchCapacityTests : LaunchFlowFixture
 
     static int? StaleReservations(AgentAuditLog audit, TimeProvider time)
     {
-        var control = new HostControl(new HostControlOptions
+        var status = JsonSerializer.SerializeToElement(StatusControl(audit, time).Status(), ProtocolJson.Options);
+        return status.TryGetProperty("staleFleetReservations", out var count) && count.ValueKind == JsonValueKind.Number ? count.GetInt32() : null;
+    }
+
+    static HostControl StatusControl(AgentAuditLog audit, TimeProvider time) => new(new HostControlOptions
         {
             Profile = "fixture", Folder = audit.Profile, Version = "0.1.0", Running = new(false), Time = time,
             Machine = new("machine", "fixture", "windows", "0.1.0"), Stop = () => { }, Restart = () => { },
             SignIn = (_, _, _) => throw new NotSupportedException(), SignedIn = (_, _) => { },
         });
-        var status = JsonSerializer.SerializeToElement(control.Status(), ProtocolJson.Options);
-        return status.TryGetProperty("staleFleetReservations", out var count) && count.ValueKind == JsonValueKind.Number ? count.GetInt32() : null;
-    }
 
     [Fact]
     public async Task Registration_and_cleanup_racing_across_audit_instances_keep_only_the_first_final()

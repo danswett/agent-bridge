@@ -1117,6 +1117,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         await starting.WaitAsync(ct);
         string? reservation = null, reserved = null;
         WorktreeResult? created = null;
+        var launchId = Guid.NewGuid().ToString("N");
+        LaunchAuditCallbacks? auditCallbacks = null;
+        var processStarted = false;
+        var unstartedOutcome = "refused";
         try
         {
             // Checked again: agent-ha-bridge may have started while this one waited its turn.
@@ -1174,6 +1178,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 log($"launch {Short(key)}: worker role MCP: {mcp.Disabled} of the person's servers disabled, {mcp.Kept} kept");
             }
 
+            if (fleet && prepare is not null && (auditCallbacks = prepare(Guid.Parse(launchId))) is null)
+            { return Refused("the launch audit could not be written durably"); }
             var directory = plan.Directory;
             string? worktree = null;
             if (plan.Isolated is { } isolated)
@@ -1296,9 +1302,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // Where a prompt of the person's would show they got past its startup questions
             // (HeldForReply): what the transcript holds now is from before this agent.
             var transcriptFrom = TranscriptFrom(plan.Launcher, sessionId);
-            var launchId = Guid.NewGuid().ToString("N");
-            LaunchAuditCallbacks? auditCallbacks = null;
-            if (prepare is not null && plan.Resume is null && plan.Transfer is null)
+            if (!fleet && prepare is not null && plan.Resume is null && plan.Transfer is null)
             {
                 auditCallbacks = prepare(Guid.Parse(launchId));
                 if (auditCallbacks is null) { return Refused("the launch audit could not be written durably"); }
@@ -1330,9 +1334,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     : "a read+reply fleet worker credential could not be issued and its launch audit could not be closed durably");
             }
             Started started;
-            try { started = starter.Start(spec); created = null; }
+            try { started = starter.Start(spec); processStarted = true; created = null; }
             catch (Exception e)
             {
+                unstartedOutcome = "failed";
                 var closed = auditCallbacks?.Terminal("failed") ?? true;
                 if (credentialIssued) { credentials!.Abandon(launchId); }
                 provenance.Abandon(key);
@@ -1359,6 +1364,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
         finally
         {
+            if (fleet && !processStarted && auditCallbacks is not null && !auditCallbacks.Terminal(unstartedOutcome))
+            { log($"launch {Short(key)}: the unstarted fleet admission could not be closed durably"); }
             if (reservation is not null && reserved is not null) { Worktrees.Release(reserved, reservation); }
             if (created is not null && await DiscardWorktreeAsync(created, key) is { } retained)
             { log($"launch {Short(key)}: the unstarted worktree was retained: {retained}"); }
