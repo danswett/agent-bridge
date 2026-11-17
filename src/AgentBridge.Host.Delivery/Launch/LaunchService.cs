@@ -1083,6 +1083,16 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return Refused(recorded ? reason : $"{reason} auditUnwritable: the agent worktree refusal could not be recorded.");
     }
 
+    async Task<string?> DiscardWorktreeAsync(WorktreeResult made, Guid key)
+    {
+        try { return await Task.Run(() => Worktrees.DiscardCreated(made, key)); }
+        catch (Exception e)
+        {
+            log($"launch {Short(key)}: refused worktree cleanup failed: {e.GetType().Name}");
+            return "Its cleanup could not be completed safely.";
+        }
+    }
+
     async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
         Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
     {
@@ -1090,6 +1100,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         LaunchedWith launched;
         await starting.WaitAsync(ct);
         string? reservation = null, reserved = null;
+        WorktreeResult? created = null;
         try
         {
             // Checked again: agent-ha-bridge may have started while this one waited its turn.
@@ -1152,6 +1163,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             if (plan.Isolated is { } isolated)
             {
                 var made = await Task.Run(() => Worktrees.Create(directory, Config, options.LocalNow, new HeldWorktreeUsage(source, options.WorktreeUsage), m => log($"launch {Short(key)}: worktree: {m}"), launchRequest: agentPrincipal is null ? null : key));
+                created = agentPrincipal is not null ? made : null;
                 if (agentPrincipal is not null)
                 {
                     string? worktreeRefusal;
@@ -1167,13 +1179,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     }
                     if (worktreeRefusal is not null)
                     {
-                        string? cleanup;
-                        try { cleanup = await Task.Run(() => Worktrees.DiscardCreated(made, key)); }
-                        catch (Exception e)
-                        {
-                            log($"launch {Short(key)}: refused worktree cleanup failed: {e.GetType().Name}");
-                            cleanup = "Its cleanup could not be completed safely.";
-                        }
+                        var cleanup = await DiscardWorktreeAsync(made, key);
+                        created = null;
                         if (cleanup is not null) { worktreeRefusal += $" The new worktree was retained: {cleanup}"; }
                         return RefuseAgentWorktree(key, agentPrincipal, worktreeRefusal);
                     }
@@ -1294,7 +1301,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             if (fleet && !credentialIssued) { provenance.Abandon(key); return Refused("a read+reply fleet worker credential could not be issued"); }
             Started started;
-            try { started = starter.Start(spec); }
+            try { started = starter.Start(spec); created = null; }
             catch (Exception e)
             {
                 if (credentialIssued) { credentials!.Abandon(launchId); }
@@ -1316,6 +1323,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         finally
         {
             if (reservation is not null && reserved is not null) { Worktrees.Release(reserved, reservation); }
+            if (created is not null && await DiscardWorktreeAsync(created, key) is { } retained)
+            { log($"launch {Short(key)}: the unstarted worktree was retained: {retained}"); }
             starting.Release();
         }
 

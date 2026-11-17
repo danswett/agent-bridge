@@ -471,6 +471,8 @@ Prompts and attachment names are never logged, only their length and count.
 A person at the machine may run `agent-bridge-host scripts grant-fleet <name>` or
 `scripts revoke-fleet <name>` (optionally `--profile <name>`); agents and script connections cannot.
 The separate `launch:fleet` grant is off for each newly minted credential.
+Activation remains closed until atomic, durable fleet hourly/live admission is wired (#2770);
+enabling a credential's grant does not yet enable dispatch.
 Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
 (empty by default). Fleet launches require an explicitly named agent, permissions and
 an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,

@@ -484,7 +484,12 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             if (enabled && FleetGrant.CheckGrant(matches[0].Credential with { FleetLaunch = true }) is { } why)
             { throw new InvalidOperationException($"refused: {why}"); }
             foreach (var r in matches) { records[records.IndexOf(r)] = r with { Credential = r.Credential with { FleetLaunch = enabled } }; }
-            Save();
+            try { Save(); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Fault($"could not save the fleet grant: {e.Message}");
+                throw new InvalidOperationException("could not save the fleet grant; the credential store is unavailable", e);
+            }
             if (problem is not null) { throw new InvalidOperationException("could not save the fleet grant"); }
         }
     }
@@ -550,6 +555,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     void Save()
     {
+        if (problem is not null) { throw new IOException("the credential store is faulted; no changes were saved"); }
         var temp = path + ".tmp";
         File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(new Saved(1, [.. records]), Json));
         File.Move(temp, path, overwrite: true);

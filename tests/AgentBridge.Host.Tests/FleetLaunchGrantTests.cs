@@ -1,7 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Host;
-using AgentBridge.Host.Cli;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Host.Cli;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -95,6 +95,37 @@ public sealed class FleetLaunchGrantTests : IDisposable
         var actual = HostSettings.Load(folder).Settings.Launch;
         Assert.Null(grant.CheckDispatch(actual, Request));
         Assert.NotNull(grant.CheckDispatch(actual with { Workspaces = [new("workers", Path.GetTempPath(), true)] }, Request));
+    }
+
+    [Theory]
+    [InlineData(true, "bind")]
+    [InlineData(false, "bind")]
+    [InlineData(true, "abandon")]
+    [InlineData(false, "abandon")]
+    [InlineData(true, "revoke")]
+    [InlineData(false, "revoke")]
+    public void A_failed_grant_save_cannot_be_persisted_by_later_mutations_after_storage_recovers(bool enabled, string later)
+    {
+        Config();
+        var store = new AgentCredentials(folder, "machine");
+        var (script, _) = store.MintScript("dispatcher");
+        if (!enabled) { store.SetFleetLaunch("dispatcher", true); }
+        store.Prepare("pending", "launch");
+        var channel = new Channel();
+        store.Accept(channel, script);
+        var blocked = Path.Combine(folder, AgentCredentials.FileName) + ".tmp";
+        Directory.CreateDirectory(blocked);
+        Assert.NotNull(Record.Exception(() => store.SetFleetLaunch("dispatcher", enabled)));
+        Directory.Delete(blocked);
+        Assert.NotNull(store.Problem);
+        Assert.Null(store.Of(channel));
+        Assert.Throws<InvalidOperationException>(() => store.SetFleetLaunch("dispatcher", enabled));
+        if (later == "bind") { store.Bind("launch", 123, Now); }
+        if (later == "abandon") { store.Abandon("launch"); }
+        if (later == "revoke") { store.Revoke("pending", "fixture"); }
+        var reopened = new AgentCredentials(folder, "machine");
+        reopened.Accept(channel, script);
+        Assert.Equal(!enabled, reopened.Of(channel)!.FleetLaunch);
     }
 
     [Fact]
