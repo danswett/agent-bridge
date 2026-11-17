@@ -595,8 +595,14 @@ and returns the original entry on a matching rid retry, even if a retry is resta
 100 entries per node and 1000 total before pruning the oldest unpinned delivered entries.
 If only pending or pinned entries remain, overflow is saved as a payload-free `refused` tombstone before
 the connector acknowledges `Reply NOT sent` with that rid and sender; no accepted reply is
-displaced. These pinned refusal records can exceed the admission caps; new requests are
-refused rather than evicting replay fences. Only unpinned delivered metadata is pruned.
+displaced. New pre-admission overflow receipts are explicitly tagged `CapacityRefused`
+and retained separately within 100 per node and 1000 total, newest first, for less than
+24 hours. Every enqueue trims these receipts under the store lock using the host's
+observation time, before duplicate lookup and after insertion; retries do not renew age.
+Count/age eviction may let that never-admitted rid be admitted later if capacity opens.
+Admitted/uncertain replay fences are never displaced to make room for an overflow receipt.
+Legacy untagged refusals remain pinned because their pre-admission origin cannot be proved;
+their existing finite footprint is not included in the new overflow-receipt bound.
 An unwritable store
 still fails explicitly and never acknowledges an outcome it could not persist. Delivery clears the payload while
 retaining rid metadata for deduplication; legacy senders get a generated rid and `legacy` sender.
@@ -626,17 +632,20 @@ FIFO order, existing outcomes and started-at markers survive; legacy started att
 attempt 1 without inventing cleanup proof. Unknown/malformed versions or migration/storage
 errors stop dispatch; no reader falls back to the recovery copy. Shipped v1 `Load` explicitly
 rejects `Version != 1`, including v2. A flushed `.v2` marker also makes this reader refuse
-restored v1 data or a missing current store; a failed commit after the marker holds for recovery.
+restored v1 data or a missing current store; a missing store after the marker holds for recovery.
 Rollback therefore holds dispatch unless the reader
 understands v2; never restore the pre-migration copy as a dispatchable store or downgrade fences.
 The recovery copy can contain old payloads; keep it under the same protected retention policy.
 
 Unconfirmed outcomes, started attempts and consumed cleanup tokens are durable pins, not
 #2808 fingerprint-cache entries: its eight/64/two-minute caps and expiry do not apply.
-Pins and final no-effect refusal tombstones override capacity pruning, `Forget` and
+Pins and admitted final no-effect refusal tombstones override capacity pruning, `Forget` and
 `ForgetExcept`. Their horizon is the lifetime of the replayable node binding, not elapsed time;
 resending the same refused rid returns refusal, while a distinct rid is a distinct request.
 Full stores hold admission rather than evict replay protection.
+Only explicitly tagged, never-admitted capacity refusals have the bounded count/age
+policy above. Invalid tags on attempts, uncertainty or cleanup fences fail closed.
+Older readers that do not understand the tag reject such snapshots rather than drop it.
 `ConsumeCleanup` durably consumes a token before any mutation; an ambiguous clear still spends
 it. Token, revision, attempt, host request and process incarnation remain correlated after restart.
 It grants no native cleanup proof and cannot authorize a second clear or Enter.

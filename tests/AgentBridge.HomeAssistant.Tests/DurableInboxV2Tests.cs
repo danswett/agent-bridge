@@ -103,13 +103,17 @@ public sealed class DurableInboxV2Tests : IDisposable
         started["StartedAt"] = Now.ToString("O");
         Write(1, [Message("queued"), started, Message("uncertain", "unconfirmed")]);
         var original = File.ReadAllText(Pathname);
-        File.Copy(Pathname, Pathname + ".v1");
-        started["Attempt"] = 1;
-        var temporary = Pathname + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        File.WriteAllText(temporary, new JsonObject { ["Version"] = 2,
-            ["Messages"] = new JsonArray(Message("queued"), started, Message("uncertain", "unconfirmed")),
-            ["Retired"] = new JsonArray() }.ToJsonString());
-        if (moved) { File.Move(temporary, Pathname, overwrite: true); }
+        var interrupted = new DurableInbox(Pathname, (source, destination) =>
+        {
+            Assert.False(File.Exists(Pathname + ".v2"));
+            Assert.Equal(original, File.ReadAllText(Pathname + ".v1"));
+            Assert.Equal(2, JsonNode.Parse(File.ReadAllText(source))!["Version"]!.GetValue<int>());
+            if (moved) { File.Move(source, destination, overwrite: true); }
+            throw new IOException("Injected interruption at the migration move boundary.");
+        });
+        Assert.Throws<IOException>(() => interrupted.Peek("node"));
+        Assert.Equal(moved ? 2 : 1, JsonNode.Parse(File.ReadAllText(Pathname))!["Version"]!.GetValue<int>());
+        Assert.False(File.Exists(Pathname + ".v2"));
 
         var recovered = new DurableInbox(Pathname);
         Assert.Equal("queued", recovered.Peek("node")!.Rid);
