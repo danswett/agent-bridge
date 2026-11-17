@@ -119,6 +119,71 @@ public sealed partial class ReplyTests
     }
 
     [Fact]
+    public async Task A_stale_reply_queued_when_a_question_opens_keeps_its_instance_mismatch_refusal()
+    {
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<ReplyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = _ => { reached.TrySetResult(); return release.Task; };
+        Idle();
+        await using var c = ConnectorWithInstance("host-run-2");
+        await Pass(c);
+        c.Observe(ha.SendFromCard(Node, "first", expectedInstance: "host-run-2"));
+        await Pass(c);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        try
+        {
+            c.Observe(ha.SendFromCard(Node, "stale queued reply", driver: "agent",
+                rid: "r-queued-instance", expectedInstance: "host-run-1"));
+            await Pass(c);
+            Assert.Equal("first", Assert.Single(replied).Text);
+
+            Idle(question: Pick());
+            await Pass(c);
+
+            Assert.Equal("instance-mismatch", Ack.GetProperty("outcome").GetString());
+            Assert.Equal("r-queued-instance", Ack.GetProperty("rid").GetString());
+            Assert.Contains("instance", Detail.GetProperty("error").GetString(), StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(answered);
+            Assert.Equal("first", Assert.Single(replied).Text);
+        }
+        finally
+        {
+            release.TrySetResult(new ReplyResult(AnswerOutcome.Delivered));
+            await c.DeliveredAsync();
+        }
+        await CardCloses(c);
+        Assert.Equal("first", Assert.Single(replied).Text);
+    }
+
+    [Fact]
+    public async Task An_untagged_agent_payload_swapped_between_question_reads_is_refused_not_typed()
+    {
+        Idle();
+        await using var c = ConnectorWithInstance("host-run-2");
+        await Pass(c);
+        Idle(question: Pick() with { Fields = [] });
+        await Pass(c);
+        ha.AfterRead = entity =>
+        {
+            if (entity != SessionEntities.ReplyPayload(Node)) { return; }
+            ha.AfterRead = null;
+            ha.SendFromCard(Node, "agent reply not an answer", driver: "agent",
+                rid: "r-untagged-swap", expectedInstance: "host-run-2");
+        };
+
+        await Pass(c, 20);
+
+        Assert.Empty(answered);
+        Assert.Empty(replied);
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        Assert.Equal("r-untagged-swap", Ack.GetProperty("rid").GetString());
+        await Pass(c, 20);
+        Assert.Empty(answered);
+        await CardCloses(c);
+        Assert.Empty(replied);
+    }
+
+    [Fact]
     public async Task Three_rapid_sends_while_a_question_is_open_are_each_refused_to_their_sender_and_none_is_lost_silently()
     {
         await using var c = await Asking();

@@ -243,18 +243,23 @@ public sealed partial class HaConnector
         // not sent and not dropped silently.
         if (p.Reply.Waiting.Count > 0)
         {
-            var waiting = p.Reply.Waiting.Count;
+            var waiting = 0;
             foreach (var w in p.Reply.Waiting)
             {
+                if (await RefuseInstanceMismatchAsync(p, w, ct)) { continue; }
+                waiting++;
                 p.Reply.Handle(w.State);
                 if (w.Attributes is { ValueKind: JsonValueKind.Object } wa && CleanRid(Str(wa, "rid")) is { } wrid) { p.Reply.Ack = MakeAck(wrid, CleanSender(Str(wa, "sender")), "refused"); }
             }
             p.Reply.Waiting.Clear();
-            await TransientAsync(p, "Reply NOT sent", new JsonObject
+            if (waiting > 0)
             {
-                ["error"] = waiting == 1 ? "the session asked a question before it could be sent" : $"the session asked a question before {waiting} replies could be sent",
-                ["hint"] = "answer it first, then reply",
-            }, ct);
+                await TransientAsync(p, "Reply NOT sent", new JsonObject
+                {
+                    ["error"] = waiting == 1 ? "the session asked a question before it could be sent" : $"the session asked a question before {waiting} replies could be sent",
+                    ["hint"] = "answer it first, then reply",
+                }, ct);
+            }
         }
         var onScreen = await ShowsWaitingAsync(p.Node, question.Id, ct);
         p.Armed = new Armed
@@ -862,15 +867,20 @@ public sealed partial class HaConnector
         if (!Changed(armed.PayloadBaseline, current) || !IsStamp(current.Value) || current.Value == armed.UsedStamp) { return false; }
         if (current.Snapshot is not { Attributes.ValueKind: JsonValueKind.Object } state) { return false; }
         if (p.Reply.IsHandled(current.Value)) { return false; }
+        return await RefuseQuestionPayloadAsync(p, armed, state, ct);
+    }
+
+    async Task<bool> RefuseQuestionPayloadAsync(Published p, Armed armed, HaState state, CancellationToken ct)
+    {
         if (await RefuseInstanceMismatchAsync(p, state, ct)) { return true; }
         var tag = Str(state.Attributes, "decision_id");
         var fromAgent = Str(state.Attributes, "driver") == SessionDrivers.Agent;
         var takesNoWords = ServesReplies && (armed.Plan.UsesFieldSlots || armed.Plan.AnswerOnTap) && !armed.Plan.TakesTypedAnswer;
         // Words tagged for a question are that question's own. An agent's are also refused when untagged or tagged for another card.
         if (tag is { Length: > 0 } ? !(fromAgent && tag != armed.Question.Id) : !(takesNoWords || fromAgent)) { return false; }
-        p.Reply.Handle(current.Value);
+        p.Reply.Handle(state.State);
         await UnservedAsync(p, new HaTrigger(SessionEntities.ReplyPayload(p.Node), state), ct);
-                return true;
+        return true;
     }
     static bool HasAttachments(HaState state) =>
         state.Attributes is { ValueKind: JsonValueKind.Object } a
@@ -1211,7 +1221,7 @@ public sealed partial class HaConnector
         if (!Changed(armed.PayloadBaseline, current) || current.Value == armed.UsedStamp || p.Reply.IsHandled(current.Value)) { return null; }
         if (current.Snapshot is not { } state || state.Attributes.ValueKind != JsonValueKind.Object) { return null; }
         // This read can see a newer payload than the question's initial refusal check.
-        if (await RefuseInstanceMismatchAsync(p, state, ct)) { return null; }
+        if (await RefuseQuestionPayloadAsync(p, armed, state, ct)) { return null; }
         // An image cannot be typed into a prompt; replies with attachments are a later stage.
         if (HasAttachments(state)) { return null; }
         var a = state.Attributes;
