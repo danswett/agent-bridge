@@ -13,13 +13,14 @@ namespace AgentBridge.Host.Tests;
 
 public sealed class AgentLiteDeliveryTests
 {
-    const string Target = "11111111-1111-1111-1111-111111111111", Req = "22222222-2222-2222-2222-222222222222";
+    const string Target = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Req = "22222222-2222-2222-2222-222222222222";
     static readonly string[] EmptyBox = ["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580", " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab"];
 
     sealed class Fixture : ISessionSource, ISessionReplier, IConsoleInjector
     {
         public SessionStatus Status = SessionStatus.Idle;
         public bool Exists = true, FlipAfterFirstGet, AllowAllTargets;
+        public string Remote = AgentMessagingSettings.OwnAccount;
         public string[] AllowAllTargetSessions = [];
         public string[] Rows = EmptyBox;
         public int Gets;
@@ -35,7 +36,7 @@ public sealed class AgentLiteDeliveryTests
             new ForcedAskGate(Launches),
             new AllowlistedAllTargetsGate(Launches, () => new AgentMessagingSettings
             {
-                Remote = AgentMessagingSettings.OwnAccount,
+                Remote = Remote,
                 AllowAllTargets = AllowAllTargets,
                 AllowAllTargetSessions = AllowAllTargetSessions
             })
@@ -100,22 +101,30 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await Send(f));
         Assert.Empty(f.Typed);
     }
-    [Fact]
-    public async Task An_allow_all_session_requires_its_exact_listed_identity_and_audits_without_message_text()
+    [Theory]
+    [InlineData("*")]
+    [InlineData("Copilot display name")]
+    [InlineData("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")]
+    [InlineData(" " + Target + " ")]
+    public async Task An_allow_all_session_requires_its_exact_listed_identity_and_audits_without_message_text(string listed)
     {
-        var f = new Fixture(); f.Launch(LaunchProtocol.AllowAll);
+        var f = new Fixture { AllowAllTargets = true }; f.Launch(LaunchProtocol.AllowAll);
         const string text = "private relay message that must not enter the audit";
-        f.AllowAllTargetSessions = ["*", "Copilot display name"];
+        f.AllowAllTargetSessions = [listed];
         Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await Send(f, text));
         Assert.Empty(f.Typed);
         Assert.Contains(f.Log, l => l.Contains("notReplyTarget", StringComparison.Ordinal));
         Assert.DoesNotContain(f.Log, l => l.Contains(text, StringComparison.Ordinal));
 
         f.AllowAllTargetSessions = [Target];
+        f.AllowAllTargets = false;
         Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await Send(f, text));
         f.AllowAllTargets = true;
         Assert.True((await Send(f, text)).Typed);
         Assert.Contains(f.Log, l => l.Contains("typed", StringComparison.Ordinal));
+        f.Remote = AgentMessagingSettings.Off;
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await Send(f, text));
+        Assert.Single(f.Typed);
         Assert.DoesNotContain(f.Log, l => l.Contains(text, StringComparison.Ordinal));
     }
     [Fact]

@@ -14,7 +14,7 @@ namespace AgentBridge.Host.Core.AgentMessaging;
 //   allowAllTargetSessions [] (the default): exact session ids that may receive while the
 //                    allowAllTargets switch is on. Names and wildcards do not grant access.
 //
-// Fail closed: an invalid switch, target list, section or file enables no allow-all targets.
+// Invalid switches, non-list targets, sections or files deny all; invalid list entries are ignored.
 // Installing or upgrading never writes these keys.
 //
 // A change needs no restart: later slices call HostSettings.CurrentAgentMessaging(folder) per message, which reads

@@ -34,8 +34,8 @@ own-agents-only.
 - A message to an offline machine fails at once and falls back to Home Assistant. Nothing is queued.
 - "Delivered" means typed and acknowledged, not read.
 - **Not in the first version; each is required before anyone beyond the owner uses it:** the signed roster,
-  durable duplicate memory, a full audit log (today there is one delivery log
-  line per message), and pushing the kill to connected hosts (it follows the cut-over).
+  durable duplicate memory, a full audit log (today delivery outcomes and each evaluated gate's
+  decision and reason are logged without message text), and pushing the kill to connected hosts (it follows the cut-over).
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
    could message his sessions, and any message from a pinned own machine is typed into a session there that is idle, has an empty input box, and is host-launched or allow-all (see the next limit).
 
