@@ -98,6 +98,21 @@ public sealed class FleetLaunchGrantTests : IDisposable
     }
 
     [Theory]
+    [InlineData("{}", 8, 6, false)]
+    [InlineData("""{"fleetPerHour":2,"liveFleetWorkers":3}""", 2, 3, false)]
+    [InlineData("""{"fleetPerHour":9,"liveFleetWorkers":0}""", 8, 6, true)]
+    public void Fleet_limits_are_bounded_and_invalid_values_are_reported(string limits, int hourly, int live, bool invalid)
+    {
+        var settings = HostSettings.Parse("{\"agents\":{\"enabled\":true,\"limits\":" + limits + "}}", "fixture").Settings;
+        var parsed = JsonSerializer.SerializeToElement(settings.Agents.Limits.Launch);
+        Assert.True(parsed.TryGetProperty("FleetPerHour", out var hour));
+        Assert.True(parsed.TryGetProperty("LiveFleetWorkers", out var workers));
+        Assert.Equal(hourly, hour.GetInt32());
+        Assert.Equal(live, workers.GetInt32());
+        Assert.Equal(invalid, settings.AgentsProblems.Count > 0);
+    }
+
+    [Theory]
     [InlineData(true, "bind")]
     [InlineData(false, "bind")]
     [InlineData(true, "abandon")]
@@ -126,6 +141,55 @@ public sealed class FleetLaunchGrantTests : IDisposable
         var reopened = new AgentCredentials(folder, "machine");
         reopened.Accept(channel, script);
         Assert.Equal(!enabled, reopened.Of(channel)!.FleetLaunch);
+    }
+
+    [Trait("Category", "Process")]
+    public sealed class FleetLaunchCapCoreTests : LaunchFlowFixture
+    {
+        private protected override bool UsesRelay => false;
+
+        [Fact]
+        public async Task Fleet_admission_limits_live_workers_and_hourly_launches_without_limiting_person_launches()
+        {
+            locator.Installed["claude"] = @"C:\fake\claude.exe";
+            Git(f.Root, "init", "-q", "-b", "main", app);
+            File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+            Git(app, "add", ".");
+            Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+            var profile = Path.Combine(f.Root, "profile");
+            Directory.CreateDirectory(profile);
+            File.WriteAllText(Path.Combine(profile, HostSettings.FileName),
+                """{"agents":{"enabled":true,"fleet":{"workspaces":["App"]},"limits":{"fleetPerHour":8,"liveFleetWorkers":6}}}""");
+            var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
+                credentials: new AgentCredentials(profile, "machine"),
+                agentWorktreeCheck: AgentLaunchWorktreeCheck.Check,
+                agentWorktreeRefusalAudit: (_, _, _) => true);
+            var service = new SessionService(source, new("host-id", machineName, "windows", "0.1.0"), launcher: launcher) { Time = clock };
+            var audit = new AgentAuditLog(profile, clock);
+            async Task<LaunchResult> Fleet()
+            {
+                var result = await service.LaunchFleetAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"),
+                    Agent = "claude", Workspace = "App", Permissions = LaunchProtocol.AllowAll },
+                    "script:machine/dispatcher", audit, () => null, _ => null);
+                await source.RefreshAsync();
+                return result;
+            }
+            for (var i = 0; i < 6; i++) { Assert.Equal(LaunchOutcome.Started, (await Fleet()).Outcome); }
+            var seventh = await Fleet();
+            Assert.Equal(LaunchOutcome.Refused, seventh.Outcome);
+            Assert.Contains("live fleet", seventh.Reason);
+            foreach (var pid in starter.Pids.ToArray()) { starter.Exit(pid); }
+            await source.RefreshAsync();
+            for (var i = 0; i < 2; i++) { Assert.Equal(LaunchOutcome.Started, (await Fleet()).Outcome); }
+            var ninth = await Fleet();
+            Assert.Equal(LaunchOutcome.Refused, ninth.Outcome);
+            Assert.Contains("hourly fleet", ninth.Reason);
+            var coordinator = await GateLaunchAudit.LaunchAsync(launcher,
+                new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "claude",
+                    Workspace = "App", Permissions = LaunchProtocol.Ask },
+                "person:local", audit, new("local", "person-client", "person:local", null));
+            Assert.Equal(LaunchOutcome.Started, coordinator.Outcome);
+        }
     }
 
     [Theory]
