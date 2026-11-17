@@ -1124,6 +1124,54 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
+    public async Task Halt_policy_expiring_while_the_host_stops_is_refused_not_reported_as_install_failure()
+    {
+        HaltPolicy(new(new(2, "{\"v\":1,\"halted\":[]}", []), time.GetUtcNow(), true));
+        updater.Ready = "0.1.2";
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        var (asked, letGo) = HeldStop();
+        var install = auto.RestartToUpdateAsync();
+        try
+        {
+            await asked;
+            time.Advance(TimeSpan.FromHours(7));
+        }
+        finally { letGo(); }
+
+        Assert.Contains("stale or unreadable", await install);
+        Assert.False(updater.Applied);
+        Assert.NotEqual(UpdateOutcome.Failed, auto.State.Last?.Outcome);
+    }
+
+    [Theory]
+    [InlineData(true, false, true)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [Trait("Category", "Network")]
+    public async Task Halt_policy_unreadable_after_departure_keeps_the_signed_single_press_terms(bool uncheckedPolicy, bool batch, bool applied)
+    {
+        await StartAsync();
+        host.On(HostOps.UpdateDepart, _ =>
+        {
+            testPolicy = new(null, null, false);
+            return Committed;
+        });
+
+        await auto.Ask(UpdateAskKind.Install, Press, time.GetUtcNow(),
+            new("0.2.0", null, time.GetUtcNow() + UpdateProtocol.NowLife, uncheckedPolicy, batch), Phone);
+
+        Assert.Equal([Press], Departed());
+        Assert.Equal(applied, updater.Applied);
+        if (!applied)
+        {
+            Assert.Equal((UpdateOutcome.Refused, UpdateCode.PolicyUnreadable), (auto.State.Last?.Outcome, auto.State.Last?.Code));
+            Assert.Empty(host.Sent(HostOps.Stop));
+        }
+    }
+
+    [Fact]
     public void When_an_update_is_ready_is_Restart_to_update_on_a_machine_nobody_set()
     {
         Assert.Equal(UpdateWhenReady.RestartToUpdate, new AppPreferences().WhenReady);
