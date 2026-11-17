@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using AgentBridge.App.Core;
 using Xunit;
 
@@ -88,16 +89,25 @@ public sealed class ConversationBlocksTests
         Assert.Same(three, shown[2]);
     }
 
-    [Fact]
-    public void A_response_with_nothing_in_common_is_left_alone_for_the_caller_to_replace_whole()
+    [Theory]
+    [InlineData("Initial latest reply.", "Received message update 1.")]
+    [InlineData("One.\n\nTwo.", "Something else.")]
+    [InlineData("", "First.\n\nSecond.")]
+    [InlineData("One.\n\nTwo.", "")]
+    public void A_response_with_nothing_in_common_updates_without_resetting_the_conversation(string before, string after)
     {
-        var shown = Shown("One.\n\nTwo.");
-        var had = shown.ToList();
+        var shown = new ConversationItems(Shown(before));
+        var actions = new List<NotifyCollectionChangedAction>();
+        var minimum = shown.Count;
+        shown.CollectionChanged += (_, e) => { actions.Add(e.Action); minimum = Math.Min(minimum, shown.Count); };
+        var next = MarkdownModel.Parse(after);
 
-        Assert.False(ConversationBlocks.Update(shown, MarkdownModel.Parse("Something else.")));
-        Assert.False(ConversationBlocks.Update(shown, []));
+        Assert.False(ConversationBlocks.Update(shown, next));
 
-        Assert.Equal(had, shown);
+        Assert.Equal(next.Select(ConversationBlocks.TextOf), shown.Select(block => block.Text));
+        Assert.NotEmpty(actions);
+        Assert.DoesNotContain(NotifyCollectionChangedAction.Reset, actions);
+        Assert.True(minimum >= Math.Min(MarkdownModel.Parse(before).Count, next.Count));
     }
 
     [Fact]
@@ -241,7 +251,12 @@ public sealed class ConversationBlocksTests
                     if (run > kept) { (start, from, kept) = (s, lead, run); }
                 }
             }
-            if (kept == 0) { return false; }
+            if (kept == 0)
+            {
+                shown.Clear();
+                foreach (var block in next) { shown.Add(new ConversationBlock(block)); }
+                return false;
+            }
             for (var i = shown.Count - 1; i >= start + kept; i--) { shown.RemoveAt(i); }
             for (var i = 0; i < start; i++) { shown.RemoveAt(0); }
             for (var i = from - 1; i >= 0; i--) { shown.Insert(0, new ConversationBlock(next[i])); }
