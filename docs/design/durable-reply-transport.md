@@ -28,15 +28,18 @@ not executed tests or evidence of current CLI support.
 
 Reuse #2808's `InjectionResult` and `WorkerInjector.ReplyWriteEvidence`; do not
 add a second ownership matcher in HA or infer ownership from a transcript.
-The payload is the exact one-logical-line `InjectableText.Collapse` result sent
-to the native worker, not the original unnormalised message.
+The payload is the complete one-logical-line text sent to the native worker,
+including staged attachment `@path` text, after `InjectableText.Collapse` and
+attachment formatting; not merely the original message or attachment references.
 
 `TextWritten = n` means a native-proven prefix of that payload's UTF-16 code
 units. For a partial native write of r key records, n is ceiling(r / 2):
 a key-down has an effect even if its key-up was not written. Bounds must hold.
 `TextFingerprint` is uppercase hex SHA-256 of UTF-8 bytes of that exact prefix,
 using the same `InjectionResult.Fingerprint` helper and encoding behaviour.
-An odd record count or split surrogate is not rounded to another text value.
+The ceiling count is diagnostic only for an odd record count: treat that case
+as no proof for cleanup. A prefix splitting a UTF-16 surrogate pair is also
+no proof; never repair, round or hash a replacement character to grant ownership.
 Missing, malformed or unsupported evidence is unknown, never a zero-length proof.
 `EnterWritten` is separate: false proves no submit key was written; null or true
 does not permit automatic resubmission. Native writes prove input records,
@@ -68,6 +71,12 @@ request may acquire admission for clear-only reconciliation as in #2808,
 but cannot submit the old text or release the FIFO head without the same proof.
 No recovery may press Enter after a final Unconfirmed receipt.
 Cleanup is a separate, explicitly correlated operation, not a resubmission.
+Clearing is one-shot: the CLI atomically consumes the ownership token and
+revision on the first successful clear. Recovery then forgets its mutation
+authority and ends; it never loops back to clear a matching prefix again.
+A person retyping the identical prefix afterward owns that new draft.
+Receipt loss permits status lookup only, never a second mutation with that
+token; keep a durable consumed-token fence even after forgetting recovery.
 
 Before any clear, all of the following must be true together:
 
@@ -188,7 +197,7 @@ transcript text, lack of a transcript record, or observation timeout.
 
 | Failure or condition | Classification | Retry and FIFO disposition |
 | --- | --- | --- |
-| Busy, or safe pre-key race with proven zero effect | Queued; Failed only if definitively abandoned | Same head, next sweep when idle; zero effect is cleanup proof |
+| Busy, or safe pre-key race with proven zero effect | Queued; Failed only if definitively abandoned | Same head, next sweep when idle; require correlated no-write/no-acceptance evidence, not Busy/Refused status alone |
 | Person-edited, pre-existing or unknown draft before any write | Queued, not Unconfirmed | No clear; same head waits for safe transport or verified empty draft |
 | Known prefix, no Enter, all B proofs and cleanup receipt valid | Queued after cleanup | Persist proof, then clear StartedAt and retry same head with fresh attempt |
 | Prefix count/hash unknown, unsupported native plan, edit, expired ownership or screen mismatch after a write | Unconfirmed | No keys and no retry; persist fence before settling head |
@@ -210,6 +219,15 @@ terminal entries. No later entry may act before the prior attempt is settled.
 For structured acceptance ambiguity, hold later dispatch until status resolves
 or the CLI provides an ordering fence excluding late insertion of the old send.
 This stricter fence prevents a delayed old IPC request overtaking a later one.
+Pin Unconfirmed outcomes, sender rids, fenced host request ids and consumed
+cleanup tokens against C1's age/capacity pruning and `Forget`; neither cache
+expiry nor payload removal may erase replay protection. Reclaim only after
+authoritative resolution and proof that no old identity can execute or replay;
+if storage fills first, hold new admission rather than evict an unresolved fence.
+The final-refusal rule above supersedes C1/A's `Forget` on refused: persist a
+no-effect refusal tombstone keyed by rid and attempt before releasing the head.
+Duplicates return that refusal, never restart delivery. Payload may be removed,
+but the tombstone remains while the identity can still be replayed.
 
 ## Placement, persistence and future validation
 
@@ -219,6 +237,15 @@ This stricter fence prevents a delayed old IPC request overtaking a later one.
 declares a rendered match authoritative. `Host/HaReplies.cs` carries correlation
 and idle policy, not draft-matching logic. The HA connector owns durable
 StartedAt/requeue transitions and rid receipts; do not expose raw drafts in HA.
+
+Cleanup receipts, consumed-token fences, pinned identities and refusal
+tombstones require a DurableInbox schema bump from version 1 to version 2.
+Migrate atomically from a protected v1 snapshot; preserve order and attempt ids,
+pin existing Unconfirmed records and fence started attempts without inventing
+cleanup proof. Refuse dispatch on failed or unknown-version migration.
+Rollback must use a v2-aware reader or hold dispatch: a v1 binary must reject
+v2, never drop its fences or replay a pre-migration snapshot. Preserve the
+snapshot for recovery, not as permission for a lossy schema downgrade.
 
 The adapter runs on whichever node hosts the target session, never a named VM.
 If that node leaves, nothing submits to its stale process identity. New live
@@ -242,6 +269,10 @@ agent prefix plus person suffix; edit-away/edit-back; mode/dialog/process
 changes; expiry; person edit between read and clear; delayed native consumption;
 cleanup receipt loss; crash on either side of proof persistence/requeue; and
 duplicate rid/fingerprint across restart. None may produce a blind extra key.
+Also test: clear once, person retypes the same prefix, next request makes zero
+mutation; pruning/Forget preserves Unconfirmed and consumed-token fences;
+refused-rid replay returns its tombstone; v1 migration and rollback fail closed;
+odd counts, split surrogates and attachment `@path` text cannot bypass proof.
 Transport conformance tests must prove a person draft survives byte-for-byte,
 with cursor and undo unchanged, while two replies arrive in FIFO order.
 Drop acceptance receipts and reconnect: exactly one insertion per identity,
