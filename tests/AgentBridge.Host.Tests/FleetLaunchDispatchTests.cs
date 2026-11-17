@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Protocol;
 using Xunit;
@@ -51,14 +52,16 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
                 .LaunchFleetAsync(request, principal, new AgentAuditLog(profile), () => null, _ => null)
             : await GateLaunchAudit.LaunchAsync(launcher, request, principal, new AgentAuditLog(profile),
                 new("local", "agent", principal, null), fleet: true, refusal: () => failure == "grant" ? "grant off" : null);
-        var expected = failure == "held" ? LaunchOutcome.Busy : failure is "start" or "uncertain" ? LaunchOutcome.Failed
+        var expected = failure == "held" ? LaunchOutcome.Busy : failure == "start" ? LaunchOutcome.Failed
+            : failure == "uncertain" ? LaunchOutcome.Unconfirmed
             : isolated && failure is null ? LaunchOutcome.Started : LaunchOutcome.Refused;
         Assert.True(result.Outcome == expected, $"{result.Outcome}: {result.Reason}");
         if (!isolated || failure is not null)
         {
             if (failure is "activation" or "grant") { Assert.Contains(failure == "activation" ? "admission" : "grant off", result.Reason); }
             Assert.Empty(starter.Specs);
-            if (isolated && failure is not ("activation" or "grant" or "audit")) { Assert.Empty(Directory.GetDirectories(config.WorktreeRoot)); }
+            if (failure == "uncertain") { Assert.Single(Directory.GetDirectories(config.WorktreeRoot)); }
+            else if (isolated && failure is not ("activation" or "grant" or "audit")) { Assert.Empty(Directory.GetDirectories(config.WorktreeRoot)); }
             else { Assert.False(Directory.Exists(config.WorktreeRoot)); }
             if (failure is "command" or "held" or "credential" or "start")
             {
