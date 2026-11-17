@@ -1,4 +1,5 @@
 using AgentBridge.Protocol;
+using AgentBridge.Host.Core.Updates;
 
 namespace AgentBridge.App.Core;
 
@@ -8,9 +9,41 @@ namespace AgentBridge.App.Core;
 // Settings is reported as one the AutoUpdater made would be: what the last check found (kept when
 // its download fails, so a release that is there is not reported as nothing newer), when, and
 // the download's progress.
-public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) : IUpdater
+public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
+    Func<Task<HaltPolicySnapshot>>? readHaltPolicy = null, Action<string>? log = null) : IUpdater
 {
     readonly TimeProvider time = time ?? TimeProvider.System;
+    internal Func<Task<HaltPolicySnapshot>> ReadHaltPolicy { get; set; } =
+        readHaltPolicy ?? (() => Task.FromResult(new HaltPolicySnapshot(null, null, false)));
+    readonly SemaphoreSlim policyTurn = new(1, 1);
+    HaltPolicySnapshot policy = new(null, null, false);
+    bool policyRead;
+
+    internal async Task RefreshHaltPolicyAsync()
+    {
+        await policyTurn.WaitAsync();
+        try
+        {
+            try { policy = await ReadHaltPolicy(); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or HttpRequestException
+                or System.Text.Json.JsonException or InvalidOperationException or ReleaseDiscoveryException
+                or FormatException or System.Security.Cryptography.CryptographicException or OperationCanceledException)
+            {
+                log?.Invoke($"update policy: protection could not be read ({e.GetType().Name}); known halts retained");
+                policy = policy with { Fresh = false };
+            }
+            policyRead = true;
+        }
+        finally { policyTurn.Release(); }
+    }
+
+    internal bool Halted(string? version) => version is not null
+        && policy.Policy?.Halted?.Contains(version, StringComparer.Ordinal) == true;
+    internal bool PolicyFresh => policy.Fresh && policy.Policy is { Body.Length: > 0 } && policy.At is { } at
+        && at <= time.GetUtcNow() && time.GetUtcNow() - at < ReleaseDiscovery.GithubRevalidateEvery;
+    internal UpdatePolicy Policy => new(PolicyFresh ? UpdatePolicyState.Ok
+        : policy.Policy is { Body.Length: > 0 } ? UpdatePolicyState.Stale : UpdatePolicyState.Unreadable, policy.At);
+    internal const string HaltedReason = "this release has been halted";
     // One download at a time: Velopack's takes a global update lock and fails, rather than waits,
     // when another holds it, so Settings' and the automatic one's overlapping made the second fail
     // (reported to every device as a failed update).
@@ -46,7 +79,8 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public event Action? Changed;
 
     // The release the last check found, null when it found nothing newer (or none has finished).
-    public string? Found { get; private set; }
+    string? foundRelease;
+    public string? Found => Halted(foundRelease) ? null : foundRelease;
     public DateTimeOffset? CheckedAt { get; private set; }
     // As of when Found is known: the feed's own answer may be older than the check that read it,
     // from the machine's shared copy (#530), and the devices are told how old it really is.
@@ -63,7 +97,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
 
     public string? InstalledVersion => inner.InstalledVersion;
     public string? PendingNotes => inner.PendingNotes;
-    public string? Ready => inner.Ready;
+    public string? Ready => policyRead && !Halted(inner.Ready) ? inner.Ready : null;
 
     public async Task<string?> CheckAsync()
     {
@@ -72,12 +106,18 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         await checking.WaitAsync();
         try
         {
+            await RefreshHaltPolicyAsync();
             var from = Bound();
             var found = await inner.CheckAsync();
+            if (Halted(found))
+            {
+                foundRelease = null;
+                throw new InvalidOperationException(HaltedReason);
+            }
             // A check that finished after its source changed answers for the old one.
             if (Bound() != from) { return found; }
             if (Found != found) { (Bytes, Total) = (null, null); }
-            Found = found;
+            foundRelease = found;
             CheckedAt = time.GetUtcNow();
             FoundAsOf = inner.DiscoveredAt is { } at && at < CheckedAt ? at : CheckedAt;
             CheckSource = inner.CheckSource;
@@ -101,6 +141,8 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         {
             await downloading.WaitAsync();
             held = true;
+            await RefreshHaltPolicyAsync();
+            if (Halted(foundRelease ?? inner.Ready)) { throw new InvalidOperationException(HaltedReason); }
             // The one waited for downloaded the release the last check found: nothing to do.
             if (inner.Ready is not null) { return; }
             var from = Source;
@@ -126,6 +168,8 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
                     (Bytes, Total) = (bytes, total);
                     Raise();
                 });
+                await RefreshHaltPolicyAsync();
+                if (Halted(release)) { throw new InvalidOperationException(HaltedReason); }
             }
             catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
             {
@@ -145,7 +189,14 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         }
     }
 
-    public void ApplyAndRestart(string version, Action? handedOver = null) => inner.ApplyAndRestart(version, handedOver);
+    public void ApplyAndRestart(string version, Action? handedOver = null) => ApplyConfirmed(version, false, handedOver);
+
+    internal void ApplyConfirmed(string version, bool uncheckedPolicy, Action? handedOver)
+    {
+        if (Halted(version)) { throw new InvalidOperationException(HaltedReason); }
+        if (!policyRead || (!PolicyFresh && !uncheckedPolicy)) { throw new InvalidOperationException("bad-release protection is stale or unreadable"); }
+        inner.ApplyAndRestart(version, handedOver);
+    }
 
     // Something the state reads besides the updater changed: Settings' install failing.
     public void Noted() => Raise();
@@ -158,7 +209,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public void SourceChanged()
     {
         changes++;
-        Found = null;
+        foundRelease = null;
         CheckedAt = null;
         FoundAsOf = null;
         CheckSource = null;
@@ -177,7 +228,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     string Bound()
     {
         var now = inner.Source;
-        if (bound is not null && bound != now) { (Found, CheckedAt, FoundAsOf, CheckSource, failed, Bytes, Total) = (null, null, null, null, null, null, null); }
+        if (bound is not null && bound != now) { (foundRelease, CheckedAt, FoundAsOf, CheckSource, failed, Bytes, Total) = (null, null, null, null, null, null, null); }
         bound = now;
         return now;
     }

@@ -41,6 +41,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     Func<CancellationToken, Task<LocalChannel>>? linkConnect;
     // The app's updater as Settings shares it, when a test plays Settings too.
     ObservedUpdater? shared;
+    HaltPolicySnapshot? testPolicy;
     // The app's UI thread, when a test watches what the updater posts there.
     IUiDispatcher? updaterUi;
     // What the installation's blockers are, when a test makes a file there held (the preflight).
@@ -130,6 +131,9 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     // The host as it is when the app starts: its status and sessions, then connected.
     async Task StartAsync(HostStatus? status = null, params Session[] sessions)
     {
+        shared ??= new ObservedUpdater(updater, time);
+        shared.ReadHaltPolicy = () => Task.FromResult(testPolicy ?? new HaltPolicySnapshot(new(2, "{\"v\":1,\"halted\":[]}", []), time.GetUtcNow(), true));
+        await shared.RefreshHaltPolicyAsync();
         host.Status = status ?? FakeHost.StatusOf();
         host.Sessions.AddRange(sessions);
         host.Start();
@@ -996,6 +1000,128 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     // after the two minutes a machine of busy agents never reached. A machine that never goes quiet
     // installs at the six-hour backstop, over a turn running but never a question waiting.
     void InstallBetweenTurns() => prefs = prefs with { WhenUpdateReady = UpdateWhenReady.InstallBetweenTurns };
+
+    void HaltPolicy(HaltPolicySnapshot snapshot)
+    {
+        updater.Found = "0.1.2";
+        updater.InstalledVersion = "0.1.1";
+        testPolicy = snapshot;
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Halt_policy_seven_hours_old_holds_automatic_install()
+    {
+        HaltPolicy(new(new(2, "{\"v\":1,\"halted\":[]}", []), time.GetUtcNow() - TimeSpan.FromHours(7), false));
+        InstallBetweenTurns();
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        await GoIdleAsync("s1");
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal(UpdatePolicyState.Stale, auto.State.Policy?.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Halt_policy_blocks_a_known_halt_from_offer_and_download()
+    {
+        HaltPolicy(new(new(2, "{\"v\":1,\"halted\":[\"0.1.2\"]}", ["0.1.2"]), time.GetUtcNow(), true));
+        await StartAsync();
+        await auto.TickAsync();
+        Assert.Null(auto.State.Available);
+        Assert.Null(auto.Ready);
+        Assert.Equal(0, updater.Downloads);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Halt_policy_refuses_an_already_downloaded_known_halt_even_when_stale()
+    {
+        HaltPolicy(new(new(2, "{\"v\":1,\"halted\":[\"0.1.2\"]}", ["0.1.2"]), time.GetUtcNow() - TimeSpan.FromHours(7), false));
+        updater.Ready = "0.1.2";
+        await StartAsync();
+        var result = await auto.RestartToUpdateAsync(_ => Task.FromResult(true));
+        Assert.NotNull(result);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Halt_policy_unreadable_requires_a_persons_confirmation_before_local_install()
+    {
+        HaltPolicy(new(null, null, false));
+        updater.Ready = "0.1.2";
+        await StartAsync();
+        string? warning = null;
+        var result = await auto.RestartToUpdateAsync(text => { warning = text; return Task.FromResult(false); });
+        Assert.Contains("Bad-release protection could not be checked", warning);
+        Assert.Equal(AutoUpdater.NotNow, result);
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Halt_policy_added_during_download_is_not_offered_or_installed()
+    {
+        HaltPolicy(new(new(2, "{\"v\":1,\"halted\":[]}", []), time.GetUtcNow(), true));
+        updater.OnDownload = () => testPolicy = new(new(3, "{\"v\":1,\"halted\":[\"0.1.2\"]}", ["0.1.2"]), time.GetUtcNow(), true);
+        await StartAsync();
+        await auto.TickAsync();
+        Assert.Null(auto.State.Available);
+        Assert.Null(auto.Ready);
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Halt_policy_becoming_unreadable_during_confirmation_needs_a_new_confirmation()
+    {
+        HaltPolicy(new(new(2, "{\"v\":1,\"halted\":[]}", []), time.GetUtcNow(), true));
+        updater.Ready = "0.1.2";
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        var result = await auto.RestartToUpdateAsync(_ =>
+        {
+            testPolicy = new(null, null, false);
+            return Task.FromResult(true);
+        });
+        Assert.NotNull(result);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Halt_policy_allows_a_signed_unchecked_single_press_at_the_restart_cap()
+    {
+        HaltPolicy(new(null, null, false));
+        updater.Ready = "0.1.2";
+        await StartAsync();
+        await auto.Ask(UpdateAskKind.Install, Press, whenIdle: new("0.1.2", Unchecked: true, Batch: false));
+        await TwoIdleTicksAsync();
+        Assert.True(updater.Applied);
+    }
+
+    [Theory]
+    [InlineData(false, false, "0.1.2")]
+    [InlineData(true, true, "0.1.2")]
+    [InlineData(true, false, "0.1.3")]
+    [Trait("Category", "Network")]
+    public async Task Halt_policy_refuses_unchecked_idle_presses_without_the_right_signed_terms(bool uncheckedPolicy, bool batch, string release)
+    {
+        HaltPolicy(new(null, null, false));
+        updater.Ready = "0.1.2";
+        await StartAsync();
+        await auto.Ask(UpdateAskKind.Install, Press, whenIdle: new(release, uncheckedPolicy, batch));
+        await TwoIdleTicksAsync();
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal(UpdateOutcome.Refused, prefs.LastUpdate?.Outcome);
+    }
 
     [Fact]
     public void When_an_update_is_ready_is_Restart_to_update_on_a_machine_nobody_set()

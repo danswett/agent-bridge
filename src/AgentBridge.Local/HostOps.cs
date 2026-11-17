@@ -74,12 +74,13 @@ public sealed record ProbeHoldResult(bool Busy, string? Why = null);
 // the device, as the host's log names it ("pwa 1a2b3c4d"). Now: an Update now (#1159), an Install
 // that skips the app's wait for a quiet machine; it is handed only to an app that says it carries
 // one (UpdateReport.CarriesUpdateNow), so an older app never reads it as a plain Install.
-public sealed record UpdateAsk(string Request, UpdateAskKind Kind, string By, DateTimeOffset At, UpdateNowAsk? Now = null);
+public sealed record UpdateAsk(string Request, UpdateAskKind Kind, string By, DateTimeOffset At, UpdateNowAsk? Now = null, UpdatePolicyAllowance? WhenIdle = null);
+public sealed record UpdatePolicyAllowance(string Release, bool Unchecked, bool Batch);
 
 // An Update now's terms, as the person signed them: the release they were shown, what they
 // confirmed it may go over (absent on a quiet machine), and the end of the press's life (15 minutes
 // from its signature), after which the app drops it expired.
-public sealed record UpdateNowAsk(string Release, UpdateBusy? Accept, DateTimeOffset Until);
+public sealed record UpdateNowAsk(string Release, UpdateBusy? Accept, DateTimeOffset Until, bool Unchecked = false, bool Batch = false);
 
 // An unknown kind reads as Check, which changes nothing on the machine.
 [UnknownAs(Check)]

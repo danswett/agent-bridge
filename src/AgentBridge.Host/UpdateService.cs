@@ -510,7 +510,8 @@ public sealed class UpdateService
                 // Otherwise keep the command so its departure can be verified again after a restart.
                 record!.Answer(press.Request, "accepted", null, null, whenIdle ? null : signed);
                 asks.Add(new UpdateAsk(press.Request, UpdateAskKind.Install, press.By, time.GetUtcNow(),
-                    whenIdle ? null : new UpdateNowAsk(args.Release!, args.Accept, until)));
+                    whenIdle ? null : new UpdateNowAsk(args.Release!, args.Accept, until, args.Unchecked == true, args.Batch == true),
+                    whenIdle ? new UpdatePolicyAllowance(args.Release!, args.Unchecked == true, args.Batch == true) : null));
             }
         }
         if (refused is not null) { return RefusedNow(peer, ManageReason.Busy, refused); }
