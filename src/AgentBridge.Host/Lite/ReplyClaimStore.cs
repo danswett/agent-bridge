@@ -15,6 +15,7 @@ public sealed class ReplyClaimStore : IDisposable
     const int Schema = 1, MaxPerSession = 4096;
     static readonly TimeSpan Lifetime = TimeSpan.FromHours(24), LockWait = TimeSpan.FromSeconds(2);
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    internal static readonly AsyncLocal<Action?> BeforeRecoveryFileFlush = new();
     static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
@@ -33,11 +34,10 @@ public sealed class ReplyClaimStore : IDisposable
         var paths = For(profileFolder);
         using var held = Lock(paths);
         var migration = Read<MigrationDocument>(paths.Migration, required: false);
-        var marker = Read<MarkerDocument>(paths.Marker, required: false);
-        var ledger = Read<LedgerDocument>(paths.Ledger, required: false);
+        var marker = Read<ReplyClaimMarker>(paths.Marker, required: false);
         if (migration is null)
         {
-            if (marker is not null || ledger is not null
+            if (marker is not null || File.Exists(paths.Ledger)
                 || Directory.Exists(paths.Directory) && Directory.EnumerateFileSystemEntries(paths.Directory).Any())
             { throw new InvalidDataException("Reply-claim state exists without a migration record; delivery remains held."); }
             migration = new(Schema, paths.ProfileKey, "initializing");
@@ -48,33 +48,29 @@ public sealed class ReplyClaimStore : IDisposable
         {
             if (marker is null || marker.State != "active") { throw new InvalidDataException("A completed reply-claim migration has a missing or inactive marker."); }
             ValidateProfile(marker.Schema, marker.ProfileKey, paths, "marker");
-            ValidateLedger(ledger, paths);
+            Load(paths, ref marker, repairTail: true);
             return;
         }
         if (migration.State != "initializing") { throw new InvalidDataException("The reply-claim migration state is invalid."); }
         if (marker is null)
         {
-            if (ledger is not null) { throw new InvalidDataException("The reply-claim marker is missing; delivery remains held."); }
-            marker = new(Schema, paths.ProfileKey, "initializing");
+            if (File.Exists(paths.Ledger)) { throw new InvalidDataException("The reply-claim marker is missing; delivery remains held."); }
+            marker = new(Schema, paths.ProfileKey, "initializing", 0, ReplyClaimJournal.Genesis(paths.ProfileKey),
+                ReplyClaimJournal.StateHash([]));
             Write(paths.Marker, marker);
         }
         ValidateProfile(marker.Schema, marker.ProfileKey, paths, "marker");
-        if (marker.State == "active")
-        { ValidateLedger(ledger, paths); }
+        if (marker.State == "active") { Load(paths, ref marker, repairTail: true); }
         else if (marker.State == "initializing")
         {
-            if (ledger is not null)
+            var active = marker with { State = "active" };
+            if (File.Exists(paths.Ledger))
             {
-                ValidateLedger(ledger, paths);
-                if (ledger.Claims.Count != 0) { throw new InvalidDataException("An initializing reply-claim ledger is not empty."); }
+                if (ReplyClaimJournal.Read(paths.Ledger, paths.ProfileKey, active, repairTail: true).Claims.Count != 0)
+                { throw new InvalidDataException("An initializing reply-claim ledger is not empty."); }
             }
-            else
-            {
-                ledger = new(Schema, paths.ProfileKey, []);
-                Write(paths.Ledger, ledger);
-            }
-            marker = new(Schema, paths.ProfileKey, "active");
-            Write(paths.Marker, marker);
+            else { WriteBytes(paths.Ledger, []); }
+            Write(paths.Marker, active);
         }
         else { throw new InvalidDataException("The reply-claim marker state is invalid."); }
         Write(paths.Migration, migration with { State = "complete" });
@@ -87,37 +83,52 @@ public sealed class ReplyClaimStore : IDisposable
         return new(paths, time);
     }
 
+    public static void RecoverFromBackup(string profileFolder, string backupPath)
+    {
+        var paths = For(profileFolder);
+        using var held = Lock(paths);
+        var marker = ReadyMarker(paths);
+        ReplyClaimJournal.Recover(paths.Ledger, Path.GetFullPath(backupPath), paths.ProfileKey, marker);
+        Load(paths, ref marker, repairTail: false);
+    }
+
     public ReplyClaimResult Acquire(string sessionId, string requestId, string textHash, string? attachmentHash = null)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentException.ThrowIfNullOrEmpty(sessionId);
         ArgumentException.ThrowIfNullOrEmpty(requestId);
+        if (Encoding.UTF8.GetByteCount(sessionId) > ReplyClaimJournal.MaxSessionBytes)
+        { throw new ArgumentException("Session IDs may not exceed 64 UTF-8 bytes.", nameof(sessionId)); }
         ValidateHash(textHash, nameof(textHash));
         if (attachmentHash is not null) { ValidateHash(attachmentHash, nameof(attachmentHash)); }
         using var held = Lock(paths);
-        ValidateReady(paths);
-        var ledger = Read<LedgerDocument>(paths.Ledger, required: true);
-        ValidateLedger(ledger, paths);
+        var marker = ReadyMarker(paths);
+        var ledger = Load(paths, ref marker, repairTail: true);
         var now = time.GetUtcNow();
-        var removed = ledger!.Claims.RemoveAll(c => now - c.FirstClaimUtc >= Lifetime) > 0;
+        foreach (var expiredClaim in ledger.Claims.Where(c => now - c.FirstClaimUtc >= Lifetime).ToArray())
+        {
+            ledger.Claims.Remove(expiredClaim);
+            ledger = ReplyClaimJournal.Append(paths.Ledger, paths.ProfileKey, ledger, "expired", expiredClaim);
+            marker = Advance(paths, marker, ledger);
+        }
+        if (new FileInfo(paths.Ledger).Length > 1024 * 1024)
+        {
+            ledger = Compact(paths, marker, ledger);
+            marker = marker with { Sequence = ledger.Sequence, Hash = ledger.Hash };
+        }
         var requestHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(requestId)));
-        var existing = ledger.Claims.FirstOrDefault(c => c.Session == sessionId && string.Equals(c.RequestHash, requestHash, StringComparison.OrdinalIgnoreCase));
+        var existing = ledger.Claims.FirstOrDefault(c => c.Session == sessionId && Eq(c.RequestHash, requestHash));
         if (existing is not null)
         {
-            if (removed) { Write(paths.Ledger, ledger); }
-            return string.Equals(existing.TextHash, textHash, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(existing.AttachmentHash, attachmentHash, StringComparison.OrdinalIgnoreCase)
-                ? new(ReplyClaimStatus.Existing, existing.Generation)
-                : new(ReplyClaimStatus.RequestReused, Guid.Empty);
+            return Eq(existing.TextHash, textHash) && Eq(existing.AttachmentHash, attachmentHash)
+                ? new(ReplyClaimStatus.Existing, existing.Generation) : new(ReplyClaimStatus.RequestReused, Guid.Empty);
         }
-        if (ledger.Claims.Count(c => c.Session == sessionId) >= MaxPerSession)
-        {
-            if (removed) { Write(paths.Ledger, ledger); }
-            return new(ReplyClaimStatus.Full, Guid.Empty);
-        }
-        var claim = new Claim(sessionId, requestHash, textHash.ToUpperInvariant(), attachmentHash?.ToUpperInvariant(), Guid.NewGuid(), now);
+        if (ledger.Claims.Count(c => c.Session == sessionId) >= MaxPerSession
+            || ledger.Claims.Count >= ReplyClaimJournal.MaxClaims) { return new(ReplyClaimStatus.Full, Guid.Empty); }
+        var claim = new ReplyClaimRecord(sessionId, requestHash, textHash.ToUpperInvariant(), attachmentHash?.ToUpperInvariant(), Guid.NewGuid(), now);
         ledger.Claims.Add(claim);
-        Write(paths.Ledger, ledger);
+        ledger = ReplyClaimJournal.Append(paths.Ledger, paths.ProfileKey, ledger, "claimed", claim);
+        marker = Advance(paths, marker, ledger);
         return new(ReplyClaimStatus.Acquired, claim.Generation);
     }
 
@@ -127,18 +138,71 @@ public sealed class ReplyClaimStore : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(sessionId);
         ArgumentException.ThrowIfNullOrEmpty(requestId);
         using var held = Lock(paths);
-        ValidateReady(paths);
-        var ledger = Read<LedgerDocument>(paths.Ledger, required: true);
-        ValidateLedger(ledger, paths);
+        var marker = ReadyMarker(paths);
+        var ledger = Load(paths, ref marker, repairTail: true);
         var requestHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(requestId)));
-        var index = ledger!.Claims.FindIndex(c => c.Session == sessionId && string.Equals(c.RequestHash, requestHash, StringComparison.OrdinalIgnoreCase) && c.Generation == generation);
-        if (index < 0) { return false; }
-        ledger.Claims.RemoveAt(index);
-        Write(paths.Ledger, ledger);
+        var claim = ledger.Claims.FirstOrDefault(c => c.Session == sessionId && Eq(c.RequestHash, requestHash) && c.Generation == generation);
+        if (claim is null) { return false; }
+        if (new FileInfo(paths.Ledger).Length > 1024 * 1024) { ledger = Compact(paths, marker, ledger); }
+        ledger.Claims.Remove(claim);
+        ledger = ReplyClaimJournal.Append(paths.Ledger, paths.ProfileKey, ledger, "released", claim);
+        marker = Advance(paths, marker, ledger);
         return true;
     }
 
+    public void Compact()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        using var held = Lock(paths);
+        var marker = ReadyMarker(paths);
+        var ledger = Load(paths, ref marker, repairTail: true);
+        Compact(paths, marker, ledger);
+    }
+
     public void Dispose() => disposed = true;
+
+    static ReplyClaimSnapshot Load(Paths paths, ref ReplyClaimMarker marker, bool repairTail)
+    {
+        var ledger = ReplyClaimJournal.Read(paths.Ledger, paths.ProfileKey, marker, repairTail);
+        if (ledger.Sequence > marker.Sequence)
+        {
+            using (var stream = new FileStream(paths.Ledger, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
+            { BeforeRecoveryFileFlush.Value?.Invoke(); stream.Flush(true); }
+            ClaimDirectorySync.Flush(paths.Directory);
+            marker = Advance(paths, marker, ledger);
+        }
+        return ledger;
+    }
+
+    static ReplyClaimSnapshot Compact(Paths paths, ReplyClaimMarker marker, ReplyClaimSnapshot ledger)
+    {
+        var compacted = ReplyClaimJournal.Compact(paths.Ledger, paths.ProfileKey, ledger, marker);
+        var verified = ReplyClaimJournal.Read(paths.Ledger, paths.ProfileKey, marker, repairTail: false);
+        if (verified.Sequence != compacted.Sequence || verified.Hash != compacted.Hash)
+        { throw new InvalidDataException("The compacted reply-claim journal did not verify."); }
+        Advance(paths, marker, verified);
+        return verified;
+    }
+
+    static ReplyClaimMarker Advance(Paths paths, ReplyClaimMarker marker, ReplyClaimSnapshot ledger)
+    {
+        var next = marker with { Sequence = ledger.Sequence, Hash = ledger.Hash, StateHash = ReplyClaimJournal.StateHash(ledger.Claims) };
+        Write(paths.Marker, next);
+        return next;
+    }
+
+    static ReplyClaimMarker ReadyMarker(Paths paths)
+    {
+        var migration = Read<MigrationDocument>(paths.Migration, required: true)!;
+        var marker = Read<ReplyClaimMarker>(paths.Marker, required: true)!;
+        ValidateProfile(migration.Schema, migration.ProfileKey, paths, "migration");
+        ValidateProfile(marker.Schema, marker.ProfileKey, paths, "marker");
+        if (migration.State != "complete" || marker.State != "active" || marker.Sequence < 0
+            || marker.Hash is not { Length: 64 } || !marker.Hash.All(Uri.IsHexDigit)
+            || marker.StateHash is not { Length: 64 } || !marker.StateHash.All(Uri.IsHexDigit))
+        { throw new InvalidDataException("The reply-claim migration or marker is invalid or inactive."); }
+        return marker;
+    }
 
     static Paths For(string folder)
     {
@@ -175,37 +239,6 @@ public sealed class ReplyClaimStore : IDisposable
         catch { gate.Release(); throw; }
     }
 
-    static void ValidateLedger(LedgerDocument? ledger, Paths paths)
-    {
-        if (ledger is null || ledger.Claims is null) { throw new InvalidDataException("The reply-claim ledger is missing or invalid; delivery remains held."); }
-        ValidateProfile(ledger.Schema, ledger.ProfileKey, paths, "ledger");
-        var keys = new HashSet<(string, string)>();
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var claim in ledger.Claims)
-        {
-            if (claim is null || string.IsNullOrEmpty(claim.Session) || !IsHash(claim.RequestHash) || !IsHash(claim.TextHash)
-                || claim.AttachmentHash is not null && !IsHash(claim.AttachmentHash) || claim.Generation == Guid.Empty
-                || claim.FirstClaimUtc == default || claim.FirstClaimUtc.Offset != TimeSpan.Zero
-                || !keys.Add((claim.Session, claim.RequestHash.ToUpperInvariant())))
-            { throw new InvalidDataException("The reply-claim ledger is invalid; delivery remains held."); }
-            counts[claim.Session] = counts.GetValueOrDefault(claim.Session) + 1;
-            if (counts[claim.Session] > MaxPerSession) { throw new InvalidDataException("The reply-claim ledger exceeds its per-session bound."); }
-        }
-    }
-
-    static void ValidateReady(Paths paths)
-    {
-        var migration = Read<MigrationDocument>(paths.Migration, required: true)!;
-        var marker = Read<MarkerDocument>(paths.Marker, required: true)!;
-        ValidateProfile(migration.Schema, migration.ProfileKey, paths, "migration");
-        ValidateProfile(marker.Schema, marker.ProfileKey, paths, "marker");
-        if (migration.State != "complete" || marker.State != "active")
-        { throw new InvalidDataException("The reply-claim migration or marker is not active."); }
-    }
-
-    static void ValidateProfile(int schema, string profileKey, Paths paths, string name)
-    { if (schema != Schema || profileKey != paths.ProfileKey) { throw new InvalidDataException($"The reply-claim {name} belongs to another profile or schema."); } }
-
     static T? Read<T>(string path, bool required) where T : class
     {
         if (!File.Exists(path)) { return required ? throw new InvalidDataException($"Required reply-claim state is missing: {Path.GetFileName(path)}.") : null; }
@@ -213,20 +246,25 @@ public sealed class ReplyClaimStore : IDisposable
         catch (JsonException e) { throw new InvalidDataException($"Reply-claim state is invalid: {Path.GetFileName(path)}.", e); }
     }
 
-    static void Write<T>(string path, T value)
+    static void Write<T>(string path, T value) => WriteBytes(path, JsonSerializer.SerializeToUtf8Bytes(value, Json));
+
+    static void WriteBytes(string path, byte[] bytes)
     {
         var directory = Path.GetDirectoryName(path)!;
         const UnixFileMode ownerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
         if (OperatingSystem.IsWindows()) { Directory.CreateDirectory(directory); }
         else { Directory.CreateDirectory(directory, ownerOnly); File.SetUnixFileMode(directory, ownerOnly); }
         ClaimDirectorySync.Flush(Path.GetDirectoryName(directory)!);
-        DurableFile.Write(path, JsonSerializer.SerializeToUtf8Bytes(value, Json));
+        DurableFile.Write(path, bytes);
         ClaimDirectorySync.Flush(directory);
     }
 
-    static bool IsHash(string? value) => value is { Length: 64 } && value.All(Uri.IsHexDigit);
+    static void ValidateProfile(int schema, string profileKey, Paths paths, string name)
+    { if (schema != Schema || profileKey != paths.ProfileKey) { throw new InvalidDataException($"The reply-claim {name} belongs to another profile or schema."); } }
+
     static void ValidateHash(string value, string name)
-    { if (!IsHash(value)) { throw new ArgumentException("Expected a SHA-256 hash in hexadecimal form.", name); } }
+    { if (value is not { Length: 64 } || !value.All(Uri.IsHexDigit)) { throw new ArgumentException("Expected a SHA-256 hash in hexadecimal form.", name); } }
+    static bool Eq(string? left, string? right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
 
     sealed class LockLease(SemaphoreSlim gate, FileStream stream) : IDisposable
     {
@@ -235,7 +273,4 @@ public sealed class ReplyClaimStore : IDisposable
 
     sealed record Paths(string Profile, string ProfileKey, string Directory, string Migration, string Marker, string Ledger, string Lock);
     sealed record MigrationDocument(int Schema, string ProfileKey, string State);
-    sealed record MarkerDocument(int Schema, string ProfileKey, string State);
-    sealed record LedgerDocument(int Schema, string ProfileKey, List<Claim> Claims);
-    sealed record Claim(string Session, string RequestHash, string TextHash, string? AttachmentHash, Guid Generation, DateTimeOffset FirstClaimUtc);
 }
