@@ -2,6 +2,36 @@ import { test, expect } from '@playwright/test';
 import { open, view } from './nav.mjs';
 import { readFileSync } from 'node:fs';
 
+test('successive replies in one turn remain visible in order', async ({ page }) => {
+  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+  await page.waitForSelector('html[data-demo-ready]');
+  await page.evaluate(() => {
+    const { host } = window.agentBridgeDemo;
+    const at = '2026-11-11T06:37:19Z';
+    const turn = { id: 'same-turn', at, prompt: { text: 'Owner question', from: 'person' },
+      parts: [{ id: 'first', at, kind: 'response', text: 'First answer' }] };
+    host.historyTurns.set('signin-1', [turn]);
+    const s = host.sessions.get('signin-1');
+    host.upsert({ ...s, activity: { turn: turn.id, responseTurn: turn.id, userMessage: turn.prompt.text, response: 'First answer' } });
+  });
+  await open(page, 'signin-1');
+  const v = view(page, 'signin-1');
+  await expect(v.locator('.stream-scroll')).toContainText('First answer');
+  await page.evaluate(() => {
+    const { host } = window.agentBridgeDemo;
+    const turn = host.historyTurns.get('signin-1')[0];
+    host.historyTurns.set('signin-1', [{ ...turn, parts: [...turn.parts,
+      { id: 'second', at: turn.at, kind: 'response', text: 'Background result' }] }]);
+    const s = host.sessions.get('signin-1');
+    host.upsert({ ...s, activity: { ...s.activity, response: 'Background result' } });
+  });
+  await expect(v.locator('.history-reply')).toHaveCount(2);
+  const text = await v.locator('.stream-scroll').innerText();
+  const words = ['Owner question', 'First answer', 'Background result'];
+  expect(words.map((word) => text.indexOf(word))).toEqual([...words.map((word) => text.indexOf(word))].sort((a, b) => a - b));
+  for (const word of words) { expect(text.split(word).length - 1).toBe(1); }
+});
+
 test('the 16-event queued-owner fixture retains all four replies under their own origins', async ({ page }) => {
   const events = readFileSync(new URL('../../tests/fixtures/copilot/queued-owner-history.jsonl', import.meta.url), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
   const turns = [[0, 3, 'user', 'person'], [2, 7, 'user', 'person'], [6, 10, 'notification', 'notification'], [12, 14, 'scheduled', 'schedule']]

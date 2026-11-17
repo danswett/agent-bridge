@@ -24,7 +24,7 @@ async function setup() {
 }
 const settle = () => new Promise(setImmediate);
 
-test('a later reply in the same turn preserves the first answer in the visible conversation', async () => {
+test('a later reply in the same turn preserves the first answer in the visible conversation', { timeout: 2000 }, async () => {
   const { store, serve } = await setup();
   const first = { id: 'first', kind: 'response', text: 'First answer' };
   const later = { id: 'later', kind: 'response', text: 'Background result' };
@@ -32,13 +32,71 @@ test('a later reply in the same turn preserves the first answer in the visible c
   store.live('h', said(A, first.text));
   await store.open('h', 's');
 
+  const refreshed = new Promise((resolve) => {
+    const unwatch = store.watch('h', 's', (_snapshot, change) => {
+      if (change.kind === 'newest') { unwatch(); resolve(); }
+    });
+  });
   serve([{ ...A, parts: [first, later] }]);
   store.live('h', said(A, later.text));
-  await settle();
+  const immediate = historyPlan(store.get('h', 's'), A.id);
+  assert.deepEqual(immediate.turns.flatMap((turn) => shownParts(turn).filter((p) => p.kind === 'response').map((p) => p.text)),
+    ['First answer', 'Background result']);
+  await refreshed;
   const snapshot = store.get('h', 's');
   const plan = historyPlan(snapshot, A.id);
   assert.deepEqual(plan.turns.flatMap((turn) => shownParts(turn).filter((p) => p.kind === 'response').map((p) => p.text)),
     ['First answer', 'Background result']);
+});
+
+test('rapid updates share a recovery and forgetting cancels a pending recovery', async () => {
+  const { store, serve, calls } = await setup();
+  serve([A]);
+  store.live('h', said(A, 'First answer'));
+  store.live('h', said(A, 'Background'));
+  store.live('h', said(A, 'Background result'));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(calls(), 2);
+
+  store.live('h', said(A, 'Another result'));
+  store.forget('h', 's');
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(calls(), 2);
+});
+
+test('a later reply keeps an observed answer even before history arrives', () => {
+  const store = new HistoryStore({ current: () => null });
+  store.open('h', 's');
+  store.live('h', said(A, 'First answer'));
+  store.live('h', said(A, 'Background result'));
+  const plan = historyPlan(store.get('h', 's'), A.id);
+  assert.deepEqual(plan.turns.flatMap((turn) => shownParts(turn).filter((p) => p.kind === 'response').map((p) => p.text)),
+    ['First answer', 'Background result']);
+  store.forget('h', 's');
+});
+
+test('a caught-up history page replaces local replies without duplicating them', async () => {
+  const { store, serve } = await setup();
+  store.live('h', said(A, 'First answer'));
+  store.live('h', said(A, 'Background result'));
+  serve([{ ...A, parts: [{ id: 'first', kind: 'response', text: 'First answer' },
+    { id: 'second', kind: 'response', text: 'Background result' }] }]);
+  await store.open('h', 's');
+  const turn = store.get('h', 's').turns[0];
+  assert.deepEqual(shownParts(turn).map((part) => part.text), ['First answer', 'Background result']);
+  assert.deepEqual(turn.parts.map((part) => part.id), ['first', 'second']);
+  store.forget('h', 's');
+});
+
+test('both locally observed replies remain when the next turn starts', () => {
+  const store = new HistoryStore({ current: () => null });
+  store.open('h', 's');
+  store.live('h', said(A, 'First answer'));
+  store.live('h', said(A, 'Background result'));
+  store.live('h', said(B));
+  const plan = historyPlan(store.get('h', 's'), B.id);
+  assert.deepEqual(shownParts(plan.turns[0]).map((part) => part.text), ['First answer', 'Background result']);
+  store.forget('h', 's');
 });
 
 test('capped turns replace moved reply ids whole without overriding host budget drops', async () => {

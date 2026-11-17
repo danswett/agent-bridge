@@ -70,8 +70,34 @@ export function topPlan(snapshot) {
 
 // What to draw for a snapshot: a meta line saying why there is nothing (or null), and the turns
 // before the latest one.
+const streamedTurns = new WeakMap();
+
+// A history page may lag the live words of the current turn.
+export function streamedTurn(turn) {
+  const cached = streamedTurns.get(turn);
+  if (cached) { return cached; }
+  const text = turn.live?.response;
+  const at = turn.parts.findLastIndex((p) => p.kind === 'response' && p.text);
+  const last = turn.parts[at];
+  const continuation = last && !turn.parts.slice(at + 1).some((p) => p.kind === 'question');
+  if (!text || text === last?.text || (continuation && last.text.startsWith(text))
+    || turn.parts.some((p) => p.kind === 'response' && p.text === text)) { return turn; }
+  const parts = [...turn.parts];
+  const response = { kind: 'response', text, truncated: turn.live.responseTruncated === true };
+  if (continuation && text.startsWith(last.text)) {
+    parts[at] = { ...last, ...response };
+  } else {
+    parts.push(response);
+  }
+  const drawn = { ...turn, parts };
+  streamedTurns.set(turn, drawn);
+  return drawn;
+}
+
 export function historyPlan(snapshot, latestId = null) {
-  const turns = snapshot.turns.filter((t) => t.id !== latestId || t.parts.some((p) => p.kind === 'question'));
+  const turns = snapshot.turns.map(streamedTurn)
+    .filter((t) => t.id !== latestId || t.parts.some((p) => p.kind === 'question')
+    || t.parts.filter((p) => p.kind === 'response' && p.text).length > 1);
   let note = null;
   if (snapshot.phase === 'loading' && !snapshot.turns.length) { note = WORDS.loading; }
   else if (snapshot.phase === 'unavailable') { note = WORDS.unavailable; }

@@ -16,6 +16,17 @@ test('the latest turn is the card\'s live exchange and is left out', () => {
   assert.equal(plan.note, null);
 });
 
+test('a growing live reply is not mistaken for another message', () => {
+  const current = { id: 'c', parts: [{ id: 'p', kind: 'response', text: 'First' }], live: { response: 'First answer' } };
+  assert.deepEqual(historyPlan(snap('ready', [current]), 'c').turns, []);
+});
+
+test('a stale live reply already in a multi-reply turn is not appended again', () => {
+  const current = { id: 'c', parts: [{ id: 'p1', kind: 'response', text: 'First' }, { id: 'p2', kind: 'response', text: 'Second' }], live: { response: 'First' } };
+  const plan = historyPlan(snap('ready', [current]), 'c');
+  assert.deepEqual(shownParts(plan.turns[0]).map((p) => p.text), ['First', 'Second']);
+});
+
 test('states say why nothing is drawn', () => {
   assert.equal(historyPlan(snap('loading')).note, WORDS.loading);
   assert.equal(historyPlan(snap('ready')).note, WORDS.empty);

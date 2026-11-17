@@ -1696,7 +1696,8 @@ export class SessionCard {
     const recorded = (kind) => t?.parts.filter((p) => p.kind === kind && p.text).at(-1)?.text;
     e.user.hidden = !!t || !s.activity.userMessage || !!promptOrigin(s);
     e.prompt.hidden = !!t || !promptOrigin(s);
-    e.response.hidden = !voice.response || (!!t && voice.response === (recorded('response') ?? t.live?.response));
+    e.response.hidden = !voice.response || (!!t && (t.parts.some((p) => p.kind === 'response' && p.text === voice.response)
+      || (!recorded('response') && voice.response === t.live?.response)));
     e.reasoning.hidden = !voice.reasoning || (!!t && voice.reasoning === recorded('reasoning'));
     e.truncated.hidden = e.response.hidden || !voice.responseTruncated;
     e.dropped.hidden = !voice.responseDropped;

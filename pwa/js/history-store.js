@@ -55,11 +55,16 @@ function mergeParts(held, incoming) {
   }
   return parts;
 }
-const adopt = (page, held) => ({
-  ...page, ...(held.live ? { live: held.live } : {}),
-  parts: page.truncated || held.truncated || page.partsMore || held.partsMore ? page.parts : mergeParts(held.parts.filter((p) => p.kind === 'response' && p.text), page.parts),
-  ...(held.carried ? { carried: true, prompt: page.prompt ?? held.prompt, kind: page.kind ?? held.kind } : {}),
-});
+const adopt = (page, held) => {
+  const caughtUp = held.live?.response && page.parts.some((p) => p.kind === 'response' && p.text === held.live.response);
+  const retained = held.parts.filter((p) => p.kind === 'response' && p.text && (!p.localReply
+    || (!caughtUp && !page.parts.some((q) => q.kind === 'response' && q.text === p.text))));
+  return {
+    ...page, ...(held.live ? { live: held.live } : {}),
+    parts: page.truncated || held.truncated || page.partsMore || held.partsMore ? page.parts : mergeParts(retained, page.parts),
+    ...(held.carried ? { carried: true, prompt: page.prompt ?? held.prompt, kind: page.kind ?? held.kind } : {}),
+  };
+};
 
 export class HistoryStore {
   #entries = new Map();
@@ -93,7 +98,7 @@ export class HistoryStore {
   forget(hostId, sessionId) {
     const key = HistoryStore.key(hostId, sessionId);
     const e = this.#entries.get(key);
-    if (e) { e.generation++; this.#entries.delete(key); }
+    if (e) { clearTimeout(e.replyTimer); e.generation++; this.#entries.delete(key); }
   }
 
   // The newest page, merged into what is held. session (as the sessions store has it) is merged
@@ -120,6 +125,8 @@ export class HistoryStore {
     const before = e.turns;
     const previousId = e.last;
     const latest = session.activity.turn ?? null;
+    const previousReply = before.find((t) => t.id === latest)?.live?.response;
+    const nextReply = session.activity.responseTurn === latest ? mainVoice(session).response : null;
     let changed = latest !== e.latest;
     let turns = e.turns.slice();
     // The turn that was latest keeps what it was drawn with, but runs no tool now, whether the next
@@ -148,6 +155,15 @@ export class HistoryStore {
     if (missedReply || missingNotice) {
       this.open(hostId, session.id).catch((err) => this.#fail(e, 'newest', err.message, false));
     }
+    // Activity names a turn, not an individual reply. A changed reply may be another message
+    // in the same turn; history supplies its identity and order. Coalesce streaming updates.
+    if (e.atLatest && latest && latest === previousId && previousReply && nextReply && previousReply !== nextReply) {
+      clearTimeout(e.replyTimer);
+      e.replyTimer = setTimeout(() => {
+        e.replyTimer = null;
+        this.open(hostId, session.id).catch((err) => this.#fail(e, 'newest', err.message, false));
+      }, 200);
+    }
   }
 
   // ---- the work ----
@@ -156,7 +172,7 @@ export class HistoryStore {
     return {
       hostId, sessionId, turns: [], cursors: new Map(), before: null, start: null, endPartial: false, phase: 'idle', why: null,
       unsupported: false, loading: null, error: null, atLatest: true, latest: null, last: null, recovering: null, seen: false,
-      generation: 0, tail: Promise.resolve(), queued: {}, running: {}, revision: 0, noticeRecovery: null,
+      generation: 0, tail: Promise.resolve(), queued: {}, running: {}, revision: 0, noticeRecovery: null, replyTimer: null, localReply: 0,
     };
   }
 
@@ -511,6 +527,16 @@ export class HistoryStore {
     }
     if (a.kind && !turns[i].kind) { turns[i] = { ...turns[i], kind: a.kind }; changed = true; }
     const replied = a.responseTurn === latest && !!voice.response;
+    const old = turns[i].live?.response;
+    if (replied && old && old !== voice.response && !voice.response.startsWith(old) && !old.startsWith(voice.response)
+      && !turns[i].parts.some((p) => p.kind === 'response' && p.text === old)) {
+      const parts = [...turns[i].parts, { id: `${latest}~live-${++e.localReply}`, kind: 'response', text: old,
+        truncated: turns[i].live?.responseTruncated === true, localReply: true }];
+      const locals = parts.filter((p) => p.localReply);
+      if (locals.length > 50) { parts.splice(parts.indexOf(locals[0]), 1); }
+      turns[i] = { ...turns[i], parts, ...(locals.length > 50 ? { truncated: true } : {}) };
+      changed = true;
+    }
     const next = { ...turns[i].live, response: replied ? voice.response : (turns[i].live?.response ?? null), responseTruncated: replied ? voice.responseTruncated : (turns[i].live?.responseTruncated ?? false), reasoning: voice.reasoning, currentTool: a.currentTool ?? null };
     if (!same(next, turns[i].live)) { turns[i] = { ...turns[i], live: next }; changed = true; }
     // A reply that is an earlier turn's is drawn there, never under the new prompt.
