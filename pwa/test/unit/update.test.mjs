@@ -104,7 +104,7 @@ test('a state from a newer host reads safely: an unknown phase as idle and an un
   assert.equal(s.phase, 'idle');
   assert.equal(s.progress, 100);
   assert.equal(s.last.outcome, 'failed');
-  assert.deepEqual(readUpdateCommandResult({ outcome: 'maybe' }), { outcome: 'refused', reason: null, state: null, code: null });
+  assert.deepEqual(readUpdateCommandResult({ outcome: 'maybe' }), { outcome: 'refused', reason: null, state: null, code: null, retryAt: null });
 });
 
 test('each phase reads as a line, and Install is offered only when a release is found and nothing is under way', () => {
@@ -318,12 +318,13 @@ for (const kind of ['ordinary', 'signed']) {
     if (kind === 'ordinary') { await control.press('a', 'install'); } else { await control.pressNow('a'); }
     return control.stateOf('a').note;
   };
-  test(`retryAt on an ${kind} update refusal uses the viewer clock`, async () => {
+  test(`retryAt on ${kind} update refusals uses the viewer clock`, async () => {
     const retryAt = '2026-11-02T20:12:00.000Z';
     const answer = { outcome: 'refused', code: 'rate-limited', retryAt, reason: 'host words nobody sees' };
-    assert.equal(await press(answer), `Not updated yet. Try again after ${clockTime(retryAt)}.`);
+    const time = new Date(retryAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    assert.equal(await press(answer), `Not updated yet. Try again after ${time}.`);
   });
-  test(`retryAt missing or invalid on an ${kind} update refusal gets a plain fallback`, async () => {
+  test(`retryAt missing or invalid on ${kind} update refusals gets a plain fallback`, async () => {
     for (const retryAt of [undefined, null, 'not a time', 123]) {
       const answer = { outcome: 'refused', code: 'rate-limited', retryAt, reason: 'host words nobody sees' };
       assert.equal(await press(answer), 'Not updated yet. Try again in a few minutes.');
@@ -370,7 +371,7 @@ test('a confirm outcome shows the confirmation again with what is busy now, and 
   assert.equal(sheets.length, 1);
   assert.deepEqual(sheets[0].sessions.map((s) => [s.id, s.state]), [['p', 'Approval waiting'], ['q', 'Question waiting'], ['t', 'Mid-turn']]);
   assert.deepEqual(signs.map((s) => [s.request, s.accept?.waiting ?? null]), [['r1', null], ['r2', 2]]);
-  assert.equal(control.stateOf('a').note, 'Not updated: too many presses just now; try again in a few minutes.');
+  assert.equal(control.stateOf('a').note, 'Not updated yet. Try again in a few minutes.');
 });
 
 test('a press that gets no answer says so and never says it was not sent', async () => {
