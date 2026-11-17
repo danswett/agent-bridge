@@ -119,6 +119,21 @@ public sealed class AgentLiteDeliveryTests
         Assert.DoesNotContain(f.Log, l => l.Contains(text, StringComparison.Ordinal));
     }
     [Fact]
+    public async Task Gate_audits_distinguish_allowlist_refusal_and_acceptance_without_message_text()
+    {
+        var f = new Fixture { AllowAllTargets = true }; f.Launch(LaunchProtocol.AllowAll);
+        const string text = "private message excluded from gate audits";
+        Assert.False((await Send(f, text)).Typed);
+        Assert.Contains(f.Log, l => l.Contains($"request {Req} gate AllowlistedAllTargetsGate: refused: the allow-all session is not enabled and listed", StringComparison.Ordinal));
+        f.AllowAllTargetSessions = [Target];
+        Assert.True((await Send(f, text)).Typed);
+        Assert.Contains(f.Log, l => l.Contains($"request {Req} gate AllowlistedAllTargetsGate: allowed", StringComparison.Ordinal));
+        f.Launch(LaunchProtocol.Ask);
+        Assert.True((await Send(f, text)).Typed);
+        Assert.Contains(f.Log, l => l.Contains($"request {Req} gate ForcedAskGate: allowed", StringComparison.Ordinal));
+        Assert.DoesNotContain(f.Log, l => l.Contains(text, StringComparison.Ordinal));
+    }
+    [Fact]
     public async Task An_unknown_session_is_refused_with_nothing_typed()
     {
         var f = new Fixture { Exists = false }; f.Launch(LaunchProtocol.Ask);

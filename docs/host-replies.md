@@ -440,6 +440,9 @@ reported apart.
 
 `LiteDeliver` types a verified lite message into one idle Copilot session behind a one-line provenance marker (sender machine, session, request id). It refuses, typing nothing, with `notReplyTarget` (not launched here in forced-ask mode; allow-all only while `agentMessaging.allowAllTargets` is on and the exact target session id is listed in `agentMessaging.allowAllTargetSessions`; text unbound, empty, over 4096 characters or with a request id that is not a UUID), `busy` (not idle, or over 6 messages a minute per session), `composerNotEmpty` or `noSuchSession`. Its host-only `RequireIdle` condition makes `ReplyService` re-check idle after taking the typing slot; a session that became busy while waiting is refused as `busy`, so the sender falls back to HA. A person's reply can still reach a working session. There is no queue and no retry. Gates (`IReplyTargetGate`) are OR-composed in `LiteComposition`; the log line carries sender, target, request id and outcome, never the text.
 
+Each evaluated gate also logs its name, decision and refusal reason with the target and request id,
+never message text. An allowed gate ends evaluation; otherwise every refusal is recorded.
+
 That is the unchanged AP5-lite contract, not the mode-capable queue-reply v1 path.
 #2468's Q35 supersession does not remove `RequireIdle` or add queueing to Lite.
 
