@@ -186,6 +186,7 @@ public sealed partial class HaConnector
         {
             foreach (var (id, p) in published)
             {
+                if (inbox is not null && p.Reply.ReadAgain) { touched.TryAdd(p.Node, []); }
                 if (p.Armed is not null) { continue; }
                 // A card rebuilt while its delivery runs (after a pause) is baselined meanwhile,
                 // so what is sent after that is still new once the delivery is done.
@@ -379,6 +380,11 @@ public sealed partial class HaConnector
     async Task<CardRead> CardReplyAsync(string sessionId, Published p, HaState state, CancellationToken ct, bool fromInbox = false)
     {
         if (!IsStamp(state.State) || (!fromInbox && p.Reply.IsHandled(state.State))) { return CardRead.Nothing; }
+        if (!fromInbox && StoreInbox(new HaTrigger(SessionEntities.ReplyPayload(p.Node), state)))
+        {
+            await InboxReceiptsAsync(ct);
+            return CardRead.Taken;
+        }
         var stamp = state.State;
         var a = state.Attributes;
         var attributes = a.ValueKind == JsonValueKind.Object;
@@ -467,7 +473,7 @@ public sealed partial class HaConnector
         }
         p.Reply.Handle(stamp);
         var shown = Preview(text, images.Count + files.Count);
-        var request = RequestId(sessionId, "reply", "card:" + stamp);
+        var request = RequestId(sessionId, "reply", fromInbox ? "rid:" + rid : "card:" + stamp);
         Deliver(p, sessionId, shown, box: false, text: null, [.. images.Select(i => i.Id)], async token =>
         {
             var staged = new List<HaReplyFile>();

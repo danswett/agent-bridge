@@ -704,6 +704,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             allDirty = false;
         }
         var live = source.Snapshot().ToDictionary(s => s.Id, StringComparer.Ordinal);
+        inbox?.ForgetExcept(live.Keys.Concat(underWay.Keys).Select(HaContract.NodeId).ToHashSet(StringComparer.Ordinal));
         List<string> work;
         List<(string Id, string Node)> gone;
         lock (gate)

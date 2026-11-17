@@ -101,7 +101,7 @@ public sealed partial class HaConnector
         if (MixedReplyPayload(hit.EntityId, hit.State)) { return; }
         lock (gate)
         {
-            StoreInbox(hit);
+            if (StoreInbox(hit)) { return; }
             hits.Enqueue((Interlocked.Increment(ref hitSeq), hit));
         }
     }
@@ -702,6 +702,7 @@ public sealed partial class HaConnector
             await ReplyAsync(sessionId, p, seen, now, ct);
             return;
         }
+        if (armed is not null) { await RefuseInboxAtQuestionAsync(p, ct); }
         if (armed is null || armed.Plan.TerminalOnly || armed.Settled)
         {
             if (seen.Count > 0) { await UnservedAsync(p, seen[^1].Hit, ct); }
@@ -712,7 +713,6 @@ public sealed partial class HaConnector
         if (armed.Superseded) { return; }
         // A question that takes no typed answer takes no words from the reply card: said, not left unanswered (#1634).
         // An agent's words are never an owner's answer: only a payload naming this very question is (#1636).
-        await RefuseInboxAtQuestionAsync(p, ct);
         if (await RefuseReplyAtQuestionAsync(p, armed, ct)) { return; }
         var since = seen.Where(h => h.Seq > armed.Boundary && !(h.Hit.EntityId == SessionEntities.ReplyPayload(p.Node) && p.Reply.IsHandled(h.Hit.State.State))).Select(h => h.Hit).ToList();
         var outcome = await ReadAnswerAsync(sessionId, p, armed, since, ct);
@@ -843,7 +843,11 @@ public sealed partial class HaConnector
         if (hit.EntityId == SessionEntities.ReplyPayload(p.Node) && hit.State.Attributes is { ValueKind: JsonValueKind.Object } at)
         {
             sender = CleanSender(Str(at, "sender"));
-            if (CleanRid(Str(at, "rid")) is { } rid) { p.Reply.Ack = MakeAck(rid, sender, "refused"); }
+            if (CleanRid(Str(at, "rid")) is { } rid)
+            {
+                var prior = inbox?.Find(p.Node, rid);
+                p.Reply.Ack = MakeAck(rid, sender, prior is null ? "refused" : InboxOutcome(prior));
+            }
         }
         log($"Home Assistant connector refused a reply to {p.Node} from {sender ?? "an unnamed sender"}: " + (ServesReplies ? "the session is waiting on a question" : "replies from the dashboard are not served here"));
         // With the host's reply delivery, a reply waits for no question: this one is being
