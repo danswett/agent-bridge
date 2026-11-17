@@ -273,6 +273,23 @@ public sealed class LocalApiTests : IAsyncLifetime
         }
     }
 
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    [InlineData(CallerKind.App)]
+    public async Task Gate_controls_never_accept_shared_OS_identity_or_agent_identity_on_the_pipe(CallerKind kind)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var channel = await ConnectAsync();
+        foreach (var op in new[] { "gate.start", "gate.pause", "gate.reset", "gate.seal" })
+        {
+            var error = await Assert.ThrowsAsync<HostErrorException>(() =>
+                channel.CallAsync(op, new { request = Guid.NewGuid(), actorKind = "person-client" }));
+            Assert.Contains("pinned person", error.Message);
+        }
+    }
+
     [Fact]
     public async Task The_local_app_can_set_up_hooks_and_host_status_requires_a_restart()
     {
