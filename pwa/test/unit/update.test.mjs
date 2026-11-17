@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   readUpdateState, readUpdateCommandResult, updateLine, updateDetails, lastLine, canInstall, canCheck, underWay, UpdateControl,
-  canUpdateNow, updateNowReason, notUpdated, nowSheet, acceptOf, quiet, readBusy, nowAnnouncement, RESTARTING, BUSY_MOST,
+  canUpdateNow, canRetryDownload, updateNowReason, notUpdated, nowSheet, acceptOf, quiet, readBusy, nowAnnouncement, RESTARTING, BUSY_MOST,
 } from '../../js/update.js';
 import { signUpdateNow } from '../../js/transfer.js';
 import { clockTime } from '../../js/auth-state.js';
@@ -234,8 +234,8 @@ test('no Update now is offered on a machine that cannot press it, and the row sa
   assert.equal(why('disabled'), 'Update now is off on this machine');
   assert.equal(why('old-app'), 'Update now needs a newer app there. Install still works.');
   assert.equal(why('busy'), 'Another update or restart is under way there');
-  assert.equal(why('restart-cap', { updateNowAt: '2026-11-02T20:30:00.000Z' }), `Update now is available again at ${clockTime('2026-11-02T20:30:00.000Z')}`);
-  assert.equal(why('restart-cap'), 'Update now is available again later');
+  assert.equal(why('restart-cap', { updateNowAt: '2026-11-02T20:30:00.000Z' }), 'Updates when its sessions are quiet');
+  assert.equal(why('restart-cap'), 'Updates when its sessions are quiet');
   // A code this device doesn't know, or nothing ready: nothing said, and no button.
   assert.equal(why('something-new'), null);
   assert.equal(updateNowReason({ ...ready, available: null, canUpdateNow: false, updateNowWhy: 'disabled' }), null);
@@ -264,7 +264,7 @@ test("an Update now's outcome is worded from its code, never the machine's reaso
   assert.equal(last({ outcome: 'refused', code: 'usage-check' }), 'Not updated: a Codex usage check was still running');
   assert.equal(last({ outcome: 'refused', code: 'release-changed' }), 'Not updated: the update changed. Check for updates again.');
   assert.equal(last({ outcome: 'refused', code: 'not-quiet' }), 'Not updated: a message was being delivered there the whole time.');
-  assert.equal(last({ outcome: 'refused', code: 'restart-cap' }), 'Not updated: Update now has used its restarts for the last 6 hours; try again later.');
+  assert.equal(last({ outcome: 'refused', code: 'restart-cap' }), 'Not updated yet. Try Update when idle.');
   assert.equal(last({ outcome: 'refused', code: 'someday-code' }), 'Not updated: the machine refused it.');
   assert.equal(last({ outcome: 'failed', code: 'other-profile' }), "Not updated: the update didn't take.");
   // One this device pressed reads as Update now's even without a code.
@@ -325,12 +325,43 @@ test('a capped Update queues one ordinary install without signing or confirming 
   assert.equal(signed, 0);
   assert.equal(confirmed, 0);
   assert.match(control.stateOf('a').note, /updates when its sessions are quiet/i);
+  fleet.states.set('a', { ...capped, available: null, current: capped.available });
+  assert.equal(control.stateOf('a').note, null);
 });
 
 test('the restart cap is worded as an idle update, not an allowance or a retry deadline', () => {
   assert.equal(updateNowReason({
     ...ready, canUpdateNow: false, updateNowWhy: 'restart-cap', updateNowAt: '2026-11-02T20:30:00Z',
   }), 'Updates when its sessions are quiet');
+});
+
+test('only an explicit settled download failure offers a retry, never a held check or an unknown step', () => {
+  const failed = { ...found, last: { outcome: 'failed', step: 'downloading' } };
+  assert.ok(canRetryDownload(readUpdateState(failed)));
+  for (const change of [
+    { installer: false }, { available: null }, { phase: 'downloading' }, { phase: 'waiting' },
+    ...[null, 'installing', 'restarting', 'new-step', 42].map((step) => ({ last: { ...failed.last, step } })),
+    { last: { ...failed.last, outcome: 'refused' } },
+    { last: { ...failed.last, reason: 'checking again soon' } },
+  ]) {
+    assert.equal(canRetryDownload(readUpdateState({ ...failed, ...change })), false);
+  }
+});
+
+test('cap fallback is single flight without a signing key and preserves a refused install result', async () => {
+  const capped = { ...ready, canUpdateNow: false, updateNowWhy: 'restart-cap', phase: 'waiting' };
+  const fleet = nowFleet(capped, [{ outcome: 'refused', code: 'rate-limited', retryAt: '2026-11-02T20:30:00Z' }]);
+  const control = new UpdateControl({ fleet, newRequest: () => 'r-idle' });
+  const pressing = control.pressNow('a');
+  await control.pressNow('a');
+  await pressing;
+  assert.deepEqual(fleet.calls, [{ id: 'a', op: 'update.install', data: { request: 'r-idle' } }]);
+  assert.match(control.stateOf('a').note, /^Not updated yet\. Try again after /);
+  for (const change of [{ installer: false }, { available: null }, { phase: 'installing' }, { updateNowWhy: 'read-only' }]) {
+    fleet.states.set('a', { ...capped, ...change });
+    await control.pressNow('a');
+  }
+  assert.equal(fleet.calls.length, 1);
 });
 
 for (const kind of ['ordinary', 'signed']) {

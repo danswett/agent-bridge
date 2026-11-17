@@ -132,6 +132,28 @@ test('a failed download offers Try again now and sends one install press', async
   expect(log[0].op).toBe('update.install');
 });
 
+test('a failed download retries without signing even when Update now is offered', async ({ page }) => {
+  await openDemo(page, '&updateNow=1');
+  await setUpdate(page, { last: { outcome: 'failed', step: 'downloading', at: new Date().toISOString() } });
+  const block = updateOf(page);
+  await expect(block.locator('.machine-update-now')).toHaveCount(0);
+  await block.getByRole('button', { name: 'Try again now', exact: true }).click();
+  await expect(sheetOf(page)).toHaveCount(0);
+  const log = await page.evaluate(() => window.agentBridgeDemo.updateLog);
+  expect(log).toHaveLength(1);
+  expect(log[0]).toMatchObject({ op: 'update.install', request: expect.stringMatching(UUID) });
+  expect(log[0].now).not.toBe(true);
+});
+
+test('a restart cap shows quiet wording before the press, never a deadline or an allowance', async ({ page }) => {
+  await openDemo(page, '&updateNow=1');
+  await setUpdate(page, { canUpdateNow: false, updateNowWhy: 'restart-cap', updateNowAt: '2026-11-02T20:30:00Z' });
+  const block = updateOf(page);
+  await expect(block.locator('.machine-update-why')).toHaveText('Updates when its sessions are quiet');
+  await expect(block.getByRole('button', { name: /^Update when idle:/ })).toBeEnabled();
+  expect(await page.evaluate(() => window.agentBridgeDemo.updateLog)).toEqual([]);
+});
+
 test('Check leaves the card and Check all leaves the rows for their respective menus', async ({ page }) => {
   await openDemo(page);
   const row = rowOf(page);
