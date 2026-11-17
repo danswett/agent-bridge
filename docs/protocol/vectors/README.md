@@ -114,6 +114,20 @@ replay until its entry goes.
   then added as a known difference with `"differs": "swift"` and an issue, in
   `tests/AgentBridge.Protocol.Tests/KnownDifferences.cs`.
 
+## Payload size report
+
+Run `pwsh docs/protocol/vectors/report-payload-sizes.ps1` from the repository root.
+The read-only report prints each record type's minimum and maximum serialized UTF-8
+bytes and vector count as tab-separated columns, sorted by ordinal record name.
+It measures the compact `json` payloads in both `valid` and `refused`, not the
+fixture wrappers, contexts or normalized `reads`. Serialization uses the protocol's
+relaxed JSON escaping. Non-record fixtures (such as Noise and roster vectors) are
+not message types and are excluded. Invalid JSON or malformed record vectors fail
+with the file name, before any report is printed.
+
+Use `-VectorPath <folder>` to measure another vector folder. This is measurement
+only: there is no byte budget or CI gate.
+
 ## Regenerating
 
 The C# records generate the files: `ProtocolVectors.cs` and `KnownDifferences.cs` in
