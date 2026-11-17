@@ -80,4 +80,14 @@ public sealed class AgentLaunchLedgerTests : IDisposable
         Assert.Single(results, r => r.Allowed);
         Assert.Single(results, r => sameRequest ? r.Duplicate : r.Reason?.StartsWith("live-limit:") == true);
     }
+
+    [Fact]
+    public void Missing_ledger_never_treats_existing_agent_launch_evidence_as_empty_capacity()
+    {
+        Assert.True(new AgentAuditLog(folder).Append(new("local", Guid.NewGuid().ToString(),
+            "agent:machine/parent", [], "session.launch", "local", "reserved")));
+        var refusal = Gate().CheckLaunch("other", "new", "hash");
+        Assert.False(refusal.Allowed);
+        Assert.Contains("needs-person", refusal.Reason);
+    }
 }
