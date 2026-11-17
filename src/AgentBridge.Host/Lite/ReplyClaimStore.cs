@@ -54,7 +54,8 @@ public sealed class ReplyClaimStore : IDisposable
         if (marker is null)
         {
             if (File.Exists(paths.Ledger)) { throw new InvalidDataException("The reply-claim marker is missing; delivery remains held."); }
-            marker = new(Schema, paths.ProfileKey, "initializing", 0, ReplyClaimJournal.Genesis(paths.ProfileKey));
+            marker = new(Schema, paths.ProfileKey, "initializing", 0, ReplyClaimJournal.Genesis(paths.ProfileKey),
+                ReplyClaimJournal.StateHash([]));
             Write(paths.Marker, marker);
         }
         ValidateProfile(marker.Schema, marker.ProfileKey, paths, "marker");
@@ -95,6 +96,8 @@ public sealed class ReplyClaimStore : IDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentException.ThrowIfNullOrEmpty(sessionId);
         ArgumentException.ThrowIfNullOrEmpty(requestId);
+        if (Encoding.UTF8.GetByteCount(sessionId) > ReplyClaimJournal.MaxSessionBytes)
+        { throw new ArgumentException("Session IDs may not exceed 64 UTF-8 bytes.", nameof(sessionId)); }
         ValidateHash(textHash, nameof(textHash));
         if (attachmentHash is not null) { ValidateHash(attachmentHash, nameof(attachmentHash)); }
         using var held = Lock(paths);
@@ -120,7 +123,8 @@ public sealed class ReplyClaimStore : IDisposable
             return Eq(existing.TextHash, textHash) && Eq(existing.AttachmentHash, attachmentHash)
                 ? new(ReplyClaimStatus.Existing, existing.Generation) : new(ReplyClaimStatus.RequestReused, Guid.Empty);
         }
-        if (ledger.Claims.Count(c => c.Session == sessionId) >= MaxPerSession) { return new(ReplyClaimStatus.Full, Guid.Empty); }
+        if (ledger.Claims.Count(c => c.Session == sessionId) >= MaxPerSession
+            || ledger.Claims.Count >= ReplyClaimJournal.MaxClaims) { return new(ReplyClaimStatus.Full, Guid.Empty); }
         var claim = new ReplyClaimRecord(sessionId, requestHash, textHash.ToUpperInvariant(), attachmentHash?.ToUpperInvariant(), Guid.NewGuid(), now);
         ledger.Claims.Add(claim);
         ledger = ReplyClaimJournal.Append(paths.Ledger, paths.ProfileKey, ledger, "claimed", claim);
@@ -179,7 +183,7 @@ public sealed class ReplyClaimStore : IDisposable
 
     static ReplyClaimMarker Advance(Paths paths, ReplyClaimMarker marker, ReplyClaimSnapshot ledger)
     {
-        var next = marker with { Sequence = ledger.Sequence, Hash = ledger.Hash };
+        var next = marker with { Sequence = ledger.Sequence, Hash = ledger.Hash, StateHash = ReplyClaimJournal.StateHash(ledger.Claims) };
         Write(paths.Marker, next);
         return next;
     }
@@ -191,7 +195,8 @@ public sealed class ReplyClaimStore : IDisposable
         ValidateProfile(migration.Schema, migration.ProfileKey, paths, "migration");
         ValidateProfile(marker.Schema, marker.ProfileKey, paths, "marker");
         if (migration.State != "complete" || marker.State != "active" || marker.Sequence < 0
-            || marker.Hash is not { Length: 64 } || !marker.Hash.All(Uri.IsHexDigit))
+            || marker.Hash is not { Length: 64 } || !marker.Hash.All(Uri.IsHexDigit)
+            || marker.StateHash is not { Length: 64 } || !marker.StateHash.All(Uri.IsHexDigit))
         { throw new InvalidDataException("The reply-claim migration or marker is invalid or inactive."); }
         return marker;
     }
