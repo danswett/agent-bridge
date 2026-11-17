@@ -541,6 +541,19 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: public-diagnostics-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    security_sensitive: true
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/public-diagnostics.ps1, quality/test-public-diagnostics.ps1, .github/workflows/ci.yml]
+    command: pwsh -NoProfile -File quality/test-public-diagnostics.ps1
+    where: ci.yml light
+    status: exists
+
   - id: arm64-waiver-script
     validation_plan: native
     kind: unit
