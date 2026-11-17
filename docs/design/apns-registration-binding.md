@@ -10,58 +10,71 @@ authorized.
 Do not change general relay admission: existing phone and host connections
 remain governed by current behavior. `RelayDeviceEnrollment` is checked only by
 APNs handlers; an unenrolled device can still use existing non-APNs operations.
-The durable record is keyed by `(accountId, deviceKeyThumbprint)` and stores
-`deviceId`, `role`, generation, status, and creation/revocation times. Handshake
-proof-of-possession derives `deviceId`; `hello.kind` never grants APNs role.
+Enrollment records keyed by `(accountId, deviceKeyThumbprint)` retain the
+device public key, ID, role, generation, and status. Each host/phone creates a
+nonexportable P-256 key; the relay challenge binds account, key thumbprint, and
+role, and the device signs it. `hello.kind` and the shared GitHub account token
+never identify or enroll a device.
 
-An owner-authenticated control-plane operation `EnrollHost(accountId,
-devicePublicKey)` verifies the deployed host, then writes its host role. An
-account-authorized `EnrollPersonDevice` operation verifies phone key possession
-and writes its person role. These control-plane operations are the only writers;
-WebSocket frames and account tokens cannot enroll/promote devices. Revocation
-increments the record generation. `DeviceRoster` remains an untrusted,
-observe-only account log, not role authority.
+`EnrollHost` requires owner approval through the deployment control plane plus
+host proof-of-possession. `EnrollPersonDevice` requires a user-approved one-use pairing grant signed by
+an active enrolled host plus phone proof-of-possession. These are the
+only enrollment writers; WebSocket frames and account tokens cannot enroll or
+promote devices. Revocation increments generation. `DeviceRoster` is an
+untrusted, observe-only account log, not role authority.
+
+`apns-enroll-challenge` returns a short-lived nonce bound to account, role, and
+device-key thumbprint; `apns-enroll` carries the key, nonce signature, and
+person pairing grant when applicable. Relay verifies the key proof and grant
+against the enrolled host key; the shared GitHub token is not device proof.
 
 ### Proof-signing key and host trust
 
 The relay signs proofs as JWS ES256 with a dedicated P-256 private key from
-managed secret storage. Hosts validate relay TLS and pin the public key through
-the same owner-controlled deployment configuration that supplies the relay
-URL. `ready` advertises only the key ID, never a trust-on-first-use key. Reject
-unknown keys, invalid signatures, and unsupported algorithms. Rotate by
-distributing the new public pin first, signing with the new key while accepting
-both IDs, and retaining the old verifier until all durable receipts are
-reissued or revoked. Missing key or enrollment control plane disables APNs.
+managed secret storage. Hosts validate relay TLS and pin the public key in owner-controlled deployment
+configuration alongside the relay URL. `ready` advertises only the key ID.
+Reject unknown keys, invalid signatures, and unsupported algorithms. Rotate by
+distributing the new pin first, accepting both IDs during signing rollover,
+then retaining the old verifier until receipts are reissued or revoked. Missing
+key or enrollment control plane disables APNs.
 
 ## Azure state and rollout overlap
 
-Use a dedicated APNs Azure Blob container via the existing `IRosterStore` /
-`AzureRosterStore` read-and-conditional-write pattern used by `DeviceRoster`:
-one opaque, account-keyed state blob holds enrollment, pending/active/revoked
-authorizations, caps, and limiter timestamps. Never use a local database,
-memory fallback, or raw account ID in blob names. Updates read the blob and
-write with its ETag (`If-Match`; create with `If-None-Match: *`); on conflict,
-reload and reapply up to five times, then fail closed with `relay-busy`.
-Unknown schema versions or storage errors also disable APNs.
+Require `Backend=azure` and a dedicated APNs Blob container using the
+`AzureRosterStore` ETag pattern in `Roster.cs`. One opaque account-keyed blob
+holds enrollment, authorization, generation, connection-fence, and limiter
+state. Missing config/storage disables APNs readiness, not general relay
+service; APNs never uses memory or raw account IDs in blob names.
+Use `If-Match`/`If-None-Match`, retry conflicts up to five times, then fail
+closed with `relay-busy`; unknown schemas and store errors fail closed too.
+
+Cap each account at 64 enrolled devices, 512 active/reserved/recently revoked
+registration records, and 64 pending grants (also enforce per-device/host
+limits). Prune revoked records only after all five-minute proofs expire.
+Preflight serialized writes at 240 KiB, below `AzureRosterStore`'s 256 KiB
+empty-body boundary; refuse enrollment or APNs mutations at either cap with
+`state-capacity`. Treat an oversized-read empty body as corruption, never as an
+empty account; do not overwrite it. Never evict active state or write an
+oversized blob.
 
 Both relay versions in the approximately 90-second deployment overlap use the
 same version-1 blob schema and ETag CAS. Registrations and pending grants count
 once across versions. Every cap check, generation change, authorization
-transition, and limiter reservation is an ETag-conditional state update.
-Store rolling 60-second timestamps for the account and each host in that blob.
-After removing timestamps at least 60 seconds old, one CAS checks limits
-(20/host, 30/account) and appends the reservation. Only then call the provider;
-provider failure conservatively consumes quota. Validation refusals consume
-none. Thus overlapping versions share limits; there is no process-local
-counter or fallback. A version that cannot read/write this schema does not
-advertise APNs. Migrate only after overlap ends; never reset state on deploy.
-Keep `maxReplicas: 1` until a reviewed multi-replica design exists.
+transition, connection-fence update, and limiter reservation is ETag-guarded.
+Store rolling 60-second timestamps for the account and each host. One CAS
+prunes expired timestamps, checks limits (20/host, 30/account), and appends the
+reservation before provider I/O; provider failures consume quota, validation
+refusals do not. Overlapping versions share caps and limiter state. Unsupported
+schemas never advertise APNs; deploy never resets state. Keep `maxReplicas: 1`
+until a reviewed multi-replica design exists.
 
 `ready` advertises `capabilities.apnsRegistration` to phones and hosts only
-when authorize/revoke, register/restore/unregister/send handlers, strict parser,
+when enroll/authorize/revoke, register/restore/unregister/send handlers, strict parser,
 Azure state, proof key, target map, and provider boundary are ready. New clients
-check the flag before an APNs request and return `relay-unsupported` immediately;
-an older relay therefore cannot time out on a phone's first authorize.
+check the flag before APNs requests and return `relay-unsupported` immediately.
+Roll out store/control plane first, then host/phone clients with device-key
+enrollment. Existing devices remain APNs-disabled until explicitly approved and
+enrolled; ordinary connections and non-APNs operations remain unchanged.
 
 ## Person-device authorization and A2 publication
 
@@ -121,21 +134,18 @@ cannot activate. `apns-register` carries exactly one of `authorizationProof`
 or `registrationReceipt`. Host state becomes active only after the receipt is
 persisted; uncertain responses retry idempotently after reconnect.
 
-The receipt is bound to the active durable authorization record and remains
-valid until revoke or replacement. The A2 `PushStore` persists the APNs token,
-registration ID, and receipt in platform-protected storage. After every host
-reconnect, the host re-publishes each saved registration before enabling APNs
-sends:
+The A2 `PushStore` persists token, registration ID, and receipt in
+platform-protected storage. After reconnect, the host republishes saved
+registrations before enabling sends:
 
 ```json
 {"t":"apns-register","id":24,"registrationId":"MDEyMzQ1Njc4OWFiY2RlZg","target":"prod","token":"<APNs hex token>","registrationReceipt":"<relay-signed active receipt>"}
 ```
 
-The relay verifies receipt signature, active record, token digest, and
-generation, then restores the binding for the new host connection. Delivery
-resumes without the phone app reopening. Failed restore leaves that ID disabled.
-An idempotent retry returns the same receipt; key rotation returns a new
-current-key receipt.
+Relay verifies receipt signature, active record, token digest, and generation,
+then restores the binding. Delivery resumes without the phone app reopening;
+failed restore leaves that ID disabled. Retries are idempotent; key rotation
+returns a current-key receipt.
 
 `RemoteAuthorization.PersonOperations` must include `push.apns.subscribe`,
 `push.apns.unsubscribe`, and `push.apns.list`.
@@ -154,21 +164,24 @@ lookup key is `(account, host, tokenHash)`; ETag updates enforce uniqueness
 for that key and `(account, host, registrationId)` across active/reserved
 records, including cap checks and replacement. Storage errors fail APNs closed.
 
-The actual binding is a bounded, thread-safe process-memory map keyed by
-`(accountId, hostId, tokenHash)`. Its value contains registration ID, target,
-source enrollment ID/generation, host connection generation, and raw token
-bytes needed by the provider. At the relay, raw token bytes are present only in
-encrypted transit and this live memory map; never write them to relay storage,
-logs, metrics, traces, or errors. Clear token buffers on replacement, revoke,
-disconnect, and shutdown where the runtime permits.
+Each host connect increments a shared per-host `hostConnectionFence` by ETag
+CAS; the accepted generation is attached to that connection. A bounded,
+thread-safe process-memory map keyed by `(accountId, hostId, tokenHash)` holds
+authorization ID, registration generation, target, source/host generations,
+and provider token bytes. At the relay, raw tokens exist only in transit and
+this map; never persist or log them. Clear buffers on replacement, revoke,
+disconnect, and shutdown where supported.
 
-The live binding belongs to the exact authenticated host connection
-generation. A host reconnect clears that map, then the host restores active
-registrations from its local `PushStore` using each token and signed durable
-receipt. The relay verifies the active durable record and rebinds the token to
-the new generation. `RelayClient` does not permit sends for a registration
-until its restore result succeeds. This preserves delivery while the phone app
-is closed without persisting raw tokens at the relay.
+On reconnect, the host restores active registrations from `PushStore` using
+each token and signed receipt; relay verifies the active record and binds to
+the new fence. `RelayClient` blocks sends until restore succeeds.
+
+Every send performs one ETag-guarded read/write that checks the stored active
+authorization ID and registration generation, enrollment generations, and
+shared host fence against the live binding, then reserves the limiter. Only a
+committed reservation reaches provider I/O. If revoke commits first, every
+relay copy refuses the stale binding; if a send reservation wins first, that
+already-accepted in-flight send may complete, but no later reservation can.
 
 The host revokes by naming the current authorization ID and generation (from
 the pending proof when replacement is in flight, otherwise from the receipt),
@@ -227,17 +240,11 @@ base64url. Re-registering the same token hash, target, and ID is idempotent.
 The same token hash and target with a new ID atomically replaces the old ID;
 the old receipt becomes unusable and does not consume another slot. Reusing an
 ID for a different source device or target returns `registration-id-conflict`.
-A token change uses the same ID and a fresh proof from the same source device;
-the relay atomically revokes the old authorization, replaces the hash, and
-keeps one slot. A target change requires a fresh proof and performs the same
-atomic replacement.
 
-Caps are 16 active or reserved registrations per host and 512 per account;
-replacements reserve the existing slot. Pending proofs are capped at 8 per
-person device and 64 per host. Exceeding a cap returns `registration-limit` or
-`authorization-limit`. Missing, foreign-account, foreign-host, revoked,
-expired, un-restored, or disconnected bindings return `unbound-registration`,
-without revealing another binding's state or making a provider request.
+Active/reserved registrations cap at 16 per host and 512 per account;
+replacements reserve a slot. Exceeding a cap returns `registration-limit`.
+Missing, foreign, revoked, expired, un-restored, or disconnected bindings
+return `unbound-registration` without revealing state or calling the provider.
 
 ## Send frame, target, payload, and rate boundaries
 
@@ -299,35 +306,40 @@ token hashes as labels. Errors contain only
 stable refusal codes such as `host-required`, `device-not-enrolled`,
 `registration-proof-invalid`, `authorization-expired`, `authorization-limit`,
 `authorization-key-unknown`, `unknown-target`, `unbound-registration`,
-`registration-limit`, `registration-id-conflict`, `stale-registration`,
+`registration-limit`, `registration-id-conflict`, `state-capacity`, `stale-registration`,
 `connection-ended`,
 `notice-expired`, `payload-too-large`, `rate-limited`, `relay-unsupported`,
 and `relay-unavailable`.
 
 ## Tests-first implementation cuts
 
-Each cut is a separate tests-first change, estimated at 180-220 changed lines
-including tests and its documentation; split before 250. No cut enables
-production provider credentials or delivery.
+Each cut is a tests-first change, estimated at 180-220 changed lines including
+tests/docs; split before 250. A4/A5 ownership and order follow merged #2437:
+A4 is provider transport; parent A5 owns host sending. No cut enables delivery.
 
 | Cut / estimate / owner | Scope and first failing tests | Depends on |
 |---|---|---|
-| A3b1a — Azure APNs state / ~210 / A3 | Add per-account blob schema, ETag CAS/retry, caps, generation fences, and shared rolling-window reservations. Test overlap conflicts, cap races, storage failure, and no memory fallback. | This spec accepted |
-| A3b1b — enrollment control plane / ~210 / A3 | Own owner-authenticated `EnrollHost` and account-authorized `EnrollPersonDevice` record creation/revocation. Test authorization, proof of key possession, generation advance, and invalid writer refusal. | A3b1a |
-| A3b1c — APNs identity gate / ~190 / A3 | Check relay-owned role/generation only in APNs handlers; preserve ordinary WebSocket admission. Test phone claiming host in hello, unenrolled identities, revoked records, and unaffected non-APNs connections. | A3b1b |
-| A3b2 — proof-key trust / ~210 / A3 | Add managed-secret ES256 signer, pinned host public-key config, key rotation, and `ready` key ID. Test unknown key, invalid signature, pre-provisioned pin, overlap, and absent-key refusal. | A3b1a |
-| A3c — strict frame parser / ~200 / A3 | Own APNs parser and typed DTO validation for authorize/register/unregister/revoke/send. Test duplicate/unknown properties, wrong types, malformed IDs, and boundary sizes. | A3b1c |
-| A3d — phone authorization / ~220 / A3 | Add authorize, five-minute proofs, pending caps, and revoke-time cancellation. Failing-first: active A, authorize B, opt-out revokes B, delayed register B must return `stale-registration`. Test caps, replay, expiry, and enrollment revoke race. | A3b2; A3c |
-| A3e — authorization receipts / ~210 / A3 | Add durable active/revoked metadata and receipts without raw tokens; implement replacement, receipt validation, and 16/512 caps. Test token rotation, wrong-source replacement, replay after revoke, and counts. | A3d |
-| A3f1 — register and restore / ~210 / A3 | Own register/restore handlers, durable receipt activation, memory binding install, and restore-before-send gate. Test receipt replay, reconnect without app launch, and no send before restore. | A3e |
-| A3f2 — ordering and teardown / ~210 / A3 | Own ordered control queue, connection lifecycle gate, replacement-connection fencing, unregister cleanup, and token-buffer clearing. Test register-vs-close, revoke-vs-register, and old loop after replacement. | A3f1 |
-| A3g — relay send and capability / ~220 / A3 | Add fixed targets, payload bounds, silent Done, relay-clock expiry clamp, Azure limiter reservation, and phone/host capability gate. Test old-relay refusal, 24-hour clamp, quota overlap, and no provider call on invalid sends. | A3f2; A1a |
-| A3h — RelayClient methods / ~210 / A3 | Own authorize/register/unregister/restore/send methods, capability parsing, and typed results. Test immediate unsupported result and restore-before-send. | A3g |
-| A2a — authorization publication / ~210 / A2 owner | Own `RemoteAuthorization.PersonOperations`, `PushStore` token/ID/proof persistence, and authorize-to-subscribe publication. Test failed save, invalid proof, and no publication before persistence. Separate child; A3 does not edit #2747. | A3h |
-| A2b — host replacement and restore / ~210 / A2 owner | Own receipt persistence, reconnect restore, token-change replacement, and pending/active/revoking states. Test closed-phone restore, opt-out of pending B, receipt uncertainty, and no stale token delivery. Separate child. | A2a |
-| A3i — host send method / ~200 / A3 | Own `IPushSender`/`PushNotifier` APNs method, notice/sound/priority mapping, forced silent Done, and typed refusal handling. Test notice policy, disconnect, and unsupported capability. | A2b; A1a |
-| A1a — `ApnsPush.cs` wire / ~190 / A1 owner | Own A1 APNs notice wire fields for sound, priority, and silent Done inputs. Test round-trip defaults, policy values, and Done never carrying sound. | This spec accepted |
-| A4 — provider transport / ~210 / assigned owner | Add APNs signing/HTTP/2, effective-expiry headers, bounded retries, safe 410 invalidation, and provider readiness. Test injected transport and ensure 410 prevents restore. | A3i; A1a |
+| A3b1a — APNs storage infra / ~190 / A3 | Own Bicep container, relay managed-identity Blob Data Contributor scoped to it, and required Azure config. Test missing backend/role fails APNs readiness, never memory. | This spec accepted |
+| A3b1b — Azure state store / ~210 / A3 | Implement per-account ETag adapter, five retries, record limits, 240-KiB preflight, generation/fence state. Test conflicts, size refusal, and oversized read fails closed. | A3b1a |
+| A3b1c — enrollment control plane / ~210 / A3 | Own owner-approved host enrollment and host-signed phone pairing grants with device PoP; persist/revoke records. Test wrong key, replayed nonce, and invalid grant. | A3b1b |
+| A3b1d — APNs identity gate / ~190 / A3 | Gate APNs handlers on relay-owned roles/generations; preserve ordinary admission. Test hello spoof, unenrolled devices, and non-APNs access. | A3b1c |
+| A3b2 — proof-key trust / ~210 / A3 | Add managed-secret ES256 signer, pinned host key, rotation, and ready key ID. Test unknown key, invalid signature, pinning, and rollover. | A3b1b |
+| A3c — relay frame parser / ~200 / A3 | Own strict APNs DTO parser. Test duplicate/unknown properties, types, malformed IDs, and bounds. | A3b1d |
+| A3d1 — phone authorization / ~200 / A3 | Issue five-minute signed proofs and enforce pending caps. Test enrollment, cap, replay, expiry, and wrong host. | A3b2; A3c |
+| A3d2 — revoke and generation race / ~210 / A3 | Cancel pending grants and fence activation. Failing-first: active A, authorize B, opt-out revokes B, delayed register B returns `stale-registration`. | A3d1 |
+| A3e — authorization receipts / ~210 / A3 | Persist active/revoked metadata and receipts without raw tokens; replace tokens and enforce 16/512 caps. Test replay after revoke and replacement counts. | A3d2 |
+| A3f1 — register and restore / ~210 / A3 | Own relay register/restore, durable receipt activation, and restore-before-send. Test reconnect without app launch and receipt replay. | A3e |
+| A3f2 — ordered control queue / ~190 / A3 | Serialize register/revoke/send/unregister per connection. Test received order and register-versus-close. | A3f1 |
+| A3f3 — shared connection fence / ~210 / A3 | Own ETag host-fence increments, replacement teardown, and binding cleanup across relay processes. Test old connection loses fence after cross-process reconnect. | A3f2; A3b1b |
+| A3g1 — shared send authorization / ~220 / A3 | Check stored authorization/generation and host fence in same ETag CAS as limiter reservation. Two-process test: revoke on A, send on B refuses; test both CAS orders. | A3f3; A3b1b |
+| A3g2 — send policy and capability / ~210 / A3 | Own targets, payload bounds, silent Done, expiry clamp, and capability gate. Test old-relay refusal, invalid sends, and 24-hour clamp. | A3g1; A1a |
+| A3h — RelayClient methods / ~210 / A3 | Own enrollment challenge/enroll plus authorize/register/restore/send methods and typed capability results. Test unsupported relay and restore-before-send. | A3g2; A3b1c |
+| A2c — enrollment client rollout / ~210 / A2 owner | Ship host/phone PoP enrollment calls for existing installs; host approval/pairing only, no token-based promotion. Test upgrade enrollment and unchanged non-APNs sessions. | A3h |
+| A2a — authorization publication / ~210 / A2 owner | Own `RemoteAuthorization.PersonOperations`, `PushStore` token/ID/proof persistence, and subscribe publication. Test persistence before publish. Separate child; A3 does not edit #2747. | A2c |
+| A2b — host replacement and restore / ~210 / A2 owner | Own receipt persistence, reconnect restore, token replacement, and pending/active/revoking states. Test closed-phone restore and opt-out of pending B. | A2a |
+| A1a — `ApnsPush.cs` wire/parser / ~220 / A1 owner | Own strict parser fields for registration ID, proof/receipt, sound, and priority. Test duplicate fields, round-trip, and Done silence. | This spec accepted |
+| A4 — provider transport / ~210 / parent #2437 owner | Add APNs signing/HTTP2, effective-expiry headers, retries, 410 invalidation, and readiness. Test injected transport and invalidation. | A3g2; A1a |
+| A5 — host send method / ~210 / parent #2437 owner | Parent cut owns `IPushSender`/`PushNotifier` APNs send, policy mapping, and typed refusal handling; no A3 duplicate. Test policy, disconnect, and unsupported capability. | A2b; A3h; A4; A1a |
 
 Two independent reader families and Chief acceptance of this revised spec are
 required before any A3 implementation. This note does not authorize provider
