@@ -47,7 +47,7 @@ const PATCHES = 'session-patches.json';
 const NOISE = 'noise-ik-p256.json';
 // The signed agent-command envelope's vectors (#722) are not records either; C# replays them.
 const ENVELOPE = 'agent-envelope.json';
-// Registry signature bytes are not records; C# replays them now, and the PWA follows in #2379.
+// Registry signature bytes are replayed by test/unit/fleet-signing-vectors.test.mjs.
 const FLEET_SIGNING = 'fleet-registry-signing.json';
 // The device roster's encoding, not records: test/unit/roster-vectors.test.mjs replays it.
 const ROSTER = 'roster.json';
