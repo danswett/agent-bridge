@@ -49,11 +49,13 @@ the separate watchdog slice; recovery UI and the existing feedback submission re
 
 Part of [#2726](https://github.com/danswett/agent-bridge/issues/2726), slice B.
 A background watchdog checks the existing one-second UI heartbeat. After 30 seconds
-without a beat it records a hang in the profile's existing `run-marker.json` under
-`Paths.AppData` with one hang record: time, managed UI thread id, seconds stalled,
+without a beat it records a hang in
+`Paths.AppData\runs\<profile|demo>\run-marker.json`: time, managed UI thread id, seconds stalled,
 and up to 20 recent AppLog stages. Free-text details and unknown messages are omitted,
 so no transcript, path or secret is copied. A new beat rearms detection; ticks during
-the same hang do not write again. Self-tests never start the watchdog, and quitting
+the same hang do not write again. If watchdog ticks pause for over five seconds
+(system resume or a debugger break), the 30-second observation window restarts
+instead of counting the pause as a UI hang. Self-tests never start the watchdog, and quitting
 disposes it (hiding to the tray does not). AppLog/CrashLog remain the existing logs.
 Slice A supplies startup/clean-exit ownership through `Program.Marker`; B never starts
 a second marker. Recovery/submission (C) and state recovery (D) remain separate work.

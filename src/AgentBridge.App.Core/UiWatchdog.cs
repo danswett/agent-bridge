@@ -12,6 +12,8 @@ public sealed class UiWatchdog : IDisposable
     readonly ITimer timer;
     readonly object gate = new();
     long lastBeat;
+    long lastCheck;
+    long observedSince;
     bool reported;
     int disposed;
 
@@ -27,6 +29,7 @@ public sealed class UiWatchdog : IDisposable
         this.lastLogLines = lastLogLines;
         this.log = log;
         lastBeat = heartbeat();
+        lastCheck = observedSince = clock.GetTimestamp();
         timer = clock.CreateTimer(Check, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
     }
 
@@ -37,9 +40,14 @@ public sealed class UiWatchdog : IDisposable
         try
         {
             if (Volatile.Read(ref disposed) != 0) { return; }
+            var now = clock.GetTimestamp();
+            // A paused watchdog cannot distinguish a UI stall from suspend or a debugger break.
+            // Restart observation when the background timer itself missed several beats.
+            if (clock.GetElapsedTime(lastCheck, now) > TimeSpan.FromSeconds(5)) { observedSince = now; }
+            lastCheck = now;
             var beat = heartbeat();
             if (beat != lastBeat) { lastBeat = beat; reported = false; }
-            var stalled = clock.GetElapsedTime(beat);
+            var stalled = clock.GetElapsedTime(Math.Max(beat, observedSince), now);
             if (reported || stalled < threshold) { return; }
             reported = true;
             try
