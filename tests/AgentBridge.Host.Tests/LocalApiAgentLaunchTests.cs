@@ -320,7 +320,7 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
                 try
                 {
                     callbackResult = audit.Append(new("local", request.ToString("D"), principal, [],
-                        LaunchProtocol.Launch, "local", "refused", reason));
+                        LaunchProtocol.Launch, "local", "refused", reason) { Grant = "agent-worktree-refusal" });
                     return callbackResult.Value;
                 }
                 finally { if (failHeadWrite) { Directory.Delete(blocked); } }
