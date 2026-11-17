@@ -88,6 +88,8 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         var process = source.ProcessOf(result.Session!);
         Assert.NotNull(process);
         Assert.True(launcher.IsFleetWorker(result.Session!, process));
+        Assert.False(launcher.IsFleetWorker(result.Session!, process with { StartedAt = null }));
+        Assert.False(launcher.IsFleetWorker(result.Session!, null));
         Assert.True(Launcher(config).IsFleetWorker(result.Session!, process));
         Assert.False(launcher.IsFleetWorker("another-session", process));
         using var saved = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile, AgentCredentials.FileName)));

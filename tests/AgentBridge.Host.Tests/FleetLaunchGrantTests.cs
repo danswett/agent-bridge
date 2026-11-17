@@ -149,7 +149,12 @@ public sealed class FleetLaunchGrantTests : IDisposable
         private protected override bool UsesRelay => false;
 
         [Fact]
-        public async Task Fleet_admission_limits_live_workers_and_hourly_launches_without_limiting_person_launches()
+        public Task A_script_credential_cannot_exceed_the_fleet_cap_of_8_an_hour_nor_6_live_workers() => CheckCaps();
+
+        [Fact]
+        public Task A_coordinator_can_launch_while_the_fleet_cap_is_full() => CheckCaps();
+
+        async Task CheckCaps()
         {
             locator.Installed["claude"] = @"C:\fake\claude.exe";
             Git(f.Root, "init", "-q", "-b", "main", app);
@@ -178,6 +183,7 @@ public sealed class FleetLaunchGrantTests : IDisposable
             var seventh = await Fleet();
             Assert.Equal(LaunchOutcome.Refused, seventh.Outcome);
             Assert.Contains("live fleet", seventh.Reason);
+            await AssertCoordinatorLaunches(launcher, audit);
             foreach (var pid in starter.Pids.ToArray()) { starter.Exit(pid); }
             await source.RefreshAsync();
             for (var i = 0; i < 2; i++) { Assert.Equal(LaunchOutcome.Started, (await Fleet()).Outcome); }
@@ -189,6 +195,15 @@ public sealed class FleetLaunchGrantTests : IDisposable
                     Workspace = "App", Permissions = LaunchProtocol.Ask },
                 "person:local", audit, new("local", "person-client", "person:local", null));
             Assert.Equal(LaunchOutcome.Started, coordinator.Outcome);
+        }
+
+        static async Task AssertCoordinatorLaunches(LaunchService launcher, AgentAuditLog audit)
+        {
+            var result = await GateLaunchAudit.LaunchAsync(launcher,
+                new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "claude",
+                    Workspace = "App", Permissions = LaunchProtocol.Ask },
+                "person:local", audit, new("local", "person-client", "person:local", null));
+            Assert.Equal(LaunchOutcome.Started, result.Outcome);
         }
 
         [Fact]
@@ -240,7 +255,8 @@ public sealed class FleetLaunchGrantTests : IDisposable
         {
             var origin = $"agent:{i}";
             var request = Guid.NewGuid().ToString();
-            Assert.True(agent.CheckLaunch(origin, request, "hash").Allowed);
+            var admission = agent.CheckLaunch(origin, request, "hash");
+            Assert.True(admission.Allowed, admission.Reason);
             Assert.True(agent.LaunchFinished(origin, request));
         }
         var launcher = new AdmissionLauncher(live);
@@ -273,7 +289,9 @@ public sealed class FleetLaunchGrantTests : IDisposable
         Assert.Equal(hourly, launcher.Dispatches);
         Assert.Equal(live, launcher.LaunchedProcesses().Count);
         Assert.True(agent.CheckLaunch("agent:last", Guid.NewGuid().ToString(), "hash").Allowed);
-        Assert.False(agent.CheckLaunch("agent:overflow", Guid.NewGuid().ToString(), "hash").Allowed);
+        var overflow = agent.CheckLaunch("agent:overflow", Guid.NewGuid().ToString(), "hash");
+        Assert.False(overflow.Allowed);
+        Assert.Equal("rate-limited", overflow.Reason);
     }
 
     sealed class AdmissionLauncher(int live) : ISessionLauncher
