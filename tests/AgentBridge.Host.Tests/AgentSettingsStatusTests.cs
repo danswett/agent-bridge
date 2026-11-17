@@ -37,7 +37,7 @@ public sealed class AgentSettingsStatusTests : IAsyncLifetime
     }
 
     void Config(string text) => File.WriteAllText(Path.Combine(folder, HostSettings.FileName), text);
-    Task<JsonElement> Read() => channel.RequestAsync(Op);
+    Task<JsonElement> Read() => channel.CallAsync(Op);
     static JsonElement Entry(JsonElement result, string key) => result.GetProperty("settings").GetProperty(key);
 
     [Fact]
@@ -114,6 +114,20 @@ public sealed class AgentSettingsStatusTests : IAsyncLifetime
         callers.FreshKind = CallerKind.App;
         var handler = LocalApi.Handler(null!, control, callers);
         await Assert.ThrowsAsync<InvalidOperationException>(() => handler(new Remote(), Op, default));
+    }
+
+    [Fact]
+    public async Task The_persons_host_command_line_can_read_but_a_credentialed_connection_cannot()
+    {
+        callers.Kind = CallerKind.HostCli;
+        Assert.Equal("ok", (await Read()).GetProperty("state").GetString());
+        var credentials = new AgentCredentials(folder, "machine");
+        var token = credentials.Mint("parent", "launch", 100, DateTimeOffset.UtcNow, AgentProtocol.ScopeRead);
+        var identity = credentials.Check(token,
+            new ProcessAncestry([new PeerProcess(100, DateTimeOffset.UtcNow, "agent.exe")], true)).Accepted!;
+        credentials.Accept(channel, identity);
+        var handler = LocalApi.Handler(null!, control, callers, credentials: credentials);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, Op, default));
     }
 
     sealed class Callers : ICallerGuard
