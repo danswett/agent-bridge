@@ -65,6 +65,16 @@ public sealed class FleetController(AgentCredentials credentials, ISessionSource
                 new("local", "agent", principal, null, FleetController: true));
         }
         var request = data.Deserialize<FleetStopRequest>(ProtocolJson.Options) ?? throw new ArgumentException("fleet.stop needs a request");
+        var ended = Guid.TryParseExact(request.Request, "D", out var key)
+            ? GateAuditProjection.Load(audit.Profile).Rows.FirstOrDefault(r => r.Action == Ops.SessionStop && r.Request == key.ToString()
+                && r.Principal == principal && r.Outcome == "ended" && r.Gate?.Phase == "terminal"
+                && r.Target is { } target && HaContract.NodeId(target) == request.Node) : null;
+        if (ended?.Target is { } completed && stops is not null)
+        {
+            // Revalidate durable evidence, but never dispatch from a replay lookup.
+            return await StopAudit.StopAsync(stops, source, audit, new StopRequest { Id = completed, Request = request.Request },
+                "local", principal, authorize: (_, _) => false, actorKind: "agent");
+        }
         var matches = source.Snapshot().Where(s => HaContract.NodeId(s.Id) == request.Node).ToArray();
         if (matches.Length != 1 || source.ProcessOf(matches[0].Id) is not { Id: > 0, StartedAt: not null } process)
         { return Refused("the exact registered node and its current process are required"); }

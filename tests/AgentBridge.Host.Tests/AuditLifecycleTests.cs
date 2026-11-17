@@ -76,8 +76,9 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
         Assert.True(new LaunchProvenance(path, logged.Enqueue).Contains(result.Session!, source.ProcessOf(result.Session!)));
     }
 
-    [Fact]
-    public async Task Only_a_registered_controller_ingress_records_durable_fleet_origin()
+    [Theory]
+    [InlineData(null), InlineData("--dangerously-skip-permissions"), InlineData("--verbose")]
+    public async Task Only_a_registered_controller_ingress_without_extra_arguments_records_durable_fleet_origin(string? extra)
     {
         var store = new AgentCredentials(Path.Combine(f.Root, "controller"), "fixture");
         var credential = store.MintScript("sre").Credential;
@@ -88,7 +89,8 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
         Git(app, "add", "README.md");
         Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
         locator.Installed["claude"] = @"C:\fake\claude.exe";
-        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)],
+            Agents = new Dictionary<string, AgentConfig> { ["claude"] = new() { ExtraArgs = extra is null ? [] : [extra] } } }),
             agentWorktreeCheck: AgentLaunchWorktreeCheck.Check);
         var controller = new FleetController(store, source, launcher, null, Writer());
         var handler = LocalApi.Handler(null!, null!, null!, credentials: store, fleetController: controller);
@@ -97,6 +99,13 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
         await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, FleetController.LaunchOp, body));
         controller.RegisterController(credential);
         var launched = Assert.IsType<LaunchResult>(await handler(channel, FleetController.LaunchOp, body));
+        if (extra is not null)
+        {
+            Assert.Equal(LaunchOutcome.Refused, launched.Outcome);
+            Assert.Contains("extra", launched.Reason, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(starter.Specs);
+            return;
+        }
         Assert.True(launched.Outcome == LaunchOutcome.Started, launched.Reason);
         var saved = new LaunchProvenance(Path.Combine(f.Root, "profile", "launch-provenance.json"), logged.Enqueue);
         Assert.True(saved.FleetContains(launched.Session!, source.ProcessOf(launched.Session!)!));

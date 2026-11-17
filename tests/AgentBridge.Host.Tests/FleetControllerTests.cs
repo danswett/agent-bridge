@@ -126,6 +126,34 @@ public sealed partial class StopFlowTests
 
     [Theory]
     [InlineData(false), InlineData(true)]
+    public async Task A_completed_fleet_stop_replays_after_the_node_disappears_without_another_effect(bool forced)
+    {
+        var setup = Fleet(new Clearance());
+        if (forced) { injector.OnInject = null; }
+        var body = JsonSerializer.SerializeToElement(new { node = HaContract.NodeId(Id), request = Guid.NewGuid().ToString() });
+        var first = Assert.IsType<StopResult>(await setup.Handle(fleetChannel, FleetController.StopOp, body));
+        Assert.Equal(StopOutcome.Ended, first.Outcome);
+        Assert.Equal(forced ? true : (bool?)null, first.Forced);
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id));
+        probe.Reason = "bridge now active";
+        var again = Assert.IsType<StopResult>(await setup.Handle(fleetChannel, FleetController.StopOp, body));
+        Assert.Equal(first, again);
+        Assert.Single(injector.Plans);
+        Assert.Equal(forced ? 1 : 0, control.Terminated.Count);
+        var wrong = JsonSerializer.SerializeToElement(new { node = HaContract.NodeId(Other), request = body.GetProperty("request").GetString() });
+        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await setup.Handle(fleetChannel, FleetController.StopOp, wrong)).Outcome);
+        var other = setup.Credentials.MintScript("other").Credential;
+        var channel = new FleetChannel();
+        setup.Credentials.Accept(channel, other);
+        setup.Controller.RegisterController(other);
+        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await setup.Handle(channel, FleetController.StopOp, body)).Outcome);
+        setup.Credentials.RevokeScript("sre");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => setup.Handle(fleetChannel, FleetController.StopOp, body));
+    }
+
+    [Theory]
+    [InlineData(false), InlineData(true)]
     public async Task Fleet_stop_checks_again_before_forced_termination(bool protect)
     {
         var clearance = new Clearance();

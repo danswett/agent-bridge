@@ -1108,6 +1108,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // arguments carrying a prompt would submit one with nobody pressing Continue (Copilot on
             // #837), so it is refused before anything is made, and stays offered.
             var extras = Config.Agent(plan.Launcher.Id).ExtraArgs;
+            if (attribution?.FleetController == true && extras.Count > 0)
+            { return Refused("Fleet launches cannot guarantee standard permissions with configured extraArgs; nothing was started."); }
             if (restoring && Launchers.PromptFlag(plan.Launcher) is var flag && extras.Contains(flag, StringComparer.Ordinal))
             {
                 return Refused($"{plan.Launcher.Label}'s extraArgs in the host's config carry {flag}, which would start the restored session with a prompt; resume it from Launch");
