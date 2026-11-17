@@ -32,6 +32,7 @@ public interface ISessionLauncher
     SessionProcess? FleetLaunchProcess(Guid request) => null;
     bool FleetLaunchRegistered(Guid request) => false;
     bool FleetProcessRunning(SessionProcess process) => false;
+    void RetireFleetReservation(Guid request) => throw new InvalidOperationException("fleet reservation retirement is unavailable");
     LaunchConfig? FleetConfig => null;
     Task<LaunchResult>? ReplayAuditedAsync(LaunchRequest request, string peer) => null;
 
@@ -768,8 +769,19 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, LaunchAuditCallbacks?> prepare,
         CancellationToken cancellationToken = default) => LaunchOnceAsync(request, principal, prepare, fleet: true);
     public bool IsFleetWorker(string session, SessionProcess? process) => provenance.IsFleetWorker(session, process);
-    public SessionProcess? FleetLaunchProcess(Guid request) => provenance.FleetProcess(request);
-    public bool FleetLaunchRegistered(Guid request) => provenance.FleetRegistered(request);
+    public SessionProcess? FleetLaunchProcess(Guid request)
+    {
+        if (provenance.Fleet(request)?.Session is { } session && source.Get(session) is not null)
+        {
+            var child = source.ProcessOf(session);
+            if (child?.StartedAt is null) { throw new InvalidOperationException("fleet child process identity is unavailable"); }
+            provenance.Bound(request, session, child);
+            return child;
+        }
+        return provenance.Fleet(request)?.Process;
+    }
+    public void RetireFleetReservation(Guid request) => provenance.RetireFleet(request);
+    public bool FleetLaunchRegistered(Guid request) => provenance.Fleet(request)?.Registered == true;
     public bool FleetProcessRunning(SessionProcess process) =>
         process.StartedAt is { } at && starter.Running(new Started(process.Id, at));
     public LaunchConfig FleetConfig => Config;

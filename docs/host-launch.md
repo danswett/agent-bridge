@@ -471,10 +471,14 @@ Prompts and attachment names are never logged, only their length and count.
 A person at the machine may run `agent-bridge-host scripts grant-fleet <name>` or
 `scripts revoke-fleet <name>` (optionally `--profile <name>`); agents and script connections cannot.
 The separate `launch:fleet` grant is off for each newly minted credential.
-Activation remains closed until atomic, durable fleet hourly/live admission is wired (#2770);
-enabling a credential's grant does not yet enable dispatch.
+Dispatch requires durable admission under the launch gate (#2770); each admission counts
+once toward the hourly cap, even if starting fails.
 Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
 (empty by default). Fleet launches require an explicitly named agent, permissions and
 an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,
 transfers and attachments. A fresh worktree is checked before starting; its worker receives
 only `read+reply`, and the durable launch audit records `grant: fleet`.
+After ten minutes, complete discovery may close an unregistered reservation only when its
+recorded launcher is proven gone and no registered child exists. Unknown process identities
+stay fail-closed. A person at the machine can retire one reservation with
+`agent-bridge-host scripts retire-fleet <request-uuid> [--profile <name>]`; hourly accounting remains.

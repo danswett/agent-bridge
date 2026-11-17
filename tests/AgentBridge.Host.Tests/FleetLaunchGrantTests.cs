@@ -5,6 +5,7 @@ using AgentBridge.Host.Cli;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed class FleetLaunchGrantTests : IDisposable
@@ -168,7 +169,7 @@ public sealed class FleetLaunchGrantTests : IDisposable
         Assert.Contains("ancestry", ancestry.Message);
     }
 
-    sealed class Channel : IProtocolChannel
+    internal sealed class Channel : IProtocolChannel
     {
         public string PeerId => "fixture";
         public string PeerName => "fixture";
@@ -188,10 +189,7 @@ public sealed class FleetLaunchCapacityTests : LaunchFlowFixture
     public async Task Concurrent_admission_reserves_hourly_slots_before_registration_and_replay_does_not_consume_another()
     {
         var (service, audit) = Setup(wait: TimeSpan.FromSeconds(1), follow: TimeSpan.FromSeconds(2));
-        for (var i = 0; i < 6; i++)
-        {
-            Assert.Equal(LaunchOutcome.Started, (await FleetLaunch(service, audit)).Outcome);
-        }
+        await FillFleet(service, audit, 6);
         foreach (var pid in starter.Pids.ToArray()) { starter.Exit(pid); }
         await source.RefreshAsync();
         Assert.Equal(LaunchOutcome.Started, (await FleetLaunch(service, audit)).Outcome);
@@ -216,47 +214,37 @@ public sealed class FleetLaunchCapacityTests : LaunchFlowFixture
             && row.Gate is { Phase: "intent" } && row.Outcome == "reserved"));
     }
 
-    [Fact]
-    public async Task Failed_fleet_starts_close_live_reservations_but_still_consume_hourly_admissions()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Never_started_launches_close_reservations_but_still_consume_hourly_admissions(bool missingCredential)
     {
-        var (service, audit) = Setup();
-        starter.Throws = new IOException("start failed");
+        var credentials = new NoFleetCredentials { IssueFleet = !missingCredential };
+        var (service, audit) = Setup(credentials: credentials);
+        starter.Throws = missingCredential ? null : new IOException("start failed");
         var failed = Enumerable.Range(0, 6).Select(_ => FleetRequest()).ToArray();
         foreach (var request in failed)
         {
-            Assert.Equal(LaunchOutcome.Failed, (await FleetLaunch(service, audit, request)).Outcome);
+            Assert.Equal(missingCredential ? LaunchOutcome.Refused : LaunchOutcome.Failed,
+                (await FleetLaunch(service, audit, request)).Outcome);
         }
-
         var (rows, complete) = GateAuditProjection.Load(audit.Profile);
         Assert.True(complete);
         Assert.All(failed, request => Assert.Contains(rows, row => row.Request == request.Request
-            && row.Gate is { Phase: "terminal", ReasonCode: "failed" } && row.Outcome == "failed"));
-
-        starter.Throws = null;
-        Assert.Equal(LaunchOutcome.Started, (await FleetLaunch(service, audit)).Outcome);
-    }
-
-    [Fact]
-    public async Task A_fleet_launch_without_a_credential_closes_its_live_reservation()
-    {
-        var credentials = new NoFleetCredentials();
-        var (service, audit) = Setup(credentials: credentials);
-        var request = FleetRequest();
-        Assert.Equal(LaunchOutcome.Refused, (await FleetLaunch(service, audit, request)).Outcome);
-
-        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
-        Assert.True(complete);
-        Assert.Contains(rows, row => row.Request == request.Request
-            && row.Gate is { Phase: "terminal", ReasonCode: "refused" } && row.Outcome == "refused");
+            && row.Gate is { Phase: "terminal" } && row.Outcome == (missingCredential ? "refused" : "failed")));
         Assert.Empty(starter.Specs);
+        starter.Throws = null;
         credentials.IssueFleet = true;
         Assert.Equal(LaunchOutcome.Started, (await FleetLaunch(service, audit)).Outcome);
     }
 
-    [Fact]
-    public async Task An_unregistered_launcher_exit_without_child_proof_stays_fail_closed()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_unregistered_exit_is_closed_after_the_registration_bound_including_after_restart(bool restart)
     {
-        var (service, audit) = Setup(wait: TimeSpan.FromSeconds(2), follow: TimeSpan.FromSeconds(3));
+        var time = new FakeTimeProvider(clock.GetUtcNow());
+        var (service, audit) = Setup(wait: TimeSpan.FromSeconds(2), follow: TimeSpan.FromSeconds(3), time: time);
         starter.Registers = false;
         starter.ExitsAtOnce = true;
         var request = FleetRequest();
@@ -271,89 +259,116 @@ public sealed class FleetLaunchCapacityTests : LaunchFlowFixture
         Assert.Equal(LaunchOutcome.Refused, refused.Outcome);
         Assert.Contains("cannot be checked safely", refused.Reason);
         Assert.Single(starter.Specs);
+        time.Advance(TimeSpan.FromMinutes(10));
+        if (restart) { service = CreateService(audit, time: time); }
+        Assert.Equal(LaunchOutcome.Started, (await FleetLaunch(service, audit)).Outcome);
+        Assert.Equal(LaunchOutcome.Failed, (await FleetLaunch(service, audit, request)).Outcome);
+        Assert.Single(GateAuditProjection.Load(audit.Profile).Rows,
+            row => row.Request == request.Request && row.Gate is { Phase: "terminal" } && row.Outcome == "failed");
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task Restart_reconciles_only_a_fleet_reservation_with_durable_exit_proof(bool processWasBound)
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task Restart_reconciles_only_a_fleet_reservation_with_durable_exit_proof(int binding)
     {
         var (_, audit) = Setup();
+        var child = binding == 3 ? await FleetLaunch(CreateService(audit), audit) : null;
         var request = FleetRequest();
         var requestId = Guid.Parse(request.Request);
-        var operation = Guid.NewGuid();
-        var gate = new GateAuditMetadata(1, operation, Guid.Empty, 0, "intent", "local", "agent", operation,
-            "none", LaunchBinding: new string('a', 64));
-        Assert.True(audit.Append(new AgentAuditEntry("local", request.Request, "script:machine/dispatcher", [],
-            "session.launch", request.Request, "reserved", Gate: gate) { Grant = "fleet" }));
+        Reserve(audit, request);
         var provenance = new LaunchProvenance(Path.Combine(audit.Profile, "launch-provenance.json"), logged.Enqueue);
         provenance.Preparing(requestId, request.Request, "fleet");
-        if (processWasBound) { provenance.Bound(requestId, request.Request, new(999999, DateTimeOffset.UtcNow)); }
+        if (binding == 1) { provenance.Bound(requestId, request.Request, new(999999, DateTimeOffset.UtcNow)); }
+        if (binding == 2) { provenance.Started(requestId, request.Request, new(999999, DateTimeOffset.UtcNow)); }
+        if (binding == 3) { provenance.Started(requestId, child!.Session!, new(999999, DateTimeOffset.UtcNow)); }
 
-        var restarted = CreateService(audit);
+        var restarted = CreateService(audit, time: new FakeTimeProvider(clock.GetUtcNow().AddMinutes(10)));
         var next = FleetRequest();
         var result = await FleetLaunch(restarted, audit, next);
-        if (processWasBound)
+        Assert.Equal(binding != 0 ? LaunchOutcome.Started : LaunchOutcome.Refused, result.Outcome);
+        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+        Assert.True(complete);
+        Assert.Equal(binding is 1 or 2, rows.Any(row => row.Request == request.Request
+            && row.Gate is { Phase: "terminal", ReasonCode: "failed" } && row.Outcome == "failed"));
+        if (binding == 0)
         {
-            Assert.Equal(LaunchOutcome.Started, result.Outcome);
-            var (rows, complete) = GateAuditProjection.Load(audit.Profile);
-            Assert.True(complete);
-            Assert.Contains(rows, row => row.Request == request.Request
-                && row.Gate is { Phase: "terminal", ReasonCode: "failed" } && row.Outcome == "failed");
-        }
-        else
-        {
-            Assert.Equal(LaunchOutcome.Refused, result.Outcome);
             Assert.Contains("cannot be checked safely", result.Reason);
-            var (rows, complete) = GateAuditProjection.Load(audit.Profile);
-            Assert.True(complete);
             Assert.DoesNotContain(rows, row => row.Request == request.Request && row.Gate?.Phase == "terminal");
             Assert.Empty(starter.Specs);
         }
     }
 
     [Fact]
-    public async Task A_script_credential_cannot_exceed_the_fleet_cap_of_8_an_hour_nor_6_live_workers()
+    public async Task Only_the_owner_can_retire_a_specific_unbound_reservation_and_the_closure_survives_restart()
     {
         var (service, audit) = Setup();
-        for (var i = 0; i < 6; i++)
+        var request = FleetRequest();
+        Reserve(audit, request);
+        new LaunchProvenance(Path.Combine(audit.Profile, "launch-provenance.json"), logged.Enqueue)
+            .Preparing(Guid.Parse(request.Request), request.Request, "fleet");
+        service = CreateService(audit);
+        var credentials = new AgentCredentials(audit.Profile, "machine");
+        var channel = new FleetLaunchGrantTests.Channel();
+        var data = JsonSerializer.SerializeToElement(new { name = request.Request });
+        Task<object?> Retire(CallerKind kind) => LocalApi.Handler(service, null!, new FixedCallerGuard(new(kind, "fixture")),
+            credentials: credentials, audit: audit)(channel, "scripts.retire-fleet", data);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Retire(CallerKind.Agent));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Retire(CallerKind.App));
+        credentials.Accept(channel, credentials.MintScript("dispatcher").Credential);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Retire(CallerKind.HostCli));
+        channel = new FleetLaunchGrantTests.Channel();
+        await Retire(CallerKind.HostCli);
+        var restarted = CreateService(audit);
+        Assert.Equal(LaunchOutcome.Failed, (await FleetLaunch(restarted, audit, request)).Outcome);
+        Assert.Equal(LaunchOutcome.Started, (await FleetLaunch(restarted, audit)).Outcome);
+    }
+
+    [Fact]
+    public async Task Registration_and_cleanup_racing_across_audit_instances_keep_only_the_first_final()
+    {
+        var (_, audit) = Setup();
+        var request = FleetRequest();
+        var intent = Reserve(audit, request);
+        using var ready = new Barrier(2);
+        await Task.WhenAll(new[] { "failed", "started" }.Select(outcome => Task.Run(() =>
         {
-            var launch = await FleetLaunch(service, audit);
-            Assert.True(launch.Outcome == LaunchOutcome.Started, $"{launch.Outcome}: {launch.Reason}");
-        }
+            ready.SignalAndWait();
+            return new AgentAuditLog(audit.Profile, clock).Append(intent with
+                { Outcome = outcome, Gate = intent.Gate! with { Phase = "terminal", ReasonCode = outcome == "failed" ? "failed" : "none" } });
+        })));
+        var final = Assert.Single(GateAuditProjection.Load(audit.Profile).Rows, row => row.Request == request.Request && row.Gate?.Phase == "terminal");
+        Assert.Equal(final.Outcome, (await FleetLaunch(CreateService(audit), audit, request)).Outcome.ToString().ToLowerInvariant());
+    }
+
+    static AgentAuditEntry Reserve(AgentAuditLog audit, LaunchRequest request)
+    {
+        var operation = Guid.NewGuid();
+        var gate = new GateAuditMetadata(1, operation, Guid.Empty, 0, "intent", "local", "agent", operation,
+            "none", LaunchBinding: LaunchService.RequestBinding(request));
+        var intent = new AgentAuditEntry("local", request.Request, "script:machine/dispatcher", [], "session.launch",
+            request.Request, "reserved", Gate: gate) { Grant = "fleet" };
+        Assert.True(audit.Append(intent));
+        return intent;
+    }
+
+    [Fact]
+    public async Task Fleet_caps_bound_script_workers_but_not_person_launches()
+    {
+        var (service, audit) = Setup();
+        await FillFleet(service, audit, 6);
         var seventhWorker = await FleetLaunch(service, audit);
         Assert.Equal(LaunchOutcome.Refused, seventhWorker.Outcome);
         Assert.Contains("live fleet worker", seventhWorker.Reason);
 
         foreach (var pid in starter.Pids.ToArray()) { starter.Exit(pid); }
         await source.RefreshAsync();
-        for (var i = 0; i < 2; i++)
-        {
-            var launch = await FleetLaunch(service, audit);
-            Assert.True(launch.Outcome == LaunchOutcome.Started, $"{launch.Outcome}: {launch.Reason}");
-        }
+        await FillFleet(service, audit, 2);
         var ninthLaunch = await FleetLaunch(service, audit);
         Assert.Equal(LaunchOutcome.Refused, ninthLaunch.Outcome);
         Assert.Contains("hourly fleet", ninthLaunch.Reason);
-    }
-
-    [Fact]
-    public async Task A_coordinator_can_launch_while_the_fleet_cap_is_full()
-    {
-        var (service, audit) = Setup();
-        for (var i = 0; i < 6; i++)
-        {
-            var launch = await FleetLaunch(service, audit);
-            Assert.True(launch.Outcome == LaunchOutcome.Started, $"{launch.Outcome}: {launch.Reason}");
-        }
-        foreach (var pid in starter.Pids.ToArray()) { starter.Exit(pid); }
-        await source.RefreshAsync();
-        for (var i = 0; i < 2; i++)
-        {
-            var launch = await FleetLaunch(service, audit);
-            Assert.True(launch.Outcome == LaunchOutcome.Started, $"{launch.Outcome}: {launch.Reason}");
-        }
-
         var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
             credentials: new AgentCredentials(Path.Combine(f.Root, "profile"), "machine"),
             agentWorktreeCheck: AgentLaunchWorktreeCheck.Check,
@@ -366,8 +381,13 @@ public sealed class FleetLaunchCapacityTests : LaunchFlowFixture
         Assert.Equal(LaunchOutcome.Started, coordinator.Outcome);
     }
 
+    async Task FillFleet(SessionService service, AgentAuditLog audit, int count)
+    {
+        for (var i = 0; i < count; i++) { Assert.Equal(LaunchOutcome.Started, (await FleetLaunch(service, audit)).Outcome); }
+    }
+
     (SessionService Service, AgentAuditLog Audit) Setup(TimeSpan? wait = null, TimeSpan? follow = null,
-        AgentBridge.Host.Delivery.ILaunchCredentials? credentials = null)
+        AgentBridge.Host.Delivery.ILaunchCredentials? credentials = null, TimeProvider? time = null)
     {
         locator.Installed["claude"] = @"C:\fake\claude.exe";
         Git(f.Root, "init", "-q", "-b", "main", app);
@@ -380,17 +400,18 @@ public sealed class FleetLaunchCapacityTests : LaunchFlowFixture
             JsonSerializer.Serialize(new { agents = new { enabled = true, fleet = new { workspaces = new[] { "App" } },
                 limits = new { fleetPerHour = 8, liveFleetWorkers = 6 } } }));
         var audit = new AgentAuditLog(profile, clock);
-        return (CreateService(audit, wait, follow, credentials), audit);
+        return (CreateService(audit, wait, follow, credentials, time), audit);
     }
 
     SessionService CreateService(AgentAuditLog audit, TimeSpan? wait = null, TimeSpan? follow = null,
-        AgentBridge.Host.Delivery.ILaunchCredentials? credentials = null)
+        AgentBridge.Host.Delivery.ILaunchCredentials? credentials = null, TimeProvider? time = null)
     {
         var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }), wait: wait, follow: follow,
             credentials: credentials ?? new AgentCredentials(audit.Profile, "machine"),
             agentWorktreeCheck: AgentLaunchWorktreeCheck.Check,
             agentWorktreeRefusalAudit: (_, _, _) => true);
-        return new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"), launcher: launcher);
+        return new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"), launcher: launcher)
+            { Time = time ?? clock };
     }
 
     LaunchRequest FleetRequest() => new() { Request = Guid.NewGuid().ToString("D"), Agent = "claude",

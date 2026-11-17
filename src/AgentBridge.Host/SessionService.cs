@@ -90,6 +90,7 @@ public sealed class SessionService
         string? Check() => refusal() ?? (launcher.FleetConfig is { } actual
             ? dispatchCheck(actual) : "fleet dispatch settings are unavailable");
         if (Check() is { } problem) { return new(LaunchOutcome.Refused, problem); }
+        await source.RefreshAsync();
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
             fleet: true, refusal: () => Check() ?? CheckFleetCapacity(audit));
         return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
@@ -118,28 +119,23 @@ public sealed class SessionService
             && row.Gate is { Phase: "intent" } gate && row.Outcome == "reserved" && !completed.Contains(gate.Operation)))
         {
             if (!Guid.TryParseExact(intent.Request, "D", out var request)) { return "live fleet worker count cannot be checked safely"; }
-            SessionProcess? process;
-            bool running;
             try
             {
-                process = launcher!.FleetLaunchProcess(request);
+                var process = launcher!.FleetLaunchProcess(request);
                 if (process is null) { return "live fleet worker count cannot be checked safely"; }
-                running = launcher.FleetProcessRunning(process);
+                if (!launcher.FleetProcessRunning(process))
+                {
+                    if (!launcher.FleetLaunchRegistered(request) && Time.GetUtcNow() - intent.At < TimeSpan.FromMinutes(10))
+                    { return "live fleet worker count cannot be checked safely"; }
+                    if (!GateLaunchAudit.CloseReservation(audit, intent)) { return "fleet launch history cannot be checked safely"; }
+                    continue;
+                }
+                live.Add(process);
             }
             catch (InvalidOperationException)
             {
                 return "live fleet worker count cannot be checked safely";
             }
-            if (!running)
-            {
-                bool registered;
-                try { registered = launcher.FleetLaunchRegistered(request); }
-                catch (InvalidOperationException) { return "live fleet worker count cannot be checked safely"; }
-                if (!registered) { return "live fleet worker count cannot be checked safely"; }
-                if (!GateLaunchAudit.CloseReservation(audit, intent)) { return "fleet launch history cannot be checked safely"; }
-                continue;
-            }
-            live.Add(process);
         }
         try
         {
@@ -156,6 +152,15 @@ public sealed class SessionService
         return live.Count >= limits.LiveFleetWorkers
             ? $"the live fleet worker cap ({limits.LiveFleetWorkers}) has been reached"
             : null;
+    }
+
+    internal void RetireFleetReservation(Guid request, AgentAuditLog audit)
+    {
+        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+        var intent = rows.FirstOrDefault(row => row.Request == request.ToString("D") && row.Gate?.Phase == "intent");
+        if (launcher is null || !complete || intent is null || !GateLaunchAudit.CloseReservation(audit, intent))
+        { throw new InvalidOperationException("refused: the fleet reservation could not be retired safely"); }
+        launcher.RetireFleetReservation(request);
     }
 
     // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or

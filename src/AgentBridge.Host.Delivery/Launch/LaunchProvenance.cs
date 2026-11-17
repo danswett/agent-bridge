@@ -13,7 +13,7 @@ internal sealed class LaunchProvenance
     readonly Lock gate = new();
     readonly Dictionary<Guid, Origin> origins = [];
     bool unavailable;
-    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, bool Registered = false);
+    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, bool Registered = false, bool Retired = false);
 
     public LaunchProvenance(string? path, Action<string> log)
     {
@@ -91,7 +91,7 @@ internal sealed class LaunchProvenance
         lock (gate)
         {
             Check();
-            if (origins.Values.Any(o => o.Grant == "fleet" && o.Process is null
+            if (origins.Values.Any(o => o.Grant == "fleet" && !o.Retired && o.Process is null
                 && (o.Session.Length == 0 || string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase))))
             { throw new InvalidOperationException("refused: a fleet launch has no durable process binding"); }
             var workers = origins.Values.Where(o => o.Grant == "fleet"
@@ -102,21 +102,21 @@ internal sealed class LaunchProvenance
         }
     }
 
-    public SessionProcess? FleetProcess(Guid request)
+    public (string Session, SessionProcess? Process, bool Registered)? Fleet(Guid request)
     {
         lock (gate)
         {
             Check();
-            return origins.GetValueOrDefault(request) is { Grant: "fleet", Process: { } process } ? process : null;
+            return origins.GetValueOrDefault(request) is { Grant: "fleet" } o ? (o.Session, o.Process, o.Registered) : null;
         }
     }
 
-    public bool FleetRegistered(Guid request)
+    public void RetireFleet(Guid request)
     {
         lock (gate)
         {
             Check();
-            return origins.GetValueOrDefault(request) is { Grant: "fleet", Registered: true };
+            if (origins.GetValueOrDefault(request) is { Grant: "fleet" } o) { origins[request] = o with { Retired = true }; Save(); }
         }
     }
 

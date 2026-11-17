@@ -74,11 +74,7 @@ internal static class GateLaunchAudit
             || intent.Gate is not { Phase: "intent" } gate || intent.Request is not { } request
             || intent.Target != request || !Guid.TryParseExact(request, "D", out _))
         { return false; }
-        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
-        if (!complete || !audit.Verify(launch: true).Intact) { return false; }
-        var terminal = rows.FirstOrDefault(row => row.Gate is { Operation: var operation, Phase: "terminal" }
-            && operation == gate.Operation);
-        if (terminal is not null) { return terminal.Outcome is "started" or "failed" or "refused"; }
+        if (!audit.Verify(launch: true).Intact) { return false; }
         return audit.Append(new AgentAuditEntry(intent.Direction ?? "local", request, intent.Principal,
             intent.Chain ?? [], intent.Action, request, "failed",
             Gate: gate with { Sequence = 0, Phase = "terminal", ReasonCode = "failed" }) { Grant = intent.Grant });

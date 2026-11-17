@@ -48,8 +48,8 @@ public static class LocalApi
             { throw Refuse(op, caller, "only the local app may read or change workspace fleet workers", log); }
             return control.WorkspaceFleetWorkers(data);
         }
-        if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet")
-        { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
+        if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet" or "scripts.retire-fleet")
+        { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit, sessions); }
         if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
         {
             if (credentials is null || !OperatingSystem.IsWindows() || channel is not LocalChannel local)

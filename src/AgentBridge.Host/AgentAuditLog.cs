@@ -107,6 +107,14 @@ public sealed class AgentAuditLog
                         if (!prior.Complete || prior.Rows.Any(r => r.Action == entry.Action && r.Request == entry.Request))
                         { throw new IOException("the launch request is already audited or its evidence is incomplete"); }
                     }
+                    if (entry.Action == "session.launch" && metadata is { Phase: "terminal", LaunchBinding: not null })
+                    {
+                        var prior = GateAuditProjection.Load(profile, alreadyLocked: true);
+                        if (!prior.Complete) { throw new IOException("launch evidence is incomplete"); }
+                        var final = prior.Rows.FirstOrDefault(r => r.Action == entry.Action
+                            && r.Gate is { Phase: "terminal" } g && g.Operation == metadata.Operation);
+                        if (final is not null) { return final.Outcome == entry.Outcome && final.Target == entry.Target; }
+                    }
                     line = line with { Gate = metadata, Reason = metadata.ReasonCode, DataSha256 = null, TextLength = null };
                 }
                 var launch = entry.Action == "session.launch";

@@ -162,11 +162,13 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
     [Theory]
     [InlineData("scripts.add")]
     [InlineData("scripts.revoke")]
+    [InlineData("scripts.retire-fleet")]
     public async Task An_unwritable_audit_refuses_the_change(string op)
     {
         credentials.MintScript("pump-wake");
         File.WriteAllText(Path.Combine(fixture.Root, AgentAuditLog.FolderName), "blocked");
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler()(channel, op, Name()));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler()(channel, op,
+            Name(op == "scripts.retire-fleet" ? Guid.NewGuid().ToString("D") : "pump-wake")));
         Assert.Contains("audit", error.Message);
         Assert.Equal(1, credentials.Count);
         Assert.Equal(1, new AgentCredentials(fixture.Root, "machine1").Count);
@@ -233,6 +235,7 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
     [Theory]
     [InlineData("add")]
     [InlineData("revoke")]
+    [InlineData("retire-fleet")]
     public async Task The_cli_refuses_an_agent_session_before_loading_even_an_invalid_profile(string verb)
     {
         var start = new System.Diagnostics.ProcessStartInfo("dotnet")
