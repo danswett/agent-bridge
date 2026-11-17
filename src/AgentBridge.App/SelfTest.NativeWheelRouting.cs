@@ -12,6 +12,12 @@ static class NativeWheelRouting
         {
             throw new InvalidOperationException("The native wheel focus is not owned by the app.");
         }
-        return focus;
+        if (hit.Class != "Microsoft.UI.Input.InputSite.WindowClass"
+            || !NativeInputSetup.TargetReady(window, hit.Handle, hit.Root, window,
+                thread, process, hit.Thread, hit.Process))
+        {
+            throw new InvalidOperationException($"The native wheel pointer input site is not verified (HWND: {hit.Handle:X}; class: {hit.Class}; root: {hit.Root:X}; thread: {hit.Thread}; process: {hit.Process}).");
+        }
+        return hit;
     }
 }

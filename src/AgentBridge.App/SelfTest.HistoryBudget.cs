@@ -921,9 +921,17 @@ static partial class SelfTest
         var mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
         if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
         var focus = PrepareNativeInput(window.Handle);
+        var hit = WindowFromPoint(mouse);
+        var candidate = CaptureNativeWheel(window, hit, focus, GetForegroundWindow());
+        AppLog.Write($"self-test: native wheel pointer candidate at ({mouse.X}, {mouse.Y}); {candidate.Detail}");
         var target = NativeWheelRouting.Select(window.Handle, GetCurrentThreadId(), (uint)Environment.ProcessId,
-            ReadNativeWheelTarget(focus), ReadNativeWheelTarget(WindowFromPoint(mouse)));
+            ReadNativeWheelTarget(focus), ReadNativeWheelTarget(hit));
         var sent = CaptureNativeWheel(window, target.Handle, focus, GetForegroundWindow());
+        if (GetForegroundWindow() != window.Handle || GetFocus() != focus || WindowFromPoint(mouse) != target.Handle
+            || ReadNativeWheelTarget(target.Handle) != target)
+        {
+            throw new InvalidOperationException($"The native wheel target changed before posting ({sent.Detail}).");
+        }
         AppLog.Write($"self-test: posting native wheel at ({mouse.X}, {mouse.Y}); {sent.Detail}");
         if (!PostMessageW(target.Handle, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException($"The native wheel message could not be posted ({sent.Detail})."); }
         return (target.Handle, mouse.X, mouse.Y, sent);

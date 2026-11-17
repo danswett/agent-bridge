@@ -1364,6 +1364,13 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   200 ms, reader content within 1.5 DIP, and blocks unselected. Client drawing only, not host reads
   or physical input. Run published `AgentBridge.exe --self-test-history-scroll <result.json>`;
   normal `--self-test` includes it on both Windows CI architectures.
+  The native wheel check (#2508, #2476) posts to the verified XAML input-site HWND
+  under the conversation's screen point, not the keyboard-focused child. Both
+  targets must belong to this window, thread and process; changed or unverified
+  targets fail before posting. The log captures the candidate and actual post,
+  with bounded HWND class/parent/root chains, and records the post-receipt sample
+  in `historyWheelInput` on both hits and misses. Wheel receipt and movement remain
+  required; the independent F24 canary and its quarantine conditions are unchanged.
   The sign-in row captures run `CheckSignInRowTypography` in Light, Dark and CI high contrast:
   the status run alone uses proportional figures for words-only text, fixing the bundled face's
   wide tabular hyphen (#903); any digit keeps the whole run tabular. The check measures the drawn
