@@ -58,6 +58,40 @@ public sealed partial class ReplyTests
         Assert.Null(new DurableInbox(InboxPath).Peek(Node));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Repeated_no_key_worker_failures_stop_retrying_and_release_the_FIFO_head_even_after_restart(bool restart)
+    {
+        outcome = r => Task.FromResult(r.Text == "stuck"
+            ? new ReplyResult(AnswerOutcome.Refused, "worker unavailable") { Refusal = ReplyRefusal.Retryable }
+            : new ReplyResult(AnswerOutcome.Delivered));
+        var mark = ha.Log.Count;
+        async Task Drain(HaConnector c, int passes)
+        {
+            for (var n = 0; n < passes; n++) { await Pass(c, 20); await c.DeliveredAsync(); }
+        }
+        await using (var first = await Ready())
+        {
+            first.Observe(ha.SendFromCard(Node, "stuck", rid: "bounded-head"));
+            first.Observe(ha.SendFromCard(Node, "later", rid: "bounded-tail"));
+            await Drain(first, 2);
+            if (!restart) { await Drain(first, 8); }
+        }
+        if (restart)
+        {
+            await using var resumed = Connector();
+            await Drain(resumed, 8);
+        }
+
+        Assert.Equal(["stuck", "stuck", "stuck", "later"], replied.Select(r => r.Text));
+        Assert.Null(new DurableInbox(InboxPath).Peek(Node));
+        Assert.Contains(NotesSince(mark), n => n.Summary == "Reply NOT sent" &&
+            n.Attributes.GetProperty("reply_ack").GetProperty("rid").GetString() == "bounded-head" &&
+            n.Attributes.GetProperty("reply_ack").GetProperty("outcome").GetString() == "refused" &&
+            n.Attributes.GetProperty("error").GetString()!.Contains("retry limit", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task A_person_draft_stays_untouched_while_a_refused_agent_message_remains_queued()
     {

@@ -591,6 +591,9 @@ no keys went (`Busy`, or a host-classified busy, unverified-composer or retryabl
 resets its attempt marker, preserves the original payload and retries no sooner than the
 reply sweep. Each attempt has a persisted sequence and a distinct host request id;
 the sender's rid stays unchanged. Permanent refusals still release the head.
+No-key `Retryable` worker refusals become terminal `refused` after three persisted
+delivery attempts, with an explicit retry-limit error, so a broken worker cannot
+hold later messages forever. Restart does not reset that attempt budget.
 Idle-only delivery is rechecked by the host. A person draft is never cleared or appended
 to, including Claude boxes whose suggestions cannot be distinguished from drafts.
 Interrupted or partly typed attempts remain `unconfirmed` and are never retried.

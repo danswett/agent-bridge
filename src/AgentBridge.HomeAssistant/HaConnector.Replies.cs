@@ -111,6 +111,7 @@ public sealed partial class HaConnector
 
     // The request ids remembered per card to drop a message delivered twice.
     const int MaxRids = 50;
+    const int MaxRetryableAttempts = 3;
 
     // A rid is one short token; anything else is treated as no rid, so a malformed one never
     // reaches an acknowledgement.
@@ -226,16 +227,23 @@ public sealed partial class HaConnector
         // Refused/Busy prove no keys went; uncertain attempts must never enter this path.
         if (!done.Failed && (result.Outcome == AnswerOutcome.Busy || result.Outcome == AnswerOutcome.Refused &&
             result.Refusal is ReplyRefusal.Busy or ReplyRefusal.ComposerUnverified or ReplyRefusal.Retryable) &&
-            done.Rid is { } retry && inbox?.Peek(p.Node)?.Rid == retry)
+            done.Rid is { } retry && inbox?.Peek(p.Node) is { } pending && pending.Rid == retry)
         {
-            inbox.Requeue(p.Node, retry);
-            p.Reply.ForgetRid(retry);
-            p.Reply.InboxRetryAt = now + options.ReplySweep;
-            p.Reply.Ack = MakeAck(retry, done.Sender, "queued");
-            if (ours) { p.DriverPendingAt = null; }
-            await TransientAsync(p, "Reply queued", new JsonObject { ["error"] = ReplyReasons.Shared(result.Reason ?? "The session is busy; the reply will be retried.") }, ct);
-            log($"Home Assistant connector requeued reply {retry}: nothing was typed");
-            return;
+            if (result.Refusal == ReplyRefusal.Retryable && pending.Attempts >= MaxRetryableAttempts)
+            {
+                result = result with { Reason = $"Automatic retry limit reached after {pending.Attempts} attempts; no keys were typed. {ReplyReasons.Shared(result.Reason ?? "")}".TrimEnd() };
+            }
+            else
+            {
+                inbox.Requeue(p.Node, retry);
+                p.Reply.ForgetRid(retry);
+                p.Reply.InboxRetryAt = now + options.ReplySweep;
+                p.Reply.Ack = MakeAck(retry, done.Sender, "queued");
+                if (ours) { p.DriverPendingAt = null; }
+                await TransientAsync(p, "Reply queued", new JsonObject { ["error"] = ReplyReasons.Shared(result.Reason ?? "The session is busy; the reply will be retried.") }, ct);
+                log($"Home Assistant connector requeued reply {retry}: nothing was typed");
+                return;
+            }
         }
         // The delivered rid goes out with the same update that says how the delivery ended.
         if (done.Rid is { } rid)
