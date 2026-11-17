@@ -231,6 +231,7 @@ public sealed class CapSignDescriptorParserTests
             "  \"about\": \"C# v3 person-descriptor parser vectors for #2385; vectors are keyed by name and record the first refusal code.\",",
             "  \"spec\": \"devices.md\",",
             "  \"generatedBy\": \"tests/AgentBridge.Roster.Tests/CapSignDescriptorParserTests.cs\",",
+            "  \"contexts\": {}, \"records\": {}, \"knownDifferences\": [],",
             $"  \"account\": {JsonSerializer.Serialize(Account, Raw)},",
             $"  \"generation\": {JsonSerializer.Serialize(Generation, Raw)},",
             $"  \"exampleDh\": {JsonSerializer.Serialize(Codec.Base64Url(Pwa.Public), Raw)},",

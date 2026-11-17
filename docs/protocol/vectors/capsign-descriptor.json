@@ -2,6 +2,7 @@
   "about": "C# v3 person-descriptor parser vectors for #2385; vectors are keyed by name and record the first refusal code.",
   "spec": "devices.md",
   "generatedBy": "tests/AgentBridge.Roster.Tests/CapSignDescriptorParserTests.cs",
+  "contexts": {}, "records": {}, "knownDifferences": [],
   "account": "owner@example",
   "generation": "ab4fb3cc24a3cc99249ab0694c361a88",
   "exampleDh": "BCN8CBKyx6Qs5EO8U2XYCSyjvzLX6G6MjlIKE8LwQ1aSagHISE6aK55Qkxh85nL5ny6-GhgnqQ99MBIpYiD36DY",
