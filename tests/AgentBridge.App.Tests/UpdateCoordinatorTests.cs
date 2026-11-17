@@ -13,6 +13,8 @@ public sealed class UpdateCoordinatorTests
     readonly TaskCompletionSource applyStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly TaskCompletionSource<UpdateApplyEvidence> applied = new(TaskCreationOptions.RunContinuationsAsynchronously);
     string? active = Target;
+    Exception? readError, respawnError;
+    bool stale;
 
     UpdateCoordinator Coordinator(Func<IDisposable>? acquire = null) => new(
         ct => { steps.Add("wait-app"); return appExited.Task.WaitAsync(ct); },
@@ -20,11 +22,20 @@ public sealed class UpdateCoordinatorTests
         {
             steps.Add("apply");
             applyStarted.TrySetResult();
-            return (await applied.Task.WaitAsync(ct)) with { Generation = generation };
+            return (await applied.Task.WaitAsync(ct)) with { Generation = stale ? Guid.Empty : generation };
         },
         acquire ?? (() => { steps.Add("lock"); return new Lease(() => steps.Add("unlock")); }),
-        () => { steps.Add("fresh-version"); return active; },
-        () => steps.Add("respawn"),
+        () =>
+        {
+            steps.Add("fresh-version");
+            if (readError is not null) throw readError;
+            return active;
+        },
+        () =>
+        {
+            steps.Add("respawn");
+            if (respawnError is not null) throw respawnError;
+        },
         time);
 
     [Fact]
@@ -117,6 +128,73 @@ public sealed class UpdateCoordinatorTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
         Assert.False(applied.Task.IsCompleted);
         Assert.DoesNotContain("respawn", steps);
+    }
+
+    [Fact]
+    public async Task Stale_equal_evidence_cannot_even_acquire_the_package_lock()
+    {
+        stale = true;
+        appExited.SetResult();
+        applied.SetResult(new(true, 0, Target));
+
+        var result = await Coordinator().RunAsync(Target);
+
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Equal("stale-evidence", result.Code);
+        Assert.Equal(["wait-app", "apply"], steps);
+    }
+
+    [Fact]
+    public async Task An_unfinished_worker_cannot_read_the_manifest_or_respawn_even_with_exit_zero()
+    {
+        appExited.SetResult();
+        applied.SetResult(new(false, 0, Target));
+        var run = Coordinator().RunAsync(Target);
+        await applyStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        time.Advance(TimeSpan.FromMinutes(10));
+
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Equal("timeout", result.Code);
+        Assert.DoesNotContain("lock", steps);
+        Assert.DoesNotContain("respawn", steps);
+    }
+
+    [Theory]
+    [InlineData(false, "active-version")]
+    [InlineData(true, "respawn")]
+    public async Task Manifest_or_respawn_failure_is_unknown_and_releases_the_lock(bool restarting, string step)
+    {
+        var error = new InvalidOperationException("private coordinator detail");
+        if (restarting) respawnError = error;
+        else readError = error;
+        appExited.SetResult();
+        applied.SetResult(new(true, 0, Target));
+
+        var result = await Coordinator().RunAsync(Target);
+
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Equal(step, result.Step);
+        Assert.Equal("InvalidOperationException", result.ErrorType);
+        Assert.Equal("unlock", steps[^1]);
+        Assert.Equal(restarting, steps.Contains("respawn"));
+        Assert.DoesNotContain(error.Message, result.ToString());
+    }
+
+    [Fact]
+    public async Task A_lock_release_failure_is_not_reported_as_success()
+    {
+        appExited.SetResult();
+        applied.SetResult(new(true, 0, Target));
+
+        var result = await Coordinator(() => new Lease(
+            () => throw new IOException("private lock path"))).RunAsync(Target);
+
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Equal("package-unlock", result.Step);
+        Assert.Equal("IOException", result.ErrorType);
+        Assert.DoesNotContain("private lock path", result.ToString());
     }
 
     sealed class Lease(Action release) : IDisposable

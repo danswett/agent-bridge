@@ -28,6 +28,18 @@ Only its authoritative result plus a fresh matching manifest under the package l
 permits respawn. A launcher exit, target files appearing or a cached locator is not
 proof. Unknown remains unknown; cancelling observation never kills the updater.
 
+### B1: bounded flow, not native wiring
+
+`UpdateCoordinator` composes the original-app wait, operation-bound apply evidence,
+package lock, fresh manifest read and respawn under one observation window. The
+adapter must retain one real apply handle per generation, not launch on every probe
+or retag cached evidence. Synchronous lock/read/respawn callbacks must not block.
+Only current-generation worker completion with exit zero reaches the manifest read;
+only its matching release identity authorizes respawn while the lock remains held.
+Failures retain their step and structured error type/code, never exception messages.
+B2 supplies the native adapter and closed packaging; B3 supplies private staging and
+the app/launcher cutover. This layer alone changes no production apply path.
+
 ## C/D: approved design basis, not activation proof
 
 Use immutable `root\slots\<release-identity>-<package-digest>` payloads. One validated
