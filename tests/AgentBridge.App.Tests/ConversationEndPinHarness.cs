@@ -90,5 +90,6 @@ namespace AgentBridge.App
         public double AnchorAt => anchorAt;
         public void Follow() => FollowPinnedEnd();
         public void Scrolling(double? correction = null) { scrolling = true; anchoring = correction; }
+        public void StopScrolling() => scrolling = false;
     }
 }

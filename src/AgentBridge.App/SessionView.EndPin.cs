@@ -1,6 +1,8 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
 
@@ -9,6 +11,20 @@ public sealed partial class SessionView
     void HookConversationPointer(ScrollViewer scroll)
     {
         scroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, _) => ReleasePin()), true);
+        // Scrollbar parts handle their presses; release before their first ViewChanged or layout.
+        scroll.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
+        {
+            var fromBar = false;
+            for (var node = e.OriginalSource as DependencyObject; node is not null; node = VisualTreeHelper.GetParent(node))
+            {
+                if (node is ScrollViewer owner)
+                {
+                    if (owner == scroll && fromBar) { ReleasePin(); }
+                    return;
+                }
+                if (node is ScrollBar) { fromBar = true; }
+            }
+        }), true);
     }
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
@@ -18,7 +34,7 @@ public sealed partial class SessionView
     // measured end on layout and final view changes, including while an older target is pending.
     void FollowPinnedEnd()
     {
-        if (panning || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
+        if (panning || scrolling && anchoring is null || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
         if (ConversationEndPin.Correction(pinEnd, scroll.VerticalOffset, scroll.ScrollableHeight, anchoring) is { } to) { Anchoring(scroll, to); }
     }
 

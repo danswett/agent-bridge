@@ -25,6 +25,8 @@ public sealed class ConversationEndPinTests
         view.Scroller.VerticalOffset = 50;
         view.Scroller.ScrollableHeight = 300;
         view.Follow();
+        view.StopScrolling();
+        view.Follow();
         Assert.Empty(view.Scroller.Targets);
     }
 
