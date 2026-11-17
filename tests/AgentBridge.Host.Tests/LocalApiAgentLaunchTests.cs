@@ -181,6 +181,35 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task A_busy_prestart_records_one_refusal_for_the_authenticated_request()
+    {
+        var body = Body();
+        launcher.BeforeStartOutcome = LaunchOutcome.Busy;
+        Assert.Equal(LaunchOutcome.Busy, (await Launch(body)).Outcome);
+        var row = Assert.Single(Rows());
+        Assert.Equal("refused", row.GetProperty("outcome").GetString());
+        Assert.Equal(body.GetProperty("request").GetString(), row.GetProperty("request").GetString());
+        Assert.Equal(Principal, row.GetProperty("principal").GetString());
+        Assert.Contains("busy", row.GetProperty("reason").GetString());
+        Assert.Equal(0, launcher.Starts);
+    }
+
+    [Fact]
+    public async Task A_busy_prestart_cannot_return_without_writable_refusal_evidence()
+    {
+        launcher.BeforeStartOutcome = LaunchOutcome.Busy;
+        launcher.BeforePrepare = () =>
+        {
+            var folder = Path.Combine(root, AgentAuditLog.FolderName);
+            Directory.Move(folder, folder + "-saved");
+            File.WriteAllText(folder, "blocked");
+        };
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Launch(Body()));
+        Assert.Contains("auditUnwritable", error.Message);
+        Assert.Equal(0, launcher.Starts);
+    }
+
+    [Fact]
     public async Task The_hourly_cap_refuses_the_fourth_launch_and_records_the_reason()
     {
         for (var i = 0; i < 3; i++) { Assert.Equal(LaunchOutcome.Started, (await Launch(Body())).Outcome); }
@@ -249,6 +278,51 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
 public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
 {
     private protected override bool UsesRelay => false;
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_real_worktree_refusal_has_one_audit_even_when_the_callback_cannot_record_it(bool callbackWrites)
+    {
+        File.WriteAllText(Path.Combine(f.Root, HostSettings.FileName), """
+            {"agents":{"enabled":true,"launch":{"enabled":true},
+              "inbound":{"local":{"launch":{"workspaces":["App"],"agents":["claude"],"permissions":"ask"}}},
+              "limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":10,"liveAgentLaunched":6,"agentLaunchedIdleHours":2}}}
+            """);
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, ".mcp.json"), "{}");
+        Git(app, "add", ".mcp.json");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        var credentials = new AgentCredentials(f.Root, "machine");
+        var channel = new LocalApiAgentLaunchTests.Channel();
+        var at = DateTimeOffset.UtcNow;
+        var token = credentials.Mint("parent", "launch", 100, at, AgentProtocol.ScopeReadReplyLaunch);
+        credentials.Accept(channel, credentials.Check(token, new ProcessAncestry([new PeerProcess(100, at, "agent.exe")], true)).Accepted!);
+        var audit = new AgentAuditLog(f.Root);
+        var calls = 0;
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
+            credentials: credentials, agentWorktreeCheck: AgentLaunchWorktreeCheck.Check,
+            agentWorktreeRefusalAudit: (request, principal, reason) =>
+            {
+                calls++;
+                return callbackWrites && audit.Append(new("local", request.ToString("D"), principal, [],
+                    LaunchProtocol.Launch, "local", "refused", reason));
+            });
+        var handle = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher),
+            null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: credentials, audit: audit);
+        var body = JsonSerializer.SerializeToElement(new { request = Guid.NewGuid().ToString("D"), agent = "claude", workspace = "App", permissions = "ask" });
+        var result = Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch, body));
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Equal(1, calls);
+        Assert.Empty(starter.Specs);
+        var rows = Directory.GetFiles(Path.Combine(f.Root, AgentAuditLog.FolderName), "launches-*.jsonl")
+            .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line))
+            .Where(row => row.TryGetProperty("action", out _) && row.GetProperty("outcome").GetString() == "refused");
+        var row = Assert.Single(rows);
+        Assert.Equal(body.GetProperty("request").GetString(), row.GetProperty("request").GetString());
+        Assert.Equal("agent:machine/parent", row.GetProperty("principal").GetString());
+    }
 
     [Fact]
     public async Task A_permitted_pipe_launch_uses_the_real_worktree_checks_and_only_the_fake_process_starter()
