@@ -23,7 +23,9 @@ Use one durable, host-local claim ledger shared by that host's `LiteReceiver` an
 relay, HA, or network dependency. Both routes terminate at the host that can type into
 the target's local session; therefore a relay outage does not block the HA fallback,
 and an HA-only host needs neither agent-lite nor a relay connection to use the ledger.
-The store is created lazily on the first claim, not only when agent-lite starts.
+A one-time host-profile migration initializes the store on new and existing hosts
+before either ingress is enabled; initialization is not deferred until the first
+claim and does not require a manual owner bootstrap.
 
 This is deliberately scoped to local-session claims: every host runs the same code;
 no named VM is a fleet-wide home. If a host leaves, its local sessions leave with it
@@ -40,9 +42,11 @@ full session ID. Before any target gate, claim, or typing, resolve the Lite loca
 enumerating the current `ISessionSource.Snapshot()` and matching it against
 `HaContract.NodeId(session.Id)` (the existing lowercase, alphanumeric, first-16
 mapping used to publish session nodes). Require a complete snapshot and exactly one
-match: zero returns `noSuchSession`, several return `ambiguousSession`, and held or
-incomplete discovery returns `sessionResolutionIncomplete`. Never choose an arbitrary
-match or fall back to prefix matching. Pass the matched full `Session.Id` to gates,
+match: a snapshot is complete only when `ISessionSource.Held == null`; check this
+before using its contents. Zero returns `noSuchSession`, several return
+`ambiguousSession`, and a non-null `Held` or otherwise incomplete discovery returns
+`sessionResolutionIncomplete`. Never choose an arbitrary match or fall back to
+prefix matching. Pass the matched full `Session.Id` to gates,
 the claim store and `ReplyService`; HA resolves its raw ID to that same `Session.Id`.
 Thus both routes use one claim key.
 The key does not include transport, sender peer, or display-only sender text. The
@@ -97,22 +101,29 @@ the current live states.
 
 The initialization marker is protected host-profile state outside the replaceable
 journal directory and excluded from journal backups/restores. It binds the profile
-and schema to a monotonically rising journal sequence and its hash-chain tip. Each
-frame carries its sequence and hash-chain link. Flush a journal mutation before
+and schema to a monotonically rising journal sequence and its hash-chain tip. A
+separate durable profile-migration record tracks `initializing` versus `complete`;
+it is also outside the journal and cannot be rolled back with a journal backup.
+Each frame carries its sequence and hash-chain link. Flush a journal mutation before
 atomically advancing the marker; a crash may leave the journal ahead, but never
 advances the marker before the corresponding frame is durable. `Acquire` cannot
 return `Acquired` until both the claim frame and its marker update are durable. If a
 completion's marker update fails after keys may have gone, return `Unconfirmed`;
 never release or acknowledge delivered.
 
-Only explicit bootstrap of a newly provisioned host profile may initialize the store.
-Under the lock, write and flush a marker in `initializing` state with the profile,
-schema and sequence-zero genesis hash, then create and flush the empty journal, and
-atomically promote the marker to `active`. No claim is allowed before activation. A
-restart may finish that exact interrupted initialization, but normal startup never
-recreates a missing marker, even when the journal appears empty. Missing marker, an
-active marker with no journal, or an initialization journal other than the exact
-genesis header holds both Lite and HA delivery.
+Before registering either ingress, the host runs an idempotent profile migration
+for every new or pre-existing profile. While ingress is disabled, it records
+`initializing`, writes and flushes the claim marker in `initializing` state with the
+profile, schema and sequence-zero genesis hash, creates and flushes the empty
+journal, promotes the claim marker to `active`, then marks the migration `complete`.
+An upgrade may adopt an already-present store only after validating its marker and
+journal chain. A restart may resume an `initializing` migration only by completing
+the exact empty-genesis initialization or by revalidating an already-present active
+marker and its full journal chain; ingress has not opened, so no new claim could
+have been accepted during migration.
+Once migration is `complete`, a missing marker or journal holds both Lite and HA
+delivery and is never recreated, even if both files are absent or a journal appears
+empty. An incomplete or inconsistent upgrade holds ingress for recovery.
 
 When the journal is ahead of an active marker, accept it only if its verified chain
 contains the marker's exact sequence/hash, then advance the marker. If the journal is
@@ -176,12 +187,14 @@ Replace `LiteDelivery.Typed` with an explicit disposition: `Delivered`, `Unconfi
 or `NotSent`. `LiteDeliver` maps `ReplyResult.Delivered` and `ReplyResult.Unconfirmed`
 separately, but outcome alone is insufficient: a `Refused` result may follow keys
 being typed. Add a host-only, non-optional `ReplyResult.KeyDisposition` with
-`NoKeysSent` and `MayHaveBeenSent` values, populated from `Attempt.KeysWent` at the
-typing boundary and propagated through every exception and result conversion. Use
-`NoKeysSent` only when code proves no key was sent; once an injector attempt may have
-emitted a key it stays `MayHaveBeenSent`, regardless of `Outcome` or `Refusal`. Do
-not infer this field from a refusal reason, and do not default an unclassified path
-to `NoKeysSent`.
+`NoKeysSent` and `MayHaveBeenSent` values. Make `MayHaveBeenSent` the enum's
+zero/default value and initialize the property to it, including every constructor
+and unclassified exception/result-conversion path. Override that default with
+`NoKeysSent` only where code proves no key could have been sent; in particular,
+propagate `Attempt.KeysWent` at the typing boundary and do not lose it in an
+exception handler. Once an injector attempt may have emitted a key, disposition
+stays `MayHaveBeenSent`, regardless of `Outcome` or `Refusal`. Do not infer this
+field from a refusal reason or default an unclassified path to `NoKeysSent`.
 
 `LiteDeliver` may return `NotSent` and release a claim only with `NoKeysSent`. Any
 non-delivered result with `MayHaveBeenSent`, including `Refused`, becomes
@@ -207,9 +220,13 @@ The Lite refusal/fallback table is part of the protocol contract:
 | Receiver result | Sender behavior |
 |---|---|
 | `status=delivered` (code null) | `LiteKind.Delivered`; success, no fallback. |
-| `status=unconfirmed` (`deliveryUnconfirmed`), or sender-side `off`, `undeliverable`, `timeout`, `mode switched off`, `channel lost`, or unreadable acknowledgement | `LiteKind.Unconfirmed` or corresponding transport outcome; fall back once over HA with the exact same request ID. |
+| `status=unconfirmed` (`deliveryUnconfirmed`), or sender-side transport failure (`off`, `undeliverable`, `timeout`, `mode switched off`, `channel lost`) or unreadable acknowledgement | `LiteKind.Unconfirmed` or corresponding transport outcome; fall back once over HA with the exact same request ID. |
 | `refused: busy` or `refused: notReplyTarget`, only when disposition is `NoKeysSent` | Fall back once over HA with the same request ID. |
 | `refused: rate`, `requestReused`, `claimUnavailable`, `noSuchSession`, `ambiguousSession`, `sessionResolutionIncomplete`, `composerNotEmpty`, `deliveryFailed` with no keys, `notSameAccount`, `notPeer`, `lite-sender`, `lite-add`, `lite-target`, `replay`, `malformed`, local `badRequest`, `badMachine`, `badSession`, `badText`, `textTooLong`, `auditUnwritable`, `credential`, `no-sign-key`, or any `EnvelopeException.Code` | Final refusal; do not fall back. |
+
+Any other receiver refusal code, including `off` and `peerError`, is also final and
+never triggers HA fallback. This is distinct from a sender-side transport failure
+such as `off`, which may fall back as specified above.
 
 `noSuchSession` means the current snapshot has zero matches for the Lite locator;
 `ambiguousSession` means several match. Neither permits typing or fallback to an
@@ -234,10 +251,10 @@ tests and implementation.
 
 | Cut | RED cases to add first | Implementation after RED | Estimate |
 |---|---|---|---:|
-| 1a. Claim ledger | Explicit fresh-profile bootstrap creates the initializing marker before the journal and can resume only that genesis state; normal startup never recreates a missing marker; an active marker with no journal holds; concurrent instances serialize; restart preserves state; expiry is fixed; same-key hash mismatch refuses; matching-generation release works and stale release cannot clear a newer claim. | Add the shared per-profile claim state, bootstrap marker, lock, bounded live-record index and generation-fenced operations. | 280 |
+| 1a. Claim ledger | New-profile and existing-host migration initializes once before ingress; interrupted initialization resumes only from genesis or revalidates an existing active ledger; completed migration with a missing marker or journal holds; concurrent instances serialize; restart preserves state; expiry is fixed; same-key hash mismatch refuses; matching-generation release works and stale release cannot clear a newer claim. | Add the shared per-profile claim state, durable migration/bootstrap record, pre-ingress upgrade path, lock, bounded live-record index and generation-fenced operations. | 320 |
 | 1b. Journal recovery | Truncated final frame is dropped and flushed; bad complete checksum and mid-file corruption hold; compaction survives crashes on either side of atomic replace; a valid backup below the marker's sequence, with the wrong hash, or without a complete-claims coverage proof is refused; operator recovery restores only a covering backup. | Add length/checksum framing, safe tail recovery, atomic snapshot compaction, sequence/hash marker validation and fail-closed recovery. | 300 |
-| 2. Local protocol and storage plumbing | Optional caller id survives local pipe parsing; malformed ids refuse; a post-key `Refused` with `KeyDisposition.MayHaveBeenSent` becomes `Unconfirmed`, while only proven `NoKeysSent` refusal is `NotSent`; a UUID delivered for session A cannot supply session B's cached result, and a new claim generation cannot reuse an old result; store starts without relay or Lite configuration. | Add the optional request id and explicit key-handoff evidence, pass the internal claim generation into `ReplyService`, scope outcome memory by `(Session.Id, generation)`, initialize the store in host composition and share it with both routes. | 300 |
-| 3. Lite integration | Same id/text duplicates do not type; mismatched text refuses; `Unconfirmed` persists; zero, multiple or incomplete-snapshot matches refuse before gates or claim; one match resolves Lite's short locator and HA's raw id to the same `Session.Id`; unconfirmed ack maps to fallback with the same id; refusal codes map to the table above. | Integrate the exact-one current-session resolver and claim/completion into `LiteReceiver`/`LiteDeliver`; update session resolution, duplicate, restart, unconfirmed ack and refusal/fallback sections of `docs/protocol/agent-lite.md`. | 300 |
+| 2. Local protocol and storage plumbing | Optional caller id survives local pipe parsing; malformed ids refuse; a post-key `Refused` with `KeyDisposition.MayHaveBeenSent` becomes `Unconfirmed`, while only proven `NoKeysSent` refusal is `NotSent`; an exception after keys are typed retains `MayHaveBeenSent` through result conversion and keeps the claim; a UUID delivered for session A cannot supply session B's cached result, and a new claim generation cannot reuse an old result; both routes wait for completed profile migration. | Add the optional request id and conservative key-handoff evidence, pass the internal claim generation into `ReplyService`, scope outcome memory by `(Session.Id, generation)`, and share the migrated store with both routes. | 320 |
+| 3. Lite integration | Same id/text duplicates do not type; mismatched text refuses; `Unconfirmed` persists; zero or multiple matches refuse before gates or claim; a non-null `ISessionSource.Held` refuses before gates or claim even if a matching session appears in the snapshot; one match resolves Lite's short locator and HA's raw id to the same `Session.Id`; unconfirmed ack maps to fallback with the same id; listed and unlisted refusal codes follow the table and final-refusal rule. | Integrate the exact-one current-session resolver and claim/completion into `LiteReceiver`/`LiteDeliver`; update session resolution, duplicate, restart, unconfirmed ack and refusal/fallback sections of `docs/protocol/agent-lite.md`. | 300 |
 | 4. HA integration | HA and Lite race on the same canonical session/key; HA-only host and relay-down fallback work; no-`rid` card/Send-press retries dedupe locally; mismatched content refuses; duplicate and refusal acks match the mapping above; missing/corrupt store holds. | Integrate the shared store into `HaConnector`; update HA fallback and ack behavior in `docs/protocol/agent-lite.md` and the ownership boundary in `docs/message-delivery.md`. | 320 |
 | 5. Messenger (cross-repo) | Relay-first and HA-first paths reuse exactly one UUID; offline and unconfirmed fallbacks do not mint another; HA-only sends without `rid` remain supported. | In `danswett/slipgates-fleet` (`messenger/reply-session.ps1`, `messenger/FleetTransport.ps1`, and `messenger/Test-FleetMessenger.ps1`), allocate before route selection and pass the same ID to Lite and HA. Owner: the accepted owner of fleet issue #56, assigned by the Chief before this cut starts. Order: after cuts 2, 3 and 4 are accepted and landed, before enabling cross-route fallback; no messenger change can precede the receiver contract. | 180 |
 
