@@ -8,14 +8,15 @@ $node = 'agent_bridge_0123456789abcdef'
 $failures = 0
 
 function Assert([bool]$Ok, [string]$Name) {
-    if ($Ok) { "ok   $Name" } else { "FAIL $Name"; $script:failures++ }
+    if ($Ok) { "ok   $Name" } else { "FAIL $Name"; $r | Format-List | Out-String; $script:failures++ }
 }
 
 $port = Get-Random -Minimum 20000 -Maximum 40000
 # Status is the session's status sensor: a delivered reply starts a turn, so it moves to 'working' (#150).
 # Moves = $false keeps it still, as a session whose box never took the reply.
 $fake = [hashtable]::Synchronized(@{ Mode = 'deliver'; Slot = $null; Ack = $null; Delivered = [System.Collections.ArrayList]::new(); Stop = $false
-    Status = 'idle'; StatusChanged = '2026-11-10T08:00:00+00:00'; Moves = $true; FlipTo = $null; Rids = [System.Collections.ArrayList]::new() })
+    Status = 'idle'; StatusChanged = '2026-11-10T08:00:00+00:00'; Moves = $true; FlipTo = $null; Rids = [System.Collections.ArrayList]::new()
+    Live = $true; Online = $true; PressRids = [System.Collections.ArrayList]::new() })
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://127.0.0.1:$port/")
 $listener.Start()
@@ -33,6 +34,11 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
         elseif ($path -eq 'services/button/press') {
             # The host takes whatever is in the single slot when Send is pressed.
             $slot = $fake.Slot
+            [void]$fake.PressRids.Add($slot.rid)
+            if ($fake.Mode -eq 'submit-response-lost') { $fake.Mode = 'deliver'; $ctx.Response.StatusCode = 503 }
+            if ($fake.Mode -eq 'lost-ack') { $fake.Mode = 'deliver'; $fake.HideAck = $true }
+            if ($fake.Mode -eq 'retry-deliver' -and $fake.PressRids.Count -eq 2) { $fake.Mode = 'deliver' }
+            if ($fake.Mode -eq 'gone-after-first') { $fake.Live = $false }
             # A status change that is not a turn, such as background agents finishing, made as Send is pressed.
             if ($fake.FlipTo) { $fake.Status = $fake.FlipTo; $fake.StatusChanged = [DateTime]::UtcNow.ToString('o') }
             if ($slot -and $fake.Mode -eq 'deliver' -and $fake.Rids.Contains($slot.rid)) {
@@ -48,7 +54,7 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
                 # The incident's first reply: typed, but the box changed before its Enter (ReplyService).
                 $fake.Ack = @{ rid = $slot.rid; outcome = 'unconfirmed'; at = [DateTime]::UtcNow.Ticks; error = "the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent and its words are still in the box" }
             }
-            elseif ($slot -and $fake.Mode -eq 'unconfirmed') {
+            elseif ($slot -and $fake.Mode -in 'unconfirmed', 'retry-deliver', 'gone-after-first') {
                 $fake.Ack = @{ rid = $slot.rid; outcome = 'unconfirmed'; at = [DateTime]::UtcNow.Ticks; error = 'the session ended before it recorded the reply' }
             }
             elseif ($slot -and $fake.Mode -eq 'refuse') {
@@ -69,6 +75,16 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
         elseif ($path -eq "states/sensor.${node}_status") {
             $out = @{ state = $fake.Status; last_changed = $fake.StatusChanged; attributes = @{} }
         }
+        elseif ($path -eq 'states') {
+            $out = @(
+                @{ entity_id = "sensor.${node}_status"; state = $fake.Status; attributes = @{ friendly_name = 'Copilot: Test receiver Status' } }
+                @{ entity_id = 'binary_sensor.agent_bridge_test_online'; state = $(if ($fake.Online) { 'on' } else { 'off' }) }
+                @{ entity_id = 'sensor.agent_bridge_test_sessions'; state = '1'; attributes = @{
+                    sessions = @($(if ($fake.Live) { @{ node = $node } }))
+                } }
+            )
+        }
+        if ($fake.HideAck) { $fake.Ack = $null; $fake.HideAck = $false }
         $bytes = [Text.Encoding]::UTF8.GetBytes(($out | ConvertTo-Json -Depth 5 -Compress))
         $ctx.Response.ContentType = 'application/json'
         $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
@@ -81,18 +97,47 @@ $env:AGENT_HA_AGENT_TOKEN = 'test-token-not-real'
 
 function Send([string]$Text, [string]$Rid) {
     $a = @('-NoProfile', '-File', $script, '-Session', $node, '-Text', $Text, '-Rid', $Rid, '-AckSeconds', '3', '-SeenPolls', '4', '-Attempts', '1', '-StatusSeconds', '3')
+    $before = $fake.PressRids.Count
     $out = & pwsh @a 2>&1 | Out-String
-    [pscustomobject]@{ Exit = $LASTEXITCODE; Out = $out }
+    [pscustomobject]@{ Exit = $LASTEXITCODE; Out = $out; Presses = $fake.PressRids.Count - $before }
 }
 
 try {
+    foreach ($mode in 'retry-deliver', 'unconfirmed', 'silent') {
+        $fake.Mode = $mode; $fake.Ack = $null; $fake.PressRids.Clear(); $fake.Delivered.Clear()
+        $r = Send 'bounded retry' "r-$mode"
+        Assert ($fake.PressRids.Count -eq 2 -and @($fake.PressRids | Select-Object -Unique).Count -eq 1) "$mode retries exactly once with the same rid, even with -Attempts 1"
+        if ($mode -eq 'retry-deliver') {
+            Assert ($r.Exit -eq 0 -and $fake.Delivered.Count -eq 1) 'an unconfirmed send can be confirmed on its same-rid retry'
+        } else {
+            $expected = if ($mode -eq 'silent') { 3 } else { 2 }
+            Assert ($r.Exit -eq $expected -and $r.Out -match 'outcome=unconfirmed') "$mode preserves its legacy exit and explicitly reports unconfirmed"
+        }
+    }
+    foreach ($kind in 'gone', 'offline', 'gone-after-first') {
+        $fake.Mode = if ($kind -eq 'gone-after-first') { $kind } else { 'deliver' }
+        $fake.Live = $kind -ne 'gone'; $fake.Online = $kind -ne 'offline'
+        $fake.Ack = $null; $fake.Status = 'idle'; $fake.PressRids.Clear()
+        $r = Send 'do not trust registration' "r-$kind"
+        $presses = if ($kind -eq 'gone-after-first') { 1 } else { 0 }
+        $outcome = if ($kind -eq 'offline') { 'unconfirmed' } else { 'node-gone' }
+        Assert ($r.Exit -eq 1 -and $fake.PressRids.Count -eq $presses -and $r.Out -match "outcome=$outcome") "$kind never uses a retained registration as liveness, including before a retry"
+    }
+    $fake.Live = $true; $fake.Online = $true; $fake.Mode = 'deliver'; $fake.Ack = $null
+    foreach ($mode in 'submit-response-lost', 'lost-ack') {
+        $fake.Mode = $mode; $fake.Ack = $null; $fake.PressRids.Clear(); $fake.Delivered.Clear()
+        $r = Send 'only once' "r-$mode"
+        $expectedExit = if ($mode -eq 'lost-ack') { 2 } else { 0 }
+        $expectedPresses = if ($mode -eq 'lost-ack') { 2 } else { 1 }
+        Assert ($r.Exit -eq $expectedExit -and $r.Presses -eq $expectedPresses -and $fake.Delivered.Count -eq 1) "$mode types once and uses only the bounded acknowledgement path"
+    }
     $fake.Mode = 'deliver'
     $r = Send 'hello' 'r-ok'
     Assert ($r.Exit -eq 0 -and $r.Out -match "(?m)^sent to $node") 'a delivered message exits 0 and says sent'
 
     $fake.Mode = 'refuse'; $fake.Ack = $null
     $r = Send 'too soon' 'r-refused'
-    Assert ($r.Exit -eq 3 -and $r.Out -match 'Reply NOT sent' -and $r.Out -match 'waiting on a question' -and $r.Out -notmatch "(?m)^sent to $node") 'a refused message exits 3 and is not reported as sent'
+    Assert ($r.Exit -eq 3 -and $r.Presses -eq 1 -and $r.Out -match 'Reply NOT sent' -and $r.Out -match 'waiting on a question' -and $r.Out -notmatch "(?m)^sent to $node") 'a refused message exits 3 without retrying and is not reported as sent'
 
     $fake.Mode = 'silent'; $fake.Ack = $null
     $r = Send 'lost' 'r-lost'
@@ -101,7 +146,7 @@ try {
     # A reply refused because stale text sits in the input box (#150) is a loud, distinct failure, never exit 0.
     $fake.Mode = 'refuse-box'; $fake.Ack = $null
     $r = Send 'hello' 'r-box'
-    Assert ($r.Exit -eq 4 -and $r.Out -match 'do not keep retrying' -and $r.Out -match '364 characters' -and $r.Out -notmatch "(?m)^sent to $node") 'a refusal for text left in the input box exits 4 and says so'
+    Assert ($r.Exit -eq 4 -and $r.Presses -eq 1 -and $r.Out -match 'do not keep retrying' -and $r.Out -match '364 characters' -and $r.Out -match 'outcome=input-full' -and $r.Out -notmatch "(?m)^sent to $node") 'a refusal for text left in the input box exits 4 without retrying and says so'
 
     # The incident's first reply (#150): the host typed it but its Enter never went, so its words sit in the box and
     # block every later reply. That is not "may have arrived" (exit 2): it was not sent, and retrying cannot work.
@@ -115,11 +160,11 @@ try {
     # The host said delivered, but the session's status never moved (#150): treated as not delivered, never exit 0.
     $fake.Mode = 'deliver'; $fake.Ack = $null; $fake.Status = 'idle'; $fake.Moves = $false
     $r = Send 'hello' 'r-still'
-    Assert ($r.Exit -eq 5 -and $r.Out -match 'did not show a turn' -and $r.Out -notmatch "(?m)^sent to $node") 'a delivered ack with no status change exits 5 and is not reported as sent'
+    Assert ($r.Exit -eq 5 -and $r.Presses -eq 1 -and $r.Out -match 'did not show a turn' -and $r.Out -match 'outcome=not-delivered' -and $r.Out -notmatch "(?m)^sent to $node") 'a delivered ack with no status change exits 5 without retrying and is not reported as sent'
     # Retrying that reply with its own rid gets the host's duplicate ack: it typed nothing, so it is not "sent" now either.
     $fake.Ack = $null
     $r = Send 'hello' 'r-still'
-    Assert ($r.Exit -eq 2 -and $r.Out -match 'already handled rid r-still' -and $r.Out -notmatch "(?m)^sent to $node") 'a retry after exit 5 with the same rid gets a duplicate ack and exits 2, never 0'
+    Assert ($r.Exit -eq 2 -and $r.Out -match 'already handled rid r-still' -and $r.Out -match 'outcome=already-handled' -and $r.Out -notmatch "(?m)^sent to $node") 'a retry after exit 5 with the same rid gets a duplicate ack and exits 2, never 0'
     # A status change that is not a turn (background agents finishing as Send is pressed) is not taken as delivery.
     $fake.Ack = $null; $fake.Status = 'agents'; $fake.FlipTo = 'idle'
     $r = Send 'hello' 'r-flip'
@@ -152,7 +197,9 @@ try {
     # Three rapid sends to one node: each is delivered once, in the order sent.
     $fake.Mode = 'deliver'; $fake.Ack = $null; $fake.Delivered.Clear()
     $procs = foreach ($n in 1..3) {
-        $p = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList @('-NoProfile', '-File', $script, '-Session', $node, '-Text', "m$n", '-Rid', "rapid-$n", '-AckSeconds', '10', '-SeenPolls', '10', '-Attempts', '1', '-StatusSeconds', '5')
+        $start = @{ PassThru = $true; ArgumentList = @('-NoProfile', '-File', $script, '-Session', $node, '-Text', "m$n", '-Rid', "rapid-$n", '-AckSeconds', '10', '-SeenPolls', '10', '-Attempts', '1', '-StatusSeconds', '5') }
+        if ($IsWindows) { $start.WindowStyle = 'Hidden' }
+        $p = Start-Process pwsh @start
         Start-Sleep -Milliseconds 800
         $p
     }

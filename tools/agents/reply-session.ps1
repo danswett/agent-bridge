@@ -13,6 +13,8 @@
 # 5 the host said delivered, but the session's status did not change within -StatusSeconds (#150): treat it as NOT delivered.
 # A 'delivered' ack alone is not enough for exit 0: the session's status must then move (a new turn), unless it was
 # already working, when no status change can show the reply and the ack stands.
+# Unconfirmed outcomes get one automatic retry with the same rid; -Attempts still bounds pre-submit payload attempts.
+# Named outcomes and liveness requirements: docs/agents/comms-lanes-sender.md.
 # The token is read from the environment and never printed.
 param(
   [Parameter(Mandatory)][string]$Session, [Parameter(Mandatory)][string]$Text, [int]$Attempts = 5,
@@ -35,6 +37,11 @@ $h = @{ Authorization = "Bearer $tok" }
 $u = $env:AGENT_HA_URL.TrimEnd('/')
 function Get-Json($path) { Invoke-RestMethod "$u/$path" -Headers $h -TimeoutSec 20 }
 function Post($path, $body) { Invoke-RestMethod -Method Post "$u/$path" -Headers $h -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -TimeoutSec 20 | Out-Null }
+function Complete-Reply([string]$Outcome, [int]$Code, [string]$Message) {
+  $line = "$Message [outcome=$Outcome; rid=$Rid]"
+  if ($Code -eq 0) { $line } else { [Console]::Error.WriteLine($line) }
+  exit $Code
+}
 
 $node = $null
 if ($Session -match '^agent_bridge_[0-9a-f]{16}$') { $node = $Session }
@@ -56,6 +63,22 @@ else {
   else { [Console]::Error.WriteLine("No session named '$Session' was found. Use its full session id or agent_bridge_<16 hex> node."); exit 1 }
 }
 
+function Assert-NodeLive {
+  try { $states = Get-Json 'states' }
+  catch { Complete-Reply 'unconfirmed' 1 'Not delivered: receiver liveness could not be read; nothing submitted.' }
+  $lists = @($states | Where-Object { $_.entity_id -match '^sensor\.agent_bridge_.+_sessions$' })
+  $owners = @($lists | Where-Object { @($_.attributes.sessions | Where-Object { $_.node -eq $node }).Count -gt 0 })
+  if ($lists.Count -gt 0 -and $owners.Count -eq 0) {
+    Complete-Reply 'node-gone' 1 "Not delivered: $node is absent from the host session lists."
+  }
+  if ($owners.Count -eq 1 -and $owners[0].state -notin 'unavailable', 'unknown') {
+    $onlineId = $owners[0].entity_id -replace '^sensor\.', 'binary_sensor.' -replace '_sessions$', '_online'
+    $online = @($states | Where-Object { $_.entity_id -eq $onlineId })
+    if ($online.Count -eq 1 -and $online[0].state -eq 'on') { return }
+  }
+  Complete-Reply 'unconfirmed' 1 "Not delivered: $node has no unique online host session-list membership; registration is not liveness."
+}
+
 # The session's status sensor as state and last change, or $null when it cannot be read. last_changed moves even when a
 # short turn has gone back to idle by the next read, so a turn that came and went is still seen.
 function Get-Status {
@@ -71,7 +94,7 @@ function Get-Ack {
   try {
     $a = (Get-Json "states/sensor.${node}_activity").attributes
     # An ack already on the node before this send (a refused earlier try with the same rid) is not this send's outcome.
-    if ($a.reply_ack -and $a.reply_ack.rid -eq $Rid -and "$($a.reply_ack.at)" -ne $script:staleAt) { return [pscustomobject]@{ Outcome = [string]$a.reply_ack.outcome; Error = [string]$a.error; Duplicate = ($a.reply_ack.duplicate -eq $true) } }
+    if ($a.reply_ack -and $a.reply_ack.rid -eq $Rid -and "$($a.reply_ack.at)" -ne $script:staleAt) { return [pscustomobject]@{ Outcome = [string]$a.reply_ack.outcome; Error = [string]$a.error; Duplicate = ($a.reply_ack.duplicate -eq $true); At = "$($a.reply_ack.at)" } }
   } catch { }
   return $null
 }
@@ -83,98 +106,88 @@ try {
   if (-not $have) { [Console]::Error.WriteLine('Another reply on this machine held the send lock for over a minute; not sent.'); exit 1 }
   $script:staleAt = $null
   try { $before = (Get-Json "states/sensor.${node}_activity").attributes.reply_ack; if ($before -and $before.rid -eq $Rid) { $script:staleAt = "$($before.at)" } } catch { }
-  $last = 'unknown'; $pressed = $false
-  for ($a = 1; $a -le $Attempts -and -not $pressed; $a++) {
-    try {
-      $at = [DateTime]::UtcNow.ToString('o')
-      $payload = @{ at = $at; text = $Text; driver = 'agent'; rid = $Rid; sender = $Sender } | ConvertTo-Json -Compress
-      if ([Text.Encoding]::UTF8.GetByteCount($payload) -gt 60000) { [Console]::Error.WriteLine('Message is over the 60 KB limit; not sent.'); exit 1 }
-      Post 'services/script/agent_bridge_reply_payload' @{ node = $node; payload = $payload }
-      $seen = $false
-      for ($i = 0; $i -lt $SeenPolls -and -not $seen; $i++) {
-        Start-Sleep -Milliseconds 700
-        $got = (Get-Json "states/sensor.${node}_reply_payload").attributes.at
-        if ($got -is [DateTime]) { $got = $got.ToUniversalTime().ToString('o') }
-        $seen = ($got -eq $at)
+  for ($deliveryAttempt = 1; $deliveryAttempt -le 2; $deliveryAttempt++) {
+    $last = 'unknown'; $pressed = $false
+    for ($a = 1; $a -le $Attempts -and -not $pressed; $a++) {
+      Assert-NodeLive
+      try {
+        $at = [DateTime]::UtcNow.ToString('o')
+        $payload = @{ at = $at; text = $Text; driver = 'agent'; rid = $Rid; sender = $Sender } | ConvertTo-Json -Compress
+        if ([Text.Encoding]::UTF8.GetByteCount($payload) -gt 60000) { Complete-Reply 'not-delivered' 1 'Message is over the 60 KB limit; not sent.' }
+        Post 'services/script/agent_bridge_reply_payload' @{ node = $node; payload = $payload }
+        $seen = $false
+        for ($i = 0; $i -lt $SeenPolls -and -not $seen; $i++) {
+          Start-Sleep -Milliseconds 700
+          $got = (Get-Json "states/sensor.${node}_reply_payload").attributes.at
+          if ($got -is [DateTime]) { $got = $got.ToUniversalTime().ToString('o') }
+          $seen = ($got -eq $at)
+        }
+        if (-not $seen) { $last = "the payload did not reach sensor.${node}_reply_payload (the single reply slot was overwritten or is slow)"; throw $last }
+        $statusBefore = Get-Status
+        # A lost HTTP response may still have pressed Send: wait for its ack before any same-rid retry.
+        $pressed = $true
+        Post 'services/button/press' @{ entity_id = "button.${node}_submit" }
+      } catch {
+        $last = $_.Exception.Message
+        if (-not $pressed -and $a -lt $Attempts) { Start-Sleep -Milliseconds (2000 + (Get-Random -Minimum 0 -Maximum 3000)) }
       }
-      if (-not $seen) { $last = "the payload did not reach sensor.${node}_reply_payload (the single reply slot was overwritten or is slow)"; throw $last }
-      # Read just before Send, so a status change from before the press (a background agent finishing while the
-      # payload was posted) is not taken for this reply's turn (#150).
-      $statusBefore = Get-Status
-      Post 'services/button/press' @{ entity_id = "button.${node}_submit" }
-      $pressed = $true
-    } catch {
-      $last = $_.Exception.Message
-      if ($a -lt $Attempts) { Start-Sleep -Milliseconds (2000 + (Get-Random -Minimum 0 -Maximum 3000)) }
     }
-  }
-  if (-not $pressed) { [Console]::Error.WriteLine("Not delivered to $node after $Attempts attempts: $last"); exit 1 }
+    if (-not $pressed) { Complete-Reply 'not-delivered' 1 "Not delivered to $node after $Attempts attempts: $last" }
 
-  # Held under the send lock, so a second send from this machine cannot overwrite the slot before the host has taken this one.
-  $deadline = [DateTime]::UtcNow.AddSeconds($AckSeconds)
-  $delivered = $false
-  do {
-    $ack = Get-Ack
-    if ($ack) {
-      # A repeat of a rid the host already handled: it typed nothing now, and the ack carries neither the first outcome's
-      # reason nor anything this send could see move. So it is never "sent" here (a retry after exit 5 must not turn into
-      # exit 0), and never "not sent" either (#150 review).
-      if ($ack.Duplicate) {
-        [Console]::Error.WriteLine("The host already handled rid $Rid for $node (outcome then: $($ack.Outcome)) and typed nothing this time. It cannot be confirmed from here, and its words may be stuck in the input box: check the session at the machine before resending.")
-        exit 2
-      }
-      switch ($ack.Outcome) {
-        'delivered' { $delivered = $true }
-        'unconfirmed' {
-          # The host typed it, but its Enter never went (the box changed first): not sent, and its words now block every
-          # later reply. That is the likely start of the 9-hour stall in #150, so it is not "may have arrived".
-          if ($ack.Error -match 'not sent and its words are still in the box') {
-            [Console]::Error.WriteLine("Reply NOT sent to ${node}: $($ack.Error). Every reply to this session will be refused until those words are sent or cleared at the machine; do not keep retrying (rid $Rid).")
-            exit 4
-          }
-          $why = if ($ack.Error) { " ($($ack.Error))" } else { '' }
-          [Console]::Error.WriteLine("The host typed the message into $node but could not confirm it$why. It MAY have been delivered; check before resending (rid $Rid).")
-          exit 2
+    $deadline = [DateTime]::UtcNow.AddSeconds($AckSeconds)
+    $delivered = $false; $unconfirmed = $false
+    do {
+      $ack = Get-Ack
+      if ($ack) {
+        if ($ack.Duplicate) {
+          Complete-Reply 'already-handled' 2 "The host already handled rid $Rid for $node (outcome then: $($ack.Outcome)) and typed nothing this time. Check the session before resending."
         }
-        default {
-          $why = if ($ack.Error) { $ack.Error } else { 'the host refused it' }
-          # Text left in the box refuses every later reply, so a retry loop would never end (#150).
-          if ($why -match 'already typed in .*input box') {
-            [Console]::Error.WriteLine("Reply NOT sent to ${node}: $why. Every reply to this session will be refused until that text is sent or cleared at the machine; do not keep retrying (rid $Rid).")
-            exit 4
+        switch ($ack.Outcome) {
+          'delivered' { $delivered = $true }
+          'unconfirmed' {
+            if ($ack.Error -match 'not sent and its words are still in the box') {
+              Complete-Reply 'input-full' 4 "Reply NOT sent to ${node}: $($ack.Error). Send or clear those words at the machine; do not keep retrying."
+            }
+            $unconfirmed = $true
           }
-          [Console]::Error.WriteLine("Reply NOT sent to ${node}: $why. Nothing is queued; retry later (rid $Rid).")
-          exit 3
+          default {
+            $why = if ($ack.Error) { $ack.Error } else { 'the host refused it' }
+            if ($why -match 'already typed in .*input box') {
+              Complete-Reply 'input-full' 4 "Reply NOT sent to ${node}: $why. Send or clear that text at the machine; do not keep retrying."
+            }
+            Complete-Reply 'not-delivered' 3 "Reply NOT sent to ${node}: $why. Nothing is queued; retry later."
+          }
         }
+        if ($delivered -or $unconfirmed) { break }
       }
-      if ($delivered) { break }
+      Start-Sleep -Milliseconds 300
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if (-not $delivered) {
+      if ($deliveryAttempt -eq 1) {
+        if ($ack) { $script:staleAt = $ack.At }
+        [Console]::Error.WriteLine("Unconfirmed reply to $node; retrying exactly once with the same rid $Rid.")
+        continue
+      }
+      if ($unconfirmed) {
+        Complete-Reply 'unconfirmed' 2 "The host could not confirm the message into $node ($($ack.Error)). It MAY have been delivered; check before resending."
+      }
+      Complete-Reply 'unconfirmed' 3 "Reply NOT confirmed for ${node}: the host gave no outcome for rid $Rid within $AckSeconds s after one same-rid retry. It may still arrive."
     }
-    Start-Sleep -Milliseconds 300
-  } while ([DateTime]::UtcNow -lt $deadline)
-  if (-not $delivered) {
-    [Console]::Error.WriteLine("Reply NOT confirmed for ${node}: the host gave no outcome for rid $Rid within $AckSeconds s (another sender may have overwritten the slot, or the host is busy). It may still arrive; retry with -Rid $Rid so the host drops a duplicate.")
-    exit 3
+    if ($statusBefore -and $statusBefore.State -eq 'working') { Complete-Reply 'sent' 0 "sent to $node (the session was already working; the host confirmed it)" }
+    $statusDeadline = [DateTime]::UtcNow.AddSeconds($StatusSeconds)
+    $readable = $false
+    do {
+      $now = Get-Status
+      if ($now) {
+        $readable = $true; $after = $now.State
+        if ($now.State -eq 'working' -or ($statusBefore -and $now.State -eq $statusBefore.State -and $now.Changed -ne $statusBefore.Changed)) {
+          Complete-Reply 'sent' 0 "sent to $node"
+        }
+      }
+      Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $statusDeadline)
+    $why = if (-not $readable) { "its status could not be read from Home Assistant for $StatusSeconds s" }
+      else { "the session's status did not show a turn within $StatusSeconds s (it was $(if ($statusBefore) { "'$($statusBefore.State)'" } else { 'unreadable' }) before Send, '$after' after)" }
+    Complete-Reply 'not-delivered' 5 "Reply NOT delivered to ${node}: the host said delivered, but $why. Check the session at the machine before resending; a blind resend may send it twice."
   }
-  # A 'delivered' ack is not enough for exit 0 (#150): the session's status must show the turn the reply starts. Still
-  # under the send lock, so another send from this machine cannot start a turn that is taken for this one's (#150 review).
-  # A session already working cannot show a new turn by its status. There the ack stands: the host says 'delivered' only
-  # once the agent's own record holds the prompt, and a reply whose Enter never went is acked 'unconfirmed' (exit 4 above).
-  if ($statusBefore -and $statusBefore.State -eq 'working') { "sent to $node (the session was already working, so its status cannot show the reply; the host confirmed it)"; exit 0 }
-  $statusDeadline = [DateTime]::UtcNow.AddSeconds($StatusSeconds)
-  $readable = $false
-  do {
-    $now = Get-Status
-    if ($now) {
-      $readable = $true; $after = $now.State
-      # A turn under way, or one that came and went between reads (the same state, changed since). Any other move, such
-      # as background agents finishing ('agents' to 'idle') or an attention word, is not this reply's turn.
-      if ($now.State -eq 'working') { "sent to $node"; exit 0 }
-      if ($statusBefore -and $now.State -eq $statusBefore.State -and $now.Changed -ne $statusBefore.Changed) { "sent to $node"; exit 0 }
-    }
-    Start-Sleep -Milliseconds 500
-  } while ([DateTime]::UtcNow -lt $statusDeadline)
-  $why = if (-not $readable) { "its status could not be read from Home Assistant for $StatusSeconds s" }
-    else { "the session's status did not show a turn within $StatusSeconds s (it was $(if ($statusBefore) { "'$($statusBefore.State)'" } else { 'unreadable' }) before Send, '$after' after)" }
-  [Console]::Error.WriteLine("Reply NOT delivered to ${node}: the host said delivered, but $why. Treat it as not delivered: its words may be stuck in the input box. Check the session at the machine before resending; a blind resend may send it twice (rid $Rid).")
-  exit 5
 } finally { if ($have) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
