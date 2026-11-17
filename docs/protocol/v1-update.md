@@ -156,13 +156,13 @@ the UUID rule. Adding these facts grants no authority and changes no signature o
 
 | Field | Type | |
 |---|---|---|
-| `outcome` | `updated` `current` `refused` `failed` | `updated`: running the new release now. `current`: there was nothing newer. `refused`: not attempted, and `reason` says why. `failed`: attempted, and still the old release. An unknown outcome reads as `failed`, never as `updated` |
+| `outcome` | `updated` `current` `refused` `failed` | `updated`: running the new release now. `current`: there was nothing newer. `refused`: not attempted, and `reason` says why. `failed`: an attempt did not finish, or app and host versions have not converged. An unknown outcome reads as `failed`, never as `updated` |
 | `from`, `to` | string? | The releases |
 | `reason` | string? | |
 | `request` | string? | The press it answers; absent for one the person started at the machine (Restart to update), or an automatic one before #516 |
-| `code` | string? | **#1159, the app's.** For an Update now, as in `UpdateCommandResult` |
+| `code` | string? | For an Update now, as in `UpdateCommandResult`; also the host's `version-skew` when app and host versions differ |
 | `at` | time | |
-| `step` | string? | Optional last step reached (`downloading`, `installing`, `restarting`, `host-start`), using the existing short-code syntax. Clients word known steps themselves; an unknown step must not imply success |
+| `step` | string? | Optional last step reached (`downloading`, `installing`, `restarting`, `host-start`, `host-version`), using the existing short-code syntax. Clients word known steps themselves; an unknown step must not imply success |
 
 An install restarts the app and host, so its outcome is reported by the new version: the app
 keeps the press it is carrying out in its preferences when it hands over to the updater, and its
@@ -174,6 +174,15 @@ reported `failed` too, its download failing included. A press the app took and h
 anything else (quit, sign-out, the machine restarting) is not carried out by its next start,
 which reports it `refused`, "the app on this machine restarted before carrying it out; press it
 again": an install pressed hours before must not go ahead on sessions never watched for it.
+
+When an installed app reports `updated` or `current` but its reported `current` differs
+from the host's own known version, the host forwards `last` as `failed`, with
+`code: version-skew`, `step: host-version` and both versions in `reason`. The original
+request, releases and outcome time stay correlated; the installed/downloaded release
+facts remain available for recovery. Existing failures and refusals are not replaced.
+A later matching-version report is forwarded normally. An unknown app/host version,
+or an app that is not installed, does not establish skew. This detects false success;
+it does not itself restart either process, apply a package or prove self-repair.
 
 ### `UpdateCommandResult`
 

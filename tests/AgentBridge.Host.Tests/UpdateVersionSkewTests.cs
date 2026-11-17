@@ -70,12 +70,13 @@ public sealed class UpdateVersionSkewTests
     }
 
     [Theory]
-    [InlineData(null, true)]
-    [InlineData("", true)]
-    [InlineData("0.2.0", false)]
-    public void Unknown_or_uninstalled_app_versions_do_not_invent_skew(string? appVersion, bool installed)
+    [InlineData("0.1.0", null, true)]
+    [InlineData("0.1.0", "", true)]
+    [InlineData("0.1.0", "0.2.0", false)]
+    [InlineData("", "0.2.0", true)]
+    public void Unknown_or_uninstalled_versions_do_not_invent_skew(string hostVersion, string? appVersion, bool installed)
     {
-        var updates = new UpdateService("0.1.0");
+        var updates = new UpdateService(hostVersion);
         using var app = new AppChannel();
         var report = new UpdateReport(Report("0.2.0", UpdateOutcome.Current).State with
         {
