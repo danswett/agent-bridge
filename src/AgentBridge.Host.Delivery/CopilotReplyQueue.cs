@@ -176,7 +176,10 @@ public sealed partial class ReplyService
                                 var result = await injector.InjectAsync(process.Id, plan);
                                 log($"reply recovery to {Short(session.Id)}: owned prefix {length} characters fingerprint {write.TextFingerprint[..12]}, {(rollback ? "clear" : "Enter")} {result.Status}");
                                 if (result.Status != InjectionStatus.Typed) { if (result.Status == InjectionStatus.Interrupted) Forget(); return false; }
-                                if (!rollback) { Forget(); timeline.Typed(false); return true; }
+                                Forget();
+                                if (rollback) return false;
+                                timeline.Typed(false);
+                                return true;
                             }
                             // Never erase or submit somebody else's draft, or type into a dialog.
                         }

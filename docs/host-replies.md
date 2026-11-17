@@ -46,6 +46,8 @@ later submission. An uncertain final receipt means recovery has ended: no later
 background keys. Dialogs/unknown writes can require inspection at the machine.
 Bounded ownership metadata lets a later reply clear a still-exact host-written prefix
 under its own admission, never submit the old reply. Edited drafts remain untouched.
+A successful clear consumes that ownership and ends recovery immediately; matching
+text typed afterwards belongs to the person and cannot authorize another clear.
 
 Ported from agent-ha-bridge (`hooks/decision-inject.ps1`, `Send-CopilotSessionPrompt`):
 the words as one burst, 300 ms, then a submit key of its own. The CLI takes a burst

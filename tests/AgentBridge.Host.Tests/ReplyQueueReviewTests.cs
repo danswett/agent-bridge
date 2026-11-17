@@ -1,8 +1,40 @@
+using AgentBridge.Host.Delivery;
 using AgentBridge.Protocol;
 using Xunit;
 
 public sealed partial class ReplyFlowTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_successful_clear_relinquishes_ownership_even_if_the_person_retypes_the_same_prefix(bool clearOnly)
+    {
+        var clears = 0;
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write") { TextWritten = 5, EnterWritten = false };
+        injector.Sent = i =>
+        {
+            var text = injector.Plans[^1].Plan.Sends[i].Text;
+            if (text == "agent report")
+                injector.Screen = _ => clearOnly ? ["Allow this command?", "1. Yes"] : CopilotBox("agent");
+            if (text == "\u0005\u0015")
+            {
+                clears++;
+                injector.Screen = _ => CopilotBox("agent");
+                injector.Result = new(InjectionStatus.Typed, "ok");
+            }
+        };
+        var replier = Replier();
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await replier.ReplyAsync(new()
+        { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        injector.Screen = _ => CopilotBox("agent");
+        var owner = await replier.ReplyAsync(new()
+        { Id = Id, Request = Guid.NewGuid().ToString(), Text = "owner reply" });
+        Assert.Equal(1, clears);
+        Assert.Equal(AnswerOutcome.Refused, owner.Outcome);
+        Assert.All(injector.Plans.Skip(1), p => Assert.All(p.Plan.Sends, s => Assert.False(s.Enter)));
+        Assert.Contains("agent", (await injector.ReadScreenAsync(100)).Rows![3]);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
