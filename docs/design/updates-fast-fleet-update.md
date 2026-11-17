@@ -229,6 +229,11 @@ shown on the card's menu as "Bad-release protection: checked 2 hours ago" or "co
 
 The host enforces both, so a PWA that skips its own check cannot start a batch; a single press can still go with `unchecked` and a warning.
 
+The app's optional `IUpdater.HaltPolicy` capability carries the verified snapshot; an older
+updater without it remains policy unknown. `ObservedUpdater` uses known halts, even when stale,
+to hide offers and refuse downloads and installation, re-reading the snapshot at each boundary.
+This shared guard does not replace the host's signed admission and departure checks.
+
 ## 5. One press, Update all, and limits
 
 **One machine.** Update now is the card's primary wherever `canUpdateNow`. A busy machine gets

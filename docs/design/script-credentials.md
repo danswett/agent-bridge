@@ -6,11 +6,29 @@ slice: registered scripts authenticate as `script:<machine>/<name>` for **`fleet
 connection allowlist refuses every other op, even after expiry or revocation. The wider send
 proposal below is not enabled. Sensitive changes need two different-family whole-file reviews.
 
+The #2763 read-only scope slice also pins that restriction at credential acceptance:
+an authenticated script connection cannot rebind to another credential, even after expiry
+or revocation. Request fields cannot widen its scope. `agent.send` and `session.reply`
+remain refused; script reply wire identity and delivery are a separate predecessor slice.
+
 Companion notes: [agent-principals.md](agent-principals.md) (§3.3 and §3.4 define the
 session credential this builds on), [agent-launch-scope.md](agent-launch-scope.md) (§11
 adds a launch grant on top of this credential),
 [fleet-session-registry.md](fleet-session-registry.md) (the read ops) and
 [agent-token-rotation.md](agent-token-rotation.md) (how a token is stored on a host).
+
+### Script identity on the wire (#2765)
+
+The lite envelope carries a script principal as `kind`, `machine`, `add`, `identity`,
+`credential`, in that canonical order. `kind` is `script`; `identity` is
+`script:<machine>/<name>` and its machine must equal the envelope's sending device ID.
+Each identity part is 1-64 ASCII letters, digits, `.`, `_` or `-`, excluding `.` and `..`;
+the full identity is at most 128 characters. Script principals carry no agent session,
+instance, agent or launcher fields. The chain's sender slot carries the script identity.
+The host derives it from the script credential, never request data, and delivery labels
+and logs it as a script. Existing agent encodings are unchanged. Shared accept/refuse
+cases live in `docs/protocol/vectors/script-principals.json`. This wire support does not
+enable script sends: the operation allowlist remains separate work in #2763.
 
 ## 1. The problem
 

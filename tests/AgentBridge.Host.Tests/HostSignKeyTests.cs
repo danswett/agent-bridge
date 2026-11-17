@@ -111,6 +111,19 @@ public sealed class HostSignKeyTests : IDisposable
         }
     }
 
+    [WindowsHostSignTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Existing_reference_text_encodings_still_open_the_committed_key(bool utf16)
+    {
+        using var made = HostSignKey.LoadOrCreate(profile, KeyStorage.Dpapi);
+        var path = Path.Combine(Store, "signing-key.json");
+        var json = File.ReadAllText(path);
+        File.WriteAllText(path, json, utf16 ? Encoding.Unicode : new UTF8Encoding(true));
+        using var opened = HostSignKey.OpenExisting(profile);
+        Assert.Equal(made.PublicPoint, opened.PublicPoint);
+    }
+
     [WindowsFact("hostSign custody uses Windows TPM or DPAPI")]
     public void Private_material_is_encrypted_in_a_private_folder_and_not_returned_as_diagnostics()
     {
