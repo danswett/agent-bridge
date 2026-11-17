@@ -37,7 +37,7 @@ $options = @{
         } finally { $state.activeWaits-- }
     }
 }
-function Run-Cancelled {
+function Invoke-CancelledDriver {
     $cancelled = $false
     try { Invoke-EfficiencyActiveSession @options }
     catch [OperationCanceledException] { $cancelled = $true }
@@ -46,7 +46,7 @@ function Run-Cancelled {
 try {
     switch ($Scenario) {
         'rates' {
-            Run-Cancelled
+            Invoke-CancelledDriver
             foreach ($pair in @(@($state.lines, 2, 60), @($state.hooks, 6, 20), @($state.questions, 60, 2))) {
                 Assert ($pair[0].Count -eq $pair[2]) 'Wrong event count over two minutes.'
                 for ($i = 0; $i -lt $pair[0].Count; $i++) {
@@ -59,15 +59,15 @@ try {
         'cancel' {
             # Use the production wait: cancellation must interrupt a pending two-second wait.
             $options.Remove('Elapsed'); $options.Remove('Wait')
-            $cts.CancelAfter(100)
+            $options.AttachViewer = { $cts.CancelAfter(100); [EfficiencyViewerLease]::new($state) }
             $watch = [Diagnostics.Stopwatch]::StartNew()
-            Run-Cancelled
+            Invoke-CancelledDriver
             Assert ($watch.Elapsed.TotalSeconds -lt 1.5) 'Cancellation waited until the next event.'
             Assert ($state.lines.Count -eq 0 -and $state.hooks.Count -eq 0 -and $state.questions.Count -eq 0) 'Work escaped cancellation.'
             Assert ($state.viewers -eq 0 -and $state.detached -eq 1) 'Cancellation left the viewer attached.'
             Assert (@(Get-Job).Count -eq 0 -and @(Get-EventSubscriber).Count -eq 0) 'Background work survived cancellation.'
             $options.AttachViewer = { throw 'A pre-cancelled run must not attach.' }
-            Run-Cancelled
+            Invoke-CancelledDriver
         }
         'viewer' {
             foreach ($cycle in 1..3) {
