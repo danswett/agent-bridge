@@ -17,7 +17,7 @@ $port = Get-Random -Minimum 20000 -Maximum 40000
 $fake = [hashtable]::Synchronized(@{ Mode = 'deliver'; Slot = $null; Ack = $null; Delivered = [System.Collections.ArrayList]::new(); Stop = $false
     Status = 'idle'; StatusChanged = '2026-11-10T08:00:00+00:00'; Moves = $true; FlipTo = $null; Rids = [System.Collections.ArrayList]::new()
     Live = $true; Online = $true; PressRids = [System.Collections.ArrayList]::new(); Payloads = [System.Collections.ArrayList]::new()
-    Instance = 'host-run-1'; RetryResults = @{ 'first-uncertain-then-refuse' = @('refused', 'the session is waiting on a question'); 'first-uncertain-then-refuse-box' = @('refused', "something is already typed in Copilot's input box; send or clear it there first"); 'first-uncertain-then-stuck-enter' = @('unconfirmed', "the reply was typed into Copilot's input box, but it was not sent and its words are still in the box"); 'unconfirmed-once' = $null } })
+    Instance = 'host-run-1'; RetryResults = @{ 'first-uncertain-then-refuse' = @('refused', 'the session is waiting on a question'); 'first-uncertain-then-refuse-box' = @('refused', "something is already typed in Copilot's input box; send or clear it there first"); 'first-uncertain-then-stuck-enter' = @('unconfirmed', "the reply was typed into Copilot's input box, but it was not sent and its words are still in the box"); 'unconfirmed-once' = $null; 'silent-first-then-refuse' = @('refused', 'the session is waiting on a question'); 'silent-first-then-refuse-box' = @('refused', "something is already typed in Copilot's input box; send or clear it there first"); 'silent-first-then-delivered-no-turn' = @('delivered', $null) } })
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://127.0.0.1:$port/")
 $listener.Start()
@@ -64,7 +64,7 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
             elseif ($slot -and $fake.Mode -eq 'retry-prep-fails') {
                 $fake.Ack = @{ rid = $slot.rid; outcome = 'unconfirmed'; at = [DateTime]::UtcNow.Ticks; error = 'the session ended before it recorded the reply' }
             }
-            elseif ($slot -and $fake.RetryResults.ContainsKey($fake.Mode)) { $result = if ($fake.PressRids.Count -eq 1) { @('unconfirmed', 'the session ended before it recorded the reply') } else { $fake.RetryResults[$fake.Mode] }; $fake.Ack = if ($result) { @{ rid = $slot.rid; outcome = $result[0]; at = [DateTime]::UtcNow.Ticks; error = $result[1] } } else { $null } }
+            elseif ($slot -and $fake.RetryResults.ContainsKey($fake.Mode)) { $result = if ($fake.PressRids.Count -eq 1 -and $fake.Mode -notlike 'silent-first-*') { @('unconfirmed', 'the session ended before it recorded the reply') } elseif ($fake.PressRids.Count -eq 1) { $null } else { $fake.RetryResults[$fake.Mode] }; $fake.Ack = if ($result) { @{ rid = $slot.rid; outcome = $result[0]; at = [DateTime]::UtcNow.Ticks; error = $result[1] } } else { $null } }
             elseif ($slot -and $fake.Mode -eq 'late-first-ack-after-turn') {
                 if ($fake.PressRids.Count -eq 1) {
                     [void]$fake.Delivered.Add($slot.text)
@@ -146,8 +146,8 @@ try {
         if ($mode -eq 'retry-deliver') {
             Assert ($r.Exit -eq 0 -and $fake.Delivered.Count -eq 1) 'an unconfirmed send can be confirmed on its same-rid retry'
         } else {
-            $expected = if ($mode -eq 'silent') { 3 } else { 2 }
-            Assert ($r.Exit -eq $expected -and $r.Out -match 'outcome=unconfirmed') "$mode preserves its legacy exit and explicitly reports unconfirmed"
+            $expected = 2
+            Assert ($r.Exit -eq $expected -and $r.Out -match 'outcome=unconfirmed') "$mode preserves first-submission uncertainty and explicitly reports unconfirmed"
         }
     }
     $fake.Mode = 'restart-after-first'; $fake.Ack = $null; $fake.Live = $true; $fake.Online = $true
@@ -158,7 +158,7 @@ try {
     $fake.PressRids.Clear(); $fake.Delivered.Clear(); $fake.Payloads.Clear()
     $r = Send 'retry preparation can fail' 'r-prep-fails'
     Assert ($r.Exit -eq 2 -and $fake.PressRids.Count -eq 1 -and $r.Out -match 'outcome=unconfirmed') 'retry preparation failure preserves first-submission uncertainty'
-    foreach ($mode in 'first-uncertain-then-refuse', 'first-uncertain-then-refuse-box', 'first-uncertain-then-stuck-enter', 'unconfirmed-once') { $fake.Mode = $mode; $fake.Ack = $null; $fake.Instance = 'host-run-1'; $fake.Status = 'idle'; $fake.StatusChanged = '2026-11-10T08:00:00+00:00'; $fake.PressRids.Clear(); $r = Send 'uncertainty survives retry' "r-$mode"; Assert ($r.Exit -eq 2 -and $r.Out -match 'outcome=unconfirmed' -and $r.Out -match 'first submission may have been delivered') "$mode preserves first-submission uncertainty" }
+    foreach ($mode in 'first-uncertain-then-refuse', 'first-uncertain-then-refuse-box', 'first-uncertain-then-stuck-enter', 'unconfirmed-once', 'silent-first-then-refuse', 'silent-first-then-refuse-box', 'silent-first-then-delivered-no-turn') { $fake.Mode = $mode; $fake.Ack = $null; $fake.Instance = 'host-run-1'; $fake.Status = 'idle'; $fake.StatusChanged = '2026-11-10T08:00:00+00:00'; $fake.Moves = $mode -ne 'silent-first-then-delivered-no-turn'; $fake.PressRids.Clear(); $r = Send 'uncertainty survives retry' "r-$mode"; Assert ($r.Exit -eq 2 -and $r.Out -match 'outcome=unconfirmed' -and $r.Out -match 'first submission may have been delivered') "$mode preserves first-submission uncertainty" }
     $fake.Mode = 'late-first-ack-after-turn'; $fake.Ack = $null; $fake.Status = 'idle'; $fake.StatusChanged = '2026-11-10T08:00:00+00:00'; $fake.PressRids.Clear(); $fake.Delivered.Clear(); $r = Send 'late acknowledgement after turn' 'r-late-first-ack'; Assert ($r.Exit -eq 0 -and $fake.Delivered.Count -eq 1 -and $r.Out -match 'outcome=sent') 'late first-attempt delivery uses the original status baseline'
     foreach ($kind in 'gone', 'offline', 'gone-after-first') {
         $fake.Mode = if ($kind -eq 'gone-after-first') { $kind } else { 'deliver' }
@@ -170,7 +170,7 @@ try {
         $outcome = if ($kind -in 'offline', 'gone-after-first') { 'unconfirmed' } else { 'node-gone' }
         Assert ($r.Exit -eq $exit -and $fake.PressRids.Count -eq $presses -and $r.Out -match "outcome=$outcome") "$kind never uses a retained registration as liveness, including before a retry"
     }
-    $fake.Live = $true; $fake.Online = $true; $fake.Mode = 'deliver'; $fake.Ack = $null
+    $fake.Live = $true; $fake.Online = $true; $fake.Mode = 'deliver'; $fake.Ack = $null; $fake.Moves = $true
     foreach ($mode in 'submit-response-lost', 'lost-ack') {
         $fake.Mode = $mode; $fake.Ack = $null; $fake.PressRids.Clear(); $fake.Delivered.Clear()
         $r = Send 'only once' "r-$mode"
@@ -188,7 +188,7 @@ try {
 
     $fake.Mode = 'silent'; $fake.Ack = $null
     $r = Send 'lost' 'r-lost'
-    Assert ($r.Exit -eq 3 -and $r.Out -match 'Reply NOT confirmed' -and $r.Out -notmatch "(?m)^sent to $node") 'a message the host never answers exits 3 after the wait'
+    Assert ($r.Exit -eq 2 -and $r.Out -match 'outcome=unconfirmed' -and $r.Out -notmatch "(?m)^sent to $node") 'a message the host never answers remains unconfirmed after the retry'
 
     # A reply refused because stale text sits in the input box (#150) is a loud, distinct failure, never exit 0.
     $fake.Mode = 'refuse-box'; $fake.Ack = $null
@@ -231,7 +231,7 @@ try {
     # An ack for an earlier send is not this send's outcome.
     $fake.Mode = 'silent'; $fake.Ack = @{ rid = 'someone-else'; outcome = 'delivered' }
     $r = Send 'overwritten' 'r-over'
-    Assert ($r.Exit -eq 3 -and $r.Out -notmatch "(?m)^sent to $node") "another sender's ack is not taken as this send's"
+    Assert ($r.Exit -eq 2 -and $r.Out -match 'outcome=unconfirmed' -and $r.Out -notmatch "(?m)^sent to $node") "another sender's ack is not taken as this send's"
 
     # Retrying a refused rid must not read the old refusal as the retry's outcome.
     $fake.Mode = 'deliver'; $fake.Ack = @{ rid = 'r-retry'; outcome = 'refused'; at = 1; error = 'old refusal' }
@@ -239,7 +239,7 @@ try {
     Assert ($r.Exit -eq 0 -and $r.Out -match '(?m)^sent to') 'a retry with the same rid is judged on the new ack, not the old refusal'
     $fake.Mode = 'silent'; $fake.Ack = @{ rid = 'r-stale'; outcome = 'refused'; at = 1; error = 'old refusal' }
     $r = Send 'retry' 'r-stale'
-    Assert ($r.Exit -eq 3 -and $r.Out -match 'NOT confirmed') 'an old refusal for the same rid is not taken as the retry''s outcome'
+    Assert ($r.Exit -eq 2 -and $r.Out -match 'outcome=unconfirmed') 'an old refusal for the same rid is not taken as the retry''s outcome'
 
     # Three rapid sends to one node: each is delivered once, in the order sent.
     $fake.Mode = 'deliver'; $fake.Ack = $null; $fake.Delivered.Clear()
