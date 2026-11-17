@@ -7,24 +7,34 @@ internal sealed record InboxMessage(string Node, string Rid, string Sender, stri
 
 internal sealed class DurableInbox
 {
+    const int MaxEntriesPerNode = 100;
+    const int MaxEntries = 1000;
     sealed record Snapshot(int Version, List<InboxMessage> Messages);
     readonly string path;
 
     public DurableInbox(string path) => this.path = Path.GetFullPath(path);
 
-    public InboxMessage Enqueue(string node, string rid, string sender, string payload, DateTimeOffset at)
+    public InboxMessage Enqueue(string node, string? rid, string? sender, string payload, DateTimeOffset at)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(node);
-        ArgumentException.ThrowIfNullOrWhiteSpace(rid);
-        ArgumentException.ThrowIfNullOrWhiteSpace(sender);
         ArgumentException.ThrowIfNullOrWhiteSpace(payload);
+        rid = string.IsNullOrWhiteSpace(rid) ? Guid.NewGuid().ToString("N") : rid;
+        sender = string.IsNullOrWhiteSpace(sender) ? "legacy" : sender;
         using var held = Lock();
         var messages = Load();
         var prior = messages.Find(m => m.Node == node && m.Rid == rid);
-        if (prior is not null)
+        if (prior is not null) { return prior; }
+        while (messages.Count(m => m.Node == node) >= MaxEntriesPerNode)
         {
-            if (prior.Sender != sender || prior.Payload != payload) { throw new InvalidOperationException("Request id already belongs to a different message."); }
-            return prior;
+            var oldest = messages.FindIndex(m => m.Node == node && m.DeliveredAt is not null);
+            if (oldest < 0) { throw new InvalidOperationException("The node inbox is full."); }
+            messages.RemoveAt(oldest);
+        }
+        while (messages.Count >= MaxEntries)
+        {
+            var oldest = messages.FindIndex(m => m.DeliveredAt is not null);
+            if (oldest < 0) { throw new InvalidOperationException("The durable inbox is full."); }
+            messages.RemoveAt(oldest);
         }
         var message = new InboxMessage(node, rid, sender, payload, at, null);
         messages.Add(message);
@@ -53,7 +63,7 @@ internal sealed class DurableInbox
         {
             throw new InvalidOperationException("Only the oldest queued message can be delivered.");
         }
-        var delivered = message with { DeliveredAt = at };
+        var delivered = message with { Payload = "", DeliveredAt = at };
         messages[index] = delivered;
         Save(messages);
         return delivered;
@@ -84,11 +94,22 @@ internal sealed class DurableInbox
             var snapshot = JsonSerializer.Deserialize<Snapshot>(file);
             if (snapshot is null || snapshot.Version != 1 || snapshot.Messages is null ||
                 snapshot.Messages.Any(m => m is null || string.IsNullOrWhiteSpace(m.Node) || string.IsNullOrWhiteSpace(m.Rid) ||
-                    string.IsNullOrWhiteSpace(m.Sender) || string.IsNullOrWhiteSpace(m.Payload)) ||
+                    string.IsNullOrWhiteSpace(m.Sender) || m.Payload is null || (m.DeliveredAt is null && string.IsNullOrWhiteSpace(m.Payload))) ||
                 snapshot.Messages.Select(m => (m.Node, m.Rid)).Distinct().Count() != snapshot.Messages.Count)
             {
                 throw new InvalidDataException("Invalid durable inbox snapshot.");
             }
+            var changed = false;
+            for (var index = 0; index < snapshot.Messages.Count; index++)
+            {
+                var message = snapshot.Messages[index];
+                if (message.DeliveredAt is not null && message.Payload.Length > 0)
+                {
+                    snapshot.Messages[index] = message with { Payload = "" };
+                    changed = true;
+                }
+            }
+            if (changed) { Save(snapshot.Messages); }
             return snapshot.Messages;
         }
     }

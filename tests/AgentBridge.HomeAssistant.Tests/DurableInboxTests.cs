@@ -47,7 +47,7 @@ public sealed class DurableInboxTests : IDisposable
         Assert.Equal(delivered, inbox.Enqueue("one", "a", "sender", "first", Now.AddHours(25)));
         Assert.Equal(delivered, inbox.Deliver("one", "a", Now.AddHours(25)));
         Assert.Null(inbox.Peek("one"));
-        Assert.Throws<InvalidOperationException>(() => inbox.Enqueue("one", "a", "sender", "changed", Now));
+        Assert.Empty(inbox.Enqueue("one", "a", "sender", "changed", Now).Payload);
         Assert.Equal("a", inbox.Enqueue("two", "a", "sender", "independent", Now).Rid);
     }
 
