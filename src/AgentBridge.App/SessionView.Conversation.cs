@@ -87,7 +87,11 @@ public sealed partial class SessionView
             guard.Scrolled(DateTimeOffset.UtcNow);
             if (anchoring is not { } asked || Math.Abs(scroll.VerticalOffset - asked) >= 0.5) { TakeAnchor(); }
             scrolling = e.IsIntermediate;
-            if (!e.IsIntermediate) { anchoring = null; keyTarget = null; }
+            if (!e.IsIntermediate)
+            {
+                anchoring = null; keyTarget = null;
+                if (pinEnd) { DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FollowPinnedEnd); }
+            }
             HistoryScrolled(e.IsIntermediate);
         };
         scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); ReleasePin(); };
@@ -423,10 +427,18 @@ public sealed partial class SessionView
     // the person pans or a scroll is under way, nor while a correction of ours is on its way.
     void OnConversationLaidOut(object? sender, object e)
     {
-        if (pinEnd) { return; }
+        if (pinEnd) { FollowPinnedEnd(); return; }
         if (panning || scrolling || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
             || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
         if (a.Correction(anchorAt, scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight) is { } to) { Anchoring(scroll, to); }
+    }
+
+    // Older turns can finish measuring after KeepPlace restored an earlier end. Follow the
+    // measured end on layout and final view changes, including while an older target is pending.
+    void FollowPinnedEnd()
+    {
+        if (panning || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
+        if (ConversationEndPin.Correction(pinEnd, scroll.VerticalOffset, scroll.ScrollableHeight, anchoring) is { } to) { Anchoring(scroll, to); }
     }
 
     void Anchoring(ScrollViewer scroll, double to)
