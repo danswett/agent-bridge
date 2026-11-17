@@ -1,5 +1,5 @@
 #Requires -Version 7.4
-param([ValidateSet('elapsed', 'exit', 'replacement', 'readonly', 'no-survivors', 'partial', 'ambiguous', 'metric-values', 'entrypoint', 'pwa-metrics', 'pwa-missing', 'pwa-exit', 'pwa-network')][string] $Scenario)
+param([ValidateSet('elapsed', 'exit', 'replacement', 'readonly', 'no-survivors', 'partial', 'ambiguous', 'metric-values', 'entrypoint', 'pwa-metrics', 'pwa-missing', 'pwa-exit', 'pwa-network', 'pwa-cdp')][string] $Scenario)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'efficiency-baseline.ps1')
@@ -23,14 +23,45 @@ $options = @{
 }
 if ($Scenario -like 'pwa-*') {
     $browser = @{ bytesIn = 0L; bytesOut = 0L; requests = 0L; messages = 0L; networkUnavailable = $null }
+    if ($Scenario -eq 'pwa-cdp') {
+        $socket = [pscustomobject]@{ calls = [Collections.Generic.List[string]]::new(); pending = [Collections.Generic.Queue[string]]::new(); reject = $false }
+        $socket | Add-Member ScriptMethod SendAsync {
+            param($data, $type, $end, $token)
+            $command = [Text.Encoding]::UTF8.GetString($data.Array) | ConvertFrom-Json -AsHashtable
+            $this.calls.Add($command.method)
+            $reply = @{ id = $command.id; result = @{ metrics = @(@{ name = 'TaskDuration'; value = 12.5 }, @{ name = 'JSHeapUsedSize'; value = 4096 }) } }
+            if ($this.reject) { $reply = @{ id = $command.id; error = @{ message = 'not supported' } } }
+            $this.pending.Enqueue('{"method":"Network.loadingFinished","params":{"encodedDataLength":123}}')
+            $json = $reply | ConvertTo-Json -Depth 6 -Compress
+            $this.pending.Enqueue($json.Substring(0, 10)); $this.pending.Enqueue($json.Substring(10))
+            return [Threading.Tasks.Task]::CompletedTask
+        }
+        $socket | Add-Member ScriptMethod ReceiveAsync {
+            param($buffer, $token)
+            $text = $this.pending.Dequeue(); $bytes = [Text.Encoding]::UTF8.GetBytes($text)
+            [Array]::Copy($bytes, 0, $buffer.Array, $buffer.Offset, $bytes.Length)
+            $part = [Net.WebSockets.WebSocketReceiveResult]::new($bytes.Length, [Net.WebSockets.WebSocketMessageType]::Text, ($text.Length -ne 10))
+            return [Threading.Tasks.Task[Net.WebSockets.WebSocketReceiveResult]]::FromResult($part)
+        }
+        $browser.socket = $socket; $browser.commandId = 0
+        $snapshot = Read-EfficiencyBrowser $browser
+        Assert ($snapshot.cpuSeconds -eq 12.5 -and $snapshot.jsHeapUsedBytes -eq 4096 -and $snapshot.network.bytesIn -eq 123) 'CDP transport lost interleaved events, fragments or metrics.'
+        Assert ($socket.calls.Count -eq 1 -and $socket.calls[0] -eq 'Performance.getMetrics') 'Unexpected browser mutation command.'
+        $socket.reject = $true
+        Assert ((Read-EfficiencyBrowser $browser).unavailable.ContainsKey('process')) 'Rejected CDP command looked like idle.'
+    }
     if ($Scenario -eq 'pwa-network') {
-        Add-EfficiencyBrowserEvent $browser @{ method = 'Network.requestWillBeSent'; params = @{ request = @{ hasPostData = $true; postData = 'é' } } }
+        $text = [string][char]0xe9
+        Add-EfficiencyBrowserEvent $browser @{ method = 'Network.requestWillBeSent'; params = @{ request = @{ hasPostData = $true; postData = $text } } }
         Add-EfficiencyBrowserEvent $browser @{ method = 'Network.loadingFinished'; params = @{ encodedDataLength = 100 } }
-        Add-EfficiencyBrowserEvent $browser @{ method = 'Network.webSocketFrameSent'; params = @{ response = @{ opcode = 1; payloadData = 'é' } } }
+        Add-EfficiencyBrowserEvent $browser @{ method = 'Network.webSocketFrameSent'; params = @{ response = @{ opcode = 1; payloadData = $text } } }
         Add-EfficiencyBrowserEvent $browser @{ method = 'Network.webSocketFrameReceived'; params = @{ response = @{ opcode = 2; payloadData = 'AQID' } } }
         Assert ($browser.bytesIn -eq 103 -and $browser.bytesOut -eq 4 -and $browser.requests -eq 1 -and $browser.messages -eq 2) 'CDP bytes, binary frames or request counts are wrong.'
         Add-EfficiencyBrowserEvent $browser @{ method = 'Network.requestWillBeSent'; params = @{ request = @{ hasPostData = $true } } }
         Assert (-not [string]::IsNullOrWhiteSpace($browser.networkUnavailable)) 'Unobservable upload was silently counted as zero.'
+        $browser.networkUnavailable = $null
+        Add-EfficiencyBrowserEvent $browser @{ method = 'Network.requestWillBeSent'; params = @{ request = @{ hasPostData = $true; postDataEntries = @() } } }
+        Assert (-not [string]::IsNullOrWhiteSpace($browser.networkUnavailable)) 'Empty upload entries were silently counted as zero.'
     }
     $options.Targets.host = @{ processId = $null; unavailable = 'No host fixture.' }
     $options.Targets.pwa = @{ processId = $null; browser = $browser; unavailable = $null }
@@ -40,7 +71,8 @@ if ($Scenario -like 'pwa-*') {
         if ($Scenario -eq 'pwa-exit' -and $i -eq 1) { return @{ unavailable = @{ process = 'Browser disconnected.' } } }
         @{ identity = 'page'; cpuSeconds = 10 + $i; jsHeapUsedBytes = 1000L + $i
             workingSetBytes = $null; privateBytes = $null; threads = $null; buildVersion = $null
-            unavailable = @{}; network = @{ bytesIn = 100L * $i; bytesOut = 20L * $i; requests = $i; messages = 2 * $i } }
+            unavailable = $(if ($connection.networkUnavailable) { @{ network = $connection.networkUnavailable } } else { @{} })
+            network = @{ bytesIn = 100L * $i; bytesOut = 20L * $i; requests = $i; messages = 2 * $i } }
     }
     if ($Scenario -eq 'pwa-missing') {
         $options.Targets.pwa = Open-EfficiencyBrowser ''
@@ -48,20 +80,29 @@ if ($Scenario -like 'pwa-*') {
         $rejected = $false
         try { Open-EfficiencyBrowser 'https://example.invalid' } catch [ArgumentException] { $rejected = $true }
         Assert $rejected 'Non-WebSocket CDP endpoint was accepted.'
+        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+        $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
+        $missing = Open-EfficiencyBrowser "ws://127.0.0.1:$port/devtools/page/absent"
+        Assert (-not $missing.ContainsKey('browser') -and -not [string]::IsNullOrWhiteSpace($missing.unavailable)) 'Absent debug browser failed without an unavailable reason.'
     }
     $result = Invoke-EfficiencyBaseline @options
     Assert (Test-Json -Json ($result | ConvertTo-Json -Depth 20) -SchemaFile (Join-Path $PSScriptRoot 'efficiency-baseline.schema.json')) 'PWA output violates the one-file schema.'
     $pwa = $result.targets.pwa
     if ($Scenario -in 'pwa-missing', 'pwa-exit') {
         Assert ($null -eq $pwa.cpuSecondsPerMinute -and $null -eq $pwa.network) 'Absent or disconnected browser looked idle.'
+        Assert ($pwa.Contains('jsHeapUsedBytes') -and $null -eq $pwa.jsHeapUsedBytes -and $pwa.unavailable.ContainsKey('jsHeapUsedBytes')) 'Absent browser heap lost its explicit null and reason.'
         Assert (-not [string]::IsNullOrWhiteSpace($pwa.unavailable.process)) 'Browser failure lost its reason.'
         if ($Scenario -eq 'pwa-exit') { Assert ($pwa.status -eq 'partial' -and $pwa.sampleCount -eq 3) 'Lost partial browser evidence.' }
     } else {
         Assert ($pwa.status -eq 'available' -and $pwa.processId -eq $null) 'Browser is unavailable or mislabeled as a process.'
         Assert ([math]::Abs($pwa.cpuSecondsPerMinute - 180.0 / 11) -lt 0.000001 -and $pwa.jsHeapUsedBytes -eq 1003) 'Wrong main-thread CPU rate or heap bytes.'
-        $net = $pwa.network.endpoints[0]
-        Assert ([math]::Abs($net.bytesInPerMinute - 18000.0 / 11) -lt 0.000001 -and [math]::Abs($net.bytesOutPerMinute - 3600.0 / 11) -lt 0.000001) 'Wrong network byte rates.'
-        Assert ([math]::Abs($net.requestsPerMinute - 180.0 / 11) -lt 0.000001 -and [math]::Abs($net.messagesPerMinute - 360.0 / 11) -lt 0.000001) 'Wrong network request/frame rates.'
+        if ($Scenario -eq 'pwa-network') {
+            Assert ($null -eq $pwa.network -and -not [string]::IsNullOrWhiteSpace($pwa.unavailable.network)) 'Incomplete CDP network looked like zero traffic.'
+        } else {
+            $net = $pwa.network.endpoints[0]
+            Assert ([math]::Abs($net.bytesInPerMinute - 18000.0 / 11) -lt 0.000001 -and [math]::Abs($net.bytesOutPerMinute - 3600.0 / 11) -lt 0.000001) 'Wrong network byte rates.'
+            Assert ([math]::Abs($net.requestsPerMinute - 180.0 / 11) -lt 0.000001 -and [math]::Abs($net.messagesPerMinute - 360.0 / 11) -lt 0.000001) 'Wrong network request/frame rates.'
+        }
         Assert ($null -eq $pwa.workingSetBytes -and $null -eq $pwa.privateBytes -and $null -eq $pwa.gcAllocationBytesPerSecond) 'Browser invented process or GC metrics.'
     }
     foreach ($name in 'host', 'desktop') {
@@ -103,15 +144,17 @@ switch ($Scenario) {
     }
     'readonly' {
         $tokens = $null; $errors = $null
-        $script = Join-Path $PSScriptRoot 'efficiency-baseline.ps1'
-        $ast = [Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$errors)
-        Assert ($errors.Count -eq 0) 'Invalid PowerShell syntax.'
-        Assert (Test-ReadOnlyCommands $ast) 'Unsafe command or dynamic call operator.'
+        foreach ($file in 'efficiency-baseline.ps1', 'efficiency-baseline.cdp.ps1') {
+            $script = Join-Path $PSScriptRoot $file
+            $ast = [Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$errors)
+            Assert ($errors.Count -eq 0) 'Invalid PowerShell syntax.'
+            Assert (Test-ReadOnlyCommands $ast) 'Unsafe command or dynamic call operator.'
+            Assert (-not ((Get-Content $script -Raw) -match '\.(Kill|Terminate|Suspend|Attach|Start)\(')) 'Mutating process API.'
+        }
         foreach ($example in 'Invoke-Expression "Get-Process"', '& $command') {
             $badAst = [Management.Automation.Language.Parser]::ParseInput($example, [ref]$tokens, [ref]$errors)
             Assert (-not (Test-ReadOnlyCommands $badAst)) 'The read-only guard accepted dynamic execution.'
         }
-        Assert (-not ((Get-Content $script -Raw) -match '\.(Kill|Terminate|Suspend|Attach|Start)\(')) 'Mutating process API.'
     }
 }
 $result = Invoke-EfficiencyBaseline @options

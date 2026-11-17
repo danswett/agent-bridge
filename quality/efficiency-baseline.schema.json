@@ -14,7 +14,8 @@
     "endpoint": {
       "type": "object", "additionalProperties": false, "required": ["endpoint", "bytesInPerMinute", "bytesOutPerMinute", "requestsPerMinute"],
       "properties": {"endpoint": {"type": "string", "minLength": 1}, "bytesInPerMinute": {"type": "number", "minimum": 0},
-        "bytesOutPerMinute": {"type": "number", "minimum": 0}, "requestsPerMinute": {"type": "number", "minimum": 0}}
+        "bytesOutPerMinute": {"type": "number", "minimum": 0}, "requestsPerMinute": {"type": "number", "minimum": 0},
+        "messagesPerMinute": {"type": "number", "minimum": 0}}
     },
     "target": {
       "type": "object", "additionalProperties": false,
@@ -23,6 +24,7 @@
         "status": {"enum": ["available", "partial", "unavailable"]}, "processId": {"type": ["integer", "null"], "minimum": 1},
         "buildVersion": {"type": ["string", "null"]}, "sampleCount": {"type": "integer", "minimum": 0},
         "cpuSecondsPerMinute": {"type": ["number", "null"], "minimum": 0},
+        "jsHeapUsedBytes": {"type": ["integer", "null"], "minimum": 0},
         "workingSetBytes": {"type": ["integer", "null"], "minimum": 0}, "privateBytes": {"type": ["integer", "null"], "minimum": 0},
         "topThreads": {"type": ["array", "null"], "maxItems": 10, "items": {"type": "object", "additionalProperties": false, "required": ["id", "cpuSeconds"],
           "properties": {"id": {"type": "integer"}, "cpuSeconds": {"type": "number", "minimum": 0}}}},

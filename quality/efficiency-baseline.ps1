@@ -12,10 +12,12 @@ param(
     [ValidateRange(0.01, 3600)][double] $SampleIntervalSeconds = 2,
     [string] $OutputPath,
     [ValidateRange(0, 2147483647)][int] $HostProcessId = 0,
-    [ValidateRange(0, 2147483647)][int] $DesktopProcessId = 0
+    [ValidateRange(0, 2147483647)][int] $DesktopProcessId = 0,
+    [string] $PwaCdpWebSocket
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'efficiency-baseline.cdp.ps1')
 
 function Get-EfficiencySnapshot([int] $ProcessId) {
     $process = $null
@@ -61,7 +63,7 @@ function ConvertTo-EfficiencyTarget($Target, [object[]] $Samples) {
             network = 'No per-process ETW/proxy or browser HAR/CDP collector in this process-only slice.'
         }
     }
-    if (-not $Target.processId) {
+    if (-not $Target.processId -and -not $Target.ContainsKey('browser')) {
         $result.unavailable.process = $Target.unavailable
         return $result
     }
@@ -89,6 +91,24 @@ function ConvertTo-EfficiencyTarget($Target, [object[]] $Samples) {
     $result.privateBytes = $last.data.privateBytes
     $result.buildVersion = $last.data.buildVersion
     foreach ($key in $last.data.unavailable.Keys) { $result.unavailable[$key] = $last.data.unavailable[$key] }
+    if ($Target.ContainsKey('browser')) {
+        $result.jsHeapUsedBytes = $last.data.jsHeapUsedBytes
+        if (-not @($valid | Where-Object { $_.data.unavailable.ContainsKey('network') }).Count) {
+            $delta = @{}
+            foreach ($key in 'bytesIn', 'bytesOut', 'requests', 'messages') { $delta[$key] = $last.data.network[$key] - $first.data.network[$key] }
+            if (@($delta.Values | Where-Object { $_ -lt 0 }).Count) {
+                $result.unavailable.network = 'Browser network counters moved backwards.'
+            } else {
+                $result.network = @{ endpoints = @(@{ endpoint = 'browser-aggregate'
+                    bytesInPerMinute = $delta.bytesIn * 60 / $seconds; bytesOutPerMinute = $delta.bytesOut * 60 / $seconds
+                    requestsPerMinute = $delta.requests * 60 / $seconds; messagesPerMinute = $delta.messages * 60 / $seconds }) }
+                $result.unavailable.Remove('network')
+            }
+        } else {
+            $result.unavailable.network = ($valid | Where-Object { $_.data.unavailable.ContainsKey('network') } | Select-Object -First 1).data.unavailable.network
+        }
+        return $result
+    }
     if ($null -eq $first.data.threads -or $null -eq $last.data.threads) {
         $result.unavailable.topThreads = 'Thread counters unavailable at an interval endpoint.'
     } else {
@@ -111,6 +131,7 @@ function Invoke-EfficiencyBaseline {
         [ValidateRange(0.01, 3600)][double] $SampleIntervalSeconds,
         [Parameter(Mandatory)][hashtable] $Targets,
         [scriptblock] $ReadSnapshot = { param($processId) Get-EfficiencySnapshot $processId },
+        [scriptblock] $ReadBrowserSnapshot = { param($browser) Read-EfficiencyBrowser $browser },
         [scriptblock] $Elapsed = { $watch.Elapsed.TotalSeconds },
         [scriptblock] $Wait = { param($seconds) Start-Sleep -Seconds $seconds },
         [scriptblock] $UtcNow = { [datetime]::UtcNow }
@@ -122,8 +143,9 @@ function Invoke-EfficiencyBaseline {
     $count = 0
     while ($true) {
         foreach ($name in 'host', 'desktop', 'pwa') {
-            if ($Targets[$name].processId) {
-                $data = $ReadSnapshot.InvokeReturnAsIs($Targets[$name].processId)
+            if ($Targets[$name].processId -or $Targets[$name].ContainsKey('browser')) {
+                $data = if ($Targets[$name].ContainsKey('browser')) { $ReadBrowserSnapshot.InvokeReturnAsIs($Targets[$name].browser) }
+                    else { $ReadSnapshot.InvokeReturnAsIs($Targets[$name].processId) }
                 $samples[$name].Add(@{ elapsedSeconds = [double]$Elapsed.InvokeReturnAsIs(); data = $data })
             }
         }
@@ -136,6 +158,10 @@ function Invoke-EfficiencyBaseline {
     $targetsResult = [ordered]@{}
     foreach ($name in 'host', 'desktop', 'pwa') {
         $targetsResult[$name] = ConvertTo-EfficiencyTarget $Targets[$name] $samples[$name].ToArray()
+        if ($name -eq 'pwa' -and -not $targetsResult[$name].Contains('jsHeapUsedBytes')) {
+            $targetsResult[$name].jsHeapUsedBytes = $null
+            $targetsResult[$name].unavailable.jsHeapUsedBytes = 'Browser heap unavailable because the page could not be sampled.'
+        }
     }
     return [ordered]@{
         schemaVersion = 1; machine = [Environment]::MachineName; os = [Runtime.InteropServices.RuntimeInformation]::OSDescription
@@ -168,16 +194,20 @@ if ($MyInvocation.InvocationName -ne '.') {
     $path = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
     $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path))
     $stream = [IO.File]::Open($path, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    $browserTarget = $null
     try {
         $targets = @{
             host = Resolve-EfficiencyProcess $HostProcessId 'agent-bridge-host'
             desktop = Resolve-EfficiencyProcess $DesktopProcessId 'AgentBridge'
-            pwa = @{ processId = $null; unavailable = 'Browser target requires a separate collector.' }
+            pwa = ($browserTarget = Open-EfficiencyBrowser $PwaCdpWebSocket)
         }
         $result = Invoke-EfficiencyBaseline -DurationSeconds $DurationSeconds -SampleIntervalSeconds $SampleIntervalSeconds -Targets $targets
         $json = $result | ConvertTo-Json -Depth 20
         if (-not (Test-Json -Json $json -SchemaFile (Join-Path $PSScriptRoot 'efficiency-baseline.schema.json'))) { throw 'Baseline failed schema validation.' }
         $stream.SetLength(0)
         $bytes = [Text.Encoding]::UTF8.GetBytes($json + [Environment]::NewLine); $stream.Write($bytes, 0, $bytes.Length)
-    } finally { $stream.Dispose() }
+    } finally {
+        if ($null -ne $browserTarget -and $browserTarget.ContainsKey('browser')) { $browserTarget.browser.socket.Dispose() }
+        $stream.Dispose()
+    }
 }
