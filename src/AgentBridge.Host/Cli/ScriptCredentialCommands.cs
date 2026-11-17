@@ -7,7 +7,7 @@ namespace AgentBridge.Host.Cli;
 
 public static class ScriptCredentialCommands
 {
-    public const string Usage = "agent-bridge-host scripts add|revoke <name> [--profile <name>]";
+    public const string Usage = "agent-bridge-host scripts add|revoke|grant-fleet|revoke-fleet <name> [--profile <name>]";
 
     public static object Handle(IProtocolChannel channel, string op, JsonElement data, ICallerGuard callers,
         AgentCredentials? credentials, AgentAuditLog? audit)
@@ -20,10 +20,17 @@ public static class ScriptCredentialCommands
             || field.ValueKind != JsonValueKind.String || !AgentCredentials.ValidScriptPart(field.GetString()))
         { throw new ArgumentException("scripts add or revoke needs a valid script name"); }
         var name = field.GetString()!;
+        if (op is not ("scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet"))
+        { throw new ArgumentException("unknown script credential operation"); }
         // Record admission before mutation: an unavailable audit must never allow an unrecorded credential write.
         if (audit?.Append(new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), "person:local", [],
             op, name, "attempted")) != true)
         { throw new InvalidOperationException("refused: the audit log could not be written; no script credential was changed"); }
+        if (op is "scripts.grant-fleet" or "scripts.revoke-fleet")
+        {
+            credentials.SetFleetLaunch(name, op == "scripts.grant-fleet");
+            return new { Name = name, Grant = "launch:fleet", Enabled = op == "scripts.grant-fleet" };
+        }
         if (op == "scripts.add")
         {
             var (credential, path) = credentials.MintScript(name);
@@ -36,7 +43,7 @@ public static class ScriptCredentialCommands
     public static async Task<int> RunAsync(IReadOnlyList<string> args, string root, TextWriter output, TextWriter error)
     {
         var profile = args.Count == 5 && args[3] == "--profile" ? args[4] : "default";
-        if (args.Count is not (3 or 5) || args[0] != "scripts" || args[1] is not ("add" or "revoke")
+        if (args.Count is not (3 or 5) || args[0] != "scripts" || args[1] is not ("add" or "revoke" or "grant-fleet" or "revoke-fleet")
             || !AgentCredentials.ValidScriptPart(args[2]) || !Identity.IsValidProfile(profile)
             || args.Count == 5 && args[3] != "--profile")
         { error.WriteLine($"usage: {Usage}"); return 2; }

@@ -1,3 +1,4 @@
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
@@ -46,7 +47,8 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public event Action? Changed;
 
     // The release the last check found, null when it found nothing newer (or none has finished).
-    public string? Found { get; private set; }
+    string? found;
+    public string? Found { get => Offered(found); private set => found = value; }
     public DateTimeOffset? CheckedAt { get; private set; }
     // As of when Found is known: the feed's own answer may be older than the check that read it,
     // from the machine's shared copy (#530), and the devices are told how old it really is.
@@ -55,6 +57,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public int? GitHubRemaining => inner.GitHubRemaining;
     public DateTimeOffset? GitHubQuotaAt => inner.GitHubQuotaAt;
     public DateTimeOffset? DiscoveredAt => inner.DiscoveredAt;
+    public HaltPolicySnapshot? HaltPolicy => inner.HaltPolicy;
     public UpdatePhase Phase => Volatile.Read(ref downloads) > 0 ? UpdatePhase.Downloading : Volatile.Read(ref checks) > 0 ? UpdatePhase.Checking : UpdatePhase.Idle;
     public int? Progress { get; private set; }
     public long? Bytes { get; private set; }
@@ -63,7 +66,18 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
 
     public string? InstalledVersion => inner.InstalledVersion;
     public string? PendingNotes => inner.PendingNotes;
-    public string? Ready => inner.Ready;
+    public string? Ready => Offered(inner.Ready);
+
+    string? Offered(string? release) =>
+        release is not null && HaltPolicy?.Policy?.Halted?.Contains(release, StringComparer.Ordinal) == true ? null : release;
+
+    void RefuseHalted(string? release)
+    {
+        if (release is not null && Offered(release) is null)
+        {
+            throw new InvalidOperationException($"the update to {release} has been halted; nothing was started");
+        }
+    }
 
     public async Task<string?> CheckAsync()
     {
@@ -75,13 +89,13 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
             var from = Bound();
             var found = await inner.CheckAsync();
             // A check that finished after its source changed answers for the old one.
-            if (Bound() != from) { return found; }
+            if (Bound() != from) { return Offered(found); }
             if (Found != found) { (Bytes, Total) = (null, null); }
             Found = found;
             CheckedAt = time.GetUtcNow();
             FoundAsOf = inner.DiscoveredAt is { } at && at < CheckedAt ? at : CheckedAt;
             CheckSource = inner.CheckSource;
-            return found;
+            return Offered(found);
         }
         finally
         {
@@ -101,6 +115,9 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         {
             await downloading.WaitAsync();
             held = true;
+            // Read after the queue wait: a halt may have arrived since the check.
+            RefuseHalted(found);
+            RefuseHalted(inner.Ready);
             // The one waited for downloaded the release the last check found: nothing to do.
             if (inner.Ready is not null) { return; }
             var from = Source;
@@ -145,7 +162,11 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         }
     }
 
-    public void ApplyAndRestart(string version, Action? handedOver = null) => inner.ApplyAndRestart(version, handedOver);
+    public void ApplyAndRestart(string version, Action? handedOver = null)
+    {
+        RefuseHalted(version);
+        inner.ApplyAndRestart(version, handedOver);
+    }
 
     // Something the state reads besides the updater changed: Settings' install failing.
     public void Noted() => Raise();

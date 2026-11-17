@@ -18,6 +18,8 @@ public interface IUpdater
     string? CheckSource => null;
     int? GitHubRemaining => null;
     DateTimeOffset? GitHubQuotaAt => null;
+    // Optional verified snapshot; null is unknown, never evidence that no releases are halted.
+    HaltPolicySnapshot? HaltPolicy => null;
     // The release notes of the release the last check found, when it has any.
     string? PendingNotes => null;
     Task DownloadAsync(Action<int> progress);

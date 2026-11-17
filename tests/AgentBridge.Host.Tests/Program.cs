@@ -9,6 +9,10 @@ public static class Program
 {
     public static int Main(string[] args)
     {
+        if (args is ["fleet-start-child", var home, var pid])
+        {
+            return global::FleetStartedAtTests.PublishChildAsync(home, int.Parse(pid, System.Globalization.CultureInfo.InvariantCulture)).GetAwaiter().GetResult();
+        }
         if (args is ["host-sign-command-child"])
         {
             var result = typeof(HostSettings).Assembly.EntryPoint!.Invoke(null, [new[] { "host-sign", "init", "--profile", "private-sentinel:invalid" }]);
