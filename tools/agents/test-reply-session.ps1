@@ -1,7 +1,6 @@
 #Requires -Version 7
 # Offline checks of tools/agents/reply-session.ps1 against a throwaway fake Home Assistant on localhost (#1634):
-# it prints 'sent' (exit 0) only when the host said 'delivered' for its own request id, exits 3 when the host refused
-# or said nothing, and three rapid sends to one node all arrive once, in order. Nothing here reaches a real Home Assistant.
+# It reports sent only for a delivered ack plus a turn, keeps silence after retry unconfirmed (exit 2), exits 3 on initial refusal, and checks three rapid sends; no real HA is used.
 $ErrorActionPreference = 'Stop'
 $script = Join-Path $PSScriptRoot 'reply-session.ps1'
 $node = 'agent_bridge_0123456789abcdef'

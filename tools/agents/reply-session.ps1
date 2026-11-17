@@ -6,7 +6,7 @@
 # prints 'sent' only once the host says 'delivered' for its own rid. There is one reply slot per node, so a send that is overwritten
 # by another never gets its ack and is reported, never printed as sent. Nothing is queued: a refusal is final until the sender retries.
 # Exit codes: 0 delivered; 1 not delivered (bad input, no token, Home Assistant unreachable); 2 the host could not confirm
-# the typing (it MAY have been delivered: check before resending), or the rid repeats one it already handled; 3 the host refused it or gave no outcome in time (retry);
+# the typing (including no fresh ack after retry; it MAY have been delivered: check before resending), or the rid repeats one it already handled; 3 an initial refusal;
 # 4 the reply is stuck in the session's input box (#150): the host refused because text is already typed there, or it typed
 # this reply but its Enter never went, so its words are left there. Every later reply is refused until someone sends or
 # clears it at the machine, so retrying cannot work.
@@ -209,7 +209,6 @@ try {
         Complete-Reply 'unconfirmed' 2 "The host could not confirm the message into $node ($($ack.Error)). It MAY have been delivered; check before resending."
       }
       if ($deliveryAttempt -gt 1 -and $firstAttemptUnconfirmed) { Complete-RetryUnconfirmed "the host gave no outcome for rid $Rid within $AckSeconds s after the same-rid retry." }
-      Complete-Reply 'unconfirmed' 3 "Reply NOT confirmed for ${node}: the host gave no outcome for rid $Rid within $AckSeconds s after one same-rid retry. It may still arrive."
     }
     if ($statusBefore -and $statusBefore.State -eq 'working') { Complete-Reply 'sent' 0 "sent to $node (the session was already working; the host confirmed it)" }
     $statusDeadline = [DateTime]::UtcNow.AddSeconds($StatusSeconds)

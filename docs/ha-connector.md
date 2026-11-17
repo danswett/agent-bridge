@@ -577,8 +577,8 @@ went between reads). Any other change, such as `agents` to `idle`, is not a turn
 before Send cannot show the reply by its status, so the ack stands for it, and the output says so. The send lock
 is held through this wait, so another send from the machine cannot start a turn taken for this one's. Exit 5:
 the host said `delivered` but no turn showed (or the status could not be read), so the reply is treated as not
-delivered (#150); check the session before resending. Exit 2: `unconfirmed` (it may have arrived), or a
-`duplicate` ack (the host handled the rid earlier and typed nothing now, so it is never reported as sent). Exit 3: `refused`, or no ack within `-AckSeconds` (default 20); retry with `-Rid` so the
+delivered (#150); check before resending. Exit 2: `unconfirmed` (may have arrived; includes no fresh ack or
+another non-delivered retry result), or a `duplicate` ack (host handled the rid earlier and typed nothing now, never reported sent). Exit 3: first-attempt refusal; retry with `-Rid` so the
 host drops a duplicate. Exit 1: not sent (bad input, no token, Home Assistant unreachable). Exit 4: the reply is
 stuck in the session's input box (#150): refused because text is already typed there, or `unconfirmed` because
 the host typed it but its Enter never went and its words are still in the box. Every later reply is refused
