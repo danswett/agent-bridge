@@ -39,4 +39,14 @@ public sealed class DurableCleanupTests : IDisposable
         Assert.Null(Assert.Single(inbox.Peek("node")!.ConsumedTokens!).Receipt);
         Assert.NotNull(inbox.Peek("node")!.StartedAt);
     }
+
+    [Fact]
+    public void A_different_token_cannot_repeat_a_clear_for_the_same_attempt()
+    {
+        var inbox = Started();
+        Assert.True(inbox.ConsumeCleanup("node", "first", Fence));
+        Assert.False(new DurableInbox(Pathname).ConsumeCleanup("node", "first",
+            Fence with { Token = "replacement-token", Revision = 8 }));
+        Assert.Single(inbox.Peek("node")!.ConsumedTokens!);
+    }
 }
