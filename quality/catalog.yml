@@ -527,6 +527,18 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: realtime-lint
+    validation_plan: native
+    kind: static
+    ring: 0
+    select: affected
+    platforms: [win-x64, win-arm64, linux-x64, macos-arm64]
+    runner: local
+    triggers: [tests/**, pwa/test/**, apple/Tests/**, quality/realtime-lint.ps1, quality/test-realtime-lint.ps1]
+    command: pwsh -NoProfile -File quality/realtime-lint.ps1
+    # Local advisory only; CI is not wired in this cut.
+    status: partial
+
   - id: red-minutes-script
     validation_plan: native
     kind: unit
