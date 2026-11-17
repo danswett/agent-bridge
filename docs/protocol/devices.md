@@ -1013,6 +1013,9 @@ existing revocation/seniority rules; no mutation of old signed descriptors.
 Do not silently remove old enrollments or claim old evidence covers the new add.
 Evidence `v: 1` is unchanged; advertising host-v2 support does not authorize v3
 enrollment or prove an old reader understands it.
+
+The C# v3 descriptor parser's fixed valid and first-refusal cases are in
+[capsign-descriptor.json](vectors/capsign-descriptor.json).
 Keep `acceptHostSign` false until #2366, #2369 and #2370 and their enrollment
 prerequisites are in; #2367 is last. Existing first-host bootstrap remains separate.
 
