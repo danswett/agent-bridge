@@ -57,8 +57,11 @@ public sealed class SessionRosterFixtureTests
             Assert.Equal("idle", row.GetProperty("status").GetString());
 
             await source.SetEndingAsync(Id, true);
+            fixture.Time.Advance(TimeSpan.FromSeconds(1));
             var ending = await channel.NextAsync();
             Assert.Equal(live.Seq + 1, ending.Seq);
+            Fixture.Append(events, Copilot.Assistant("pending change", 5));
+            await source.RefreshAsync();
             fixture.Processes.Exit(AgentKind.Copilot, 100);
             await source.RefreshAsync();
             var removed = await channel.NextAsync();
@@ -70,6 +73,7 @@ public sealed class SessionRosterFixtureTests
             var replacement = Assert.IsType<ChannelReply>(await service.HandleAsync(channel, Ops.SessionsSubscribe, empty));
             Assert.Equal(0, JsonSerializer.SerializeToElement(replacement.Result).GetProperty("Count").GetInt32());
             var resynced = replacement.Then(channel);
+            fixture.Time.Advance(TimeSpan.FromSeconds(1));
             Assert.Equal(Events.SessionsSynced, (await channel.NextAsync()).Name);
             channel.Close();
             await resynced.WaitAsync(Patience);
