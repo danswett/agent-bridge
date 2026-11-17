@@ -1,4 +1,7 @@
 {
+  "description": "Signed-envelope identity cases replayed by ScriptPrincipalTests; no Protocol DTO records.",
+  "records": {},
+  "knownDifferences": [],
   "cases": [
     { "identity": "script:{machine}/pump-wake", "accepted": true },
     { "identity": "script:{machine}/Board_1.v2", "accepted": true },

@@ -86,6 +86,7 @@ public sealed class AgentLiteDeliveryTests
                 { ["account"] = new string('a', 32), ["machine"] = machine, ["session"] = identity }),
         };
         root["target"]!["account"] = new string('a', 32); root["target"]!["machine"] = new string('2', 32);
+        root["action"] = "session.read";
         root["expiresAt"] = 60;
         var body = EnvelopeBody.Parse(Encoding.UTF8.GetBytes(root.ToJsonString()));
         Assert.True((await f.Build().DeliverAsync(new VerifiedEnvelope(body, []), "hi", default)).Typed);
