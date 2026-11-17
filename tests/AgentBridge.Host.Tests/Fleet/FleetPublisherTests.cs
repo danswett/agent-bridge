@@ -196,12 +196,13 @@ public sealed class FleetPublisherTests
     {
         var publisher = new FleetPublisher(source, "machine", time: time);
         Assert.True(await publisher.PublishAsync(Put));
-        source.Sessions.RemoveAt(0);
+        source.Sessions[0] = source.Sessions[0] with { Status = SessionStatus.Working };
         time.Advance(TimeSpan.FromSeconds(1));
         Assert.False(await publisher.PublishAsync(Put));
         time.Advance(TimeSpan.FromSeconds(1));
         Assert.True(await publisher.PublishAsync(Put));
-        Assert.Equal(2, sent[^1].GetProperty("sessions").GetArrayLength());
+        Assert.Equal(3, sent[^1].GetProperty("sessions").GetArrayLength());
+        Assert.Single(sent[^1].GetProperty("sessions").EnumerateArray(), s => s.GetProperty("state").GetString() == "working");
         time.Advance(TimeSpan.FromSeconds(19));
         Assert.False(await publisher.PublishAsync(Put));
         time.Advance(TimeSpan.FromSeconds(1));
@@ -247,6 +248,22 @@ public sealed class FleetPublisherTests
         stop.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => publisher.PublishAsync(Put, force: true, ct: stop.Token));
         Assert.Single(sent);
+    }
+
+    [Fact]
+    public async Task A_held_or_failed_removal_keeps_the_last_successful_membership_until_retry_succeeds()
+    {
+        var publisher = new FleetPublisher(source, "machine", time: time);
+        Assert.True(await publisher.PublishAsync(Put));
+        source.Sessions.Clear();
+        source.Held = new DiscoveryHeld("discovery incomplete", [AgentKind.Copilot]);
+        Assert.False(await publisher.PublishAsync(Put));
+        Assert.Single(sent);
+        source.Held = null;
+        await Assert.ThrowsAsync<IOException>(() => publisher.PublishAsync((_, _) => throw new IOException("put failed")));
+        Assert.True(await publisher.PublishAsync(Put));
+        Assert.Empty(sent[^1].GetProperty("sessions").EnumerateArray());
+        Assert.False(await publisher.PublishAsync(Put));
     }
 
     [Fact]

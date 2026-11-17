@@ -45,6 +45,15 @@ publisher. This slice changes neither verification nor selection.
 
 ## Summary in plain English
 
+Implementation update, November 17, 2026 (Pacific),
+[roster sync](https://github.com/danswett/agent-bridge/issues/2643):
+session removals bypass publication coalescing; failed puts and discovery holds do not
+acknowledge a removal. Offline machine metadata remains visible, but cached session rows
+are withheld. The host reader filters against the current verified roster's serving hosts
+before parsing records and refuses when its roster provider is unavailable. Membership
+does not verify record signatures or enable routing. The relay accepts optional
+`startedAt` only as a whole-second UTC timestamp; all other allow-list restrictions remain.
+
 **The problem.** Today only Home Assistant (HA) knows, in one place, which sessions exist on
 which machines, what each is doing, and how long it has been doing it. The relay knows machines
 only. Scripts and agents that need "which session is `SG Quality Lead`, and is it idle?" ask HA.

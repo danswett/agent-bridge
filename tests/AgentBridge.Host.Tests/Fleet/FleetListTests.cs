@@ -426,8 +426,8 @@ public sealed class FleetListTests : IDisposable
 
     [Theory]
     [InlineData(true, "unverified")]
-    [InlineData(false, "offline")]
-    public async Task Known_metadata_never_fills_a_missing_display_name_in_legacy_session_or_find_replies(bool online, string result)
+    [InlineData(false, "notFound")]
+    public async Task Known_metadata_is_only_a_machine_fallback_after_offline_session_rows_are_withheld(bool online, string result)
     {
         if (!OperatingSystem.IsWindows()) { return; }
         roster.Machines = RelayFleetRoster.Parse(new[]
@@ -442,11 +442,17 @@ public sealed class FleetListTests : IDisposable
         var chan = Hello(AgentProtocol.ScopeRead);
         var op = Op();
         var reply = JsonSerializer.SerializeToElement(await op.HandleAsync(chan, Body("{}")), Web);
-        var legacy = $$"""[{"machine":"m2","node":"n1","state":"working","since":"2026-11-07T12:00:00+00:00","secondsInState":90,"machineOnline":{{online.ToString().ToLowerInvariant()}}}]""";
-        Assert.Equal(legacy, reply.GetProperty("sessions").GetRawText());
+        var legacy = """[{"machine":"m2","node":"n1","state":"working","since":"2026-11-07T12:00:00+00:00","secondsInState":90,"machineOnline":true}]""";
+        Assert.Equal(online ? legacy : "[]", reply.GetProperty("sessions").GetRawText());
         var found = JsonSerializer.SerializeToElement(await op.FindAsync(chan, Body("""{"name":"my project"}""")), Web);
         Assert.Equal(result, found.GetProperty("result").GetString());
-        Assert.False(found.GetProperty("machines")[0].TryGetProperty("machineName", out _));
+        if (online) { Assert.False(found.GetProperty("machines")[0].TryGetProperty("machineName", out _)); }
+        else
+        {
+            Assert.False(found.TryGetProperty("machines", out _));
+            Assert.Equal("offline", reply.GetProperty("machines")[0].GetProperty("state").GetString());
+            Assert.Equal("old-name", reply.GetProperty("machines")[0].GetProperty("machineName").GetString());
+        }
     }
 
     static string[] Names(string json) =>
