@@ -86,7 +86,7 @@ static partial class SelfTest
     // and one not realised yet realised through the VirtualizedItem pattern of what it found, since
     // WinUI numbers an item only once it has a container (#829, B's realisation contract). Null when
     // it is given all of them right, with how many blocks were realised that way.
-    static async Task<(string? Problem, int Realised, double Seconds)> Listed(ListView list)
+    static async Task<(string? Problem, int Realised, double Seconds)> Listed(ListView list, Func<string, Task> progress)
     {
         var count = list.Items.Count;
         if (count == 0 || FrameworkElementAutomationPeer.CreatePeerForElement(list) is not ItemsControlAutomationPeer peer) { return ("a list to read", 0, 0); }
@@ -99,6 +99,7 @@ static partial class SelfTest
         var walked = 0;
         for (var i = 0; i < count; i++)
         {
+            if (i % 16 == 0) { await progress($"15 reader list block {i + 1}/{count}"); }
             var found = items.FindItemByProperty(after, null, null);
             if (found is null) { problems.Add($"block {i + 1} found after block {i}"); break; }
             after = found;

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
 using System.Text.Json;
 using AgentBridge.App.Core;
 using Microsoft.Extensions.Time.Testing;
@@ -13,7 +12,7 @@ public sealed class SelfTestResultTests
     public async Task An_unfinished_stage_keeps_its_name_elapsed_time_and_last_real_progress()
     {
         var time = new FakeTimeProvider(Start);
-        var writer = Writer(time);
+        var writer = new SelfTestResult(time);
         var result = new Dictionary<string, object?>();
         var file = Path.Combine(Path.GetTempPath(), $"selftest-{Guid.NewGuid():N}.json");
         try
@@ -32,6 +31,9 @@ public sealed class SelfTestResultTests
             Assert.Equal(Start.AddSeconds(2), stage.GetProperty("lastProgressAt").GetDateTimeOffset());
             Assert.Equal(JsonValueKind.Null, stage.GetProperty("endedAt").ValueKind);
             Assert.Equal("02 light sweep", stage.GetProperty("step").GetString());
+            var steps = stage.GetProperty("steps").EnumerateArray().ToArray();
+            Assert.Equal(new[] { 2d, 5d }, steps.Select(s => s.GetProperty("elapsedSeconds").GetDouble()));
+            Assert.Equal(Start.AddSeconds(2), steps[0].GetProperty("endedAt").GetDateTimeOffset());
         }
         finally { File.Delete(file); }
     }
@@ -40,36 +42,31 @@ public sealed class SelfTestResultTests
     public async Task A_finished_stage_keeps_its_end_and_elapsed_time_when_the_result_is_written_again()
     {
         var time = new FakeTimeProvider(Start);
-        var writer = Writer(time);
+        var writer = new SelfTestResult(time);
         var result = new Dictionary<string, object?>();
         var file = Path.Combine(Path.GetTempPath(), $"selftest-{Guid.NewGuid():N}.json");
         try
         {
+            await Write(writer, file, result, "high contrast", null);
+            time.Advance(TimeSpan.FromSeconds(3));
             await Write(writer, file, result, "live resize", "16 report");
             time.Advance(TimeSpan.FromSeconds(7));
             await Write(writer, file, result, null, null);
             time.Advance(TimeSpan.FromSeconds(20));
             await Write(writer, file, result, null, null);
             using var json = JsonDocument.Parse(await File.ReadAllTextAsync(file));
-            var stage = Assert.Single(json.RootElement.GetProperty("stages").EnumerateArray());
+            var stages = json.RootElement.GetProperty("stages").EnumerateArray().ToArray();
+            Assert.Equal(3, stages[0].GetProperty("elapsedSeconds").GetDouble());
+            var stage = Assert.Single(stages, s => s.GetProperty("name").GetString() == "live resize");
             Assert.Equal(7, stage.GetProperty("elapsedSeconds").GetDouble());
-            Assert.Equal(Start.AddSeconds(7), stage.GetProperty("endedAt").GetDateTimeOffset());
-            Assert.Equal(Start.AddSeconds(7), stage.GetProperty("lastProgressAt").GetDateTimeOffset());
+            Assert.Equal(Start.AddSeconds(10), stage.GetProperty("endedAt").GetDateTimeOffset());
+            Assert.Equal(Start.AddSeconds(10), stage.GetProperty("lastProgressAt").GetDateTimeOffset());
         }
         finally { File.Delete(file); }
     }
 
-    // Reflection lets the new writer's absence be an assertion RED, not a compilation failure.
-    static object Writer(TimeProvider time)
-    {
-        var type = typeof(FrameTimes).Assembly.GetType("AgentBridge.App.Core.SelfTestResult");
-        Assert.NotNull(type);
-        return Activator.CreateInstance(type, time)!;
-    }
-
-    static Task Write(object writer, string file, Dictionary<string, object?> result, string? stage, string? step) =>
-        (Task)writer.GetType().GetMethod("WriteAsync", BindingFlags.Public | BindingFlags.Instance)!
-            .Invoke(writer, [file, result, new List<string> { "passed" }, new List<string>(), stage, step])!;
+    static Task Write(SelfTestResult writer, string file, Dictionary<string, object?> result, string? stage, string? step) =>
+        writer.WriteAsync(file, result, ["passed"], [], stage, step);
 
     [Theory]
     [Trait("Category", "Process")]
@@ -82,7 +79,7 @@ public sealed class SelfTestResultTests
         int silence, bool completed, bool exited, string expected, int completedSecond = 90)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !Directory.Exists(Path.Combine(root.FullName, ".git"))) { root = root.Parent; }
+        while (root is not null && !Path.Exists(Path.Combine(root.FullName, ".git"))) { root = root.Parent; }
         Assert.NotNull(root);
         var helper = Path.Combine(root.FullName, "build", "app-self-test-progress.ps1");
         Assert.True(File.Exists(helper), "The wrapper has no stage timing classifier.");
@@ -108,5 +105,7 @@ public sealed class SelfTestResultTests
         using var evidence = JsonDocument.Parse(await output);
         Assert.StartsWith(expected, evidence.RootElement.GetProperty("classification").GetString());
         Assert.Equal("live resize", Assert.Single(evidence.RootElement.GetProperty("stages").EnumerateArray()).GetProperty("name").GetString());
+        Assert.False(evidence.RootElement.GetProperty("waitFinished").GetBoolean());
+        Assert.Equal(exited, evidence.RootElement.GetProperty("processExited").GetBoolean());
     }
 }
