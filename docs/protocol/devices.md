@@ -51,6 +51,7 @@ bytes.
 | `agent-bridge verifier set v1` | Capability active-set digest over `F(label, member1, ..., memberN)` |
 | `agent-bridge verifier key binding v1` | A person's capability-key possession proof over `F(label, account, generation, dh)` |
 | `agent-bridge enroll capSign v1` | Proposed v3 person-enrollment transcript `T3`, defined below; never the v1 transcript |
+| `agent-bridge apns enrollment v1` | #2398 A3a hostSign/capSign proof over relay ID/origin, account, generation, device ID/DH, role, and nonce |
 
 ## Encodings
 
@@ -974,12 +975,27 @@ Sources use the encoding baseline above unless an explicit merged-main commit is
 | `invite hint v1`, `enroll qr joiner v1`, `enroll qr approver v1` | devices.md 42-43 |
 | `roster head v1`, `person command v1`, `reset veto v1`, `host key binding v1` | devices.md 44-47 |
 | `verifier support v1`, `verifier frontier v1`, `verifier set v1`, `verifier key binding v1` | devices.md 48-51 |
+| `apns enrollment v1` | devices.md 54 (#2398 A3a) |
 | `fleet registry v1` | devices.md 48 at merged main `e0ae344dd2494410cbb69dd05451544c83a29a0f` (#2370) |
 | `agent command v1`, `session instance v1`, `link v1`, `link-attest v1`, `link tombstone v1`, `command v1` (MAC salt) | design/agent-principals.md 3143-3149 |
 
 This slice's only edit to agent-principals is the T3 row in section 8.5
 (baseline 3130-3153); the four evidence-label mirrors remain owned by #2366.
 The merged registry domain needs cross-domain vectors too; add connector domains when pinned.
+
+**APNs enrollment vector (#2398 A3a).** The signed bytes are
+`F("agent-bridge apns enrollment v1", relayId, origin, account, generation, deviceId, dh, role, nonce)`.
+Use `relayId=relay-test-1`,
+`origin=wss://relay.test`, `account=test`, generation `0` repeated 32 times,
+role `host`, and nonce `22` repeated 32 times. `dh` is the uncompressed SEC1
+point `047cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc4766997807775510db8ed040293d9ac69f7430dbba7dade63ce982299e04b79d227873d1`;
+`deviceId=a9f300eb5960e89133af7362011a1e26` (first 16 bytes of SHA-256(`dh`)).
+The 264-byte framed input hashes to
+`d3f3a29e78cee7616a4e4b5f1649beb961e025282a1a0a4a27c98318a5ddae23`.
+Test-only `hostSign` is P-256 base point G (private scalar 1); its low-S DER
+signature, base64url without padding, is
+`MEQCIDNHczhUJpgCjVtSPboT8l5W059O6NSfrQXkniaiceYzAiAeAXX3E7G0gLmERP0eSHGaxfCNoVo3OSRCVH0XuhfLBg`.
+Changing relay ID, origin, role, or any other field must fail verification.
 
 ### Custody, migration and executable vectors
 
