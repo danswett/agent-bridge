@@ -112,7 +112,7 @@ public class AnswerTests
         Assert.Null(Answers.Check(q, Answer("""{"answer":{"other":"neither, use c"}}""")));
         Assert.Contains("empty", Answers.Check(q, Answer("""{"answer":{"other":"  "}}""")));
         var tooLong = JsonSerializer.Serialize(new { answer = new { other = new string('x', Limits.AnswerText + 1) } });
-        Assert.Contains("longer than 4 KiB", Answers.Check(q, Answer(tooLong)));
+        Assert.Contains("longer than 16 KiB; send it as a reply instead", Answers.Check(q, Answer(tooLong)));
     }
 
     [Fact]
@@ -157,14 +157,57 @@ public class AnswerTests
     }
 
     [Fact]
-    public void A_request_over_16_KiB_is_refused_even_when_each_text_is_within_its_own_limit()
+    public void A_request_over_18_KiB_is_refused_even_when_each_text_is_within_its_own_limit()
     {
         var fields = Enumerable.Range(0, 5).Select(i => new Field { Name = $"t{i}", Type = FieldType.Text }).ToArray();
-        var text = new string('x', Limits.AnswerText);
+        var text = new string('x', 4 * 1024);
         var each = JsonSerializer.Serialize(fields.ToDictionary(f => f.Name, _ => text));
 
-        Assert.Contains("larger than 16 KiB", Answers.Check(Form(fields), Answer(each)));
+        Assert.Equal("the answer is larger than 18 KiB; send it as a reply instead", Answers.Check(Form(fields), Answer(each)));
         Assert.Null(Answers.Check(Form(fields.Take(3).ToArray()), Answer(JsonSerializer.Serialize(fields.Take(3).ToDictionary(f => f.Name, _ => text)))));
+    }
+
+    [Theory]
+    [InlineData(4 * 1024 + 1)]
+    [InlineData(16 * 1024)]
+    public void Pasted_diagnostics_fit_as_plain_text_a_text_field_or_other_with_request_overhead(int bytes)
+    {
+        var text = new string('x', bytes);
+        var request = new AnswerRequest
+        {
+            Id = new string('s', 256), Question = new string('q', 256),
+            Request = Guid.NewGuid().ToString(), Progress = true, Text = text,
+        };
+        Assert.Null(Answers.Check(Form(), request));
+        var fields = Form(new Field { Name = "diagnostics", Type = FieldType.Text }, Choice("choice", other: true));
+        request = request with
+        {
+            Text = null,
+            Fields = Answer(JsonSerializer.Serialize(new { diagnostics = text, choice = "a" })).Fields,
+        };
+        Assert.True(ProtocolJson.ByteCount(request) <= Limits.AnswerRequest);
+        Assert.Null(Answers.Check(fields, request));
+        request = request with { Fields = Answer(JsonSerializer.Serialize(new { choice = new { other = text } })).Fields };
+        Assert.Null(Answers.Check(fields, request));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void The_answer_text_limit_counts_UTF8_bytes_and_names_the_reply_path(bool unicode)
+    {
+        var text = unicode ? new string('\u754c', 5461) + "x" : new string('x', 16 * 1024);
+        var request = new AnswerRequest { Id = "s1", Question = "q1", Request = "r1", Text = text };
+        Assert.Null(Answers.Check(Form(), request));
+        Assert.Equal("the answer is longer than 16 KiB; send it as a reply instead", Answers.Check(Form(), request with { Text = text + "x" }));
+    }
+
+    [Fact]
+    public void JSON_escaping_cannot_bypass_the_request_envelope_and_the_refusal_names_the_reply_path()
+    {
+        var request = new AnswerRequest { Id = "s1", Question = "q1", Request = "r1", Text = new string('\n', 16 * 1024) };
+        Assert.True(ProtocolJson.ByteCount(request) > Limits.AnswerRequest);
+        Assert.Equal("the answer is larger than 18 KiB; send it as a reply instead", Answers.Check(Form(), request));
     }
 
     [Fact]
