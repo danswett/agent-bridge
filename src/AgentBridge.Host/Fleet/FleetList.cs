@@ -10,7 +10,7 @@ using AgentBridge.Transport;
 namespace AgentBridge.Host.Fleet;
 
 // One machine of the caller's own account, as the relay's session registry reports it.
-// Verified stays false until hostSign exists (design "Signing"); Truncated is the record's own cap flag.
+// Verified stays false until the scoped hostSign validates its fresh registry record.
 public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSession> Sessions, bool Truncated = false, bool Verified = false, string? Name = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? LastSeen = null,
     [property: JsonIgnore] bool HasRegistryRecord = false);
@@ -34,12 +34,28 @@ public interface IScopedFleetRoster : IFleetRoster
 // never sends another account's machines, so nothing here has to filter them.
 public sealed class RelayFleetRoster : IScopedFleetRoster
 {
+    sealed record AcceptedRecord(string Epoch, long Sequence, DateTimeOffset At, byte[] Canonical);
+
     RelayClient? relay;
+    readonly Func<RosterVerifier?>? verifiedRoster;
+    readonly TimeProvider time;
+    readonly object recordsLock = new();
+    readonly Dictionary<string, AcceptedRecord> acceptedRecords = new(StringComparer.Ordinal);
 
-    // Carried inert #2371 interface; verification remains that slice's responsibility.
-    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null) { }
+    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null)
+    {
+        this.verifiedRoster = verifiedRoster;
+        this.time = time ?? TimeProvider.System;
+    }
 
-    public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames) => Parse(frames);
+    public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames)
+    {
+        var source = frames.ToArray();
+        var machines = Parse(source);
+        if (verifiedRoster?.Invoke() is not { } verifier) { return machines; }
+        var now = time.GetUtcNow();
+        return machines.Select(machine => Verify(machine, source, verifier, now)).ToArray();
+    }
 
     public void Attach(RelayClient? connection) => Volatile.Write(ref relay, connection);
 
@@ -52,6 +68,69 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
         var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
         if (!ReferenceEquals(current, Volatile.Read(ref relay))) { throw new InvalidOperationException("refused: the fleet connection changed during lookup"); }
         return new(current.AccountId, Read(frames));
+    }
+
+    FleetMachine Verify(FleetMachine machine, IReadOnlyList<JsonElement> frames, RosterVerifier verifier, DateTimeOffset now)
+    {
+        if (!machine.Online || !verifier.Serving.ContainsKey(machine.Id)
+            || verifier.State.Device(machine.Id)?.HostSign is not { } hostSign) { return machine; }
+
+        JsonElement record = default;
+        foreach (var frame in frames)
+        {
+            if (frame.ValueKind == JsonValueKind.Object
+                && frame.TryGetProperty("machine", out var id) && id.ValueKind == JsonValueKind.String
+                && id.GetString() == machine.Id
+                && frame.TryGetProperty("record", out var candidate) && candidate.ValueKind == JsonValueKind.Object)
+            {
+                record = candidate;
+                break;
+            }
+        }
+
+        if (!TryRecordOrder(record, machine.Id, out var epoch, out var sequence, out var at)
+            || now < at || now - at > TimeSpan.FromSeconds(60)
+            || !FleetRecordSigning.Verify(record, hostSign)) { return machine; }
+
+        var canonical = FleetRecordSigning.CanonicalBytes(record);
+        lock (recordsLock)
+        {
+            if (acceptedRecords.TryGetValue(machine.Id, out var previous))
+            {
+                if (previous.Epoch == epoch
+                    ? sequence < previous.Sequence || sequence == previous.Sequence && !canonical.AsSpan().SequenceEqual(previous.Canonical)
+                    : at <= previous.At)
+                {
+                    return machine;
+                }
+            }
+            acceptedRecords[machine.Id] = new(epoch, sequence, at, canonical);
+        }
+        return machine with { Verified = true };
+    }
+
+    static bool TryRecordOrder(JsonElement record, string machine, out string epoch, out long sequence, out DateTimeOffset at)
+    {
+        epoch = "";
+        sequence = 0;
+        at = default;
+        if (record.ValueKind != JsonValueKind.Object
+            || !record.TryGetProperty("v", out var version) || version.ValueKind != JsonValueKind.Number
+            || !version.TryGetInt32(out var v) || v != 1
+            || !record.TryGetProperty("machine", out var id) || id.ValueKind != JsonValueKind.String || id.GetString() != machine
+            || !record.TryGetProperty("epoch", out var epochValue) || epochValue.ValueKind != JsonValueKind.String
+            || epochValue.GetString() is not { Length: 16 } value
+            || !value.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'))
+            || !record.TryGetProperty("seq", out var seq) || seq.ValueKind != JsonValueKind.Number
+            || !seq.TryGetInt64(out sequence) || sequence < 1
+            || !record.TryGetProperty("at", out var timestamp) || timestamp.ValueKind != JsonValueKind.String
+            || timestamp.GetString() is not { } text
+            || !DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out at))
+        {
+            return false;
+        }
+        epoch = value;
+        return true;
     }
 
     // Known-only machines have no sessions; registry liveness and supplied metadata take precedence.
@@ -164,9 +243,8 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
     }
 
     // fleet.find (#1399, design "Names and lookup"): a filter over the same roster. The name is
-    // trimmed, exact and case-sensitive, and never echoed back. Records are unsigned until
-    // hostSign exists, so a real live match still answers `unverified`. A unique verified live
-    // match needs no machine pin; its scope and optional model come only from the scoped roster.
+    // trimmed, exact and case-sensitive, and never echoed back. A unique live match is found only
+    // after its registry record verifies against the serving hostSign from the scoped roster.
     public async Task<object?> FindAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default, AgentAuditLog? auditLog = null)
     {
         var caller = Authorize(channel, FindOp);
