@@ -81,6 +81,6 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
         if (problem is not null) { return new(false, problem, null); }
         if (!policy.LaunchEnabled) { return new(false, "agents.launch.enabled is off or missing on this machine", null); }
         if (!policy.Enabled) { return new(false, "agents.enabled is off on this machine", null); }
-        return new(true, null, policy.Limits.Launch);
+        return new(true, null, policy.Limits.Launch.At(clock?.Invoke() ?? DateTimeOffset.UtcNow));
     }
 }

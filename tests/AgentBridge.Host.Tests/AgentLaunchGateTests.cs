@@ -58,9 +58,13 @@ public sealed class AgentLaunchGateTests : IDisposable
         values["temporaryRaise"] = JsonSerializer.SerializeToElement(new
         { startedAt = start, expiresAt = start.AddHours(1), limits = new Dictionary<string, int> { [key] = ceiling } });
         Write(Config(JsonSerializer.Serialize(values)));
-        int? Value(DateTimeOffset now) => JsonSerializer.SerializeToElement(
-            new AgentLaunchGate(folder, () => now).CheckPolicy().Limits, new JsonSerializerOptions(JsonSerializerDefaults.Web))
-            .GetProperty(key).GetInt32();
+        int Value(DateTimeOffset now)
+        {
+            var policy = new AgentLaunchGate(folder, () => now).CheckPolicy();
+            Assert.True(policy.Allowed, policy.Reason);
+            return JsonSerializer.SerializeToElement(policy.Limits, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                .GetProperty(key).GetInt32();
+        }
 
         Assert.Equal(ceiling, Value(start));
         Assert.Equal(1, Value(start.AddHours(1)));
@@ -72,6 +76,10 @@ public sealed class AgentLaunchGateTests : IDisposable
     [InlineData("""{"startedAt":"2026-11-16T12:00:00-08:00","expiresAt":"2026-11-16T12:00:00-08:00","limits":{"launchesPerOriginPerHour":3}}""")]
     [InlineData("""{"expiresAt":"2026-11-16T16:00:00-08:00","limits":{"launchesPerOriginPerHour":3}}""")]
     [InlineData("""{"startedAt":false,"expiresAt":42,"limits":{}}""")]
+    [InlineData("""{"startedAt":"2026-11-16T12:00:00","expiresAt":"2026-11-16T16:00:00","limits":{}}""")]
+    [InlineData("""{"startedAt":"2026-11-16T16:00:00Z","expiresAt":"2026-11-16T12:00:00Z","limits":{}}""")]
+    [InlineData("""{"startedAt":"2026-11-16T12:00:00Z","expiresAt":"2026-11-16T16:00:00Z","limits":[] }""")]
+    [InlineData("""{"startedAt":"2026-11-16T12:00:00Z","expiresAt":"2026-11-16T16:00:00Z","limits":{},"unknown":true}""")]
     [InlineData("""{"startedAt":"2026-11-16T12:00:00-08:00","expiresAt":"2026-11-16T16:00:00-08:00","limits":{"launchesPerOriginPerHour":4}}""")]
     [InlineData("""{"startedAt":"2026-11-16T12:00:00-08:00","expiresAt":"2026-11-16T16:00:00-08:00","limits":{"launchesPerOriginPerHour":0}}""")]
     [InlineData("""{"startedAt":"2026-11-16T12:00:00-08:00","expiresAt":"2026-11-16T16:00:00-08:00","limits":{"launchesPerOriginPerHour":1.5}}""")]
@@ -86,6 +94,7 @@ public sealed class AgentLaunchGateTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public async Task An_agent_session_cannot_change_a_launch_limit()
     {
         var start = new System.Diagnostics.ProcessStartInfo("dotnet")
