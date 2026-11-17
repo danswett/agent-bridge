@@ -22,6 +22,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     // Shared with every profile's app and host through the app's folder (#530).
     readonly ReleaseDiscovery discovery = new(Paths.AppData, log: log);
     static readonly HttpClient HaltHttp = new();
+    public HaltPolicySnapshot? HaltPolicy => discovery.HaltPolicy;
     public Task<HaltPolicySnapshot> ReadHaltPolicyAsync() =>
         new GitHubHaltListSource(HaltHttp, discovery).ReadSnapshotAsync(CancellationToken.None);
     readonly PackageDownloader downloader = new();

@@ -2861,6 +2861,7 @@ public sealed class SettingsTests : IAsyncLifetime
             await observed.RefreshHaltPolicyAsync();
 
             Assert.False(page.UpdateAvailable);
+            Assert.Equal(policy, ((IUpdater)observed).HaltPolicy);
             Assert.Null(observed.Ready);
             Assert.False(updater.Applied);
         }

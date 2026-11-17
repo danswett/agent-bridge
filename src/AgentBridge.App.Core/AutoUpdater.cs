@@ -1522,7 +1522,7 @@ public sealed class AutoUpdater
                 // Settings' checks and downloads do not wait for this one: one may have replaced the
                 // package while the host stopped, and Velopack applies whatever is ready. Only the
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
-                if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
+                Validate(handoff: true);
                 updater.ApplyConfirmed(to, allowedUnchecked || confirmedUnchecked, HandedOver(prefs, save));
             }, waitForFiles: false);
             return null;
@@ -1581,13 +1581,13 @@ public sealed class AutoUpdater
             return $"installing {to} failed: {e.Message}";
         }
 
-        void Validate()
+        void Validate(bool handoff = false)
         {
             if (updater.Halted(to)) { throw new InstallRefusedException(ObservedUpdater.HaltedReason, "halted"); }
             if (!updater.PolicyFresh && !allowedUnchecked && !(local && confirmedUnchecked))
             { throw new InstallRefusedException("bad-release protection is stale or unreadable", UpdateCode.PolicyUnreadable); }
             if (updater.Ready != to || updater.Source != source || Stale()) { throw new PackageReplacedException("while preparing the install"); }
-            if (departed is not null) { return; }
+            if (departed is not null || handoff) { return; }
             if (!local && (Asked(UpdateAskKind.Install) != request || NowPress)) { throw new InstallRefusedException(NotNow); }
             if (othersInPackage(host.Status?.ProcessId) is { } other) { throw new InstallRefusedException(other, UpdateCode.OtherProfile); }
             if (WhyNot(asked || local) is { } why && !(local && why == HostGone)) { throw new InstallRefusedException(why, ManageReason.Unavailable); }

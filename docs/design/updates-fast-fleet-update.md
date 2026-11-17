@@ -233,6 +233,9 @@ The app's optional `IUpdater.HaltPolicy` capability carries the verified snapsho
 updater without it remains policy unknown. `ObservedUpdater` uses known halts, even when stale,
 to hide offers and refuse downloads and installation, re-reading the snapshot at each boundary.
 This shared guard does not replace the host's signed admission and departure checks.
+Policy refreshes notify Settings even without a release check. Policy expiry at the final
+package handoff is a refusal, not an installation failure; signed `unchecked` and `batch`
+terms survive both immediate departure and an idle-queued install.
 
 ## 5. One press, Update all, and limits
 

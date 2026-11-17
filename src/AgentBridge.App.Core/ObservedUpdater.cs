@@ -35,6 +35,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
             policyRead = true;
         }
         finally { policyTurn.Release(); }
+        Raise();
     }
 
     internal bool Halted(string? version) => version is not null
@@ -90,7 +91,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
     public int? GitHubRemaining => inner.GitHubRemaining;
     public DateTimeOffset? GitHubQuotaAt => inner.GitHubQuotaAt;
     public DateTimeOffset? DiscoveredAt => inner.DiscoveredAt;
-    public HaltPolicySnapshot? HaltPolicy => inner.HaltPolicy;
+    public HaltPolicySnapshot? HaltPolicy => policyRead ? policy : inner.HaltPolicy;
     public UpdatePhase Phase => Volatile.Read(ref downloads) > 0 ? UpdatePhase.Downloading : Volatile.Read(ref checks) > 0 ? UpdatePhase.Checking : UpdatePhase.Idle;
     public int? Progress { get; private set; }
     public long? Bytes { get; private set; }
