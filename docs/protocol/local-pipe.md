@@ -316,7 +316,16 @@ the sender. An absent audit log, a false append or a thrown append raises the fi
 The sender is not called, and nothing is queued or retried. Early caller/input refusals are not
 audited in this slice. The record's `attempted` outcome is not delivery confirmation; its local
 attempt id is distinct from the sender's relay request id. Only text hash and byte length are
-recorded, never the text. See [the audit log](../host-config.md#the-agent-audit-log).
+recorded, never the text.
+
+Before replying, the host appends the terminal `delivered`, `refused`, `undeliverable`,
+`unconfirmed` or `off` outcome with the same local attempt id, credential attribution,
+target and text hash/byte length. Free-form sender codes are not logged. If this append
+returns false or throws, the caller receives
+`refused: auditUnwritable: the terminal agent audit outcome could not be written; the message may have been sent`,
+not a successful reply; the host does not resend. A sender exception is propagated and
+leaves the attempt without a terminal record.
+See [the audit log](../host-config.md#the-agent-audit-log).
 
 ### The MCP server (`mcp/`)
 

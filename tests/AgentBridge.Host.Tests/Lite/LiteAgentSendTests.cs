@@ -36,7 +36,7 @@ public sealed class LiteAgentSendTests : IDisposable
         .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line)).Where(line => line.TryGetProperty("action", out _)).ToArray();
 
     [Fact]
-    public async Task A_send_writes_one_credential_attributed_attempt_before_delivery_without_the_message_text()
+    public async Task A_send_writes_a_credential_attributed_attempt_before_delivery_without_the_message_text()
     {
         const string text = "private message that must not be logged \u00e9";
         sender.BeforeSend = () =>
@@ -51,7 +51,9 @@ public sealed class LiteAgentSendTests : IDisposable
 
         Assert.Equal("delivered", reply.Outcome);
         Assert.Single(sender.Calls);
-        var entry = Assert.Single(AuditLines());
+        var entries = AuditLines();
+        Assert.Equal(2, entries.Length);
+        var entry = entries[0];
         Assert.Equal("agent:machine1/sess-1", entry.GetProperty("principal").GetString());
         Assert.Equal("agent:upstream/parent", Assert.Single(entry.GetProperty("chain").EnumerateArray()).GetString());
         Assert.Equal("out", entry.GetProperty("direction").GetString());
@@ -63,6 +65,7 @@ public sealed class LiteAgentSendTests : IDisposable
         Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text))).ToLowerInvariant(),
             entry.GetProperty("dataSha256").GetString());
         Assert.DoesNotContain(text, entry.GetRawText());
+        Assert.DoesNotContain(text, entries[1].GetRawText());
     }
 
     [Theory]
@@ -87,15 +90,49 @@ public sealed class LiteAgentSendTests : IDisposable
     }
 
     [Theory]
+    [InlineData(LiteKind.Delivered)]
     [InlineData(LiteKind.Refused)]
     [InlineData(LiteKind.Undeliverable)]
     [InlineData(LiteKind.Unconfirmed)]
     [InlineData(LiteKind.Off)]
-    public async Task A_send_the_sender_fails_still_has_exactly_one_attempt_record(LiteKind kind)
+    public async Task Every_terminal_outcome_is_persisted_and_correlated_to_its_attempt(LiteKind kind)
     {
         sender.Next = new LiteOutcome(kind, "sender refusal", "relay-request");
         var reply = Assert.IsType<LiteSendReply>(await Send(hello, Body));
         Assert.Equal(kind.ToString().ToLowerInvariant(), reply.Outcome);
+        var entries = AuditLines();
+        Assert.Equal(2, entries.Length);
+        Assert.Equal("attempted", entries[0].GetProperty("outcome").GetString());
+        Assert.Equal(reply.Outcome, entries[1].GetProperty("outcome").GetString());
+        foreach (var field in new[] { "request", "principal", "chain", "direction", "action", "target", "dataSha256", "textLength" })
+        {
+            Assert.Equal(entries[0].GetProperty(field).GetRawText(), entries[1].GetProperty(field).GetRawText());
+        }
+        Assert.NotEqual(reply.Request, entries[1].GetProperty("request").GetString());
+        Assert.Equal("", entries[1].GetProperty("reason").GetString());
+    }
+
+    [Theory]
+    [InlineData(LiteKind.Delivered, false)]
+    [InlineData(LiteKind.Delivered, true)]
+    [InlineData(LiteKind.Refused, false)]
+    [InlineData(LiteKind.Refused, true)]
+    public async Task A_failed_terminal_append_surfaces_an_error_without_resending_or_claiming_nothing_was_sent(LiteKind kind, bool throws)
+    {
+        sender.Next = new LiteOutcome(kind, "private sender detail", "relay-request");
+        var calls = 0;
+        bool Append(AgentAuditEntry entry, string? text)
+        {
+            if (++calls == 1) { return audit.Append(entry, text); }
+            if (throws) { throw new IOException("private failure detail"); }
+            return false;
+        }
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            LiteAgentSend.HandleAsync(store, sender, hello, Json(), windows: true, appendAttempt: Append));
+
+        Assert.Equal("refused: auditUnwritable: the terminal agent audit outcome could not be written; the message may have been sent", error.Message);
+        Assert.Equal(2, calls);
+        Assert.Single(sender.Calls);
         Assert.Equal("attempted", Assert.Single(AuditLines()).GetProperty("outcome").GetString());
     }
 
@@ -210,7 +247,7 @@ public sealed class LiteAgentSendTests : IDisposable
         Assert.Equal("delivered", Assert.IsType<LiteSendReply>(await wired(hello, LiteAgentSend.Op, Json())).Outcome);
         var unwired = LocalApi.Handler(null!, null!, null!, null, null, store, null, audit: audit);
         Assert.Equal("off", Assert.IsType<LiteSendReply>(await unwired(hello, LiteAgentSend.Op, Json())).Outcome);
-        Assert.Equal(2, AuditLines().Length);
+        Assert.Equal(4, AuditLines().Length);
     }
 
     [Fact]

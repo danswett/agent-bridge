@@ -46,11 +46,18 @@ public static partial class LiteAgentSend
         catch (Exception) { throw AuditUnavailable(); }
         if (!written) { throw AuditUnavailable(); }
         var outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct);
-        return new LiteSendReply(outcome.Kind.ToString().ToLowerInvariant(), outcome.Code, outcome.Request);
+        var name = outcome.Kind.ToString().ToLowerInvariant();
+        try { written = appendAttempt?.Invoke(attempt with { Outcome = name }, text) == true; }
+        catch (Exception) { throw TerminalAuditUnavailable(); }
+        if (!written) { throw TerminalAuditUnavailable(); }
+        return new LiteSendReply(name, outcome.Code, outcome.Request);
     }
 
     static InvalidOperationException AuditUnavailable() =>
         new("refused: auditUnwritable: the agent audit log could not be written; nothing was sent");
+
+    static InvalidOperationException TerminalAuditUnavailable() =>
+        new("refused: auditUnwritable: the terminal agent audit outcome could not be written; the message may have been sent");
 
     [GeneratedRegex(@"^[A-Za-z0-9._-]{1,64}\z")]
     private static partial Regex MachinePattern();
