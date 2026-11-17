@@ -14,15 +14,15 @@ public sealed class HostwBundleTests
     internal static PackageDigest Digest(byte[] bytes) => new(PackageDigest.Sha256, Convert.ToHexString(SHA256.HashData(bytes)));
 
     // Synthetic PE/bundle bytes following .NET 10's published v6 manifest format; never executable.
-    internal static byte[] Bundle(string? omit = null, bool compressed = false, string? extra = null)
+    internal static byte[] Bundle(string? omit = null, bool compressed = false, string? extra = null, string? config = null, string? deps = null)
     {
         var files = new Dictionary<string, (byte Type, byte[] Bytes)>
         {
             [Host + ".dll"] = (1, [1, 2, 3]), ["System.Private.CoreLib.dll"] = (1, [4, 5, 6]),
             ["dependency.dll"] = (1, Enumerable.Repeat((byte)7, 128).ToArray()),
             ["coreclr.dll"] = (2, [8, 9]), ["clrjit.dll"] = (2, [10, 11]),
-            [Host + ".deps.json"] = (3, Encoding.UTF8.GetBytes(Deps)),
-            [Host + ".runtimeconfig.json"] = (4, Encoding.UTF8.GetBytes(Config)),
+            [Host + ".deps.json"] = (3, Encoding.UTF8.GetBytes(deps ?? Deps)),
+            [Host + ".runtimeconfig.json"] = (4, Encoding.UTF8.GetBytes(config ?? Config)),
         };
         if (omit is not null) { files.Remove(omit); }
         if (extra is not null) { files.Add(extra, (1, [12])); }
@@ -33,13 +33,21 @@ public sealed class HostwBundleTests
         image.Position = 0x3c; writer.Write(0x80);
         image.Position = 0x80; writer.Write(0x4550); writer.Write((ushort)0x8664); writer.Write((ushort)1);
         image.Position = 0x94; writer.Write((ushort)240); writer.Write((ushort)0x22); writer.Write((ushort)0x20b);
-        image.Position = 0xb8; writer.Write(0x140000000UL); writer.Write(4096); writer.Write(512);
+        image.Position = 0xb0; writer.Write(0x140000000UL); writer.Write(4096); writer.Write(512);
         image.Position = 0xd0; writer.Write(8192); writer.Write(512);
-        image.Position = 0xf4; writer.Write(16);
+        image.Position = 0x104; writer.Write(16); writer.Write(0x1040); writer.Write(64);
         image.Position = 0x188; writer.Write(Encoding.ASCII.GetBytes(".rdata\0\0"));
         writer.Write(512); writer.Write(4096); writer.Write(512); writer.Write(512);
         image.Position = 0x218;
         writer.Write(Convert.FromHexString("8B1202B96A612038727B930214D7A03213F5B9E6EFAE3318EE3B2DCE24B36AAE"));
+        string[] exports = ["g_CLREngineMetrics", "CLRJitAttachState", "DotNetRuntimeInfo", "g_dacTable", "MetaDataGetDispenser", "DotNetRuntimeContractDescriptor"];
+        image.Position = 0x258; writer.Write(exports.Length); writer.Write(0); writer.Write(0x1080);
+        image.Position = 0x280; var nameAt = 0x2a0;
+        foreach (var name in exports)
+        {
+            writer.Write(4096 + nameAt - 512); var next = image.Position; image.Position = nameAt;
+            writer.Write(Encoding.ASCII.GetBytes(name + "\0")); nameAt = (int)image.Position; image.Position = next;
+        }
         image.Position = 1024;
         var entries = new List<(string Name, byte Type, long Offset, long Size, long Compressed)>();
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -95,6 +103,11 @@ public sealed class HostwBundleTests
     [InlineData("range")]
     [InlineData("truncated")]
     [InlineData("content")]
+    [InlineData("architecture")]
+    [InlineData("json-location")]
+    [InlineData("oversized")]
+    [InlineData("exports")]
+    [InlineData("static-runtime")]
     public void Malformed_partial_or_internally_mismatched_manifests_are_rejected(string damage)
     {
         var bytes = Bundle();
@@ -106,6 +119,11 @@ public sealed class HostwBundleTests
             case "range": BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(header + 65), header); break;
             case "truncated": bytes = bytes[..^5]; break;
             case "content": bytes[1024] ^= 0xff; break;
+            case "architecture": BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(0x84), 0xAA64); break;
+            case "json-location": BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(header + 25), 1024); break;
+            case "oversized": BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(header + 73), long.MaxValue); break;
+            case "exports": BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x10c), 0); break;
+            case "static-runtime": bytes[0x2a0] = (byte)'X'; break;
         }
         Assert.Throws<InvalidDataException>(() => Verify(bytes));
     }
@@ -119,4 +137,23 @@ public sealed class HostwBundleTests
     [Fact]
     public void A_bundle_with_the_wrong_custody_digest_is_rejected() =>
         Assert.Throws<PackageMismatchException>(() => Verify(Bundle(), new(PackageDigest.Sha256, new string('0', 64))));
+
+    [Fact]
+    public void Native_members_follow_the_published_embedded_inventory_not_prebundle_sidecars() =>
+        Verify(Bundle(omit: "coreclr.dll", deps: Deps.Replace("\"coreclr.dll\":{},", "")));
+
+    [Theory]
+    [InlineData("framework")]
+    [InlineData("target")]
+    [InlineData("graph")]
+    public void Embedded_configuration_must_describe_the_complete_matching_self_contained_closure(string damage)
+    {
+        var bytes = damage switch
+        {
+            "framework" => Bundle(config: """{"runtimeOptions":{"framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}"""),
+            "target" => Bundle(deps: Deps.Replace("win-x64", "win-arm64")),
+            _ => Bundle(deps: Deps.Replace("\"runtime\":", "\"dependencies\":{\"absent\":\"1.0\"},\"runtime\":")),
+        };
+        Assert.Throws<InvalidDataException>(() => Verify(bytes));
+    }
 }
