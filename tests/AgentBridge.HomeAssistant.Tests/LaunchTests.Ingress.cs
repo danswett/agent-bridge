@@ -40,6 +40,20 @@ public sealed partial class LaunchTests
     }
 
     [Fact]
+    public async Task A_burst_larger_than_the_detail_cache_keeps_every_waiting_payload()
+    {
+        await using var c = await Ready();
+        for (var i = 0; i < 25; i++) { await SnapshotPayload(c, $"ingress-burst-{i:D2}", $"words {i}"); }
+        for (var i = 0; i < 25; i++) { c.Observe(ha.Press(Entity("button", "new_session"), AgentUser)); }
+        for (var i = 0; i < 26; i++)
+        {
+            await Pass(c);
+            await c.DeliveredAsync();
+        }
+        Assert.Equal(Enumerable.Range(0, 25).Select(i => $"words {i}"), launched.Select(r => r.Prompt));
+    }
+
+    [Fact]
     public async Task A_payload_overwritten_by_the_previous_requests_clear_is_still_launched()
     {
         await using var c = await Ready();

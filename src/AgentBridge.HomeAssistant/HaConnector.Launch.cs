@@ -477,7 +477,7 @@ public sealed partial class HaConnector
         if (!hasId && !hasSettings) { return new("none"); }
         var id = idElement.ValueKind == JsonValueKind.String ? idElement.GetString() : null;
         if (id is not null && launchRequestsHandled.Contains(id, StringComparer.Ordinal)
-            && (!captured || launchOutcomes.FirstOrDefault(o => o["request"]!.GetValue<string>() == id)?["outcome"]?.GetValue<string>() != "waiting-press")) { return new("handled"); }
+            && (!captured || launchTombstones.FirstOrDefault(o => o["request"]!.GetValue<string>() == id)?["outcome"]?.GetValue<string>() != "waiting-press")) { return new("handled"); }
         var age = state.LastUpdated is { } published ? (pressedAt - published).TotalSeconds : double.PositiveInfinity;
         if (age < 0) { return new("newer"); }
         if (age > 60) { return new("stale"); }
