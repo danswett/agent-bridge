@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Protocol;
@@ -81,10 +82,69 @@ public sealed partial class ReplyTests
         sessions.End(A);
         await using var restarted = Connector();
         await Pass(restarted);
+        Assert.NotNull(new DurableInbox(InboxPath).Peek(Node));
+        await Pass(restarted);
+        Assert.NotNull(new DurableInbox(InboxPath).Peek(Node));
+        await Pass(restarted);
 
         Assert.Null(new DurableInbox(InboxPath).Peek(Node));
         Assert.Empty(JsonNode.Parse(File.ReadAllText(InboxPath))!["Messages"]!.AsArray());
         Assert.Empty(replied);
+    }
+
+    [Fact]
+    public async Task A_transiently_absent_published_session_keeps_its_queued_reply()
+    {
+        await using var c = await Ready();
+        c.Observe(ha.SendFromCard(Node, "survives discovery gap", rid: "gap"));
+        sessions.End(A);
+        await Pass(c);
+        Assert.NotNull(new DurableInbox(InboxPath).Peek(Node));
+        Idle();
+        for (var n = 0; n < 3; n++) { await Pass(c); await c.DeliveredAsync(); }
+
+        Assert.Equal("survives discovery gap", Assert.Single(replied).Text);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Inbox_overflow_is_acknowledged_refused_and_stays_refused_after_restart(bool totalLimit)
+    {
+        var release = new TaskCompletionSource<ReplyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = _ => release.Task;
+        await using (var c = await Ready())
+        {
+            var messages = Enumerable.Range(0, totalLimit ? 1000 : 100).Select(n =>
+            {
+                var node = totalLimit ? "other" + n / 100 : Node;
+                var hit = ha.SendFromCard(node, "accepted", rid: "seed" + n);
+                return new InboxMessage(node, "seed" + n, "sender", JsonSerializer.Serialize(hit.State), time.GetUtcNow(), null);
+            }).ToList();
+            File.WriteAllText(InboxPath, JsonSerializer.Serialize(new { Version = 1, Messages = messages }));
+            var mark = ha.Log.Count;
+            try
+            {
+                c.Observe(ha.SendFromCard(Node, "must not be typed", rid: "overflow", sender: "overflow-sender"));
+                await Pass(c);
+                Assert.Contains(NotesSince(mark), n => n.Summary == "Reply NOT sent" &&
+                    n.Attributes.TryGetProperty("reply_ack", out var a) &&
+                    a.GetProperty("rid").GetString() == "overflow" && a.GetProperty("outcome").GetString() == "refused" &&
+                    a.GetProperty("sender").GetString() == "overflow-sender");
+            }
+            finally { release.TrySetResult(new ReplyResult(AnswerOutcome.Delivered)); }
+            await c.DeliveredAsync();
+        }
+        new DurableInbox(InboxPath).Deliver(totalLimit ? "other0" : Node, "seed0", time.GetUtcNow());
+        await using var restarted = Connector();
+        await Pass(restarted);
+        var retryMark = ha.Log.Count;
+        await Do(restarted, ha.SendFromCard(Node, "retry after capacity frees", rid: "overflow"));
+
+        Assert.Contains(NotesSince(retryMark), n => n.Attributes.TryGetProperty("reply_ack", out var a) &&
+            a.GetProperty("rid").GetString() == "overflow" && a.GetProperty("outcome").GetString() == "refused" &&
+            a.GetProperty("duplicate").GetBoolean());
+        Assert.DoesNotContain(replied, r => r.Text is "must not be typed" or "retry after capacity frees");
     }
 
     [Fact]

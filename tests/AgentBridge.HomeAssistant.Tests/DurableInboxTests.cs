@@ -171,21 +171,55 @@ public sealed class DurableInboxTests : IDisposable
         Assert.Null(new DurableInbox(Pathname).Peek("one"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Full_queues_persist_refused_rids_without_displacing_accepted_replies(bool totalLimit)
+    {
+        var messages = Enumerable.Range(0, totalLimit ? 1000 : 100)
+            .Select(n => new InboxMessage(totalLimit ? "node" + n / 100 : "node0", "r" + n,
+                "sender", "message", Now, null)).ToList();
+        File.WriteAllText(Pathname, JsonSerializer.Serialize(new { Version = 1, Messages = messages }));
+        var inbox = new DurableInbox(Pathname);
+        var node = totalLimit ? "overflow" : "node0";
+        var refused = inbox.Enqueue(node, "overflow", "sender", "private overflow", Now);
+
+        Assert.Equal("refused", refused.Outcome);
+        Assert.NotNull(refused.DeliveredAt);
+        Assert.Empty(refused.Payload);
+        Assert.DoesNotContain("private overflow", File.ReadAllText(Pathname));
+        var saved = JsonDocument.Parse(File.ReadAllText(Pathname)).RootElement.GetProperty("Messages")
+            .Deserialize<List<InboxMessage>>()!;
+        Assert.All(messages, m => Assert.Contains(m, saved));
+        inbox.Deliver("node0", "r0", Now);
+        inbox = new DurableInbox(Pathname);
+        Assert.Equal(refused, inbox.Enqueue(node, "overflow", "changed", "retry", Now.AddMinutes(1)));
+        Assert.Null(inbox.Enqueue(node, "new", "sender", "new", Now).DeliveredAt);
+        Assert.Equal("r1", inbox.Peek("node0")!.Rid);
+    }
+
     [Fact]
-    public void Inbox_caps_reject_full_queues_and_prune_delivered_entries()
+    public void Absence_requires_three_consecutive_passes_and_presence_resets_the_guard()
     {
         var inbox = new DurableInbox(Pathname);
-        for (var n = 0; n < 100; n++) { inbox.Enqueue("node0", "r" + n, "sender", "message", Now); }
-        Assert.Throws<InvalidOperationException>(() => inbox.Enqueue("node0", "overflow", "sender", "message", Now));
+        inbox.Enqueue("one", "a", "sender", "pending", Now);
+        inbox.Enqueue("two", "b", "sender", "delivered", Now);
+        inbox.Deliver("two", "b", Now);
+        IReadOnlySet<string> both = new HashSet<string> { "one", "two" };
+        IReadOnlySet<string> none = new HashSet<string>();
 
-        for (var node = 1; node < 10; node++)
-        {
-            for (var n = 0; n < 100; n++) { inbox.Enqueue("node" + node, "r" + n, "sender", "message", Now); }
-        }
-        Assert.Throws<InvalidOperationException>(() => inbox.Enqueue("overflow", "full", "sender", "message", Now));
-        inbox.Deliver("node0", "r0", Now);
-        Assert.Equal("full", inbox.Enqueue("overflow", "full", "sender", "message", Now).Rid);
-        Assert.Equal("r1", inbox.Peek("node0")!.Rid);
+        inbox.ForgetExcept(none);
+        inbox.ForgetExcept(none);
+        Assert.NotNull(inbox.Peek("one"));
+        Assert.NotNull(inbox.Find("two", "b"));
+        inbox.ForgetExcept(both);
+        inbox.ForgetExcept(none);
+        inbox.ForgetExcept(none);
+        Assert.NotNull(inbox.Peek("one"));
+        Assert.NotNull(inbox.Find("two", "b"));
+        inbox.ForgetExcept(none);
+        Assert.Null(inbox.Peek("one"));
+        Assert.Null(inbox.Find("two", "b"));
     }
 
     [Fact]
