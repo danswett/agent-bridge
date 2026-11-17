@@ -1298,6 +1298,22 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData("app")]
+    [InlineData("host")]
+    [InlineData("launcher")]
+    public async Task A_profile_refusal_banner_names_the_blocking_profile_and_process(string kind)
+    {
+        var refusal = $"bridge profile 'work' {kind} (pid 4242) runs from this installation";
+        var banner = new AppUpdateViewModel(() => "0.2.0", _ => Task.FromResult<string?>(refusal));
+
+        Assert.Equal(refusal, await banner.RestartAsync(null));
+
+        Assert.Equal($"The update didn't install because {refusal}.", banner.Message);
+        Assert.True(banner.Failed);
+        Assert.Equal("Try again", banner.ActionLabel);
+    }
+
+    [Theory]
     [InlineData("another profile's app (pid 4242) runs from this installation", "another bridge profile is running from this installation")]
     [InlineData("agent-bridge-host (pid 12) runs and cannot be looked at", "another bridge profile is running from this installation")]
     [InlineData(@"installing 0.2.0 failed: C:\Users\dana\AppData\Local\AgentBridge\Update.exe is missing", "the installer reported an error")]
