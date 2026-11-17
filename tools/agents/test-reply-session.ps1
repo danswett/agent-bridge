@@ -30,9 +30,12 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
         $body = [IO.StreamReader]::new($ctx.Request.InputStream).ReadToEnd()
         $out = @{}
         if ($path -eq 'services/script/agent_bridge_reply_payload') {
-            $payload = ($body | ConvertFrom-Json).payload
-            $fake.Slot = $payload | ConvertFrom-Json
-            [void]$fake.Payloads.Add($payload)
+            if ($fake.Mode -eq 'retry-prep-fails' -and $fake.Payloads.Count -gt 0) { $ctx.Response.StatusCode = 503 }
+            else {
+                $payload = ($body | ConvertFrom-Json).payload
+                $fake.Slot = $payload | ConvertFrom-Json
+                [void]$fake.Payloads.Add($payload)
+            }
         }
         elseif ($path -eq 'services/button/press') {
             # The host takes whatever is in the single slot when Send is pressed.
@@ -57,6 +60,9 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
                 [void]$fake.Delivered.Add($slot.text)
                 $fake.Ack = @{ rid = $slot.rid; outcome = 'delivered'; at = [DateTime]::UtcNow.Ticks }
                 if ($fake.Moves) { $fake.Status = 'working'; $fake.StatusChanged = [DateTime]::UtcNow.ToString('o') }
+            }
+            elseif ($slot -and $fake.Mode -eq 'retry-prep-fails') {
+                $fake.Ack = @{ rid = $slot.rid; outcome = 'unconfirmed'; at = [DateTime]::UtcNow.Ticks; error = 'the session ended before it recorded the reply' }
             }
             elseif ($slot -and $fake.Mode -eq 'deliver' -and $fake.Rids.Contains($slot.rid)) {
                 # As the host does: a rid it already delivered is re-acked as a duplicate, and nothing is typed.
@@ -136,6 +142,10 @@ try {
     $fake.Instance = 'host-run-1'; $fake.PressRids.Clear(); $fake.Delivered.Clear(); $fake.Payloads.Clear()
     $r = Send 'do not duplicate after host restart' 'r-restart'
     Assert ($r.Exit -eq 2 -and $fake.PressRids.Count -eq 1 -and $fake.Delivered.Count -eq 1 -and $r.Out -match 'outcome=unconfirmed') 'a changed receiver instance prevents retry and preserves first-submission uncertainty'
+    $fake.Mode = 'retry-prep-fails'; $fake.Ack = $null; $fake.Instance = 'host-run-1'
+    $fake.PressRids.Clear(); $fake.Delivered.Clear(); $fake.Payloads.Clear()
+    $r = Send 'retry preparation can fail' 'r-prep-fails'
+    Assert ($r.Exit -eq 2 -and $fake.PressRids.Count -eq 1 -and $r.Out -match 'outcome=unconfirmed') 'retry preparation failure preserves first-submission uncertainty'
     foreach ($kind in 'gone', 'offline', 'gone-after-first') {
         $fake.Mode = if ($kind -eq 'gone-after-first') { $kind } else { 'deliver' }
         $fake.Live = $kind -ne 'gone'; $fake.Online = $kind -ne 'offline'
