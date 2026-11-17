@@ -82,7 +82,7 @@ with the wrong type):
 |---|---|---|
 | `HelloResult` | `protocol` | |
 | `MachineInfo` | `id` | |
-| `Session` | `id` | |
+| `Session` | `id`, `machine` | |
 | `SessionLoad` ([v1-machine-load.md](v1-machine-load.md)) | `session` | |
 | `Subagent` | `id` | |
 | `ToolCall` | `id` | |
@@ -399,6 +399,11 @@ unknown is not confirmed none or false. Idle does not mean work-finished. Once d
 observes a session ended, removal bypasses upsert coalescing and quiet-session holding;
 list/get and the next subscription exclude it immediately. A discovery hold is not
 evidence that a session ended.
+
+This cut emits `owner`, `pr` and `finished` as `{ "state": "unknown" }` on every
+host-bound row; discovering known values or confirmed none/false is out of scope.
+It does not complete the all-fields Done-when for
+[the host roster issue](https://github.com/danswett/agent-bridge/issues/2642).
 
 A session can change while the snapshot is being sent; its upsert then simply arrives
 again. When a channel closes, the client subscribes again on the new channel.
