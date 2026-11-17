@@ -64,6 +64,8 @@ static partial class SelfTest
             await CaptureFrame(root);
             var later = TrackedTop();
             var elapsed = clock.Elapsed.TotalMilliseconds;
+            check(later >= moving - 5 && later <= target + 1,
+                $"interrupted shift continues from its drawn position ({moving}, {later}, {target})");
             var progress = (later - moving) / (target - moving);
             var t = Math.Clamp(elapsed / Motion.Catalogue.Enter("Shift", true).Duration.TotalMilliseconds, 0, 1);
             var standard = t * t * (3 - 2 * t);

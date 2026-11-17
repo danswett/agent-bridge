@@ -477,6 +477,9 @@ retargetable `shift` motion (#2105). This covers key and row-menu moves, drag/dr
 Most recent batches and #950 return-grace order changes; the dragged row still follows the
 pointer directly. The other #685 slices follow.
 
+Windows session-list neighbours use composition `Offset` shifts. The guarded fade for
+a departing row is a separate slice.
+
 Motion shows where something came from and where it went. It answers the person or a
 change, and never runs for its own sake. The values are in `tokens.json` under `motion`,
 generated as `--ab-motion-*` for the PWA and `AbMotion*` resources for the app
