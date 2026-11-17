@@ -4,6 +4,71 @@ namespace AgentBridge.App.Tests;
 
 public sealed class ConversationEndPinTests
 {
+    [Theory]
+    [InlineData("thumb")]
+    [InlineData("track")]
+    [InlineData("arrow")]
+    public void A_scrollbar_press_releases_the_pin_before_dragging_or_clicking_scrolls(string part)
+    {
+        var view = new SessionView();
+        var bar = new Microsoft.UI.Xaml.Controls.Primitives.ScrollBar { Parent = view.Scroller };
+        var source = new Microsoft.UI.Xaml.UIElement { Parent = bar };
+        var pressed = part == "thumb" ? new Microsoft.UI.Xaml.UIElement { Parent = source } : source;
+
+        view.Scroller.Press(pressed);
+
+        Assert.False(view.Pinned);
+        Assert.Equal(1, view.Releases);
+        // Layout can arrive before the first intermediate ViewChanged, or after the final one.
+        view.Follow();
+        view.Scrolling();
+        view.Scroller.VerticalOffset = 50;
+        view.Scroller.ScrollableHeight = 300;
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void Follow_does_not_correct_the_end_while_the_person_is_scrolling()
+    {
+        var view = new SessionView();
+        view.Scrolling();
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void An_in_flight_correction_still_follows_a_growing_end()
+    {
+        var view = new SessionView();
+        view.Scrolling(correction: 150);
+        view.Follow();
+        Assert.Equal([200.0], view.Scroller.Targets);
+        Assert.Equal(200, view.AnchorAt);
+    }
+
+    [Fact]
+    public void A_nested_scrollbar_or_conversation_content_does_not_release_the_pin()
+    {
+        var view = new SessionView();
+        var nested = new Microsoft.UI.Xaml.Controls.ScrollViewer { Parent = view.Scroller };
+        var bar = new Microsoft.UI.Xaml.Controls.Primitives.ScrollBar { Parent = nested };
+        view.Scroller.Press(new Microsoft.UI.Xaml.UIElement { Parent = bar });
+        view.Scroller.Press(new Microsoft.UI.Xaml.UIElement { Parent = view.Scroller });
+        Assert.True(view.Pinned);
+        Assert.Equal(0, view.Releases);
+    }
+
+    [Fact]
+    public void The_existing_wheel_release_still_leaves_the_readers_offset_alone()
+    {
+        var view = new SessionView();
+        view.Scroller.Wheel();
+        view.Follow();
+        Assert.False(view.Pinned);
+        Assert.Empty(view.Scroller.Targets);
+    }
+
     [Fact]
     public void A_pin_follows_extent_growth_while_an_earlier_correction_is_still_in_flight()
     {

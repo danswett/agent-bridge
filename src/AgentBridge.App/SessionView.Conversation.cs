@@ -96,7 +96,7 @@ public sealed partial class SessionView
         };
         scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); ReleasePin(); };
         scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
-        scroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, _) => ReleasePin()), true);
+        HookConversationPointer(scroll);
         // Take the view only when focus actually asks to scroll out of it, not on every Tab.
         ConversationHeader.BringIntoViewRequested += FocusScroll;
         ConversationFooter.BringIntoViewRequested += FocusScroll;
@@ -431,21 +431,6 @@ public sealed partial class SessionView
         if (panning || scrolling || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
             || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
         if (a.Correction(anchorAt, scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight) is { } to) { Anchoring(scroll, to); }
-    }
-
-    // Older turns can finish measuring after KeepPlace restored an earlier end. Follow the
-    // measured end on layout and final view changes, including while an older target is pending.
-    void FollowPinnedEnd()
-    {
-        if (panning || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
-        if (ConversationEndPin.Correction(pinEnd, scroll.VerticalOffset, scroll.ScrollableHeight, anchoring) is { } to) { Anchoring(scroll, to); }
-    }
-
-    void Anchoring(ScrollViewer scroll, double to)
-    {
-        anchoring = to;
-        anchorAt = to;
-        scroll.ChangeView(null, to, null, disableAnimation: true);
     }
 
     static double Top(UIElement element, UIElement viewport) => element.TransformToVisual(viewport).TransformPoint(default).Y;

@@ -179,9 +179,6 @@ public sealed partial class SessionView
 
     void OnHistoryEarlier(object sender, RoutedEventArgs e) => LoadEarlier();
 
-    // The person is scrolling: the view is theirs from here, and stays where they leave it.
-    internal void ReleasePin() { pinEnd = false; anchoring = null; pinReleases++; }
-
     // Content changed in the conversation can reflow it, so the place is put back once layout has settled:
     // the end if pinned, else the stored turn's screen position through a prepend (#1593).
     // Without a visible stored turn, keep the previous offset if the layout moved it up (#1635).
