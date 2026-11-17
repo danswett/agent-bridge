@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 const root = new URL('../../../', import.meta.url);
 const files = [
   'tools/ha-contract/Export-HaContract.ps1',
+  'tools/ha-contract/Test-HaContractDrift.ps1',
   'src/AgentBridge.HomeAssistant/HaContract.cs',
   'src/AgentBridge.App/SelfTest.MachineTabs.cs',
   'quality/merge-rule.yml',
