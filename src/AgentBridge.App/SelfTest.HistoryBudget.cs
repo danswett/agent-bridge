@@ -189,8 +189,23 @@ static partial class SelfTest
             await CheckPostedInput(window, check, result);
             // #2483: hosted ARM64 can lose activation to the Microsoft account popup.
             AcquireNativeForeground(window.Handle);
+            bool FocusInLane()
+            {
+                for (var focused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) as DependencyObject;
+                    focused is not null; focused = VisualTreeHelper.GetParent(focused))
+                {
+                    if (ReferenceEquals(focused, window.Sessions.Rows)) { return true; }
+                }
+                return false;
+            }
+            // Choose changes selection, not focus. Replacing history under inherited MessageTime
+            // focus asks WinUI to bring it into view and releases the end pin (#2018).
+            var laneFocusedBeforeReopen = window.Sessions.Rows.Focus(FocusState.Programmatic) && FocusInLane();
+            var focusBeforeReopen = FocusedName(window);
             Away(window, main);
             var pinnedView = await Choose(window, main, id, "Response");
+            check(laneFocusedBeforeReopen && FocusInLane(),
+                $"reopens pinned history from the session lane without inherited conversation focus (before: {focusBeforeReopen}; after: {FocusedName(window)})");
             Button? pinnedPin = null, pinnedDetails = null;
             var controlsUnavailable = false;
             try { pinnedPin = ById<Button>(away, "HeaderPin"); pinnedDetails = ById<Button>(away, "Details"); }
@@ -220,6 +235,7 @@ static partial class SelfTest
                 var pinnedFill = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, pinned };
                 ObservePinned(pinnedObserver, pinnedSamples, GrowthStage.PinnedAfter, pinnedFill.drawn, pinned, pinnedFill.offset, pinnedFill.extent);
                 result["historyPinnedFill"] = pinnedFill;
+                result["historyPinnedReopen"] = new { laneFocusedBeforeReopen, focusBeforeReopen, laneFocusedAfterFill = FocusInLane(), focusAfterFill = FocusedName(window) };
                 const string pinnedMessage = "finishes older drawing at the end before focus moves away";
                 var foregroundMatches = GetForegroundWindow() == window.Handle;
                 var hostedArm64 = Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true"
