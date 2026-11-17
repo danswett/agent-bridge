@@ -321,6 +321,8 @@ public sealed class FleetPublisherTests
     internal sealed class Source : ISessionSource
     {
         public List<Session> Sessions = Enumerable.Range(1, 3).Select(NewSession).ToList();
+        public Func<string, SessionProcess?> Binding = _ => null;
+        public SessionProcess? ProcessOf(string id) => Binding(id);
         public DiscoveryHeld? Held { get; set; }
         public long Revision => 0;
         public event EventHandler<SessionChange>? Changed { add { } remove { } }

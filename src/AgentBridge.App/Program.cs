@@ -33,6 +33,7 @@ public static class Program
             .Run();
 
         var options = AppOptions.Parse(args);
+        if (options.LiveListReplay) { Paths.DiagnosticRoot = Path.Combine(Path.GetDirectoryName(options.SelfTest!)!, "live-list-logs"); }
         if (options.SelfTest is not null) { SelfTestTrace.Start(); }
 
         // One window per profile: a second start shows the first one's window and leaves.

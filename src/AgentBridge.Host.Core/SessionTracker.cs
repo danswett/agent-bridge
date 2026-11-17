@@ -12,6 +12,9 @@ internal sealed class SessionTracker
 {
     readonly SessionSourceOptions _options;
     readonly TimeProvider _time;
+    readonly string? _hostId;
+    (long? Bytes, string? Unavailable)? _transcriptSize;
+    TranscriptObservation? _transcriptObservation;
     readonly SessionState _state = new();
     readonly TranscriptParser _parser;
     TranscriptTail? _tail;
@@ -39,10 +42,11 @@ internal sealed class SessionTracker
     // when it could not (not working, or already showing another attention).
     (SessionStatus Effective, DateTimeOffset? LastEvent, bool Background, IReadOnlyList<Subagent>? Subagents, int? More)? _stall;
 
-    public SessionTracker(DiscoveredSession discovered, SessionSourceOptions options, TimeProvider time)
+    public SessionTracker(DiscoveredSession discovered, SessionSourceOptions options, TimeProvider time, string? hostId = null)
     {
         _options = options;
         _time = time;
+        _hostId = hostId;
         Discovered = discovered;
         _firstSeen = time.GetUtcNow();
         _parser = discovered.Agent switch
@@ -66,7 +70,18 @@ internal sealed class SessionTracker
         // rebuilt and re-serialised every session, changed or not: about 35 MB/min of the host's
         // allocation (#608).
         var changed = _built is null || discovered != Discovered;
+        var pathChanged = discovered.TranscriptPath != Discovered.TranscriptPath;
         Discovered = discovered;
+        if (_hostId is not null)
+        {
+            var size = TranscriptFileSize.Read(discovered.TranscriptPath);
+            if (_transcriptSize != size || pathChanged)
+            {
+                _transcriptSize = size;
+                _transcriptObservation = new(_time.GetUtcNow(), "file-size", _hostId);
+                changed = true;
+            }
+        }
         if (discovered.TranscriptPath is { } path)
         {
             if (_tail is null || !string.Equals(_tail.Path, path, StringComparison.Ordinal))
@@ -342,6 +357,9 @@ internal sealed class SessionTracker
             StartedAt = ws?.CreatedAt ?? _state.StartedAt,
             UpdatedAt = _state.UpdatedAt ?? reg?.Updated ?? ws?.UpdatedAt ?? _firstSeen,
             ProcessId = d.ProcessId,
+            TranscriptBytes = _transcriptSize?.Bytes,
+            TranscriptBytesUnavailable = _transcriptSize?.Unavailable,
+            TranscriptObservation = _transcriptObservation,
             Question = question,
             WaitingOn = question?.Agent,
             Subagents = subagents,

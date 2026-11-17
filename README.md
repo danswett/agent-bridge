@@ -26,6 +26,9 @@ reviews and handoffs. Fresh agent sessions start with [AGENTS.md](AGENTS.md).
 > The architecture is in [docs/design.md](docs/design.md), and feature-by-feature parity
 > with evidence is in [docs/parity.md](docs/parity.md).
 
+**Trying the beta?** Start with the [first-draft tester guide](docs/tester-guide.md).
+It covers Windows install, connecting your phone, known issues, help and uninstall.
+
 ## Planned shape
 
 Nothing depends on Windows: the host, hook, relay, protocol and all product logic are

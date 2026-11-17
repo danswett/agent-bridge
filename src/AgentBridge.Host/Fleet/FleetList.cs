@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentBridge.Protocol;
+using AgentBridge.Roster;
 using AgentBridge.Transport;
 
 namespace AgentBridge.Host.Fleet;
@@ -35,6 +36,11 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
 {
     RelayClient? relay;
 
+    // Carried inert #2371 interface; verification remains that slice's responsibility.
+    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null) { }
+
+    public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames) => Parse(frames);
+
     public void Attach(RelayClient? connection) => Volatile.Write(ref relay, connection);
 
     public async Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => (await ReadScopedAsync(ct)).Machines;
@@ -45,7 +51,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
         var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
         if (!ReferenceEquals(current, Volatile.Read(ref relay))) { throw new InvalidOperationException("refused: the fleet connection changed during lookup"); }
-        return new(current.AccountId, Parse(frames));
+        return new(current.AccountId, Read(frames));
     }
 
     // Known-only machines have no sessions; registry liveness and supplied metadata take precedence.
