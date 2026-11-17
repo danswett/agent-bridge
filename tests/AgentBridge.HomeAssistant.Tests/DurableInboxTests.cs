@@ -52,6 +52,66 @@ public sealed class DurableInboxTests : IDisposable
     }
 
     [Fact]
+    public void A_restamped_retry_returns_the_original_message()
+    {
+        var inbox = new DurableInbox(Pathname);
+        var original = inbox.Enqueue("one", "a", "sender", "first", Now);
+
+        Assert.Equal(original, inbox.Enqueue("one", "a", "new sender", "restamped", Now.AddMinutes(1)));
+    }
+
+    [Fact]
+    public void Delivered_payloads_are_removed_without_losing_persisted_rid_deduplication()
+    {
+        var inbox = new DurableInbox(Pathname);
+        var original = inbox.Enqueue("one", "a", "sender", "private payload", Now);
+        var delivered = inbox.Deliver("one", "a", Now.AddMinutes(1));
+
+        Assert.Empty(delivered.Payload);
+        Assert.DoesNotContain("private payload", File.ReadAllText(Pathname));
+
+        var retry = new DurableInbox(Pathname).Enqueue("one", "a", "sender", "restamped", Now.AddHours(1));
+        Assert.Equal(original.Node, retry.Node);
+        Assert.Equal(original.Rid, retry.Rid);
+        Assert.Equal(original.Sender, retry.Sender);
+        Assert.Equal(original.QueuedAt, retry.QueuedAt);
+        Assert.Equal(delivered.DeliveredAt, retry.DeliveredAt);
+        Assert.Empty(retry.Payload);
+    }
+
+    [Fact]
+    public void Legacy_messages_without_rid_or_sender_get_defaults()
+    {
+        var inbox = new DurableInbox(Pathname);
+
+        var first = inbox.Enqueue("one", null!, null!, "first", Now);
+        var second = inbox.Enqueue("one", null!, null!, "second", Now);
+
+        Assert.NotEmpty(first.Rid);
+        Assert.NotEmpty(second.Rid);
+        Assert.NotEqual(first.Rid, second.Rid);
+        Assert.Equal("legacy", first.Sender);
+        Assert.Equal("legacy", second.Sender);
+    }
+
+    [Fact]
+    public void Inbox_caps_reject_full_queues_and_prune_delivered_entries()
+    {
+        var inbox = new DurableInbox(Pathname);
+        for (var n = 0; n < 100; n++) { inbox.Enqueue("node0", "r" + n, "sender", "message", Now); }
+        Assert.Throws<InvalidOperationException>(() => inbox.Enqueue("node0", "overflow", "sender", "message", Now));
+
+        for (var node = 1; node < 10; node++)
+        {
+            for (var n = 0; n < 100; n++) { inbox.Enqueue("node" + node, "r" + n, "sender", "message", Now); }
+        }
+        Assert.Throws<InvalidOperationException>(() => inbox.Enqueue("overflow", "full", "sender", "message", Now));
+        inbox.Deliver("node0", "r0", Now);
+        Assert.Equal("full", inbox.Enqueue("overflow", "full", "sender", "message", Now).Rid);
+        Assert.Equal("r1", inbox.Peek("node0")!.Rid);
+    }
+
+    [Fact]
     public async Task Concurrent_instances_keep_all_enqueues()
     {
         var first = new DurableInbox(Pathname);
