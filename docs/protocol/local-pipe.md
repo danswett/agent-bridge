@@ -90,6 +90,18 @@ the connection closes:
 
 ## Who may manage the host
 
+`host.workspace.fleetWorkers` reads or changes the stored fleet-worker tick for one
+approved workspace. Its data is `{ "workspace": "<approved absolute path>" }`, with
+optional `"fleetWorkers": true` or `false` to set it. No other keys are accepted.
+The result is `{ "workspace": "<expanded path>", "value": false, "defaultValue": false }`.
+The default is off; the boolean is stored as `fleetWorkers` on that entry in
+`launch.workspaces` in `config.json`, preserving other settings. A string entry is
+converted to an object only when changed. Each actual change writes one host-log
+audit line naming the workspace index, old and new values and local-app caller.
+Every call requires a freshly classified local app on the pipe, without an agent
+credential. Agents, other processes (including the host CLI) and remote channels
+are refused with a reason. This slice adds no app view or launch-policy enforcement.
+
 Design §6.3 invariant 13: no session the bridge launched, nor any agent process, may stop or
 restart its host. On 2026-10-15 an agent ran `agent-ha-bridge restart`. The new daemon took
 that agent for an unaccounted process, held discovery, and every resumable session vanished
@@ -316,7 +328,18 @@ the sender. An absent audit log, a false append or a thrown append raises the fi
 The sender is not called, and nothing is queued or retried. Early caller/input refusals are not
 audited in this slice. The record's `attempted` outcome is not delivery confirmation; its local
 attempt id is distinct from the sender's relay request id. Only text hash and byte length are
-recorded, never the text. See [the audit log](../host-config.md#the-agent-audit-log).
+recorded, never the text.
+
+Before replying, the host appends the terminal `delivered`, `refused`, `undeliverable`,
+`unconfirmed` or `off` outcome with the same local attempt id, credential attribution,
+target and text hash/byte length. Free-form sender codes are not logged. If this append
+returns false or throws, the caller receives
+`refused: auditUnwritable: the terminal agent audit outcome could not be written; the message may have been sent`,
+not a successful reply; the host does not resend. A sender exception or cancellation
+is recorded as `unconfirmed` before being rethrown, without logging exception text:
+delivery cannot be established. If that terminal append fails, `auditUnwritable`
+takes precedence over the sender error.
+See [the audit log](../host-config.md#the-agent-audit-log).
 
 ### The MCP server (`mcp/`)
 

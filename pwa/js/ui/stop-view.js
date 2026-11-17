@@ -12,6 +12,7 @@
 import { h, icon } from './dom.js';
 import { UPDATING, holdOf } from './hold.js';
 import { LINGER_READ_MS } from './receipt.js';
+import { whileVisible } from './ticker.js';
 
 export const CONFIRM_NOTE = 'Press End session again to end it';
 export const LAPSED_NOTE = 'End session NOT confirmed';
@@ -90,7 +91,7 @@ export class EndSession {
 
   destroy() {
     this.#unwatch?.();
-    clearInterval(this.#tick);
+    this.#tick?.stop();
     clearTimeout(this.#busyTimer);
     clearTimeout(this.#lapseTimer);
   }
@@ -160,9 +161,9 @@ export class EndSession {
     const e = this.els;
     if (entry?.state === 'done' && entry.outcome === 'confirm' && this.#armed?.request !== entry.request) {
       this.#armed = { request: entry.request, at: this.now(), seconds: entry.detail?.confirmSeconds ?? 10 };
-      clearInterval(this.#tick);
-      this.#tick = setInterval(() => {
-        if (this.#left() === null) { clearInterval(this.#tick); this.#tick = null; }
+      this.#tick?.stop();
+      this.#tick = whileVisible(() => {
+        if (this.#left() === null) { this.#tick.stop(); this.#tick = null; }
         this.#show(this.entry);
       }, 1000);
     }
