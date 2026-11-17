@@ -181,6 +181,38 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task Authoritative_exit_closes_an_unconfirmed_launch_once_without_refunding_its_hourly_debit()
+    {
+        Policy(live: 1, machine: 2);
+        var first = Body();
+        launcher.BeforeStartOutcome = LaunchOutcome.Unconfirmed;
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await Launch(first)).Outcome);
+        launcher.Exited = true;
+        launcher.Fail(Guid.Parse(first.GetProperty("request").GetString()!));
+        launcher.Fail(Guid.Parse(first.GetProperty("request").GetString()!));
+        launcher.Exited = null;
+        launcher.BeforeStartOutcome = null;
+        var second = Body();
+        Assert.Equal(LaunchOutcome.Started, (await Launch(second)).Outcome);
+        launcher.Exited = true;
+        launcher.Fail(Guid.Parse(second.GetProperty("request").GetString()!));
+        launcher.Exited = null;
+        Assert.Contains("rate-limited", (await Launch(Body())).Reason);
+    }
+
+    [Fact]
+    public async Task A_failed_signal_with_unknown_process_evidence_does_not_free_live_capacity()
+    {
+        Policy(live: 1);
+        var first = Body();
+        launcher.BeforeStartOutcome = LaunchOutcome.Unconfirmed;
+        await Launch(first);
+        launcher.Fail(Guid.Parse(first.GetProperty("request").GetString()!));
+        launcher.BeforeStartOutcome = null;
+        Assert.Contains("live-limit", (await Launch(Body())).Reason);
+    }
+
+    [Fact]
     public async Task The_hourly_cap_refuses_the_fourth_launch_and_records_the_reason()
     {
         for (var i = 0; i < 3; i++) { Assert.Equal(LaunchOutcome.Started, (await Launch(Body())).Outcome); }
@@ -207,6 +239,10 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
         public string? Principal;
         public LaunchOutcome? BeforeStartOutcome;
         public string[] Extras = [];
+        public bool? Exited;
+        public bool? RequestExited(Guid request) => Exited;
+        public event Action<Guid>? RequestFailed;
+        public void Fail(Guid request) => RequestFailed?.Invoke(request);
         public Action? BeforePrepare;
         readonly Dictionary<string, LaunchResult> results = [];
         public LaunchDispatchSnapshot CaptureDispatch(string agent, string? principal) => new(Extras, principal);
@@ -249,6 +285,38 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
 public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
 {
     private protected override bool UsesRelay => false;
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Only_a_proven_CreateProcess_failure_frees_live_capacity_and_neither_outcome_refunds_the_hour(bool proven)
+    {
+        File.WriteAllText(Path.Combine(f.Root, HostSettings.FileName), """
+            {"agents":{"enabled":true,"launch":{"enabled":true},
+              "inbound":{"local":{"launch":{"workspaces":["App"],"agents":["claude"],"permissions":"ask"}}},
+              "limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":1,"liveAgentLaunched":1,"agentLaunchedIdleHours":2}}}
+            """);
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture");
+        Git(app, "add", "README.md");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        var credentials = new AgentCredentials(f.Root, "machine");
+        var channel = new LocalApiAgentLaunchTests.Channel();
+        var at = DateTimeOffset.UtcNow;
+        var token = credentials.Mint("parent", "launch", 100, at, AgentProtocol.ScopeReadReplyLaunch);
+        credentials.Accept(channel, credentials.Check(token, new ProcessAncestry([new PeerProcess(100, at, "agent.exe")], true)).Accepted!);
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
+            credentials: credentials, agentWorktreeCheck: AgentLaunchWorktreeCheck.Check);
+        var handle = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher),
+            null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: credentials, audit: new(f.Root));
+        async Task<LaunchResult> Launch() => Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch,
+            JsonSerializer.SerializeToElement(new { request = Guid.NewGuid().ToString("D"), agent = "claude", workspace = "App", permissions = "ask" })));
+        starter.Throws = proven ? new System.ComponentModel.Win32Exception(2) : new IOException("start result unknown");
+        Assert.Equal(proven ? LaunchOutcome.Failed : LaunchOutcome.Unconfirmed, (await Launch()).Outcome);
+        starter.Throws = null;
+        Assert.Contains(proven ? "rate-limited" : "live-limit", (await Launch()).Reason);
+    }
 
     [Fact]
     public async Task A_permitted_pipe_launch_uses_the_real_worktree_checks_and_only_the_fake_process_starter()
