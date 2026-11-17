@@ -8,7 +8,7 @@ public sealed class FleetNameEnrollmentNoticeTests
     public void Disclosure_warns_that_the_relay_sees_the_label_and_excludes_private_details()
     {
         using var output = new StringWriter();
-        FleetNameEnrollmentNotice.WriteDisclosure(output);
+        FleetNameEnrollmentNotice.WriteDisclosure("SG Quality Lead", output);
         var text = output.ToString();
         Assert.Contains("The relay sees this label.", text, StringComparison.Ordinal);
         Assert.Contains("public-safe label", text, StringComparison.Ordinal);
@@ -23,8 +23,20 @@ public sealed class FleetNameEnrollmentNoticeTests
     {
         using var result = JsonDocument.Parse(json);
         using var output = new StringWriter();
-        FleetNameEnrollmentNotice.WriteWarning(result.RootElement, output);
+        FleetNameEnrollmentNotice.WriteWarning("SG Quality Lead", result.RootElement, output);
         Assert.Contains(expected, output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" \t ")]
+    public void Clearing_a_name_skips_the_disclosure_and_duplicate_warning(string name)
+    {
+        using var result = JsonDocument.Parse("""{"duplicateStatus":"unknown"}""");
+        using var output = new StringWriter();
+        FleetNameEnrollmentNotice.WriteDisclosure(name, output);
+        FleetNameEnrollmentNotice.WriteWarning(name, result.RootElement, output);
+        Assert.Empty(output.ToString());
     }
 
     [Fact]
@@ -32,7 +44,7 @@ public sealed class FleetNameEnrollmentNoticeTests
     {
         using var result = JsonDocument.Parse("""{"duplicateStatus":"absent"}""");
         using var output = new StringWriter();
-        FleetNameEnrollmentNotice.WriteWarning(result.RootElement, output);
+        FleetNameEnrollmentNotice.WriteWarning("SG Quality Lead", result.RootElement, output);
         Assert.Empty(output.ToString());
     }
 }
