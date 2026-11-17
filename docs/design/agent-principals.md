@@ -72,8 +72,9 @@ the third-party connector API that Home Assistant is the first client of.
   diamond, `driver: agent`, `driverPrincipal`, and `userMessageFrom: agent`. The silent
   wrong-token failure that AGENTS.md records for agent-ha-bridge (the 2026-09-29 blue card) can't
   happen, because an agent only ever holds an agent credential (design.md:503-506).
-* **G3. Least authority.** Read, reply and launch only. Never `session.answer` on an approval,
-  never `launch.trust.answer`, never `stop`, `transfer`, `update`, `forget`, settings or pairing.
+* **G3. Least authority.** Read, reply and launch, plus only Q12's safeguarded fleet-stop
+  exception. Never `session.answer` on an approval, never `launch.trust.answer`, never `stop`
+  outside Q12, `transfer`, `update`, `forget`, settings or pairing.
   Never an **unattended** reply into an allow-all session, and never a launch that isn't
   explicitly `ask` (§5.2, §5.3). The owner's opt-ins (§5.7) add a per-message approval, a
   same-account setting the owner enables knowingly, a time-limited coordination group the owner
@@ -3092,7 +3093,7 @@ grants because both are "not a person".
 | Issued by | The host, at launch or adoption, under the machine's policy (§3.2, §3.5) | **The owner**, approving the full public key at the **selected host** (full-key transfer, #394 "Proposed enrollment sequence", steps 1-3), and in the roster after #55 (§8.7) | Both owners: link code plus each side's presence-signed statement (§7.3) | Person's devices, mutual codes (#391 §4) |
 | Authenticates as | `AGENT_BRIDGE_TOKEN` + process ancestry on the local pipe (§3.4); its host's channel for remote | Noise static key (full key, not routing id), plus a **key-bound scoped relay credential** for admission (#394, "Grant and enforcement") | Noise static key as a relay guest (§7.3), plus the envelope signature | Noise static key, plus the account token |
 | Grants | read, reply, launch (`ask`) through the owning host, under the target's policy (§5) | **First grant: read-only on one selected host** (§8.6). Nothing else, whatever agents may do | Each side's `expose` scope (§7.4) | design.md §5.6 |
-| Never | Approvals, folder trust, stop, transfer, allow-all, administration | Approvals, folder trust, **any write**, administration, blobs, push, usage, delegation | All of those | Person-only actions need person commands (#391 §7.2) |
+| Never | Approvals, folder trust, stop outside Q12's safeguarded fleet exception, transfer, allow-all, administration | Approvals, folder trust, **any write**, administration, blobs, push, usage, delegation | All of those | Person-only actions need person commands (#391 §7.2) |
 | Lifetime | The session's process, ≤ 7 days (§3.3) | An owner-set grant expiry at the host. Short access credentials renewed by proving the same key, never extending the grant (#394 "Expiry, revocation and failures": ≤ 15 min proposed) | Link expiry (30 days) | Until removed |
 | Revoked by | Process exit, resume, owner at the machine, policy change, expiry (§3.4) | **The owner at the host, even with the relay down**. Also relay revocation of the credential, and roster removal after #55. Closes its channels and subscriptions at once (#394) | Either owner, alone (§7.7) | Roster removal (#391 §6) |
 | Restart and restore | Hash records bound to pid and start time. A session's process can outlive the host, so a store-only restore can leave a restored record matching a live process: the conversation is then `unknown:<machine>` (§8.4), but the restore also undoes an owner's `agents revoke` or narrowed scope while that process runs, a residual of same-user store access (§1.3) | Host store fails closed when unreadable. A restore needs an owner trust reset and re-approval: no automatic reactivation of old grants (#394; #407's store generations) | Statement versions are monotone, and an older version is refused | #391 §6.3 freshness, §7.2 replay floor |
@@ -3590,6 +3591,9 @@ first. **Production Home Assistant (C5) waits for the trust anchor (Q16), the re
 In addition to design.md §5.1 (:348-361) and #391 §2.
 
 ### 10.1 Single account
+
+**Q12 exception:** the tools-only agent row's stop prohibition is superseded only for
+Q12's safeguarded agent-started fleet-session case. All other prohibitions remain.
 
 | Party | Assumption | Must not be able to | Can (residual) |
 |---|---|---|---|
