@@ -114,7 +114,7 @@ public sealed class HostCliProcessTests(ITestOutputHelper output)
         Assert.Equal([Path.Combine(home, ".agent-bridge")], isolated.UsageProbeRoots);
     }
 
-    static Process StartFixtureAgent(Fixture fixture)
+    internal static Process StartFixtureAgent(Fixture fixture)
     {
         // A renamed native shell blocked on our stdin keeps discovery's matching pid alive.
         var executable = Path.Combine(fixture.Root, OperatingSystem.IsWindows() ? "copilot.exe" : "copilot");

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AgentBridge.AgentEnvelope;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -14,6 +15,7 @@ public sealed record AgentCredential(string Id, string Session, string LaunchId,
     string Scope, int Depth, string[] Chain, DateTimeOffset IssuedAt, DateTimeOffset ExpiresAt,
     string Kind = "session", string? Principal = null)
 {
+    public bool FleetLaunch { get; init; }
     // Record construction only; minting and persisting a script token are separate operations.
     public static AgentCredential Script(string id, string machine, string name, DateTimeOffset issuedAt, TimeSpan? lifetime = null)
     {
@@ -85,6 +87,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     public AgentCredentials(string folder, string machine, TimeProvider? time = null, Action<string>? log = null, Func<int, DateTimeOffset, bool>? rootAlive = null)
     {
         LaunchGate = new AgentLaunchGate(folder);
+        FleetGrant = new FleetLaunchGrant(folder);
         this.rootAlive = rootAlive ?? ((_, _) => true);
         path = Path.Combine(folder, FileName);
         this.machine = machine;
@@ -96,6 +99,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     public string? Problem { get { lock (gate) { return problem; } } }
 
     internal AgentLaunchGate LaunchGate { get; }
+    internal FleetLaunchGrant FleetGrant { get; }
+    internal bool IsScriptConnection(IProtocolChannel channel) => connections.TryGetValue(channel, out var c) && c.Script;
 
     public int Count { get { lock (gate) { return records.Count; } } }
 
@@ -216,6 +221,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // A launch's token is issued before its process exists, so it is bound to none and answers to
     // nobody until Bind. Launched agents may read only: the agents policy (§5.1) widens that later.
     public string? Prepare(string session, string launchId) => Mint(session, launchId, 0, default, AgentProtocol.ScopeRead);
+    public string PrepareFleet(string session, string launchId) => Mint(session, launchId, 0, default, AgentProtocol.ScopeReadReply, depth: 1);
 
     // Called only by the person-authorized management path, never a remote/agent operation.
     // No token is returned. Both hashes stand until a successful fleet read retires the old one.
@@ -378,6 +384,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // principal, for as long as its credential stands.
     public AgentHelloResult Accept(IProtocolChannel channel, AgentCredential credential)
     {
+        // A script connection cannot shed its read-only limit by authenticating again.
+        CheckScriptOperation(channel, AgentProtocol.Hello);
         var principal = PrincipalOf(credential);
         connections.AddOrUpdate(channel, new Connection(credential.Id, principal, credential.Kind == "script"));
         return new AgentHelloResult(principal, credential.Kind == "script" ? AgentProtocol.ScopeRead : credential.Scope);
@@ -468,6 +476,27 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         }
     }
 
+    internal void SetFleetLaunch(string name, bool enabled)
+    {
+        lock (gate)
+        {
+            if (problem is not null) { throw new InvalidOperationException("script credentials are unavailable"); }
+            var matches = records.FindAll(r => r.Credential.Kind == "script"
+                && r.Credential.Principal == $"script:{machine}/{name}" && r.Credential.ExpiresAt > time.GetUtcNow());
+            if (matches.Count == 0) { throw new InvalidOperationException("no live script credential exists for that name"); }
+            if (enabled && FleetGrant.CheckGrant(matches[0].Credential with { FleetLaunch = true }) is { } why)
+            { throw new InvalidOperationException($"refused: {why}"); }
+            foreach (var r in matches) { records[records.IndexOf(r)] = r with { Credential = r.Credential with { FleetLaunch = enabled } }; }
+            try { Save(); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Fault($"could not save the fleet grant: {e.Message}");
+                throw new InvalidOperationException("could not save the fleet grant; the credential store is unavailable", e);
+            }
+            if (problem is not null) { throw new InvalidOperationException("could not save the fleet grant"); }
+        }
+    }
+
     // A session's process ended: whatever it held dies with it (§3.4 "Revocation").
     public int RevokeEnded(Func<int, DateTimeOffset, bool> sameProcessAlive)
     {
@@ -507,7 +536,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             {
                 if (r?.Credential is not { } c || r.Hash is not { Length: 64 } || !IsHex(r.Hash) || c.Id is not { Length: > 0 } || !ids.Add(c.Id)
                     || !AgentProtocol.Scopes.Contains(c.Scope, StringComparer.Ordinal) || c.Chain is null
-                    || !(c.Kind == "session" ? ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
+                    || !(c.Kind == "session" ? !c.FleetLaunch && ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
                 {
                     throw new JsonException("invalid credential record");
                 }
@@ -529,6 +558,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     void Save()
     {
+        if (problem is not null) { throw new IOException("the credential store is faulted; no changes were saved"); }
         var temp = path + ".tmp";
         File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(new Saved(1, [.. records]), Json));
         File.Move(temp, path, overwrite: true);
@@ -540,17 +570,14 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     internal static bool ValidScript(AgentCredential c, string machine)
     {
-        var prefix = $"script:{machine}/";
-        return ValidScriptPart(machine) && c.Principal is { Length: <= 128 } principal
-            && principal.StartsWith(prefix, StringComparison.Ordinal) && ValidScriptPart(principal[prefix.Length..])
+        return AgentPrincipal.ValidScriptIdentity(c.Principal, machine)
             && c.Session == "" && c.LaunchId == "" && c.RootPid == 0 && c.RootStartUtc == default
             && c.Scope == AgentProtocol.ScopeReadReply && c.Depth == 0 && c.Chain is { Length: 0 }
             && c.IssuedAt != default && c.ExpiresAt > c.IssuedAt
             && c.ExpiresAt - c.IssuedAt <= TimeSpan.FromDays(DefaultScriptDays);
     }
 
-    internal static bool ValidScriptPart(string? value) => value is { Length: > 0 and <= 64 } && value is not "." and not ".."
-        && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+    internal static bool ValidScriptPart(string? value) => AgentPrincipal.ValidScriptPart(value);
 
     // A session id is at most 36 characters (a UUID).
     internal static bool ValidSession(string? s) => s is { Length: > 0 and <= 36 } && s.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');

@@ -32,7 +32,7 @@ public interface IHeldProcess : IDisposable
     // True once the process has exited; false if it is still running after timeout.
     Task<bool> WaitForExitAsync(TimeSpan timeout);
 
-    // Null once termination is asked for; otherwise why it could not be.
+    // Null once termination is asked for; otherwise a host-log diagnostic, not client text.
     string? Terminate();
 }
 
@@ -296,12 +296,15 @@ public sealed class StopService : ISessionStopper
                 return Failed($"{started}, so the host stopped short of terminating the session; check at the machine");
             }
             var refused = held.Terminate();
+            if (refused is not null) { log($"end of {Short(session.Id)} (pid {pid}) could not terminate: {refused}"); }
             if (await held.WaitForExitAsync(options.TerminateWait))
             {
                 log($"ended {Short(session.Id)}: {(typed ? $"did not exit within {options.Grace.TotalSeconds:0} s; " : "")}terminated pid {pid}");
                 return Ended(true);
             }
-            return Failed(refused ?? "the session's process was terminated but has not exited; check at the machine");
+            return Failed(refused is not null
+                ? "the machine couldn't end the session"
+                : "the session's process was terminated but has not exited; check at the machine");
         }
     }
 

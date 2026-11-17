@@ -46,6 +46,7 @@ public sealed class UnattendedCommandsTests
         var (code, text) = Run(system, "setup-unattended", "--user", @"VM\hostuser");
         Assert.Equal(0, code);
         Assert.Equal(Password, system.Secret);
+        Assert.Contains($"Received {Password.Length} characters (masked)", text);
         Assert.DoesNotContain(Password, text);
         Assert.DoesNotContain(system.Winlogon, w => w.Key == "DefaultPassword" || w.Value.Contains(Password));
         Assert.Equal("1", system.Winlogon["AutoAdminLogon"]);
