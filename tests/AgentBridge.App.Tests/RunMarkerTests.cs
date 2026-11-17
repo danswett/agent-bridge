@@ -76,16 +76,17 @@ public sealed class RunMarkerTests : IDisposable
     public void A_crash_keeps_type_and_frames_but_never_the_exception_message_or_transcript()
     {
         var marker = RunMarker.Start(folder, "1", clock);
-        Action crash = () => throw new InvalidOperationException("private conversation");
-        var error = Assert.Throws<InvalidOperationException>(crash);
+        var error = Assert.Throws<InvalidOperationException>((Action)Crash);
         marker.RecordCrash(error);
         marker.Complete();
         var previous = RunMarker.ReadPrevious(folder);
         Assert.True(previous.Unclean);
         Assert.Contains(nameof(InvalidOperationException), previous.Crash);
-        Assert.Contains(nameof(A_crash_keeps_type_and_frames_but_never_the_exception_message_or_transcript), previous.Crash);
+        Assert.Contains("RunMarkerTests.Crash", previous.Crash);
         Assert.DoesNotContain("private conversation", File.ReadAllText(Assert.Single(Directory.GetFiles(folder))));
     }
+
+    static void Crash() => throw new InvalidOperationException("private conversation");
 
     [Fact]
     public void A_late_watchdog_or_crash_callback_does_not_recreate_a_completed_marker()
