@@ -56,20 +56,15 @@ public sealed partial class StopFlowTests
             openOwnedPr = false, unpushedWork = false, held = false, @private = false,
         }));
 
-    [Fact]
-    public async Task Fleet_stop_requires_a_separate_live_host_grant_and_verified_fleet_origin()
+    [Theory]
+    [InlineData(0), InlineData(1), InlineData(2), InlineData(3), InlineData(4)]
+    public async Task Fleet_stop_requires_a_separate_live_host_grant_and_verified_fleet_origin(int missing)
     {
-        var setup = Fleet(new Clearance(), grant: false);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => FleetStop(setup.Handle));
-        setup = Fleet(new Clearance(), fleetOrigin: false);
-        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(setup.Handle)).Outcome);
-        setup = Fleet(new Clearance(), fleetOrigin: false, personOrigin: true);
-        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(setup.Handle)).Outcome);
-        setup = Fleet(new Clearance(), recorded: false);
-        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(setup.Handle)).Outcome);
-        setup = Fleet(new Clearance());
-        setup.Credentials.RevokeScript("sre");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => FleetStop(setup.Handle));
+        var setup = Fleet(new Clearance(), grant: missing != 0, fleetOrigin: missing is not (1 or 2),
+            personOrigin: missing == 2, recorded: missing != 3);
+        if (missing == 4) { setup.Credentials.RevokeScript("sre"); }
+        if (missing is 0 or 4) { await Assert.ThrowsAsync<InvalidOperationException>(() => FleetStop(setup.Handle)); }
+        else { Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(setup.Handle)).Outcome); }
         Assert.Empty(injector.Plans);
         Assert.Empty(control.Terminated);
     }
@@ -78,11 +73,13 @@ public sealed partial class StopFlowTests
     [InlineData("unknown")]
     [InlineData(Id)]
     [InlineData("AGENT_BRIDGE_7777777777774777")]
-    public async Task Fleet_stop_requires_the_exact_registered_node(string node)
+    [InlineData(null)]
+    public async Task Fleet_stop_requires_the_exact_registered_node_and_host_clearance(string? node)
     {
-        var setup = Fleet(new Clearance());
+        var setup = Fleet(node is null ? null : new Clearance());
         Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(setup.Handle, node)).Outcome);
         Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
     }
 
     [Fact]
@@ -100,22 +97,20 @@ public sealed partial class StopFlowTests
         Assert.Empty(control.Terminated);
     }
 
-    [Fact]
-    public async Task Fleet_stop_defaults_to_unknown_despite_caller_supplied_clearance()
-    {
-        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(Fleet().Handle)).Outcome);
-        Assert.Empty(injector.Plans);
-        Assert.Empty(control.Terminated);
-    }
-
     [Theory]
     [InlineData(0), InlineData(1), InlineData(2), InlineData(3), InlineData(4), InlineData(5), InlineData(6), InlineData(7)]
-    public async Task Fleet_stop_rechecks_every_safeguard_and_identity_before_dispatch(int change)
+    [InlineData(0, true), InlineData(1, true), InlineData(2, true), InlineData(3, true), InlineData(8, true)]
+    public async Task Fleet_stop_rechecks_every_safeguard_and_identity_before_dispatch(int change, bool delayed = false)
     {
         var clearance = new Clearance();
+        var setup = Fleet(clearance);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool changed = false, typed = false;
+        injector.Gate = delayed ? release.Task : Task.CompletedTask;
+        injector.OnInject = (_, _) => typed = true;
         clearance.Change = (read, value) =>
         {
-            if (read == 1) { return value; }
+            if (read == 1 || delayed && !changed) { return value; }
             var refused = new WorkClearance(WorkState.Refused, "protected work");
             return change switch
             {
@@ -127,9 +122,18 @@ public sealed partial class StopFlowTests
                 _ => value with { Session = Other },
             };
         };
-        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(Fleet(clearance).Handle)).Outcome);
+        var stop = FleetStop(setup.Handle);
+        if (delayed)
+        {
+            await injector.Entered.Task.WaitAsync(Patience);
+            changed = true;
+            if (change == 8) { setup.Credentials.RevokeScript("sre"); }
+            release.SetResult();
+        }
+        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await stop).Outcome);
         Assert.True(clearance.Reads >= 2);
-        Assert.Empty(injector.Plans);
+        Assert.Equal(delayed ? 1 : 0, injector.Plans.Count);
+        Assert.False(typed);
         Assert.Empty(control.Terminated);
     }
 

@@ -273,8 +273,12 @@ public sealed class StopService : ISessionStopper
                 if (!asking)
                 {
                     InjectionResult typing;
-                    try { typing = await injector.InjectAsync(pid, ExitKeys); }
+                    string? dispatchRefusal = null;
+                    var keys = ExitKeys with { Proceed = () => dispatchRefusal = probe.Active()
+                        ?? (beforeDispatch?.Invoke(pid, startedAt) == false ? "stop authorization changed before typing" : null) };
+                    try { typing = await injector.InjectAsync(pid, keys); }
                     catch (Exception e) { typing = new InjectionResult(InjectionStatus.Interrupted, e.Message); }
+                    if (dispatchRefusal is not null) { return Refused(dispatchRefusal); }
                     typed = typing.Status != InjectionStatus.NothingTyped;
                     log($"typed /exit into {Short(session.Id)} (pid {pid}) -> {typing.Status} {typing.Detail}");
                 }

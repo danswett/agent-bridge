@@ -1171,6 +1171,7 @@ public sealed partial class StopFlowTests : IAsyncLifetime
             lock (Plans) { Plans.Add((processId, plan)); }
             Entered.TrySetResult();
             await Gate;
+            if (plan.Proceed?.Invoke() is { } refusal) { return new InjectionResult(InjectionStatus.NothingTyped, refusal); }
             OnInject?.Invoke(processId, plan);
             return new InjectionResult(InjectionStatus.Typed, "ok");
         }
