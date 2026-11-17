@@ -143,9 +143,11 @@ public sealed class DurableInboxTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Crash_leftovers_are_removed_before_reading_and_delivering(bool partial)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void Crash_leftovers_are_removed_before_reading_and_delivering(bool partial, bool differentCase)
     {
         var inbox = new DurableInbox(Pathname);
         inbox.Enqueue("one", "a", "sender", "secret", Now);
@@ -157,7 +159,8 @@ public sealed class DurableInboxTests : IDisposable
         File.WriteAllText(unrelated, "unrelated");
         File.WriteAllText(lookalike, "unrelated");
 
-        Assert.Equal("a", new DurableInbox(Pathname).Peek("one")!.Rid);
+        inbox = new DurableInbox(OperatingSystem.IsWindows() && differentCase ? Path.Combine(folder, "INBOX.JSON") : Pathname);
+        Assert.Equal("a", inbox.Peek("one")!.Rid);
         Assert.False(File.Exists(leftover));
         File.WriteAllText(leftover, partial ? snapshot[..^5] : snapshot);
         inbox.Deliver("one", "a", Now);

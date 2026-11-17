@@ -137,11 +137,12 @@ internal sealed class DurableInbox
     void DeleteLeftovers()
     {
         var prefix = Path.GetFileName(path) + ".";
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         foreach (var candidate in Directory.EnumerateFiles(Path.GetDirectoryName(path)!))
         {
             var name = Path.GetFileName(candidate);
-            if (name.Length == prefix.Length + 36 && name.StartsWith(prefix, StringComparison.Ordinal) &&
-                name.EndsWith(".tmp", StringComparison.Ordinal) && Guid.TryParseExact(name.AsSpan(prefix.Length, 32), "N", out _))
+            if (name.Length == prefix.Length + 36 && name.StartsWith(prefix, comparison) &&
+                name.EndsWith(".tmp", comparison) && Guid.TryParseExact(name.AsSpan(prefix.Length, 32), "N", out _))
             {
                 File.Delete(candidate);
             }
