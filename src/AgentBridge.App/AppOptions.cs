@@ -64,7 +64,7 @@ static class CrashLog
     public static void Write(Exception? e)
     {
         try { Program.Marker?.RecordCrash(e); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { AppLog.Write($"crash marker not written: {error.GetType().Name}"); }
+        catch (Exception error) { AppLog.Write($"crash marker not written: {error.GetType().Name}"); }
         try
         {
             Directory.CreateDirectory(Paths.AppData);
