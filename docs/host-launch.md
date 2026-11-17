@@ -52,6 +52,16 @@ change. Refusal audit records share the pipe's per-principal windowing: 60 per h
 then counted summaries at most once a minute. Live limits, idle ending, restart durability
 and temporary raises are C2 work, not guarantees of this staged readback.
 
+## Dispatch facts seam (#2788, not wired)
+
+`LaunchService.CaptureDispatch` lets a trusted dispatcher take a read-only copy of
+the resolved launcher's configured extra arguments at dispatch time, together with
+the explicitly authenticated principal. Later configuration changes cannot alter
+an existing snapshot. Missing or unauthenticated identity is passed as null; empty
+or whitespace identity is also reported as null, never inferred from request fields
+or a peer label. Capturing these facts performs no launch, gate check or audit write.
+No existing launch path calls this seam yet; LocalApi and CheckLaunch wiring is #2774.
+
 ## What agent-ha-bridge does
 
 From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonRequestedLaunch`,
