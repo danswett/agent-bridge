@@ -21,6 +21,7 @@ public sealed record AgentPolicy
 
     public bool Enabled { get; init; }
     public bool LaunchEnabled { get; init; }
+    public IReadOnlyList<string> FleetWorkspaces { get; init; } = [];
     public int CredentialDays { get; init; } = DefaultCredentialDays;
     public string IssueLaunched { get; init; } = ScopeNone;
     public string IssueAdopted { get; init; } = ScopeNone;
@@ -49,6 +50,14 @@ public sealed record AgentPolicy
             switch (p.Name)
             {
                 case "enabled": policy = policy with { Enabled = Bool(p.Value, "agents.enabled", problems) }; break;
+                case "fleet":
+                    if (!Object(p.Value, "agents.fleet", problems, out var fleet)) { return Denied(problems); }
+                    foreach (var f in fleet.EnumerateObject())
+                    {
+                        if (f.Name == "workspaces") { policy = policy with { FleetWorkspaces = Strings(f.Value, "agents.fleet.workspaces", problems) ?? [] }; }
+                        else { Unknown($"agents.fleet.{f.Name}", problems); }
+                    }
+                    break;
                 case "launch":
                     if (!Object(p.Value, "agents.launch", problems, out var launch)) { return Denied(problems); }
                     foreach (var l in launch.EnumerateObject())
