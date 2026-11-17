@@ -92,6 +92,12 @@ What the sender gets, and what the messenger does:
 | `refused` with `rate` | final failure shown to the sender; never sent over Home Assistant |
 | any other `refused` (other account, unpinned peer, replay, size, and so on) | final failure shown to the sender |
 
+The external fleet messenger (fleet #56) must honour the `agent.send` reply's `nextStep`
+([local pipe](local-pipe.md#agentsend-ap5-lite)). It may use Home Assistant only for
+`fallback_to_home_assistant`; `check_conversation` must show the unconfirmed outcome and
+tell the caller to check the target conversation, without sending again. The host's
+guidance alone does not enforce this policy in an older external messenger.
+
 ## Acceptance tests (tick before cut-over)
 
 Run on staging, then production, with VM3 and VM1 first and VM4 and VM2 joining after.

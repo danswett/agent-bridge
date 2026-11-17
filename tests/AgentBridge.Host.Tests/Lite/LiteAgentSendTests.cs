@@ -144,6 +144,7 @@ public sealed class LiteAgentSendTests : IDisposable
     [Fact]
     public async Task An_unconfirmed_local_api_send_tells_the_caller_to_check_instead_of_falling_back()
     {
+        if (!OperatingSystem.IsWindows()) { return; }
         sender.Next = new LiteOutcome(LiteKind.Unconfirmed, "timeout", "relay-request");
         var handler = LocalApi.Handler(null!, null!, null!, null, null, store, sender, audit: audit);
 

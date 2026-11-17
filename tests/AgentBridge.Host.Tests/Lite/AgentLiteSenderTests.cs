@@ -1,8 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using AgentBridge.AgentEnvelope;
 using AgentBridge.Host;
 using AgentBridge.Host.Lite;
+using AgentBridge.Local;
+using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using Xunit;
 
@@ -176,6 +179,65 @@ public class AgentLiteSenderTests
         r.Link.Reply = (_, _) => throw new IOException("connection dropped");
         var o = await r.Send();
         Assert.Equal((LiteKind.Unconfirmed, "channel lost"), (o.Kind, o.Code));
+    }
+
+    [Theory]
+    [InlineData("timeout", "timeout")]
+    [InlineData("channel loss", "channel lost")]
+    [InlineData("kill", "mode switched off")]
+    [InlineData("offline", AgentLiteSender.OfflineText)]
+    public async Task The_real_sender_preserves_uncertainty_at_the_callers_fallback_boundary(string failure, string code)
+    {
+        using var r = new Rig();
+        var root = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.remote", "own-account"], root, TextWriter.Null, TextWriter.Null));
+            var mode = new LiteKill(root, new Peers(true));
+            var credentials = new AgentCredentials(root, Self);
+            var token = credentials.Mint(Caller.Session, Caller.LaunchId, Caller.RootPid, Caller.RootStartUtc, AgentProtocol.ScopeRead);
+            var channel = new SendChannel();
+            credentials.Accept(channel, credentials.Check(token,
+                new ProcessAncestry([new PeerProcess(Caller.RootPid, Caller.RootStartUtc, "agent.exe")], true)).Accepted!);
+            Receiving(r);
+            var receive = r.Link.Reply;
+            var cancelled = false;
+            r.Link.Present = failure != "offline";
+            r.Link.Reply = async (request, ct) =>
+            {
+                await receive(request, ct);
+                if (failure == "channel loss") { throw new IOException("acknowledgement lost after typing"); }
+                if (failure == "kill") { mode.Kill(); }
+                try { await Task.Delay(Timeout.Infinite, ct); }
+                catch (OperationCanceledException) { cancelled = true; throw; }
+                throw new InvalidOperationException("the send must be cancelled");
+            };
+            var sender = new AgentLiteSender(mode, new Peers(true), r.Link, credentials.IsLive,
+                () => new EcdsaEnvelopeSigner(r.Key), OwnStatic, ackTimeout: failure == "timeout" ? TimeSpan.FromMilliseconds(200) : TimeSpan.FromSeconds(60),
+                watchEvery: TimeSpan.FromMilliseconds(1));
+            var input = JsonSerializer.SerializeToElement(new { machine = "vm2", session = "agent_bridge_0123456789abcdef", text = "hello" });
+            var reply = Assert.IsType<LiteSendReply>(await LiteAgentSend.HandleAsync(credentials, sender, channel, input,
+                windows: true, appendAttempt: new AgentAuditLog(root).Append).WaitAsync(TimeSpan.FromSeconds(30)));
+            var response = JsonSerializer.SerializeToElement(reply, ProtocolJson.Options);
+            var offline = failure == "offline";
+            Assert.Equal(offline ? "undeliverable" : "unconfirmed", reply.Outcome);
+            Assert.Equal(code, reply.Code);
+            Assert.Equal(offline ? "fallback_to_home_assistant" : "check_conversation", response.GetProperty("nextStep").GetString());
+            Assert.Equal(offline ? 0 : 1, r.Link.Opened);
+            Assert.Equal(offline ? null : "hello", r.Deliver.Text);
+            Assert.Equal(failure is "timeout" or "kill", cancelled);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    sealed class SendChannel : IProtocolChannel
+    {
+        public string PeerId => "fixture";
+        public string PeerName => "fixture";
+        public string PeerKind => "fixture";
+        public bool IsOpen => true;
+        public Task Closed => Task.Delay(Timeout.Infinite);
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
     }
 
     [Fact]
