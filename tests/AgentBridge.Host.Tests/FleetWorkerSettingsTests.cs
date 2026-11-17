@@ -74,6 +74,8 @@ public sealed class FleetWorkerSettingsTests : IAsyncLifetime
                 var result = await ch.CallAsync(Op, new { workspace, fleetWorkers = value });
                 Assert.Equal(value, result.GetProperty("value").GetBoolean());
                 Assert.False(result.GetProperty("defaultValue").GetBoolean());
+                await using var verify = await Connect();
+                Assert.Equal(value, (await verify.CallAsync(Op, new { workspace })).GetProperty("value").GetBoolean());
             }
         }
         await using var reader = await Connect();
