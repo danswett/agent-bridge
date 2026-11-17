@@ -38,6 +38,9 @@ public sealed class ReplyOptions
     public TimeSpan ConfirmTimeout { get; init; } = TimeSpan.FromSeconds(60);
 
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromMilliseconds(250);
+    public int QueueCapacity { get; init; } = 8;
+    public int QueueSessions { get; init; } = 64;
+    public TimeSpan QueueLifetime { get; init; } = TimeSpan.FromMinutes(2);
 
     // How much longer a reply that timed out unrecorded is watched for, without changing its
     // outcome, so its confirmation line can be followed by when it was recorded after all
@@ -123,6 +126,9 @@ public sealed partial class ReplyService : ISessionReplier
     public ReplyService(DeliveryGate gate, ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
         IConsoleInjector injector, ReplyOptions options, Action<string>? log = null, AttachmentStore? attachments = null)
     {
+        if (options.QueueCapacity < 1 || options.QueueSessions < 1 || options.QueueLifetime <= TimeSpan.Zero
+            || options.QueueLifetime.TotalMilliseconds > uint.MaxValue - 1)
+            throw new ArgumentOutOfRangeException(nameof(options), "reply queue limits must be positive and the lifetime must fit a timer");
         this.source = source;
         this.processes = processes;
         this.probe = probe;
@@ -229,15 +235,14 @@ public sealed partial class ReplyService : ISessionReplier
         {
             return Task.FromResult(Refused("request must be a UUID"));
         }
-        return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "reply", key, log), t => DeliverAsync(request, key, peer ?? "", t), result =>
+        return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "reply", key, log), t => QueueAsync(request, key, peer ?? "", t, cancellationToken), result =>
             log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({ReplyReasons.Shared(result.Reason)})")}"));
     }
 
-    async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)
+    async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline,
+        CancellationToken queuedCancellation = default, Action? releaseQueue = null)
     {
         Typed typed;
-        SemaphoreSlim? queued = null;
-        var queueHeld = false;
         IReadOnlyList<ReplyAttachmentBinding>? bindings = null;
         try
         {
@@ -254,14 +259,9 @@ public sealed partial class ReplyService : ISessionReplier
             }
             if (request.StillCurrent is not null && session.Agent != AgentKind.Copilot)
             { return Refused("retry fencing is supported only for Copilot"); }
-            if (session.Agent == AgentKind.Copilot && !request.RequireIdle)
+            if (session.Agent == AgentKind.Copilot && !request.RequireIdle && request.StillCurrent is null)
             {
-                queued = replyQueues.GetOrAdd(session.Id, _ => new(1, 1));
-                await queued.WaitAsync(Stopping);
-                queueHeld = true;
-                log($"reply {Short(request.Request)} to {Short(session.Id)} producer {Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(peer)))[..8]}: queued host-side, {request.Text?.Length ?? 0} characters");
-                if (recovering.TryGetValue(session.Id, out var pending)) { await pending.WaitAsync(Stopping); }
-                if (await ClaimIdleAsync(session, key) is { } held) { return held; }
+                if (await ClaimIdleAsync(session, key, queuedCancellation) is { } held) { return held; }
             }
             else if (!gate.TryClaim(session.Id, key)) { return Busy(); }
             Claim? claim = null;
@@ -276,7 +276,7 @@ public sealed partial class ReplyService : ISessionReplier
                     if (problem is not null) { return Refused(problem); }
                 }
                 var outcome = session.Agent == AgentKind.Copilot
-                    ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent)
+                    ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, queuedCancellation)
                     : await AgentAsync(session, request.Text ?? "", claim, timeline);
                 keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result; }
@@ -301,13 +301,17 @@ public sealed partial class ReplyService : ISessionReplier
                 gate.Release(session.Id, key);
             }
         }
+        catch (OperationCanceledException) when (queuedCancellation.IsCancellationRequested)
+        {
+            return Refused("the reply queue was cancelled or expired before typing; nothing was typed");
+        }
         catch (Exception e)
         {
             // Only reached before anything was typed: CopilotAsync owns its own failures
             // once a key may have gone.
             return Failed(AnswerOutcome.Refused, $"reply {key.ToString()[..8]} to {Short(request.Id)} failed before typing", e);
         }
-        finally { if (queueHeld) queued!.Release(); }
+        finally { releaseQueue?.Invoke(); }
 
         // The session is free again once the keys have gone: a question it asks next can be
         // answered while this waits for the prompt to be taken, which for a busy session can
@@ -386,7 +390,8 @@ public sealed partial class ReplyService : ISessionReplier
     // KeysWent: some or all of the reply may have reached the session, whatever the result.
     sealed record Attempt(ReplyResult? Result, Typed? Typed, bool KeysWent = false);
 
-    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle, Func<bool>? stillCurrent)
+    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle, Func<bool>? stillCurrent,
+        CancellationToken queuedCancellation = default)
     {
         // The session id names a folder; only the agent's own id shape is accepted.
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Done(Refused("the session's id is not a Copilot session id")); }
@@ -433,6 +438,7 @@ public sealed partial class ReplyService : ISessionReplier
         var retryChanged = false;
         try
         {
+            queuedCancellation.ThrowIfCancellationRequested();
             if (stillCurrent is not null && !stillCurrent()) { return Done(Stale(retryChangedReason)); }
             if (probe.Active() is { } active) { return Done(Refused(active)); }
             var now = source.Get(session.Id);
@@ -523,13 +529,18 @@ public sealed partial class ReplyService : ISessionReplier
                 if (FinalEffect() is { } changed) { return Done(Stale(changed)); }
             }
 
+            var proceed = keys.Proceed;
+            keys = keys with
+            {
+                Proceed = () => queuedCancellation.IsCancellationRequested
+                    ? "the reply queue was cancelled or expired before typing" : proceed?.Invoke()
+            };
+            queuedCancellation.ThrowIfCancellationRequested();
             timeline.InjectStart();
             try { result = await injector.InjectAsync(pid, keys); }
             catch (Exception e)
             {
-                recovering[session.Id] = RecoverCopilotAsync(session, target, transcript, from, words, timeline, true,
-                    e is InjectorWorkerException failed ? failed.Exited : Task.Delay(Timeout.InfiniteTimeSpan, Stopping));
-                return new Attempt(Failed(AnswerOutcome.Unconfirmed, $"the injector failed while typing a reply into {Short(session.Id)}", e), null, KeysWent: true);
+                return new Attempt(Failed(AnswerOutcome.Unconfirmed, $"reply delivery to {Short(session.Id)} is uncertain after an injector failure; no background recovery will type further keys", e), null, KeysWent: true);
             }
             finally { timeline.InjectEnd(); }
         }
@@ -538,17 +549,10 @@ public sealed partial class ReplyService : ISessionReplier
         // Before the log line, which writes a file: the client hears it as soon as it can.
         if (result.Status == InjectionStatus.Typed) { timeline.Typed(working); }
         log($"typed a reply into {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {keys.Describe()} -> {result.Status} {result.Detail}");
-        if (stillCurrent is null && result.Status is InjectionStatus.Interrupted or InjectionStatus.Typed
+        if (stillCurrent is null && result.Status == InjectionStatus.Interrupted
             && !result.Detail.Contains("console closed", StringComparison.Ordinal))
         {
-            // Keep ownership of any pasted draft after returning an uncertain receipt. Later
-            // replies wait host-side, never append to it or refuse the owner because of it.
-            var recovery = RecoverCopilotAsync(session, target, transcript, from, words, timeline,
-                result.Detail.Contains("(partial error ", StringComparison.Ordinal));
-            recovering[session.Id] = recovery;
-            try { await recovery.WaitAsync(options.SubmitPatience, options.Time, Stopping); }
-            catch (TimeoutException) { log($"reply recovery to {Short(session.Id)}: pending host-side; later replies will wait"); }
-            if (recovery.IsCompletedSuccessfully && recovery.Result)
+            if (await RecoverCopilotAsync(session, target, transcript, words, timeline, result))
                 return Typing(AgentKind.Copilot, () => FirstOf(CopilotPrompts.Since(transcript, from).Prompts, p => CopilotReply.Matches(words, p.Content), p => p.At),
                     seen => ConfirmAsync(transcript, from, words, staged, timeline, seen));
         }
@@ -559,7 +563,7 @@ public sealed partial class ReplyService : ISessionReplier
                 ? "Copilot's input box changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
                 : DeliveryReasons.Of(result.Detail))),
             InjectionStatus.Interrupted when result.Detail == WorkerInjector.ScreenChangedPartway =>
-                new Attempt(Unconfirmed("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent and its words are still in the box"), null, KeysWent: true),
+                new Attempt(Unconfirmed("reply delivery is uncertain after the input box changed; automatic recovery has ended and will not type further keys"), null, KeysWent: true),
             InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{DeliveryReasons.Of(result.Detail)}; part of the reply may have reached the session"), null, KeysWent: true),
             _ => Typing(AgentKind.Copilot, () => FirstOf(CopilotPrompts.Since(transcript, from).Prompts, p => CopilotReply.Matches(words, p.Content), p => p.At),
                 seen => ConfirmAsync(transcript, from, words, staged, timeline, seen)),

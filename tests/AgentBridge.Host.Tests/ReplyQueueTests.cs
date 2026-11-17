@@ -64,12 +64,13 @@ public sealed partial class ReplyFlowTests
         {
             if (i == 0) injector.Screen = _ => ["Allow this command?", " 1. Yes", " 2. No"];
         };
-        var replier = Replier();
-        var agent = await replier.ReplyAsync(new() { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" });
-        Assert.Equal(AnswerOutcome.Unconfirmed, agent.Outcome);
+        var replier = Replier(submitPatience: TimeSpan.FromSeconds(2));
+        var agent = replier.ReplyAsync(new() { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" });
+        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the paste", Patience);
         var owner = replier.ReplyAsync(new() { Id = Id, Request = Guid.NewGuid().ToString(), Text = "owner reply" });
         await Task.Delay(150);
         Assert.False(owner.IsCompleted);
+        Assert.False(agent.IsCompleted);
         Assert.Single(injector.Plans);
 
         injector.Sent = null;
@@ -80,27 +81,29 @@ public sealed partial class ReplyFlowTests
         };
         injector.Screen = _ => CopilotBox("agent report");
 
+        Assert.Equal(AnswerOutcome.Delivered, (await agent.WaitAsync(Patience)).Outcome);
         Assert.Equal(AnswerOutcome.Delivered, (await owner.WaitAsync(Patience)).Outcome);
         Assert.Equal(3, injector.Plans.Count);
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_partial_native_write_is_cleared_without_submitting_and_does_not_block_the_owner(bool workerThrows)
+    [InlineData("native")]
+    [InlineData("worker")]
+    [InlineData("edited")]
+    public async Task Only_a_proven_exact_native_prefix_is_cleared_without_submitting(string failure)
     {
-        injector.Result = new(AgentBridge.Host.Delivery.InjectionStatus.Interrupted, "the injector failed while typing (partial error 8)");
+        injector.Result = new(AgentBridge.Host.Delivery.InjectionStatus.Interrupted, "partial native write") { TextWritten = 5, EnterWritten = false };
         injector.Sent = i =>
         {
             var text = injector.Plans[^1].Plan.Sends[i].Text;
-            if (text == "agent report") injector.Screen = _ => CopilotBox("agent");
+            if (text == "agent report") injector.Screen = _ => CopilotBox(failure == "edited" ? "age" : "agent");
             if (text == "\u0005\u0015")
             {
                 injector.Screen = _ => CopilotIdle;
                 injector.Result = new(AgentBridge.Host.Delivery.InjectionStatus.Typed, "ok");
             }
         };
-        if (workerThrows) injector.Holding = () =>
+        if (failure == "worker") injector.Holding = () =>
         {
             injector.Holding = null;
             injector.Screen = _ => CopilotBox("agent");
@@ -108,10 +111,16 @@ public sealed partial class ReplyFlowTests
         };
         var replier = Replier();
         Assert.Equal(AnswerOutcome.Unconfirmed, (await replier.ReplyAsync(new()
-            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        if (failure != "native")
+        {
+            Assert.DoesNotContain(injector.Plans, p => p.Plan.Sends.Any(s => s.Text == "\u0005\u0015"));
+            Assert.Contains(failure == "edited" ? "age" : "agent", (await injector.ReadScreenAsync(100)).Rows![3]);
+            return;
+        }
 
         var owner = await replier.ReplyAsync(new()
-            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "owner reply" }).WaitAsync(Patience);
+        { Id = Id, Request = Guid.NewGuid().ToString(), Text = "owner reply" }).WaitAsync(Patience);
 
         Assert.Equal(AnswerOutcome.Delivered, owner.Outcome);
         Assert.Contains(injector.Plans, p => p.Plan.Sends.Any(s => s.Text == "\u0005\u0015" && !s.Enter));

@@ -197,6 +197,7 @@ public sealed class WorkerInjector : IConsoleInjector
         try
         {
             var wrote = false;
+            var evidence = new ReplyWriteEvidence(plan);
             string? final = null;
             var errors = process.StandardError.ReadToEndAsync();
             try
@@ -209,6 +210,7 @@ public sealed class WorkerInjector : IConsoleInjector
 
             void Read(string line)
             {
+                evidence.Read(line);
                 if (line.StartsWith("writing", StringComparison.Ordinal)) { wrote = true; }
                 else if (line == "ok" || line.StartsWith("fail ", StringComparison.Ordinal)) { final = line; }
             }
@@ -225,11 +227,11 @@ public sealed class WorkerInjector : IConsoleInjector
                 await process.WaitForExitAsync();
                 // Whatever it announced before it was stopped still counts.
                 foreach (var line in (await process.StandardOutput.ReadToEndAsync()).Split('\n')) { Read(line.TrimEnd('\r')); }
-                return wrote ? Interrupted("the injector stopped responding while typing") : Nothing("the injector stopped responding before typing");
+                return evidence.Apply(wrote ? Interrupted("the injector stopped responding while typing") : Nothing("the injector stopped responding before typing"));
             }
             await errors;
 
-            if (final == "ok") { return new InjectionResult(InjectionStatus.Typed, "ok"); }
+            if (final == "ok") { return evidence.Apply(new InjectionResult(InjectionStatus.Typed, "ok")); }
             if (final is not null)
             {
                 var parts = final.Split(' ');
@@ -237,8 +239,8 @@ public sealed class WorkerInjector : IConsoleInjector
                 var code = parts.Length > 2 && int.TryParse(parts[2], CultureInfo.InvariantCulture, out var c) ? c : 0;
                 // A later send held to the screen, refused after an earlier one went: what went
                 // stays, and nothing after it does.
-                if (wrote && (stage, code) == ("screen", 0)) { return Interrupted(ScreenChangedPartway); }
-                return wrote ? Interrupted($"the injector failed while typing ({stage} error {code})") : Nothing(Explain(stage, code));
+                if (wrote && (stage, code) == ("screen", 0)) { return evidence.Apply(Interrupted(ScreenChangedPartway)); }
+                return evidence.Apply(wrote ? Interrupted($"the injector failed while typing ({stage} error {code})") : Nothing(Explain(stage, code)));
             }
             var exit = process.ExitCode;
             // STATUS_CONTROL_C_EXIT: what Windows ends an attached process with when the
@@ -246,7 +248,7 @@ public sealed class WorkerInjector : IConsoleInjector
             var closed = unchecked((uint)exit) == 0xC000013A;
             if (wrote)
             {
-                return Interrupted(closed ? "the session's console closed while the answer was being typed" : $"the injector stopped unexpectedly while typing (exit 0x{exit:X8})");
+                return evidence.Apply(Interrupted(closed ? "the session's console closed while the answer was being typed" : $"the injector stopped unexpectedly while typing (exit 0x{exit:X8})"));
             }
             return Nothing(closed ? "the session's console closed before anything was typed" : $"the injector stopped before typing (exit 0x{exit:X8})");
         }
@@ -261,6 +263,37 @@ public sealed class WorkerInjector : IConsoleInjector
         {
             if (!ended) { process.Dispose(); }
         }
+    }
+
+    internal sealed class ReplyWriteEvidence(KeyPlan plan)
+    {
+        readonly bool supported = plan.Sends is [{ Enter: false }, { Text.Length: 0, Enter: true }];
+        int? text;
+        bool? enter = false;
+        bool writingText, writingEnter;
+
+        public void Read(string line)
+        {
+            if (!supported) return;
+            if (line == "writing 0") { writingText = true; text = null; }
+            else if (line == "wrote 0") { writingText = false; text = plan.Sends[0].Text.Length; }
+            else if (line == "writing 1 enter") { writingEnter = true; enter = null; }
+            else if (line == "wrote 1" && writingEnter) { writingEnter = false; enter = true; }
+            else if (line.StartsWith("fail partial ", StringComparison.Ordinal)
+                && int.TryParse(line.AsSpan(13), CultureInfo.InvariantCulture, out var records) && records >= 0)
+            {
+                // Each UTF-16 character is a key-down/up pair; the down is the effect.
+                if (writingText && records <= 2L * plan.Sends[0].Text.Length) text = records / 2 + records % 2;
+                else if (writingEnter && records <= 2) enter = records > 0;
+            }
+        }
+
+        public InjectionResult Apply(InjectionResult result) => !supported ? result : result with
+        {
+            TextWritten = text,
+            EnterWritten = enter,
+            TextFingerprint = text is { } count ? InjectionResult.Fingerprint(plan.Sends[0].Text[..count]) : null,
+        };
     }
 
     // The worker may still be sending keys: end it, and wait a moment for proof. The proof is its
