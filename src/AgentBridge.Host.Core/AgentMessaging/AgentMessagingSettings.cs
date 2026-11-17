@@ -11,13 +11,11 @@ namespace AgentBridge.Host.Core.AgentMessaging;
 //   allowAllTargets  false (the default) or true: whether own-agent text may enter an allow-all
 //                    session. Matters only while remote is "own-account"; otherwise such a
 //                    target falls back to Home Assistant.
-//   allowAllTargetSessions [] (the default): exact session ids that may receive while the
-//                    allowAllTargets switch is on. Names and wildcards do not grant access.
+//   allowAllTargetSessions [] (default): exact session ids allowed with allowAllTargets on; names and wildcards grant nothing.
 //
-// Invalid switches, non-list targets, sections or files deny all; invalid list entries are ignored.
-// Installing or upgrading never writes these keys.
+// Invalid switches, non-list targets, sections or files deny all; invalid list entries are ignored. Installs/upgrades never write these keys.
 //
-// A change needs no restart: later slices call HostSettings.CurrentAgentMessaging(folder) per message, which reads
+// A change needs no restart: HostSettings.CurrentAgentMessaging(folder) is called per message, which reads
 // the file afresh, so switching to off holds from the next message and loses none (a message
 // that is not sent over the relay goes over Home Assistant).
 public sealed record AgentMessagingSettings
