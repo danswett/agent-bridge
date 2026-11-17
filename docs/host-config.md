@@ -46,7 +46,7 @@ never create the key.
   },
   "push": { "enabled": true },
   "delivery": { "readOnly": false },
-  "sessions": { "restoreOnStart": true },
+  "sessions": { "restoreOnStart": true, "autoRetry": true },
   "fleet": { "share": true },
   "fleetNames": { "launchRule": "on" },
   "load": { "enabled": true },
@@ -102,6 +102,7 @@ never create the key.
 Comments and trailing commas are allowed. Absent and `null` mean the default,
 except an explicit `null` for `fleet` or `fleet.share` disables sharing with a problem,
 and `fleetNames` or `fleetNames.launchRule` set to `null` disables named launches with a problem.
+`sessions.autoRetry` is read fresh without restart; invalid values, including explicit `null`, turn it off with a problem.
 
 | Key | Default | Meaning |
 |---|---|---|

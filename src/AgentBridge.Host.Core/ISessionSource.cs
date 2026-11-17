@@ -90,6 +90,7 @@ public interface ISessionSource : IAsyncDisposable
     // ending it failed. A session that has gone is removed as usual; a source that cannot
     // show it does nothing.
     Task SetEndingAsync(string id, bool ending) => Task.CompletedTask;
+    Task SetAutoRetryAsync(string id, AutoRetryStatus? status, CancellationToken cancellation = default) => Task.CompletedTask;
 
     // Host-owned recovery state, conditional on the same auth failure. A new generation
     // takes ownership; callbacks from an older flow cannot overwrite it or clear attention.
