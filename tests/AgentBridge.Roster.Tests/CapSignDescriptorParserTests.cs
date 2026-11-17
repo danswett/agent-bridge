@@ -9,7 +9,7 @@ namespace AgentBridge.Roster.Tests;
 
 public sealed class CapSignDescriptorParserTests
 {
-    sealed record Vector(string Name, byte[] Body, string? Code);
+    sealed record Vector(string Name, byte[] Body, string? Code, bool Wrapper = false);
 
     static readonly TestKey CapSign = TestKey.Named("person capSign");
 
@@ -36,11 +36,9 @@ public sealed class CapSignDescriptorParserTests
         return d;
     }
 
-    static JsonObject Add() => Body("add", 1, [SHA256.HashData("parent"u8)], Phone, "2026-11-17T10:00:00Z");
-
     static JsonObject V3Add(string presence = Presence.Key)
     {
-        var body = Add();
+        var body = Body("add", 1, [SHA256.HashData("parent"u8)], Phone, "2026-11-17T10:00:00Z");
         body["v"] = 3;
         body["device"] = Device(Pwa, PwaSign, RosterKinds.Pwa, "windows", presence);
         body["approval"] = new JsonObject { ["method"] = "code", ["transcript"] = Codec.Base64Url(new byte[32]) };
@@ -54,11 +52,11 @@ public sealed class CapSignDescriptorParserTests
         return body;
     }
 
-    static JsonObject V3Genesis()
+    static JsonObject V3Genesis(string presence = Presence.Key)
     {
         var body = Body("genesis", 0, null, Phone, "2026-11-17T10:00:00Z");
         body["v"] = 3;
-        body["device"] = Device(Phone, PhoneSign, RosterKinds.Phone, "ios", Presence.Key);
+        body["device"] = Device(Phone, PhoneSign, RosterKinds.Phone, "ios", presence);
         body["approval"] = new JsonObject { ["method"] = "genesis" };
         return body;
     }
@@ -71,16 +69,12 @@ public sealed class CapSignDescriptorParserTests
         var r = rs.R.ToByteArray(isUnsigned: true, isBigEndian: true);
         r = (r[0] & 0x80) != 0 ? [0, 0, .. r] : [0, .. r];
         var s = P256.Der(rs.R, rs.S)[(4 + der[3])..];
-        return [0x30, (byte)(4 + r.Length + s.Length), 0x02, (byte)r.Length, .. r, .. s];
+        return [0x30, (byte)(2 + r.Length + s.Length), 0x02, (byte)r.Length, .. r, .. s];
     }
 
     static IReadOnlyList<Vector> Vectors()
     {
         var valid = V3Add();
-        var genesis = V3Genesis();
-        var webauthn = V3Add(Presence.WebAuthn);
-        var noPresence = V3Add(Presence.None);
-        var qr = V3QrAdd();
         var proof = CapSign.Sign(Binding(Pwa));
         var fractional = Encoding.UTF8.GetString(Bytes(V3Add())).Replace("{\"v\":3,", "{\"v\":3.0,", StringComparison.Ordinal);
         var exponent = Encoding.UTF8.GetString(Bytes(V3Add())).Replace("{\"v\":3,", "{\"v\":3e0,", StringComparison.Ordinal);
@@ -88,10 +82,12 @@ public sealed class CapSignDescriptorParserTests
         var vectors = new List<Vector>
         {
             new("person-add", Bytes(valid), null),
-            new("person-add-webauthn", Bytes(webauthn), null),
-            new("person-add-no-presence", Bytes(noPresence), null),
-            new("person-add-by-qr", Bytes(qr), null),
-            new("person-genesis", Bytes(genesis), null),
+            new("person-add-webauthn", Bytes(V3Add(Presence.WebAuthn)), null),
+            new("person-add-no-presence", Bytes(V3Add(Presence.None)), null),
+            new("person-add-by-qr", Bytes(V3QrAdd()), null),
+            new("person-genesis", Bytes(V3Genesis()), null),
+            new("person-genesis-webauthn", Bytes(V3Genesis(Presence.WebAuthn)), null),
+            new("person-genesis-none", Bytes(V3Genesis(Presence.None)), null),
             new("fractional-version", Encoding.UTF8.GetBytes(fractional), Refusal.Version),
             new("exponent-version", Encoding.UTF8.GetBytes(exponent), Refusal.Version),
             new("string-version", Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Bytes(V3Add())).Replace("\"v\":3,", "\"v\":\"3\",", StringComparison.Ordinal)), Refusal.Version),
@@ -111,7 +107,11 @@ public sealed class CapSignDescriptorParserTests
             Refuse(name, code, body);
         }
 
-        BodyRefuse("version-on-remove", Refusal.Version, body => body["op"] = "remove");
+        foreach (var op in new[] { "remove", "rename", "confirm", "merge" })
+        { BodyRefuse($"version-on-{op}", Refusal.Version, body => body["op"] = op); }
+        BodyRefuse("v2-person", Refusal.Version, body => body["v"] = 2);
+        foreach (var member in new[] { "hostSign", "hostSignAlg", "hostSignProof", "tier" })
+        { DeviceRefuse($"forbidden-{member}", Refusal.Unknown, d => d[member] = "x"); }
         DeviceRefuse("host-before-presence", Refusal.Version, d => { d["kind"] = RosterKinds.Host; d.Remove("presence"); });
         DeviceRefuse("kind-type-before-presence", Refusal.Type, d => { d["kind"] = 1; d["presence"] = 1; });
         DeviceRefuse("unknown-before-missing", Refusal.Unknown, d => { d.Remove("capSign"); d["keyId"] = "x"; });
@@ -131,14 +131,12 @@ public sealed class CapSignDescriptorParserTests
         DeviceRefuse("proof-type", Refusal.Type, d => d["capSignProof"] = 1);
         DeviceRefuse("proof-padded-base64", Refusal.Base64, d => d["capSignProof"] = Codec.Base64Url(proof) + "=");
         DeviceRefuse("proof-nonminimal-der", Refusal.Der, d => d["capSignProof"] = Codec.Base64Url(NonMinimal(proof)));
+        DeviceRefuse("proof-malformed-length", Refusal.Der, d => d["capSignProof"] = Codec.Base64Url([.. proof, 0]));
         DeviceRefuse("cap-sign-equals-dh", Refusal.Device, d => d["capSign"] = Codec.Base64Url(Pwa.Public));
         DeviceRefuse("cap-sign-equals-sign", Refusal.Device, d => d["capSign"] = Codec.Base64Url(PwaSign.Public));
         DeviceRefuse("cap-sign-equals-webauthn", Refusal.Device, d => { d["presence"] = Presence.WebAuthn; d["webauthn"] = Credential(); d["capSign"] = Codec.Base64Url(PwaCredential.Public); });
         DeviceRefuse("proof-high-s", Refusal.HighS, d => d["capSignProof"] = Codec.Base64Url(P256.Flip(proof)));
-        DeviceRefuse("proof-wrong-account", "cap-proof", d =>
-        {
-            d["capSignProof"] = Codec.Base64Url(CapSign.Sign(Binding(Pwa, account: "other")));
-        });
+        DeviceRefuse("proof-wrong-account", Refusal.CapProof, d => d["capSignProof"] = Codec.Base64Url(CapSign.Sign(Binding(Pwa, account: "other"))));
         DeviceRefuse("proof-wrong-generation", Refusal.CapProof, d => d["capSignProof"] = Codec.Base64Url(CapSign.Sign(Binding(Pwa, generation: new string('0', 32)))));
         DeviceRefuse("proof-wrong-dh", Refusal.CapProof, d => d["capSignProof"] = Codec.Base64Url(CapSign.Sign(Binding(Phone))));
         DeviceRefuse("proof-wrong-domain", Refusal.CapProof, d => d["capSignProof"] = Codec.Base64Url(CapSign.Sign(Binding(Pwa, label: Framing.EntryLabel))));
@@ -146,11 +144,19 @@ public sealed class CapSignDescriptorParserTests
         DeviceRefuse("bad-proof-after-platform", Refusal.Value, d => { d["platform"] = "beos"; d["capSignProof"] = Codec.Base64Url(CapSign.Sign("wrong"u8.ToArray())); });
         DeviceRefuse("bad-proof-after-name", Refusal.Name, d => { d["name"] = ""; d["capSignProof"] = Codec.Base64Url(CapSign.Sign("wrong"u8.ToArray())); });
         BodyRefuse("add-grandfather", Refusal.Approval, body => body["approval"] = new JsonObject { ["method"] = "grandfather" });
+        BodyRefuse("add-genesis-approval", Refusal.Approval, body => body["approval"] = new JsonObject { ["method"] = "genesis" });
+        BodyRefuse("missing-transcript", Refusal.Approval, body => body["approval"]!.AsObject().Remove("transcript"));
+        foreach (JsonNode? transcript in new JsonNode?[] { null, JsonValue.Create(1), JsonValue.Create("AA"), JsonValue.Create(Codec.Base64Url(new byte[32]) + "=") })
+        { BodyRefuse($"wrong-transcript-{transcript?.ToJsonString() ?? "null"}", Refusal.Approval, body => body["approval"]!["transcript"] = transcript?.DeepClone()); }
+        foreach (var shown in new[] { "", "relay" })
+        { BodyRefuse($"qr-shown-{shown}", Refusal.Approval, body => { body["approval"]!["method"] = "qr"; if (shown != "") { body["approval"]!["shown"] = shown; } }); }
+        BodyRefuse("qr-shown-type", Refusal.Approval, body => { body["approval"]!["method"] = "qr"; body["approval"]!["shown"] = 1; });
+        BodyRefuse("proof-before-approval", Refusal.CapProof, body => { body["device"]!["capSignProof"] = Codec.Base64Url(CapSign.Sign("wrong"u8.ToArray())); body["approval"] = new JsonObject { ["method"] = "grandfather" }; });
         BodyRefuse("genesis-needs-genesis-approval", Refusal.Approval, body => { body["op"] = "genesis"; body["seq"] = 0; body["by"] = Pwa.Device; body.Remove("prev"); body["approval"] = new JsonObject { ["method"] = "code", ["transcript"] = Codec.Base64Url(new byte[32]) }; });
-        var legacy = Body("add", 1, [SHA256.HashData("parent"u8)], Phone, "2026-11-17T10:00:00Z");
-        legacy["device"] = Person(Pwa, PwaSign, RosterKinds.Pwa, "windows", "Desk", Presence.Key);
-        legacy["device"]!["capSign"] = Codec.Base64Url(CapSign.Public);
-        legacy["approval"] = new JsonObject { ["method"] = "code", ["transcript"] = Codec.Base64Url(new byte[32]) };
+        var oversized = Encoding.UTF8.GetBytes(new string(' ', Entry.MaxBytes) + Encoding.UTF8.GetString(Bytes(valid)));
+        vectors.Add(new("oversize-wrapper", Encoding.UTF8.GetBytes(Entry.Canonical(oversized, PhoneSign.Sign(Entry.SignedBy(oversized)))), Refusal.Size, true));
+        var legacy = V3Add();
+        legacy["v"] = 1;
         Refuse("legacy-cap-sign", Refusal.Unknown, legacy);
         var hostV2 = JsonNode.Parse(RosterVectorTests.HostV2Add().Body)!.AsObject();
         hostV2["device"]!["capSign"] = Codec.Base64Url(CapSign.Public);
@@ -172,10 +178,37 @@ public sealed class CapSignDescriptorParserTests
                 Assert.NotNull(parsed.Device.CapSignProof);
                 continue;
             }
-            var refused = Record.Exception(() => EntryBody.Parse(vector.Body));
+            var refused = Record.Exception(() => { if (vector.Wrapper) { Entry.Parse(vector.Body); } else { EntryBody.Parse(vector.Body); } });
             Assert.True(refused is RosterFormatException, $"{vector.Name}: expected {vector.Code}, got {refused?.GetType().Name ?? "accept"}");
             Assert.Equal(vector.Code, ((RosterFormatException)refused!).Code);
         }
+    }
+
+    [Fact]
+    public void Nonminimal_proof_has_valid_lengths_but_a_redundant_integer_zero()
+    {
+        var der = NonMinimal(CapSign.Sign(Binding(Pwa)));
+        Assert.Equal(der.Length - 2, der[1]);
+        Assert.Equal(0, der[4]);
+        Assert.Equal(0, der[5]);
+        Assert.Null(P256.ReadDer(der));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Verifier_refuses_v3_genesis_and_add_until_dependent_readers_land(bool acceptHostSign)
+    {
+        var verifier = new RosterVerifier(Account, Generation, () => TimeSpan.Zero) { AcceptHostSign = acceptHostSign };
+        Entry Signed(JsonObject body) { var bytes = Bytes(body); return Entry.Parse(Encoding.UTF8.GetBytes(Entry.Canonical(bytes, PhoneSign.Sign(Entry.SignedBy(bytes))))); }
+        var genesis = Signed(V3Genesis());
+        Assert.Equal(new Offered(genesis.Hash, Verdict.Refused, Invalid.Version), Assert.Single(verifier.Offer(genesis)));
+        var legacy = Entry.Parse(Encoding.UTF8.GetBytes(RosterVectorTests.Chain()[0].Wire));
+        Assert.Equal(Verdict.Accepted, Assert.Single(verifier.Offer(legacy)).Verdict);
+        var body = V3Add(); body["prev"] = Hashes([legacy.Hash]);
+        var add = Signed(body);
+        Assert.Equal(new Offered(add.Hash, Verdict.Refused, Invalid.Version), Assert.Single(verifier.Offer(add)));
+        Assert.False(verifier.Holds(add.Hash));
     }
 
     [Fact]
@@ -211,7 +244,7 @@ public sealed class CapSignDescriptorParserTests
             var vector = vectors[i];
             var value = new JsonObject
             {
-                ["body"] = Encoding.UTF8.GetString(vector.Body),
+                [vector.Wrapper ? "wrapper" : "body"] = Encoding.UTF8.GetString(vector.Body),
                 ["result"] = vector.Code ?? "valid",
             }.ToJsonString(Raw);
             lines.Add($"    {JsonSerializer.Serialize(vector.Name, Raw)}: {value}{(i + 1 == vectors.Count ? "" : ",")}");

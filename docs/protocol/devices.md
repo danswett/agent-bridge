@@ -826,12 +826,13 @@ Later executable vectors must pin low-S signatures and each independent refusal
 mutation. Their artifacts/tests belong to #2366; end-to-end positive baselines
 cannot be built before the required host/person purpose-key enrollment exists.
 
-## Person capability-key enrollment (#2385, design only)
+## Person capability-key enrollment (#2385, staged readers)
 
-**Proposed contract, no implementation or rollout grant.** This is #1825 / #55,
+**Contract and staged implementation, no rollout grant.** This is #1825 / #55,
 under #1396. Every real person verifier remains unsupported until its capability
-key is enrolled and the dependent code is reviewed. This slice changes no parser,
-key store, roster pin, command, transition bit or live enrollment.
+key is enrolled and the dependent code is reviewed. C# parses v3 descriptors, but
+its verifier refuses v3 with `version` until collision checks and client parity land.
+Key stores, roster pins, commands, transition bits and live enrollment are unchanged.
 
 **Encoding baseline.** At commit
 `e16dc3674e21f4974dabd51b8bdee3ebd6ad07b3`, this file's lines 75-109 define the

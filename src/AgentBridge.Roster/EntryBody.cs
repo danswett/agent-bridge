@@ -124,7 +124,7 @@ public sealed record EntryBody(
         var at = Time(StrictJson.String(root.GetProperty("at"), "body.at"));
         var device = root.TryGetProperty("device", out var d) ? ParseDevice(d, version, account, generation) : null;
         var approval = root.TryGetProperty("approval", out var a) ? ParseApproval(a, op) : null;
-        if (version == 3 && op == EntryOp.Add && approval!.Method is not ("code" or "qr")) { throw new RosterFormatException(Refusal.Approval, "body.approval.method"); }
+        if (version == 3 && op == EntryOp.Add && approval is not { Method: "code" or "qr" }) { throw new RosterFormatException(Refusal.Approval, "body.approval.method"); }
         var target = root.TryGetProperty("target", out var t) ? ParseTarget(t) : null;
         IReadOnlyList<byte[]> keep = root.TryGetProperty("keep", out var k) ? Hashes(k, "body.keep", 0, MaxKeep) : [];
         var name = root.TryGetProperty("name", out var n) ? DeviceName(n, "body.name") : null;

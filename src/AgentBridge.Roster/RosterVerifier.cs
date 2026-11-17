@@ -38,7 +38,7 @@ public static class Invalid
     public const string Cap = "cap";
     public const string Budget = "budget";
     public const string Evidence = "evidence";
-    // A v2 host add on a roster whose verifier has not switched v2 on.
+    // A v2 host add before its switch, or v3 before its dependent readers land.
     public const string Version = "version";
     // A hostSign key that is, or is made by this add the same as, another device's key of any kind.
     public const string HostKey = "host-key";
@@ -157,6 +157,8 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
         var body = e.Body;
         if (body.Account != Account) { return new(e.Hash, Verdict.Refused, Invalid.Account); }
         if (body.Generation != Generation) { return new(e.Hash, Verdict.Refused, Invalid.Generation); }
+        // Parsing v3 does not grant authority before collision checks and client parity land.
+        if (body.Version == 3) { return new(e.Hash, Verdict.Refused, Invalid.Version); }
 
         var parents = new int[body.Prev.Count];
         for (var i = 0; i < parents.Length; i++)
