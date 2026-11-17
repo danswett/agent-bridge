@@ -32,6 +32,12 @@ public sealed class SessionService
     readonly UsageService? usage;
     readonly ISessionLauncher? launcher;
     internal ISessionLauncher? AgentLauncher => launcher;
+    AgentLaunchLifecycle? agentLaunches;
+    internal void ObserveAgentLaunches(AgentLaunchGate gate, AgentAuditLog audit)
+    {
+        lock (subscribers) { agentLaunches ??= launcher is null ? null : new(gate, launcher, source, audit, log); }
+    }
+    internal void ReconcileAgentLaunches() => agentLaunches?.Reconcile();
     readonly SessionTransfers? transfers;
     readonly ConcurrentDictionary<IProtocolChannel, Subscriber> subscribers = new();
 

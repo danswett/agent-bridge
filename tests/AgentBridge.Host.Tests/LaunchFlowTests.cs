@@ -1718,6 +1718,7 @@ public abstract partial class LaunchFlowFixture
             Looking?.Invoke();
             lock (Specs) { return running.Contains(started.ProcessId); }
         }
+        public bool? Exited(Started started) => !Running(started);
 
         // Runs as the host asks whether a process still runs: where a test holds the host's
         // following of a launch between two of its looks.

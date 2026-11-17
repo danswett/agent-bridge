@@ -65,7 +65,11 @@ The L1 ledger now atomically persists request bindings, attempts, live reservati
 hourly charges under the private profile, with one cross-process admission lock.
 Missing or damaged committed state, or legacy agent-launch evidence without a ledger,
 fails closed as `capRebuilding: needs-person`.
-Restarts and elapsed time never free a live slot; production evidence consumers remain L2.
+The L2 pipe composition observes registered/failed requests and session removals, reconciling
+durable terminal proof and process identity (PID plus start time). Proven no-start/exit closure
+releases live capacity once without refunding Failed/Unconfirmed hourly charges.
+Unknown process state stays held; after ten minutes the live-cap refusal says `needs-person`,
+not expired. No timeout alone releases capacity, and launch remains disabled by default.
 Proven prestart refusals and busy outcomes release only their own hourly and live
 reservation; request memory and the separate attempt budget are retained.
 
