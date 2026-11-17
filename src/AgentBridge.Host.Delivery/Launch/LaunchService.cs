@@ -20,7 +20,7 @@ public interface ISessionLauncher
     Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default);
 
     Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default, LaunchAttribution? attribution = null) =>
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot write durable launch evidence."));
 
     Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
@@ -758,17 +758,18 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         LaunchOnceAsync(request, peer, null);
 
     public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, LaunchAttribution? attribution = null)
     {
         ArgumentNullException.ThrowIfNull(prepare);
-        return LaunchOnceAsync(request, peer, prepare);
+        return LaunchOnceAsync(request, peer, prepare, attribution);
     }
 
-    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare)
+    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare,
+        LaunchAttribution? attribution = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare)
-            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare))
+        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, attribution: attribution)
+            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, attribution: attribution))
             : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
             Settled(request, result, $"launch {Short(key)}"),
             owner: prepare is null ? Owner(request, peer) : new LaunchOwner(peer, RequestBinding(request)),
@@ -840,7 +841,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
     async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default,
-        Func<Guid, Action<string>?>? prepare = null)
+        Func<Guid, Action<string>?>? prepare = null, LaunchAttribution? attribution = null)
     {
         try
         {
@@ -906,7 +907,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     }
                 }
                 return await StartAsync(plan, claim, key, handed, fetched, ct, restoring,
-                    peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare);
+                    peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, attribution: attribution);
             }
             finally
             {
@@ -1076,7 +1077,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     }
 
     async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
-        Func<Guid, Action<string>?>? prepare = null)
+        Func<Guid, Action<string>?>? prepare = null, LaunchAttribution? attribution = null)
     {
         Pending follow;
         LaunchedWith launched;
@@ -1273,7 +1274,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 if (auditRegistered is null) { return Refused("the launch audit could not be written durably"); }
             }
             // A crash before registration must not turn an unbound launch into an adoptable process.
-            provenance.Preparing(key, sessionId);
+            provenance.Preparing(key, sessionId, attribution);
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)

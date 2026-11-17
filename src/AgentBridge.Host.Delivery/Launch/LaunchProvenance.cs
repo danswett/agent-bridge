@@ -3,6 +3,14 @@ using AgentBridge.Host.Core;
 
 namespace AgentBridge.Host.Delivery.Launch;
 
+// Set by verified host ingress, never inferred from request fields, peer names or session ids.
+public sealed record LaunchAttribution(string Path, string ActorKind, string Principal)
+{
+    internal bool IsValid => Path is "local" or "relay" or "legacy-ha"
+        && ActorKind is "person-client" or "agent" or "ha-component"
+        && !string.IsNullOrWhiteSpace(Principal) && Principal.Length <= 1024;
+}
+
 internal sealed class LaunchProvenance
 {
     const int MaxBytes = 4 * 1024 * 1024;
@@ -13,7 +21,7 @@ internal sealed class LaunchProvenance
     readonly Lock gate = new();
     readonly Dictionary<Guid, Origin> origins = [];
     bool unavailable;
-    sealed record Origin(string Session, SessionProcess? Process);
+    sealed record Origin(string Session, SessionProcess? Process, LaunchAttribution? Attribution = null);
 
     public LaunchProvenance(string? path, Action<string> log)
     {
@@ -26,7 +34,7 @@ internal sealed class LaunchProvenance
             if (stream.Length > MaxBytes) { throw new InvalidDataException(); }
             var stored = JsonSerializer.Deserialize<Dictionary<Guid, Origin>>(stream, Json)
                 ?? throw new InvalidDataException();
-            if (stored.Values.Any(o => o is null || o.Session is not { Length: <= 1024 } ||
+            if (stored.Values.Any(o => o is null || o.Session is not { Length: <= 1024 } || o.Attribution is { IsValid: false } ||
                 (o.Process is not null && (o.Session.Length == 0 || o.Process is not { Id: > 0, StartedAt: not null }
                     || o.Process.StartedAt == default(DateTimeOffset)))))
             { throw new InvalidDataException(); }
@@ -41,9 +49,10 @@ internal sealed class LaunchProvenance
         }
     }
 
-    public void Preparing(Guid request, string session = "")
+    public void Preparing(Guid request, string session = "", LaunchAttribution? attribution = null)
     {
-        lock (gate) { Check(); origins[request] = new(session, null); Save(); }
+        if (attribution is { IsValid: false }) { throw new ArgumentException("launch attribution is invalid", nameof(attribution)); }
+        lock (gate) { Check(); origins[request] = new(session, null, attribution); Save(); }
     }
 
     public void Abandon(Guid request)
@@ -56,7 +65,7 @@ internal sealed class LaunchProvenance
         lock (gate)
         {
             Check();
-            var origin = new Origin(session, process);
+            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Attribution);
             if (origins.GetValueOrDefault(request) == origin) { return; }
             origins[request] = origin;
             Save();

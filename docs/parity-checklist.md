@@ -438,6 +438,11 @@ Mark before each: `agent-bridge-rehearsal mark $cp`.
 
 ### E5. Ending a session
 
+**Open parity gap (#2741):** an agent ends a session that an agent started.
+The host must use verified fleet-launch provenance and preserve Q12's exact-node,
+work and ownership safeguards. The first slice records launch attribution only;
+agent stopping and its live verification remain pending.
+
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
 | **E5-01** | §5 "One press when idle", §5 "/exit, then terminate", §5 "Status reads ending" | PWA | `agent-bridge-rehearsal mark $cp2` (the idle session from E1-10), then press End session once on its card | `ending`, then gone. Copilot recorded its shutdown | `agent-bridge-rehearsal expect shutdown $cp2 --step E5-01`, then `agent-bridge-rehearsal sessions --id $cp2 --expect-gone --timeout 30 --step E5-01b` | |

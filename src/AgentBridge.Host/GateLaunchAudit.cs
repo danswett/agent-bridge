@@ -52,7 +52,8 @@ internal static class GateLaunchAudit
             if (!audit.Append(intent)) { return null; }
             return session => { audit.Append(intent with { Target = session, Outcome = "started", Gate = gate with { Phase = "terminal" } }); };
         }
-        return await launcher.LaunchAuditedAsync(request, peer, Prepare, ct);
+        return await launcher.LaunchAuditedAsync(request, peer, Prepare, ct,
+            new LaunchAttribution(ingress.Path, ingress.ActorKind, ingress.Principal));
     }
 
     static LaunchResult Refused(string reason) => new(LaunchOutcome.Refused, reason);

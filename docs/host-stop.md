@@ -8,6 +8,11 @@ worker to type `/exit`, the agent-ha-bridge guard (G5), request memory, and the 
 
 ## Local person command
 
+The approved agent-stop parity rule is [Q12](design/agent-principals.md): an agent may
+end any session proven to have been agent-started through the fleet launch route, never
+a person-started or unattributed session. #2741's first slice records verified launch
+attribution only; the agent stop gate is still pending and existing refusals remain.
+
 On Windows, run `agent-bridge-host stop <session> [--confirm <token>] [--profile <name>]` from the person's
 own terminal, outside any agent session. It calls the running local host, not another machine.
 JSON output contains `outcome`, and when relevant `confirm`, `confirmSeconds` or `forced`;
