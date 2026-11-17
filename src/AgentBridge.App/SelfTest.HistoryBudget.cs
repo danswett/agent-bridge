@@ -192,7 +192,8 @@ static partial class SelfTest
             bool SessionLaneFocused() => FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is DependencyObject focused
                 && (ReferenceEquals(focused, window.Sessions.Rows)
                     || Above<ListView>(focused, lane => ReferenceEquals(lane, window.Sessions.Rows)) is not null);
-            var sessionLaneFocusBefore = SessionLaneFocused();
+            // Model a row click: programmatic selection alone retains focus in recycled history.
+            var sessionLaneFocusBefore = window.Sessions.Rows.Focus(FocusState.Programmatic) && SessionLaneFocused();
             check(sessionLaneFocusBefore, "starts the pinned reopen with keyboard focus in the session lane");
             Away(window, main);
             var pinnedView = await Choose(window, main, id, "Response");
