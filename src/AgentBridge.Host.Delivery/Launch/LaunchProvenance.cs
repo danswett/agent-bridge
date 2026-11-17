@@ -74,6 +74,11 @@ internal sealed class LaunchProvenance
         }
     }
 
+    internal SessionProcess? ProcessFor(Guid request)
+    {
+        lock (gate) { Check(); return origins.GetValueOrDefault(request)?.Process; }
+    }
+
     public bool IsFleetWorker(string session, SessionProcess? process)
     {
         lock (gate)

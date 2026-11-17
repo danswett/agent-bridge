@@ -42,6 +42,7 @@ public interface IAgentStarter
 
     // Whether the process started is still the one running under its id.
     bool Running(Started started);
+    bool? Exited(Started started) => null;
 
     // Whether a process is the one started or runs under it (an npm shim's cmd.exe starts node,
     // which may start the agent's own binary); null when that cannot be told, as when the
@@ -141,6 +142,20 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
             // A recycled id is another process: only the one started at that moment counts.
             return !GetProcessTimes(process, out var created, out _, out _, out _)
                 || Math.Abs((DateTimeOffset.FromFileTime(created).ToUniversalTime() - started.StartedAt).TotalMilliseconds) < 1000;
+        }
+        finally { CloseHandle(process); }
+    }
+
+    public bool? Exited(Started started)
+    {
+        var process = OpenProcess(ProcessQueryLimitedInformation, false, (uint)started.ProcessId);
+        if (process == 0) { return Marshal.GetLastWin32Error() == 87 ? true : null; }
+        try
+        {
+            if (!GetExitCodeProcess(process, out var code)) { return null; }
+            if (code != StillActive) { return true; }
+            return GetProcessTimes(process, out var created, out _, out _, out _)
+                && Math.Abs((DateTimeOffset.FromFileTime(created).ToUniversalTime() - started.StartedAt).TotalMilliseconds) < 1000 ? false : null;
         }
         finally { CloseHandle(process); }
     }

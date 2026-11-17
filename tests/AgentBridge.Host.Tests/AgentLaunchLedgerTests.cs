@@ -82,6 +82,16 @@ public sealed class AgentLaunchLedgerTests : IDisposable
     }
 
     [Fact]
+    public void An_unresolved_launch_after_ten_minutes_is_held_and_surfaces_needs_person()
+    {
+        Assert.True(Gate().CheckLaunch("a", "unknown", "hash").Allowed);
+        time.Advance(TimeSpan.FromMinutes(11));
+        var refusal = Gate().CheckLaunch("b", "another", "hash");
+        Assert.False(refusal.Allowed);
+        Assert.Contains("needs-person", refusal.Reason);
+    }
+
+    [Fact]
     public void Missing_ledger_never_treats_existing_agent_launch_evidence_as_empty_capacity()
     {
         Assert.True(new AgentAuditLog(folder).Append(new("local", Guid.NewGuid().ToString(),
