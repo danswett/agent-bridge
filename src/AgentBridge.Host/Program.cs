@@ -141,7 +141,8 @@ var defaults = readRoots ?? SessionSourceOptions.ForCurrentUser();
 // usage, which reads what serve would (usage.*). usage only reads the file: it never makes the
 // profile a device key, as loading its identity would. serve and ha shadow also read whether this
 // profile has taken over agent-ha-bridge's hooks (IntakeState, docs/host-hooks.md).
-var serveFolder = command == "serve" || (command == "ha" && arguments.ElementAtOrDefault(1) == "shadow") ? LoadIdentity().Folder : null;
+var servingIdentity = command == "serve" || (command == "ha" && arguments.ElementAtOrDefault(1) == "shadow") ? LoadIdentity() : null;
+var serveFolder = servingIdentity?.Folder;
 var (settings, settingsProblem) = serveFolder is not null
     ? HostSettings.Load(serveFolder)
     : command is "usage" or "devbox" && Identity.IsValidProfile(Option("--profile") ?? "default")
@@ -168,6 +169,7 @@ IPersonDeviceRoster personRoster = new NoPersonRoster();
 Func<string?> rosterAccount = () => null;
 var options = new SessionSourceOptions
 {
+    HostId = servingIdentity is null ? null : Wire.DeviceId(servingIdentity.Key.Public),
     // A migrated installation's agent homes, where its hooks were re-pointed, unless told otherwise.
     CopilotHome = Option("--copilot-home") ?? intakeState?.Homes?.Copilot ?? defaults.CopilotHome,
     ClaudeHome = Option("--claude-home") ?? intakeState?.Homes?.Claude ?? defaults.ClaudeHome,

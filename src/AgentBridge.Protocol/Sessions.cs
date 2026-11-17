@@ -390,6 +390,12 @@ public sealed record Session
     public DateTimeOffset? StartedAt { get; init; }
     public required DateTimeOffset UpdatedAt { get; init; }
     public int? ProcessId { get; init; }
+    [JsonPropertyName("transcript_bytes")]
+    public long? TranscriptBytes { get; init; }
+    [JsonPropertyName("transcript_bytes_unavailable")]
+    public string? TranscriptBytesUnavailable { get; init; }
+    [JsonPropertyName("transcript_bytes_provenance")]
+    public TranscriptSizeProvenance? TranscriptBytesProvenance { get; init; }
     public required Activity Activity { get; init; }
     public Question? Question { get; init; }
     // Agent while an agent drives the current turn: it launched the session, or answered or
@@ -430,6 +436,11 @@ public sealed record Session
     // The list and event form: everything but the tool history.
     public Session WithoutHistory() => Activity.History is null ? this : this with { Activity = Activity with { History = null } };
 }
+
+public sealed record TranscriptSizeProvenance(
+    [property: JsonPropertyName("observed_at")] DateTimeOffset ObservedAt,
+    string Source,
+    [property: JsonPropertyName("host_id")] string HostId);
 
 // session.attention (#800, v1-sessions.md "Attention"). Which fields a kind uses is the spec's;
 // a reader takes whatever is there. Nothing in it is a credential, a sign-in code or a link:

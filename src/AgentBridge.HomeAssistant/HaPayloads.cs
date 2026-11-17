@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Protocol;
 
@@ -133,6 +134,13 @@ public static class HaPayloads
             ["machine"] = machineName,
         };
         if (s.ProcessId is { } pid) { a["process_id"] = pid; }
+        if (s.TranscriptBytesProvenance is { } transcript)
+        {
+            a["session_id"] = s.Id;
+            a["transcript_bytes_provenance"] = JsonSerializer.SerializeToNode(transcript, ProtocolJson.Options);
+        }
+        if (s.TranscriptBytes is { } bytes) { a["transcript_bytes"] = bytes; }
+        if (s.TranscriptBytesUnavailable is { } unavailable) { a["transcript_bytes_unavailable"] = unavailable; }
         a["updated"] = Stamp(now);
         if (!string.IsNullOrWhiteSpace(s.Model)) { a["model"] = s.Model; }
         if (s.Activity.Background is { Agents: > 0 } b) { a["background_agents"] = b.Agents; }

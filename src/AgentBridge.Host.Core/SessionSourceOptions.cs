@@ -5,6 +5,9 @@ namespace AgentBridge.Host.Core;
 // ~/.copilot, ~/.claude or ~/.codex by accident.
 public sealed class SessionSourceOptions
 {
+    // The serving host's protocol identity; offline readers need not load a device key.
+    public string? HostId { get; init; }
+
     // ~/.copilot: session-state/<id>/ with events.jsonl, workspace.yaml and inuse.<pid>.lock.
     public required string CopilotHome { get; init; }
 

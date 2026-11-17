@@ -22,6 +22,22 @@ clients restart paging without `before` and merge by turn id.
 
 ## Rules for every message
 
+Serving hosts report each session's event-log size as `transcript_bytes`, from
+file metadata only, never by opening or parsing content for this measurement.
+The discovered transcript belongs to that session's `id`. The companion
+`transcript_bytes_provenance` contains `source: "file-size"`, `host_id` (hello's
+machine id) and `observed_at` (UTC). These diagnostic keys deliberately use
+snake_case, including on the Home Assistant status attributes, where `session_id`
+binds the observation to the protocol session rather than its display name.
+An observation is replaced when its size, availability or source path changes;
+unchanged observations retain their timestamp to avoid idle upsert churn.
+If metadata cannot be read, `transcript_bytes` is absent and
+`transcript_bytes_unavailable` gives a fixed reason (`path-unavailable`,
+`file-not-found`, `directory-not-found`, `access-denied`, `invalid-path`, `io-error`).
+Neither absence nor unavailability means zero. Only a stat-ed empty file reports
+zero. Offline readers without a host identity and older hosts may omit all three
+fields. This is not process working-set memory and does not enforce a cap.
+
 * JSON, UTF-8, `camelCase` names. A field that is absent and one that is `null` mean
   the same thing. Text in the Basic Multilingual Plane, accented letters and CJK
   included, is sent as raw UTF-8, not as `\u` escapes. Characters outside it, which are

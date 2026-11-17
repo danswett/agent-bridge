@@ -15,6 +15,8 @@ internal sealed class SessionTracker
     readonly SessionState _state = new();
     readonly TranscriptParser _parser;
     TranscriptTail? _tail;
+    TranscriptSize? _transcriptSize;
+    string? _transcriptSizePath;
     ClaudeSubagents? _subagents;
     Workspace? _workspace;
     (DateTime, long) _workspaceStamp;
@@ -67,6 +69,17 @@ internal sealed class SessionTracker
         // allocation (#608).
         var changed = _built is null || discovered != Discovered;
         Discovered = discovered;
+        if (_options.HostId is { } hostId)
+        {
+            var sample = TranscriptSize.Read(discovered.TranscriptPath, hostId, _time.GetUtcNow());
+            if (_transcriptSize is null || _transcriptSizePath != discovered.TranscriptPath
+                || sample.Bytes != _transcriptSize.Bytes || sample.Unavailable != _transcriptSize.Unavailable)
+            {
+                _transcriptSize = sample;
+                _transcriptSizePath = discovered.TranscriptPath;
+                changed = true;
+            }
+        }
         if (discovered.TranscriptPath is { } path)
         {
             if (_tail is null || !string.Equals(_tail.Path, path, StringComparison.Ordinal))
@@ -342,6 +355,9 @@ internal sealed class SessionTracker
             StartedAt = ws?.CreatedAt ?? _state.StartedAt,
             UpdatedAt = _state.UpdatedAt ?? reg?.Updated ?? ws?.UpdatedAt ?? _firstSeen,
             ProcessId = d.ProcessId,
+            TranscriptBytes = _transcriptSize?.Bytes,
+            TranscriptBytesUnavailable = _transcriptSize?.Unavailable,
+            TranscriptBytesProvenance = _transcriptSize?.Provenance,
             Question = question,
             WaitingOn = question?.Agent,
             Subagents = subagents,
