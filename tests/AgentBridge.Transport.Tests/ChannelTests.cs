@@ -83,6 +83,8 @@ public class ChannelTests
 
     static KnownResponders ExpectIk(ChannelHub hub)
     {
+        // These tests require IK, not the production five-second fallback deadline.
+        hub.IkPatience = TimeSpan.FromSeconds(30);
         return hub.KnownPeers = new KnownResponders();
     }
 
