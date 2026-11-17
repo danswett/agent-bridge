@@ -41,7 +41,8 @@ internal static class ReplyClaimJournal
         var sequence = 0L;
         var tip = Genesis(profileKey);
         proofs[0] = tip;
-        stateProofs[0] = StateHash([]);
+        string? expectedStateHash = StateHash([]);
+        stateProofs[0] = expectedStateHash;
         var first = true;
         while (offset < bytes.Length)
         {
@@ -57,7 +58,8 @@ internal static class ReplyClaimJournal
             Row row;
             try { row = JsonSerializer.Deserialize<Row>(payload, Json) ?? throw Corrupt(); }
             catch (JsonException e) { throw new InvalidDataException("The reply-claim journal contains an invalid row.", e); }
-            if (row.Version != Version || row.ProfileKey != profileKey || row.Sequence <= 0 || !IsHash(row.PreviousHash)) { throw Corrupt(); }
+            if (row.Version != Version || row.ProfileKey != profileKey || row.Sequence <= 0
+                || !IsHash(row.PreviousHash) || !IsHash(row.StateHash)) { throw Corrupt(); }
             var rowHash = Convert.ToHexString(digest);
             if (first && row.Action == "snapshot")
             {
@@ -75,19 +77,24 @@ internal static class ReplyClaimJournal
                 if (row.Action == "snapshot" || row.Claims is not null || row.CoverageSequence != -1 || row.CoverageHash is not null
                     || row.CoverageStateHash is not null || row.Sequence != sequence + 1 || row.PreviousHash != tip) { throw Corrupt(); }
                 Apply(claims, row);
-                var stateHash = StateHash(claims.Values);
-                if (row.StateHash != stateHash) { throw Corrupt(); }
             }
             sequence = row.Sequence;
             tip = rowHash;
             proofs[sequence] = tip;
-            stateProofs[sequence] = StateHash(claims.Values);
+            if (sequence == marker.Sequence)
+            {
+                var stateHash = StateHash(claims.Values);
+                if (row.StateHash != stateHash) { throw Corrupt(); }
+                stateProofs[sequence] = stateHash;
+            }
+            expectedStateHash = row.StateHash;
             first = false;
             offset += length + ChecksumSize;
         }
         if (sequence < marker.Sequence || !proofs.TryGetValue(marker.Sequence, out var proof) || proof != marker.Hash
             || !stateProofs.TryGetValue(marker.Sequence, out var stateProof) || stateProof != marker.StateHash)
         { throw new InvalidDataException("The reply-claim journal cannot prove the marker's high-water point."); }
+        if (StateHash(claims.Values) != expectedStateHash) { throw Corrupt(); }
         if (truncateAt is not null)
         {
             if (!repairTail || ContainsValidFrame(bytes, truncateAt.Value, sequence, profileKey)) { throw Corrupt(); }

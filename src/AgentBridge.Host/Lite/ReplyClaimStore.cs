@@ -47,7 +47,7 @@ public sealed class ReplyClaimStore : IDisposable
         {
             if (marker is null || marker.State != "active") { throw new InvalidDataException("A completed reply-claim migration has a missing or inactive marker."); }
             ValidateProfile(marker.Schema, marker.ProfileKey, paths, "marker");
-            Load(paths, marker, repairTail: true);
+            Load(paths, ref marker, repairTail: true);
             return;
         }
         if (migration.State != "initializing") { throw new InvalidDataException("The reply-claim migration state is invalid."); }
@@ -59,7 +59,7 @@ public sealed class ReplyClaimStore : IDisposable
             Write(paths.Marker, marker);
         }
         ValidateProfile(marker.Schema, marker.ProfileKey, paths, "marker");
-        if (marker.State == "active") { Load(paths, marker, repairTail: true); }
+        if (marker.State == "active") { Load(paths, ref marker, repairTail: true); }
         else if (marker.State == "initializing")
         {
             var active = marker with { State = "active" };
@@ -88,7 +88,7 @@ public sealed class ReplyClaimStore : IDisposable
         using var held = Lock(paths);
         var marker = ReadyMarker(paths);
         ReplyClaimJournal.Recover(paths.Ledger, Path.GetFullPath(backupPath), paths.ProfileKey, marker);
-        Load(paths, marker, repairTail: false);
+        Load(paths, ref marker, repairTail: false);
     }
 
     public ReplyClaimResult Acquire(string sessionId, string requestId, string textHash, string? attachmentHash = null)
@@ -102,8 +102,7 @@ public sealed class ReplyClaimStore : IDisposable
         if (attachmentHash is not null) { ValidateHash(attachmentHash, nameof(attachmentHash)); }
         using var held = Lock(paths);
         var marker = ReadyMarker(paths);
-        var ledger = Load(paths, marker, repairTail: true);
-        marker = marker with { Sequence = ledger.Sequence, Hash = ledger.Hash };
+        var ledger = Load(paths, ref marker, repairTail: true);
         var now = time.GetUtcNow();
         foreach (var expiredClaim in ledger.Claims.Where(c => now - c.FirstClaimUtc >= Lifetime).ToArray())
         {
@@ -129,7 +128,6 @@ public sealed class ReplyClaimStore : IDisposable
         ledger.Claims.Add(claim);
         ledger = ReplyClaimJournal.Append(paths.Ledger, paths.ProfileKey, ledger, "claimed", claim);
         marker = Advance(paths, marker, ledger);
-        if (new FileInfo(paths.Ledger).Length > 1024 * 1024) { Compact(paths, marker, ledger); }
         return new(ReplyClaimStatus.Acquired, claim.Generation);
     }
 
@@ -140,15 +138,14 @@ public sealed class ReplyClaimStore : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(requestId);
         using var held = Lock(paths);
         var marker = ReadyMarker(paths);
-        var ledger = Load(paths, marker, repairTail: true);
-        marker = marker with { Sequence = ledger.Sequence, Hash = ledger.Hash };
+        var ledger = Load(paths, ref marker, repairTail: true);
         var requestHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(requestId)));
         var claim = ledger.Claims.FirstOrDefault(c => c.Session == sessionId && Eq(c.RequestHash, requestHash) && c.Generation == generation);
         if (claim is null) { return false; }
+        if (new FileInfo(paths.Ledger).Length > 1024 * 1024) { ledger = Compact(paths, marker, ledger); }
         ledger.Claims.Remove(claim);
         ledger = ReplyClaimJournal.Append(paths.Ledger, paths.ProfileKey, ledger, "released", claim);
         marker = Advance(paths, marker, ledger);
-        if (new FileInfo(paths.Ledger).Length > 1024 * 1024) { Compact(paths, marker, ledger); }
         return true;
     }
 
@@ -157,17 +154,16 @@ public sealed class ReplyClaimStore : IDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         using var held = Lock(paths);
         var marker = ReadyMarker(paths);
-        var ledger = Load(paths, marker, repairTail: true);
-        marker = marker with { Sequence = ledger.Sequence, Hash = ledger.Hash };
+        var ledger = Load(paths, ref marker, repairTail: true);
         Compact(paths, marker, ledger);
     }
 
     public void Dispose() => disposed = true;
 
-    static ReplyClaimSnapshot Load(Paths paths, ReplyClaimMarker marker, bool repairTail)
+    static ReplyClaimSnapshot Load(Paths paths, ref ReplyClaimMarker marker, bool repairTail)
     {
         var ledger = ReplyClaimJournal.Read(paths.Ledger, paths.ProfileKey, marker, repairTail);
-        if (ledger.Sequence > marker.Sequence) { Advance(paths, marker, ledger); }
+        if (ledger.Sequence > marker.Sequence) { marker = Advance(paths, marker, ledger); }
         return ledger;
     }
 

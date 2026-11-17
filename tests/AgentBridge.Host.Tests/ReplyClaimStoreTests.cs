@@ -331,6 +331,93 @@ public sealed class ReplyClaimStoreTests : IDisposable
     }
 
     [Fact]
+    public void Compaction_uses_the_refreshed_marker_when_replay_is_ahead()
+    {
+        using var store = ReplyClaimStore.Open(profile, time);
+        store.Acquire("session", "first", Hash("text"));
+        var oldMarker = File.ReadAllBytes(PathInProfile(Marker));
+        var later = store.Acquire("session", "later", Hash("text"));
+        File.WriteAllBytes(PathInProfile(Marker), oldMarker);
+
+        store.Compact();
+        using var restarted = ReplyClaimStore.Open(profile, time);
+        Assert.Equal(later.Generation, restarted.Acquire("session", "later", Hash("text")).Generation);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void State_hash_validation_holds_at_the_marker_and_at_the_journal_end(bool ahead)
+    {
+        using var store = ReplyClaimStore.Open(profile, time);
+        var genesis = File.ReadAllBytes(PathInProfile(Marker));
+        store.Acquire("session", "request", Hash("text"));
+        RewriteFirstFrame(PathInProfile(Ledger), (row, _) => row["stateHash"] = Hash("wrong state"));
+        if (ahead) { File.WriteAllBytes(PathInProfile(Marker), genesis); }
+
+        Assert.Throws<InvalidDataException>(() => store.Acquire("session", "request", Hash("text")));
+    }
+
+    [Fact]
+    public void Replay_at_the_claim_cap_finishes_within_the_two_second_lock_wait()
+    {
+        using var store = ReplyClaimStore.Open(profile, time);
+        var marker = JsonNode.Parse(File.ReadAllText(PathInProfile(Marker)))!.AsObject();
+        var state = new ReplyClaimSnapshot([], 0, marker["hash"]!.GetValue<string>());
+        for (var i = 0; i < 2048; i++)
+        {
+            var claim = new ReplyClaimRecord("session", Hash($"request-{i}"), Hash("text"), null, Guid.NewGuid(), time.GetUtcNow());
+            state.Claims.Add(claim);
+            state = ReplyClaimJournal.Append(PathInProfile(Ledger), marker["profileKey"]!.GetValue<string>(), state, "claimed", claim);
+        }
+        marker["sequence"] = state.Sequence; marker["hash"] = state.Hash;
+        marker["stateHash"] = ReplyClaimJournal.StateHash(state.Claims);
+        File.WriteAllText(PathInProfile(Marker), marker.ToJsonString());
+
+        var watch = Stopwatch.StartNew();
+        var duplicate = store.Acquire("session", "request-2047", Hash("text"));
+        watch.Stop();
+        Assert.Equal(ReplyClaimStatus.Existing, duplicate.Status);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2), $"Replay held the lock for {watch.Elapsed}.");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Crossing_the_compaction_threshold_never_loses_a_successful_mutation(bool release)
+    {
+        using var store = ReplyClaimStore.Open(profile, time);
+        var first = store.Acquire("session", "first", Hash("text"));
+        var path = PathInProfile(Ledger);
+        var original = File.ReadAllBytes(path);
+        var length = BinaryPrimitives.ReadInt32LittleEndian(original);
+        var payload = Enumerable.Repeat((byte)' ', 1024 * 1024 - 1 - 36).ToArray();
+        original.AsSpan(4, length).CopyTo(payload);
+        var padded = new byte[payload.Length + 36];
+        BinaryPrimitives.WriteInt32LittleEndian(padded, payload.Length);
+        payload.CopyTo(padded.AsSpan(4));
+        SHA256.HashData(payload).CopyTo(padded.AsSpan(4 + payload.Length));
+        File.WriteAllBytes(path, padded);
+        var marker = JsonNode.Parse(File.ReadAllText(PathInProfile(Marker)))!;
+        marker["hash"] = Convert.ToHexString(SHA256.HashData(payload));
+        File.WriteAllText(PathInProfile(Marker), marker.ToJsonString());
+        try
+        {
+            ReplyClaimJournal.BeforeCompactReplace.Value = () => throw new IOException("injected maintenance failure");
+            if (release) { Assert.True(store.Release("session", "first", first.Generation)); }
+            else { Assert.Equal(ReplyClaimStatus.Acquired, store.Acquire("session", "later", Hash("text")).Status); }
+            Assert.Throws<IOException>(() => store.Compact());
+            Assert.Throws<IOException>(() => store.Acquire("session", "blocked", Hash("text")));
+        }
+        finally { ReplyClaimJournal.BeforeCompactReplace.Value = null; }
+
+        using var restarted = ReplyClaimStore.Open(profile, time);
+        Assert.Equal(release ? ReplyClaimStatus.Acquired : ReplyClaimStatus.Existing,
+            restarted.Acquire("session", release ? "first" : "later", Hash("text")).Status);
+        Assert.Equal(ReplyClaimStatus.Acquired, restarted.Acquire("session", "blocked", Hash("text")).Status);
+    }
+
+    [Fact]
     public void A_leftover_compaction_temp_is_preserved_and_ignored()
     {
         using var store = ReplyClaimStore.Open(profile, time);
