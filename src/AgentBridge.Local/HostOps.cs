@@ -170,6 +170,8 @@ public sealed record HostStatus
     public required RelayStatus Relay { get; init; }
     public FleetPublicationStatus? FleetPublication { get; init; }
     public HostSigningStatus? HostSigning { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
+    public int? StaleFleetReservations { get; init; }
     public required SignInStatus SignIn { get; init; }
     // Why delivery is off: agent-ha-bridge is running for this user (design G5). Null when it
     // is not, so answers, replies and stops are this host's to deliver.

@@ -68,6 +68,14 @@ internal static class GateLaunchAudit
         return denied is null ? outcome : Refused(denied);
     }
 
+    internal static IEnumerable<AuditCommands.Row> FleetReservations(IReadOnlyList<AuditCommands.Row> rows)
+    {
+        var completed = rows.Where(row => row.Action == "session.launch" && row.Gate is { Phase: "terminal" }
+            && row.Outcome is "started" or "failed" or "refused").Select(row => row.Gate!.Operation).ToHashSet();
+        return rows.Where(row => row.Grant == "fleet" && row.Action == "session.launch" && row.Outcome == "reserved"
+            && row.Gate is { Phase: "intent" } gate && !completed.Contains(gate.Operation));
+    }
+
     internal static bool CloseReservation(AgentAuditLog audit, AuditCommands.Row intent)
     {
         if (intent.Action != "session.launch" || intent.Grant != "fleet" || intent.Outcome != "reserved"

@@ -478,7 +478,8 @@ Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
 an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,
 transfers and attachments. A fresh worktree is checked before starting; its worker receives
 only `read+reply`, and the durable launch audit records `grant: fleet`.
-After ten minutes, complete discovery may close an unregistered reservation only when its
-recorded launcher is proven gone and no registered child exists. Unknown process identities
-stay fail-closed. A person at the machine can retire one reservation with
-`agent-bridge-host scripts retire-fleet <request-uuid> [--profile <name>]`; hourly accounting remains.
+Unresolved reservations never close automatically: a launcher may be a shim, and a failed
+process query proves no exit. Each reservation keeps its live slot until the person at the
+machine runs `agent-bridge-host scripts retire-fleet <request-uuid> [--profile <name>]`;
+hourly accounting remains. `host.status.staleFleetReservations` counts unresolved reservations
+at least ten minutes old, or is null when the audit cannot be read safely.

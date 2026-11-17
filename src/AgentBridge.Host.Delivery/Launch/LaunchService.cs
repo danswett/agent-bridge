@@ -30,8 +30,6 @@ public interface ISessionLauncher
         CancellationToken cancellationToken = default) => Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "fleet launch is unavailable"));
     bool IsFleetWorker(string session, SessionProcess? process) => false;
     SessionProcess? FleetLaunchProcess(Guid request) => null;
-    bool FleetLaunchRegistered(Guid request) => false;
-    bool FleetProcessRunning(SessionProcess process) => false;
     void RetireFleetReservation(Guid request) => throw new InvalidOperationException("fleet reservation retirement is unavailable");
     LaunchConfig? FleetConfig => null;
     Task<LaunchResult>? ReplayAuditedAsync(LaunchRequest request, string peer) => null;
@@ -781,9 +779,6 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return provenance.Fleet(request)?.Process;
     }
     public void RetireFleetReservation(Guid request) => provenance.RetireFleet(request);
-    public bool FleetLaunchRegistered(Guid request) => provenance.Fleet(request)?.Registered == true;
-    public bool FleetProcessRunning(SessionProcess process) =>
-        process.StartedAt is { } at && starter.Running(new Started(process.Id, at));
     public LaunchConfig FleetConfig => Config;
 
     public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, LaunchAuditCallbacks?> prepare,
@@ -1347,7 +1342,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             if (fleet && sessionId.Length > 0)
             {
-                try { provenance.Started(key, sessionId, new SessionProcess(started.ProcessId, started.StartedAt)); }
+                try { provenance.Bound(key, sessionId, new SessionProcess(started.ProcessId, started.StartedAt)); }
                 catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
                 { log($"launch {Short(key)}: fleet process provenance could not be bound: {e.GetType().Name}"); }
             }

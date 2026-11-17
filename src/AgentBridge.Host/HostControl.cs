@@ -157,6 +157,7 @@ public sealed class HostControl
     HostStatus StatusLocked(bool fresh = false)
     {
         var now = Configured();
+        var (rows, complete) = GateAuditProjection.Load(options.Folder);
         return new HostStatus
         {
             Version = options.Version,
@@ -171,6 +172,8 @@ public sealed class HostControl
             Relay = relay,
             FleetPublication = options.FleetPublication(),
             HostSigning = HostSignCustody.Read(options.Folder),
+            StaleFleetReservations = complete ? GateLaunchAudit.FleetReservations(rows)
+                .Count(row => options.Time.GetUtcNow() - row.At >= TimeSpan.FromMinutes(10)) : null,
             SignIn = signIn,
             AgentHaBridge = options.AgentHaBridge(),
             HomeAssistant = options.HomeAssistant(),

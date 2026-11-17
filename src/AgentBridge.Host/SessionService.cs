@@ -90,7 +90,6 @@ public sealed class SessionService
         string? Check() => refusal() ?? (launcher.FleetConfig is { } actual
             ? dispatchCheck(actual) : "fleet dispatch settings are unavailable");
         if (Check() is { } problem) { return new(LaunchOutcome.Refused, problem); }
-        await source.RefreshAsync();
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
             fleet: true, refusal: () => Check() ?? CheckFleetCapacity(audit));
         return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
@@ -111,26 +110,16 @@ public sealed class SessionService
         { return $"the hourly fleet launch cap ({limits.FleetPerHour}) has been reached"; }
         if (source.Held is not null) { return "live fleet worker count cannot be checked while session discovery is incomplete"; }
 
-        var completed = rows.Where(row => row.Action == "session.launch" && row.Gate is { Phase: "terminal" }
-                && (row.Outcome is "started" or "failed" or "refused"))
-            .Select(row => row.Gate!.Operation).ToHashSet();
         var live = new HashSet<SessionProcess>();
-        foreach (var intent in rows.Where(row => row.Grant == "fleet" && row.Action == "session.launch"
-            && row.Gate is { Phase: "intent" } gate && row.Outcome == "reserved" && !completed.Contains(gate.Operation)))
+        var unbound = 0;
+        foreach (var intent in GateLaunchAudit.FleetReservations(rows))
         {
             if (!Guid.TryParseExact(intent.Request, "D", out var request)) { return "live fleet worker count cannot be checked safely"; }
             try
             {
                 var process = launcher!.FleetLaunchProcess(request);
-                if (process is null) { return "live fleet worker count cannot be checked safely"; }
-                if (!launcher.FleetProcessRunning(process))
-                {
-                    if (!launcher.FleetLaunchRegistered(request) && Time.GetUtcNow() - intent.At < TimeSpan.FromMinutes(10))
-                    { return "live fleet worker count cannot be checked safely"; }
-                    if (!GateLaunchAudit.CloseReservation(audit, intent)) { return "fleet launch history cannot be checked safely"; }
-                    continue;
-                }
-                live.Add(process);
+                if (process is null) { unbound++; }
+                else { live.Add(process); }
             }
             catch (InvalidOperationException)
             {
@@ -149,7 +138,7 @@ public sealed class SessionService
         {
             return "live fleet worker count cannot be checked safely";
         }
-        return live.Count >= limits.LiveFleetWorkers
+        return live.Count + unbound >= limits.LiveFleetWorkers
             ? $"the live fleet worker cap ({limits.LiveFleetWorkers}) has been reached"
             : null;
     }

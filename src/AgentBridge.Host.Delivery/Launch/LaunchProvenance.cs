@@ -13,7 +13,7 @@ internal sealed class LaunchProvenance
     readonly Lock gate = new();
     readonly Dictionary<Guid, Origin> origins = [];
     bool unavailable;
-    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, bool Registered = false, bool Retired = false);
+    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, bool Retired = false);
 
     public LaunchProvenance(string? path, Action<string> log)
     {
@@ -51,24 +51,12 @@ internal sealed class LaunchProvenance
         lock (gate) { Check(); origins.Remove(request); Save(); }
     }
 
-    public void Started(Guid request, string session, SessionProcess process)
-    {
-        lock (gate)
-        {
-            Check();
-            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant);
-            if (origins.GetValueOrDefault(request) == origin) { return; }
-            origins[request] = origin;
-            Save();
-        }
-    }
-
     public void Bound(Guid request, string session, SessionProcess process)
     {
         lock (gate)
         {
             Check();
-            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant, Registered: true);
+            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant);
             if (origins.GetValueOrDefault(request) == origin) { return; }
             origins[request] = origin;
             Save();
@@ -102,12 +90,12 @@ internal sealed class LaunchProvenance
         }
     }
 
-    public (string Session, SessionProcess? Process, bool Registered)? Fleet(Guid request)
+    public (string Session, SessionProcess? Process)? Fleet(Guid request)
     {
         lock (gate)
         {
             Check();
-            return origins.GetValueOrDefault(request) is { Grant: "fleet" } o ? (o.Session, o.Process, o.Registered) : null;
+            return origins.GetValueOrDefault(request) is { Grant: "fleet" } o ? (o.Session, o.Process) : null;
         }
     }
 
