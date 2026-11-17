@@ -107,6 +107,13 @@ public static class LocalApi
         }
         if (op.StartsWith("host.", StringComparison.Ordinal))
         {
+            if (op == HostOps.Diagnostics)
+            {
+                var diagnosticsCaller = callers.Classify(channel, fresh: true);
+                if (diagnosticsCaller.Kind is not (CallerKind.App or CallerKind.HostCli))
+                { throw Refuse(op, diagnosticsCaller, "host diagnostics are for the app or host command line", log); }
+                return meter?.Snapshot() ?? throw new InvalidOperationException("host diagnostics meter is not configured");
+            }
             if (!Reads.Contains(op) && callers.Classify(channel, fresh: true) is { Kind: not CallerKind.App } caller
                 && !(caller.Kind == CallerKind.HostCli && op == HostOps.Restart))
             {
