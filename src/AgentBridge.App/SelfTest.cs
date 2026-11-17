@@ -732,13 +732,14 @@ static partial class SelfTest
         ContentDialog? Dialog() => VisualTreeHelper.GetOpenPopupsForXamlRoot(window.RootElement.XamlRoot)
             .Select(p => p.Child).OfType<UIElement>()
             .SelectMany(c => c is ContentDialog d ? (IEnumerable<ContentDialog>)new[] { d } : Find<ContentDialog>(c))
-            .FirstOrDefault(d => AutomationProperties.GetAutomationId(d) == "FeedbackUnavailable");
+            .FirstOrDefault(d => AutomationProperties.GetAutomationId(d) == "FeedbackDialog");
         async Task Unavailable(string from)
         {
-            var opened = await Until(() => Dialog() is not null, TimeSpan.FromSeconds(5));
+            var opened = await Until(() => Dialog() is { } d && ById<TextBox>(d, "FeedbackPreview") is { Text.Length: > 0 }, TimeSpan.FromSeconds(15));
             var dialog = Dialog();
-            check(opened && dialog is { Title: "Send feedback", Content: "Feedback isn't available in the Windows app yet.", CloseButtonText: "Close", PrimaryButtonText: "", SecondaryButtonText: "" },
-                $"says feedback is unavailable without offering a send, from {from}");
+            check(opened && dialog is { Title: "Send feedback", IsPrimaryButtonEnabled: false, PrimaryButtonText: "Send", SecondaryButtonText: "" }
+                && ById<TextBlock>(dialog, "FeedbackStatus")?.Text == AgentBridge.App.Core.Feedback.FeedbackSenderFactory.UnavailableText,
+                $"previews feedback but disables Send while unavailable, from {from}");
             dialog?.Hide();
             check(await Until(() => Dialog() is null && !window.FeedbackOpen, TimeSpan.FromSeconds(5)), $"closes the feedback dialog opened from {from}");
         }
