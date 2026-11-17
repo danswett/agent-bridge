@@ -382,9 +382,14 @@ public partial class App : Application
     // Closing the window keeps the app in the notification area, where its toasts come from.
     void OnWindowClosing(Microsoft.UI.Windowing.AppWindowClosingEventArgs e)
     {
-        if (quitting || tray is null) { return; }
-        e.Cancel = true;
-        window?.HideToTray();
+        if (!quitting && tray is not null)
+        {
+            e.Cancel = true;
+            window?.HideToTray();
+            return;
+        }
+        try { Program.Marker?.Complete(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { AppLog.Write($"run marker not cleared: {error.GetType().Name}"); }
     }
 
     void Quit()

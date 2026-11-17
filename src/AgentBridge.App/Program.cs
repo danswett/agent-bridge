@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.Host.Core.Diagnostics;
 using AgentBridge.Host.Core.Usage;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
@@ -8,6 +9,8 @@ namespace AgentBridge.App;
 
 public static class Program
 {
+    internal static RunMarker? Marker { get; private set; }
+
     [STAThread]
     static int Main(string[] args)
     {
@@ -39,6 +42,14 @@ public static class Program
         // One window per profile: a second start shows the first one's window and leaves.
         using var single = SingleInstance.TryClaim(options);
         if (single is null) { return 0; }
+
+        if (options.SelfTest is null)
+        {
+            var version = JournalEvents.Version(typeof(Program).Assembly) ?? "0.0.0";
+            try { Marker = RunMarker.Start(Path.Combine(Paths.AppData, "runs", options.Demo ? "demo" : options.Profile), version); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { AppLog.Write($"run marker not started: {e.GetType().Name}"); }
+            AppLog.Write($"app started: {version}");
+        }
 
         // Only an installed app owns the AUMID and the toast activator; a development copy or
         // the demo registers nothing on the machine.

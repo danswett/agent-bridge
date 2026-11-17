@@ -89,12 +89,31 @@ public sealed class RunMarkerTests : IDisposable
     static void Crash() => throw new InvalidOperationException("private conversation");
 
     [Fact]
-    public void A_late_watchdog_or_crash_callback_does_not_recreate_a_completed_marker()
+    public void A_late_watchdog_callback_does_not_recreate_a_completed_marker()
     {
         var marker = RunMarker.Start(folder, "1", clock);
         marker.Complete();
         marker.RecordHang(42, TimeSpan.FromSeconds(15), ["diagnostic"]);
-        marker.RecordCrash(new InvalidOperationException());
         Assert.False(RunMarker.ReadPrevious(folder).Unclean);
+    }
+
+    [Fact]
+    public void A_crash_during_window_teardown_restores_evidence_even_after_complete()
+    {
+        var marker = RunMarker.Start(folder, "1", clock);
+        marker.Complete();
+        marker.RecordCrash(new InvalidOperationException("private conversation"));
+        Assert.True(RunMarker.ReadPrevious(folder).Unclean);
+        Assert.Contains(nameof(InvalidOperationException), RunMarker.ReadPrevious(folder).Crash);
+    }
+
+    [Fact]
+    public void A_private_key_spanning_log_lines_is_removed_before_the_tail_is_bounded()
+    {
+        var marker = RunMarker.Start(folder, "1", clock);
+        var material = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("synthetic-material"));
+        marker.RecordHang(42, TimeSpan.FromSeconds(15),
+            ["-----BEGIN PRIVATE KEY-----", .. Enumerable.Repeat(material, 45), "-----END PRIVATE KEY-----"]);
+        Assert.DoesNotContain(material, File.ReadAllText(Assert.Single(Directory.GetFiles(folder))));
     }
 }

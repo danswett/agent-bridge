@@ -53,7 +53,8 @@ public sealed class RunMarker
         lock (gate)
         {
             if (completed) { return; }
-            var lines = lastLogLines.TakeLast(40).Select(line => Limit(FeedbackRedactor.Redact(line), 2048)).ToArray();
+            var lines = FeedbackRedactor.RedactLogLines(string.Join('\n', lastLogLines))
+                .Split('\n').TakeLast(40).Select(line => Limit(line, 2048)).ToArray();
             current = current with { Hang = new(clock.GetUtcNow(), threadId, stalled.TotalSeconds, lines) };
             Save();
         }
@@ -63,7 +64,7 @@ public sealed class RunMarker
     {
         lock (gate)
         {
-            if (completed) { return; }
+            completed = false;
             // Exception messages can contain transcript text; only type and frames belong here.
             current = current with { Crash = DescribeCrash(error) };
             Save();
