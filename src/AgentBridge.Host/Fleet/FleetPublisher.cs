@@ -12,6 +12,8 @@ namespace AgentBridge.Host.Fleet;
 public sealed class FleetPublisher(ISessionSource source, string machine, Func<string, string?>? name = null, TimeProvider? time = null,
     Func<JsonElement, JsonElement>? sign = null)
 {
+    // P-256 DER is at most 72 bytes: 96 base64url characters plus ,"sig":"".
+    const int SignatureOverhead = 96 + 9;
     readonly TimeProvider clock = time ?? TimeProvider.System;
     readonly string epoch = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
     readonly SemaphoreSlim publishing = new(1, 1);
@@ -63,14 +65,15 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
                 {
                     v = 1, machine, epoch, seq, at, truncated, total, sessions,
                 }, ProtocolJson.Options);
-                record = sign?.Invoke(record) ?? record;
-                if (Encoding.UTF8.GetByteCount(record.GetRawText()) <= 16 * 1024) { break; }
+                if (Fits(record, sign is null ? 0 : SignatureOverhead)) { break; }
                 if (sessions.Count == 0) { throw new InvalidDataException("registry publication exceeds the 16 KiB record limit"); }
-                // Fit the completed signed record, dropping the least-recent state change first.
+                // Fit whole entries before using the protected key.
                 sessions.RemoveAt(sessions.Count - 1);
                 truncated = true;
                 total = usable.Length;
             }
+            record = sign?.Invoke(record) ?? record;
+            if (!Fits(record)) { throw new InvalidDataException("signed registry publication exceeds the record or frame limit"); }
             var started = clock.GetTimestamp();
             await put(record, ct);
             lastSent = started;
@@ -79,4 +82,8 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
         }
         finally { publishing.Release(); }
     }
+
+    static bool Fits(JsonElement record, int reserve = 0) =>
+        Encoding.UTF8.GetByteCount(record.GetRawText()) + reserve <= 16 * 1024
+        && JsonSerializer.SerializeToUtf8Bytes(new { t = "registry-put", id = long.MinValue, record }, ProtocolJson.Options).Length + reserve <= 24 * 1024;
 }

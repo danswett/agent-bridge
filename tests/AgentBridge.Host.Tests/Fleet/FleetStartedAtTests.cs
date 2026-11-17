@@ -76,8 +76,14 @@ public sealed class FleetStartedAtTests
         var q = key.ExportParameters(false).Q;
         byte[] point = [4, .. q.X!, .. q.Y!];
         // Ordinary 64-row records fit; oversize the fixture header to exercise defensive byte fitting.
+        var calls = 0;
         var publisher = new FleetPublisher(source, new string('m', 2048), _ => new string('+', 64), sign: r =>
-            FleetRecordSigning.Sign(r, bytes => P256.FromRaw(key.SignData(bytes, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))));
+        {
+            calls++;
+            Assert.True(Encoding.UTF8.GetByteCount(r.GetRawText()) + 105 <= 16 * 1024, "Oversized candidate reached signer");
+            Assert.True(JsonSerializer.SerializeToUtf8Bytes(new { t = "registry-put", id = long.MinValue, record = r }, ProtocolJson.Options).Length + 105 <= 24 * 1024);
+            return FleetRecordSigning.Sign(r, bytes => P256.FromRaw(key.SignData(bytes, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation)));
+        });
         Assert.True(await publisher.PublishAsync((record, _) =>
         {
             var entries = record.GetProperty("sessions");
@@ -89,9 +95,21 @@ public sealed class FleetStartedAtTests
             Assert.All(entries.EnumerateArray(), s => Assert.Equal("2026-10-28T04:00:00Z", s.GetProperty("startedAt").GetString()));
             Assert.True(FleetRecordSigning.Verify(record, point));
             Assert.True(Encoding.UTF8.GetByteCount(record.GetRawText()) <= 16 * 1024);
-            Assert.True(JsonSerializer.SerializeToUtf8Bytes(new { t = "registry-put", record }, ProtocolJson.Options).Length <= 24 * 1024);
+            Assert.True(JsonSerializer.SerializeToUtf8Bytes(new { t = "registry-put", id = long.MinValue, record }, ProtocolJson.Options).Length <= 24 * 1024);
             return Task.CompletedTask;
         }));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task An_oversized_header_is_refused_without_calling_the_signer()
+    {
+        var calls = 0;
+        var publisher = new FleetPublisher(new FleetPublisherTests.Source(), new string('m', 16 * 1024),
+            sign: r => { calls++; return r; });
+        await Assert.ThrowsAsync<InvalidDataException>(() => publisher.PublishAsync((_, _) =>
+            throw new InvalidOperationException("Oversized record reached transport")));
+        Assert.Equal(0, calls);
     }
 
     [Fact, Trait("Category", "Process")]

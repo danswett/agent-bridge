@@ -38,8 +38,9 @@ Host implementation, November 16, 2026 (Pacific), #2518 / S-N2a:
 `FleetPublisher` uses only discovery's `ISessionSource.ProcessOf` binding for optional
 `startedAt`, floors to UTC whole seconds and omits unknown starts. A host restart
 re-observes the still-live process; a replacement process supplies its own start.
-The completed signed record is byte-fitted within 16 KiB, retaining recent state
-changes and marking omissions with `truncated`/`total`. S-N2b's strict relay
+Whole entries are byte-fitted within 16 KiB before signing once, reserving bounded
+signature and frame overhead, then checking the final signed caps. Recent state
+changes are retained; omissions set `truncated`/`total`. S-N2b's strict relay
 allow-list/total semantics and S-N2c's vectors must precede deployment of this
 publisher. This slice changes neither verification nor selection.
 
