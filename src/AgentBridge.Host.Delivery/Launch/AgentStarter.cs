@@ -44,8 +44,7 @@ public interface IAgentStarter
     bool Running(Started started);
 
     // Whether a process is the one started or runs under it (an npm shim's cmd.exe starts node,
-    // which may start the agent's own binary); null when that cannot be told, as when the
-    // process started has gone.
+    // which may start the agent's own binary); null when the process tree cannot be read.
     bool? Owns(Started started, int processId) => null;
 }
 
@@ -147,14 +146,21 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
 
     public bool? Owns(Started started, int processId)
     {
-        if (!Running(started)) { return null; }
         var parents = Parents();
         if (parents is null) { return null; }
         var current = processId;
-        var created = CreatedAt(current);
+        var targetCreated = CreatedAt(current);
+        var created = targetCreated;
         for (var depth = 0; depth < 16; depth++)
         {
-            if (current == started.ProcessId) { return true; }
+            if (current == started.ProcessId)
+            {
+                var launchCreated = CreatedAt(current);
+                if (launchCreated is { } actual)
+                { return Math.Abs((actual - started.StartedAt).TotalMilliseconds) < 1000; }
+                // An exited launcher disappears from the snapshot, but its child retains its parent id.
+                return !parents.ContainsKey(current) && targetCreated is { } target && target >= started.StartedAt;
+            }
             if (!parents.TryGetValue(current, out var parent) || parent == 0 || parent == current) { return false; }
             // An id recycled since: a parent cannot have started after its child.
             var parentCreated = CreatedAt(parent);

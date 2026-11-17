@@ -440,15 +440,22 @@ public sealed class LaunchPieceTests : IDisposable
             Assert.True(starter.Owns(started, agent));
             Assert.True(starter.Owns(started, started.ProcessId));
             Assert.False(starter.Owns(started, Environment.ProcessId));
+
+            if (starter.Running(started))
+            {
+                using var launcher = Process.GetProcessById(started.ProcessId);
+                if (!launcher.HasExited) { launcher.Kill(); }
+            }
+            var gone = DateTime.UtcNow.AddSeconds(20);
+            while (starter.Running(started) && DateTime.UtcNow < gone) { Thread.Sleep(50); }
+            Assert.False(starter.Running(started));
+            Assert.True(starter.Owns(started, agent));
+            Assert.False(starter.Owns(started, Environment.ProcessId));
         }
         finally
         {
             if (agent != 0) { try { Process.GetProcessById(agent).Kill(); } catch (ArgumentException) { } }
         }
-        var gone = DateTime.UtcNow.AddSeconds(20);
-        while (starter.Running(started) && DateTime.UtcNow < gone) { Thread.Sleep(50); }
-        // Once the launcher has gone, nothing can be traced to it.
-        Assert.Null(starter.Owns(started, agent));
     }
 
     static string Echo => Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "agent-bridge-console-echo.exe" : "agent-bridge-console-echo");

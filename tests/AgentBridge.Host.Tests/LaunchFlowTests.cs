@@ -1355,6 +1355,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     [Fact]
     public async Task A_pending_fleet_launch_does_not_bind_a_person_resumed_process_with_the_same_session_id()
     {
+        starter.Registers = false;
         var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(10));
         var registered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         launcher.SessionStarted += (id, _) => registered.TrySetResult(id);
@@ -1377,6 +1378,29 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.NotEqual(starter.Pids[0], process.Id);
         var refusal = Assert.Throws<InvalidOperationException>(() => launcher.FleetLaunchedSession(session, process));
         Assert.Contains("unfinished launch", refusal.Message);
+    }
+
+    [Fact]
+    public async Task A_pending_fleet_launch_binds_a_verified_handoff_first_seen_after_its_launcher_exits()
+    {
+        starter.ExitsAtOnce = true;
+        starter.HandsOn = true;
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(10));
+        var registered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        launcher.SessionStarted += (id, _) => registered.TrySetResult(id);
+
+        var result = await launcher.LaunchAuditedAsync(
+            new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" },
+            "fleet",
+            _ => _ => { },
+            attribution: new LaunchAttribution("local", "agent", "fleet", FleetController: true));
+
+        var session = Assert.IsType<string>(result.Session);
+        Assert.Equal(session, await registered.Task.WaitAsync(Patience));
+        var process = Assert.IsType<SessionProcess>(source.ProcessOf(session));
+        Assert.NotEqual(starter.Pids[0], process.Id);
+        Assert.False(starter.Running(new Started(starter.Pids[0], DateTimeOffset.UtcNow)));
+        Assert.True(launcher.FleetLaunchedSession(session, process));
     }
 
     [Fact]
@@ -1736,7 +1760,18 @@ public abstract partial class LaunchFlowFixture
             BeforeStart?.Invoke();
             if (Throws is { } broken) { throw broken; }
             int pid;
-            lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } if (HandsOn) { running.Add(pid + 3000); } }
+            lock (Specs)
+            {
+                Specs.Add(spec);
+                pid = ++next;
+                Pids.Add(pid);
+                if (!ExitsAtOnce) { running.Add(pid); }
+                if (HandsOn)
+                {
+                    running.Add(pid + 3000);
+                    parents[pid + 3000] = pid;
+                }
+            }
             if (Registers) { Register(spec, HandsOn ? pid + 3000 : pid); }
             return new Started(pid, DateTimeOffset.UtcNow);
         }
@@ -1754,11 +1789,7 @@ public abstract partial class LaunchFlowFixture
         // As the process tree does: the process started, or one under it.
         public bool? Owns(Started started, int processId)
         {
-            lock (Specs)
-            {
-                if (!running.Contains(started.ProcessId)) { return null; }
-                return processId == started.ProcessId || parents.GetValueOrDefault(processId) == started.ProcessId;
-            }
+            lock (Specs) { return processId == started.ProcessId || parents.GetValueOrDefault(processId) == started.ProcessId; }
         }
 
         // As the process goes: for the host's discovery too, which lists the agent's processes. It
