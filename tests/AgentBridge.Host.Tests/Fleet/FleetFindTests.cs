@@ -5,6 +5,7 @@ using AgentBridge.Host.Fleet;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Relay;
+using AgentBridge.Roster;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
 using Microsoft.Extensions.Time.Testing;
@@ -72,24 +73,42 @@ public sealed class FleetFindTests : IDisposable
         JsonSerializer.SerializeToElement(await op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(data)), Web);
 
     [Fact]
-    public async Task Host_wiring_without_a_pin_or_switch_never_returns_a_routing_node()
+    public void Host_wiring_without_a_verified_roster_refuses_before_reading_session_rows()
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var pin = Path.Combine(root, "roster-pin.json");
         var trust = new FleetTrust(new HostRosterReader(pin, HostRoster.Now), root, () => "account-a");
         var reader = new RelayFleetRoster(trust.VerifiedRoster);
-        var machines = reader.Read([Body(new
+        var error = Assert.Throws<InvalidOperationException>(() => reader.Read([Body(new
         {
             machine = "a", online = true,
             record = new { sessions = new[] { new { node = "n-a", name = "SG Quality", state = "idle", since = Started } } },
-        })]);
-        var result = await Find(Op(machines.ToArray()), new { name = "SG Quality" });
-        Assert.Equal("unverified", result.GetProperty("result").GetString());
-        Assert.False(result.TryGetProperty("session", out _));
-        Assert.DoesNotContain("\"node\"", result.GetRawText());
+        })]));
+        Assert.Contains("verified device roster", error.Message);
         Assert.Null(trust.VerifiedRoster());
         Assert.False(File.Exists(pin));
         Assert.False(Directory.Exists(Path.Combine(root, "host-sign")));
+    }
+
+    [Fact]
+    public void Roster_membership_is_read_afresh_and_non_host_frames_are_excluded_before_their_payloads_are_parsed()
+    {
+        var world = new World();
+        world.Genesis();
+        world.AddHostV2("host", "G", "H", "G");
+        var verified = new RosterVerifier(world.AccountId, world.GenerationId, () => world.Now) { AcceptHostSign = true };
+        var reader = new RelayFleetRoster(() => verified);
+        var frames = new[]
+        {
+            Body(new { machine = world.Id("G"), online = true, record = new { sessions = new[] { new { invalid = true } } } }),
+            Body(new { machine = world.Id("H"), online = true, record = new { sessions = Array.Empty<object>() } }),
+            Body(new { known = new[] { new { machine = world.Id("unpaired"), lastSeen = "invalid" } } }),
+        };
+        Assert.Empty(reader.Read(frames));
+        Assert.All(world.Feed(verified, "G", "host"), offered => Assert.Equal(Verdict.Accepted, offered.Verdict));
+        var host = Assert.Single(reader.Read(frames));
+        Assert.Equal(world.Id("H"), host.Id);
+        Assert.False(host.Verified);
     }
 
     [Fact]

@@ -35,11 +35,20 @@ public interface IScopedFleetRoster : IFleetRoster
 public sealed class RelayFleetRoster : IScopedFleetRoster
 {
     RelayClient? relay;
+    readonly Func<RosterVerifier?>? verifiedRoster;
 
-    // Carried inert #2371 interface; verification remains that slice's responsibility.
-    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null) { }
+    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null) =>
+        this.verifiedRoster = verifiedRoster;
 
-    public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames) => Parse(frames);
+    public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames)
+    {
+        if (verifiedRoster is null) { return Parse(frames); }
+        var roster = verifiedRoster() ?? throw new InvalidOperationException("refused: the fleet registry needs a verified device roster");
+        var hosts = roster.Serving.Where(pair => roster.Graph[pair.Value].Body.Device?.Kind == "host")
+            .Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
+        // Membership is not record-signature verification: these rows remain unverified.
+        return Parse(frames, hosts);
+    }
 
     public void Attach(RelayClient? connection) => Volatile.Write(ref relay, connection);
 
@@ -55,7 +64,9 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     }
 
     // Known-only machines have no sessions; registry liveness and supplied metadata take precedence.
-    public static IReadOnlyList<FleetMachine> Parse(IEnumerable<JsonElement> frames)
+    public static IReadOnlyList<FleetMachine> Parse(IEnumerable<JsonElement> frames) => Parse(frames, null);
+
+    static IReadOnlyList<FleetMachine> Parse(IEnumerable<JsonElement> frames, IReadOnlySet<string>? hosts)
     {
         var machines = new List<FleetMachine>();
         var known = new List<FleetMachine>();
@@ -66,16 +77,19 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
                 foreach (var entry in k.EnumerateArray())
                 {
                     if (!entry.TryGetProperty("machine", out var km) || km.GetString() is not { } knownId) { continue; }
+                    if (hosts is not null && !hosts.Contains(knownId)) { continue; }
                     known.Add(new FleetMachine(knownId, entry.TryGetProperty("online", out var knownOnline) && knownOnline.ValueKind == JsonValueKind.True, [],
                         Name: MachineName(entry), LastSeen: LastSeen(entry)));
                 }
             }
             if (!f.TryGetProperty("machine", out var m) || m.GetString() is not { } id) { continue; }
+            if (hosts is not null && !hosts.Contains(id)) { continue; }
+            var online = f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True;
             var name = MachineName(f);
             var sessions = new List<FleetSession>();
             var truncated = false;
             var hasRegistryRecord = false;
-            if (f.TryGetProperty("record", out var rec) && rec.ValueKind == JsonValueKind.Object && rec.TryGetProperty("sessions", out var list) && list.ValueKind == JsonValueKind.Array)
+            if (online && f.TryGetProperty("record", out var rec) && rec.ValueKind == JsonValueKind.Object && rec.TryGetProperty("sessions", out var list) && list.ValueKind == JsonValueKind.Array)
             {
                 hasRegistryRecord = true;
                 truncated = rec.TryGetProperty("truncated", out var tr) && tr.ValueKind == JsonValueKind.True;
@@ -86,7 +100,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
                         s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null));
                 }
             }
-            machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name, LastSeen: LastSeen(f), HasRegistryRecord: hasRegistryRecord));
+            machines.Add(new FleetMachine(id, online, sessions, truncated, Name: name, LastSeen: LastSeen(f), HasRegistryRecord: hasRegistryRecord));
         }
         foreach (var entry in known)
         {
