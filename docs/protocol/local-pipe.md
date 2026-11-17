@@ -292,9 +292,14 @@ Agent-only reads of the account's cross-machine session list, on a connection th
 ### `agent.send` (AP5-lite)
 
 Windows only, pipe only, and only on a connection that has passed `agent.hello`. Any other
-caller (a plain pipe client, a connector, the HTTP MCP server, a script) is refused with
-`refused: agent.send is for an agent connection that has passed agent.hello`. The sender is
-always the connection's credential (a non-Windows host, or one without agent credentials, answers
+caller (a plain pipe client, a connector, the HTTP MCP server, an unauthenticated script) is refused with
+`refused: agent.send is for an agent connection that has passed agent.hello`. An authenticated
+script credential may use this op as `script:<machine>/<name>` with `read+reply` scope.
+Its only other allowed ops are `fleet.list` and `fleet.find`; direct `session.reply`,
+answers, settings changes, credential/scope changes and unknown ops are refused with a reason.
+Launch still requires the separate explicit fleet grant. A script cannot authorize its own grant,
+reauthenticate to widen scope, or fall back to person authority after expiry or revocation.
+The sender is always the connection's credential (a non-Windows host, or one without agent credentials, answers
 `refused: agent.send isn't available on this host`; with the mode off or no sender wired, an agent
 connection gets the `off` outcome below): any `principal` or other extra field in the request is
 ignored.

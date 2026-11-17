@@ -1,15 +1,19 @@
 # Script credentials: one credential for fleet scripts that run outside any session (#1402)
 
 Part of #1396 (HA parity, slice S5), and of epic #1248. #2346 implements the Windows caller
-slice: registered scripts authenticate as `script:<machine>/<name>` for **`fleet.list` and
-`fleet.find` only**. Stored scope remains `read+reply`, but the hello advertises `read` and a
-connection allowlist refuses every other op, even after expiry or revocation. The wider send
-proposal below is not enabled. Sensitive changes need two different-family whole-file reviews.
+slice: registered scripts authenticate as `script:<machine>/<name>`. #2763 enables
+**`fleet.list`, `fleet.find` and `agent.send` only**, advertising the stored `read+reply`
+scope. The allowlist refuses answering questions, settings changes, credential management,
+scope raises and unknown operations with a readable reason. Launch requires the separate,
+person-set `launch:fleet` grant; this slice neither creates nor widens it.
+Sensitive changes need two different-family whole-file reviews.
 
-The #2763 read-only scope slice also pins that restriction at credential acceptance:
+The #2763 scope slice also pins that restriction at credential acceptance:
 an authenticated script connection cannot rebind to another credential, even after expiry
-or revocation. Request fields cannot widen its scope. `agent.send` and `session.reply`
-remain refused; script reply wire identity and delivery are a separate predecessor slice.
+or revocation. Request fields cannot widen its scope. Expiry, revocation or a faulted store
+refuses reads and replies. `session.reply` remains refused: scripts send through `agent.send`,
+with the script wire identity and delivery checks from #2765, never as the person.
+Reply attempts require the existing audit before dispatch and preserve the sender's live-grant checks.
 
 Companion notes: [agent-principals.md](agent-principals.md) (§3.3 and §3.4 define the
 session credential this builds on), [agent-launch-scope.md](agent-launch-scope.md) (§11
@@ -27,8 +31,8 @@ the full identity is at most 128 characters. Script principals carry no agent se
 instance, agent or launcher fields. The chain's sender slot carries the script identity.
 The host derives it from the script credential, never request data, and delivery labels
 and logs it as a script. Existing agent encodings are unchanged. Shared accept/refuse
-cases live in `docs/protocol/vectors/script-principals.json`. This wire support does not
-enable script sends: the operation allowlist remains separate work in #2763.
+cases live in `docs/protocol/vectors/script-principals.json`. #2763 enables this path through
+the script connection's read-and-reply allowlist.
 
 ## 1. The problem
 

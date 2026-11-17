@@ -147,9 +147,11 @@ public sealed class ScriptCredentialScopeTests : IDisposable
         Assert.Equal(new LiteSendInput("target", "agent_bridge_1111111111111111", "please read this"), sent.Input);
         Assert.Equal(issued, credentials.Of(channel));
         Assert.False(credentials.Of(channel)!.FleetLaunch);
-        Assert.All(Directory.GetFiles(Path.Combine(fixture.Root, AgentAuditLog.FolderName), "*.jsonl")
+        var audit = Directory.GetFiles(Path.Combine(fixture.Root, AgentAuditLog.FolderName), "*.jsonl")
             .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line))
-            .Where(row => row.TryGetProperty("action", out _)), row =>
+            .Where(row => row.TryGetProperty("action", out _)).ToArray();
+        Assert.Equal(new[] { "attempted", "delivered" }, audit.Select(row => row.GetProperty("outcome").GetString()));
+        Assert.All(audit, row =>
             Assert.Equal(issued.Principal, row.GetProperty("principal").GetString()));
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             handler(channel, "scripts.grant-fleet", Body(new { name = "collector" })));
