@@ -948,9 +948,6 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   never be published as artifacts in this public repository; derived text, such as
   stack analysis, is allowed only if size-capped and scrubbed of paths and secret-like
   strings, while private channels require a separate owner decision.
-  The existing cdb crash-analysis text for #2685 is the sole dated exception to the
-  size-cap and scrubbing requirements, valid until the dump-hardening follow-up to
-  #2683 merges or Nov 18, 2026, 00:00 PT, whichever is first.
   The replacement [public-diagnostics.ps1](public-diagnostics.ps1) stages only named
   self-test/installer JSON and logs, with 64 KiB limits on input and output.
   Oversized, linked, binary or malformed JSON inputs fail staging and block upload.
@@ -958,8 +955,7 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   all string values and unknown keys are withheld. Log bodies are withheld entirely;
   cdb analysis retains only its validated numeric exception code. This deliberately
   sacrifices free-text detail rather than claiming a blacklist can scrub arbitrary
-  runner/user text. Workflow wiring and exception removal await Quality's authorized
-  workflow publication; this source-only helper is not proof uploads are scrubbed.
+  runner/user text. Raw diagnostics and process dumps are never upload inputs.
   Offline regression: [test-public-diagnostics.ps1](test-public-diagnostics.ps1),
   catalog suite `public-diagnostics-script`; `-FromWorkflow` exercises the actual
   CI staging steps when the wiring is applied.
