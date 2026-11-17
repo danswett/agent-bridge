@@ -222,6 +222,11 @@ opening existing hostSign custody. It neither provisions nor repairs keys, write
 the roster, nor contacts a relay. Refusals are content-free codes (`no-switch`,
 `missing-key`, `account`, `generation`, `not-pinned`, `invalid-descriptor`,
 `attempt-already-open`); absent, unreadable and wrong-tier keys all use `missing-key`.
+Custody opens and signs outside the reader lock; the account, generation and switch
+are checked again before publication. Same-instance attempts are serialized.
+The key loader consumes the exact privately validated reference and encrypted-key
+bytes without reopening either file. Expected custody/provider failures use
+`missing-key`, without retaining an exception or an opened attempt.
 The descriptor carries only public device fields and the hostSign binding proof.
 The existing person-approver exchange is the sole add path; descriptor equality
 also covers `hostSign`, `hostSignAlg` and `hostSignProof`. Status is `enrolled` only

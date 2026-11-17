@@ -112,7 +112,6 @@ if (command == "approve")
     return await ApproveCommands.RunAsync(args, Identity.DefaultRoot, () => Refused("approving a question"), Console.Out, Console.Error);
 }
 
-// Inventory must return before even intake or device/account identity files are opened.
 if (command == "devices" && arguments.ElementAtOrDefault(1) == "descriptor")
 {
     // No verified reader is wired here yet; neither identity nor custody may be opened.
@@ -130,6 +129,7 @@ if (command == "host-sign")
         !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_BRIDGE_TOKEN")), Console.Out, Console.Error);
 }
 
+// Inventory must return before even intake or device/account identity files are opened.
 if (command == "ha" && HaCommands.TryInventoryCommand(arguments, Identity.DefaultRoot, Console.Out, Console.Error) is { } inventoryExit)
 {
     return inventoryExit;
