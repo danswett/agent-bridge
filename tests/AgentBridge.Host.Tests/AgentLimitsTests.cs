@@ -71,6 +71,10 @@ public sealed class AgentLimitsTests
             Assert.True(gate.CheckLaunch("a", "r", "hash").Allowed);
             Assert.True(gate.CheckLaunch("a", "r", "hash").Duplicate);
             Assert.Equal("requestReused", gate.CheckLaunch("a", "r", "changed").Reason);
+            Assert.Throws<ArgumentNullException>(() => gate.SessionEnded(null!));
+            Assert.Throws<ArgumentNullException>(() => gate.ObserveSession(null!, now, personTyped: true));
+            now = now.AddHours(1);
+            Assert.True(gate.CheckLaunch("a", "r", "hash").Duplicate);
             gate.LaunchFinished("another", "r");
             Assert.Contains("live-limit", gate.CheckLaunch("b", "blocked", "hash").Reason);
             Assert.Throws<InvalidOperationException>(() => gate.LaunchStarted("another", "r", "not-owned"));
