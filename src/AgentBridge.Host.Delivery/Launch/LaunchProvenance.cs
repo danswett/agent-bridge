@@ -93,6 +93,11 @@ internal sealed class LaunchProvenance
         }
     }
 
+    internal LaunchAttribution? AttributionOf(Guid request)
+    {
+        lock (gate) { Check(); return origins.GetValueOrDefault(request)?.Attribution; }
+    }
+
     void Check()
     {
         if (unavailable) { throw new InvalidOperationException("refused: launch provenance is unavailable"); }
