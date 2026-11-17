@@ -1,4 +1,5 @@
 using AgentBridge.HomeAssistant;
+using System.Text.Json;
 using Xunit;
 
 public sealed class DurableInboxTests : IDisposable
@@ -77,6 +78,53 @@ public sealed class DurableInboxTests : IDisposable
         Assert.Equal(original.QueuedAt, retry.QueuedAt);
         Assert.Equal(delivered.DeliveredAt, retry.DeliveredAt);
         Assert.Empty(retry.Payload);
+    }
+
+    [Theory]
+    [InlineData("peek")]
+    [InlineData("enqueue")]
+    [InlineData("deliver")]
+    public void Legacy_delivered_payloads_are_scrubbed_without_blocking_the_store(string operation)
+    {
+        File.WriteAllText(Pathname, """
+            {"Version":1,"Messages":[
+              {"Node":"one","Rid":"done","Sender":"sender","Payload":"secret","QueuedAt":"2026-11-16T00:00:00Z","DeliveredAt":"2026-11-16T00:01:00Z"},
+              {"Node":"one","Rid":"a","Sender":"sender","Payload":"first","QueuedAt":"2026-11-16T00:02:00Z","DeliveredAt":null},
+              {"Node":"one","Rid":"b","Sender":"sender","Payload":"second","QueuedAt":"2026-11-16T00:03:00Z","DeliveredAt":null}]}
+            """);
+        var inbox = new DurableInbox(Pathname);
+        if (operation == "peek") { Assert.Equal("a", inbox.Peek("one")!.Rid); }
+        else if (operation == "enqueue") { Assert.Equal("done", inbox.Enqueue("one", "done", "other", "retry", Now).Rid); }
+        else { Assert.NotNull(inbox.Deliver("one", "done", Now).DeliveredAt); }
+
+        Assert.DoesNotContain("secret", File.ReadAllText(Pathname));
+        inbox = new DurableInbox(Pathname);
+        var retry = inbox.Enqueue("one", "done", "other", "retry", Now);
+        Assert.Empty(retry.Payload);
+        Assert.Equal(Now.AddMinutes(1), retry.DeliveredAt);
+        Assert.Equal("sender", retry.Sender);
+        Assert.Equal("a", inbox.Peek("one")!.Rid);
+        inbox.Deliver("one", "a", Now);
+        Assert.Equal("b", inbox.Peek("one")!.Rid);
+        Assert.Empty(Directory.GetFiles(folder, "*.tmp"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_delivered_rid_is_deduplicated_only_until_capacity_prunes_it(bool totalLimit)
+    {
+        var messages = Enumerable.Range(0, totalLimit ? 1000 : 100)
+            .Select(n => new InboxMessage(totalLimit ? "node" + n / 100 : "node0", "r" + n,
+                "sender", "", Now, Now.AddMinutes(1))).ToList();
+        File.WriteAllText(Pathname, JsonSerializer.Serialize(new { Version = 1, Messages = messages }));
+        var inbox = new DurableInbox(Pathname);
+        Assert.NotNull(inbox.Enqueue("node0", "r0", "sender", "retry", Now).DeliveredAt);
+        inbox.Enqueue(totalLimit ? "new-node" : "node0", "new", "sender", "new", Now);
+
+        inbox = new DurableInbox(Pathname);
+        Assert.NotNull(inbox.Enqueue("node0", "r1", "sender", "retry", Now).DeliveredAt);
+        Assert.Null(inbox.Enqueue("node0", "r0", "sender", "retry", Now).DeliveredAt);
     }
 
     [Fact]

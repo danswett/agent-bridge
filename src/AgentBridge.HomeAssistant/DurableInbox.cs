@@ -89,29 +89,27 @@ internal sealed class DurableInbox
         FileStream file;
         try { file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); }
         catch (FileNotFoundException) { return []; }
-        using (file)
+        Snapshot? snapshot;
+        using (file) { snapshot = JsonSerializer.Deserialize<Snapshot>(file); }
+        if (snapshot is null || snapshot.Version != 1 || snapshot.Messages is null ||
+            snapshot.Messages.Any(m => m is null || string.IsNullOrWhiteSpace(m.Node) || string.IsNullOrWhiteSpace(m.Rid) ||
+                string.IsNullOrWhiteSpace(m.Sender) || m.Payload is null || (m.DeliveredAt is null && string.IsNullOrWhiteSpace(m.Payload))) ||
+            snapshot.Messages.Select(m => (m.Node, m.Rid)).Distinct().Count() != snapshot.Messages.Count)
         {
-            var snapshot = JsonSerializer.Deserialize<Snapshot>(file);
-            if (snapshot is null || snapshot.Version != 1 || snapshot.Messages is null ||
-                snapshot.Messages.Any(m => m is null || string.IsNullOrWhiteSpace(m.Node) || string.IsNullOrWhiteSpace(m.Rid) ||
-                    string.IsNullOrWhiteSpace(m.Sender) || m.Payload is null || (m.DeliveredAt is null && string.IsNullOrWhiteSpace(m.Payload))) ||
-                snapshot.Messages.Select(m => (m.Node, m.Rid)).Distinct().Count() != snapshot.Messages.Count)
-            {
-                throw new InvalidDataException("Invalid durable inbox snapshot.");
-            }
-            var changed = false;
-            for (var index = 0; index < snapshot.Messages.Count; index++)
-            {
-                var message = snapshot.Messages[index];
-                if (message.DeliveredAt is not null && message.Payload.Length > 0)
-                {
-                    snapshot.Messages[index] = message with { Payload = "" };
-                    changed = true;
-                }
-            }
-            if (changed) { Save(snapshot.Messages); }
-            return snapshot.Messages;
+            throw new InvalidDataException("Invalid durable inbox snapshot.");
         }
+        var changed = false;
+        for (var index = 0; index < snapshot.Messages.Count; index++)
+        {
+            var message = snapshot.Messages[index];
+            if (message.DeliveredAt is not null && message.Payload.Length > 0)
+            {
+                snapshot.Messages[index] = message with { Payload = "" };
+                changed = true;
+            }
+        }
+        if (changed) { Save(snapshot.Messages); }
+        return snapshot.Messages;
     }
 
     void Save(List<InboxMessage> messages)

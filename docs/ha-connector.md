@@ -574,6 +574,9 @@ and returns the original entry on a matching rid retry, even if a retry is resta
 at most 100 entries per node and 1000 total; when full, it prunes the oldest delivered entries
 before refusing an enqueue if only undelivered entries remain. Delivery clears the payload while
 retaining rid metadata for deduplication; legacy senders get a generated rid and `legacy` sender.
+For #2780 integration, deduplication lasts only while that metadata is retained within the
+100-entry per-node and 1000-entry total caps, including pending entries. A retry of a pruned
+delivered rid is accepted as new and may be delivered again; this is not permanent deduplication.
 Power-loss durability is not established. It does not change the live reply path, publish acks,
 or provide native receipt. A later slice must provide an access-controlled storage directory,
 one dispatcher per node (a peek does not reserve a message), and reconcile the crash window
