@@ -201,6 +201,7 @@ try {
       if ($deliveryAttempt -eq 1) {
         if ($ack) { $script:staleAt = $ack.At }
         [Console]::Error.WriteLine("Unconfirmed reply to $node; retrying exactly once with the same rid $Rid.")
+        $firstAttemptUnconfirmed = $true
         continue
       }
       if ($unconfirmed) {

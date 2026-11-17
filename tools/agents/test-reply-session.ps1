@@ -8,7 +8,7 @@ $node = 'agent_bridge_0123456789abcdef'
 $failures = 0
 
 function Assert([bool]$Ok, [string]$Name) {
-    if ($Ok) { "ok   $Name" } else { "FAIL $Name"; $r | Format-List | Out-String; $script:failures++ }
+    if ($Ok) { "ok   $Name" } else { "FAIL $Name"; $script:failures++ }
 }
 
 $port = Get-Random -Minimum 20000 -Maximum 40000
@@ -16,8 +16,8 @@ $port = Get-Random -Minimum 20000 -Maximum 40000
 # Moves = $false keeps it still, as a session whose box never took the reply.
 $fake = [hashtable]::Synchronized(@{ Mode = 'deliver'; Slot = $null; Ack = $null; Delivered = [System.Collections.ArrayList]::new(); Stop = $false
     Status = 'idle'; StatusChanged = '2026-11-10T08:00:00+00:00'; Moves = $true; FlipTo = $null; Rids = [System.Collections.ArrayList]::new()
-    Live = $true; Online = $true; PressRids = [System.Collections.ArrayList]::new(); Payloads = [System.Collections.ArrayList]::new()
-    Instance = 'host-run-1'; RetryResults = @{ 'first-uncertain-then-refuse' = @('refused', 'the session is waiting on a question'); 'first-uncertain-then-refuse-box' = @('refused', "something is already typed in Copilot's input box; send or clear it there first"); 'first-uncertain-then-stuck-enter' = @('unconfirmed', "the reply was typed into Copilot's input box, but it was not sent and its words are still in the box"); 'unconfirmed-once' = $null; 'silent-first-then-refuse' = @('refused', 'the session is waiting on a question'); 'silent-first-then-refuse-box' = @('refused', "something is already typed in Copilot's input box; send or clear it there first"); 'silent-first-then-delivered-no-turn' = @('delivered', $null) } })
+    Live = $true; Online = $true; PressRids = [System.Collections.ArrayList]::new(); Payloads = [System.Collections.ArrayList]::new(); Instance = 'host-run-1'
+    RetryResults = @{ 'first-uncertain-then-refuse' = @('refused', 'the session is waiting on a question'); 'first-uncertain-then-refuse-box' = @('refused', "something is already typed in Copilot's input box; send or clear it there first"); 'first-uncertain-then-stuck-enter' = @('unconfirmed', "the reply was typed into Copilot's input box, but it was not sent and its words are still in the box"); 'unconfirmed-once' = $null; 'silent-first-then-refuse' = @('refused', 'the session is waiting on a question'); 'silent-first-then-refuse-box' = @('refused', "something is already typed in Copilot's input box; send or clear it there first"); 'silent-first-then-delivered-no-turn' = @('delivered', $null) } })
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://127.0.0.1:$port/")
 $listener.Start()
@@ -170,8 +170,7 @@ try {
         $outcome = if ($kind -in 'offline', 'gone-after-first') { 'unconfirmed' } else { 'node-gone' }
         Assert ($r.Exit -eq $exit -and $fake.PressRids.Count -eq $presses -and $r.Out -match "outcome=$outcome") "$kind never uses a retained registration as liveness, including before a retry"
     }
-    $fake.Live = $true; $fake.Online = $true; $fake.Mode = 'deliver'; $fake.Ack = $null; $fake.Moves = $true
-    foreach ($mode in 'submit-response-lost', 'lost-ack') {
+    $fake.Live = $true; $fake.Online = $true; $fake.Mode = 'deliver'; $fake.Ack = $null; $fake.Moves = $true; foreach ($mode in 'submit-response-lost', 'lost-ack') {
         $fake.Mode = $mode; $fake.Ack = $null; $fake.PressRids.Clear(); $fake.Delivered.Clear()
         $r = Send 'only once' "r-$mode"
         $expectedExit = if ($mode -eq 'lost-ack') { 2 } else { 0 }
@@ -244,9 +243,7 @@ try {
     # Three rapid sends to one node: each is delivered once, in the order sent.
     $fake.Mode = 'deliver'; $fake.Ack = $null; $fake.Delivered.Clear()
     $procs = foreach ($n in 1..3) {
-        $start = @{ PassThru = $true; ArgumentList = @('-NoProfile', '-File', $script, '-Session', $node, '-Text', "m$n", '-Rid', "rapid-$n", '-AckSeconds', '10', '-SeenPolls', '10', '-Attempts', '1', '-StatusSeconds', '5') }
-        if ($IsWindows) { $start.WindowStyle = 'Hidden' }
-        $p = Start-Process pwsh @start
+        $start = @{ PassThru = $true; ArgumentList = @('-NoProfile', '-File', $script, '-Session', $node, '-Text', "m$n", '-Rid', "rapid-$n", '-AckSeconds', '10', '-SeenPolls', '10', '-Attempts', '1', '-StatusSeconds', '5') }; if ($IsWindows) { $start.WindowStyle = 'Hidden' }; $p = Start-Process pwsh @start
         Start-Sleep -Milliseconds 800
         $p
     }
