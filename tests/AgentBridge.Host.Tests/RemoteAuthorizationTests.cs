@@ -86,6 +86,18 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         host.Hub.Handler = authorization.Handler(service, restarted);
         var retry = Result(await channel.RequestAsync("gate.start", new { request }, Patience));
         Assert.Equal(run, retry.GetProperty("run").GetGuid());
+        var other = await PeerAsync();
+        Pin(other, TrustedPeerStore.Person);
+        var otherChannel = await other.Hub.OpenAsync(host.Id, Patience);
+        var conflict = await otherChannel.RequestAsync("gate.start", new { request }, Patience);
+        Assert.False(conflict.GetProperty("ok").GetBoolean());
+        Assert.Contains("conflicting request binding", conflict.GetProperty("error").GetString());
+        foreach (var op in new[] { "gate.pause", "gate.reset", "gate.seal" })
+        {
+            var unavailable = await channel.RequestAsync(op, new { }, Patience);
+            Assert.False(unavailable.GetProperty("ok").GetBoolean());
+            Assert.Contains("prepare barrier", unavailable.GetProperty("error").GetString());
+        }
         var output = new StringWriter();
         Assert.Equal(0, AuditCommands.Run(["audit", "--profile", "gate"], fixture.Root, output, new StringWriter()));
         using var row = JsonDocument.Parse(Assert.Single(output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries)));
@@ -99,6 +111,30 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         var report = GateAuditProjection.Read(profile, run);
         Assert.Empty(report.Totals);
         Assert.Contains("missing-run-evidence", report.IncompleteReasons);
+    }
+
+    [Fact]
+    public async Task Gate_preparation_never_rebinds_a_request_after_its_audit_prefix_is_retained_away()
+    {
+        var profile = Path.Combine(fixture.Root, "gate");
+        var auditTime = new FakeTimeProvider(time.GetUtcNow());
+        var audit = new AgentAuditLog(profile, auditTime);
+        host.Hub.Handler = authorization.Handler(service, audit);
+        var peer = await PeerAsync();
+        Pin(peer, TrustedPeerStore.Person);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var request = Guid.NewGuid();
+        Result(await channel.RequestAsync("gate.start", new { request }, Patience));
+        auditTime.Advance(TimeSpan.FromDays(31));
+        Assert.True(audit.Append(new AgentAuditEntry("local", Guid.NewGuid().ToString(), "person:local", [],
+            "agent.send", "fleet", "attempted")));
+        auditTime.Advance(TimeSpan.FromDays(1));
+        Assert.True(audit.Append(new AgentAuditEntry("local", Guid.NewGuid().ToString(), "person:local", [],
+            "agent.send", "fleet", "attempted")));
+        Assert.True(AgentAuditLog.RetainedThrough(Path.Combine(profile, "audit")) > 0);
+        var retry = await channel.RequestAsync("gate.start", new { request }, Patience);
+        Assert.False(retry.GetProperty("ok").GetBoolean());
+        Assert.Contains("audit unavailable", retry.GetProperty("error").GetString());
     }
 
     [Theory]

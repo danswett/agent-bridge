@@ -10,7 +10,8 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
         && (LaunchBinding is null || action == "session.launch" && LaunchBinding.Length == 64 && LaunchBinding.All(char.IsAsciiHexDigit))
         && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled" or "forced"
         && (Phase == "control" ? target == "profile" && (action is "gate.start" or "gate.pause" or "gate.reset" or "gate.seal")
-            && (outcome is "prepared" or "paused" or "reset" or "sealed" or "invalidated")
+            && (outcome is "prepared" or "paused" or "reset" or "sealed" or "invalidated"
+                || action == "gate.start" && outcome == "pending" && Path == "relay" && ActorKind == "person-client")
             : Incarnation != Guid.Empty && Guid.TryParse(target, out var id) && id != Guid.Empty && target == id.ToString()
             && GateAuditProjection.SuccessFor(action) is { } success
             && (outcome == success || outcome is "attempted" or "reserved" or "refused" or "failed" or "unconfirmed" || action == "session.stop" && outcome is "confirm" or "busy")
