@@ -45,6 +45,12 @@ public sealed partial class AppFeedbackSources : IFeedbackSources
 
     public FeedbackEnvironment Environment() => environment();
 
+    public async Task<FeedbackRequest> RecoveryRequestAsync(PreviousRun previous, string machine, string? sessionId, CancellationToken ct)
+    {
+        var lines = previous.Hang?.LastLogLines ?? await JournalTailAsync(FeedbackLimits.MaxJournalLines, ct);
+        return new FeedbackRequest { Recovery = new(previous, machine, sessionId, lines) };
+    }
+
     public async Task<IReadOnlyList<FeedbackAgent>> DetectAgentsAsync(CancellationToken cancellationToken)
     {
         try

@@ -1,3 +1,5 @@
+using AgentBridge.App.Core.Feedback;
+
 namespace AgentBridge.App.Core;
 
 // What a "Report this" press hands to the feedback flow: which kind of action failed and the
@@ -32,5 +34,21 @@ public sealed class ReportThisOffer
         if (context is null) { return false; }
         open(context);
         return true;
+    }
+}
+
+// Start already replaced the previous marker. Consume that snapshot, never the active run's file.
+public sealed class RecoveryReportOffer(PreviousRun? previous)
+{
+    int accepted;
+    public PreviousRun? Previous { get; private set; } = previous is { Unclean: true } ? previous : null;
+    public bool Visible => Previous is not null;
+    public void Dismiss() => Previous = null;
+
+    public Task AcceptAsync(FeedbackSendViewModel send)
+    {
+        if (!Visible || !send.CanSend || Interlocked.Exchange(ref accepted, 1) != 0) { return Task.CompletedTask; }
+        Dismiss();
+        return send.SendAsync();
     }
 }

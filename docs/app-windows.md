@@ -41,6 +41,12 @@ not hiding to the tray, calls `Complete()`. Crash evidence survives closing; a t
 crash restores the marker. Self-tests leave markers alone. `RecordHang` is the seam for
 the separate watchdog slice; recovery UI and the existing feedback submission remain separate work.
 
+The recovery feedback core builds a prefilled request from that previous-run snapshot:
+version/start time, machine/session identifiers, crash or hang details and bounded log lines.
+It uses the existing redactor, bundle preview and sender; no session turns are attached.
+Accept is single-use; dismiss drops only the snapshot, leaving the active run marker intact.
+An unavailable feedback sender still permits a redacted preview, but never a send.
+
 ## Decisions
 
 Settings' **Reply box** group offers **Return key in replies**: **New line** (the
