@@ -1906,6 +1906,9 @@ is for disposable evaluation, not production service enrollment.
 | `startedAt` | time? | |
 | `updatedAt` | time | When something a client shows last changed. Events that change nothing visible (hook runs, usage records, model internals) do **not** move it, so they never cause an upsert |
 | `processId` | number? | The agent's process, when known |
+| `transcript_bytes` | integer? | Session event-log file length in bytes, obtained from filesystem metadata only (#2739), never transcript contents or process memory. A measured empty file is zero; absence is unknown, never zero |
+| `transcript_bytes_unavailable` | string? | Instead of a size when metadata cannot be read: `path-unavailable`, `not-found`, `not-a-file`, `access-denied`, `io-error` or `invalid-path`. No local path or exception text |
+| `transcript_observation` | object? | With either result: `observed_at` (UTC time), `source: "file-size"`, `host_id` (this host's public machine id). Bound to this session's `id`. Optional for older hosts and identity-free local readers; clients may ignore all three fields |
 | `activity` | Activity | |
 | `question` | Question? | The question the agent is waiting on, if any |
 | `driver` | `"person"` \| `"agent"`? | Who drives the current turn ([Driver](#driver)). Absent means `person`, and a host sends it only as `agent`. A client that does not know a value reads it as `person` |
@@ -1917,6 +1920,11 @@ is for disposable evaluation, not production service enrollment.
 | `attention` | [Attention](#attention)? | **New (#800).** What is wrong with the session that `status` cannot say: its agent needs signing in again, its turn ended on an error, or it stopped responding. Absent when nothing is |
 | `class` | `"needsYou"` \| `"done"` \| `"fyi"`? | **New (#913).** The session's notification tier, which every client follows instead of its own rules: [Notification class](#notification-class-913). Absent from an older host; a client then keeps today's behaviour. A client that does not know a value reads it as absent |
 | `classSince` | time? | **New (#913).** When the session entered its present tier, the episode's start, which the 15-minute reminder counts from. Kept while `class` is unchanged (a further question does not move it); on a change of `class`, for `needsYou` the earliest of `question.askedAt`, `attention.since` and, after a crash, `restored.at`, otherwise `statusSince` ([Notification class](#notification-class-913)). Present with `class`. Never shown |
+
+The serving host samples transcript metadata on normal refreshes, resolving file links to their
+target metadata. Size, availability or path changes publish a new observation, including partial
+final lines and truncation. An unchanged result retains its last published observation time to avoid
+timestamp-only event churn. This adds no content reads, cap enforcement or census policy.
 
 **Status precedence** with sub-agents (first match wins): the session's own question
 (`waiting`); a sub-agent's question (`waiting`, with `waitingOn`); the main agent's turn

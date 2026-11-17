@@ -18,7 +18,10 @@ namespace AgentBridge.Host;
 // holds no prompt text, path or token: callers pass a short reason, and the log cuts it at
 // MaxReason as well.
 public sealed record AgentAuditEntry(string Direction, string Request, string Principal, string[] Chain, string Action,
-    string Target, string Outcome, string Reason = "", GateAuditMetadata? Gate = null);
+    string Target, string Outcome, string Reason = "", GateAuditMetadata? Gate = null)
+{
+    public string? Grant { get; init; }
+}
 
 internal sealed record AuditLockTiming(Func<long> TickCount, Action Wait);
 
@@ -49,7 +52,8 @@ public sealed class AgentAuditLog
     sealed record Line(DateTimeOffset At, string Direction, string Request, string Principal, string[] Chain, string Action,
         string Target, string Outcome, string Reason, string? DataSha256, int? TextLength, int V = 1, string PreviousSha256 = "",
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GateAuditMetadata? Gate = null,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool PreviousTailIncomplete = false);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool PreviousTailIncomplete = false,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Grant = null);
 
     static readonly string Genesis = new('0', 64);
     readonly object gate = new();
@@ -86,7 +90,7 @@ public sealed class AgentAuditLog
             var chain = (entry.Chain ?? []).Take(MaxChain).Select(c => Cap(c, MaxField)).ToArray();
             var line = new Line(now, Cap(entry.Direction, MaxField), Cap(entry.Request, MaxField), Cap(entry.Principal, MaxField), chain,
                 Cap(entry.Action, MaxField), Cap(entry.Target, MaxField), Cap(entry.Outcome, MaxField), Cap(entry.Reason, MaxReason),
-                bytes is null ? null : Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes?.Length);
+                bytes is null ? null : Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes?.Length, Grant: entry.Grant);
             lock (gate)
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
