@@ -745,11 +745,12 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   `refused`, `busy`, `failed` or `unconfirmed`, with the session id and what was launched) is
   kept for at least 15 minutes (and at least five entries), newest first, on `new_session_result`'s `recent`, which is what
   the bridge's MCP `launch_agent_session` reads. A request published after the press waits for
-  its own; one more than 60 s older than the press is skipped, words and all, and the press
-  launches from the card; an id not matching `^[A-Za-z0-9-]{8,64}$` is refused; one already
+  its own; one more than 60 s older than the press is skipped, words and all. Only a person's
+  press can fall back to the card; agents always need a fresh request. An id not matching
+  `^[A-Za-z0-9-]{8,64}$` is refused; one already
   served is never served again; and one that reached the machine more than five minutes after
-  its press is refused rather than started late. An agent's second press within 10 s of the one
-  that took a request launches nothing (the daemon's guard against two presses for one request).
+  its press is refused rather than started late. Known ids are checked before staleness;
+  refused and handled payloads are cleared without replaying an agent request from the card.
   A press whose prompt payload cannot be read waits for the next pass rather than launching from
   the card, since it may carry a request with settings of its own.
 - **Launch options (beyond agent-ha-bridge, #1142).** `sensor.agent_bridge_<machine>_launch_options`
@@ -768,17 +769,20 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   appears, for the turn it was launched with (already under way or still to come); the turn
   after that is whoever's it is.
 * **One at a time.** The launch runs beside the passes (the host follows it to registration).
-  Accepted request ids wait in a durable FIFO; card-only presses while busy launch nothing.
-  The queue and outcomes live beside the connector's `StateFile`, in its `.launch` journal.
-  Every accepted id is remembered beyond outcome expiry. A flushed atomic replacement records
-  a dispatch claim before calling the launcher; a write failure prevents dispatch.
-  This per-host state follows that host's restart, not another machine; removing a host leaves
-  its pending work on its disk. Other hosts continue serving their own independent queues.
+  Up to 128 accepted requests wait in a memory-only FIFO; overflow has a refusal outcome.
+  Only id, outcome and time live beside the connector's `StateFile`, in its `.launch` journal:
+  no prompt, attachment or launch settings are persisted. Tombstones last 24 hours, capped at
+  10,000 entries, oldest evicted first (Chief's #2743 ruling). A flushed atomic replacement
+  records a dispatch claim before calling the launcher; a write failure prevents dispatch.
+  With no `StateFile` (shadow connectors), all state is memory-only. Corrupt journals are
+  quarantined with an error; subsequent launches fail closed until recovery.
+  State belongs to each host, not a designated fleet machine; other hosts have independent queues.
 * **A restart**, or taking the machine back after agent-ha-bridge had it, reads the outcomes back
   before taking any press: local durable history is merged with Home Assistant's, the requests it
   names are not served again, the history agents read carries on, and one left at `starting`
   (other than the connector's own launch still under way) is reported `unconfirmed` rather than
-  launched a second time. Undispatched queued requests resume after restart. Payload capture
+  launched a second time. A queued id whose memory-only payload was lost becomes `lost-restart`;
+  the client must relaunch with a new id. Payload capture
   before a shared-slot overwrite is a separate ingress step; this queue alone cannot recover
   a payload the connector never observed.
 * What the button holds when the connector first reads it is not a press, and the note is

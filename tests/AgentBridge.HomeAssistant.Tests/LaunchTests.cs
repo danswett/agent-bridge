@@ -52,11 +52,11 @@ public sealed partial class LaunchTests : IDisposable
 
     readonly SessionDrivers drivers = new();
 
-    HaConnector Connector(bool launches = true) => new(new HaConnectorOptions
+    HaConnector Connector(bool launches = true, bool durable = true) => new(new HaConnectorOptions
     {
         MachineName = Machine,
         Version = "0.1.0",
-        StateFile = Path.Combine(folder, "ha-connector.json"),
+        StateFile = durable ? Path.Combine(folder, "ha-connector.json") : null,
         FieldPinDelay = TimeSpan.Zero,
         SelectDelay = TimeSpan.Zero,
         AgentUserIds = [AgentUser],
@@ -412,7 +412,7 @@ public sealed partial class LaunchTests : IDisposable
     }
 
     [Fact]
-    public async Task An_agents_second_press_moments_after_its_request_was_taken_launches_nothing_but_a_later_one_does()
+    public async Task An_agents_second_press_without_a_new_request_never_launches_even_later()
     {
         await using var c = await Ready();
         Payload(new JsonObject { ["request"] = "req-0006-abcd" });
@@ -424,7 +424,7 @@ public sealed partial class LaunchTests : IDisposable
         Assert.Single(launched);
         ha.Now = ha.Now.AddSeconds(11);
         await Launch(c, AgentUser);
-        Assert.Equal(2, launched.Count);
+        Assert.Single(launched);
     }
 
     [Fact]
@@ -632,7 +632,7 @@ public sealed partial class LaunchTests : IDisposable
         Payload(new JsonObject { ["text"] = "the daemon's request", ["request"] = "req-0020-abcd" });
         await Launch(c, AgentUser);
         Assert.Single(launched);
-        Assert.Equal(["req-0019-abcd", "req-0020-abcd"], JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Select(o => o!["request"]!.GetValue<string>()));
+        Assert.Equal(["req-0020-abcd", "req-0019-abcd"], JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Select(o => o!["request"]!.GetValue<string>()));
     }
 
     [Fact]

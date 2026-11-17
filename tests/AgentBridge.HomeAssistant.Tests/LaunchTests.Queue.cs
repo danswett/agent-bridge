@@ -26,7 +26,7 @@ public sealed partial class LaunchTests
     }
 
     [Fact]
-    public async Task A_request_waiting_behind_a_launch_survives_restart_and_runs_once()
+    public async Task Pending_payloads_are_not_persisted_and_restart_reports_them_lost_without_replaying()
     {
         var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         answer = _ => release.Task;
@@ -38,19 +38,22 @@ public sealed partial class LaunchTests
         c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
         await Pass(c);
         Assert.Equal("queued", Outcome()["outcome"]!.GetValue<string>());
+        var journal = File.ReadAllText(Path.Combine(folder, "ha-connector.json.launch"));
         release.SetResult(new LaunchResult(LaunchOutcome.Started));
         await c.DeliveredAsync();
         await c.DisposeAsync();
+        Assert.DoesNotContain("second prompt", journal, StringComparison.Ordinal);
+        Assert.DoesNotContain("Attachments", journal, StringComparison.Ordinal);
         answer = null;
         await using var restarted = await Ready();
         await restarted.DeliveredAsync();
         await Pass(restarted);
-        Assert.Equal(["second prompt"], launched.Where(r => r.Prompt is not null).Select(r => r.Prompt));
-        Assert.Equal(2, launched.Count);
+        Assert.Single(launched);
+        Assert.Equal("lost-restart", Outcome()["outcome"]!.GetValue<string>());
         Assert.Equal("unconfirmed", Outcome(1)["outcome"]!.GetValue<string>());
         Payload(new JsonObject { ["request"] = "queue-first" });
         await Launch(restarted, AgentUser);
-        Assert.Equal(2, launched.Count);
+        Assert.Single(launched);
     }
 
     [Fact]

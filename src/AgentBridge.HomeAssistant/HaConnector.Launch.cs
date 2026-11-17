@@ -49,7 +49,6 @@ public sealed partial class HaConnector
     readonly ConcurrentQueue<LaunchDone> launchesDone = new();
     // Requests served, by id, so one whose payload could not be cleared is never served twice.
     readonly List<string> launchRequestsHandled = [];
-    DateTimeOffset launchConsumedPress = DateTimeOffset.MinValue;
     // The outcomes an agent reads, newest first (Set-DaemonLaunchOutcome).
     readonly List<JsonObject> launchOutcomes = [];
     Dictionary<string, (string Id, string Launcher)> resumeByLabel = new(StringComparer.Ordinal);
@@ -286,7 +285,10 @@ public sealed partial class HaConnector
                 return;
             case "handled":
                 log("Home Assistant connector ignored an already accepted launch request");
-                return;
+                await ClearPromptPayloadAsync(ct);
+                if (driver == "agent") { return; }
+                payloadSkip = true;
+                break;
             case "stale":
                 log($"Home Assistant connector: a Launch press ignored a {read.Kind} launch request left in the prompt payload");
                 await ClearPromptPayloadAsync(ct);
@@ -298,12 +300,9 @@ public sealed partial class HaConnector
         {
             if (driver == "agent")
             {
-                var since = (pressedAt - launchConsumedPress).TotalSeconds;
-                if (launchConsumedPress != DateTimeOffset.MinValue && since is >= 0 and <= 10)
-                {
-                    log($"Home Assistant connector: Launch pressed by an agent {since:F1} s after another press used the launch request waiting; nothing launched");
-                    return;
-                }
+                log("Home Assistant connector refused an agent Launch press without a fresh request");
+                await LaunchNoteAsync("Launch refused: an agent must supply a fresh request id; card settings were not used.", ct);
+                return;
             }
             if (launchBusy)
             {
@@ -316,17 +315,18 @@ public sealed partial class HaConnector
 
         var id = read.Id!;
         launchRequestsHandled.Insert(0, id);
-        launchConsumedPress = pressedAt;
         log($"Home Assistant connector: launch request {id} received ({(read.Settings!.Count > 0 ? string.Join(", ", read.Settings.OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => $"{k.Key}={k.Value}")) : "machine defaults")}; prompt of {read.Text.Length} chars)");
         var refusal = read.Problem;
         if (refusal.Length == 0 && time.GetUtcNow() - pressedAt > TimeSpan.FromMinutes(5))
         {
             refusal = "Launch refused: the request waited more than 5 minutes for this machine, so it was not started late.";
         }
+        if (refusal.Length == 0 && launchQueue.Count >= 128) { refusal = "Launch refused: the pending queue is full; retry with a new request id."; }
         if (refusal.Length > 0)
         {
             await LaunchNoteAsync(refusal, ct);
             await OutcomeAsync(id, "refused", refusal, pressed: pressed, ct: ct);
+            await ClearPromptPayloadAsync(ct);
             return;
         }
         var (request, launched, why) = RequestedLaunch(read, pressed);
@@ -334,6 +334,7 @@ public sealed partial class HaConnector
         {
             await LaunchNoteAsync(why!, ct);
             await OutcomeAsync(id, "refused", why!, pressed: pressed, ct: ct);
+            await ClearPromptPayloadAsync(ct);
             return;
         }
         launchQueue.Add(new(request, id, pressed, driver, principal, launched!));
@@ -451,12 +452,12 @@ public sealed partial class HaConnector
         var hasId = a.TryGetProperty("request", out var idElement) && idElement.ValueKind != JsonValueKind.Null;
         var hasSettings = a.TryGetProperty("settings", out var settings) && settings.ValueKind != JsonValueKind.Null;
         if (!hasId && !hasSettings) { return new("none"); }
+        var id = idElement.ValueKind == JsonValueKind.String ? idElement.GetString() : null;
+        if (id is not null && launchRequestsHandled.Contains(id, StringComparer.Ordinal)) { return new("handled"); }
         var age = state.LastUpdated is { } published ? (pressedAt - published).TotalSeconds : double.PositiveInfinity;
         if (age < 0) { return new("newer"); }
         if (age > 60) { return new("stale"); }
-        var id = idElement.ValueKind == JsonValueKind.String ? idElement.GetString() : null;
         if (id is null || !RequestIdPattern().IsMatch(id)) { return new("malformed"); }
-        if (launchRequestsHandled.Contains(id, StringComparer.Ordinal)) { return new("handled"); }
 
         var parsed = new Dictionary<string, string>(StringComparer.Ordinal);
         var problem = "";
@@ -760,11 +761,7 @@ public sealed partial class HaConnector
             ["at"] = time.GetUtcNow().ToString("o", CultureInfo.InvariantCulture),
             ["launched"] = launched?.DeepClone(),
         });
-        foreach (var old in launchOutcomes.Skip(HaContract.LaunchOutcomesKept).Where(o =>
-            DateTimeOffset.TryParse(o["at"]?.GetValue<string>(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)
-            && time.GetUtcNow() - at > HaContract.LaunchOutcomeRetention
-            && o["request"]!.GetValue<string>() != launchInFlight
-            && !launchQueue.Any(q => q.Id == o["request"]!.GetValue<string>())).ToArray()) { launchOutcomes.Remove(old); }
+        PruneLaunchRecords();
         SaveLaunchJournal();
         try
         {
@@ -796,14 +793,26 @@ public sealed partial class HaConnector
             foreach (var item in recent.EnumerateArray())
             {
                 if (JsonNode.Parse(item.GetRawText()) is not JsonObject o || o["request"] is not JsonValue r || !r.TryGetValue<string>(out var id)) { continue; }
-                if (!launchOutcomes.Any(existing => existing["request"]!.GetValue<string>() == id)) { launchOutcomes.Add(o); }
-                if (!launchRequestsHandled.Contains(id, StringComparer.Ordinal)) { launchRequestsHandled.Add(id); }
+                if (!DateTimeOffset.TryParse(o["at"]?.GetValue<string>(), out _))
+                {
+                    o["at"] = time.GetUtcNow().ToString("o", CultureInfo.InvariantCulture);
+                    log("Home Assistant connector normalized a legacy launch outcome without a timestamp");
+                }
+                var existing = launchOutcomes.FindIndex(entry => entry["request"]!.GetValue<string>() == id);
+                if (existing < 0) { launchOutcomes.Add(o); }
+                else if (launchOutcomes[existing]["outcome"]!.GetValue<string>() == o["outcome"]?.GetValue<string>()) { launchOutcomes[existing] = o; }
             }
         }
         var cut = false;
         foreach (var o in launchOutcomes)
         {
             var id = o["request"]!.GetValue<string>();
+            if (o["outcome"]?.GetValue<string>() == "queued" && !launchQueue.Any(q => q.Id == id))
+            {
+                o["outcome"] = "lost-restart";
+                o["note"] = "The bridge restarted without this pending payload; relaunch with a new request id.";
+                cut = true;
+            }
             if (o["outcome"] is JsonValue v && v.TryGetValue<string>(out var outcome) && outcome == "starting" && id != launchInFlight)
             {
                 o["outcome"] = "unconfirmed";
@@ -811,9 +820,10 @@ public sealed partial class HaConnector
                 cut = true;
             }
         }
+        PruneLaunchRecords();
         if (launchOutcomes.Count > 0) { SaveLaunchJournal(); }
         launchOutcomesRestored = true;
-        if (cut || launchOutcomes.Count > 0)
+        if (cut || launchOutcomes.Count > 0 || state is not null)
         {
             try
             {

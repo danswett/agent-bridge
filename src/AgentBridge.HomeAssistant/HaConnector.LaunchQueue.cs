@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -11,32 +12,52 @@ public sealed partial class HaConnector
     readonly List<QueuedLaunch> launchQueue = [];
     bool launchJournalLoaded;
 
-    string LaunchJournalPath => options.StateFile is { } path ? path + ".launch"
-        : throw new IOException("Durable Home Assistant launch requests require a connector StateFile.");
-
     void LoadLaunchJournal()
     {
         if (launchJournalLoaded) { return; }
-        if (options.StateFile is null) { return; }
-        var path = LaunchJournalPath;
+        if (options.StateFile is not { } stateFile) { return; }
+        var path = stateFile + ".launch";
+        if (File.Exists(path + ".corrupt")) { throw new IOException("Launch journal is quarantined; recovery is required before launching."); }
         if (File.Exists(path))
         {
-            var journal = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
-            launchRequestsHandled.AddRange(journal["handled"]!.Deserialize<List<string>>()!);
-            launchQueue.AddRange(journal["pending"]!.Deserialize<List<QueuedLaunch>>()!);
-            launchOutcomes.AddRange(journal["recent"]!.AsArray().Select(o => o!.DeepClone().AsObject()));
+            List<JsonObject> loaded;
+            try
+            {
+                static string Text(JsonNode? n) => n is JsonValue v && v.TryGetValue<string>(out var s) && s.Length > 0
+                    ? s : throw new JsonException("Missing launch tombstone field.");
+                var journal = JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? throw new JsonException("Invalid launch journal.");
+                var rows = (journal["tombstones"] ?? journal["recent"]) as JsonArray ?? throw new JsonException("Missing launch tombstones.");
+                loaded = rows.Select(item =>
+                {
+                    var id = Text(item?["request"]);
+                    var outcome = Text(item?["outcome"]);
+                    var at = Text(item?["at"]);
+                    if (!RequestIdPattern().IsMatch(id) || !DateTimeOffset.TryParse(at, out _)) { throw new JsonException("Invalid launch tombstone."); }
+                    return new JsonObject { ["request"] = id, ["outcome"] = outcome, ["at"] = at,
+                        ["pressed"] = "", ["session"] = "", ["note"] = "", ["launched"] = null };
+                }).ToList();
+            }
+            catch (Exception e) when (e is JsonException or InvalidOperationException)
+            {
+                File.Move(path, path + ".corrupt");
+                Problem("launch-journal", $"Launch journal quarantined: {e.GetType().Name}; recovery is required before launching.");
+                throw new IOException("Launch journal quarantined.", e);
+            }
+            launchOutcomes.AddRange(loaded);
         }
         launchJournalLoaded = true;
     }
 
     void SaveLaunchJournal()
     {
-        var path = LaunchJournalPath;
+        if (options.StateFile is not { } stateFile) { return; }
+        var path = stateFile + ".launch";
         var journal = new JsonObject
         {
-            ["handled"] = JsonSerializer.SerializeToNode(launchRequestsHandled),
-            ["pending"] = JsonSerializer.SerializeToNode(launchQueue),
-            ["recent"] = new JsonArray([.. launchOutcomes.Select(o => (JsonNode)o.DeepClone())]),
+            ["tombstones"] = new JsonArray([.. launchOutcomes.Select(o => (JsonNode)new JsonObject
+            {
+                ["request"] = o["request"]!.DeepClone(), ["outcome"] = o["outcome"]!.DeepClone(), ["at"] = o["at"]!.DeepClone(),
+            })]),
         };
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         // The claim must reach disk before dispatch. A crash after it is unconfirmed, never retried.
@@ -46,6 +67,17 @@ public sealed partial class HaConnector
             stream.Flush(flushToDisk: true);
         }
         File.Move(path + ".tmp", path, overwrite: true);
+    }
+
+    void PruneLaunchRecords()
+    {
+        var now = time.GetUtcNow();
+        static DateTimeOffset At(JsonObject o) => DateTimeOffset.Parse(o["at"]!.GetValue<string>(), CultureInfo.InvariantCulture);
+        var kept = launchOutcomes.Where(o => now - At(o) <= TimeSpan.FromHours(24)).OrderByDescending(At).Take(10000).ToArray();
+        launchOutcomes.Clear();
+        launchOutcomes.AddRange(kept);
+        launchRequestsHandled.Clear();
+        launchRequestsHandled.AddRange(launchOutcomes.Select(o => o["request"]!.GetValue<string>()));
     }
 
     async Task DispatchQueuedLaunchAsync(CancellationToken ct)
