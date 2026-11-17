@@ -106,6 +106,15 @@ public sealed class HostConnection : IAsyncDisposable
 
     public bool Can(string capability) => Capabilities.Contains(capability);
 
+    internal bool IsLocalPipe => Volatile.Read(ref current)?.Channel is LocalChannel;
+
+    public Task<JsonElement> RenameFleetNameAsync(string id, string name)
+    {
+        var now = Volatile.Read(ref current);
+        if (now?.Channel is not LocalChannel) { throw new HostErrorException("Fleet labels can only be set through this machine's local pipe."); }
+        return now.Channel.CallAsync("session.rename", new { id, name }, TimeSpan.FromSeconds(10), default);
+    }
+
     // Raised on the UI thread when this connection's events skip some (a gap), before anything
     // after the gap is applied: its sessions may be missing changes until the snapshot the recovery
     // asks for is whole. That snapshot begins only once the recovery has read hello, status, usage

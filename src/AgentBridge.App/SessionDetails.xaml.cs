@@ -89,5 +89,9 @@ public sealed partial class SessionDetails : UserControl
     }
 
     void OnEnd(object sender, RoutedEventArgs e) => Card?.End?.Press();
+    async void OnSaveFleetName(object sender, RoutedEventArgs e)
+    {
+        if (Card is { } card) { await card.SaveFleetNameAsync(); }
+    }
     void OnResendEnd(object sender, RoutedEventArgs e) => Card?.End?.Resend();
 }

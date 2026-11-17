@@ -218,10 +218,12 @@ switch (command)
             }
             try
             {
-                await using var local = await LocalClient.ConnectAsync(LocalEndpoint.For(Path.Combine(Identity.DefaultRoot, profileName)));
-                await local.HelloAsync();
-                var renamed = await local.CallAsync(AgentBridge.Host.Fleet.FleetNames.Op, new { id = arguments[1], name = arguments[2] });
-                Console.WriteLine(renamed.GetRawText());
+                await AgentBridge.Host.Fleet.FleetRenameCommand.RunAsync(async () =>
+                {
+                    await using var local = await LocalClient.ConnectAsync(LocalEndpoint.For(Path.Combine(Identity.DefaultRoot, profileName)));
+                    await local.HelloAsync();
+                    return await local.CallAsync(AgentBridge.Host.Fleet.FleetNames.Op, new { id = arguments[1], name = arguments[2] });
+                }, Console.Out, Console.Error);
                 return 0;
             }
             catch (Exception e) when (e is IOException or HostErrorException)
