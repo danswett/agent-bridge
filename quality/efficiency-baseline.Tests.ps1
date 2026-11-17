@@ -1,5 +1,5 @@
 #Requires -Version 7.4
-param([ValidateSet('elapsed', 'exit', 'replacement', 'readonly', 'no-survivors', 'partial', 'ambiguous', 'metric-values', 'entrypoint')][string] $Scenario)
+param([ValidateSet('elapsed', 'exit', 'replacement', 'readonly', 'no-survivors', 'partial', 'ambiguous', 'metric-values', 'entrypoint', 'pwa-metrics', 'pwa-missing', 'pwa-exit', 'pwa-network')][string] $Scenario)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'efficiency-baseline.ps1')
@@ -20,6 +20,55 @@ $options = @{
     Wait = { param($seconds) $state.seconds += $seconds + 1 }
     ReadSnapshot = { param($processId) $fixture[$state.index++] }
     UtcNow = { [datetime]::new(2026, 1, 1, 0, 0, 0, [DateTimeKind]::Utc).AddSeconds($state.seconds) }
+}
+if ($Scenario -like 'pwa-*') {
+    $browser = @{ bytesIn = 0L; bytesOut = 0L; requests = 0L; messages = 0L; networkUnavailable = $null }
+    if ($Scenario -eq 'pwa-network') {
+        Add-EfficiencyBrowserEvent $browser @{ method = 'Network.requestWillBeSent'; params = @{ request = @{ hasPostData = $true; postData = 'é' } } }
+        Add-EfficiencyBrowserEvent $browser @{ method = 'Network.loadingFinished'; params = @{ encodedDataLength = 100 } }
+        Add-EfficiencyBrowserEvent $browser @{ method = 'Network.webSocketFrameSent'; params = @{ response = @{ opcode = 1; payloadData = 'é' } } }
+        Add-EfficiencyBrowserEvent $browser @{ method = 'Network.webSocketFrameReceived'; params = @{ response = @{ opcode = 2; payloadData = 'AQID' } } }
+        Assert ($browser.bytesIn -eq 103 -and $browser.bytesOut -eq 4 -and $browser.requests -eq 1 -and $browser.messages -eq 2) 'CDP bytes, binary frames or request counts are wrong.'
+        Add-EfficiencyBrowserEvent $browser @{ method = 'Network.requestWillBeSent'; params = @{ request = @{ hasPostData = $true } } }
+        Assert (-not [string]::IsNullOrWhiteSpace($browser.networkUnavailable)) 'Unobservable upload was silently counted as zero.'
+    }
+    $options.Targets.host = @{ processId = $null; unavailable = 'No host fixture.' }
+    $options.Targets.pwa = @{ processId = $null; browser = $browser; unavailable = $null }
+    $options.ReadBrowserSnapshot = {
+        param($connection)
+        $i = $state.index++
+        if ($Scenario -eq 'pwa-exit' -and $i -eq 1) { return @{ unavailable = @{ process = 'Browser disconnected.' } } }
+        @{ identity = 'page'; cpuSeconds = 10 + $i; jsHeapUsedBytes = 1000L + $i
+            workingSetBytes = $null; privateBytes = $null; threads = $null; buildVersion = $null
+            unavailable = @{}; network = @{ bytesIn = 100L * $i; bytesOut = 20L * $i; requests = $i; messages = 2 * $i } }
+    }
+    if ($Scenario -eq 'pwa-missing') {
+        $options.Targets.pwa = Open-EfficiencyBrowser ''
+        Assert (-not [string]::IsNullOrWhiteSpace($options.Targets.pwa.unavailable)) 'Absent browser has no reason.'
+        $rejected = $false
+        try { Open-EfficiencyBrowser 'https://example.invalid' } catch [ArgumentException] { $rejected = $true }
+        Assert $rejected 'Non-WebSocket CDP endpoint was accepted.'
+    }
+    $result = Invoke-EfficiencyBaseline @options
+    Assert (Test-Json -Json ($result | ConvertTo-Json -Depth 20) -SchemaFile (Join-Path $PSScriptRoot 'efficiency-baseline.schema.json')) 'PWA output violates the one-file schema.'
+    $pwa = $result.targets.pwa
+    if ($Scenario -in 'pwa-missing', 'pwa-exit') {
+        Assert ($null -eq $pwa.cpuSecondsPerMinute -and $null -eq $pwa.network) 'Absent or disconnected browser looked idle.'
+        Assert (-not [string]::IsNullOrWhiteSpace($pwa.unavailable.process)) 'Browser failure lost its reason.'
+        if ($Scenario -eq 'pwa-exit') { Assert ($pwa.status -eq 'partial' -and $pwa.sampleCount -eq 3) 'Lost partial browser evidence.' }
+    } else {
+        Assert ($pwa.status -eq 'available' -and $pwa.processId -eq $null) 'Browser is unavailable or mislabeled as a process.'
+        Assert ([math]::Abs($pwa.cpuSecondsPerMinute - 180.0 / 11) -lt 0.000001 -and $pwa.jsHeapUsedBytes -eq 1003) 'Wrong main-thread CPU rate or heap bytes.'
+        $net = $pwa.network.endpoints[0]
+        Assert ([math]::Abs($net.bytesInPerMinute - 18000.0 / 11) -lt 0.000001 -and [math]::Abs($net.bytesOutPerMinute - 3600.0 / 11) -lt 0.000001) 'Wrong network byte rates.'
+        Assert ([math]::Abs($net.requestsPerMinute - 180.0 / 11) -lt 0.000001 -and [math]::Abs($net.messagesPerMinute - 360.0 / 11) -lt 0.000001) 'Wrong network request/frame rates.'
+        Assert ($null -eq $pwa.workingSetBytes -and $null -eq $pwa.privateBytes -and $null -eq $pwa.gcAllocationBytesPerSecond) 'Browser invented process or GC metrics.'
+    }
+    foreach ($name in 'host', 'desktop') {
+        Assert ($null -eq $result.targets[$name].network -and $null -eq $result.targets[$name].gcAllocationBytesPerSecond) 'Browser collection changed process-only metrics.'
+    }
+    Write-Output "PASS: $Scenario"
+    exit
 }
 switch ($Scenario) {
     'entrypoint' {

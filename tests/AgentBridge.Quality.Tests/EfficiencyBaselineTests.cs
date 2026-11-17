@@ -15,6 +15,10 @@ public class EfficiencyBaselineTests
     [InlineData("ambiguous")]
     [InlineData("metric-values")]
     [InlineData("entrypoint")]
+    [InlineData("pwa-metrics")]
+    [InlineData("pwa-missing")]
+    [InlineData("pwa-exit")]
+    [InlineData("pwa-network")]
     public async Task The_baseline_contract_holds_for_each_fixture(string scenario)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
