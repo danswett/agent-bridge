@@ -92,6 +92,59 @@ public sealed class SelfTestResultTests
         Assert.True(walk.Elapsed > TimeSpan.FromSeconds(30));
     }
 
+    [Fact]
+    public async Task Nested_reporting_is_rejected_without_resuming_the_outer_pause()
+    {
+        var time = new FakeTimeProvider(Start);
+        var walk = new SelfTestResult.WalkTimer(time);
+        await walk.ReportAsync(async () =>
+        {
+            var called = false;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => walk.ReportAsync(() => { called = true; return Task.CompletedTask; }));
+            Assert.False(called);
+            time.Advance(TimeSpan.FromSeconds(100));
+            Assert.Equal(TimeSpan.Zero, walk.Elapsed);
+        });
+        Assert.Equal(TimeSpan.Zero, walk.Elapsed);
+    }
+
+    [Fact]
+    public async Task Overlapping_reporting_is_rejected_without_releasing_another_reporters_pause()
+    {
+        var time = new FakeTimeProvider(Start);
+        var walk = new SelfTestResult.WalkTimer(time);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var outer = walk.ReportAsync(() => release.Task);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Task.Run(() => walk.ReportAsync(() => Task.CompletedTask)));
+            time.Advance(TimeSpan.FromSeconds(100));
+            Assert.Equal(TimeSpan.Zero, walk.Elapsed);
+        }
+        finally { release.SetResult(); await outer; }
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(TimeSpan.FromSeconds(1), walk.Elapsed);
+    }
+
+    [Fact]
+    public async Task Overlap_cannot_make_elapsed_negative_after_the_outer_report_finishes()
+    {
+        var time = new FakeTimeProvider(Start);
+        var walk = new SelfTestResult.WalkTimer(time);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var outer = walk.ReportAsync(() => release.Task);
+        time.Advance(TimeSpan.FromSeconds(10));
+        try
+        {
+            var error = await Record.ExceptionAsync(() => walk.ReportAsync(() => { time.Advance(TimeSpan.FromSeconds(20)); return Task.CompletedTask; }));
+            Assert.True(error is null or InvalidOperationException);
+        }
+        finally { release.SetResult(); await outer; }
+        Assert.True(walk.Elapsed >= TimeSpan.Zero);
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(TimeSpan.FromSeconds(1), walk.Elapsed);
+    }
+
     [Theory]
     [Trait("Category", "Process")]
     [InlineData(5, false, false, "still progressing at 15 reader list")]
