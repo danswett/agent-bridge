@@ -629,8 +629,33 @@ operator resolution excluding old execution may call it, never cache expiry, a m
 an absent session snapshot or an empty box. It atomically replaces all node entries/pins with
 one permanent retired-node fence outside message capacity. Every old or new rid on that binding
 then returns refusal; a new incarnation requires a newly bound node, never reopening the old one.
-Ordinary lifecycle `Forget` does not assert that authority. C2b still owns cleanup receipt
-completion, guarded requeue, native one-shot conformance and attachment-payload fingerprints.
+Ordinary lifecycle `Forget` does not assert that authority.
+
+**Cleanup completion and guarded requeue (C2b storage contract).** Reservation cannot
+carry a completion receipt. Once a token is reserved, changing the token or revision cannot
+authorize another clear of that attempt, including after restart or receipt loss.
+`CompleteCleanup` takes the separately verified completion from a supported adapter: exact
+node/rid, attempt, host request, process incarnation, token and revision, a nonblank protected
+receipt reference, and confirmation of fenced/drained input, empty owned buffer and no
+acceptance. Missing, mismatched or conflicting proof refuses the transition.
+The receipt is flushed before `Requeue` may clear `StartedAt`; completion alone leaves the
+attempt fenced. A restart between those operations can finish the same transition
+idempotently, without another clear. Requeue preserves payload, enqueue time, sender, rid,
+FIFO position and consumed tokens. The next `Start` increments the attempt and requires
+a fresh host request on the same incarnation; old receipts cannot requeue that next attempt.
+A final Unconfirmed outcome is never automatically requeued, even with an older cleanup
+receipt. Storage failure leaves the attempt fenced and surfaces the error.
+
+These are internal persistence operations, **not an implemented CLI compare-and-clear
+transport**. No production caller supplies cleanup receipts in this cut, so existing
+interrupted deliveries still become Unconfirmed, never automatic replay. Native prefix and
+attachment-payload ownership remain the single host injector's responsibility; this store
+does not add a fingerprint matcher or infer proof from a screen. A producer must first
+verify every native/process/draft guard and the CLI's atomic ownership/revision and
+input-drain contract in the accepted durable-reply design. That supported CLI contract is
+not established here. No keys, draft copying, trust/permission responses or structured
+fallback are added. Native/attachment conformance and draft-independent delivery remain
+unimplemented; this storage slice does not close issue 2780 or promise automatic clearing.
 
 **`tools/agents/reply-session.ps1`** is the in-repo sender. It posts the payload with a rid, waits
 for the reply sensor to show its own stamp (there is one slot per node, so rapid sends can overwrite
