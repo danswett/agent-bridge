@@ -160,6 +160,40 @@ public sealed class PushNoticeEvidenceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_full_notice_queue_drops_and_logs_new_outcomes_without_losing_accepted_evidence()
+    {
+        var blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var audit = new AgentAuditLog(folder)
+        {
+            LockTiming = new AuditLockTiming(() => 0, () => { blocked.TrySetResult(); release.Wait(); }),
+        };
+        recorder = new PhoneNoticeRecorder(audit, evidenceErrors.Add);
+        var held = AgentAuditLog.Lock(Path.Combine(folder, AgentAuditLog.FolderName));
+        try
+        {
+            recorder.Record(new PushNoticeOutcome(Phone, "s1", "first", NoticeKind.Question, "delivered"));
+            await blocked.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            for (var i = 0; i < 66; i++)
+            {
+                recorder.Record(new PushNoticeOutcome(Phone, "s1", $"q{i}", NoticeKind.Question, "delivered"));
+            }
+            Assert.Equal(["phone notice evidence queue full or closed; dropped=1",
+                "phone notice evidence queue full or closed; dropped=2"], evidenceErrors);
+        }
+        finally
+        {
+            held.Dispose();
+            release.Set();
+            await recorder.DisposeAsync();
+        }
+        var notices = PhoneApprovalEvidence.Read(folder, []).Notices;
+        Assert.Equal(65, notices.Count);
+        Assert.Equal("first", notices[0].Question);
+        Assert.Equal("q63", notices[^1].Question);
+    }
+
+    [Fact]
     public async Task An_unwritable_audit_is_reported_instead_of_claiming_notice_evidence()
     {
         Start();

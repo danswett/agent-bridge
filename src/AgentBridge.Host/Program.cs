@@ -545,10 +545,10 @@ async Task<int> ServeAsync(HostHandover handover)
     await using var phoneNotices = new PhoneNoticeRecorder(agentAudit, Log);
     await using var push = settings.Push
         ? new PushNotifier(source, machine, PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), identity.Account?.AccountId, Log), log: Log, trust: trustedPeers)
-            { NoticeOutcome = phoneNotices.Record }
         : null;
     if (push is not null)
     {
+        push.NoticeOutcome += phoneNotices.Record;
         trustedPeers.Changed += push.RevalidateTrust;
         push.RevalidateTrust();
     }

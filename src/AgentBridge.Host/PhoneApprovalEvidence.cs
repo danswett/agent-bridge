@@ -3,8 +3,8 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
-// Asked: answers this client tried; Answered: those the host delivered; AnsweredAway: delivered ones that
-// came through the relay. Delivered counts distinct question notices accepted by the push service, not phone receipts.
+// Asked counts answer attempts; Answered counts host-delivered answers. AnsweredAway identifies the relay path,
+// not the phone's physical location. Delivered counts push-service acceptance, never confirmed phone receipts.
 internal sealed record PhoneClientEvidence(string Client, int Asked, int Answered, int AnsweredAway, int Delivered = 0);
 
 internal sealed record PhoneApprovalEvidenceReport(IReadOnlyList<PhoneClientEvidence> Clients, IReadOnlyList<string> Missing, bool Complete,
@@ -13,12 +13,14 @@ internal sealed record PhoneApprovalEvidenceReport(IReadOnlyList<PhoneClientEvid
     internal bool Passed { get; init; }
 }
 
-// The notifier calls under its lock: queue metadata only, then drain before the host exits.
+// Bound queued metadata without waiting for space; count and log rejections, and drain accepted rows at shutdown.
 internal sealed class PhoneNoticeRecorder : IAsyncDisposable
 {
-    readonly Channel<PushNoticeOutcome> queue = Channel.CreateUnbounded<PushNoticeOutcome>(new() { SingleReader = true });
+    readonly Channel<PushNoticeOutcome> queue = Channel.CreateBounded<PushNoticeOutcome>(
+        new BoundedChannelOptions(64) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
     readonly Task drain;
     readonly Action<string> log;
+    long dropped;
 
     internal PhoneNoticeRecorder(AgentAuditLog audit, Action<string> log)
     {
@@ -41,7 +43,11 @@ internal sealed class PhoneNoticeRecorder : IAsyncDisposable
 
     internal void Record(PushNoticeOutcome notice)
     {
-        if (!queue.Writer.TryWrite(notice)) { log("phone notice evidence recorder is closed; outcome not recorded"); }
+        if (!queue.Writer.TryWrite(notice))
+        {
+            var count = Interlocked.Increment(ref dropped);
+            log($"phone notice evidence queue full or closed; dropped={count}");
+        }
     }
 
     public async ValueTask DisposeAsync()

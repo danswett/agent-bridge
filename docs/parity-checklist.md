@@ -40,6 +40,8 @@ For [the per-client check](https://github.com/danswett/agent-bridge/issues/2649)
 the host subscribes to the existing `NoticeOutcome` hook. Its non-blocking queue
 drains into the existing private audit log before shutdown. No fixed node or new
 service is involved; each host retains its own existing profile audit files.
+The queue holds at most 64 pending outcomes. When full or closed, new outcomes
+are rejected without waiting for space, counted, and logged with a cumulative drop count.
 The existing row fields hold action `push`, direction `out`, recipient
 `person:<device>` (or `person:unknown`), question in `request`, session in `target`,
 kind `question` in `reason`, and the push-service outcome. No endpoint, keys,
