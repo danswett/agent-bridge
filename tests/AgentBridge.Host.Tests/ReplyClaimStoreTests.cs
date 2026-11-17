@@ -165,25 +165,22 @@ public sealed class ReplyClaimStoreTests : IDisposable
     }
 
     [Fact]
-    public void The_claim_cap_refuses_without_evicting_a_live_claim_and_compacts_at_the_cap()
+    public void A_full_session_preserves_4096_claims_without_refusing_another_session()
     {
-        ReplyClaimStore.EnsureInitialized(profile);
-        var markerPath = PathInProfile(Marker);
-        var markerJson = JsonNode.Parse(File.ReadAllText(markerPath))!.AsObject();
-        var profileKey = markerJson["profileKey"]!.GetValue<string>();
-        var claims = Enumerable.Range(0, 2048).Select(i => new ReplyClaimRecord("session", Hash($"request-{i}"), Hash("text"), null, Guid.NewGuid(), time.GetUtcNow())).ToList();
-        var coverageHash = Hash("coverage"); var marker = new ReplyClaimMarker(1, profileKey, "active", 1, coverageHash, ReplyClaimJournal.StateHash(claims));
-        ReplyClaimJournal.Compact(PathInProfile(Ledger), profileKey, new(claims, 1, coverageHash), marker);
-        markerJson["sequence"] = marker.Sequence; markerJson["hash"] = marker.Hash; markerJson["stateHash"] = marker.StateHash;
-        File.WriteAllText(markerPath, markerJson.ToJsonString());
-
+        var seeded = SeedSnapshot(1, claimsPerSession: 4095);
         using var store = ReplyClaimStore.Open(profile, time);
-        Assert.Equal(ReplyClaimStatus.Full, store.Acquire("other", "overflow", Hash("text")).Status);
-        Assert.Equal(ReplyClaimStatus.Existing, store.Acquire("session", "request-0", Hash("text")).Status);
+        var last = store.Acquire("session-0", "last", Hash("text"));
+        Assert.Equal(ReplyClaimStatus.Acquired, last.Status);
+        Assert.Equal(ReplyClaimStatus.Full, store.Acquire("session-0", "overflow", Hash("text")).Status);
+        var other = store.Acquire("other", "request-0", Hash("text"));
+        Assert.Equal(ReplyClaimStatus.Acquired, other.Status);
+        Assert.NotEqual(seeded.Claims[0].Generation, other.Generation);
+        Assert.Equal(ReplyClaimStatus.Existing, store.Acquire("session-0", "request-0", Hash("text")).Status);
         store.Compact();
         using var restarted = ReplyClaimStore.Open(profile, time);
-        Assert.Equal(ReplyClaimStatus.Existing, restarted.Acquire("session", "request-0", Hash("text")).Status);
-        Assert.Equal(claims[0].Generation, restarted.Acquire("session", "request-0", Hash("text")).Generation);
+        Assert.Equal(seeded.Claims[0].Generation, restarted.Acquire("session-0", "request-0", Hash("text")).Generation);
+        Assert.Equal(last.Generation, restarted.Acquire("session-0", "last", Hash("text")).Generation);
+        Assert.Equal(other.Generation, restarted.Acquire("other", "request-0", Hash("text")).Generation);
     }
 
     [Fact]
@@ -359,7 +356,7 @@ public sealed class ReplyClaimStoreTests : IDisposable
     }
 
     [Fact]
-    public void Replay_at_the_claim_cap_finishes_within_the_two_second_lock_wait()
+    public void Replay_of_2048_claims_finishes_within_the_two_second_lock_wait()
     {
         using var store = ReplyClaimStore.Open(profile, time);
         var marker = JsonNode.Parse(File.ReadAllText(PathInProfile(Marker)))!.AsObject();
@@ -458,6 +455,98 @@ public sealed class ReplyClaimStoreTests : IDisposable
 
         using var restarted = ReplyClaimStore.Open(profile, time);
         Assert.Equal(ReplyClaimStatus.Existing, restarted.Acquire("session", "request", Hash("text")).Status);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Snapshots_larger_than_one_frame_survive_crashes_and_operator_recovery(int crashPoint)
+    {
+        var seeded = SeedSnapshot(4);
+        var path = PathInProfile(Ledger);
+        var bytes = File.ReadAllBytes(path);
+        Assert.True(bytes.Length > 4 * 1024 * 1024);
+        Assert.True(FrameStarts(bytes).Count > 1);
+        using var store = ReplyClaimStore.Open(profile, time);
+        try
+        {
+            if (crashPoint == 0) { ReplyClaimJournal.BeforeCompactReplace.Value = () => throw new IOException("before replace"); }
+            if (crashPoint == 1) { ReplyClaimJournal.AfterCompactReplace.Value = () => throw new IOException("after replace"); }
+            if (crashPoint == 2)
+            {
+                ClaimDirectorySync.BeforeFlush.Value = directory =>
+                {
+                    if (directory == Path.GetDirectoryName(path)) { throw new IOException("after replace, before directory flush"); }
+                };
+            }
+            Assert.Throws<IOException>(() => store.Compact());
+        }
+        finally
+        {
+            ReplyClaimJournal.BeforeCompactReplace.Value = null; ReplyClaimJournal.AfterCompactReplace.Value = null;
+            ClaimDirectorySync.BeforeFlush.Value = null;
+        }
+        using var restarted = ReplyClaimStore.Open(profile, time);
+        Assert.Equal(seeded.Claims[^1].Generation, restarted.Acquire("session-3", "request-4095", Hash("text")).Generation);
+        var backup = Path.Combine(profile, "covering-multi-frame");
+        File.Copy(path, backup);
+        File.Delete(path);
+        ReplyClaimStore.RecoverFromBackup(profile, backup);
+        Assert.Equal(seeded.Claims[0].Generation, restarted.Acquire("session-0", "request-0", Hash("text")).Generation);
+        Assert.Equal(seeded.Claims[^1].Generation, restarted.Acquire("session-3", "request-4095", Hash("text")).Generation);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void An_incomplete_or_corrupt_snapshot_cannot_prove_coverage_or_be_tail_repaired(int damage)
+    {
+        SeedSnapshot(4, lagMarker: true);
+        var path = PathInProfile(Ledger);
+        var bytes = File.ReadAllBytes(path);
+        var starts = FrameStarts(bytes);
+        if (damage == 0) { bytes = bytes[..^3]; }
+        else if (damage == 1) { bytes = bytes[..starts[^1]]; }
+        else { bytes[starts[1] + 4] ^= 0x01; }
+        File.WriteAllBytes(path, bytes);
+
+        Assert.Throws<InvalidDataException>(() => ReplyClaimStore.Open(profile, time));
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void Rechaining_snapshot_chunks_cannot_hide_a_missing_covered_claim()
+    {
+        SeedSnapshot(4, lagMarker: true);
+        var path = PathInProfile(Ledger);
+        var bytes = File.ReadAllBytes(path);
+        using var changed = new MemoryStream();
+        string? previous = null;
+        var removed = false;
+        foreach (var start in FrameStarts(bytes))
+        {
+            var length = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(start));
+            var row = JsonNode.Parse(bytes.AsSpan(start + 4, length))!.AsObject();
+            if (!removed && row["action"]!.GetValue<string>() == "snapshotChunk")
+            { row["claims"]!.AsArray().RemoveAt(0); removed = true; }
+            if (previous is not null) { row["previousHash"] = previous; }
+            var payload = Encoding.UTF8.GetBytes(row.ToJsonString());
+            var digest = SHA256.HashData(payload);
+            var frame = new byte[payload.Length + 36];
+            BinaryPrimitives.WriteInt32LittleEndian(frame, payload.Length);
+            payload.CopyTo(frame.AsSpan(4));
+            digest.CopyTo(frame.AsSpan(payload.Length + 4));
+            changed.Write(frame);
+            previous = Convert.ToHexString(digest);
+        }
+        Assert.True(removed);
+        var tampered = changed.ToArray();
+        File.WriteAllBytes(path, tampered);
+
+        Assert.Throws<InvalidDataException>(() => ReplyClaimStore.Open(profile, time));
+        Assert.Equal(tampered, File.ReadAllBytes(path));
     }
 
     [Fact]
@@ -592,6 +681,39 @@ public sealed class ReplyClaimStoreTests : IDisposable
     }
 
     string ReadState(string file) => JsonNode.Parse(File.ReadAllText(PathInProfile(file)))!["state"]!.GetValue<string>();
+
+    ReplyClaimSnapshot SeedSnapshot(int sessions, bool lagMarker = false, int claimsPerSession = 4096)
+    {
+        ReplyClaimStore.EnsureInitialized(profile);
+        var markerPath = PathInProfile(Marker);
+        var markerJson = JsonNode.Parse(File.ReadAllText(markerPath))!.AsObject();
+        var profileKey = markerJson["profileKey"]!.GetValue<string>();
+        var claims = Enumerable.Range(0, sessions).SelectMany(s => Enumerable.Range(0, claimsPerSession).Select(i =>
+            new ReplyClaimRecord($"session-{s}", Hash($"request-{i}"), Hash("text"), null, Guid.NewGuid(), time.GetUtcNow()))).ToList();
+        var coverageHash = Hash("coverage");
+        var marker = new ReplyClaimMarker(1, profileKey, "active", 1, coverageHash, ReplyClaimJournal.StateHash(claims));
+        var snapshot = ReplyClaimJournal.Compact(PathInProfile(Ledger), profileKey, new(claims, 1, coverageHash), marker);
+        markerJson["sequence"] = lagMarker ? marker.Sequence : snapshot.Sequence;
+        markerJson["hash"] = lagMarker ? marker.Hash : snapshot.Hash;
+        markerJson["stateHash"] = marker.StateHash;
+        File.WriteAllText(markerPath, markerJson.ToJsonString());
+        return snapshot;
+    }
+
+    static List<int> FrameStarts(byte[] bytes)
+    {
+        var starts = new List<int>();
+        var offset = 0;
+        while (offset < bytes.Length)
+        {
+            starts.Add(offset);
+            var length = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(offset));
+            Assert.InRange(length, 2, 4 * 1024 * 1024 - 36);
+            offset += length + 36;
+        }
+        Assert.Equal(bytes.Length, offset);
+        return starts;
+    }
 
     void RewriteFirstFrame(string path, Action<JsonObject, string> change, bool updateMarker = true)
     {

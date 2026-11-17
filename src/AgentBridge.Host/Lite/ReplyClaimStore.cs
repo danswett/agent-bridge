@@ -12,7 +12,7 @@ public sealed record ReplyClaimResult(ReplyClaimStatus Status, Guid Generation);
 
 public sealed class ReplyClaimStore : IDisposable
 {
-    const int Schema = 1, MaxPerSession = 4096;
+    const int Schema = 1;
     static readonly TimeSpan Lifetime = TimeSpan.FromHours(24), LockWait = TimeSpan.FromSeconds(2);
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     internal static readonly AsyncLocal<Action?> BeforeRecoveryFileFlush = new();
@@ -123,8 +123,7 @@ public sealed class ReplyClaimStore : IDisposable
             return Eq(existing.TextHash, textHash) && Eq(existing.AttachmentHash, attachmentHash)
                 ? new(ReplyClaimStatus.Existing, existing.Generation) : new(ReplyClaimStatus.RequestReused, Guid.Empty);
         }
-        if (ledger.Claims.Count(c => c.Session == sessionId) >= MaxPerSession
-            || ledger.Claims.Count >= ReplyClaimJournal.MaxClaims) { return new(ReplyClaimStatus.Full, Guid.Empty); }
+        if (ledger.Claims.Count(c => c.Session == sessionId) >= ReplyClaimJournal.MaxPerSession) { return new(ReplyClaimStatus.Full, Guid.Empty); }
         var claim = new ReplyClaimRecord(sessionId, requestHash, textHash.ToUpperInvariant(), attachmentHash?.ToUpperInvariant(), Guid.NewGuid(), now);
         ledger.Claims.Add(claim);
         ledger = ReplyClaimJournal.Append(paths.Ledger, paths.ProfileKey, ledger, "claimed", claim);

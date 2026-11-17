@@ -12,8 +12,8 @@ internal sealed record ReplyClaimMarker(int Schema, string ProfileKey, string St
 
 internal static class ReplyClaimJournal
 {
-    const int Version = 1, ChecksumSize = 32, MaxFrame = 4 * 1024 * 1024, MaxPayload = MaxFrame - 4 - ChecksumSize;
-    internal const int MaxClaims = 2048, MaxSessionBytes = 64;
+    const int Version = 1, ChecksumSize = 32, MaxFrame = 4 * 1024 * 1024, MaxPayload = MaxFrame - 4 - ChecksumSize, SnapshotChunkClaims = 1024;
+    internal const int MaxPerSession = 4096, MaxSessionBytes = 64;
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     internal static readonly AsyncLocal<Action?> BeforeCompactReplace = new(), AfterCompactReplace = new();
 
@@ -34,8 +34,10 @@ internal static class ReplyClaimJournal
         try { bytes = File.ReadAllBytes(path); }
         catch (FileNotFoundException e) { throw new InvalidDataException("The reply-claim journal is missing; delivery remains held.", e); }
         var claims = new Dictionary<(string, string), ReplyClaimRecord>();
+        var sessions = new Dictionary<string, int>(StringComparer.Ordinal);
         var proofs = new Dictionary<long, string>();
         var stateProofs = new Dictionary<long, string>();
+        Row? snapshot = null;
         var offset = 0;
         int? truncateAt = null;
         var sequence = 0L;
@@ -61,27 +63,47 @@ internal static class ReplyClaimJournal
             if (row.Version != Version || row.ProfileKey != profileKey || row.Sequence <= 0
                 || !IsHash(row.PreviousHash) || !IsHash(row.StateHash)) { throw Corrupt(); }
             var rowHash = Convert.ToHexString(digest);
-            if (first && row.Action == "snapshot")
+            if (first && row.Action is "snapshot" or "snapshotStart")
             {
                 if (row.Claim is not null || row.CoverageSequence < 0 || row.CoverageHash is null || !IsHash(row.CoverageHash)
                     || row.CoverageStateHash is null || !IsHash(row.CoverageStateHash) || row.StateHash is null || !IsHash(row.StateHash)
                     || row.Sequence != row.CoverageSequence + 1 || row.PreviousHash != row.CoverageHash) { throw Corrupt(); }
-                ApplySnapshot(claims, row.Claims);
-                var stateHash = StateHash(claims.Values);
-                if (stateHash != row.StateHash || stateHash != row.CoverageStateHash) { throw Corrupt(); }
-                proofs[row.CoverageSequence] = row.CoverageHash;
-                stateProofs[row.CoverageSequence] = stateHash;
+                if (row.Action == "snapshotStart")
+                {
+                    if (row.Claims is not null) { throw Corrupt(); }
+                    snapshot = row;
+                }
+                else
+                {
+                    ApplySnapshot(claims, sessions, row.Claims);
+                    ProveSnapshot(claims, row, proofs, stateProofs);
+                }
             }
             else
             {
-                if (row.Action == "snapshot" || row.Claims is not null || row.CoverageSequence != -1 || row.CoverageHash is not null
+                if (row.CoverageSequence != -1 || row.CoverageHash is not null
                     || row.CoverageStateHash is not null || row.Sequence != sequence + 1 || row.PreviousHash != tip) { throw Corrupt(); }
-                Apply(claims, row);
+                if (snapshot is not null)
+                {
+                    if (row.Claim is not null || row.StateHash != snapshot.StateHash) { throw Corrupt(); }
+                    if (row.Action == "snapshotChunk") { ApplySnapshot(claims, sessions, row.Claims); }
+                    else if (row.Action == "snapshotEnd" && row.Claims is null)
+                    {
+                        ProveSnapshot(claims, snapshot, proofs, stateProofs);
+                        snapshot = null;
+                    }
+                    else { throw Corrupt(); }
+                }
+                else
+                {
+                    if (row.Claims is not null) { throw Corrupt(); }
+                    Apply(claims, sessions, row);
+                }
             }
             sequence = row.Sequence;
             tip = rowHash;
             proofs[sequence] = tip;
-            if (sequence == marker.Sequence)
+            if (sequence == marker.Sequence && snapshot is null)
             {
                 var stateHash = StateHash(claims.Values);
                 if (row.StateHash != stateHash) { throw Corrupt(); }
@@ -91,6 +113,7 @@ internal static class ReplyClaimJournal
             first = false;
             offset += length + ChecksumSize;
         }
+        if (snapshot is not null) { throw Corrupt(); }
         if (sequence < marker.Sequence || !proofs.TryGetValue(marker.Sequence, out var proof) || proof != marker.Hash
             || !stateProofs.TryGetValue(marker.Sequence, out var stateProof) || stateProof != marker.StateHash)
         { throw new InvalidDataException("The reply-claim journal cannot prove the marker's high-water point."); }
@@ -115,18 +138,36 @@ internal static class ReplyClaimJournal
 
     internal static ReplyClaimSnapshot Compact(string path, string profileKey, ReplyClaimSnapshot state, ReplyClaimMarker marker)
     {
-        var row = new Row(Version, profileKey, state.Sequence + 1, state.Hash, "snapshot",
-            Claims: state.Claims, CoverageSequence: state.Sequence, CoverageHash: state.Hash,
-            StateHash: StateHash(state.Claims), CoverageStateHash: StateHash(state.Claims));
-        var frame = Frame(JsonSerializer.SerializeToUtf8Bytes(row, Json));
+        var sequence = state.Sequence;
+        var tip = state.Hash;
+        var stateHash = StateHash(state.Claims);
         var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         var backup = path + ".bak";
         try
         {
             using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            { stream.Write(frame); stream.Flush(true); }
+            {
+                void WriteRow(string action, List<ReplyClaimRecord>? claims = null)
+                {
+                    var covering = action is "snapshot" or "snapshotStart";
+                    var row = new Row(Version, profileKey, ++sequence, tip, action, Claims: claims,
+                        CoverageSequence: covering ? state.Sequence : -1, CoverageHash: covering ? state.Hash : null,
+                        StateHash: stateHash, CoverageStateHash: covering ? stateHash : null);
+                    var payload = JsonSerializer.SerializeToUtf8Bytes(row, Json);
+                    stream.Write(Frame(payload));
+                    tip = Hash(payload);
+                }
+                if (state.Claims.Count <= SnapshotChunkClaims) { WriteRow("snapshot", state.Claims); }
+                else
+                {
+                    WriteRow("snapshotStart");
+                    foreach (var chunk in state.Claims.Chunk(SnapshotChunkClaims)) { WriteRow("snapshotChunk", chunk.ToList()); }
+                    WriteRow("snapshotEnd");
+                }
+                stream.Flush(true);
+            }
             var verified = Read(temp, profileKey, marker, repairTail: false);
-            if (verified.Sequence != row.Sequence || verified.Hash != Hash(frame.AsSpan(4, frame.Length - 4 - ChecksumSize)))
+            if (verified.Sequence != sequence || verified.Hash != tip)
             { throw Corrupt(); }
             BeforeCompactReplace.Value?.Invoke();
             File.Replace(temp, path, backup, ignoreMetadataErrors: true);
@@ -134,7 +175,7 @@ internal static class ReplyClaimJournal
             AfterCompactReplace.Value?.Invoke();
         }
         finally { File.Delete(temp); }
-        return new(state.Claims, row.Sequence, Hash(frame.AsSpan(4, frame.Length - 4 - ChecksumSize)));
+        return new(state.Claims, sequence, tip);
     }
 
     internal static void Recover(string path, string backup, string profileKey, ReplyClaimMarker marker)
@@ -154,14 +195,21 @@ internal static class ReplyClaimJournal
         finally { File.Delete(temp); }
     }
 
-    static void Apply(Dictionary<(string, string), ReplyClaimRecord> claims, Row row)
+    static void ProveSnapshot(Dictionary<(string, string), ReplyClaimRecord> claims, Row snapshot,
+        Dictionary<long, string> proofs, Dictionary<long, string> stateProofs)
+    {
+        var stateHash = StateHash(claims.Values);
+        if (stateHash != snapshot.StateHash || stateHash != snapshot.CoverageStateHash) { throw Corrupt(); }
+        proofs[snapshot.CoverageSequence] = snapshot.CoverageHash ?? throw Corrupt();
+        stateProofs[snapshot.CoverageSequence] = stateHash;
+    }
+
+    static void Apply(Dictionary<(string, string), ReplyClaimRecord> claims, Dictionary<string, int> sessions, Row row)
     {
         if (row.Action == "claimed")
         {
             var claim = row.Claim ?? throw Corrupt();
-            Validate(claim);
-            if (!claims.TryAdd((claim.Session, claim.RequestHash.ToUpperInvariant()), claim)) { throw Corrupt(); }
-            if (claims.Count > MaxClaims || claims.Values.Count(c => c.Session == claim.Session) > 4096) { throw Corrupt(); }
+            AddClaim(claims, sessions, claim);
             return;
         }
         if (row.Action is not ("released" or "expired") || row.Claim is null) { throw Corrupt(); }
@@ -169,17 +217,21 @@ internal static class ReplyClaimJournal
         var key = (row.Claim.Session, row.Claim.RequestHash.ToUpperInvariant());
         if (!claims.TryGetValue(key, out var current) || current.Generation != row.Claim.Generation) { throw Corrupt(); }
         claims.Remove(key);
+        sessions[current.Session]--;
     }
 
-    static void ApplySnapshot(Dictionary<(string, string), ReplyClaimRecord> claims, List<ReplyClaimRecord>? snapshot)
+    static void ApplySnapshot(Dictionary<(string, string), ReplyClaimRecord> claims, Dictionary<string, int> sessions, List<ReplyClaimRecord>? snapshot)
     {
         if (snapshot is null) { throw Corrupt(); }
-        foreach (var claim in snapshot)
-        {
-            Validate(claim);
-            if (!claims.TryAdd((claim.Session, claim.RequestHash.ToUpperInvariant()), claim)
-                || claims.Count > MaxClaims || claims.Values.Count(c => c.Session == claim.Session) > 4096) { throw Corrupt(); }
-        }
+        foreach (var claim in snapshot) { AddClaim(claims, sessions, claim); }
+    }
+
+    static void AddClaim(Dictionary<(string, string), ReplyClaimRecord> claims, Dictionary<string, int> sessions, ReplyClaimRecord claim)
+    {
+        Validate(claim);
+        var count = sessions.GetValueOrDefault(claim.Session) + 1;
+        if (count > MaxPerSession || !claims.TryAdd((claim.Session, claim.RequestHash.ToUpperInvariant()), claim)) { throw Corrupt(); }
+        sessions[claim.Session] = count;
     }
 
     static void Validate(ReplyClaimRecord? claim)
