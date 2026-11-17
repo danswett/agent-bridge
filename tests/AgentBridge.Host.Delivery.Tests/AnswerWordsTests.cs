@@ -275,10 +275,10 @@ public sealed class AnswerWordsTests : IDisposable
     }
 
     [Fact]
-    public void Past_256_KiB_in_all_or_16_KiB_in_one_an_answer_is_refused_and_nothing_held_is_cut()
+    public void Past_256_KiB_in_all_or_18_KiB_in_one_an_answer_is_refused_and_nothing_held_is_cut()
     {
         var ledger = Ledger();
-        Assert.Equal(DeliveryReasons.CannotHoldAnswer, ledger.Claim("k-one", Guid.NewGuid(), Admit(new string('y', 17_000), "q-one")));
+        Assert.Equal(DeliveryReasons.CannotHoldAnswer, ledger.Claim("k-one", Guid.NewGuid(), Admit(new string('y', 19_000), "q-one")));
         var big = new string('x', 16_000);
         for (var i = 0; i < 16; i++) { Assert.Null(ledger.Claim($"k{i}", Guid.NewGuid(), Admit($"{i:D2}{big}", $"q{i}"))); }
 
@@ -286,6 +286,35 @@ public sealed class AnswerWordsTests : IDisposable
 
         var held = Words();
         for (var i = 0; i < 16; i++) { Assert.Contains($"{i:D2}{big}", held); }
+    }
+
+    [Theory]
+    [InlineData('x', 16 * 1024)]
+    [InlineData('\u754c', 3_000)]
+    [InlineData('\u754c', 5_461)]
+    public void Protocol_sized_form_answers_are_held_privately_and_survive_a_restart(char character, int count)
+    {
+        var text = new string(character, count);
+        var request = new AnswerRequest
+        {
+            Id = "s1", Question = "q1", Request = Guid.NewGuid().ToString(),
+            Fields = new Dictionary<string, JsonElement> { ["diagnostics"] = JsonSerializer.SerializeToElement(text) },
+        };
+        var question = new Question
+        {
+            Id = "q1", Kind = QuestionKind.Form, Message = "Diagnostics", AskedAt = time.GetUtcNow(),
+            Fields = [new Field { Name = "diagnostics", Type = FieldType.Text }],
+        };
+        Assert.Null(Answers.Check(question, request));
+        var admission = new AttemptLedger.Admission(new("phone", "s1", "q1"), AnswerDigest.Of(request),
+            new("copilot", "transcript.jsonl", "q1", 42), new AnswerWords.Words(null, request.Fields));
+
+        Assert.Null(Ledger().Claim("k1", Guid.Parse(request.Request), admission));
+
+        Assert.Equal(text, Ledger().FirstFor("s1", "q1")!.Words!.Fields!["diagnostics"].GetString());
+        AssertPrivate(Path.GetDirectoryName(wordsPath)!, wordsPath);
+        Assert.DoesNotContain(text, File.ReadAllText(ledgerPath));
+        Assert.True(new FileInfo(wordsPath).Length < Limits.AnswerRequest + 256);
     }
 
     [Fact]

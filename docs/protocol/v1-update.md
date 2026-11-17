@@ -779,10 +779,13 @@ owns what the host keeps on disk; slice 0 lands only with all of Trust's conditi
           every cap check (so an answer that finds the cap full first retries the pending deletes,
           then checks again, with no restart needed), and until it succeeds the words stay in `answer-words.json` and **still count against
           the caps below**.
-   * **Bounds** (condition 5). At most 32 entries hold words, at most 16 KiB of words each and
-     256 KiB in all, counting words whose delete failed. The protocol's own request limit (`Limits.AnswerRequest`, 16 KiB) already
-     refuses a longer answer with its own reason; an answer that would pass the entry or total
-     cap is refused before any key, as a `refused` answer whose reason says to answer at the
+   * **Bounds** (condition 5). At most 32 entries hold words, at most 18 KiB of serialized JSON
+     each and 256 KiB in all, counting words whose delete failed. Sizing and writing use the
+     protocol's UTF-8 JSON escaping and the entry cap matches `Limits.AnswerRequest` (18 KiB).
+     Only text and fields are retained, so an admitted request fits the entry cap, including a
+     16 KiB text field or multibyte text. The protocol refuses a larger request with its own
+     reason; an answer that would exceed the entry or total cap is refused before any key,
+     as a `refused` answer whose reason says to answer at the
      machine (the words added to v1-sessions.md's answer reasons in this slice). Nothing is
      evicted to make room and no words are truncated. So a delete that keeps failing fills the
      caps and the host stops accepting new answers from other devices (each refused, saying to
