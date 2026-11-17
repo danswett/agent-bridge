@@ -130,7 +130,7 @@ public sealed partial class ReplyTests
                 Assert.Contains(NotesSince(mark), n => n.Summary == "Reply NOT sent" &&
                     n.Attributes.TryGetProperty("reply_ack", out var a) &&
                     a.GetProperty("rid").GetString() == "overflow" && a.GetProperty("outcome").GetString() == "refused" &&
-                    a.GetProperty("sender").GetString() == "overflow-sender");
+                    a.GetProperty("sender").GetString() == "overflow-sender" && !a.TryGetProperty("duplicate", out _));
             }
             finally { release.TrySetResult(new ReplyResult(AnswerOutcome.Delivered)); }
             await c.DeliveredAsync();

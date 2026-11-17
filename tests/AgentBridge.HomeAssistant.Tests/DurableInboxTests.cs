@@ -222,6 +222,39 @@ public sealed class DurableInboxTests : IDisposable
         Assert.Null(inbox.Find("two", "b"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Migration_preserves_v1_and_the_v2_fence_refuses_missing_or_rolled_back_state(bool rollback)
+    {
+        var legacy = """{"Version":1,"Messages":[]}""";
+        File.WriteAllText(Pathname, legacy);
+        var inbox = new DurableInbox(Pathname);
+        inbox.Enqueue("one", "a", "sender", "pending", Now);
+        Assert.Equal(legacy, File.ReadAllText(Pathname + ".v1"));
+        Assert.True(File.Exists(Pathname + ".v2"));
+        var snapshot = JsonDocument.Parse(File.ReadAllText(Pathname)).RootElement;
+        Assert.Equal(2, snapshot.GetProperty("Version").GetInt32());
+        Assert.Empty(snapshot.GetProperty("Retired").EnumerateArray());
+        if (rollback) { File.WriteAllText(Pathname, legacy); }
+        else { File.Delete(Pathname); }
+
+        if (rollback) { Assert.Throws<InvalidDataException>(() => new DurableInbox(Pathname).Peek("one")); }
+        else { Assert.Throws<FileNotFoundException>(() => new DurableInbox(Pathname).Peek("one")); }
+    }
+
+    [Theory]
+    [InlineData("""{"Version":2,"Messages":[],"Retired":[{"Node":"one","At":"2026-11-16T00:00:00Z","Resolution":0}]}""", typeof(InvalidDataException))]
+    [InlineData("""{"Version":2,"Messages":[{"Node":"one","Rid":"a","Sender":"s","Payload":"p","Attempt":1}],"Retired":[]}""", typeof(JsonException))]
+    public void The_C1_reader_never_discards_C2_recovery_or_retirement_data(string snapshot, Type error)
+    {
+        File.WriteAllText(Pathname, snapshot);
+
+        Assert.Throws(error, () => new DurableInbox(Pathname).Enqueue("one", "b", "sender", "new", Now));
+        Assert.Equal(snapshot, File.ReadAllText(Pathname));
+        Assert.False(File.Exists(Pathname + ".v2"));
+    }
+
     [Fact]
     public async Task Concurrent_instances_keep_all_enqueues()
     {

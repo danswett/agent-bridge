@@ -1,45 +1,57 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace AgentBridge.HomeAssistant;
 
 internal sealed record InboxMessage(string Node, string Rid, string Sender, string Payload, DateTimeOffset QueuedAt, DateTimeOffset? DeliveredAt,
     DateTimeOffset? StartedAt = null, string? Outcome = null);
+internal enum InboxResolution { IncarnationEnded, OperatorResolved }
+internal sealed record InboxRetirement(string Node, DateTimeOffset At, InboxResolution Resolution);
 
 internal sealed class DurableInbox
 {
     const int MaxEntriesPerNode = 100;
     const int MaxEntries = 1000;
-    sealed record Snapshot(int Version, List<InboxMessage> Messages);
+    const int AbsencePasses = 3;
+    sealed record Snapshot(int Version, List<InboxMessage> Messages, List<InboxRetirement>? Retired = null);
+    static readonly JsonSerializerOptions Json = new() { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow };
     readonly string path;
+    readonly Dictionary<string, int> absent = new(StringComparer.Ordinal);
 
     public DurableInbox(string path) => this.path = Path.GetFullPath(path);
 
     public InboxMessage Enqueue(string node, string? rid, string? sender, string payload, DateTimeOffset at)
+        => Enqueue(node, rid, sender, payload, at, out _);
+
+    public InboxMessage Enqueue(string node, string? rid, string? sender, string payload, DateTimeOffset at, out bool duplicate)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(node);
         ArgumentException.ThrowIfNullOrWhiteSpace(payload);
         rid = string.IsNullOrWhiteSpace(rid) ? Guid.NewGuid().ToString("N") : rid;
         sender = string.IsNullOrWhiteSpace(sender) ? "legacy" : sender;
+        duplicate = false;
         using var held = Lock();
         var messages = Load();
         var prior = messages.Find(m => m.Node == node && m.Rid == rid);
-        if (prior is not null) { return prior; }
+        if (prior is not null) { duplicate = true; return prior; }
+        var full = false;
         while (messages.Count(m => m.Node == node) >= MaxEntriesPerNode)
         {
             var oldest = messages.FindIndex(m => m.Node == node && m.DeliveredAt is not null);
-            if (oldest < 0) { throw new InvalidOperationException("The node inbox is full."); }
+            if (oldest < 0) { full = true; break; }
             messages.RemoveAt(oldest);
         }
-        while (messages.Count >= MaxEntries)
+        while (!full && messages.Count >= MaxEntries)
         {
             var oldest = messages.FindIndex(m => m.DeliveredAt is not null);
-            if (oldest < 0) { throw new InvalidOperationException("The durable inbox is full."); }
+            if (oldest < 0) { full = true; break; }
             messages.RemoveAt(oldest);
         }
-        var message = new InboxMessage(node, rid, sender, payload, at, null);
+        var message = new InboxMessage(node, rid, sender, full ? "" : payload, at, full ? at : null, Outcome: full ? "refused" : null);
         messages.Add(message);
         Save(messages);
+        absent.Remove(node);
         return message;
     }
 
@@ -60,7 +72,15 @@ internal sealed class DurableInbox
     {
         using var held = Lock();
         var messages = Load();
-        if (messages.RemoveAll(m => !nodes.Contains(m.Node)) > 0) { Save(messages); }
+        foreach (var node in nodes) { absent.Remove(node); }
+        var expired = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var node in messages.Select(m => m.Node).Distinct().Where(n => !nodes.Contains(n)))
+        {
+            absent[node] = Math.Min(AbsencePasses, absent.GetValueOrDefault(node) + 1);
+            if (absent[node] == AbsencePasses) { expired.Add(node); }
+        }
+        if (messages.RemoveAll(m => expired.Contains(m.Node)) > 0) { Save(messages); }
+        foreach (var node in expired) { absent.Remove(node); }
     }
 
     public void Start(string node, string rid, DateTimeOffset at)
@@ -124,18 +144,24 @@ internal sealed class DurableInbox
         DeleteLeftovers();
         FileStream file;
         try { file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); }
-        catch (FileNotFoundException) { return []; }
+        catch (FileNotFoundException) when (!File.Exists(path + ".v2")) { return []; }
         Snapshot? snapshot;
-        using (file) { snapshot = JsonSerializer.Deserialize<Snapshot>(file); }
-        if (snapshot is null || snapshot.Version != 1 || snapshot.Messages is null ||
+        using (file) { snapshot = JsonSerializer.Deserialize<Snapshot>(file, Json); }
+        if (snapshot is null || snapshot.Version is not (1 or 2) || snapshot.Messages is null ||
+            (snapshot.Version == 1 && File.Exists(path + ".v2")) ||
+            (snapshot.Version == 2 && snapshot.Retired is null) || snapshot.Retired is { Count: > 0 } ||
             snapshot.Messages.Any(m => m is null || string.IsNullOrWhiteSpace(m.Node) || string.IsNullOrWhiteSpace(m.Rid) ||
                 string.IsNullOrWhiteSpace(m.Sender) || m.Payload is null || (m.DeliveredAt is null && string.IsNullOrWhiteSpace(m.Payload))) ||
-            snapshot.Messages.Any(m => m.Outcome is not (null or "delivered" or "unconfirmed") || (m.DeliveredAt is null && m.Outcome is not null)) ||
+            snapshot.Messages.Any(m => m.Outcome is not (null or "delivered" or "unconfirmed" or "refused") ||
+                (m.DeliveredAt is null && m.Outcome is not null)) ||
+            (snapshot.Version == 1 && (snapshot.Retired is not null || snapshot.Messages.Any(m => m.Outcome == "refused"))) ||
             snapshot.Messages.Select(m => (m.Node, m.Rid)).Distinct().Count() != snapshot.Messages.Count)
         {
             throw new InvalidDataException("Invalid durable inbox snapshot.");
         }
-        var changed = false;
+        if (snapshot.Version == 2) { MarkV2(); }
+        var changed = snapshot.Version == 1;
+        if (changed) { PreserveV1(); }
         for (var index = 0; index < snapshot.Messages.Count; index++)
         {
             var message = snapshot.Messages[index];
@@ -149,6 +175,22 @@ internal sealed class DurableInbox
         return snapshot.Messages;
     }
 
+    void PreserveV1()
+    {
+        var backup = path + ".v1";
+        if (File.Exists(backup))
+        {
+            if (!File.ReadAllBytes(path).AsSpan().SequenceEqual(File.ReadAllBytes(backup))) { throw new InvalidDataException("Legacy inbox backup differs."); }
+            return;
+        }
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+        if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
+        using var output = new FileStream(backup, options);
+        using var input = File.OpenRead(path);
+        input.CopyTo(output);
+        output.Flush(flushToDisk: true);
+    }
+
     void Save(List<InboxMessage> messages)
     {
         DeleteLeftovers();
@@ -159,15 +201,25 @@ internal sealed class DurableInbox
         {
             using (var file = new FileStream(temp, options))
             {
-                JsonSerializer.Serialize(file, new Snapshot(1, messages));
+                JsonSerializer.Serialize(file, new Snapshot(2, messages, []));
                 file.Flush(flushToDisk: true);
             }
+            MarkV2();
             File.Move(temp, path, overwrite: true);
         }
         finally
         {
             if (File.Exists(temp)) { File.Delete(temp); }
         }
+    }
+
+    void MarkV2()
+    {
+        if (File.Exists(path + ".v2")) { return; }
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+        if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
+        using var marker = new FileStream(path + ".v2", options);
+        marker.Flush(flushToDisk: true);
     }
 
     void DeleteLeftovers()

@@ -581,7 +581,8 @@ directory, before `queued` is acknowledged. Legacy publishes without a rid stay 
 The existing connector pass and per-session delivery fence provide one FIFO dispatcher per
 node; queued messages survive process restart and bypass the old 16-message memory limit.
 Each rid is acknowledged as queued, then with its delivery outcome; the sender waits through
-queued without calling it delivered. Refused rids may be retried. Terminal outcomes survive
+queued without calling it delivered. Delivery refusals may be retried; overflow refusals retain
+their rid and require a new rid after capacity frees. Terminal outcomes survive
 restart and are re-acknowledged on duplicate sends, without typing again.
 An attempt marker is persisted before calling delivery. A restart during an attempt reports
 `unconfirmed` and logs the interruption rather than risking duplicate typing; later queued
@@ -592,12 +593,25 @@ No live HA, host management, authorization or 16 KiB publication limits change.
 **Durable inbox store.** `DurableInbox` is the reused internal store: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,
 and returns the original entry on a matching rid retry, even if a retry is restamped. It keeps
-at most 100 entries per node and 1000 total; when full, it prunes the oldest delivered entries
-before refusing an enqueue if only undelivered entries remain. Delivery clears the payload while
+100 entries per node and 1000 total before pruning the oldest terminal entries. If only
+undelivered entries remain, overflow is saved as a payload-free `refused` tombstone before
+the connector acknowledges `Reply NOT sent` with that rid and sender; no accepted reply is
+displaced. One overflow tombstone may sit beyond a full node's cap (or the global cap);
+later enqueues prune terminal metadata before admitting more work. An unwritable store
+still fails explicitly and never acknowledges an outcome it could not persist. Delivery clears the payload while
 retaining rid metadata for deduplication; legacy senders get a generated rid and `legacy` sender.
 For #2780 integration, deduplication lasts only while that metadata is retained within the
 100-entry per-node and 1000-entry total caps, including pending entries. A retry of a pruned
-delivered rid is accepted as new and may be delivered again; this is not permanent deduplication.
+terminal rid is accepted as new and may be delivered again; this is not permanent deduplication.
+Automatic absence cleanup requires three consecutive connector passes without the node,
+including across card rebuilds; presence resets the guard. Restart resets absence counts
+conservatively. In-flight nodes count as present. Explicit per-rid delivery refusals are not
+absence cleanup.
+Refusal outcomes use C2's version-2 snapshot envelope with an empty retirement list.
+Version-1 migration preserves the original, user-restricted `.v1` backup (which can retain
+legacy payloads) and writes the `.v2` downgrade fence; missing or rolled-back state fails
+closed after that fence. This C1 reader refuses C2-only recovery fields or retirement data
+rather than discarding them; the C2/C2b reader owns those extensions.
 Load and save remove this inbox's GUID-named crash-leftover temporary files under its lock,
 so obsolete copies cannot retain payloads after a later delivery.
 Power-loss durability is not established. A peek alone does not reserve a message; ingress

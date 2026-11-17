@@ -303,6 +303,7 @@ public sealed partial class ReplyTests : IDisposable
         sessions.End(A);
         await Pass(c);
         await Pass(c);
+        await Pass(c);
         sessions.Set(FakeSessions.Copilot(A));
         await Pass(c);
         await Pass(c);
@@ -323,6 +324,7 @@ public sealed partial class ReplyTests : IDisposable
         await Pass(c);
         sessions.End(A);
         daemon = null;
+        await Pass(c);
         await Pass(c);
         await Pass(c);
         sessions.Set(FakeSessions.Copilot(A));
