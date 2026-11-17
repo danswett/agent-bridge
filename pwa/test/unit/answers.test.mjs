@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   Limits, answerability, answerRequest, buildAnswer, checkAnswer, draftText, hostJsonBytes, initialState,
-  optionTone, orderOptions, problemField, tapToAnswer, utf8Bytes,
+  optionTone, orderOptions, prepareAnswer, problemField, tapToAnswer, utf8Bytes,
 } from '../../js/answers.js';
 import { readAnswerResult, readQuestion } from '../../js/protocol.js';
 import { answerControls, answeredWords, describeAnswer, describeClosed } from '../../js/ui/question-view.js';
@@ -239,6 +239,33 @@ test('defaults pre-fill the form, and an untouched form sends them', () => {
   assert.deepEqual(answer, { fields: { plan: 'go', areas: ['host', 'pwa'], urgent: false, notes: 'none', count: 3 } });
   assert.equal(checkAnswer(q, answer), null);
 });
+
+const row17 = [
+  [{ name: 'colour', type: 'choice', options: ['red', 'green', 'blue'].map((value) => ({ value })) }, { selected: 'green' }, 'green'],
+  [{ name: 'confirm', type: 'boolean' }, { value: true }, true],
+  [{ name: 'name', type: 'text' }, { text: 'Zo\u00eb \u{1f680}' }, 'Zo\u00eb \u{1f680}'],
+  [{ name: 'count', type: 'number' }, { text: '3' }, 3],
+  [{ name: 'extras', type: 'multi', options: ['x', 'y', 'z'].map((value) => ({ value })) }, { selected: ['z', 'x'], touched: true }, ['x', 'z']],
+];
+
+for (const renamed of [null, ...row17.map(([field]) => field.type)]) {
+  test(`row 17 keeps all five typed named values on the wire (${renamed ?? 'canonical'} field${renamed ? ' named __proto__' : ' names'})`, () => {
+    const q = form(...row17.map(([field]) => ({
+      ...field, name: field.type === renamed ? '__proto__' : field.name, required: true,
+    })));
+    const state = initialState(q);
+    for (const [i, field] of q.fields.entries()) { Object.assign(state[field.name], row17[i][1]); }
+    const expected = Object.fromEntries(q.fields.map((field, i) => [field.name, row17[i][2]]));
+    const built = buildAnswer(q, state);
+    assert.deepEqual(built.problems, []);
+    assert.equal(Object.getPrototypeOf(built.answer.fields), Object.prototype);
+    const prepared = prepareAnswer(q, state, 's1');
+    assert.equal(prepared.problem, null);
+    assert.deepEqual(prepared.answer, { fields: expected });
+    const request = answerRequest({ sessionId: 's1', questionId: q.id, request: 'r1', answer: prepared.answer });
+    assert.deepEqual(JSON.parse(JSON.stringify(request)), { id: 's1', question: 'q1', request: 'r1', fields: expected });
+  });
+}
 
 test('a default that is not an option becomes Other text where Other is allowed', () => {
   const q = form(
