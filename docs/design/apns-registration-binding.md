@@ -1,42 +1,46 @@
 # Relay-side APNs registration binding
 
-**Revised proposal; specification only.** Based on A1/A2 head
-`3e0197ddadc1ad7bcef84606d742dc2c13fdc1a4` and merged design PR #2437. No
-APNs implementation, provider credentials, rollout, or device delivery is
+**Spec only; based on A1/A2 head `3e0197ddadc1ad7bcef84606d742dc2c13fdc1a4`
+and merged design PR #2437.** No code, credentials, rollout, or delivery is
 authorized.
 
 ## Trust boundaries and relay identity
 
-Do not change general relay admission: existing phone and host connections
-remain governed by current behavior. `RelayDeviceEnrollment` is checked only by
-APNs handlers; an unenrolled device can still use existing non-APNs operations.
-Enrollment records keyed by `(accountId, deviceKeyThumbprint)` retain the
-device public key, ID, role, generation, and status. Each host/phone creates a
-nonexportable P-256 key; the relay challenge binds account, key thumbprint, and
-role, and the device signs it. `hello.kind` and the shared GitHub account token
-never identify or enroll a device.
+Only APNs handlers enforce roles; all other admission and operations remain unchanged.
+APNs roles come only from the independently verified signed device roster
+(`docs/protocol/devices.md`), not `hello.kind`, `MachineRoster`, or account
+token. The relay binds enrollment to the raw `dh` key proved by the connection,
+not merely a derived device ID.
 
-`EnrollHost` requires owner approval through the deployment control plane plus
-host proof-of-possession. `EnrollPersonDevice` requires a user-approved one-use pairing grant signed by
-an active enrolled host plus phone proof-of-possession. These are the
-only enrollment writers; WebSocket frames and account tokens cannot enroll or
-promote devices. Revocation increments generation. `DeviceRoster` is an
-untrusted, observe-only account log, not role authority.
+A host requires an active v2 roster descriptor: `hostSignProof` binds its
+separate `HostSignKey` to account, roster generation, and that exact `dh`.
+Use only `HostSignKey.OpenExisting`; missing custody never creates/replaces it.
+A person requires an active v3 descriptor with #2385 `capSignProof` binding
+`capSign` to the same account/generation/`dh`. The phone signs APNs challenges
+with capSign, never the ECDH `dh` key; Apple stores capSign in Secure Enclave.
 
-`apns-enroll-challenge` returns a short-lived nonce bound to account, role, and
-device-key thumbprint; `apns-enroll` carries the key, nonce signature, and
-person pairing grant when applicable. Relay verifies the key proof and grant
-against the enrolled host key; the shared GitHub token is not device proof.
+Host v2 and person v3 descriptors are approved through the signed roster's
+existing code/QR flow; there is no deployment control plane. `apns-enroll-challenge`
+returns a 32-byte, one-use, 60-second nonce bound to the socket, account, role,
+`dh`, and roster generation. `apns-enroll` proves possession by signing
+`F("agent-bridge apns enrollment v1", relayId, account, generation, deviceId,
+dh, role, nonce)` with hostSign or capSign (P-256/SHA-256, low-S DER). Relay
+derives account/device/`dh` from the connection, validates the active roster
+entry with `RosterVerifier`, and rejects replay or mismatch. The shared GitHub
+token authenticates only the account, never a device.
+
+APNs state materializes only active verified roster entries, keyed by account,
+device/`dh`, and role; it retains roster generation and signer thumbprint.
+Accepted roster removal/replacement revokes the enrollment and bindings in the
+same Azure state transaction. An incomplete or stale roster fails APNs closed.
 
 ### Proof-signing key and host trust
 
-The relay signs proofs as JWS ES256 with a dedicated P-256 private key from
-managed secret storage. Hosts validate relay TLS and pin the public key in owner-controlled deployment
-configuration alongside the relay URL. `ready` advertises only the key ID.
-Reject unknown keys, invalid signatures, and unsupported algorithms. Rotate by
-distributing the new pin first, accepting both IDs during signing rollover,
-then retaining the old verifier until receipts are reissued or revoked. Missing
-key or enrollment control plane disables APNs.
+The relay signs JWS ES256 with a managed-secret P-256 key. Hosts validate TLS
+and pin the public key in owner-controlled relay config; `ready` exposes only
+its ID. Reject unknown keys. Rotate by pinning new, dual-accepting, then
+retiring old only after receipts are reissued/revoked. Missing key or roster
+verifier disables APNs.
 
 ## Azure state and rollout overlap
 
@@ -68,13 +72,12 @@ refusals do not. Overlapping versions share caps and limiter state. Unsupported
 schemas never advertise APNs; deploy never resets state. Keep `maxReplicas: 1`
 until a reviewed multi-replica design exists.
 
-`ready` advertises `capabilities.apnsRegistration` to phones and hosts only
-when enroll/authorize/revoke, register/restore/unregister/send handlers, strict parser,
-Azure state, proof key, target map, and provider boundary are ready. New clients
-check the flag before APNs requests and return `relay-unsupported` immediately.
-Roll out store/control plane first, then host/phone clients with device-key
-enrollment. Existing devices remain APNs-disabled until explicitly approved and
-enrolled; ordinary connections and non-APNs operations remain unchanged.
+`ready` advertises `capabilities.apnsRegistration` only when enrollment and
+APNs handlers, signed-roster verifier, strict parser, Azure state, proof key,
+target map, and provider boundary are ready. Clients check it before requests.
+Roll out Azure state/verifier first, then host and phone upgrades. Legacy
+devices stay connected but APNs-disabled until their host v2/person v3 roster
+entry is explicitly approved by the existing code/QR flow.
 
 ## Person-device authorization and A2 publication
 
@@ -88,10 +91,10 @@ authenticated relay connection:
 All APNs frames use strict JSON parsing: duplicate properties, unknown
 properties, and wrong types are rejected.
 
-The relay derives account and person-device identity from that connection. It
-requires an active person enrollment, an active host enrollment for `hostId`
-in the same account, an allowed target, a valid 16-byte registration ID, and
-the A1-bounded hexadecimal token. It creates a cryptographically random,
+The relay derives account and `dh` identity from the authenticated connection.
+It requires the phone's active v3 roster entry and the selected host's active
+v2 entry in that account, an allowed target, a valid registration ID, and the
+A1-bounded hexadecimal token. It creates a cryptographically random,
 five-minute pending authorization with a 16-byte unpadded-base64url
 `authorizationId`, bound to account, person-device and host enrollment
 generations, host, target, registration ID, `registrationGeneration`, and
@@ -321,7 +324,7 @@ A4 is provider transport; parent A5 owns host sending. No cut enables delivery.
 |---|---|---|
 | A3b1a — APNs storage infra / ~190 / A3 | Own Bicep container, relay managed-identity Blob Data Contributor scoped to it, and required Azure config. Test missing backend/role fails APNs readiness, never memory. | This spec accepted |
 | A3b1b — Azure state store / ~210 / A3 | Implement per-account ETag adapter, five retries, record limits, 240-KiB preflight, generation/fence state. Test conflicts, size refusal, and oversized read fails closed. | A3b1a |
-| A3b1c — enrollment control plane / ~210 / A3 | Own owner-approved host enrollment and host-signed phone pairing grants with device PoP; persist/revoke records. Test wrong key, replayed nonce, and invalid grant. | A3b1b |
+| A3b1c — roster-bound enrollment / ~230 / A3 | Verify the complete signed roster; `apns-enroll` accepts only active v2 host/v3 person keys bound to the exact hello `dh`. No external control plane. Test wrong `dh`, stale roster, token-only, and revoked entry. | A3b1b |
 | A3b1d — APNs identity gate / ~190 / A3 | Gate APNs handlers on relay-owned roles/generations; preserve ordinary admission. Test hello spoof, unenrolled devices, and non-APNs access. | A3b1c |
 | A3b2 — proof-key trust / ~210 / A3 | Add managed-secret ES256 signer, pinned host key, rotation, and ready key ID. Test unknown key, invalid signature, pinning, and rollover. | A3b1b |
 | A3c — relay frame parser / ~200 / A3 | Own strict APNs DTO parser. Test duplicate/unknown properties, types, malformed IDs, and bounds. | A3b1d |
@@ -334,14 +337,12 @@ A4 is provider transport; parent A5 owns host sending. No cut enables delivery.
 | A3g1 — shared send authorization / ~220 / A3 | Check stored authorization/generation and host fence in same ETag CAS as limiter reservation. Two-process test: revoke on A, send on B refuses; test both CAS orders. | A3f3; A3b1b |
 | A3g2 — send policy and capability / ~210 / A3 | Own targets, payload bounds, silent Done, expiry clamp, and capability gate. Test old-relay refusal, invalid sends, and 24-hour clamp. | A3g1; A1a |
 | A3h — RelayClient methods / ~210 / A3 | Own enrollment challenge/enroll plus authorize/register/restore/send methods and typed capability results. Test unsupported relay and restore-before-send. | A3g2; A3b1c |
-| A2c — enrollment client rollout / ~210 / A2 owner | Ship host/phone PoP enrollment calls for existing installs; host approval/pairing only, no token-based promotion. Test upgrade enrollment and unchanged non-APNs sessions. | A3h |
-| A2a — authorization publication / ~210 / A2 owner | Own `RemoteAuthorization.PersonOperations`, `PushStore` token/ID/proof persistence, and subscribe publication. Test persistence before publish. Separate child; A3 does not edit #2747. | A2c |
+| A2c — Windows host enrollment / ~190 / A2 owner | Use existing `HostSignKey.OpenExisting` and v2 roster approval; bind proof to live hello `dh`, never auto-create a key. Test missing key, wrong `dh`, and legacy host. | A3h; A3b1c |
+| A2d — Apple/Swift person enrollment / ~220 / A2 owner | Add Secure Enclave capSign custody and v3 roster code/QR writer per #2385; bind capSignProof to hello `dh`. Test key custody, approval, and replay. | A3h; A3b1c |
+| A2a — authorization publication / ~210 / A2 owner | Own `RemoteAuthorization.PersonOperations`, `PushStore` token/ID/proof persistence, and subscribe publication. Test persistence before publish. Separate child; A3 does not edit #2747. | A2c; A2d |
 | A2b — host replacement and restore / ~210 / A2 owner | Own receipt persistence, reconnect restore, token replacement, and pending/active/revoking states. Test closed-phone restore and opt-out of pending B. | A2a |
 | A1a — `ApnsPush.cs` wire/parser / ~220 / A1 owner | Own strict parser fields for registration ID, proof/receipt, sound, and priority. Test duplicate fields, round-trip, and Done silence. | This spec accepted |
 | A4 — provider transport / ~210 / parent #2437 owner | Add APNs signing/HTTP2, effective-expiry headers, retries, 410 invalidation, and readiness. Test injected transport and invalidation. | A3g2; A1a |
 | A5 — host send method / ~210 / parent #2437 owner | Parent cut owns `IPushSender`/`PushNotifier` APNs send, policy mapping, and typed refusal handling; no A3 duplicate. Test policy, disconnect, and unsupported capability. | A2b; A3h; A4; A1a |
 
-Two independent reader families and Chief acceptance of this revised spec are
-required before any A3 implementation. This note does not authorize provider
-provisioning, production rollout, physical-device proof, or edits to the A1/A2
-branch.
+Two reader families and Chief acceptance are required before A3 code; no provider provisioning, production rollout, physical-device proof, or A1/A2 edits are authorized.
