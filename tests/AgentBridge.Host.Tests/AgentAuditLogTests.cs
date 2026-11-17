@@ -22,6 +22,21 @@ public sealed class AgentAuditLogTests : IDisposable
         new("local", "req-1", "agent:m1/s1", ["agent:m1/s1"], action, "m2/s2", outcome, "fine");
 
     [Fact]
+    public void A_launch_refusal_is_idempotent_per_authenticated_principal_and_request_across_writers()
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D") };
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Append(entry with { Reason = "fallback" }));
+        Assert.True(Log().Append(entry with { Principal = "agent:m1/other" }));
+        Assert.True(Log().Append(entry with { Request = Guid.NewGuid().ToString("D") }));
+        var rows = File.ReadAllLines(Path.Combine(Audit, "launches-2026-11-08.jsonl")).Skip(1)
+            .Select(line => JsonSerializer.Deserialize<JsonElement>(line)).ToArray();
+        Assert.Equal(3, rows.Length);
+        Assert.Single(rows, row => row.GetProperty("request").GetString() == entry.Request
+            && row.GetProperty("principal").GetString() == entry.Principal);
+    }
+
+    [Fact]
     public void A_second_writer_is_refused_while_the_folder_lock_is_held_and_can_retry_after_release()
     {
         var second = Log();

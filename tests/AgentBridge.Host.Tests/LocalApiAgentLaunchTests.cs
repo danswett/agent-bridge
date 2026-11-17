@@ -280,9 +280,10 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
     private protected override bool UsesRelay => false;
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task A_real_worktree_refusal_has_one_audit_even_when_the_callback_cannot_record_it(bool callbackWrites)
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task A_real_worktree_refusal_has_one_audit_even_when_the_callback_cannot_record_it(bool callbackWrites, bool failHeadWrite)
     {
         File.WriteAllText(Path.Combine(f.Root, HostSettings.FileName), """
             {"agents":{"enabled":true,"launch":{"enabled":true},
@@ -300,14 +301,29 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
         var token = credentials.Mint("parent", "launch", 100, at, AgentProtocol.ScopeReadReplyLaunch);
         credentials.Accept(channel, credentials.Check(token, new ProcessAncestry([new PeerProcess(100, at, "agent.exe")], true)).Accepted!);
         var audit = new AgentAuditLog(f.Root);
+        if (failHeadWrite)
+        {
+            var seed = Guid.NewGuid();
+            Assert.True(audit.Append(new("local", seed.ToString(), "person:local", [], "session.stop", seed.ToString(), "reserved",
+                Gate: new(1, seed, Guid.NewGuid(), 0, "intent", "local", "person-client", seed, "none"))));
+        }
         var calls = 0;
+        bool? callbackResult = null;
         var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
             credentials: credentials, agentWorktreeCheck: AgentLaunchWorktreeCheck.Check,
             agentWorktreeRefusalAudit: (request, principal, reason) =>
             {
                 calls++;
-                return callbackWrites && audit.Append(new("local", request.ToString("D"), principal, [],
-                    LaunchProtocol.Launch, "local", "refused", reason));
+                if (!callbackWrites) { return false; }
+                var blocked = Path.Combine(f.Root, AgentAuditLog.FolderName, "launches.head.new");
+                if (failHeadWrite) { Directory.CreateDirectory(blocked); }
+                try
+                {
+                    callbackResult = audit.Append(new("local", request.ToString("D"), principal, [],
+                        LaunchProtocol.Launch, "local", "refused", reason));
+                    return callbackResult.Value;
+                }
+                finally { if (failHeadWrite) { Directory.Delete(blocked); } }
             });
         var handle = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher),
             null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: credentials, audit: audit);
@@ -315,6 +331,7 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
         var result = Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch, body));
         Assert.Equal(LaunchOutcome.Refused, result.Outcome);
         Assert.Equal(1, calls);
+        Assert.Equal(callbackWrites && !failHeadWrite, callbackResult == true);
         Assert.DoesNotContain("refusalAudited", JsonSerializer.Serialize(result, ProtocolJson.Options));
         Assert.Empty(starter.Specs);
         var rows = Directory.GetFiles(Path.Combine(f.Root, AgentAuditLog.FolderName), "launches-*.jsonl")
