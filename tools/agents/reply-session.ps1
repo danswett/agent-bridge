@@ -42,6 +42,7 @@ function Complete-Reply([string]$Outcome, [int]$Code, [string]$Message) {
   if ($Code -eq 0) { $line } else { [Console]::Error.WriteLine($line) }
   exit $Code
 }
+function Complete-RetryUnconfirmed([string]$Message) { Complete-Reply 'unconfirmed' 2 "The first submission may have been delivered; $Message" }
 
 $node = $null
 if ($Session -match '^agent_bridge_[0-9a-f]{16}$') { $node = $Session }
@@ -118,7 +119,7 @@ try {
   if (-not $have) { [Console]::Error.WriteLine('Another reply on this machine held the send lock for over a minute; not sent.'); exit 1 }
   $script:staleAt = $null
   try { $before = (Get-Json "states/sensor.${node}_activity").attributes.reply_ack; if ($before -and $before.rid -eq $Rid) { $script:staleAt = "$($before.at)" } } catch { }
-  $firstPayload = $null; $firstAt = $null; $firstReceiverInstance = $null
+  $firstPayload = $null; $firstAt = $null; $firstReceiverInstance = $null; $firstAttemptUnconfirmed = $false
   for ($deliveryAttempt = 1; $deliveryAttempt -le 2; $deliveryAttempt++) {
     $last = 'unknown'; $pressed = $false
     for ($a = 1; $a -le $Attempts -and -not $pressed; $a++) {
@@ -143,11 +144,8 @@ try {
           $seen = ($got -eq $expectedAt)
         }
         if (-not $seen) { $last = "the payload did not reach sensor.${node}_reply_payload (the single reply slot was overwritten or is slow)"; throw $last }
-        $statusBefore = Get-Status
         if ($deliveryAttempt -eq 1) {
-          $firstPayload = $payload
-          $firstAt = $at
-          $firstReceiverInstance = $receiverInstance
+          $firstPayload = $payload; $firstAt = $at; $firstReceiverInstance = $receiverInstance; $statusBefore = Get-Status
         } else {
           $receiverInstance = Assert-NodeLive -Retry
           if ($receiverInstance -cne $firstReceiverInstance) {
@@ -173,18 +171,22 @@ try {
       $ack = Get-Ack
       if ($ack) {
         if ($ack.Duplicate) {
+          if ($deliveryAttempt -gt 1 -and $firstAttemptUnconfirmed) { Complete-RetryUnconfirmed "the retry received a duplicate acknowledgement ($($ack.Outcome)); check the session before resending." }
           Complete-Reply 'already-handled' 2 "The host already handled rid $Rid for $node (outcome then: $($ack.Outcome)) and typed nothing this time. Check the session before resending."
         }
         switch ($ack.Outcome) {
           'delivered' { $delivered = $true }
           'unconfirmed' {
+            if ($deliveryAttempt -eq 1) { $firstAttemptUnconfirmed = $true }
             if ($ack.Error -match 'not sent and its words are still in the box') {
+              if ($deliveryAttempt -gt 1 -and $firstAttemptUnconfirmed) { Complete-RetryUnconfirmed "the retry left text in the input box: $($ack.Error)" }
               Complete-Reply 'input-full' 4 "Reply NOT sent to ${node}: $($ack.Error). Send or clear those words at the machine; do not keep retrying."
             }
             $unconfirmed = $true
           }
           default {
             $why = if ($ack.Error) { $ack.Error } else { 'the host refused it' }
+            if ($deliveryAttempt -gt 1 -and $firstAttemptUnconfirmed) { Complete-RetryUnconfirmed "the retry was refused: $why" }
             if ($why -match 'already typed in .*input box') {
               Complete-Reply 'input-full' 4 "Reply NOT sent to ${node}: $why. Send or clear that text at the machine; do not keep retrying."
             }
@@ -202,8 +204,10 @@ try {
         continue
       }
       if ($unconfirmed) {
+        if ($deliveryAttempt -gt 1 -and $firstAttemptUnconfirmed) { Complete-RetryUnconfirmed "the retry could not be confirmed ($($ack.Error))." }
         Complete-Reply 'unconfirmed' 2 "The host could not confirm the message into $node ($($ack.Error)). It MAY have been delivered; check before resending."
       }
+      if ($deliveryAttempt -gt 1 -and $firstAttemptUnconfirmed) { Complete-RetryUnconfirmed "the host gave no outcome for rid $Rid within $AckSeconds s after the same-rid retry." }
       Complete-Reply 'unconfirmed' 3 "Reply NOT confirmed for ${node}: the host gave no outcome for rid $Rid within $AckSeconds s after one same-rid retry. It may still arrive."
     }
     if ($statusBefore -and $statusBefore.State -eq 'working') { Complete-Reply 'sent' 0 "sent to $node (the session was already working; the host confirmed it)" }
@@ -219,8 +223,8 @@ try {
       }
       Start-Sleep -Milliseconds 500
     } while ([DateTime]::UtcNow -lt $statusDeadline)
-    $why = if (-not $readable) { "its status could not be read from Home Assistant for $StatusSeconds s" }
-      else { "the session's status did not show a turn within $StatusSeconds s (it was $(if ($statusBefore) { "'$($statusBefore.State)'" } else { 'unreadable' }) before Send, '$after' after)" }
+    $why = if (-not $readable) { "its status could not be read from Home Assistant for $StatusSeconds s" } else { "the session's status did not show a turn within $StatusSeconds s (it was $(if ($statusBefore) { "'$($statusBefore.State)'" } else { 'unreadable' }) before Send, '$after' after)" }
+    if ($deliveryAttempt -gt 1 -and $firstAttemptUnconfirmed) { Complete-RetryUnconfirmed "the retry's delivery was not confirmed: $why." }
     Complete-Reply 'not-delivered' 5 "Reply NOT delivered to ${node}: the host said delivered, but $why. Check the session at the machine before resending; a blind resend may send it twice."
   }
 } finally { if ($have) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
