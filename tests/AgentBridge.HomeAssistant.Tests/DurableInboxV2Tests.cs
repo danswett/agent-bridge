@@ -12,7 +12,7 @@ public sealed class DurableInboxV2Tests : IDisposable
     public void Dispose() => Directory.Delete(folder, recursive: true);
     void Write(int version, IEnumerable<JsonObject> messages) =>
         File.WriteAllText(Pathname, new JsonObject { ["Version"] = version,
-            ["Messages"] = new JsonArray(messages.Select(m => (JsonNode)m).ToArray()),
+            ["Messages"] = new JsonArray(messages.Select(m => m.DeepClone()).ToArray()),
             ["Retired"] = version == 2 ? new JsonArray() : null }.ToJsonString());
     static JsonObject Message(string rid, string? outcome = null, string node = "node") =>
         JsonSerializer.SerializeToNode(new InboxMessage(node, rid, "sender", outcome is null ? "private" : "", Now,
@@ -92,6 +92,112 @@ public sealed class DurableInboxV2Tests : IDisposable
         Assert.Equal(pending, recovered.Enqueue("node", "r", "other", "retry", Now.AddMinutes(1)));
         File.Delete(Pathname);
         Assert.Throws<FileNotFoundException>(() => new DurableInbox(Pathname).Peek("node"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Migration_recovers_both_sides_of_the_atomic_move_without_losing_attempt_fences(bool moved)
+    {
+        var started = Message("started");
+        started["StartedAt"] = Now.ToString("O");
+        Write(1, [Message("queued"), started, Message("uncertain", "unconfirmed")]);
+        var original = File.ReadAllText(Pathname);
+        var interrupted = new DurableInbox(Pathname, (source, destination) =>
+        {
+            Assert.False(File.Exists(Pathname + ".v2"));
+            Assert.Equal(original, File.ReadAllText(Pathname + ".v1"));
+            Assert.Equal(2, JsonNode.Parse(File.ReadAllText(source))!["Version"]!.GetValue<int>());
+            if (moved) { File.Move(source, destination, overwrite: true); }
+            throw new IOException("Injected interruption at the migration move boundary.");
+        });
+        Assert.Throws<IOException>(() => interrupted.Peek("node"));
+        Assert.Equal(moved ? 2 : 1, JsonNode.Parse(File.ReadAllText(Pathname))!["Version"]!.GetValue<int>());
+        Assert.False(File.Exists(Pathname + ".v2"));
+
+        var recovered = new DurableInbox(Pathname);
+        Assert.Equal("queued", recovered.Peek("node")!.Rid);
+        var attempt = recovered.Find("node", "started")!;
+        Assert.Equal(Now, attempt.StartedAt);
+        Assert.Equal(1, attempt.Attempt);
+        Assert.Equal("unconfirmed", recovered.Find("node", "uncertain")!.Outcome);
+        Assert.Equal(original, File.ReadAllText(Pathname + ".v1"));
+        Assert.True(File.Exists(Pathname + ".v2"));
+        Assert.Empty(Directory.GetFiles(folder, "*.tmp"));
+        File.Copy(Pathname + ".v1", Pathname, overwrite: true);
+        Assert.Throws<InvalidDataException>(() => new DurableInbox(Pathname).Peek("node"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Capacity_refusal_history_is_bounded_per_node_and_globally_without_displacing_admitted_replies(bool total)
+    {
+        var limit = total ? 1000 : 100;
+        var admitted = Enumerable.Range(0, limit).Select(n => Message("admitted-" + n, node: "node" + n / 100)).ToList();
+        Write(2, admitted);
+        var node = total ? "overflow0" : "node0";
+        var refused = new DurableInbox(Pathname).Enqueue(node, "seed", "sender", "never admitted", Now);
+        var history = Enumerable.Range(0, limit + 2).Select(n => JsonSerializer.SerializeToNode(
+            refused with { Node = total ? "overflow" + n / 100 : node, Rid = "refused-" + n })!.AsObject());
+        Write(2, admitted.Concat(history));
+
+        var inbox = new DurableInbox(Pathname);
+        var newest = inbox.Enqueue(node, "newest", "sender", "never admitted either", Now);
+        Assert.Equal("refused", newest.Outcome);
+        var saved = JsonNode.Parse(File.ReadAllText(Pathname))!["Messages"]!.AsArray();
+        Assert.Equal(limit, saved.Count(m => m!["Outcome"]?.GetValue<string>() == "refused"));
+        Assert.Equal(limit * 2, saved.Count);
+        inbox = new DurableInbox(Pathname);
+        Assert.Null(inbox.Find(node, "refused-0"));
+        Assert.Equal(newest, inbox.Enqueue(node, "newest", "other", "retry", Now.AddMinutes(1), out var duplicate));
+        Assert.True(duplicate);
+        var payloads = saved.ToDictionary(m => (m!["Node"]!.GetValue<string>(), m["Rid"]!.GetValue<string>()),
+            m => m!["Payload"]!.GetValue<string>());
+        foreach (var m in admitted)
+        {
+            Assert.Equal("private", payloads[(m["Node"]!.GetValue<string>(), m["Rid"]!.GetValue<string>())]);
+        }
+    }
+
+    [Fact]
+    public void Capacity_refusals_expire_after_a_day_without_renewal_or_expiring_admitted_fences()
+    {
+        var started = Message("started", node: "protected");
+        started["StartedAt"] = Now.ToString("O");
+        started["Attempt"] = 1;
+        var cleaned = Message("cleaned", "delivered", "protected");
+        cleaned["ConsumedTokens"] = JsonSerializer.SerializeToNode(new[] { new InboxCleanupFence("token", 1, 1, "host", "process") });
+        Write(2, Enumerable.Range(0, 100).Select(n => Message("pending-" + n, node: "full")).Concat(
+            [Message("final", "refused", "protected"), Message("uncertain", "unconfirmed", "protected"), started, cleaned]));
+        var inbox = new DurableInbox(Pathname);
+        inbox.ResolveAndFence("retired", InboxResolution.IncarnationEnded, Now);
+        var refused = inbox.Enqueue("full", "overflow", "sender", "private", Now);
+        inbox = new DurableInbox(Pathname);
+        Assert.Equal(refused, inbox.Enqueue("full", "overflow", "other", "retry", Now.AddDays(1).AddTicks(-1), out var duplicate));
+        Assert.True(duplicate);
+        inbox.Enqueue("other", "trigger", "sender", "new", Now.AddDays(1));
+        inbox = new DurableInbox(Pathname);
+        Assert.Null(inbox.Find("full", "overflow"));
+        foreach (var rid in new[] { "final", "uncertain", "started", "cleaned" }) { Assert.NotNull(inbox.Find("protected", rid)); }
+        Assert.Equal("refused", inbox.Enqueue("retired", "new", "sender", "blocked", Now.AddDays(1)).Outcome);
+        var again = inbox.Enqueue("full", "overflow", "sender", "retry", Now.AddDays(1), out duplicate);
+        Assert.False(duplicate);
+        Assert.Equal(Now.AddDays(1), again.QueuedAt);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Capacity_refusal_tags_cannot_make_admitted_attempts_or_uncertainty_prunable(bool uncertain)
+    {
+        var message = Message("r", uncertain ? "unconfirmed" : "refused");
+        message["CapacityRefused"] = true;
+        if (!uncertain) { message["Attempt"] = 1; }
+        Write(2, [message]);
+        var original = File.ReadAllText(Pathname);
+        Assert.Throws<InvalidDataException>(() => new DurableInbox(Pathname).Peek("node"));
+        Assert.Equal(original, File.ReadAllText(Pathname));
     }
 
     [Theory]

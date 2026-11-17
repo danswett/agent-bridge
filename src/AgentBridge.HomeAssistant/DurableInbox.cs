@@ -6,7 +6,8 @@ namespace AgentBridge.HomeAssistant;
 
 internal sealed record InboxMessage(string Node, string Rid, string Sender, string Payload, DateTimeOffset QueuedAt, DateTimeOffset? DeliveredAt,
     DateTimeOffset? StartedAt = null, string? Outcome = null, int Attempt = 0, string? HostRequest = null,
-    string? Incarnation = null, List<InboxCleanupFence>? ConsumedTokens = null);
+    string? Incarnation = null, List<InboxCleanupFence>? ConsumedTokens = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool CapacityRefused = false);
 internal sealed record InboxCleanupFence(string Token, long Revision, int Attempt, string HostRequest, string Incarnation, string? Receipt = null);
 internal sealed record InboxCleanupReceipt(InboxCleanupFence Identity, string Receipt, bool InputFenced, bool BufferEmpty, bool NeverAccepted);
 internal enum InboxResolution { IncarnationEnded, OperatorResolved }
@@ -17,12 +18,18 @@ internal sealed class DurableInbox
     const int MaxEntriesPerNode = 100;
     const int MaxEntries = 1000;
     const int AbsencePasses = 3;
+    static readonly TimeSpan CapacityRefusalLifetime = TimeSpan.FromDays(1);
     sealed record Snapshot(int Version, List<InboxMessage> Messages, List<InboxRetirement>? Retired = null);
     static readonly JsonSerializerOptions Json = new() { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow };
     readonly string path;
+    readonly Action<string, string> moveSnapshot;
     readonly Dictionary<string, int> absent = new(StringComparer.Ordinal);
 
-    public DurableInbox(string path) => this.path = Path.GetFullPath(path);
+    public DurableInbox(string path, Action<string, string>? moveSnapshot = null)
+    {
+        this.path = Path.GetFullPath(path);
+        this.moveSnapshot = moveSnapshot ?? ((source, destination) => File.Move(source, destination, overwrite: true));
+    }
 
     public InboxMessage Enqueue(string node, string? rid, string? sender, string payload, DateTimeOffset at)
         => Enqueue(node, rid, sender, payload, at, out _);
@@ -37,12 +44,19 @@ internal sealed class DurableInbox
         using var held = Lock();
         var state = Load();
         var messages = state.Messages;
+        var trimmed = TrimCapacityRefusals(messages, at);
         if (state.Retired!.Find(r => r.Node == node) is { } retired)
         {
+            if (trimmed) { Save(state); }
             return new InboxMessage(node, rid, sender, "", at, retired.At, Outcome: "refused");
         }
         var prior = messages.Find(m => m.Node == node && m.Rid == rid);
-        if (prior is not null) { duplicate = true; return prior; }
+        if (prior is not null)
+        {
+            if (trimmed) { Save(state); }
+            duplicate = true;
+            return prior;
+        }
         var full = false;
         while (messages.Count(m => m.Node == node) >= MaxEntriesPerNode)
         {
@@ -56,8 +70,10 @@ internal sealed class DurableInbox
             if (oldest < 0) { full = true; break; }
             messages.RemoveAt(oldest);
         }
-        var message = new InboxMessage(node, rid, sender, full ? "" : payload, at, full ? at : null, Outcome: full ? "refused" : null);
+        var message = new InboxMessage(node, rid, sender, full ? "" : payload, at, full ? at : null,
+            Outcome: full ? "refused" : null, CapacityRefused: full);
         messages.Add(message);
+        TrimCapacityRefusals(messages, at);
         Save(state);
         absent.Remove(node);
         return message;
@@ -122,6 +138,22 @@ internal sealed class DurableInbox
 
     static bool Pinned(InboxMessage m) => m.Outcome is "unconfirmed" or "refused" ||
         (m.StartedAt is not null && m.DeliveredAt is null) || m.ConsumedTokens is { Count: > 0 };
+
+    static bool TrimCapacityRefusals(List<InboxMessage> messages, DateTimeOffset at)
+    {
+        var retained = new HashSet<(string Node, string Rid)>();
+        var perNode = new Dictionary<string, int>(StringComparer.Ordinal);
+        // Only tagged pre-admission refusals can expire; legacy refusals may protect real attempts.
+        foreach (var m in messages.Where(m => m.CapacityRefused).Reverse())
+        {
+            var count = perNode.GetValueOrDefault(m.Node);
+            if (at - m.DeliveredAt!.Value >= CapacityRefusalLifetime || retained.Count >= MaxEntries || count >= MaxEntriesPerNode) { continue; }
+            retained.Add((m.Node, m.Rid));
+            perNode[m.Node] = count + 1;
+        }
+        return messages.RemoveAll(m => m.CapacityRefused && !retained.Contains((m.Node, m.Rid))) > 0;
+    }
+
     static bool Valid(InboxCleanupFence f) => f is not null && !string.IsNullOrWhiteSpace(f.Token) && f.Revision >= 0 &&
         f.Attempt > 0 && !string.IsNullOrWhiteSpace(f.HostRequest) && !string.IsNullOrWhiteSpace(f.Incarnation) &&
         (f.Receipt is null || !string.IsNullOrWhiteSpace(f.Receipt));
@@ -255,13 +287,17 @@ internal sealed class DurableInbox
                 string.IsNullOrWhiteSpace(m.Sender) || m.Payload is null || (m.DeliveredAt is null && string.IsNullOrWhiteSpace(m.Payload))) ||
             snapshot.Messages.Any(m => m.Outcome is not (null or "delivered" or "unconfirmed" or "refused") ||
                 (m.DeliveredAt is null && m.Outcome is not null) || m.Attempt < 0 ||
-                (m.ConsumedTokens?.Any(f => !Valid(f)) ?? false)) ||
+                (m.ConsumedTokens?.Any(f => !Valid(f)) ?? false) ||
+                (m.CapacityRefused && (m.Outcome != "refused" || m.DeliveredAt is null || m.Payload.Length > 0 ||
+                    m.StartedAt is not null || m.Attempt != 0 || m.HostRequest is not null || m.Incarnation is not null ||
+                    m.ConsumedTokens is { Count: > 0 }))) ||
             (snapshot.Version == 2 && snapshot.Retired is null) ||
             (snapshot.Retired?.Any(r => r is null || string.IsNullOrWhiteSpace(r.Node) || !Enum.IsDefined(r.Resolution)) ?? false) ||
             (snapshot.Retired?.Select(r => r.Node).Distinct().Count() ?? 0) != (snapshot.Retired?.Count ?? 0) ||
             snapshot.Messages.Any(m => snapshot.Retired?.Any(r => r.Node == m.Node) == true) ||
             (snapshot.Version == 1 && (snapshot.Retired is not null || snapshot.Messages.Any(m =>
-                m.Attempt != 0 || m.HostRequest is not null || m.Incarnation is not null || m.ConsumedTokens is not null || m.Outcome == "refused"))) ||
+                m.Attempt != 0 || m.HostRequest is not null || m.Incarnation is not null || m.ConsumedTokens is not null ||
+                m.Outcome == "refused" || m.CapacityRefused))) ||
             snapshot.Messages.Select(m => (m.Node, m.Rid)).Distinct().Count() != snapshot.Messages.Count)
         {
             throw new InvalidDataException("Invalid durable inbox snapshot.");
@@ -318,7 +354,7 @@ internal sealed class DurableInbox
                 JsonSerializer.Serialize(file, state);
                 file.Flush(flushToDisk: true);
             }
-            File.Move(temp, path, overwrite: true);
+            moveSnapshot(temp, path);
             MarkV2();
         }
         finally
