@@ -16,18 +16,24 @@ internal sealed class DurableInbox
 {
     const int MaxEntriesPerNode = 100;
     const int MaxEntries = 1000;
+    const int AbsencePasses = 3;
     sealed record Snapshot(int Version, List<InboxMessage> Messages, List<InboxRetirement>? Retired = null);
     static readonly JsonSerializerOptions Json = new() { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow };
     readonly string path;
+    readonly Dictionary<string, int> absent = new(StringComparer.Ordinal);
 
     public DurableInbox(string path) => this.path = Path.GetFullPath(path);
 
     public InboxMessage Enqueue(string node, string? rid, string? sender, string payload, DateTimeOffset at)
+        => Enqueue(node, rid, sender, payload, at, out _);
+
+    public InboxMessage Enqueue(string node, string? rid, string? sender, string payload, DateTimeOffset at, out bool duplicate)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(node);
         ArgumentException.ThrowIfNullOrWhiteSpace(payload);
         rid = string.IsNullOrWhiteSpace(rid) ? Guid.NewGuid().ToString("N") : rid;
         sender = string.IsNullOrWhiteSpace(sender) ? "legacy" : sender;
+        duplicate = false;
         using var held = Lock();
         var state = Load();
         var messages = state.Messages;
@@ -36,22 +42,24 @@ internal sealed class DurableInbox
             return new InboxMessage(node, rid, sender, "", at, retired.At, Outcome: "refused");
         }
         var prior = messages.Find(m => m.Node == node && m.Rid == rid);
-        if (prior is not null) { return prior; }
+        if (prior is not null) { duplicate = true; return prior; }
+        var full = false;
         while (messages.Count(m => m.Node == node) >= MaxEntriesPerNode)
         {
             var oldest = messages.FindIndex(m => m.Node == node && m.DeliveredAt is not null && !Pinned(m));
-            if (oldest < 0) { throw new InvalidOperationException("The node inbox is full."); }
+            if (oldest < 0) { full = true; break; }
             messages.RemoveAt(oldest);
         }
-        while (messages.Count >= MaxEntries)
+        while (!full && messages.Count >= MaxEntries)
         {
             var oldest = messages.FindIndex(m => m.DeliveredAt is not null && !Pinned(m));
-            if (oldest < 0) { throw new InvalidOperationException("The durable inbox is full."); }
+            if (oldest < 0) { full = true; break; }
             messages.RemoveAt(oldest);
         }
-        var message = new InboxMessage(node, rid, sender, payload, at, null);
+        var message = new InboxMessage(node, rid, sender, full ? "" : payload, at, full ? at : null, Outcome: full ? "refused" : null);
         messages.Add(message);
         Save(state);
+        absent.Remove(node);
         return message;
     }
 
@@ -72,7 +80,15 @@ internal sealed class DurableInbox
     {
         using var held = Lock();
         var state = Load();
-        if (state.Messages.RemoveAll(m => !nodes.Contains(m.Node) && !Pinned(m)) > 0) { Save(state); }
+        foreach (var node in nodes) { absent.Remove(node); }
+        var expired = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var node in state.Messages.Select(m => m.Node).Distinct().Where(n => !nodes.Contains(n)))
+        {
+            absent[node] = Math.Min(AbsencePasses, absent.GetValueOrDefault(node) + 1);
+            if (absent[node] == AbsencePasses) { expired.Add(node); }
+        }
+        if (state.Messages.RemoveAll(m => expired.Contains(m.Node) && !Pinned(m)) > 0) { Save(state); }
+        foreach (var node in expired) { absent.Remove(node); }
     }
 
     public void Start(string node, string rid, DateTimeOffset at, string? request = null, string? incarnation = null)

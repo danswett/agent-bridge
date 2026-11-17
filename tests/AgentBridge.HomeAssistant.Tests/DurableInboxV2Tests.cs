@@ -89,10 +89,14 @@ public sealed class DurableInboxV2Tests : IDisposable
         });
         Write(2, messages);
         var inbox = new DurableInbox(Pathname);
-        Assert.Throws<InvalidOperationException>(() => inbox.Enqueue(total ? "new-node" : "node0", "overflow", "s", "new", Now.AddYears(1)));
+        var refused = inbox.Enqueue(total ? "new-node" : "node0", "overflow", "s", "new", Now.AddYears(1));
+        Assert.Equal("refused", refused.Outcome);
+        Assert.Empty(refused.Payload);
+        Assert.NotNull(refused.DeliveredAt);
         inbox.Forget("node0", "r0");
-        inbox.ForgetExcept(new HashSet<string>());
+        for (var n = 0; n < 3; n++) { inbox.ForgetExcept(new HashSet<string>()); }
         Assert.NotNull(new DurableInbox(Pathname).Find("node0", "r0"));
+        Assert.Equal(refused, new DurableInbox(Pathname).Find(refused.Node, "overflow"));
     }
 
     [Fact]
@@ -127,6 +131,8 @@ public sealed class DurableInboxV2Tests : IDisposable
         Assert.False(inbox.ConsumeCleanup("node", "r", fence));
         Assert.Equal(7, inbox.Find("node", "r")!.ConsumedTokens![0].Revision);
         inbox.ResolveAndFence("node", (InboxResolution)resolution, Now);
+        inbox.Enqueue("other", "r", "s", "private", Now);
+        inbox.Forget("other");
         inbox.ForgetExcept(new HashSet<string>());
         inbox = new DurableInbox(Pathname);
         Assert.Null(inbox.Find("node", "r"));
