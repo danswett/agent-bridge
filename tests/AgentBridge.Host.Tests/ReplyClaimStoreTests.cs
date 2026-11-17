@@ -243,6 +243,16 @@ public sealed class ReplyClaimStoreTests : IDisposable
         Assert.Throws<InvalidDataException>(() => ReplyClaimStore.Open(profile, time));
     }
 
+    [Fact]
+    public void A_claim_frame_cannot_contain_snapshot_data()
+    {
+        using var store = ReplyClaimStore.Open(profile, time);
+        store.Acquire("session", "request", Hash("text"));
+        RewriteFirstFrame(PathInProfile(Ledger), (row, _) => row["claims"] = new JsonArray());
+
+        Assert.Throws<InvalidDataException>(() => ReplyClaimStore.Open(profile, time));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

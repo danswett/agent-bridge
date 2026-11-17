@@ -51,14 +51,15 @@ internal static class ReplyClaimJournal
             var rowHash = Convert.ToHexString(digest);
             if (first && row.Action == "snapshot")
             {
-                if (row.CoverageSequence < 0 || row.CoverageHash is null || !IsHash(row.CoverageHash)
+                if (row.Claim is not null || row.CoverageSequence < 0 || row.CoverageHash is null || !IsHash(row.CoverageHash)
                     || row.Sequence != row.CoverageSequence + 1 || row.PreviousHash != row.CoverageHash) { throw Corrupt(); }
                 proofs[row.CoverageSequence] = row.CoverageHash;
                 ApplySnapshot(claims, row.Claims);
             }
             else
             {
-                if (row.Action == "snapshot" || row.Sequence != sequence + 1 || row.PreviousHash != tip) { throw Corrupt(); }
+                if (row.Action == "snapshot" || row.Claims is not null || row.CoverageSequence != -1 || row.CoverageHash is not null
+                    || row.Sequence != sequence + 1 || row.PreviousHash != tip) { throw Corrupt(); }
                 Apply(claims, row);
             }
             sequence = row.Sequence;
