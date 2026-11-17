@@ -1100,6 +1100,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         LaunchedWith launched;
         await starting.WaitAsync(ct);
         string? reservation = null, reserved = null;
+        WorktreeResult? created = null;
         try
         {
             // Checked again: agent-ha-bridge may have started while this one waited its turn.
@@ -1159,11 +1160,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
             var directory = plan.Directory;
             string? worktree = null;
-            WorktreeResult? created = null;
             if (plan.Isolated is { } isolated)
             {
                 var made = await Task.Run(() => Worktrees.Create(directory, Config, options.LocalNow, new HeldWorktreeUsage(source, options.WorktreeUsage), m => log($"launch {Short(key)}: worktree: {m}"), launchRequest: agentPrincipal is null ? null : key));
-                created = made;
+                created = agentPrincipal is not null ? made : null;
                 if (agentPrincipal is not null)
                 {
                     string? worktreeRefusal;
@@ -1180,6 +1180,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     if (worktreeRefusal is not null)
                     {
                         var cleanup = await DiscardWorktreeAsync(made, key);
+                        created = null;
                         if (cleanup is not null) { worktreeRefusal += $" The new worktree was retained: {cleanup}"; }
                         return RefuseAgentWorktree(key, agentPrincipal, worktreeRefusal);
                     }
@@ -1298,16 +1299,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     log($"launch {Short(key)}: no agent credential was issued: {e.Message}");
                 }
             }
-            if (fleet && !credentialIssued)
-            {
-                provenance.Abandon(key);
-                if (reservation is not null && reserved is not null) { Worktrees.Release(reserved, reservation); }
-                var cleanup = created is null ? null : await DiscardWorktreeAsync(created, key);
-                return Refused("a read+reply fleet worker credential could not be issued"
-                    + (cleanup is null ? "" : $" The new worktree was retained: {cleanup}"));
-            }
+            if (fleet && !credentialIssued) { provenance.Abandon(key); return Refused("a read+reply fleet worker credential could not be issued"); }
             Started started;
-            try { started = starter.Start(spec); }
+            try { started = starter.Start(spec); created = null; }
             catch (Exception e)
             {
                 if (credentialIssued) { credentials!.Abandon(launchId); }
@@ -1329,6 +1323,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         finally
         {
             if (reservation is not null && reserved is not null) { Worktrees.Release(reserved, reservation); }
+            if (created is not null && await DiscardWorktreeAsync(created, key) is { } retained)
+            { log($"launch {Short(key)}: the unstarted worktree was retained: {retained}"); }
             starting.Release();
         }
 

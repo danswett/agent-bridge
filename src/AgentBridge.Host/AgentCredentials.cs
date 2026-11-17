@@ -555,6 +555,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     void Save()
     {
+        if (problem is not null) { throw new IOException("the credential store is faulted; no changes were saved"); }
         var temp = path + ".tmp";
         File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(new Saved(1, [.. records]), Json));
         File.Move(temp, path, overwrite: true);
