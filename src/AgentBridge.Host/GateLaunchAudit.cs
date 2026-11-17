@@ -50,6 +50,7 @@ internal static class GateLaunchAudit
 
         string? denied = null;
         AgentAuditEntry? admitted = null;
+        var terminalWritten = false;
         Action<string>? Prepare(Guid operation)
         {
             if ((denied = refusal?.Invoke()) is not null) { return null; }
@@ -64,10 +65,17 @@ internal static class GateLaunchAudit
         void Terminal(string outcome)
         {
             if (admitted is { Gate: { } gate } intent)
-            { audit.Append(intent with { Outcome = outcome, Gate = gate with { Phase = "terminal", ReasonCode = outcome } }); }
+            { terminalWritten = audit.Append(intent with { Outcome = outcome, Gate = gate with { Phase = "terminal", ReasonCode = outcome } }); }
         }
         var outcome = fleet ? await launcher.LaunchFleetAsync(request, peer, Prepare, Terminal, ct)
             : await launcher.LaunchAuditedAsync(request, peer, Prepare, ct);
+        if (fleet && !terminalWritten && admitted is not null && outcome.Outcome is LaunchOutcome.Refused or LaunchOutcome.Busy or LaunchOutcome.Failed)
+        {
+            var reason = outcome.Outcome switch { LaunchOutcome.Failed => "failed", LaunchOutcome.Busy => "busy", _ => "refused" };
+            if (!audit.Append(admitted with { Outcome = reason == "busy" ? "refused" : reason,
+                Gate = admitted.Gate! with { Phase = "terminal", ReasonCode = reason } }))
+            { return Refused("the fleet launch reservation could not be released durably"); }
+        }
         return denied is null ? outcome : Refused(denied);
     }
 

@@ -33,17 +33,28 @@ internal sealed class FleetLaunchState(AgentAuditLog audit, ISessionSource? sour
         var completed = rows.Where(row => row.Action == "session.launch" && row.Gate is { Phase: "terminal" })
             .Select(row => row.Gate!.Operation).ToHashSet();
         var retired = rows.Where(row => row.Request is { } id && Retired(row, id)).Select(row => row.Request).ToHashSet();
-        var reserved = intents.Where(row => !completed.Contains(row.Gate!.Operation) && !retired.Contains(row.Request))
-            .Select(row => row.Request!).ToArray();
+        var now = time.GetUtcNow();
+        var reserved = intents.Where(row => row.At > now - TimeSpan.FromMinutes(10)
+            && !completed.Contains(row.Gate!.Operation) && !retired.Contains(row.Request))
+            .Select(row => row.Request!).Distinct().ToArray();
         if (source is null || source.Held is not null || launcher is null)
         { throw new InvalidOperationException("fleet admission cannot check live workers while session discovery is incomplete"); }
-        int registered;
-        try { registered = source.Snapshot().Count(session => launcher.IsFleetWorker(session.Id, source.ProcessOf(session.Id))); }
+        var registered = 0;
+        var processes = new HashSet<SessionProcess>();
+        try
+        {
+            foreach (var session in source.Snapshot())
+            {
+                var process = source.ProcessOf(session.Id);
+                if (launcher.IsFleetWorker(session.Id, process) && process is not null && processes.Add(process)) { registered++; }
+            }
+        }
         catch (InvalidOperationException)
         { throw new InvalidOperationException("fleet admission cannot check live workers safely"); }
         var limits = settings.Agents.Limits.Launch;
         return new(settings.Agents.Enabled, limits.FleetPerHour, limits.LiveFleetWorkers,
-            intents.Count(row => row.At > time.GetUtcNow() - TimeSpan.FromHours(1)), reserved.Length + registered, reserved);
+            intents.Where(row => row.At > now - TimeSpan.FromHours(1)).DistinctBy(row => row.Request).Count(),
+            reserved.Length + registered, reserved);
     }
 
     internal object Retire(string request)
