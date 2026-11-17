@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Diagnostics;
 using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
@@ -40,6 +41,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     int restarts;
     // Who each connection is. The app, unless a test says otherwise.
     readonly Callers callers = new();
+    readonly CountingTimeProvider meter = new(TimeProvider.System);
     readonly List<string> logged = [];
     readonly List<bool> applied = [];
     Action<bool>? onApply;
@@ -112,7 +114,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             HoldProbes = () => { Interlocked.Increment(ref probeHolds); return probesFinishing; },
         });
         authorization = new RemoteAuthorization(false, new TrustedPeerStore(profile, hostKey.Public, () => "acct"));
-        server = LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(service, control, callers, m => { lock (logged) { logged.Add(m); } }, authorization));
+        server = LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(service, control, callers, m => { lock (logged) { logged.Add(m); } }, authorization, meter: meter));
         owned.Add(server);
     }
 
@@ -133,6 +135,37 @@ public sealed class LocalApiTests : IAsyncLifetime
         var ch = await LocalClient.ConnectAsync(LocalEndpoint.For(profile), Patience);
         owned.Add(ch);
         return ch;
+    }
+
+    [Theory]
+    [InlineData(CallerKind.App)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task Host_diagnostics_report_timer_allocation_and_gc_counts_over_the_pipe(CallerKind kind)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        using var timer = meter.ForOwner("fixture").CreateTimer(_ => { }, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        var allocated = GC.GetTotalAllocatedBytes();
+        var counts = Enumerable.Range(0, 3).Select(GC.CollectionCount).ToArray();
+        var ch = await ConnectAsync();
+
+        var snapshot = await ch.CallAsync<EfficiencySnapshot>("host.diagnostics");
+
+        Assert.Equal(new TimerCounts(1, 0), snapshot.Timers["fixture"]);
+        Assert.True(snapshot.AllocatedBytes >= allocated);
+        Assert.True(snapshot.Gen0Collections >= counts[0]);
+        Assert.True(snapshot.Gen1Collections >= counts[1]);
+        Assert.True(snapshot.Gen2Collections >= counts[2]);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    public async Task Host_meter_is_not_available_to_unapproved_pipe_callers(CallerKind kind)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync("host.diagnostics"));
+        Assert.StartsWith("refused:", refused.Message);
     }
 
     static async Task<ChannelEvent> NextAsync(LocalChannel ch)
