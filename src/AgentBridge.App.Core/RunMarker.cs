@@ -10,6 +10,7 @@ public sealed record PreviousRun(bool Unclean, string? Version = null, DateTimeO
 // Local evidence only. Callers supply diagnostics, never conversation/transcript text.
 public sealed class RunMarker
 {
+    [ThreadStatic] internal static Action<string, byte[]>? WriteFileOverride;
     const string FileName = "run-marker.json";
     readonly object gate = new();
     readonly string path;
@@ -86,5 +87,22 @@ public sealed class RunMarker
     }
 
     static string Limit(string text, int length) => text.Length <= length ? text : text[..length];
-    void Save() => File.WriteAllText(path, JsonSerializer.Serialize(current));
+    void Save()
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(current);
+        var temp = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            (WriteFileOverride ?? WriteFlushed)(temp, bytes);
+            File.Move(temp, path, overwrite: true);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    static void WriteFlushed(string file, byte[] bytes)
+    {
+        using var stream = new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        stream.Write(bytes);
+        stream.Flush(flushToDisk: true);
+    }
 }

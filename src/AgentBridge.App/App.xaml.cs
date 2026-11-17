@@ -397,6 +397,11 @@ public partial class App : Application
             window?.HideToTray();
             return;
         }
+        CompleteRun();
+    }
+
+    void CompleteRun()
+    {
         try { Program.Marker?.Complete(); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { AppLog.Write($"run marker not cleared: {error.GetType().Name}"); }
     }
@@ -428,7 +433,7 @@ public partial class App : Application
             if (d is not null) { await d.DisposeAsync(); }
         });
         if (options.SelfTest is not null) { AppLog.Write("self-test: closing the window and exiting"); }
-        if (window is null) { Exit(); return; }
+        if (window is null) { CompleteRun(); Exit(); return; }
         // Window.Close disconnects UI Automation, and that cross-apartment call pumps messages: a
         // window-position message still waiting is then handled by a window already half torn down,
         // and WinUI faults in CWindowChrome::UpdateBridgeWindowSizePosition (0xC0000005, #1537, seen
