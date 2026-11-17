@@ -41,6 +41,15 @@ public sealed class PhoneApprovalEvidenceTests
     }
 
     [Fact]
+    public void An_answer_without_notice_delivery_evidence_does_not_pass_the_phone_check()
+    {
+        var report = Check(Answered("phone-a"), true, ["phone-a"]);
+
+        Assert.False(report.Passed);
+        Assert.Equal(["phone-a"], report.Missing);
+    }
+
+    [Fact]
     public void Given_synthetic_relay_rows_every_expected_phone_that_answered_passes_with_its_own_counts()
     {
         var report = Check([.. Answered("phone-a"), .. Answered("phone-a"), .. Answered("phone-b")], true, ["phone-a", "phone-b"]);

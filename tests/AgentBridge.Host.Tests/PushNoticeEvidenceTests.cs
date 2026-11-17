@@ -35,8 +35,8 @@ public sealed class PushNoticeEvidenceTests : IDisposable
     void Start()
     {
         var store = PushStore.Load(Path.Combine(folder, "push-subscriptions.json"), Account);
-        notifier = new PushNotifier(source, new MachineInfo("53d1997f0a1b2c3d4e5f60718293a4b5", "DEV", "windows", "0.1.0"), store, null, _ => { }, time)
-        { NoticeOutcome = outcomes.Add };
+        notifier = new PushNotifier(source, new MachineInfo("53d1997f0a1b2c3d4e5f60718293a4b5", "DEV", "windows", "0.1.0"), store, null, _ => { }, time);
+        notifier.NoticeOutcome += outcomes.Add;
         notifier.Attach(sender);
         notifier.Handle(new PushPeer(Phone, "iPhone", Account, true), Ops.PushSubscribe, JsonSerializer.SerializeToElement(new
         {
@@ -73,6 +73,47 @@ public sealed class PushNoticeEvidenceTests : IDisposable
         await Notify(status);
 
         Assert.Equal(new PushNoticeOutcome(Phone, "s1", "q1", NoticeKind.Question, outcome), Assert.Single(outcomes));
+    }
+
+    // Recorder-only RED contract: synthetic notices are not real-device delivery or answer evidence.
+    [Theory]
+    [InlineData(201, "delivered")]
+    [InlineData(410, "gone")]
+    [InlineData(503, "retrying")]
+    [InlineData(400, "refused")]
+    public async Task A_production_subscriber_records_the_existing_notice_fields_without_claiming_an_answer(int status, string outcome)
+    {
+        await Notify(status);
+        var report = PhoneApprovalEvidence.Read(folder, []);
+        var recorded = JsonSerializer.Serialize(report);
+
+        Assert.Contains($"\"{Phone}\"", recorded);
+        Assert.Contains("\"s1\"", recorded);
+        Assert.Contains("\"q1\"", recorded);
+        Assert.Contains($"\"{outcome}\"", recorded);
+        Assert.DoesNotContain("https://web.push.apple.com", recorded);
+        Assert.DoesNotContain("p256dh", recorded);
+        Assert.DoesNotContain("Which database?", recorded);
+        Assert.All(report.Clients, client => Assert.Equal((0, 0), (client.Answered, client.AnsweredAway)));
+        Assert.False(report.Passed);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("unknown")]
+    [InlineData("person:local")]
+    public void A_missing_or_unknown_notice_identity_is_recorded_as_unknown_not_as_a_real_device(string? device)
+    {
+        Start();
+        notifier.NoticeOutcome?.Invoke(new PushNoticeOutcome(device!, "s1", "q1", NoticeKind.Question, "delivered"));
+        var report = PhoneApprovalEvidence.Read(folder, []);
+
+        Assert.Equal("unknown", Assert.Single(report.Clients).Client);
+        Assert.Contains("\"delivered\"", JsonSerializer.Serialize(report));
+        Assert.DoesNotContain(report.Clients, client => client.Client == "person:local");
+        Assert.All(report.Clients, client => Assert.Equal((0, 0), (client.Answered, client.AnsweredAway)));
+        Assert.False(report.Passed);
     }
 
     [Fact]
