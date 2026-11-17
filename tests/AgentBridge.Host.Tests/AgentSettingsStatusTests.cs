@@ -73,6 +73,27 @@ public sealed class AgentSettingsStatusTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Enabled_launch_and_each_set_limit_are_read_from_the_current_policy()
+    {
+        Config("""{"agents":{"launch":{"enabled":true},"limits":{"maxDepth":1,"conversationMessages":2,"conversationMinutes":3,"perPairPerMinute":4,"perTargetPerMinute":5,"launchesPerOriginPerHour":2,"launchesPerMachinePerHour":6,"launchAttemptsPerOriginPerHour":7,"liveAgentLaunched":4,"agentLaunchedIdleHours":1}}}""");
+        var result = await Read();
+        Assert.Equal("ok", result.GetProperty("state").GetString());
+        Assert.True(Entry(result, "agents.launch.enabled").GetProperty("value").GetBoolean());
+        foreach (var (key, value, ceiling) in new[]
+        {
+            ("maxDepth", 1, 3), ("conversationMessages", 2, 20), ("conversationMinutes", 3, 60),
+            ("perPairPerMinute", 4, 6), ("perTargetPerMinute", 5, 12),
+            ("launchesPerOriginPerHour", 2, 3), ("launchesPerMachinePerHour", 6, 10),
+            ("launchAttemptsPerOriginPerHour", 7, 20), ("liveAgentLaunched", 4, 6), ("agentLaunchedIdleHours", 1, 2),
+        })
+        {
+            var entry = Entry(result, "agents.limits." + key);
+            Assert.Equal((value, ceiling, 1, ceiling), (entry.GetProperty("value").GetInt32(),
+                entry.GetProperty("default").GetInt32(), entry.GetProperty("min").GetInt32(), entry.GetProperty("max").GetInt32()));
+        }
+    }
+
+    [Fact]
     public async Task An_invalid_limit_is_refused_not_reported_as_the_default_in_force()
     {
         Config("""{"agents":{"limits":{"launchesPerOriginPerHour":99}}}""");
