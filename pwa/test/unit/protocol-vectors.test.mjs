@@ -47,7 +47,7 @@ const PATCHES = 'session-patches.json';
 const NOISE = 'noise-ik-p256.json';
 // The signed agent-command envelope's vectors (#722) are not records either; C# replays them.
 const ENVELOPE = 'agent-envelope.json';
-// Registry signature bytes are not records; C# replays them now, and the PWA follows in #2379.
+// Registry signature bytes are replayed by test/unit/fleet-signing-vectors.test.mjs.
 const FLEET_SIGNING = 'fleet-registry-signing.json';
 // The device roster's encoding, not records: test/unit/roster-vectors.test.mjs replays it.
 const ROSTER = 'roster.json';
@@ -270,7 +270,7 @@ const READS = {
   // Update now's fields (#1159) are read from its client slice (3) on.
   UpdateState: { read: readUpdateState, unread: ['bytes', 'total', 'downloaded', 'installing', 'leaving', 'back', 'mode', 'checksHeldUntil', 'policy', 'last.step'] },
   UpdateResult: { read: (j) => readUpdateState({ last: j }).last, unread: ['step'] },
-  UpdateCommandResult: { read: readUpdateCommandResult, unread: ['retryAt', 'state.bytes', 'state.total', 'state.downloaded', 'state.installing', 'state.leaving', 'state.back', 'state.mode', 'state.checksHeldUntil', 'state.policy', 'state.last.step'] },
+  UpdateCommandResult: { read: readUpdateCommandResult, unread: ['state.bytes', 'state.total', 'state.downloaded', 'state.installing', 'state.leaving', 'state.back', 'state.mode', 'state.checksHeldUntil', 'state.policy', 'state.last.step'] },
   // What Update now would go over, and one session of it (#1159), as a confirmation shows them.
   UpdateBusy: { read: readBusy },
   UpdateBusySession: { read: (j) => readBusy({ working: 1, waiting: 0, sessions: [j] }).sessions[0] ?? null },

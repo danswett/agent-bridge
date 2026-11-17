@@ -90,6 +90,18 @@ the connection closes:
 
 ## Who may manage the host
 
+`host.workspace.fleetWorkers` reads or changes the stored fleet-worker tick for one
+approved workspace. Its data is `{ "workspace": "<approved absolute path>" }`, with
+optional `"fleetWorkers": true` or `false` to set it. No other keys are accepted.
+The result is `{ "workspace": "<expanded path>", "value": false, "defaultValue": false }`.
+The default is off; the boolean is stored as `fleetWorkers` on that entry in
+`launch.workspaces` in `config.json`, preserving other settings. A string entry is
+converted to an object only when changed. Each actual change writes one host-log
+audit line naming the workspace index, old and new values and local-app caller.
+Every call requires a freshly classified local app on the pipe, without an agent
+credential. Agents, other processes (including the host CLI) and remote channels
+are refused with a reason. This slice adds no app view or launch-policy enforcement.
+
 Design §6.3 invariant 13: no session the bridge launched, nor any agent process, may stop or
 restart its host. On 2026-10-15 an agent ran `agent-ha-bridge restart`. The new daemon took
 that agent for an unaccounted process, held discovery, and every resumable session vanished
