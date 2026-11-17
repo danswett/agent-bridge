@@ -16,7 +16,8 @@ $port = Get-Random -Minimum 20000 -Maximum 40000
 # Moves = $false keeps it still, as a session whose box never took the reply.
 $fake = [hashtable]::Synchronized(@{ Mode = 'deliver'; Slot = $null; Ack = $null; Delivered = [System.Collections.ArrayList]::new(); Stop = $false
     Status = 'idle'; StatusChanged = '2026-11-10T08:00:00+00:00'; Moves = $true; FlipTo = $null; Rids = [System.Collections.ArrayList]::new()
-    Live = $true; Online = $true; PressRids = [System.Collections.ArrayList]::new() })
+    Live = $true; Online = $true; PressRids = [System.Collections.ArrayList]::new(); Payloads = [System.Collections.ArrayList]::new()
+    Updated = '2026-11-17T08:00:00.0000000+00:00' })
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://127.0.0.1:$port/")
 $listener.Start()
@@ -29,7 +30,9 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
         $body = [IO.StreamReader]::new($ctx.Request.InputStream).ReadToEnd()
         $out = @{}
         if ($path -eq 'services/script/agent_bridge_reply_payload') {
-            $fake.Slot = ($body | ConvertFrom-Json).payload | ConvertFrom-Json
+            $payload = ($body | ConvertFrom-Json).payload
+            $fake.Slot = $payload | ConvertFrom-Json
+            [void]$fake.Payloads.Add($payload)
         }
         elseif ($path -eq 'services/button/press') {
             # The host takes whatever is in the single slot when Send is pressed.
@@ -39,9 +42,23 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
             if ($fake.Mode -eq 'lost-ack') { $fake.Mode = 'deliver'; $fake.HideAck = $true }
             if ($fake.Mode -eq 'retry-deliver' -and $fake.PressRids.Count -eq 2) { $fake.Mode = 'deliver' }
             if ($fake.Mode -eq 'gone-after-first') { $fake.Live = $false }
+            if ($fake.Mode -eq 'restart-after-first' -and $fake.PressRids.Count -eq 1) {
+                [void]$fake.Delivered.Add($slot.text)
+                [void]$fake.Rids.Add($slot.rid)
+                $fake.Updated = '2026-11-17T08:00:01.0000000+00:00'
+                $fake.Rids.Clear()
+            }
             # A status change that is not a turn, such as background agents finishing, made as Send is pressed.
             if ($fake.FlipTo) { $fake.Status = $fake.FlipTo; $fake.StatusChanged = [DateTime]::UtcNow.ToString('o') }
-            if ($slot -and $fake.Mode -eq 'deliver' -and $fake.Rids.Contains($slot.rid)) {
+            if ($slot -and $fake.Mode -eq 'restart-after-first' -and $fake.PressRids.Count -eq 1) {
+                $fake.Ack = @{ rid = $slot.rid; outcome = 'unconfirmed'; at = [DateTime]::UtcNow.Ticks; error = 'the session ended before it recorded the reply' }
+            }
+            elseif ($slot -and $fake.Mode -eq 'restart-after-first') {
+                [void]$fake.Delivered.Add($slot.text)
+                $fake.Ack = @{ rid = $slot.rid; outcome = 'delivered'; at = [DateTime]::UtcNow.Ticks }
+                if ($fake.Moves) { $fake.Status = 'working'; $fake.StatusChanged = [DateTime]::UtcNow.ToString('o') }
+            }
+            elseif ($slot -and $fake.Mode -eq 'deliver' -and $fake.Rids.Contains($slot.rid)) {
                 # As the host does: a rid it already delivered is re-acked as a duplicate, and nothing is typed.
                 $fake.Ack = @{ rid = $slot.rid; outcome = 'delivered'; duplicate = $true; at = [DateTime]::UtcNow.Ticks }
             }
@@ -80,7 +97,7 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
                 @{ entity_id = "sensor.${node}_status"; state = $fake.Status; attributes = @{ friendly_name = 'Copilot: Test receiver Status' } }
                 @{ entity_id = 'binary_sensor.agent_bridge_test_online'; state = $(if ($fake.Online) { 'on' } else { 'off' }) }
                 @{ entity_id = 'sensor.agent_bridge_test_sessions'; state = '1'; attributes = @{
-                    sessions = @($(if ($fake.Live) { @{ node = $node } }))
+                    sessions = @($(if ($fake.Live) { @{ node = $node } })); updated = $fake.Updated
                 } }
             )
         }
@@ -104,9 +121,10 @@ function Send([string]$Text, [string]$Rid) {
 
 try {
     foreach ($mode in 'retry-deliver', 'unconfirmed', 'silent') {
-        $fake.Mode = $mode; $fake.Ack = $null; $fake.PressRids.Clear(); $fake.Delivered.Clear()
+        $fake.Mode = $mode; $fake.Ack = $null; $fake.PressRids.Clear(); $fake.Delivered.Clear(); $fake.Payloads.Clear()
         $r = Send 'bounded retry' "r-$mode"
         Assert ($fake.PressRids.Count -eq 2 -and @($fake.PressRids | Select-Object -Unique).Count -eq 1) "$mode retries exactly once with the same rid, even with -Attempts 1"
+        Assert ($fake.Payloads.Count -eq 2 -and $fake.Payloads[0] -ceq $fake.Payloads[1]) "$mode retry reuses the exact first payload"
         if ($mode -eq 'retry-deliver') {
             Assert ($r.Exit -eq 0 -and $fake.Delivered.Count -eq 1) 'an unconfirmed send can be confirmed on its same-rid retry'
         } else {
@@ -114,14 +132,19 @@ try {
             Assert ($r.Exit -eq $expected -and $r.Out -match 'outcome=unconfirmed') "$mode preserves its legacy exit and explicitly reports unconfirmed"
         }
     }
+    $fake.Mode = 'restart-after-first'; $fake.Ack = $null; $fake.Live = $true; $fake.Online = $true
+    $fake.Updated = '2026-11-17T08:00:00.0000000+00:00'; $fake.PressRids.Clear(); $fake.Delivered.Clear(); $fake.Payloads.Clear()
+    $r = Send 'do not duplicate after host restart' 'r-restart'
+    Assert ($r.Exit -eq 2 -and $fake.PressRids.Count -eq 1 -and $fake.Delivered.Count -eq 1 -and $r.Out -match 'outcome=unconfirmed') 'a changed receiver instance prevents retry and preserves first-submission uncertainty'
     foreach ($kind in 'gone', 'offline', 'gone-after-first') {
         $fake.Mode = if ($kind -eq 'gone-after-first') { $kind } else { 'deliver' }
         $fake.Live = $kind -ne 'gone'; $fake.Online = $kind -ne 'offline'
         $fake.Ack = $null; $fake.Status = 'idle'; $fake.PressRids.Clear()
         $r = Send 'do not trust registration' "r-$kind"
         $presses = if ($kind -eq 'gone-after-first') { 1 } else { 0 }
-        $outcome = if ($kind -eq 'offline') { 'unconfirmed' } else { 'node-gone' }
-        Assert ($r.Exit -eq 1 -and $fake.PressRids.Count -eq $presses -and $r.Out -match "outcome=$outcome") "$kind never uses a retained registration as liveness, including before a retry"
+        $exit = if ($kind -eq 'gone-after-first') { 2 } else { 1 }
+        $outcome = if ($kind -in 'offline', 'gone-after-first') { 'unconfirmed' } else { 'node-gone' }
+        Assert ($r.Exit -eq $exit -and $fake.PressRids.Count -eq $presses -and $r.Out -match "outcome=$outcome") "$kind never uses a retained registration as liveness, including before a retry"
     }
     $fake.Live = $true; $fake.Online = $true; $fake.Mode = 'deliver'; $fake.Ack = $null
     foreach ($mode in 'submit-response-lost', 'lost-ack') {
