@@ -40,8 +40,8 @@ static partial class SelfTest
         // behind them, choosing one lists nothing.
         MachineChoice[] extra =
         [
-            new("selftest-long", "DSWETT-DEV-VM1 (shadow of the build machine) · 0 sessions", "DSWETT-DEV-VM1 (shadow of the build machine)"),
-            new("selftest-arm", "DSWETT-ARM8 · 0 sessions", "DSWETT-ARM8"),
+            new("selftest-long", "machine-a (shadow of the build machine) · 0 sessions", "machine-a (shadow of the build machine)"),
+            new("selftest-short", "machine-b · 0 sessions", "machine-b"),
             new("selftest-lab", "Lab bench 2 · 0 sessions · View only", "Lab bench 2"),
         ];
         foreach (var c in extra) { main.Machines.Add(c); }
@@ -101,9 +101,9 @@ static partial class SelfTest
             var away = extra[1];
             var awayWas = away.Label;
             var label = typeof(MachineChoice).GetProperty(nameof(MachineChoice.Label))!;
-            label.SetValue(away, "DSWETT-ARM8 · offline");
+            label.SetValue(away, "machine-b · offline");
             var awayLine = menu?.Items.OfType<MenuFlyoutItem>().FirstOrDefault(i => i.Tag == away);
-            var awaySaid = awayLine is { Text: "DSWETT-ARM8 · offline" } && ToolTipService.GetToolTip(awayLine) as string == "DSWETT-ARM8 · offline";
+            var awaySaid = awayLine is { Text: "machine-b · offline" } && ToolTipService.GetToolTip(awayLine) as string == "machine-b · offline";
             check(page.MachinesUnderMore.Contains(away) && menu?.IsOpen == true && awaySaid,
                 $"says a machine under More has gone offline while its menu is open (\"{awayLine?.Text}\", tooltip \"{(awayLine is null ? null : ToolTipService.GetToolTip(awayLine))}\")");
             label.SetValue(away, awayWas);
