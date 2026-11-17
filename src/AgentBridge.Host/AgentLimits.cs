@@ -29,7 +29,7 @@ public sealed class AgentLimits
     readonly Window machineLaunches = new(Hour);
     DateTimeOffset? lastLaunchCheck;
 
-    sealed record LiveLaunch(string? Session = null, DateTimeOffset? IdleSince = null, bool PersonTyped = false);
+    sealed record LiveLaunch(string? Session = null, DateTimeOffset? IdleSince = null, bool PersonTyped = false, bool FleetWorker = false);
 
     public AgentLimits(
         Func<DateTimeOffset>? clock = null,
@@ -140,16 +140,17 @@ public sealed class AgentLimits
         }
     }
 
-    // Only the trusted lifecycle observer supplies personTyped; agent input never clears it.
-    // A null idleSince means busy, waiting, or unknown and cancels any idle-end eligibility.
-    public bool ObserveSession(string session, DateTimeOffset? idleSince, bool personTyped)
+    // Only the trusted lifecycle observer supplies personTyped and fleetWorker; agent input
+    // never clears personTyped. A null idleSince means busy, waiting, or unknown.
+    public bool ObserveSession(string session, DateTimeOffset? idleSince, bool personTyped, bool fleetWorker = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(session);
         lock (gate)
         {
             var entry = liveLaunches.FirstOrDefault(p => p.Value.Session == session);
             if (entry.Value is not { } launch) { return false; }
-            liveLaunches[entry.Key] = launch with { IdleSince = idleSince, PersonTyped = launch.PersonTyped || personTyped };
+            liveLaunches[entry.Key] = launch with { IdleSince = idleSince, PersonTyped = launch.PersonTyped || personTyped,
+                FleetWorker = launch.FleetWorker || fleetWorker };
             return true;
         }
     }
@@ -162,7 +163,7 @@ public sealed class AgentLimits
         lock (gate)
         {
             var now = clock();
-            return liveLaunches.Values.Where(l => !l.PersonTyped && l.Session is not null
+            return liveLaunches.Values.Where(l => !l.PersonTyped && !l.FleetWorker && l.Session is not null
                 && l.IdleSince is { } since && now - since >= idle).Select(l => l.Session!).ToArray();
         }
     }

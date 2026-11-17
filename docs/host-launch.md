@@ -471,3 +471,5 @@ Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
 an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,
 transfers and attachments. A fresh worktree is checked before starting; its worker receives
 only `read+reply`, and the durable launch audit records `grant: fleet`.
+If a grant or launch is refused with `diskLow` (also shown as `host.status.fleetLaunchProblem`),
+free at least 1 GiB on the profile disk and retry.

@@ -4,8 +4,31 @@ using AgentBridge.Host.Delivery.Launch;
 
 namespace AgentBridge.Host;
 
-public sealed class FleetLaunchGrant(string profileFolder)
+public sealed class FleetLaunchGrant(string profileFolder, Func<long>? profileDiskAvailableBytes = null)
 {
+    const long MinimumProfileDiskBytes = 1024L * 1024 * 1024;
+
+    public string? DiskProblem
+    {
+        get
+        {
+            long available;
+            try
+            {
+                if (profileDiskAvailableBytes is { } read) { available = read(); }
+                else
+                {
+                    var root = Path.GetPathRoot(Path.GetFullPath(profileFolder))
+                        ?? throw new IOException("profile disk root is unavailable");
+                    available = new DriveInfo(root).AvailableFreeSpace;
+                }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            { return "diskUnavailable"; }
+            return available < MinimumProfileDiskBytes ? "diskLow" : null;
+        }
+    }
+
     public string? CheckDispatch(LaunchConfig actual, LaunchRequest request)
     {
         if (request.Agent is null) { return "fleet launch must name its agent"; }
@@ -22,6 +45,12 @@ public sealed class FleetLaunchGrant(string profileFolder)
         if (script.Kind != "script" || script.Scope != AgentProtocol.ScopeReadReply)
         { return "launch:fleet requires a script credential with only read+reply scope"; }
         if (!script.FleetLaunch) { return "launch:fleet grant is off; no fallback"; }
+        if (DiskProblem is { } diskProblem)
+        {
+            return diskProblem == "diskLow"
+                ? "diskLow: fleet grants require at least 1 GiB free on the profile disk"
+                : "diskUnavailable: the profile disk's available space could not be read";
+        }
         var (policy, problem) = HostSettings.CurrentAgents(profileFolder);
         return problem ?? (policy.Enabled ? null : "agents.enabled is off");
     }
