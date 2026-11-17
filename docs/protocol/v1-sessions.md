@@ -672,8 +672,11 @@ A field's value, by type:
 | `text` | A string |
 | `number` | A number |
 
-Free text, in `text` or `other`, is at most 4 KiB of UTF-8; the whole request is at most
-16 KiB. A host collapses control characters and line breaks to spaces before typing.
+Free text, in `text`, a text field or `other`, is at most 16 KiB of UTF-8; the whole request
+is at most 18 KiB of serialized JSON, leaving room for ids and field choices. Escaping and
+multiple fields still count toward that envelope. Either limit is refused with a message
+naming the limit and saying "send it as a reply instead"; the composer offer is a later
+slice of #918. A host collapses control characters and line breaks to spaces before typing.
 Free text of nothing but what shows as nothing (white space, control and format characters,
 default-ignorables such as U+3164, marks with no base; see `session.reply`) is empty, and
 `refused` as such.
@@ -2378,19 +2381,19 @@ that default is the only answer it can be given from another device, a client le
 out of an answer, and a required field's is refused as blank. A default with something visible
 in it, such as `"a\u200Bb"`, is answered as usual. So does a `text` or `number` field
 whose pre-filled default no answer can match: a `text` field's that is not a string, holds half
-a surrogate pair (a client sends it as U+FFFD) or is longer than `text` takes (4 KiB), a
+a surrogate pair (a client sends it as U+FFFD) or is longer than `text` takes (16 KiB), a
 `number` field's that is `null`, not plainly a number, or one JavaScript would hold as another
-number; a form whose smallest answer exceeds 16 KiB in the largest envelope a host takes (a
+number; a form whose smallest answer exceeds 18 KiB in the largest envelope a host takes (a
 256-character session id, a request id, `progress`), counting each pre-filled `text` or `number`
 default (a number as the number it holds, written the longer of the ways JavaScript and .NET
 write it), and every other default and every required field
 at its smallest (a required `number` at 0, or at the number nearest 0 that its bounds,
 `multipleOf` and `integer` allow, past an exclusive bound; a required `text`
-at its `minLength`, which past 4 KiB no answer can meet); and a form with
+at its `minLength`, which past 16 KiB no answer can meet); and a form with
 half a surrogate pair anywhere in its schema, which a host cannot read. Required `text` that
 must match a `pattern` or `format` is counted at its `minLength` (or one character): a host
 does not solve a pattern for its shortest match, so such a form may be offered and its answer
-refused as larger than 16 KiB, before any key. So does a
+refused as larger than 18 KiB, before any key. So does a
 `choice` whose schema, or a `multi` whose `items`, has text constraints. A client checking a
 `pattern` reads it as JavaScript does, without flags: `\d` and `\w` are ASCII.
 
