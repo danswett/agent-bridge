@@ -15,7 +15,7 @@ function Waived($needs, [string]$jobsJson, [string]$setting = 'on', [string]$now
     Remove-Item $o -ErrorAction SilentlyContinue
     ConvertTo-Json -InputObject $needs -Depth 5 | Set-Content $n
     if ($jobsJson) { Set-Content $j $jobsJson } else { Remove-Item $j -ErrorAction SilentlyContinue }
-    $a = @('-NeedsFile', $n, '-JobsFile', $j, '-OutFile', $o, '-Now', $now)
+    $a = @('-NeedsFile', $n, '-JobsFile', $j, '-OutFile', $o, '-Now', $now, '-SummaryFile', (Join-Path $tmp 'summary.md'))
     if ($setting) { $a += '-Setting', $setting }
     pwsh -NoProfile -File $script @a | Out-Null
     (@(Get-Content -Raw $o | ConvertFrom-Json) -join ',')
@@ -33,8 +33,13 @@ try {
     Check 'at exactly 2026-11-20T08:00:00Z it waives nothing' ((Waived $appFailed $arm64Red 'on' '2026-11-20T08:00:00Z') -eq '')
     Check 'a local-offset clock past the expiry waives nothing' ((Waived $appFailed $arm64Red 'on' '2026-11-20T00:00:01-08:00') -eq '')
     foreach ($setting in '', 'off', 'ON', 'on ', 'true') {
-        Check "switch '$setting' waives nothing" ((Waived $appFailed $arm64Red $setting) -eq '')
+        Check "switch '$setting' still waives the app before expiry" ((Waived $appFailed $arm64Red $setting) -eq 'app')
+        Check "switch '$setting' does not waive product" ((Waived @{ product = @{ result = 'failure' } } (Pages @((Leg 'product (windows-11-arm)' 'failure'))) $setting) -eq '')
     }
+    Check 'the automatic app exception ends exactly at expiry' ((Waived $appFailed $arm64Red '' '2026-11-20T08:00:00Z') -eq '')
+    Check 'the automatic installer exception applies with the switch off' ((Waived @{ 'app-installer' = @{ result = 'failure' } } (Pages @((Leg 'app-installer (win-x64)' 'success'), (Leg 'app-installer (win-arm64)' 'failure'))) '') -eq 'app-installer')
+    Check 'the automatic installer exception does not waive x64' ((Waived @{ 'app-installer' = @{ result = 'failure' } } (Pages @((Leg 'app-installer (win-x64)' 'failure'), (Leg 'app-installer (win-arm64)' 'failure'))) '') -eq '')
+    Check 'the summary identifies the owner decision and expiry' ((Get-Content -Raw (Join-Path $tmp 'summary.md')).Contains('win-arm64 non-blocking until 2026-11-20 (#2744, owner decision 2026-11-16 23:12 PT)'))
 
     Check 'a failed app (win-x64) is never waived' ((Waived $appFailed (Pages @((Leg 'app (win-x64)' 'failure'), (Leg 'app (win-arm64)' 'success')))) -eq '')
     Check 'an arm64 failure beside an x64 failure waives nothing' ((Waived $appFailed (Pages @((Leg 'app (win-x64)' 'failure'), (Leg 'app (win-arm64)' 'failure')))) -eq '')

@@ -1867,9 +1867,9 @@ public class MergeRuleTests
     [InlineData("on", -1, "success")]
     [InlineData("on", 0, "failure")]
     [InlineData("on", 1, "failure")]
-    [InlineData(null, -1, "failure")]
-    [InlineData("off", -1, "failure")]
-    [InlineData("ON", -1, "failure")]
+    [InlineData(null, -1, "success")]
+    [InlineData("off", -1, "success")]
+    [InlineData("ON", -1, "success")]
     public void The_arm64_waiver_reads_clock_and_switch_once_and_expires_at_the_exact_boundary(string? value, int seconds, string state)
     {
         var config = WriteConfig(arm64Waiver: true);
@@ -1883,6 +1883,27 @@ public class MergeRuleTests
                 name => { switches++; Assert.Equal("ARM64_WAIVER", name); return value; });
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
             Assert.Equal((1, 1), (clocks, switches));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
+    [InlineData("app (win-arm64)", -1, "success")]
+    [InlineData("app-installer (win-arm64)", -1, "success")]
+    [InlineData("app (win-x64)", -1, "failure")]
+    [InlineData("app-installer (win-x64)", -1, "failure")]
+    [InlineData("product (windows-11-arm)", -1, "failure")]
+    [InlineData("app (win-arm64)", 0, "failure")]
+    [InlineData("app-installer (win-arm64)", 1, "failure")]
+    public void The_owner_app_exception_applies_to_head_checks_without_enabling_the_product_waiver(string name, int seconds, string state)
+    {
+        var config = WriteConfig(arm64Waiver: true);
+        var github = new FakeGitHub(WaiverPullRequest(name));
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain,
+                () => WaiverExpiry.AddSeconds(seconds), _ => "off");
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
         }
         finally { File.Delete(config); }
     }
@@ -1969,12 +1990,16 @@ public class MergeRuleTests
     }
 
     [Theory]
-    [InlineData("app (win-arm64)", -1, "success")]
-    [InlineData("product (windows-11-arm)", -1, "success")]
-    [InlineData("app (win-x64)", -1, "failure")]
-    [InlineData("product (windows-latest)", -1, "failure")]
-    [InlineData("app (win-arm64)", 0, "failure")]
-    public void Main_green_waives_only_the_exact_failed_arm64_instances_while_active(string failed, int seconds, string state)
+    [InlineData("app (win-arm64)", -1, "success", "on")]
+    [InlineData("product (windows-11-arm)", -1, "success", "on")]
+    [InlineData("app (win-x64)", -1, "failure", "on")]
+    [InlineData("product (windows-latest)", -1, "failure", "on")]
+    [InlineData("app (win-arm64)", 0, "failure", "on")]
+    [InlineData("app (win-arm64)", -1, "success", "off")]
+    [InlineData("product (windows-11-arm)", -1, "failure", "off")]
+    [InlineData("app (win-x64)", -1, "failure", "off")]
+    [InlineData("app (win-arm64)", 0, "failure", "off")]
+    public void Main_green_waives_only_the_exact_failed_arm64_instances_while_active(string failed, int seconds, string state, string setting)
     {
         var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)", failed }
             .Distinct().Select((name, id) => new { id, name, status = "completed", conclusion = name == failed ? "failure" : "success", run_attempt = 1 }).ToArray();
@@ -1983,7 +2008,7 @@ public class MergeRuleTests
         try
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain,
-                () => WaiverExpiry.AddSeconds(seconds), _ => "on");
+                () => WaiverExpiry.AddSeconds(seconds), _ => setting);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
         }
         finally { File.Delete(config); }

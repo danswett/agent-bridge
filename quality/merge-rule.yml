@@ -58,7 +58,8 @@ codeql:
 ignore_workflows: [Merge rule]
 
 # Temporary owner-approved exception (#2564/#2565); exact failures only, never publishing.
-# OFF by default; only the owner enables the repository variable. Expires Nov 20, 00:00 PT.
+# Product is OFF by default; only the owner enables its switch. Expires Nov 20, 00:00 PT.
+# #2744 makes only the two app jobs automatic before that expiry, regardless of the switch.
 arm64_waiver:
   jobs:
     - app (win-arm64)

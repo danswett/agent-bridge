@@ -899,8 +899,12 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
 - **The win-arm64 waiver** (#2564, owner decision 2026-11-13, until **2026-11-20 00:00 PT**, 08:00 UTC):
-  while the repository variable `ARM64_WAIVER` is exactly `on` (off or unset waives nothing; the owner
-  sets it), `quality-gate` counts a failed needed job as success when its only failures are
+  #2744 (owner decision Nov 16 23:12 PT) makes only `app (win-arm64)` and
+  `app-installer (win-arm64)` failures non-blocking automatically until that exact expiry,
+  in `quality-gate`, head checks and main-green. Jobs still run/report; x64 still gates.
+  The product exception below still requires the switch; publishing and review receipts are unchanged.
+  While the repository variable `ARM64_WAIVER` is exactly `on` (the owner sets it),
+  `quality-gate` also counts a failed needed job as success when its only failures are
   `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly,
   on main and PRs, and every other leg of that job succeeded. The warning and summary identify
   each waived job, its run and the expiry.

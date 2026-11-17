@@ -2,8 +2,9 @@
 # JSON and this run's jobs (GitHub's jobs API, paginated and slurped) and writes to -OutFile the ids
 # of the needed jobs whose failures are only the three waived jobs named below; ci.yml then reads
 # those as success. A matrix collapses to one result per job id in needs, so the legs can only be
-# told apart through the API. Anything doubtful waives nothing: the switch not exactly "on", the
-# expiry reached, an API answer of an unexpected shape, or any other job that did not succeed.
+# told apart through the API. Anything doubtful waives nothing: the expiry reached, an API
+# answer of an unexpected shape, or any other job that did not succeed.
+# #2744 makes only the two app jobs automatic; product keeps its existing switch.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$NeedsFile,
@@ -16,15 +17,15 @@ param(
 $ErrorActionPreference = 'Stop'
 # The only expiry, computed here so the waiver stops by itself; 2026-11-20 00:00 PT.
 $expiry = [DateTimeOffset]::Parse('2026-11-20T08:00:00Z', [cultureinfo]::InvariantCulture)
-$waivable = @('app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)')
+$waivable = @('app (win-arm64)', 'app-installer (win-arm64)')
+if ($Setting -ceq 'on') { $waivable += 'product (windows-11-arm)' }
 $ids = @()
 $lines = @()
 try {
-    if ($Setting -cne 'on') {
-        $lines += 'ARM64_WAIVER is not on: nothing waived.'
-    } elseif ($Now -ge $expiry) {
+    if ($Now -ge $expiry) {
         $lines += 'The waiver ended 2026-11-20 00:00 PT (08:00 UTC): nothing waived.'
     } else {
+        $lines += 'win-arm64 non-blocking until 2026-11-20 (#2744, owner decision 2026-11-16 23:12 PT)'
         $needs = Get-Content -Raw -LiteralPath $NeedsFile | ConvertFrom-Json
         $pages = @(Get-Content -Raw -LiteralPath $JobsFile | ConvertFrom-Json)
         $jobs = @()

@@ -1750,18 +1750,17 @@ jobs:
       app: ${{ needs.app.result }}
     steps:
       # Time-boxed win-arm64 waiver (#2564, owner decision 2026-11-13; quality/README.md §4.7):
-      # while the repository variable ARM64_WAIVER is exactly "on" and before 2026-11-20 00:00 PT
-      # (08:00 UTC, checked in the script), only app (win-arm64), app-installer (win-arm64) and
-      # product (windows-11-arm) failures count as success below, on main and PRs. Raw jobs stay red.
+      # Before 2026-11-20 00:00 PT, app/app-installer win-arm64 failures are non-blocking (#2744).
+      # Product still requires ARM64_WAIVER exactly "on". Raw jobs stay red, on main and PRs.
       # Publishing refuses raw app failures; x64, every other failure and any API error block.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: ${{ vars.ARM64_WAIVER == 'on' && contains(needs.*.result, 'failure') }}
+        if: ${{ contains(needs.*.result, 'failure') }}
         with:
           persist-credentials: false
           sparse-checkout: quality
       - name: Waive the failed win-arm64 legs, until 2026-11-20 00:00 PT
         id: waiver
-        if: ${{ vars.ARM64_WAIVER == 'on' && contains(needs.*.result, 'failure') }}
+        if: ${{ contains(needs.*.result, 'failure') }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

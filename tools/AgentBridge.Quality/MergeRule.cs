@@ -113,6 +113,9 @@ sealed class Arm64WaiverConfig
 
     public bool Active(DateTimeOffset now, string? value) => Switch == "ARM64_WAIVER" && value == "on" && now < Until;
 
+    // #2744: automatic only for app jobs; the product waiver remains switch-controlled.
+    public bool AppNonBlocking(DateTimeOffset now) => now < Until && now < new DateTimeOffset(2026, 11, 20, 8, 0, 0, TimeSpan.Zero);
+
     public bool Allows(string name, string? conclusion) => conclusion == "failure"
         && (name is "app (win-arm64)" or "app-installer (win-arm64)" or "product (windows-11-arm)")
         && Jobs is not null && Jobs.Contains(name, StringComparer.Ordinal);

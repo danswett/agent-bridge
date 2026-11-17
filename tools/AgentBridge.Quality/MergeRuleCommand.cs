@@ -154,12 +154,13 @@ static class MergeRuleCommand
         """;
 
     /// <summary>One run's reads: what it cost, and each head's files, which never change, read once.</summary>
-    sealed class Session(IGitHub github, MergeRuleConfig config, string slug, bool arm64Waiver)
+    sealed class Session(IGitHub github, MergeRuleConfig config, string slug, bool arm64Waiver, bool appNonBlocking)
     {
         public IGitHub GitHub { get; } = github;
         public MergeRuleConfig Config { get; } = config;
         public string Slug { get; } = slug;
         public bool Arm64Waiver { get; } = arm64Waiver;
+        public bool AppNonBlocking { get; } = appNonBlocking;
         public int GraphQLPoints { get; private set; }
         public int? GraphQLRemaining { get; private set; }
         public int RestCalls { get; private set; }
@@ -245,7 +246,8 @@ static class MergeRuleCommand
         var post = options.ContainsKey("post");
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         var switchValue = (variable ?? Environment.GetEnvironmentVariable)("ARM64_WAIVER");
-        var session = new Session(github, config, slug, config.Arm64Waiver?.Active(now, switchValue) == true);
+        var session = new Session(github, config, slug, config.Arm64Waiver?.Active(now, switchValue) == true,
+            config.Arm64Waiver?.AppNonBlocking(now) == true);
         var problems = 0;
 
         session.Main = ReadMain(session, out var mainLog);
@@ -445,7 +447,8 @@ static class MergeRuleCommand
                 && plan.GetProperty("status").GetString() == "completed" && plan.GetProperty("conclusion").GetString() == "success";
             bool Green(JsonElement job) => job.GetProperty("status").GetString() == "completed"
                 && (job.GetProperty("conclusion").GetString() is "success" or "skipped"
-                    || (session.Arm64Waiver && config.Arm64Waiver?.Allows(job.GetProperty("name").GetString() ?? "",
+                    || ((session.Arm64Waiver || (session.AppNonBlocking && job.GetProperty("name").GetString() is "app (win-arm64)" or "app-installer (win-arm64)"))
+                        && config.Arm64Waiver?.Allows(job.GetProperty("name").GetString() ?? "",
                         job.GetProperty("conclusion").GetString()) == true));
             bool Passed(string name)
             {
@@ -601,7 +604,7 @@ static class MergeRuleCommand
         var node = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
         if (node.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException($"{session.Slug} has no pull request #{number}.");
-        var facts = ParseFacts(node, session.Config, session.Arm64Waiver);
+        var facts = ParseFacts(node, session.Config, session.Arm64Waiver, session.AppNonBlocking);
         return history ? WithReceiptHistory(session, facts) : facts;
     }
 
@@ -727,7 +730,7 @@ static class MergeRuleCommand
     /// One pull request's facts from the GraphQL fragment above. Its files come from FetchFull;
     /// read without checks, it's marked not fully read, which can fail it but never pass it.
     /// </summary>
-    internal static PullRequestFacts ParseFacts(JsonElement pr, MergeRuleConfig config, bool arm64Waiver = false)
+    internal static PullRequestFacts ParseFacts(JsonElement pr, MergeRuleConfig config, bool arm64Waiver = false, bool appNonBlocking = false)
     {
         var head = pr.GetProperty("headRefOid").GetString()!;
         var reviews = pr.GetProperty("reviews").GetProperty("nodes").EnumerateArray()
@@ -760,7 +763,7 @@ static class MergeRuleCommand
                     .ToList();
             checksRead = commit.TryGetProperty("checkSuites", out var suites);
             if (checksRead)
-                (run, codeScanning, checks) = ReadChecks(suites, config, arm64Waiver);
+                (run, codeScanning, checks) = ReadChecks(suites, config, arm64Waiver, appNonBlocking);
             // Every other status counts like a check; merge-rule is this verdict, and the receipts
             // are judged on their own terms above.
             var receiptContexts = ReceiptContexts(config);
@@ -798,7 +801,7 @@ static class MergeRuleCommand
     /// rule's own workflows are left out (they're running while it judges), and CodeQL's workflow
     /// and code scanning's check are read apart, for their own messages.
     /// </summary>
-    static (RunFact? CodeQlRun, RunFact? CodeQlCheck, List<CheckFact> Checks) ReadChecks(JsonElement connection, MergeRuleConfig config, bool arm64Waiver)
+    static (RunFact? CodeQlRun, RunFact? CodeQlCheck, List<CheckFact> Checks) ReadChecks(JsonElement connection, MergeRuleConfig config, bool arm64Waiver, bool appNonBlocking)
     {
         var suites = connection.GetProperty("nodes");
         RunFact? codeqlRun = null, codeqlCheck = null;
@@ -868,7 +871,8 @@ static class MergeRuleCommand
                 checks.Add(new CheckFact(workflow, "pending", status?.ToLowerInvariant()));
             var jobs = runs.GroupBy(cr => cr.GetProperty("name").GetString() ?? "")
                 .Select(g => Classify(g.Key, g.MaxBy(cr => cr.GetProperty("databaseId").GetInt64())))
-                .Select(c => arm64Waiver && id > 0 && workflow == "CI"
+                .Select(c => (arm64Waiver || (appNonBlocking && c.Name is "app (win-arm64)" or "app-installer (win-arm64)"))
+                    && id > 0 && workflow == "CI"
                     && suite.GetProperty("app") is { ValueKind: JsonValueKind.Object } source
                     && source.GetProperty("slug").GetString() == "github-actions"
                     && c.State == "failure" && config.Arm64Waiver?.Allows(c.Name, c.Detail) == true
