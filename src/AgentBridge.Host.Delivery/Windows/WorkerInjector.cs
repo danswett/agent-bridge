@@ -196,6 +196,7 @@ public sealed class WorkerInjector : IConsoleInjector
         var ended = false;
         try
         {
+            if (plan.Proceed?.Invoke() is { } stop) { ended = true; await EndAsync(process); return Nothing($"stopped before typing: {stop}"); }
             var wrote = false;
             string? final = null;
             var errors = process.StandardError.ReadToEndAsync();

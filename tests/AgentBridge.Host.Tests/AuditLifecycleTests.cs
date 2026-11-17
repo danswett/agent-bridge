@@ -81,7 +81,7 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
     {
         var store = new AgentCredentials(Path.Combine(f.Root, "controller"), "fixture");
         var credential = store.MintScript("sre").Credential;
-        var channel = new FleetTestChannel();
+        var channel = new FleetChannel();
         store.Accept(channel, credential);
         Git(f.Root, "init", "-q", "-b", "main", app);
         File.WriteAllText(Path.Combine(app, "README.md"), "fixture");
@@ -101,16 +101,6 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
         var saved = new LaunchProvenance(Path.Combine(f.Root, "profile", "launch-provenance.json"), logged.Enqueue);
         Assert.True(saved.FleetContains(launched.Session!, source.ProcessOf(launched.Session!)!));
         Assert.False(saved.FleetContains(launched.Session!, new SessionProcess(123, DateTimeOffset.UtcNow)));
-    }
-
-    sealed class FleetTestChannel : AgentBridge.Transport.IProtocolChannel
-    {
-        public string PeerId => "fixture";
-        public string PeerName => "fixture";
-        public string PeerKind => "fixture";
-        public bool IsOpen => true;
-        public Task Closed => Task.CompletedTask;
-        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
     }
 
     [Theory]

@@ -397,6 +397,29 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     }
 
     [WindowsFact]
+    public async Task A_clearance_changed_while_waiting_to_start_the_worker_types_nothing()
+    {
+        var echo = StartEcho();
+        using var checkedClearance = new ManualResetEventSlim();
+        var changed = false;
+        var plan = new KeyPlan([new KeySend("/exit", true, 10, 0)])
+        {
+            Proceed = () => { var reason = Volatile.Read(ref changed) ? "clearance changed" : null; checkedClearance.Set(); return reason; },
+        };
+        Task<InjectionResult> typing;
+        using (AgentBridge.Host.Core.Processes.ProcessLaunch.HoldInheritableHandles())
+        {
+            typing = Task.Run(() => new WorkerInjector(Worker).InjectAsync(echo.Pid, plan));
+            Assert.True(checkedClearance.Wait(TimeSpan.FromSeconds(30)));
+            Volatile.Write(ref changed, true);
+        }
+        var result = await typing.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(InjectionStatus.NothingTyped, result.Status);
+        Assert.Contains("clearance changed", result.Detail);
+        Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+    }
+
+    [WindowsFact]
     public async Task A_missing_worker_types_nothing()
     {
         var result = await new WorkerInjector(Path.Combine(root, "absent.exe")).InjectAsync(1, new KeyPlan([new KeySend("x", true, 10, 0)]));

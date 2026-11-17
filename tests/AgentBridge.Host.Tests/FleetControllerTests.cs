@@ -82,23 +82,9 @@ public sealed partial class StopFlowTests
         Assert.Empty(control.Terminated);
     }
 
-    [Fact]
-    public async Task Fleet_stop_refuses_a_grant_revoked_during_clearance()
-    {
-        var clearance = new Clearance();
-        var setup = Fleet(clearance);
-        clearance.Change = (read, value) =>
-        {
-            if (read > 1) { setup.Credentials.RevokeScript("sre"); }
-            return value;
-        };
-        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(setup.Handle)).Outcome);
-        Assert.Empty(injector.Plans);
-        Assert.Empty(control.Terminated);
-    }
-
     [Theory]
     [InlineData(0), InlineData(1), InlineData(2), InlineData(3), InlineData(4), InlineData(5), InlineData(6), InlineData(7)]
+    [InlineData(9)]
     [InlineData(0, true), InlineData(1, true), InlineData(2, true), InlineData(3, true), InlineData(8, true)]
     public async Task Fleet_stop_rechecks_every_safeguard_and_identity_before_dispatch(int change, bool delayed = false)
     {
@@ -111,6 +97,7 @@ public sealed partial class StopFlowTests
         clearance.Change = (read, value) =>
         {
             if (read == 1 || delayed && !changed) { return value; }
+            if (change == 9) { setup.Credentials.RevokeScript("sre"); return value; }
             var refused = new WorkClearance(WorkState.Refused, "protected work");
             return change switch
             {
@@ -153,13 +140,14 @@ public sealed partial class StopFlowTests
         Assert.All(rows.Where(r => r.Action == Ops.SessionStop), r => Assert.Equal("agent", r.Gate!.ActorKind));
     }
 
-    sealed class FleetChannel : IProtocolChannel
-    {
-        public string PeerId => "not-authority";
-        public string PeerName => "SRE";
-        public string PeerKind => "agent";
-        public bool IsOpen => true;
-        public Task Closed => Task.CompletedTask;
-        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
-    }
+}
+
+sealed class FleetChannel : IProtocolChannel
+{
+    public string PeerId => "not-authority";
+    public string PeerName => "SRE";
+    public string PeerKind => "agent";
+    public bool IsOpen => true;
+    public Task Closed => Task.CompletedTask;
+    public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
 }
