@@ -53,7 +53,7 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         {
             if (failure is "activation" or "grant") { Assert.Contains(failure == "activation" ? "admission" : "grant off", result.Reason); }
             Assert.Empty(starter.Specs);
-            if (isolated && failure != "activation") { Assert.Empty(Directory.GetDirectories(config.WorktreeRoot)); }
+            if (isolated && failure is not ("activation" or "grant" or "audit")) { Assert.Empty(Directory.GetDirectories(config.WorktreeRoot)); }
             else { Assert.False(Directory.Exists(config.WorktreeRoot)); }
             return;
         }

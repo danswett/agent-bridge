@@ -190,6 +190,38 @@ public sealed class FleetLaunchGrantTests : IDisposable
                 "person:local", audit, new("local", "person-client", "person:local", null));
             Assert.Equal(LaunchOutcome.Started, coordinator.Outcome);
         }
+
+        [Fact]
+        public async Task Concurrent_unregistered_fleet_launches_reserve_live_slots_and_replay_does_not_spend_another()
+        {
+            locator.Installed["claude"] = @"C:\fake\claude.exe";
+            Git(f.Root, "init", "-q", "-b", "main", app);
+            File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+            Git(app, "add", ".");
+            Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+            var profile = Path.Combine(f.Root, "profile");
+            Directory.CreateDirectory(profile);
+            File.WriteAllText(Path.Combine(profile, HostSettings.FileName),
+                """{"agents":{"enabled":true,"fleet":{"workspaces":["App"]},"limits":{}}}""");
+            var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
+                credentials: new AgentCredentials(profile, "machine"),
+                agentWorktreeCheck: AgentLaunchWorktreeCheck.Check, agentWorktreeRefusalAudit: (_, _, _) => true);
+            var service = new SessionService(source, new("host-id", machineName, "windows", "0.1.0"), launcher: launcher) { Time = clock };
+            var audit = new AgentAuditLog(profile, clock);
+            starter.Registers = false;
+            clock.Run();
+            var requests = Enumerable.Range(0, 7).Select(_ => new LaunchRequest { Request = Guid.NewGuid().ToString("D"),
+                Agent = "claude", Workspace = "App", Permissions = LaunchProtocol.AllowAll }).ToArray();
+            Task<LaunchResult> Launch(LaunchRequest request) =>
+                service.LaunchFleetAsync(request, "script:machine/dispatcher", audit, () => null, _ => null);
+            var results = await Task.WhenAll(requests.Select(Launch));
+            Assert.Equal(6, results.Count(result => result.Outcome == LaunchOutcome.Unconfirmed));
+            Assert.Single(results, result => result.Outcome == LaunchOutcome.Refused && result.Reason!.Contains("live fleet"));
+            Assert.Equal(6, starter.Specs.Count);
+            var admitted = Array.FindIndex(results, result => result.Outcome == LaunchOutcome.Unconfirmed);
+            Assert.Equal(LaunchOutcome.Unconfirmed, (await Launch(requests[admitted])).Outcome);
+            Assert.Equal(6, starter.Specs.Count);
+        }
     }
 
     [Theory]
@@ -199,12 +231,18 @@ public sealed class FleetLaunchGrantTests : IDisposable
     [InlineData(0, 5)]
     [InlineData(0, 6)]
     [InlineData(8, 6)]
-    public async Task Fleet_activation_stays_closed_at_hourly_and_live_boundaries_under_concurrency_and_replay(int hourly, int live)
+    public async Task Fleet_admission_refuses_incomplete_discovery_under_concurrency_and_preserves_replay(int hourly, int live)
     {
         File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
             """{"agents":{"enabled":true,"launch":{"enabled":true},"limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":10,"liveAgentLaunched":6,"agentLaunchedIdleHours":2}}}""");
         var agent = new AgentLaunchGate(folder);
-        for (var i = 0; i < 9; i++) { Assert.True(agent.CheckLaunch($"agent:{i}", Guid.NewGuid().ToString(), "hash").Allowed); }
+        for (var i = 0; i < 9; i++)
+        {
+            var origin = $"agent:{i}";
+            var request = Guid.NewGuid().ToString();
+            Assert.True(agent.CheckLaunch(origin, request, "hash").Allowed);
+            Assert.True(agent.LaunchFinished(origin, request));
+        }
         var launcher = new AdmissionLauncher(live);
         var audit = new AgentAuditLog(folder);
         var replay = Request;
@@ -227,10 +265,11 @@ public sealed class FleetLaunchGrantTests : IDisposable
         foreach (var result in await Task.WhenAll(attempts))
         {
             Assert.Equal(LaunchOutcome.Refused, result.Outcome);
-            Assert.Contains("admission", result.Reason);
+            Assert.True(result.Reason!.Contains("admission") || result.Reason.Contains("hourly fleet"));
         }
-        Assert.Equal(LaunchOutcome.Refused, (await Attempt(replay)).Outcome);
-        Assert.Equal(LaunchOutcome.Refused, (await Attempt(replay)).Outcome);
+        var replayOutcome = hourly == 0 ? LaunchOutcome.Refused : LaunchOutcome.Started;
+        Assert.Equal(replayOutcome, (await Attempt(replay)).Outcome);
+        Assert.Equal(replayOutcome, (await Attempt(replay)).Outcome);
         Assert.Equal(hourly, launcher.Dispatches);
         Assert.Equal(live, launcher.LaunchedProcesses().Count);
         Assert.True(agent.CheckLaunch("agent:last", Guid.NewGuid().ToString(), "hash").Allowed);
@@ -247,9 +286,11 @@ public sealed class FleetLaunchGrantTests : IDisposable
         public IReadOnlyList<Started> LaunchedProcesses() => Enumerable.Range(1, live).Select(i => new Started(i, Now)).ToArray();
         public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare, CancellationToken cancellationToken = default)
         {
+            var registered = prepare(Guid.NewGuid());
+            if (registered is null) { return Task.FromResult(new LaunchResult(LaunchOutcome.Refused)); }
             Interlocked.Increment(ref Dispatches);
             var session = Guid.NewGuid().ToString();
-            prepare(Guid.NewGuid())?.Invoke(session);
+            registered(session);
             return Task.FromResult(new LaunchResult(LaunchOutcome.Started) { Session = session });
         }
     }
