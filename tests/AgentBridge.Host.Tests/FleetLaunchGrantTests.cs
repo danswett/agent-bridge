@@ -21,6 +21,47 @@ public sealed class FleetLaunchGrantTests : IDisposable
     public void Dispose() => Directory.Delete(folder, true);
 
     [Fact]
+    public void Under_1_GiB_free_refuses_the_grant_and_fleet_launches_with_diskLow_in_host_status()
+    {
+        const long gib = 1024L * 1024 * 1024;
+        Config();
+        var grant = new FleetLaunchGrant(folder, () => gib - 1);
+        Assert.Contains("diskLow", grant.CheckGrant(Script));
+        Assert.Contains("diskLow", grant.CheckLaunch(Script, Outside, Request));
+
+        var control = new HostControl(new HostControlOptions
+        {
+            Profile = "test", Folder = folder, Version = "0.1.0",
+            Machine = new("host-id", "Test host", "windows", "0.1.0"),
+            Running = new HostSettingsView(RemoteApproval: true),
+            ProfileDiskAvailableBytes = () => gib - 1,
+            SignIn = (_, _, _) => throw new NotSupportedException(), SignedIn = (_, _) => { },
+            Stop = () => { }, Restart = () => { },
+        });
+        Assert.Equal("diskLow", control.Status().FleetLaunchProblem);
+        Assert.Null(new FleetLaunchGrant(folder, () => gib).CheckGrant(Script));
+    }
+
+    [Fact]
+    public void A_fleet_worker_is_not_ended_at_two_hours_idle()
+    {
+        var now = Now;
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
+            """{"agents":{"enabled":true,"launch":{"enabled":true},"limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":10,"liveAgentLaunched":6,"agentLaunchedIdleHours":2}}}""");
+        var gate = new AgentLaunchGate(folder, () => now);
+        Assert.True(gate.CheckLaunch("script:machine/dispatcher", "request", "hash").Allowed);
+        gate.LaunchStarted("script:machine/dispatcher", "request", "fleet-worker");
+        gate.ObserveSession("fleet-worker", now, personTyped: false, fleetWorker: true);
+        Assert.True(gate.CheckLaunch("agent:machine/parent", "agent-request", "hash").Allowed);
+        gate.LaunchStarted("agent:machine/parent", "agent-request", "agent-session");
+        gate.ObserveSession("agent-session", now, personTyped: false);
+
+        now = now.AddHours(2);
+
+        Assert.Equal(["agent-session"], gate.IdleSessions());
+    }
+
+    [Fact]
     public void allowAll_is_allowed_only_in_a_ticked_isolated_workspace()
     {
         var grant = new FleetLaunchGrant(folder);
@@ -140,7 +181,13 @@ public sealed class FleetLaunchGrantTests : IDisposable
         File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
             """{"agents":{"enabled":true,"launch":{"enabled":true},"limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":10,"liveAgentLaunched":6,"agentLaunchedIdleHours":2}}}""");
         var agent = new AgentLaunchGate(folder);
-        for (var i = 0; i < 9; i++) { Assert.True(agent.CheckLaunch($"agent:{i}", Guid.NewGuid().ToString(), "hash").Allowed); }
+        for (var i = 0; i < 9; i++)
+        {
+            var origin = $"agent:{i}";
+            var request = Guid.NewGuid().ToString();
+            Assert.True(agent.CheckLaunch(origin, request, "hash").Allowed);
+            Assert.True(agent.LaunchFinished(origin, request));
+        }
         var launcher = new AdmissionLauncher(live);
         var audit = new AgentAuditLog(folder);
         var replay = Request;
