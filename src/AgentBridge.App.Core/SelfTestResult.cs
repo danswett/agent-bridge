@@ -58,4 +58,26 @@ public sealed class SelfTestResult(TimeProvider? time = null)
         await File.WriteAllTextAsync(file + ".tmp", JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
         File.Move(file + ".tmp", file, overwrite: true);
     }
+
+    // Checkpoint serialization and I/O must not spend the reader's existing walk budget.
+    public sealed class WalkTimer(TimeProvider? time = null)
+    {
+        readonly TimeProvider clock = time ?? TimeProvider.System;
+        readonly long startedAt = (time ?? TimeProvider.System).GetTimestamp();
+        TimeSpan reporting;
+        long? pausedAt;
+        public TimeSpan Elapsed => clock.GetElapsedTime(startedAt, pausedAt ?? clock.GetTimestamp()) - reporting;
+
+        public async Task ReportAsync(Func<Task> progress)
+        {
+            var from = clock.GetTimestamp();
+            pausedAt = from;
+            try { await progress(); }
+            finally
+            {
+                reporting += clock.GetElapsedTime(from);
+                pausedAt = null;
+            }
+        }
+    }
 }

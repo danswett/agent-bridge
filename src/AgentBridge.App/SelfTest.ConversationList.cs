@@ -93,13 +93,13 @@ static partial class SelfTest
         if (peer.GetPattern(PatternInterface.ItemContainer) is not IItemContainerProvider items) { return ("the list's items found as a screen reader finds them", 0, 0); }
         var problems = new List<string>();
         var realised = 0;
-        var walk = System.Diagnostics.Stopwatch.StartNew();
+        var walk = new SelfTestResult.WalkTimer();
         var finder = new ProviderPeer();
         IRawElementProviderSimple? after = null;
         var walked = 0;
         for (var i = 0; i < count; i++)
         {
-            if (i % 16 == 0) { await progress($"15 reader list block {i + 1}/{count}"); }
+            if (i % 16 == 0) { await walk.ReportAsync(() => progress($"15 reader list block {i + 1}/{count}")); }
             var found = items.FindItemByProperty(after, null, null);
             if (found is null) { problems.Add($"block {i + 1} found after block {i}"); break; }
             after = found;

@@ -69,14 +69,39 @@ public sealed class SelfTestResultTests
         writer.WriteAsync(file, result, ["passed"], [], stage, step);
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_reader_guard_counts_only_walk_time_even_when_progress_waits_or_fails(bool fail)
+    {
+        var time = new FakeTimeProvider(Start);
+        var walk = new SelfTestResult.WalkTimer(time);
+        time.Advance(TimeSpan.FromSeconds(29));
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var progress = walk.ReportAsync(async () =>
+        {
+            await release.Task;
+            if (fail) { throw new IOException("progress write failed"); }
+        });
+        time.Advance(TimeSpan.FromSeconds(100));
+        Assert.Equal(TimeSpan.FromSeconds(29), walk.Elapsed);
+        release.SetResult();
+        if (fail) { await Assert.ThrowsAsync<IOException>(() => progress); }
+        else { await progress; }
+        Assert.Equal(TimeSpan.FromSeconds(29), walk.Elapsed);
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.True(walk.Elapsed > TimeSpan.FromSeconds(30));
+    }
+
+    [Theory]
     [Trait("Category", "Process")]
     [InlineData(5, false, false, "still progressing at 15 reader list")]
     [InlineData(90, false, false, "stalled at 15 reader list")]
     [InlineData(5, true, false, "completed; awaiting process exit")]
     [InlineData(5, true, true, "missed process exit")]
     [InlineData(5, true, true, "late completion", 110)]
+    [InlineData(5, false, false, "timing unavailable; cause unproven", 90, true)]
     public async Task The_wrapper_classifies_progress_without_treating_a_timeout_as_proof_of_a_hang(
-        int silence, bool completed, bool exited, string expected, int completedSecond = 90)
+        int silence, bool completed, bool exited, string expected, int completedSecond = 90, bool legacy = false)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !Path.Exists(Path.Combine(root.FullName, ".git"))) { root = root.Parent; }
@@ -85,7 +110,7 @@ public sealed class SelfTestResultTests
         Assert.True(File.Exists(helper), "The wrapper has no stage timing classifier.");
         var start = new ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
         start.Environment["SELFTEST_HELPER"] = helper;
-        start.Environment["SELFTEST_RESULT"] = JsonSerializer.Serialize(new
+        start.Environment["SELFTEST_RESULT"] = legacy ? """{"unfinished":"live resize","passed":[],"failed":[]}""" : JsonSerializer.Serialize(new
         {
             unfinished = completed ? null : "live resize",
             completedAt = completed ? Start.AddSeconds(completedSecond) : (DateTimeOffset?)null,
@@ -93,7 +118,7 @@ public sealed class SelfTestResultTests
                 lastProgressAt = Start.AddSeconds(120 - silence), elapsedSeconds = 120 - silence, step = "15 reader list" } },
         });
         foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Command",
-            ". $env:SELFTEST_HELPER; Get-SelfTestStageEvidence -Result ($env:SELFTEST_RESULT | ConvertFrom-Json) " +
+            "$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest; . $env:SELFTEST_HELPER; Get-SelfTestStageEvidence -Result ($env:SELFTEST_RESULT | ConvertFrom-Json) " +
             $"-ObservedAt '{Start.AddSeconds(120):O}' -Deadline '{Start.AddSeconds(100):O}' " +
             $"-WaitFinished $false -ProcessExited ${exited} | ConvertTo-Json -Depth 6" })
             start.ArgumentList.Add(arg);
@@ -104,7 +129,8 @@ public sealed class SelfTestResultTests
         Assert.True(process.ExitCode == 0, await error);
         using var evidence = JsonDocument.Parse(await output);
         Assert.StartsWith(expected, evidence.RootElement.GetProperty("classification").GetString());
-        Assert.Equal("live resize", Assert.Single(evidence.RootElement.GetProperty("stages").EnumerateArray()).GetProperty("name").GetString());
+        if (legacy) { Assert.Empty(evidence.RootElement.GetProperty("stages").EnumerateArray()); }
+        else { Assert.Equal("live resize", Assert.Single(evidence.RootElement.GetProperty("stages").EnumerateArray()).GetProperty("name").GetString()); }
         Assert.False(evidence.RootElement.GetProperty("waitFinished").GetBoolean());
         Assert.Equal(exited, evidence.RootElement.GetProperty("processExited").GetBoolean());
     }
