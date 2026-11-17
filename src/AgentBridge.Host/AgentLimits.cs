@@ -29,7 +29,7 @@ public sealed class AgentLimits
     readonly Window machineLaunches = new(Hour);
     DateTimeOffset? lastLaunchCheck;
 
-    sealed record LiveLaunch(string? Session = null, DateTimeOffset? IdleSince = null, bool PersonTyped = false);
+    sealed record LiveLaunch(string? Session = null, DateTimeOffset? IdleSince = null, bool PersonTyped = false, object? Charge = null);
 
     public AgentLimits(
         Func<DateTimeOffset>? clock = null,
@@ -104,8 +104,9 @@ public sealed class AgentLimits
             if (known) { return new(false, "requestReused", 0); }
             launchRequests.Add(key, (requestSha256, now));
             if (reserveLive && liveLaunches.Count >= liveLimit) { return new(false, AgentLimitVerdict.LiveLimited, 0); }
-            var result = CheckLaunch(origin, now, originLimit, machineLimit);
-            if (reserveLive && result.Allowed) { liveLaunches.Add(key, new()); }
+            var charge = reserveLive ? new object() : null;
+            var result = CheckLaunch(origin, now, originLimit, machineLimit, charge);
+            if (reserveLive && result.Allowed) { liveLaunches.Add(key, new(Charge: charge)); }
             return result;
         }
     }
@@ -128,6 +129,17 @@ public sealed class AgentLimits
     public bool LaunchFinished(string origin, string request)
     {
         lock (gate) { return liveLaunches.Remove((origin, request)); }
+    }
+
+    internal bool LaunchRefused(string origin, string request)
+    {
+        lock (gate)
+        {
+            if (!liveLaunches.TryGetValue((origin, request), out var launch) || launch.Session is not null) { return false; }
+            originLaunches.GetValueOrDefault(origin)?.UndoHit(launch.Charge);
+            machineLaunches.UndoHit(launch.Charge);
+            return liveLaunches.Remove((origin, request));
+        }
     }
 
     public bool SessionEnded(string session)
@@ -167,14 +179,14 @@ public sealed class AgentLimits
         }
     }
 
-    AgentLimitVerdict CheckLaunch(string origin, DateTimeOffset now, int originLimit, int machineLimit)
+    AgentLimitVerdict CheckLaunch(string origin, DateTimeOffset now, int originLimit, int machineLimit, object? charge = null)
     {
         var own = Get(originLaunches, origin, Hour, now);
         if (own is null) { return Refuse(3600); }
         var wait = Math.Max(own.WaitFor(now, originLimit), machineLaunches.WaitFor(now, machineLimit));
         if (wait > 0) { return Refuse(wait); }
-        own.Hit(now);
-        machineLaunches.Hit(now);
+        own.Hit(now, charge);
+        machineLaunches.Hit(now, charge);
         return AgentLimitVerdict.Admit;
     }
 
@@ -231,22 +243,30 @@ public sealed class AgentLimits
 
     sealed class Window(TimeSpan span)
     {
-        readonly Queue<DateTimeOffset> hits = new();
+        readonly Queue<(DateTimeOffset At, object? Charge)> hits = new();
 
         // A lowered limit can need several hits to expire before another is admitted.
         public int WaitFor(DateTimeOffset now, int limit)
         {
             // A clock stepped back leaves hits in the future; count them as now, so the wait is
             // never longer than one span.
-            if (hits.Any(h => h > now)) { var kept = hits.Select(h => h > now ? now : h).ToArray(); hits.Clear(); foreach (var h in kept) { hits.Enqueue(h); } }
-            while (hits.Count > 0 && now - hits.Peek() >= span) { hits.Dequeue(); }
+            if (hits.Any(h => h.At > now)) { var kept = hits.Select(h => h.At > now ? (At: now, h.Charge) : h).ToArray(); hits.Clear(); foreach (var h in kept) { hits.Enqueue(h); } }
+            while (hits.Count > 0 && now - hits.Peek().At >= span) { hits.Dequeue(); }
             if (hits.Count < limit) { return 0; }
-            var seconds = (int)Math.Ceiling((hits.ElementAt(hits.Count - limit) + span - now).TotalSeconds);
+            var seconds = (int)Math.Ceiling((hits.ElementAt(hits.Count - limit).At + span - now).TotalSeconds);
             return Math.Max(1, seconds);
         }
 
         public bool IsIdle(DateTimeOffset now) => WaitFor(now, int.MaxValue) == 0 && hits.Count == 0;
 
-        public void Hit(DateTimeOffset now) => hits.Enqueue(now);
+        public void Hit(DateTimeOffset now, object? charge = null) => hits.Enqueue((now, charge));
+
+        public void UndoHit(object? charge)
+        {
+            if (charge is null) { return; }
+            var kept = hits.Where(h => !ReferenceEquals(h.Charge, charge)).ToArray();
+            hits.Clear();
+            foreach (var hit in kept) { hits.Enqueue(hit); }
+        }
     }
 }
