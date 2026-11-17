@@ -273,6 +273,17 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         }
     }
 
+    internal AgentCredential? LiveScript(string name)
+    {
+        var principal = ScriptPrincipal(name);
+        lock (gate) { return problem is null
+            ? records.Select(r => r.Credential).LastOrDefault(c => c.Kind == "script" && c.Principal == principal && c.ExpiresAt > time.GetUtcNow())
+            : null; }
+    }
+
+    internal string ScriptPrincipal(string name) => ValidScriptPart(name) ? $"script:{machine}/{name}"
+        : throw new ArgumentException("invalid script name", nameof(name));
+
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     static byte[] ProtectScript(byte[] clear) => ProtectedData.Protect(clear, null, DataProtectionScope.CurrentUser);
 

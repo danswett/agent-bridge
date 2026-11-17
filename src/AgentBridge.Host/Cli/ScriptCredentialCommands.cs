@@ -7,10 +7,10 @@ namespace AgentBridge.Host.Cli;
 
 public static class ScriptCredentialCommands
 {
-    public const string Usage = "agent-bridge-host scripts add|revoke <name> [--profile <name>]";
+    public const string Usage = "agent-bridge-host scripts add|revoke <name> | scripts controller grant <name> [--profile <name>]";
 
     public static object Handle(IProtocolChannel channel, string op, JsonElement data, ICallerGuard callers,
-        AgentCredentials? credentials, AgentAuditLog? audit)
+        AgentCredentials? credentials, AgentAuditLog? audit, FleetController? controller = null)
     {
         if (callers.Classify(channel, fresh: true).Kind != CallerKind.HostCli || credentials?.IsCredentialed(channel) == true)
         { throw new InvalidOperationException("refused: only a person at the machine using the host command line may change script credentials"); }
@@ -29,24 +29,46 @@ public static class ScriptCredentialCommands
             var (credential, path) = credentials.MintScript(name);
             return new { credential.Id, credential.Principal, credential.Scope, credential.ExpiresAt, Path = path };
         }
-        if (!credentials.RevokeScript(name)) { throw new InvalidOperationException("no script credential exists for that name"); }
-        return new { Name = name, Revoked = true };
+        if (op == "scripts.revoke")
+        {
+            controller?.RevokeController(credentials.ScriptPrincipal(name));
+            if (!credentials.RevokeScript(name)) { throw new InvalidOperationException("no script credential exists for that name"); }
+            return new { Name = name, Revoked = true };
+        }
+        if (controller is null) { throw new InvalidOperationException("refused: fleet controller is unavailable"); }
+        if (op == "scripts.controller.grant")
+        {
+            var credential = credentials.LiveScript(name)
+                ?? throw new InvalidOperationException("refused: create a live script credential before granting controller access");
+            controller.RegisterController(credential);
+            return new { Name = name, Granted = true, credential.ExpiresAt };
+        }
+        throw new ArgumentException("unsupported script credential operation", nameof(op));
     }
 
     public static async Task<int> RunAsync(IReadOnlyList<string> args, string root, TextWriter output, TextWriter error)
     {
-        var profile = args.Count == 5 && args[3] == "--profile" ? args[4] : "default";
-        if (args.Count is not (3 or 5) || args[0] != "scripts" || args[1] is not ("add" or "revoke")
-            || !AgentCredentials.ValidScriptPart(args[2]) || !Identity.IsValidProfile(profile)
-            || args.Count == 5 && args[3] != "--profile")
+        var rest = args;
+        var profile = "default";
+        if (args.Count >= 2 && args[^2] == "--profile")
+        { profile = args[^1]; rest = args.Take(args.Count - 2).ToArray(); }
+        if (!Identity.IsValidProfile(profile))
         { error.WriteLine($"usage: {Usage}"); return 2; }
+        var (op, name) = rest switch
+        {
+            ["scripts", "add" or "revoke", var script] when AgentCredentials.ValidScriptPart(script) => ("scripts." + rest[1], script),
+            ["scripts", "controller", "grant", var script] when AgentCredentials.ValidScriptPart(script) =>
+                ("scripts.controller." + rest[2], script),
+            _ => ("", ""),
+        };
+        if (op.Length == 0) { error.WriteLine($"usage: {Usage}"); return 2; }
         if (!OperatingSystem.IsWindows())
         { error.WriteLine("agent-bridge-host: script credential management is available only on Windows"); return 2; }
         try
         {
             await using var local = await LocalClient.ConnectAsync(LocalEndpoint.For(Path.Combine(root, profile)));
             await local.HelloAsync();
-            var result = await local.CallAsync("scripts." + args[1], new { name = args[2] });
+            var result = await local.CallAsync(op, new { name });
             output.WriteLine(result.GetRawText());
             return 0;
         }

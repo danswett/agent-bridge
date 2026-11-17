@@ -615,7 +615,8 @@ async Task<int> ServeAsync(HostHandover handover)
     var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
     var agentAudit = new AgentAuditLog(identity.Folder, log: Log);
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit);
-    var fleetController = agentCredentials is null ? null : new FleetController(agentCredentials, source, launcher, stops as StopService, agentAudit);
+    var fleetController = agentCredentials is null ? null : new FleetController(agentCredentials, source, launcher, stops as StopService, agentAudit,
+        new WorkStateClearanceProvider(source));
     launcher.SessionStarted += restore.Launched;
     launcher.StartScanning();
     var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => settings.AgentMessaging.AllowAllTargets, launcher, Log);

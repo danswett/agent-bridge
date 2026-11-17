@@ -26,8 +26,8 @@ public static class LocalApi
         if (op is FleetController.LaunchOp or FleetController.StopOp)
         { return await (fleetController ?? throw new InvalidOperationException("refused: fleet control is not configured")).HandleAsync(channel, op, data); }
         credentials?.CheckScriptOperation(channel, op, log);
-        if (op is "scripts.add" or "scripts.revoke")
-        { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
+        if (op is "scripts.add" or "scripts.revoke" or "scripts.controller.grant")
+        { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit, fleetController); }
         if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
         {
             if (credentials is null || !OperatingSystem.IsWindows() || channel is not LocalChannel local)

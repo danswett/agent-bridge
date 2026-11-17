@@ -21,8 +21,7 @@ The controller-only local `fleet.launch` ingress adds a durable `fleetController
 marker only after authenticating its separately host-registered grant. It retains
 the agent worktree checks and requires a fresh isolated session, standard permissions,
 and no resume, transfer or attachments. Ordinary launches never acquire that marker.
-Production provisions no controller grants yet; the [stop gate](host-stop.md) also
-defaults to Unknown clearance, so live agent stopping remains unavailable.
+Production provisions no controller grants by default; see the [stop gate](host-stop.md).
 
 ## Answering `launch.options` without waiting for Agency (#1527)
 

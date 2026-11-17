@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text.Json;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
@@ -30,17 +29,38 @@ public sealed class FleetController(AgentCredentials credentials, ISessionSource
     StopService? stops, AgentAuditLog audit, IWorkStateClearance? clearance = null, TimeProvider? time = null)
 {
     public const string LaunchOp = "fleet.launch", StopOp = "fleet.stop";
-    readonly ConcurrentDictionary<string, AgentCredential> grants = new(StringComparer.Ordinal);
+    readonly Dictionary<string, AgentCredential> grants = new(StringComparer.Ordinal);
+    readonly SemaphoreSlim operations = new(1, 1);
     readonly IWorkStateClearance work = clearance ?? new UnknownWorkStateClearance();
     readonly TimeProvider clock = time ?? TimeProvider.System;
 
+    void Exclusive(Action action)
+    {
+        operations.Wait();
+        try { action(); }
+        finally { operations.Release(); }
+    }
+
+    async Task<T> Exclusive<T>(Func<Task<T>> action)
+    {
+        await operations.WaitAsync();
+        try { return await action(); }
+        finally { operations.Release(); }
+    }
+
     // Host-only provisioning: neither script names nor possession of a read credential grants control.
-    internal void RegisterController(AgentCredential credential)
+    internal void RegisterController(AgentCredential credential) => Exclusive(() =>
     {
         if (credential.Kind != "script" || !credentials.IsLive(credential))
         { throw new InvalidOperationException("refused: a live registered script credential is required"); }
         grants[credential.Id] = credential;
-    }
+    });
+
+    internal void RevokeController(string principal) => Exclusive(() =>
+    {
+        foreach (var grant in grants.Where(entry => entry.Value.Principal == principal))
+        { grants.Remove(grant.Key); }
+    });
 
     AgentCredential Require(IProtocolChannel channel)
     {
@@ -49,7 +69,10 @@ public sealed class FleetController(AgentCredentials credentials, ISessionSource
         throw new InvalidOperationException("refused: a live host-registered fleet-controller grant is required");
     }
 
-    internal async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data)
+    internal Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data) =>
+        Exclusive(() => HandleWithGrantAsync(channel, op, data));
+
+    async Task<object?> HandleWithGrantAsync(IProtocolChannel channel, string op, JsonElement data)
     {
         var caller = Require(channel);
         var principal = credentials.PrincipalOf(caller);
@@ -57,6 +80,7 @@ public sealed class FleetController(AgentCredentials credentials, ISessionSource
         { throw new ArgumentException("fleet control needs a bounded request object"); }
         if (op == LaunchOp)
         {
+            if (credentials.Of(channel) != caller) { throw new InvalidOperationException("refused: the fleet-controller grant was revoked"); }
             var launch = data.Deserialize<LaunchRequest>(ProtocolJson.Options) ?? throw new ArgumentException("fleet.launch needs a request");
             if (launch.Resume is not null || launch.Transfer is not null || launch.Attachments is { Count: > 0 }
                 || launch.Permissions is not (null or LaunchProtocol.Ask))

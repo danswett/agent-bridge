@@ -74,6 +74,19 @@ public sealed partial class StopFlowTests
         Assert.Empty(control.Terminated);
     }
 
+    [Fact]
+    public async Task Fleet_controller_grant_requires_an_explicit_host_command()
+    {
+        var setup = Fleet(new Clearance(), grant: false);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => FleetStop(setup.Handle));
+        var admin = LocalApi.Handler(null!, null!, new FixedCallerGuard(new Caller(CallerKind.HostCli, "owner at machine")),
+            credentials: setup.Credentials, fleetController: setup.Controller, audit: new AgentAuditLog(Path.Combine(f.Root, "fleet-controller-audit"), clock));
+        await admin(new FleetChannel(), "scripts.controller.grant", JsonSerializer.SerializeToElement(new { name = "sre" }));
+        Assert.Equal(StopOutcome.Ended, Assert.IsType<StopResult>(await FleetStop(setup.Handle)).Outcome);
+        await admin(new FleetChannel(), "scripts.revoke", JsonSerializer.SerializeToElement(new { name = "sre" }));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => FleetStop(setup.Handle));
+    }
+
     [Theory]
     [InlineData("unknown")]
     [InlineData(Id)]
@@ -86,18 +99,26 @@ public sealed partial class StopFlowTests
     }
 
     [Fact]
-    public async Task Fleet_stop_refuses_a_grant_revoked_during_clearance()
+    public async Task Fleet_stop_and_grant_revocation_are_serialized()
     {
         var clearance = new Clearance();
         var setup = Fleet(clearance);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
         clearance.Change = (read, value) =>
         {
-            if (read > 1) { setup.Credentials.RevokeScript("sre"); }
+            if (read > 1) { entered.Set(); release.Wait(); }
             return value;
         };
-        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(setup.Handle)).Outcome);
-        Assert.Empty(injector.Plans);
-        Assert.Empty(control.Terminated);
+        var stopping = Task.Run(() => FleetStop(setup.Handle));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        var revoke = Task.Run(() => setup.Controller.RevokeController(setup.Credentials.ScriptPrincipal("sre")));
+        var waited = await Task.WhenAny(revoke, Task.Delay(100)) != revoke;
+        release.Set();
+        Assert.True(waited);
+        Assert.Equal(StopOutcome.Ended, Assert.IsType<StopResult>(await stopping).Outcome);
+        await revoke;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => FleetStop(setup.Handle));
     }
 
     [Fact]

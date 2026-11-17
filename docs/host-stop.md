@@ -23,9 +23,15 @@ Refused, Unknown, stale/mismatched evidence and held discovery refuse. The host 
 again before typing and before forced termination, retaining G5, confirmation and audit.
 Caller-supplied safety fields confer no authority.
 
-Production registers no controller grants in this slice and uses
-`UnknownWorkStateClearance`, which returns Unknown for every safeguard. No live agent
-stop is enabled; slice 3 supplies the real provider and controlled provisioning.
+Production uses `WorkStateClearanceProvider`; Unknown fails closed. It verifies the
+recorded worktree, GitHub PR/commit state, and `locked`, `agent-bridge-host-held` or
+`agent-bridge-host-private` markers in Git administration. Dirty work, open PRs and
+unpushed commits refuse.
+
+No controller grant is enabled by default. From the host CLI, a person may run
+`agent-bridge-host scripts controller grant <name>` for a live script credential.
+`agent-bridge-host scripts revoke <name>` revokes its access; grants last until restart.
+Neither command creates or displays credentials.
 
 On Windows, run `agent-bridge-host stop <session> [--confirm <token>] [--profile <name>]` from the person's
 own terminal, outside any agent session. It calls the running local host, not another machine.
