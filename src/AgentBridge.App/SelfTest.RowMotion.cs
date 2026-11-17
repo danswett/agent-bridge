@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
+using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Markup;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
@@ -78,6 +80,35 @@ static partial class SelfTest
             await CaptureFrame(root);
             check(Math.Abs(TrackedTop() - LayoutInformation.GetLayoutSlot(neighbour).Y) <= 1,
                 "reduced-motion row neighbours take their final positions without travel");
+            animations = true;
+            items.Insert(0, first);
+            list.UpdateLayout();
+            await Task.Delay(250);
+            var source = (ListViewItem)list.ContainerFromItem(first);
+            items.Remove(first);
+            list.UpdateLayout();
+            var overlay = ElementCompositionPreview.GetElementChildVisual(list) as ContainerVisual;
+            var ghost = overlay?.Children.OfType<SpriteVisual>().SingleOrDefault();
+            var fade = ghost?.TryGetAnimationController("Opacity");
+            fade?.Pause();
+            if (fade is not null) { fade.Progress = 0.5f; }
+            check(fade is not null, "a departing row has a drawn-only fading composition copy");
+            source.Content = null;
+            items.Add(added);
+            list.UpdateLayout();
+            check(!ReferenceEquals(list.ContainerFromItem(items[^1]), source), "a fading row's source is not recycled");
+            await CaptureFrame(root);
+            var picture = WindowPicture.Take(MainWindow.CurrentHandle, 0);
+            var point = list.TransformToVisual(root).TransformPoint(new Windows.Foundation.Point(120, 40));
+            var x = (int)Math.Round(point.X * picture.Width / root.ActualWidth);
+            var y = (int)Math.Round(point.Y * picture.Height / root.ActualHeight);
+            var at = (y * (int)picture.Width + x) * 4;
+            bool Matches(SolidColorBrush brush) => Math.Abs(picture.Pixels[at + 2] - brush.Color.R) <= 2
+                && Math.Abs(picture.Pixels[at + 1] - brush.Color.G) <= 2 && Math.Abs(picture.Pixels[at] - brush.Color.B) <= 2;
+            check(!Matches(background) && !Matches(first) && !Matches(tracked),
+                "a cleared departure source still paints its faded copy");
+            shifts.Clear();
+            check(ElementCompositionPreview.GetElementChildVisual(list) is null, "cancelling a departure removes its composition copy");
         }
         finally { root.Children.Remove(list); }
 
