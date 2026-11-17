@@ -1271,7 +1271,7 @@ after its card has gone; retained topics under `copilot/cli/machine/<slug>/` and
 **administrator** (as the daemon's `homeAssistant.token` is: `mqtt.publish` and the entity
 registry are administrator-only). It is given at the machine with `agent-bridge-host ha token
 set`, read from standard input (never an argument, which would sit in shell history and the
-process list; not echoed at a console; refused inside an agent session, as `ha token clear` is,
+process list; echoed only as masks; refused inside an agent session, as `ha token clear` is,
 [host-config.md](host-config.md#approving-a-workspace-at-the-machine)), and kept the way the device key is: DPAPI to the Windows
 user in `ha-token.dpapi` beside it; elsewhere an owner-only file until the Keychain arrives
 (P5). It is never in `config.json`, never logged; failures name the HTTP status and never echo a
@@ -1489,13 +1489,19 @@ Assistant and broker).
 agent-bridge-host config set homeAssistant.baseUrl http://127.0.0.1:8123
 agent-bridge-host config set homeAssistant.disposable true
 agent-bridge-host config set homeAssistant.enabled true
-agent-bridge-host ha token set            # paste the token; it is not shown
+agent-bridge-host ha token set            # paste the token, then explicitly confirm
 agent-bridge-host ha status               # on, or why not, and any refusal; never the token
 agent-bridge-host ha shadow               # compare with agent-ha-bridge's retained topics; writes nothing
 ```
 
 `serve` logs `the Home Assistant connector is on: <url> as agent_bridge_<slug>` or why it is
 off, and `Home Assistant connector paused: …` while agent-ha-bridge runs.
+
+`ha token set` requires the base URL first. It reports length, whitespace and only eight SHA256
+hex characters, checks the local JWT shape (not validity), then warns about the recorded
+three-rejection budget (the real HA ban count is unknown). Only an explicit `yes` stores it
+and authorizes one attempt; a rejection stops it until consent is given again, even after
+restart. Neither this command nor a declined prompt contacts HA; malformed input changes nothing.
 
 ## Troubleshooting
 
