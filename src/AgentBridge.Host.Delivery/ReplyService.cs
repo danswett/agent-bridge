@@ -90,7 +90,7 @@ public sealed class ReplyOptions
 //     read just before typing, that is the reply typed, with every file it carried.
 //     Anything else is unconfirmed. Never retyped; for Claude and Codex, Enter alone may be
 //     pressed again while the reply still sits in the input box.
-public sealed class ReplyService : ISessionReplier
+public sealed partial class ReplyService : ISessionReplier
 {
     readonly ISessionSource source;
     readonly IProcessInspector processes;
@@ -236,6 +236,8 @@ public sealed class ReplyService : ISessionReplier
     async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)
     {
         Typed typed;
+        SemaphoreSlim? queued = null;
+        var queueHeld = false;
         IReadOnlyList<ReplyAttachmentBinding>? bindings = null;
         try
         {
@@ -252,7 +254,16 @@ public sealed class ReplyService : ISessionReplier
             }
             if (request.StillCurrent is not null && session.Agent != AgentKind.Copilot)
             { return Refused("retry fencing is supported only for Copilot"); }
-            if (!gate.TryClaim(session.Id, key)) { return Busy(); }
+            if (session.Agent == AgentKind.Copilot && !request.RequireIdle)
+            {
+                queued = replyQueues.GetOrAdd(session.Id, _ => new(1, 1));
+                await queued.WaitAsync(Stopping);
+                queueHeld = true;
+                log($"reply {Short(request.Request)} to {Short(session.Id)} producer {Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(peer)))[..8]}: queued host-side, {request.Text?.Length ?? 0} characters");
+                if (recovering.TryGetValue(session.Id, out var pending)) { await pending.WaitAsync(Stopping); }
+                if (await ClaimIdleAsync(session, key) is { } held) { return held; }
+            }
+            else if (!gate.TryClaim(session.Id, key)) { return Busy(); }
             Claim? claim = null;
             var keysWent = false;
             try
@@ -296,6 +307,7 @@ public sealed class ReplyService : ISessionReplier
             // once a key may have gone.
             return Failed(AnswerOutcome.Refused, $"reply {key.ToString()[..8]} to {Short(request.Id)} failed before typing", e);
         }
+        finally { if (queueHeld) queued!.Release(); }
 
         // The session is free again once the keys have gone: a question it asks next can be
         // answered while this waits for the prompt to be taken, which for a busy session can
@@ -381,7 +393,8 @@ public sealed class ReplyService : ISessionReplier
         var transcript = Path.Combine(options.CopilotHome, "session-state", session.Id, "events.jsonl");
         if (session.ProcessId is not { } pid) { return Done(Refused("the session's process is not known; reply at the machine")); }
         var process = stillCurrent is null ? null : source.ProcessOf(session.Id);
-        if (!processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid)) { return Done(Stale("the session's process has ended")); }
+        var target = processes.GetAgentProcesses(AgentKind.Copilot).FirstOrDefault(p => p.Id == pid);
+        if (target is null) { return Done(Stale("the session's process has ended")); }
         if (guard.Refuse(pid) is { } refused) { return Done(Refused(refused)); }
         IReadOnlyList<string> staged = [];
         if (claim is not null)
@@ -425,7 +438,7 @@ public sealed class ReplyService : ISessionReplier
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
             if (now.Question is { } asking) { return Done(Asking(asking)); }
-            if (requireIdle && now.Status != SessionStatus.Idle)
+            if (now.Status != SessionStatus.Idle)
             {
                 return Done(Refused("the session is no longer idle, so the agent message was not typed") with { Refusal = ReplyRefusal.Busy });
             }
@@ -478,10 +491,8 @@ public sealed class ReplyService : ISessionReplier
             [
                 new(footer, ScreenCheck.WithAny, CopilotInputBoxReader.FooterSigns),
                 new(footer, ScreenCheck.WithoutParts, CopilotInputBoxReader.UnsafeFooter),
-                // Under 80 columns a turn's row has no mode labels to check, so a turn that starts
-                // after the read is refused too, as one running at the read is (Trust's #843
-                // re-review).
-                .. CopilotInputBoxReader.Narrow(box) ? [new ScreenRowCheck(footer, ScreenCheck.WithNone, CopilotInputBoxReader.TurnSigns)] : Array.Empty<ScreenRowCheck>(),
+                // A turn starting after the read must not turn this paste into a CLI-side queue.
+                new(footer, ScreenCheck.WithNone, CopilotInputBoxReader.TurnSigns),
                 // Still at the bottom: nothing but blank rows under the footer, as the reader
                 // required. Rows that read like the box and its footer can be printed above the
                 // real ones (a draft in them, or a dialog in their place); with only the box and
@@ -516,6 +527,8 @@ public sealed class ReplyService : ISessionReplier
             try { result = await injector.InjectAsync(pid, keys); }
             catch (Exception e)
             {
+                recovering[session.Id] = RecoverCopilotAsync(session, target, transcript, from, words, timeline, true,
+                    e is InjectorWorkerException failed ? failed.Exited : Task.Delay(Timeout.InfiniteTimeSpan, Stopping));
                 return new Attempt(Failed(AnswerOutcome.Unconfirmed, $"the injector failed while typing a reply into {Short(session.Id)}", e), null, KeysWent: true);
             }
             finally { timeline.InjectEnd(); }
@@ -525,6 +538,20 @@ public sealed class ReplyService : ISessionReplier
         // Before the log line, which writes a file: the client hears it as soon as it can.
         if (result.Status == InjectionStatus.Typed) { timeline.Typed(working); }
         log($"typed a reply into {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {keys.Describe()} -> {result.Status} {result.Detail}");
+        if (stillCurrent is null && result.Status is InjectionStatus.Interrupted or InjectionStatus.Typed
+            && !result.Detail.Contains("console closed", StringComparison.Ordinal))
+        {
+            // Keep ownership of any pasted draft after returning an uncertain receipt. Later
+            // replies wait host-side, never append to it or refuse the owner because of it.
+            var recovery = RecoverCopilotAsync(session, target, transcript, from, words, timeline,
+                result.Detail.Contains("(partial error ", StringComparison.Ordinal));
+            recovering[session.Id] = recovery;
+            try { await recovery.WaitAsync(options.SubmitPatience, options.Time, Stopping); }
+            catch (TimeoutException) { log($"reply recovery to {Short(session.Id)}: pending host-side; later replies will wait"); }
+            if (recovery.IsCompletedSuccessfully && recovery.Result)
+                return Typing(AgentKind.Copilot, () => FirstOf(CopilotPrompts.Since(transcript, from).Prompts, p => CopilotReply.Matches(words, p.Content), p => p.At),
+                    seen => ConfirmAsync(transcript, from, words, staged, timeline, seen));
+        }
         return result.Status switch
         {
             InjectionStatus.NothingTyped when retryChanged => Done(Stale(retryChangedReason)),

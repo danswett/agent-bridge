@@ -18,6 +18,24 @@ one session at once.
 
 ## The keys (Copilot)
 
+**Idle-only delivery (#2808).** The host keeps ordinary Copilot replies in a per-session,
+in-memory queue while a turn is running or a preceding reply is being pasted/submitted.
+It never uses Copilot's input box as that queue. This safety rule supersedes the
+working-session Enter behavior and the proposed CLI-queue behavior described below.
+Fenced internal retry requests still fail closed rather than waiting past their fence.
+A genuine pre-existing draft retains its distinct refusal; the host never erases it.
+Queue admission logs correlate request/session IDs, a peer fingerprint and character
+count, never reply or draft text. The queue lives only for this host process.
+
+If a paste reflows the box before Enter, the host retains responsibility for it and
+re-reads the box. It submits only an exact matching reply in a complete, anchored,
+non-shell, non-vim-normal box while idle, with fresh transcript and worker screen guards.
+A dialog gets no keys; later replies wait behind recovery instead of being refused
+because the agent's text is pending. Recovery stops with the host or target process.
+For a reported native partial write, an exact owned prefix is cleared with Ctrl+E,
+Ctrl+U under the same guards; recovery verifies an empty box before releasing the queue.
+An uncertain receipt can precede recovery; it does not authorize retyping the reply.
+
 Ported from agent-ha-bridge (`hooks/decision-inject.ps1`, `Send-CopilotSessionPrompt`):
 the words as one burst, 300 ms, then a submit key of its own. The CLI takes a burst
 as a paste. Enter submits as before; #2468's queue path uses Ctrl+Q while working.
