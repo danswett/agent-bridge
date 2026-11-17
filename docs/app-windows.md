@@ -36,7 +36,9 @@ keeps exception types and frames, not messages or source paths, in `crash.log` a
 existing diagnostics journal. Neither submits anything.
 Each profile keeps `runs/<profile>/run-marker.json` under `Paths.AppData` (the demo uses
 `runs/demo`). Startup captures `RunMarker.Previous` before writing the current version
-and UTC start time; an empty/corrupt marker counts as unclean. Only an actual exit,
+and UTC start time; an empty/corrupt marker counts as unclean. Marker writes flush a
+same-directory temporary file before atomically replacing the old marker; failed writes
+preserve the old marker and remove the temporary file. Only an actual exit,
 not hiding to the tray, calls `Complete()`. Crash evidence survives closing; a teardown
 crash restores the marker. Self-tests leave markers alone. `RecordHang` is the seam for
 the separate watchdog slice; recovery UI and the existing feedback submission remain separate work.
