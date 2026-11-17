@@ -6,7 +6,7 @@ using AgentBridge.Roster;
 namespace AgentBridge.Host.Fleet;
 
 // The caller supplies the locally pinned reader's state, never a roster inferred from registry frames.
-public sealed class FleetRecordVerifier(Func<RosterVerifier?> pinnedRoster, TimeProvider time)
+internal sealed class FleetRecordVerifier(Func<RosterVerifier?> pinnedRoster, TimeProvider time)
 {
     readonly object gate = new();
     readonly Dictionary<(string Account, string Generation, string Add), (string Epoch, long Seq, DateTimeOffset At)> accepted = [];

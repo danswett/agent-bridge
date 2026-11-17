@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentBridge.Protocol;
+using AgentBridge.Roster;
 using AgentBridge.Transport;
 
 namespace AgentBridge.Host.Fleet;
@@ -36,9 +37,12 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     RelayClient? relay;
     readonly FleetRecordVerifier? verifier;
 
-    public RelayFleetRoster(FleetRecordVerifier? verifier = null) => this.verifier = verifier;
+    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null) =>
+        verifier = verifiedRoster is null ? null : new(verifiedRoster, time ?? TimeProvider.System);
 
-    public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames, string? account = null) =>
+    public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames) => Read(frames, null);
+
+    IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames, string? account) =>
         Parse(frames, (machine, record) => verifier?.Verify(machine, record, account) == true);
 
     public void Attach(RelayClient? connection) => Volatile.Write(ref relay, connection);

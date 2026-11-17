@@ -159,7 +159,8 @@ public sealed class FleetHostVerificationTests
         Assert.All(v1.Feed(reader, "G", "H"), o => Assert.Equal(Verdict.Accepted, o.Verdict));
         f.Trusted = reader;
         Assert.Empty(Assert.Single(f.Read(f.Record(seq: 3))).Sessions);
-        Assert.Throws<InvalidOperationException>(() => f.Verifier.Verify(f.Machine, Json(f.Record()), "another-account"));
+        var verifier = new FleetRecordVerifier(() => f.Trusted, new FakeTimeProvider(Now));
+        Assert.Throws<InvalidOperationException>(() => verifier.Verify(f.Machine, Json(f.Record()), "another-account"));
     }
 
     [Fact]
@@ -180,7 +181,6 @@ public sealed class FleetHostVerificationTests
         public RosterVerifier Roster { get; }
         public RosterVerifier? Trusted { get; set; }
         public string Machine => global::World.Keys("H").Dh.Device;
-        public FleetRecordVerifier Verifier { get; }
         readonly RelayFleetRoster reader;
 
         public Fixture()
@@ -190,8 +190,7 @@ public sealed class FleetHostVerificationTests
             Roster = new(RosterFixture.Account, RosterFixture.Generation, () => World.Now) { AcceptHostSign = true };
             Assert.All(World.Feed(Roster, "G", "H"), o => Assert.Equal(Verdict.Accepted, o.Verdict));
             Trusted = Roster;
-            Verifier = new(() => Trusted, new FakeTimeProvider(Now));
-            reader = new(Verifier);
+            reader = new(() => Trusted, new FakeTimeProvider(Now));
         }
 
         public JsonObject Sign(JsonObject record) =>
