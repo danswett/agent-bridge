@@ -383,6 +383,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // principal, for as long as its credential stands.
     public AgentHelloResult Accept(IProtocolChannel channel, AgentCredential credential)
     {
+        // A script connection cannot shed its read-only limit by authenticating again.
+        CheckScriptOperation(channel, AgentProtocol.Hello);
         var principal = PrincipalOf(credential);
         connections.AddOrUpdate(channel, new Connection(credential.Id, principal, credential.Kind == "script"));
         return new AgentHelloResult(principal, credential.Kind == "script" ? AgentProtocol.ScopeRead : credential.Scope);
