@@ -55,7 +55,8 @@ and temporary raises are C2 work, not guarantees of this staged readback.
 Fleet script launches have separate `agents.limits`: `fleetPerHour` defaults to 8 and
 `liveFleetWorkers` to 6. The person at the machine may lower either, never raise or
 disable it. Distinct admitted request IDs count against the hourly cap, including failed
-starts. A refusal, busy result or failed start releases its live reservation; an unresolved
+starts. A proven pre-start refusal, busy result or failure releases its live reservation;
+a registered worker that closes before becoming ready also releases it. An unresolved
 admission retains one for at most ten minutes, including across restart. Proven live
 workers count once per process identity. Ordinary coordinator launches do not use these
 fleet limits.

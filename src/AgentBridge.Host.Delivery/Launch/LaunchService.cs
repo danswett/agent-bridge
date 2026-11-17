@@ -25,7 +25,7 @@ public interface ISessionLauncher
 
     Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
     Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
-        CancellationToken cancellationToken = default) => Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "fleet launch is unavailable"));
+        Action<string>? terminal = null, CancellationToken cancellationToken = default) => Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "fleet launch is unavailable"));
     bool IsFleetWorker(string session, SessionProcess? process) => false;
     LaunchConfig? FleetConfig => null;
     Task<LaunchResult>? ReplayAuditedAsync(LaunchRequest request, string peer) => null;
@@ -761,7 +761,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
         LaunchOnceAsync(request, peer, null);
     public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
-        CancellationToken cancellationToken = default) => LaunchOnceAsync(request, principal, prepare, fleet: true);
+        Action<string>? terminal = null, CancellationToken cancellationToken = default) => LaunchOnceAsync(request, principal, prepare, fleet: true, terminal: terminal);
     public bool IsFleetWorker(string session, SessionProcess? process) => provenance.IsFleetWorker(session, process);
     public LaunchConfig FleetConfig => Config;
 
@@ -772,11 +772,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return LaunchOnceAsync(request, peer, prepare);
     }
 
-    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false)
+    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false, Action<string>? terminal = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet)
-            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, fleet: fleet))
+        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet, terminal: terminal)
+            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, fleet: fleet, terminal: terminal))
             : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
             Settled(request, result, $"launch {Short(key)}"),
             owner: prepare is null ? Owner(request, peer) : new LaunchOwner(peer, RequestBinding(request)),
@@ -848,7 +848,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
     async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false, Action<string>? terminal = null)
     {
         try
         {
@@ -914,7 +914,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     }
                 }
                 return await StartAsync(plan, claim, key, handed, fetched, ct, restoring,
-                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet);
+                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet, terminal: terminal);
             }
             finally
             {
@@ -1094,7 +1094,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     }
 
     async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false, Action<string>? terminal = null)
     {
         Pending follow;
         LaunchedWith launched;
@@ -1103,6 +1103,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         WorktreeResult? created = null;
         var launchId = Guid.NewGuid().ToString("N");
         Action<string>? auditRegistered = null;
+        var processMayHaveStarted = false;
+        var unstartedOutcome = "refused";
         try
         {
             // Checked again: agent-ha-bridge may have started while this one waited its turn.
@@ -1303,9 +1305,20 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             if (fleet && !credentialIssued) { provenance.Abandon(key); return Refused("a read+reply fleet worker credential could not be issued"); }
             Started started;
-            try { started = starter.Start(spec); created = null; }
+            try { processMayHaveStarted = true; started = starter.Start(spec); created = null; }
             catch (Exception e)
             {
+                // CreateProcess reports a refused start as Win32Exception; other faults may follow creation.
+                if (e is System.ComponentModel.Win32Exception) { processMayHaveStarted = false; }
+                unstartedOutcome = "failed";
+                if (fleet && processMayHaveStarted)
+                {
+                    created = null;
+                    reservation = null;
+                    log($"launch {Short(key)}: the starter could not confirm whether the process started: {e.GetType().Name}");
+                    return new LaunchResult(LaunchOutcome.Unconfirmed, "the process start could not be confirmed; check the machine")
+                        { Session = sessionId.Length > 0 ? sessionId : null, Launched = launched };
+                }
                 if (credentialIssued) { credentials!.Abandon(launchId); }
                 provenance.Abandon(key);
                 log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
@@ -1317,13 +1330,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
             // The reservation is the follow's now, released when the session registers.
             follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched)
-                { Transcript = transcriptFrom, AuditRegistered = auditRegistered };
+                { Transcript = transcriptFrom, AuditRegistered = auditRegistered, AuditTerminal = fleet ? terminal : null };
             reservation = null;
             lock (pendingGate) { pending.Add(follow); }
             resumable.Forget();
         }
         finally
         {
+            if (fleet && !processMayHaveStarted && auditRegistered is not null) { terminal?.Invoke(unstartedOutcome); }
             if (reservation is not null && reserved is not null) { Worktrees.Release(reserved, reservation); }
             if (created is not null && await DiscardWorktreeAsync(created, key) is { } retained)
             { log($"launch {Short(key)}: the unstarted worktree was retained: {retained}"); }
@@ -1653,7 +1667,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Interlocked.Exchange(ref p.AuditRegistered, null)?.Invoke(id);
             RequestRegistered?.Invoke(p.Key, id);
         }
-        if (result.Outcome == LaunchOutcome.Failed) { RequestFailed?.Invoke(p.Key); }
+        if (result.Outcome == LaunchOutcome.Failed)
+        {
+            if (p.RegisteredAt is not null) { Interlocked.Exchange(ref p.AuditTerminal, null)?.Invoke("failed"); }
+            RequestFailed?.Invoke(p.Key);
+        }
         if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started)
         {
             p.RegisteredLate = true;
@@ -1998,6 +2016,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         public string? Reservation { get; } = reservation;
         public LaunchedWith Launched { get; } = launched;
         public Action<string>? AuditRegistered;
+        public Action<string>? AuditTerminal;
         public TaskCompletionSource<LaunchResult> Decided { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public volatile StartupQuestion Question;
         // Seen to close after a person's Quit: it asks nothing from then on, whatever Question

@@ -35,7 +35,7 @@ public sealed class FleetLaunchFailedStartTests : LaunchFlowFixture
             current.LaunchFleetAsync(request, "script:machine/dispatcher", audit, () => null, _ => null);
         static LaunchRequest Request() => new() { Request = Guid.NewGuid().ToString("D"), Agent = "claude",
             Workspace = "App", Permissions = LaunchProtocol.AllowAll };
-        starter.Throws = missingCredential ? null : new IOException("start failed");
+        starter.Throws = missingCredential ? null : new System.ComponentModel.Win32Exception("start failed");
         var failed = Enumerable.Range(0, cap).Select(_ => Request()).ToArray();
         foreach (var request in failed)
         {

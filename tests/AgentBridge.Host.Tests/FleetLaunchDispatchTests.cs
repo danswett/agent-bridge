@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Protocol;
 using Xunit;
@@ -18,6 +19,8 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
     [InlineData(true, "audit")]
     [InlineData(true, "command")]
     [InlineData(true, "held")]
+    [InlineData(true, "start")]
+    [InlineData(true, "uncertain")]
     [InlineData(true, "activation")]
     public async Task Fleet_dispatch_requires_fresh_isolation_and_removes_unstarted_trees_on_every_refusal(bool isolated, string? failure)
     {
@@ -31,6 +34,8 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         var profile = Path.Combine(f.Root, "fleet-profile");
         var credentials = new AgentCredentials(profile, "machine");
         if (failure == "credential") { Directory.CreateDirectory(Path.Combine(profile, AgentCredentials.FileName) + ".tmp"); }
+        if (failure == "start") { starter.Throws = new System.ComponentModel.Win32Exception("fixture"); }
+        if (failure == "uncertain") { starter.Throws = new InvalidOperationException("fixture"); }
         var config = Config(c => c with { Workspaces = [new("App", app, isolated)] });
         if (failure == "command") { config = config with { Agents = new Dictionary<string, AgentConfig> { ["claude"] = new() { ExtraArgs = [new string('x', 40000)] } } }; }
         var launcher = Launcher(config, credentials: credentials, agentWorktreeCheck: (workspace, made, _) =>
@@ -47,14 +52,35 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
                 .LaunchFleetAsync(request, principal, new AgentAuditLog(profile), () => null, _ => null)
             : await GateLaunchAudit.LaunchAsync(launcher, request, principal, new AgentAuditLog(profile),
                 new("local", "agent", principal, null), fleet: true, refusal: () => failure == "grant" ? "grant off" : null);
-        var expected = failure == "held" ? LaunchOutcome.Busy : isolated && failure is null ? LaunchOutcome.Started : LaunchOutcome.Refused;
+        var expected = failure == "held" ? LaunchOutcome.Busy : failure == "start" ? LaunchOutcome.Failed
+            : failure == "uncertain" ? LaunchOutcome.Unconfirmed
+            : isolated && failure is null ? LaunchOutcome.Started : LaunchOutcome.Refused;
         Assert.True(result.Outcome == expected, $"{result.Outcome}: {result.Reason}");
         if (!isolated || failure is not null)
         {
             if (failure is "activation" or "grant") { Assert.Contains(failure == "activation" ? "admission" : "grant off", result.Reason); }
             Assert.Empty(starter.Specs);
-            if (isolated && failure is not ("activation" or "grant" or "audit")) { Assert.Empty(Directory.GetDirectories(config.WorktreeRoot)); }
+            if (failure == "uncertain") { Assert.Single(Directory.GetDirectories(config.WorktreeRoot)); }
+            else if (isolated && failure is not ("activation" or "grant" or "audit")) { Assert.Empty(Directory.GetDirectories(config.WorktreeRoot)); }
             else { Assert.False(Directory.Exists(config.WorktreeRoot)); }
+            if (failure is "command" or "held" or "credential" or "start")
+            {
+                var (evidence, complete) = GateAuditProjection.Load(profile);
+                Assert.True(complete);
+                var terminal = Assert.Single(evidence, row => row.Gate?.Phase == "terminal");
+                Assert.Equal(failure == "start" ? "failed" : "refused", terminal.Outcome);
+                var replay = await GateLaunchAudit.LaunchAsync(Launcher(config), request, principal, new AgentAuditLog(profile),
+                    new("local", "agent", principal, null), fleet: true);
+                Assert.Equal(failure == "start" ? LaunchOutcome.Failed : LaunchOutcome.Refused, replay.Outcome);
+                Assert.Empty(starter.Specs);
+            }
+            if (failure == "uncertain")
+            {
+                var (evidence, complete) = GateAuditProjection.Load(profile);
+                Assert.True(complete);
+                Assert.Single(evidence, row => row.Gate?.Phase == "intent");
+                Assert.DoesNotContain(evidence, row => row.Gate?.Phase == "terminal");
+            }
             return;
         }
         Assert.NotEqual(app, Assert.Single(starter.Specs).WorkingDirectory);
@@ -71,5 +97,71 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
             .GetProperty("credential").GetProperty("scope").GetString());
         var rows = File.ReadAllLines(Assert.Single(Directory.GetFiles(Path.Combine(profile, "audit"), "launches-*.jsonl")));
         Assert.All(rows.Skip(1), row => Assert.Equal("fleet", JsonDocument.Parse(row).RootElement.GetProperty("grant").GetString()));
+    }
+
+    [Fact]
+    public async Task A_proven_prestart_refusal_releases_the_live_slot_for_the_next_request()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        var profile = Path.Combine(f.Root, "fleet-profile");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(Path.Combine(profile, HostSettings.FileName),
+            """{"agents":{"enabled":true,"limits":{"liveFleetWorkers":1}}}""");
+        var checks = 0;
+        var config = Config(c => c with { Workspaces = [new("App", app, true)] });
+        var launcher = Launcher(config, credentials: new AgentCredentials(profile, "machine"),
+            agentWorktreeCheck: (workspace, made, agent) => ++checks == 1 ? "fixture refusal" : AgentLaunchWorktreeCheck.Check(workspace, made, agent),
+            agentWorktreeRefusalAudit: (_, _, _) => true);
+        var service = new SessionService(source, new("machine", "fixture", "windows", "1"), launcher: launcher);
+        var audit = new AgentAuditLog(profile);
+        Task<LaunchResult> Launch() => service.LaunchFleetAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"),
+            Agent = "claude", Workspace = "App", Permissions = LaunchProtocol.AllowAll }, "script:machine/dispatcher", audit, () => null, _ => null);
+
+        Assert.Equal(LaunchOutcome.Refused, (await Launch()).Outcome);
+        Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
+        Assert.Single(starter.Specs);
+    }
+
+    [Fact]
+    public async Task A_registered_worker_that_exits_after_an_unconfirmed_answer_settles_as_failed()
+    {
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        screens.Rows = ["waiting for startup"];
+        var profile = Path.Combine(f.Root, "fleet-profile");
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
+            wait: TimeSpan.FromMilliseconds(100), credentials: new AgentCredentials(profile, "machine"),
+            account: new AllowedAccount(),
+            agentWorktreeCheck: (_, _, _) => null, agentWorktreeRefusalAudit: (_, _, _) => true);
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        launcher.RequestFailed += _ => failed.TrySetResult();
+        launcher.SessionStarted += (_, _) => registered.TrySetResult();
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot",
+            Workspace = "App", Permissions = LaunchProtocol.AllowAll };
+        const string principal = "script:machine/dispatcher";
+        var audit = new AgentAuditLog(profile);
+        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null), fleet: true);
+        Assert.True(result.Outcome == LaunchOutcome.Unconfirmed, result.Reason);
+        await source.RefreshAsync();
+        await registered.Task.WaitAsync(Patience);
+        starter.Exit(Assert.Single(starter.Pids));
+        await source.RefreshAsync();
+        await failed.Task.WaitAsync(Patience);
+        var (rows, complete) = GateAuditProjection.Load(profile);
+        Assert.True(complete);
+        Assert.Equal("failed", Assert.Single(rows, row => row.Gate?.Phase == "terminal").Outcome);
+    }
+
+    sealed class AllowedAccount : ILaunchAccount
+    {
+        public Task<LaunchAccount> CheckAsync(string? expectedLogin, CancellationToken cancellationToken) =>
+            Task.FromResult(LaunchAccount.Allowed("fixture"));
     }
 }

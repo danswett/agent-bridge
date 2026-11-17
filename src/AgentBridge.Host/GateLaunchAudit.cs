@@ -32,19 +32,25 @@ internal static class GateLaunchAudit
                 || matching.Any(r => r.Principal != first.Principal || r.Gate is not { } other
                     || other.Operation != gate.Operation || other.LaunchBinding != binding))
             { return Refused("the request conflicts with its durable launch binding"); }
-            var terminal = matching.FirstOrDefault(r => r.Gate?.Phase == "terminal" && r.Outcome == "started");
+            var terminal = matching.FirstOrDefault(r => r.Gate?.Phase == "terminal");
             if (launcher.ReplayAuditedAsync(request, peer) is { } remembered)
             {
                 var result = await remembered;
-                if (terminal is null || result.Outcome == LaunchOutcome.Started && result.Session == terminal.Target) { return result; }
+                if (terminal is null || result.Outcome.ToString().Equals(terminal.Outcome, StringComparison.OrdinalIgnoreCase)
+                    && (result.Outcome != LaunchOutcome.Started || result.Session == terminal.Target)) { return result; }
             }
-            return terminal is null
-                ? new(LaunchOutcome.Unconfirmed, "the launch was already admitted; its registration is not proven")
-                : new(LaunchOutcome.Started) { Session = terminal.Target };
+            return terminal?.Outcome switch
+            {
+                "started" => new(LaunchOutcome.Started) { Session = terminal.Target },
+                "failed" => new(LaunchOutcome.Failed, "the launch failed"),
+                "refused" => Refused("the launch was refused before the agent started"),
+                _ => new(LaunchOutcome.Unconfirmed, "the launch was already admitted; its registration is not proven"),
+            };
         }
 
         string? denied = null;
-        AgentAuditEntry? reserved = null;
+        AgentAuditEntry? admitted = null;
+        var terminalWritten = false;
         Action<string>? Prepare(Guid operation)
         {
             if ((denied = refusal?.Invoke()) is not null) { return null; }
@@ -53,16 +59,21 @@ internal static class GateLaunchAudit
             var intent = new AgentAuditEntry(ingress.Path == "relay" ? "in" : "local", id.ToString(),
                 ingress.Principal, [], "session.launch", id.ToString(), "reserved", Gate: gate) { Grant = fleet ? "fleet" : null };
             if (!audit.Append(intent)) { return null; }
-            reserved = intent;
+            admitted = intent;
             return session => { audit.Append(intent with { Target = session, Outcome = "started", Gate = gate with { Phase = "terminal" } }); };
         }
-        var outcome = fleet ? await launcher.LaunchFleetAsync(request, peer, Prepare, ct)
+        void Terminal(string outcome)
+        {
+            if (admitted is { Gate: { } gate } intent)
+            { terminalWritten = audit.Append(intent with { Outcome = outcome, Gate = gate with { Phase = "terminal", ReasonCode = outcome } }); }
+        }
+        var outcome = fleet ? await launcher.LaunchFleetAsync(request, peer, Prepare, Terminal, ct)
             : await launcher.LaunchAuditedAsync(request, peer, Prepare, ct);
-        if (fleet && reserved is not null && outcome.Outcome is LaunchOutcome.Refused or LaunchOutcome.Busy or LaunchOutcome.Failed)
+        if (fleet && !terminalWritten && admitted is not null && outcome.Outcome is LaunchOutcome.Refused or LaunchOutcome.Busy or LaunchOutcome.Failed)
         {
             var reason = outcome.Outcome switch { LaunchOutcome.Failed => "failed", LaunchOutcome.Busy => "busy", _ => "refused" };
-            if (!audit.Append(reserved with { Outcome = reason == "busy" ? "refused" : reason,
-                Gate = reserved.Gate! with { Phase = "terminal", ReasonCode = reason } }))
+            if (!audit.Append(admitted with { Outcome = reason == "busy" ? "refused" : reason,
+                Gate = admitted.Gate! with { Phase = "terminal", ReasonCode = reason } }))
             { return Refused("the fleet launch reservation could not be released durably"); }
         }
         return denied is null ? outcome : Refused(denied);
