@@ -7,6 +7,7 @@ public interface ILaunchCredentials
 {
     // A token for the session about to start, or null when none is issued. Never logged.
     string? Prepare(string session, string launchId);
+    string? PrepareFleet(string session, string launchId) => null;
 
     // The launch started: the token now answers only to this process.
     void Bind(string launchId, int processId, DateTimeOffset startedAt);

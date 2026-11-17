@@ -485,12 +485,14 @@ public sealed class HostSettingsTests : IDisposable
     [Fact]
     public void The_home_assistant_token_is_read_without_an_argument_kept_protected_and_never_shown()
     {
-        const string token = "fixture-token-that-must-not-be-printed";
+        const string token = SecretPromptTests.Token;
+        const string config = """{"homeAssistant":{"baseUrl":"http://ha.test:8123"}}""";
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), config);
         var output = new StringWriter();
         var error = new StringWriter();
-        Assert.Equal(0, HaCommands.Run(["ha", "token", "set"], folder, () => token, output, error, devBuild: true, agentHaBridge: () => null));
+        Assert.Equal(0, HaCommands.Run(["ha", "token", "set"], folder, () => token, output, error, devBuild: true, agentHaBridge: () => null, confirm: () => "yes"));
         Assert.DoesNotContain(token, output.ToString(), StringComparison.Ordinal);
-        Assert.False(File.Exists(Path.Combine(folder, HostSettings.FileName)));
+        Assert.Equal(config, File.ReadAllText(Path.Combine(folder, HostSettings.FileName)));
         Assert.Equal(token, AgentBridge.HomeAssistant.HaTokenStore.Load(folder));
 
         File.WriteAllText(Path.Combine(folder, HostSettings.FileName), """{ "homeAssistant": { "enabled": true, "baseUrl": "http://ha.test:8123" } }""");
@@ -512,7 +514,7 @@ public sealed class HostSettingsTests : IDisposable
     [Fact]
     public async Task Ha_status_says_Home_Assistant_rejected_the_token_and_ha_token_set_earns_it_one_fresh_attempt()
     {
-        const string token = "test-token-not-a-secret";
+        const string token = SecretPromptTests.Token;
         var profile = Directory.CreateDirectory(Path.Combine(folder, "default")).FullName;
         File.WriteAllText(Path.Combine(profile, HostSettings.FileName), """{ "homeAssistant": { "baseUrl": "http://ha.test:8123" } }""");
         AgentBridge.HomeAssistant.HaTokenStore.Save(profile, token);
@@ -530,7 +532,7 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Contains("refused: Home Assistant rejected the token: run `agent-bridge-host ha token set`", Status(), StringComparison.Ordinal);
         Assert.DoesNotContain(token, Status(), StringComparison.Ordinal);
 
-        Assert.Equal(0, HaCommands.Run(["ha", "token", "set"], profile, () => token, new StringWriter(), new StringWriter(), devBuild: false, agentHaBridge: null));
+        Assert.Equal(0, HaCommands.Run(["ha", "token", "set"], profile, () => token, new StringWriter(), new StringWriter(), devBuild: false, agentHaBridge: null, confirm: () => "yes"));
         Assert.DoesNotContain("refused:", Status(), StringComparison.Ordinal);
         var restarted = new AgentBridge.HomeAssistant.HomeAssistantClient(new Uri("http://ha.test:8123"), token, new HttpClient(new Refusing()),
             auth: new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(profile)));
@@ -542,7 +544,7 @@ public sealed class HostSettingsTests : IDisposable
     [Fact]
     public async Task Ha_token_set_fails_and_says_so_when_it_cannot_record_that_the_token_was_given_again()
     {
-        const string token = "test-token-not-a-secret";
+        const string token = SecretPromptTests.Token;
         var profile = Directory.CreateDirectory(Path.Combine(folder, "default")).FullName;
         File.WriteAllText(Path.Combine(profile, HostSettings.FileName), """{ "homeAssistant": { "baseUrl": "http://ha.test:8123" } }""");
         var record = AgentBridge.HomeAssistant.HaAuthGuard.FileFor(profile);
@@ -552,7 +554,7 @@ public sealed class HostSettingsTests : IDisposable
         Directory.CreateDirectory(record + ".tmp");
 
         var error = new StringWriter();
-        Assert.Equal(1, HaCommands.Run(["ha", "token", "set"], profile, () => token, new StringWriter(), error, devBuild: false, agentHaBridge: null));
+        Assert.Equal(1, HaCommands.Run(["ha", "token", "set"], profile, () => token, new StringWriter(), error, devBuild: false, agentHaBridge: null, confirm: () => "yes"));
         Assert.Contains("could not record", error.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(token, error.ToString(), StringComparison.Ordinal);
 
