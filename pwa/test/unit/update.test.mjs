@@ -311,6 +311,26 @@ function nowFleet(state, answers) {
 const signs = [];
 const fakeSign = async (a) => { signs.push(a); return { body: 'b', by: 'y', mac: 'm' }; };
 
+for (const kind of ['ordinary', 'signed']) {
+  const press = async (answer) => {
+    const fleet = kind === 'ordinary' ? fakeFleet(() => answer) : nowFleet(ready, [answer]);
+    const control = new UpdateControl({ fleet, newRequest: () => 'r1', sign: fakeSign });
+    if (kind === 'ordinary') { await control.press('a', 'install'); } else { await control.pressNow('a'); }
+    return control.stateOf('a').note;
+  };
+  test(`retryAt on an ${kind} update refusal uses the viewer clock`, async () => {
+    const retryAt = '2026-11-02T20:12:00.000Z';
+    const answer = { outcome: 'refused', code: 'rate-limited', retryAt, reason: 'host words nobody sees' };
+    assert.equal(await press(answer), `Not updated yet. Try again after ${clockTime(retryAt)}.`);
+  });
+  test(`retryAt missing or invalid on an ${kind} update refusal gets a plain fallback`, async () => {
+    for (const retryAt of [undefined, null, 'not a time', 123]) {
+      const answer = { outcome: 'refused', code: 'rate-limited', retryAt, reason: 'host words nobody sees' };
+      assert.equal(await press(answer), 'Not updated yet. Try again in a few minutes.');
+    }
+  });
+}
+
 test('Update now on a quiet machine goes on one press, asking nothing and accepting nothing', async () => {
   signs.length = 0;
   const fleet = nowFleet(ready, []);
