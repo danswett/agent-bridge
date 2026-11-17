@@ -203,6 +203,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         await source.RefreshAsync();
         var answers = new AnswerAuditStub(source);
         var auditProfile = Path.Combine(profile, "answer");
+        Directory.CreateDirectory(auditProfile);
         var endpoint = LocalEndpoint.For(auditProfile);
         await using var answerServer = LocalServer.Start(endpoint, LocalApi.Handler(
             new SessionService(source, new MachineInfo("host-id", "Host", "windows", "0.1.0"), answers: answers),
