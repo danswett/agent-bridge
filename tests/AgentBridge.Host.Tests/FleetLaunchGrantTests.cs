@@ -140,7 +140,11 @@ public sealed class FleetLaunchGrantTests : IDisposable
         File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
             """{"agents":{"enabled":true,"launch":{"enabled":true},"limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":10,"liveAgentLaunched":6,"agentLaunchedIdleHours":2}}}""");
         var agent = new AgentLaunchGate(folder);
-        for (var i = 0; i < 9; i++) { Assert.True(agent.CheckLaunch($"agent:{i}", Guid.NewGuid().ToString(), "hash").Allowed); }
+        for (var i = 0; i < 9; i++)
+        {
+            var admitted = agent.CheckLaunch($"agent:{i}", Guid.NewGuid().ToString(), "hash");
+            Assert.True(admitted.Allowed, admitted.Reason);
+        }
         var launcher = new AdmissionLauncher(live);
         var audit = new AgentAuditLog(folder);
         var replay = Request;
@@ -170,7 +174,9 @@ public sealed class FleetLaunchGrantTests : IDisposable
         Assert.Equal(hourly, launcher.Dispatches);
         Assert.Equal(live, launcher.LaunchedProcesses().Count);
         Assert.True(agent.CheckLaunch("agent:last", Guid.NewGuid().ToString(), "hash").Allowed);
-        Assert.False(agent.CheckLaunch("agent:overflow", Guid.NewGuid().ToString(), "hash").Allowed);
+        var overflow = agent.CheckLaunch("agent:overflow", Guid.NewGuid().ToString(), "hash");
+        Assert.False(overflow.Allowed);
+        Assert.Equal(AgentLimitVerdict.RateLimited, overflow.Reason);
     }
 
     sealed class AdmissionLauncher(int live) : ISessionLauncher
