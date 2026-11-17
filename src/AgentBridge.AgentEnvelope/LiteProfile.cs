@@ -3,7 +3,8 @@ namespace AgentBridge.AgentEnvelope;
 
 // The sender of a lite envelope: an agent session's AP1 credential, on a host whose account id
 // and relay device key (`Add`, 32 bytes as base64url) the relay has bound to it.
-public sealed record LiteSender(string Account, string Machine, string Add, string Session, string Instance, string Credential, string Agent, string Launcher);
+public sealed record LiteSender(string Account, string Machine, string Add, string Session, string Instance, string Credential, string Agent, string Launcher,
+    string Kind = "agent", string? Identity = null);
 
 public sealed record LiteTarget(string Machine, string Session, string Instance);
 
@@ -33,8 +34,8 @@ public static class LiteProfile
         if (lifetimeSeconds is < 1 or > EnvelopeBody.MaxLifetimeSeconds) { throw new EnvelopeException(Refusal.Lifetime, "expiresAt"); }
         var body = new EnvelopeBody(
             request, sender.Account, Generation, [Head],
-            new AgentPrincipal(sender.Machine, sender.Add, sender.Session, sender.Instance, sender.Credential, sender.Agent, sender.Launcher),
-            new AgentChain(request, nowSeconds, null, 1, 1, [new ChainSender(sender.Account, sender.Machine, sender.Session)]),
+            new AgentPrincipal(sender.Machine, sender.Add, sender.Session, sender.Instance, sender.Credential, sender.Agent, sender.Launcher, sender.Kind, sender.Identity),
+            new AgentChain(request, nowSeconds, null, 1, 1, [new ChainSender(sender.Account, sender.Machine, sender.Kind == "script" ? sender.Identity ?? "" : sender.Session)]),
             new AgentProvenance(null, OEligible.No, null),
             Action,
             new AgentTarget(sender.Account, target.Machine, target.Session, target.Instance),

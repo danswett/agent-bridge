@@ -58,10 +58,11 @@ public static class UnattendedCommands
         if (system.AutoLogonBlockedReason() is { } blocked) { return Fail(error, $"this machine cannot sign in by itself, so nothing was changed: {blocked}."); }
         if (system.IsAdministrator(user)) { return Fail(error, $"{user} is an administrator. Unattended start uses a dedicated standard account; nothing was changed."); }
         var (domain, name) = Split(user);
-        error.Write($"Password for {user} (not shown, kept only in Windows' secret store): ");
+        error.Write($"Password for {user} (masked, kept only in Windows' secret store): ");
         var password = readPassword();
         error.WriteLine();
         if (string.IsNullOrEmpty(password)) { return Fail(error, "no password was given; nothing was changed."); }
+        SecretInput.Received(password, output);
 
         // Rights first and the switch last: a failure part-way never leaves Windows trying to sign in without a secret.
         system.AddRight(user, Interactive);

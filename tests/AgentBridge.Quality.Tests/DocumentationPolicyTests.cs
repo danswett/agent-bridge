@@ -2,6 +2,44 @@ namespace AgentBridge.Quality.Tests;
 
 public class DocumentationPolicyTests
 {
+    [Fact]
+    public void Tester_guide_is_reachable_from_the_repository_docs_index()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var index = File.ReadAllText(Path.Combine(root, "README.md"));
+
+        Assert.Contains("](docs/tester-guide.md)", index, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Tester_guide_relative_links_resolve()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var path = Path.Combine(root, "docs", "tester-guide.md");
+        Assert.True(File.Exists(path), "The first-draft tester guide must exist.");
+        var text = File.ReadAllText(path);
+        var links = System.Text.RegularExpressions.Regex.Matches(text, @"\[[^\]]+\]\(([^)]+)\)");
+        Assert.NotEmpty(links);
+
+        foreach (System.Text.RegularExpressions.Match link in links)
+        {
+            var target = link.Groups[1].Value;
+            if (Uri.TryCreate(target, UriKind.Absolute, out _))
+                continue;
+
+            var parts = target.Split('#', 2);
+            var destination = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, parts[0]));
+            Assert.True(File.Exists(destination), $"Broken tester guide link: {target}");
+            if (parts.Length == 2)
+            {
+                var headings = File.ReadLines(destination)
+                    .Where(line => line.StartsWith('#'))
+                    .Select(line => line.TrimStart('#', ' ').Trim().ToLowerInvariant().Replace(' ', '-'));
+                Assert.Contains(parts[1], headings);
+            }
+        }
+    }
+
     [Theory]
     [InlineData("AGENTS.md")]
     [InlineData("docs/status.md")]

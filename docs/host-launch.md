@@ -22,6 +22,13 @@ counts and milliseconds only.
 
 ## Agent launch readback and cap tuning (#2173, staged C1)
 
+The local pipe refuses `session.launch` from an untraceable caller (`CallerKind.Other`)
+with `untraceableCaller` and a bounded refusal audit under `unknown:local`; it never
+treats caller-supplied identity as a person. At the machine, a person can run
+`agent-bridge-host agents revoke <session> [--profile <name>]` to invalidate that
+session's credential, including launch scope and readback, immediately. The command
+is refused inside an agent session; an already-running child is not stopped.
+
 An authenticated local agent repeats the same `session.launch` request, including its
 original settings, to read its own remembered outcome. This only reads: a new request,
 changed content or another principal's request still meets the existing refusal path.
@@ -44,6 +51,16 @@ force. Watch refusal counts and retry delays in the launch audit before and afte
 change. Refusal audit records share the pipe's per-principal windowing: 60 per hour,
 then counted summaries at most once a minute. Live limits, idle ending, restart durability
 and temporary raises are C2 work, not guarantees of this staged readback.
+
+## Dispatch facts seam (#2788, not wired)
+
+`LaunchService.CaptureDispatch` lets a trusted dispatcher take a read-only copy of
+the resolved launcher's configured extra arguments at dispatch time, together with
+the explicitly authenticated principal. Later configuration changes cannot alter
+an existing snapshot. Missing or unauthenticated identity is passed as null; empty
+or whitespace identity is also reported as null, never inferred from request fields
+or a peer label. Capturing these facts performs no launch, gate check or audit write.
+No existing launch path calls this seam yet; LocalApi and CheckLaunch wiring is #2774.
 
 ## What agent-ha-bridge does
 
@@ -458,3 +475,16 @@ screen still shows it) -> Typed ok` and `folder-trust answer 5d0c9f3e from pwa 1
 a refusal, `folder-trust answer refused from 1a2b3c4d: …`. At start the host logs whether launching
 is on and which workspaces are approved, and any problem in `config.json`'s `launch` section.
 Prompts and attachment names are never logged, only their length and count.
+
+## Fleet script launch grant
+
+A person at the machine may run `agent-bridge-host scripts grant-fleet <name>` or
+`scripts revoke-fleet <name>` (optionally `--profile <name>`); agents and script connections cannot.
+The separate `launch:fleet` grant is off for each newly minted credential.
+Activation remains closed until atomic, durable fleet hourly/live admission is wired (#2770);
+enabling a credential's grant does not yet enable dispatch.
+Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
+(empty by default). Fleet launches require an explicitly named agent, permissions and
+an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,
+transfers and attachments. A fresh worktree is checked before starting; its worker receives
+only `read+reply`, and the durable launch audit records `grant: fleet`.
