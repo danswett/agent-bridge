@@ -17,7 +17,7 @@ $port = Get-Random -Minimum 20000 -Maximum 40000
 $fake = [hashtable]::Synchronized(@{ Mode = 'deliver'; Slot = $null; Ack = $null; Delivered = [System.Collections.ArrayList]::new(); Stop = $false
     Status = 'idle'; StatusChanged = '2026-11-10T08:00:00+00:00'; Moves = $true; FlipTo = $null; Rids = [System.Collections.ArrayList]::new()
     Live = $true; Online = $true; PressRids = [System.Collections.ArrayList]::new(); Payloads = [System.Collections.ArrayList]::new()
-    Instance = 'host-run-1' })
+    Instance = 'host-run-1'; RetryResults = @{ 'first-uncertain-then-refuse' = @('refused', 'the session is waiting on a question'); 'first-uncertain-then-refuse-box' = @('refused', "something is already typed in Copilot's input box; send or clear it there first"); 'first-uncertain-then-stuck-enter' = @('unconfirmed', "the reply was typed into Copilot's input box, but it was not sent and its words are still in the box"); 'unconfirmed-once' = $null } })
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://127.0.0.1:$port/")
 $listener.Start()
@@ -63,6 +63,18 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
             }
             elseif ($slot -and $fake.Mode -eq 'retry-prep-fails') {
                 $fake.Ack = @{ rid = $slot.rid; outcome = 'unconfirmed'; at = [DateTime]::UtcNow.Ticks; error = 'the session ended before it recorded the reply' }
+            }
+            elseif ($slot -and $fake.RetryResults.ContainsKey($fake.Mode)) { $result = if ($fake.PressRids.Count -eq 1) { @('unconfirmed', 'the session ended before it recorded the reply') } else { $fake.RetryResults[$fake.Mode] }; $fake.Ack = if ($result) { @{ rid = $slot.rid; outcome = $result[0]; at = [DateTime]::UtcNow.Ticks; error = $result[1] } } else { $null } }
+            elseif ($slot -and $fake.Mode -eq 'late-first-ack-after-turn') {
+                if ($fake.PressRids.Count -eq 1) {
+                    [void]$fake.Delivered.Add($slot.text)
+                    $fake.Status = 'working'
+                    $fake.StatusChanged = '2026-11-17T08:00:01.0000000+00:00'
+                    $fake.Status = 'idle'
+                    $fake.StatusChanged = '2026-11-17T08:00:02.0000000+00:00'
+                    $fake.Ack = $null
+                }
+                else { $fake.Ack = @{ rid = $slot.rid; outcome = 'delivered'; at = [DateTime]::UtcNow.Ticks } }
             }
             elseif ($slot -and $fake.Mode -eq 'deliver' -and $fake.Rids.Contains($slot.rid)) {
                 # As the host does: a rid it already delivered is re-acked as a duplicate, and nothing is typed.
@@ -146,6 +158,8 @@ try {
     $fake.PressRids.Clear(); $fake.Delivered.Clear(); $fake.Payloads.Clear()
     $r = Send 'retry preparation can fail' 'r-prep-fails'
     Assert ($r.Exit -eq 2 -and $fake.PressRids.Count -eq 1 -and $r.Out -match 'outcome=unconfirmed') 'retry preparation failure preserves first-submission uncertainty'
+    foreach ($mode in 'first-uncertain-then-refuse', 'first-uncertain-then-refuse-box', 'first-uncertain-then-stuck-enter', 'unconfirmed-once') { $fake.Mode = $mode; $fake.Ack = $null; $fake.Instance = 'host-run-1'; $fake.Status = 'idle'; $fake.StatusChanged = '2026-11-10T08:00:00+00:00'; $fake.PressRids.Clear(); $r = Send 'uncertainty survives retry' "r-$mode"; Assert ($r.Exit -eq 2 -and $r.Out -match 'outcome=unconfirmed' -and $r.Out -match 'first submission may have been delivered') "$mode preserves first-submission uncertainty" }
+    $fake.Mode = 'late-first-ack-after-turn'; $fake.Ack = $null; $fake.Status = 'idle'; $fake.StatusChanged = '2026-11-10T08:00:00+00:00'; $fake.PressRids.Clear(); $fake.Delivered.Clear(); $r = Send 'late acknowledgement after turn' 'r-late-first-ack'; Assert ($r.Exit -eq 0 -and $fake.Delivered.Count -eq 1 -and $r.Out -match 'outcome=sent') 'late first-attempt delivery uses the original status baseline'
     foreach ($kind in 'gone', 'offline', 'gone-after-first') {
         $fake.Mode = if ($kind -eq 'gone-after-first') { $kind } else { 'deliver' }
         $fake.Live = $kind -ne 'gone'; $fake.Online = $kind -ne 'offline'
