@@ -120,4 +120,33 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
         Assert.Single(starter.Specs);
     }
+
+    [Fact]
+    public async Task A_registered_worker_that_exits_after_an_unconfirmed_answer_settles_as_failed()
+    {
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        screens.Rows = ["waiting for startup"];
+        var profile = Path.Combine(f.Root, "fleet-profile");
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
+            wait: TimeSpan.FromMilliseconds(100), credentials: new AgentCredentials(profile, "machine"),
+            agentWorktreeCheck: AgentLaunchWorktreeCheck.Check, agentWorktreeRefusalAudit: (_, _, _) => true);
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        launcher.RequestFailed += _ => failed.TrySetResult();
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot",
+            Workspace = "App", Permissions = LaunchProtocol.AllowAll };
+        const string principal = "script:machine/dispatcher";
+        var audit = new AgentAuditLog(profile);
+        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null), fleet: true);
+        Assert.Equal(LaunchOutcome.Unconfirmed, result.Outcome);
+        Assert.NotNull(source.Get(result.Session!));
+        starter.Exit(Assert.Single(starter.Pids));
+        await source.RefreshAsync();
+        await failed.Task.WaitAsync(Patience);
+        var (rows, complete) = GateAuditProjection.Load(profile);
+        Assert.True(complete);
+        Assert.Equal("failed", Assert.Single(rows, row => row.Gate?.Phase == "terminal").Outcome);
+    }
 }
