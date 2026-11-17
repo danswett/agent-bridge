@@ -99,10 +99,10 @@ function group(value, now, data) {
 
 function banner(groups) {
   const required = ['delivery', 'fleet', 'quota', 'incidents'];
+  if ((groups.incidents.state === 'fresh' && groups.incidents.data.items.some(item => item.state === 'active' && item.blockedMerges === true))
+      || (groups.fleet.state === 'fresh' && groups.fleet.data.liveSessions > 0 && groups.fleet.data.machinesOnline === 0)) { return 'Outage'; }
   if (required.some(name => groups[name].state !== 'fresh')) { return 'Degraded'; }
   const d = groups.delivery.data, f = groups.fleet.data, q = groups.quota.data, incidents = groups.incidents.data.items;
-  if (incidents.some(item => item.state === 'active' && item.blockedMerges === true)
-      || (f.liveSessions > 0 && f.machinesOnline === 0)) { return 'Outage'; }
   const stale = ['systems', 'programs'].some(name => groups[name].counted && groups[name].state !== 'fresh')
     || (groups.systems.state === 'fresh' && Object.values(groups.systems.rows).some(row => row.state === 'unavailable'));
   const degraded = stale || d.mainCi.state === 'red'
@@ -139,7 +139,8 @@ export function readStatusJson(text, now = Date.now()) {
       const rows = {};
       for (const [key, row] of Object.entries(source)) {
         if (key !== 'enabled' && key !== 'observedAt') {
-          rows[key] = row.heartbeatAgeMinutes > LIMITS.heartbeatMinutes ? { state: 'unavailable' } : { ...row };
+          const heartbeatAgeMs = row.heartbeatAgeMinutes * 60_000 + (now - Date.parse(source.observedAt));
+          rows[key] = heartbeatAgeMs > LIMITS.heartbeatMinutes * 60_000 ? { state: 'unavailable' } : { ...row };
         }
       }
       groups.systems = { state: 'fresh', counted: true, rows };

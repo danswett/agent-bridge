@@ -38,7 +38,8 @@ The document and each produced group's `observedAt` must be no more than ten min
 old. Exactly ten minutes is fresh; strictly older or future data is unavailable.
 An unavailable whole document returns no data. An unavailable group exposes no
 stale values. An enabled F-system row whose heartbeat is strictly over ten minutes
-old is unavailable; exactly ten minutes remains fresh. Disabled Systems and Programs
+old (including elapsed time since Systems was observed) is unavailable; exactly ten
+minutes remains fresh. Disabled Systems and Programs
 are shown as Unavailable and are not counted until their producer is enabled.
 Without script, the page fallback says Stale and never Operational.
 

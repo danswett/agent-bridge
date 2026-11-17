@@ -74,7 +74,10 @@ test('A missing, unknown, malformed, or oversized value fails closed', () => {
     { ...document(), quota: undefined },
   ];
   for (const value of bad) { assert.equal(read(value).state, 'unavailable'); }
-  assert.equal(readStatusJson('x'.repeat(65_537), now).state, 'unavailable');
+  const json = JSON.stringify(document());
+  const exact = json + ' '.repeat(65_536 - Buffer.byteLength(json));
+  assert.equal(readStatusJson(exact, now).state, 'available');
+  assert.equal(readStatusJson(exact + ' ', now).state, 'unavailable');
   assert.equal(readStatusJson('{', now).state, 'unavailable');
   assert.equal(readStatusJson(JSON.stringify(document()), Number.NaN).state, 'unavailable');
   const tooMany = document();
@@ -128,6 +131,14 @@ test('Enabled F-system rows become unavailable after ten minutes but accept the 
   assert.equal(read(value).groups.systems.rows.f2.state, 'live');
   value.systems.f2 = { state: 'live', heartbeatAgeMinutes: 10.01 };
   assert.deepEqual(read(value).groups.systems.rows.f2, { state: 'unavailable' });
+  value.systems.observedAt = at(9);
+  value.systems.f2 = { state: 'live', heartbeatAgeMinutes: 1 };
+  assert.equal(read(value).groups.systems.rows.f2.state, 'live');
+  value.systems.observedAt = at(9 + 1 / 60_000);
+  assert.deepEqual(read(value).groups.systems.rows.f2, { state: 'unavailable' });
+  value.systems.observedAt = at(9);
+  value.systems.f2 = { state: 'live', heartbeatAgeMinutes: 9 };
+  assert.deepEqual(read(value).groups.systems.rows.f2, { state: 'unavailable' });
 });
 
 test('Every banner threshold has a tested boundary', () => {
@@ -168,6 +179,23 @@ test('An active incident with blocked merges or lost live sessions is an outage'
   assert.equal(read(fleet).banner, 'Outage');
   fleet.fleet.liveSessions = 0;
   assert.equal(read(fleet).banner, 'Operational');
+});
+
+test('Fresh outage evidence takes precedence over unrelated stale groups, but stale evidence does not', () => {
+  const value = document();
+  value.incidents.items = [{ state: 'active', startedAt: at(), blockedMerges: true }];
+  for (const name of ['delivery', 'fleet', 'quota']) {
+    value[name].observedAt = at(11);
+    assert.equal(read(value).banner, 'Outage');
+    value[name].observedAt = at();
+  }
+  value.incidents.observedAt = at(11);
+  assert.equal(read(value).banner, 'Degraded');
+  value.fleet.machinesOnline = 0;
+  value.fleet.cpuBands = value.fleet.memoryBands = { low: 0, medium: 0, high: 0 };
+  assert.equal(read(value).banner, 'Outage');
+  value.fleet.observedAt = at(11);
+  assert.equal(read(value).banner, 'Degraded');
 });
 
 test('Only closed incident labels and fields are accepted', () => {
