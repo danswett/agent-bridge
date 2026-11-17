@@ -457,6 +457,8 @@ static Uri? SavedRelay(Identity identity)
 
 async Task<int> ServeAsync(HostHandover handover)
 {
+    var meter = new CountingTimeProvider(TimeProvider.System);
+    TimeProvider Time(string owner) => meter.ForOwner(owner);
     var identity = LoadIdentity();
     var profile = Option("--profile") ?? "default";
     var localOnly = Flag("--local-only");
@@ -504,10 +506,10 @@ async Task<int> ServeAsync(HostHandover handover)
     // its command lines are already known.
     var processes = new SystemProcessInspector();
     var attempts = new AttemptLedger(Path.Combine(identity.Folder, "answer-attempts.json"), log: Log);
-    await using var source = new SessionSource(options, processes, drivers: drivers, answerAttempted: attempts.IsClaimed);
+    await using var source = new SessionSource(options, processes, Time("discovery"), drivers: drivers, answerAttempted: attempts.IsClaimed);
     attempts.Changed += source.AnswerAttemptsChanged;
     // Five-second samples for sessions or feeds; otherwise only the minute host-log cadence.
-    await using var load = HostLoadSampling.Create(settings, source, new AgentBridge.Host.Core.Load.SystemProcessTable(), relay: !localOnly);
+    await using var load = HostLoadSampling.Create(settings, source, new AgentBridge.Host.Core.Load.SystemProcessTable(), Time("process-load"), relay: !localOnly);
     var lastLoadLog = DateTimeOffset.MinValue;
     load.Sampled += report =>
     {
@@ -542,7 +544,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // all when push.enabled is off (the shadow host beside agent-ha-bridge, which already notifies
     // the phones): no subscription is taken and nothing is sent.
     await using var push = settings.Push
-        ? new PushNotifier(source, machine, PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), identity.Account?.AccountId, Log), log: Log, trust: trustedPeers)
+        ? new PushNotifier(source, machine, PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), identity.Account?.AccountId, Log), log: Log, time: Time("push"), trust: trustedPeers)
         : null;
     if (push is not null)
     {
@@ -557,6 +559,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // clean stop is written while the sessions are still live.
     await using var restore = new RestoreRecorder(source, new RestoreOptions
     {
+        Time = Time("restore"),
         Path = Path.Combine(identity.Folder, RestoreFiles.FileName),
         Instance = machine.Instance!,
         Ends = SessionEnds.For(options),
@@ -579,7 +582,7 @@ async Task<int> ServeAsync(HostHandover handover)
     foreach (var problem in settings.UsageProblems) { Log($"config.json: {problem}"); }
     foreach (var problem in settings.SecurityProblems) { Log($"config.json: {problem}"); }
     await using var usageMonitor = settings.Usage.Publish
-        ? NewUsageMonitor(source, usageHttp, Log, () => OperatingSystem.IsWindows() ? haProbe!.Active() : null, NewUsageProbes(identity.Folder))
+        ? NewUsageMonitor(source, usageHttp, Log, () => OperatingSystem.IsWindows() ? haProbe!.Active() : null, NewUsageProbes(identity.Folder), Time("usage"))
         : null;
     Log(usageMonitor is null ? "agent usage is off (usage.publish)"
         : $"agent usage is on{(settings.Usage.CopilotAccounts.Count == 0 ? "" : $", with {settings.Usage.CopilotAccounts.Count} further Copilot account(s) (usage.copilotAccounts)")}");
@@ -588,7 +591,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // offline (#172). Only where this machine reports usage itself.
     var peerUsage = usageMonitor is null ? null
         : PeerUsage.Load(Path.Combine(identity.Folder, "usage"), machine.Id, identity.Account?.AccountId, log: Log);
-    await using var usagePeers = peerUsage is null ? null : new UsagePeers(peerUsage, machine.Id, Log) { Trust = trustedPeers };
+    await using var usagePeers = peerUsage is null ? null : new UsagePeers(peerUsage, machine.Id, Log, Time("usage-peers")) { Trust = trustedPeers };
     if (usagePeers is not null)
     {
         trustedPeers.Changed += usagePeers.RevalidateTrust;
@@ -600,7 +603,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // agent-ha-bridge's own keep-awake task is on. Off Windows there is no Dev Box.
     foreach (var problem in settings.DevBoxProblems) { Log($"config.json: {problem}"); }
     using var devCenter = new DevCenterHttp(TimeSpan.FromSeconds(30));
-    await using var keepAwake = OperatingSystem.IsWindows() ? NewKeepAwake(devCenter) : null;
+    await using var keepAwake = OperatingSystem.IsWindows() ? NewKeepAwake(devCenter, Time("keep-awake")) : null;
     keepAwake?.Start();
     // The Home Assistant connector (docs/ha-connector.md): this machine's sessions on the dashboard
     // agent-ha-bridge's writer generates. Off unless config.json turns it on, and paused while
@@ -614,7 +617,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // Made here, not beside RemoteDiagnostics, because launches record into it too (#737).
     var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
     var agentAudit = new AgentAuditLog(identity.Folder, log: Log);
-    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit);
+    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit, Time("launch"));
     launcher.SessionStarted += restore.Launched;
     launcher.StartScanning();
     var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => settings.AgentMessaging.AllowAllTargets, launcher, Log);
@@ -666,7 +669,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // rejected token is never repeated into a ban (#227); the app shows what it says.
     var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
-        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current, launchAudit: agentAudit);
+        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current, launchAudit: agentAudit, time: Time("home-assistant"));
     load.SetConsumerDemand((!localOnly && settings.LoadEnabled) || homeAssistant is not null);
     // What takes answering, replying, ending and launching away while it runs (design G5).
     // Asked afresh by what acts on it (updates, the readiness checks, the app's status).
@@ -684,7 +687,7 @@ async Task<int> ServeAsync(HostHandover handover)
         new RosterSignInAuthority(personRoster, () => ServeReadOnly() is not null, c => trustedPeers.HasRole(c, TrustedPeerStore.Person)),
         new HostSignInContextResolver(source, options.CopilotHome),
         new CopilotSignInAdapter(() => signInCopilot, options.CopilotHome),
-        () => ServeReadOnly() is not null);
+        () => ServeReadOnly() is not null, Time("phone-sign-in"));
     Log(signIn is not null ? $"sign-in from devices is on for Copilot (permissions.phoneSignIn); {CopilotDeviceCommand.SideEffects} while it runs"
         : settings.PhoneSignIn ? "sign-in from devices is set (permissions.phoneSignIn) but off: it needs Windows and Copilot's .exe, found as launching finds it"
         : "sign-in from devices is off (permissions.phoneSignIn)");
@@ -701,7 +704,7 @@ async Task<int> ServeAsync(HostHandover handover)
         var interrupted = plannedStops.RestartToken();
         _ = Task.Run(() => restart.RunAsync(interrupted));
     }
-    using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost, () => stop.IsCancellationRequested));
+    using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost, () => stop.IsCancellationRequested), Time("departure"));
     // Restart from a person's device through the relay (#801, docs/protocol/v1-sessions.md, "Managing
     // a machine"), every planned departure through one quiet lease (#805). ServeReadOnly is the
     // acting answer (G5's Active). Update now (#1159) leaves through the same lease, its Update
@@ -712,7 +715,7 @@ async Task<int> ServeAsync(HostHandover handover)
             Log("restarting: asked by a person's device through the relay");
             RestartHost();
         },
-        push, name, Log, watchdog: departureWatchdog, otherHosts: OperatingSystem.IsWindows() ? HostUpdateGate.OtherHosts : null);
+        push, name, Log, time: Time("management"), watchdog: departureWatchdog, otherHosts: OperatingSystem.IsWindows() ? HostUpdateGate.OtherHosts : null);
     var (manage, lifecycle) = (composed.Manage, composed.Lifecycle);
     handingOver = manage.HandingOver;
     manage.Start();
@@ -724,7 +727,7 @@ async Task<int> ServeAsync(HostHandover handover)
         Path.Combine(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, "app"), log: Log);
     using var haltHttp = new HttpClient();
     var haltSource = new GitHubHaltListSource(haltHttp, haltDiscovery);
-    var updates = new UpdateService(HostVersion(), Log)
+    var updates = new UpdateService(HostVersion(), Log, Time("updates"))
     {
         ReadHaltPolicy = haltSource.ReadSnapshotAsync,
         ReadOnly = ServeReadOnly,
@@ -742,12 +745,13 @@ async Task<int> ServeAsync(HostHandover handover)
         () => source.Held,
         () => settings.ReadOnly ? (settingsProblem is null ? DiagnosticsReadOnly.ConfigReadOnly : DiagnosticsReadOnly.ConfigProblem, null)
             : RemoteDiagnostics.AgentHaBridge(g5),
-        log: Log);
+        time: Time("remote-diagnostics"), log: Log);
     var fleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder);
-    var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare, name: fleetNames.Get, log: Log);
+    var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare, name: fleetNames.Get, time: Time("fleet-publication"), log: Log);
     var loadService = new LoadService(source, () => load.Current, () => settings.LoadEnabled, Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
+        Time = Time("sessions"),
         LoadEnabled = () => settings.LoadEnabled,
         Load = loadService,
         Drivers = drivers,
@@ -785,7 +789,7 @@ async Task<int> ServeAsync(HostHandover handover)
     {
         Log(refreshed);
     }
-    await using var intake = StartIntake(haProbe, () => restore.JudgingEndings, diagnosticsJournal, stop.Token);
+    await using var intake = StartIntake(haProbe, () => restore.JudgingEndings, diagnosticsJournal, stop.Token, Time("hook-intake"));
     runningIntake = intake;
 
     // The desktop app's way in (docs/protocol/local-pipe.md): the same sessions ops, and the
@@ -837,7 +841,7 @@ async Task<int> ServeAsync(HostHandover handover)
         ? new AgentCliSignInService(identity.Folder, agentHomes, agentLocator, agentLocator.Refresh,
             new WindowsAgentStarter(), agentProbes, CheckAgentMutation, stop.Token) : null;
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
-        settings.Launch, agentLocator, agentProbes, ServeReadOnly, intake);
+        settings.Launch, agentLocator, agentProbes, ServeReadOnly, intake, time: Time("agent-readiness"));
     var launchConfiguration = JsonSerializer.Serialize(settings.Launch, ProtocolJson.Options);
     string? VerificationUnavailable()
     {
@@ -852,9 +856,10 @@ async Task<int> ServeAsync(HostHandover handover)
         return null;
     }
     await using var agentVerification = OperatingSystem.IsWindows()
-        ? new AgentVerificationService(source, launcher, intake, VerificationUnavailable, Log, stop.Token) : null;
+        ? new AgentVerificationService(source, launcher, intake, VerificationUnavailable, Log, stop.Token, time: Time("agent-verification")) : null;
     var control = new HostControl(new HostControlOptions
     {
+        Time = Time("host-control"),
         Profile = profile,
         Folder = identity.Folder,
         Version = HostVersion(),
@@ -926,7 +931,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
     var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster();
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit, meter: meter), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
@@ -1106,7 +1111,7 @@ async Task<int> ServeAsync(HostHandover handover)
 // Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
 // the profile's config.json approves, and on Windows only for now. The agent starts in a console
 // of its own on this desktop, so the host must run here, as the user, unelevated.
-LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate, IRestorePending restore, ILaunchCredentials? credentials, IDiagnosticsJournal journal, string machineName, AgentAuditLog audit)
+LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate, IRestorePending restore, ILaunchCredentials? credentials, IDiagnosticsJournal journal, string machineName, AgentAuditLog audit, TimeProvider time)
 {
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
@@ -1116,6 +1121,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
     var launchHttp = new UsageHttp(TimeSpan.FromSeconds(15));
     var launcher = new LaunchService(deliveryGate, source, probe, injector, starter, agentLocator, new AgencyCatalog(new BatchFileRunner(new CommandRunner()), log: Log), new LaunchServiceOptions
     {
+        Time = time,
         MachineName = machineName,
         CopilotHome = options.CopilotHome,
         ClaudeHome = options.ClaudeHome,
@@ -1142,11 +1148,11 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
 
 // Each agent's allowance as config.json's usage section says to read it: at its pace, with its
 // further Copilot accounts.
-UsageMonitor NewUsageMonitor(ISessionSource source, IUsageHttp http, Action<string> log, Func<string?>? agentHaBridge = null, UsageProbes? probes = null)
+UsageMonitor NewUsageMonitor(ISessionSource source, IUsageHttp http, Action<string> log, Func<string?>? agentHaBridge = null, UsageProbes? probes = null, TimeProvider? time = null)
 {
     var usageOptions = UsageOptions.For(options, settings.Usage);
-    return new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: log, accounts: settings.Usage.CopilotAccounts, probes: probes), source, usageOptions,
-        agentHaBridge: agentHaBridge, log: log);
+    return new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), time: time, log: log, accounts: settings.Usage.CopilotAccounts, probes: probes), source, usageOptions,
+        time: time, agentHaBridge: agentHaBridge, log: log);
 }
 
 // What lets Claude Code and Codex read their own allowance (#200): only for serve, which is there
@@ -1170,8 +1176,9 @@ UsageProbes NewUsageProbes(string folder)
 // The Dev Box keep-awake as config.json's devBox section says to run it (docs/host-config.md): az
 // through the windowless runner (az.cmd through cmd.exe), one pass at a time for this user, and
 // never while agent-ha-bridge's own keep-awake is on.
-KeepAwakeService NewKeepAwake(IDevCenterHttp http) => new(new KeepAwakeOptions
+KeepAwakeService NewKeepAwake(IDevCenterHttp http, TimeProvider? time = null) => new(new KeepAwakeOptions
 {
+    Time = time ?? TimeProvider.System,
     Settings = settings.DevBox,
     FindIdentity = FindDevBox,
     Token = new AzCliToken(new BatchFileRunner(new CommandRunner()), AzCliToken.Find),
@@ -1205,7 +1212,7 @@ void RestartSelf(bool checkStop)
 // Hook intake (docs/host-hooks.md): only for a profile that has migrated from agent-ha-bridge,
 // and only where agent-ha-bridge's daemon can be seen, since the intake must stand back
 // whenever it runs (G5). Null when off.
-HookIntake? StartIntake(AgentHaBridgeProbe? probe, Func<bool> keepEndings, IDiagnosticsJournal journal, CancellationToken cancellationToken)
+HookIntake? StartIntake(AgentHaBridgeProbe? probe, Func<bool> keepEndings, IDiagnosticsJournal journal, CancellationToken cancellationToken, TimeProvider time)
 {
     if (intakeProblem is not null) { Log(intakeProblem); }
     if (intakeState is null) { return null; }
@@ -1223,7 +1230,7 @@ HookIntake? StartIntake(AgentHaBridgeProbe? probe, Func<bool> keepEndings, IDiag
         KeepEndings = keepEndings,
         // The one journal diagnostics.get reads (#737, #802).
         Journal = journal,
-    }, new SystemProcessInspector(), log: Log);
+    }, new SystemProcessInspector(), time: time, log: Log);
     intake.Start(cancellationToken);
     var owner = intakeState.Standalone ? "this fresh installation" : $"agent-ha-bridge installation {intakeState.InstallationId}";
     Log($"hook intake is on: taking {owner}'s hook spool in {intakeState.RuntimeRoot}{(active() is { } why ? $", once it stops ({why})" : "")}");
