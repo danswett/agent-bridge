@@ -189,9 +189,18 @@ static partial class SelfTest
             await CheckPostedInput(window, check, result);
             // #2483: hosted ARM64 can lose activation to the Microsoft account popup.
             AcquireNativeForeground(window.Handle);
+            // Recycled history can retain a timestamp's focus and legitimately release the end pin.
+            // Move focus before reopening, not the viewport after the pinned-fill check has begun.
             var pinnedFocus = ById<Button>(away, "HeaderPin");
-            var pinnedFocusReady = pinnedFocus is not null
+            var pinnedFocusReady = pinnedFocus?.Focus(FocusState.Programmatic) == true;
+            await CaptureFrame(window.RootElement);
+            pinnedFocusReady &= pinnedFocus is not null
                 && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(away.XamlRoot), pinnedFocus);
+            result["historyPinnedFocusSetup"] = new
+            {
+                ready = pinnedFocusReady,
+                focus = FocusedName(window),
+            };
             check(pinnedFocusReady, "starts the pinned reopen with focus outside recycled conversation history");
             Away(window, main);
             var pinnedView = await Choose(window, main, id, "Response");
