@@ -22,6 +22,13 @@ counts and milliseconds only.
 
 ## Agent launch readback and cap tuning (#2173, staged C1)
 
+The local pipe refuses `session.launch` from an untraceable caller (`CallerKind.Other`)
+with `untraceableCaller` and a bounded refusal audit under `unknown:local`; it never
+treats caller-supplied identity as a person. At the machine, a person can run
+`agent-bridge-host agents revoke <session> [--profile <name>]` to invalidate that
+session's credential, including launch scope and readback, immediately. The command
+is refused inside an agent session; an already-running child is not stopped.
+
 An authenticated local agent repeats the same `session.launch` request, including its
 original settings, to read its own remembered outcome. This only reads: a new request,
 changed content or another principal's request still meets the existing refusal path.

@@ -142,6 +142,12 @@ public static class LocalApi
             if (authorization is not null && op.StartsWith("host.peers.", StringComparison.Ordinal)) { return authorization.Manage(op, data); }
             return await control.HandleAsync(channel, op, data);
         }
+        if (op == LaunchProtocol.Launch && callers.Classify(channel, fresh: true) is { Kind: CallerKind.Other } untraced)
+        {
+            const string why = "untraceableCaller: launching sessions requires the app or the host's own command line";
+            AuditRefusal("unknown:local", [], op, data, audit, why, refusals);
+            throw Refuse(op, untraced, why, log);
+        }
         if (op == Ops.SessionAnswer && credentials?.Of(channel) is { } answering)
         {
             // Refusals must not copy arbitrary answer fields into the audit trail.
