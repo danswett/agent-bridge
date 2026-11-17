@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { AttachmentLimits, attachmentName, base64url, prepareAttachment, uploadAttachment } from '../../js/attachments.js';
 import { CANCELLED, ReplyService } from '../../js/reply-service.js';
 import { DemoBlobStore } from '../../js/demo.js';
-import { blobIdOf, fromBase64url, openBlob, storedSize } from '../../js/blobs.js';
+import { blobIdOf, fromBase64url, maxPlain, openBlob, storedSize } from '../../js/blobs.js';
 import { HostClient, HostError } from '../../js/host-client.js';
 import { SentImages } from '../../js/sent-images.js';
 
@@ -245,6 +245,15 @@ test('a file over 256 KiB goes as it is where the machine takes large files, and
     { message: 'logs.zip is 3.0 MiB, over the 2.0 MiB limit for an attachment' });
 });
 
+test('the host attachment limit is enforced before reading even if the advertised limit is higher', async () => {
+  const oversized = {
+    name: 'large.bin', type: 'application/octet-stream', size: AttachmentLimits.blobBytes + 1,
+    arrayBuffer: async () => assert.fail('an oversized file must not be read'),
+  };
+  await assert.rejects(prepareAttachment(oversized, { largeMax: AttachmentLimits.blobBytes * 2 }),
+    { message: 'large.bin is 100.0 MiB, over the 100.0 MiB limit for an attachment' });
+});
+
 // A host's attachment.start for files from the blob store, as AttachmentStore takes them: it
 // fetches from the store, opens and checks the file, then reports it complete.
 function blobHost(store, { fail = null } = {}) {
@@ -269,6 +278,20 @@ function blobHost(store, { fail = null } = {}) {
   };
   return { client, log, got };
 }
+
+test('a blob at the current relay limit is sent and one byte over is refused before upload', async () => {
+  const store = new DemoBlobStore({ max: 512 * 1024 });
+  const host = blobHost(store);
+  const limit = maxPlain(store.max);
+  const atLimit = await prepareAttachment(file(filled(limit), 'at.png', 'image/png'), { uuid: ids(), largeMax: 2 * 1024 * 1024 });
+  await uploadAttachment(host.client, atLimit, () => {}, { blobs: store, hostId: 'h1', pollMs: 1 });
+  assert.deepEqual(host.got.get(atLimit.id), atLimit.bytes);
+  const before = store.log.length;
+  const over = await prepareAttachment(file(filled(limit + 1), 'over.bin'), { uuid: ids(), largeMax: 2 * 1024 * 1024 });
+  await assert.rejects(uploadAttachment(host.client, over, () => {}, { blobs: store, hostId: 'h1' }),
+    { fromHost: true, message: "over.bin is over the current 512 KiB limit for the relay's blob store" });
+  assert.equal(store.log.length, before);
+});
 
 test('a large file is sealed, uploaded once for the machine, named to it with its key, and watched until the machine has it', async () => {
   const store = new DemoBlobStore();
