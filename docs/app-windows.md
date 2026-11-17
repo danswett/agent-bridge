@@ -30,6 +30,19 @@ shows the window: a start at sign-in or a toast launch leaves it pending for the
 
 ## Decisions
 
+### UI hang evidence
+
+Part of [#2726](https://github.com/danswett/agent-bridge/issues/2726), slice B.
+A background watchdog checks the existing one-second UI heartbeat. After 30 seconds
+without a beat it atomically replaces the profile's `run-marker.json` under
+`Paths.AppData` with one hang record: time, managed UI thread id, seconds stalled,
+and up to 20 recent AppLog stages. Free-text details and unknown messages are omitted,
+so no transcript, path or secret is copied. A new beat rearms detection; ticks during
+the same hang do not write again. Self-tests never start the watchdog, and quitting
+disposes it (hiding to the tray does not). AppLog/CrashLog remain the existing logs.
+Startup/clean-exit markers (A), recovery/submission (C), and state recovery (D) are
+separate work. This slice makes no network request and adds no submission path.
+
 Settings' **Reply box** group offers **Return key in replies**: **New line** (the
 unchanged default, Ctrl+Enter sends) or **Send** (Enter sends, Shift+Enter makes a
 new line, Ctrl+Enter still sends). The choice is local to this device/profile and

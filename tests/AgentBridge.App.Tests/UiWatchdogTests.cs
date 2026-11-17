@@ -68,7 +68,7 @@ public sealed class UiWatchdogTests : IDisposable
         clock.Advance(TimeSpan.FromSeconds(30));
         using var json = JsonDocument.Parse(File.ReadAllText(Marker));
         var lines = json.RootElement.GetProperty("Hang").GetProperty("LastLogLines")
-            .EnumerateArray().Select(e => e.GetString()).ToArray();
+            .EnumerateArray().Select(e => e.GetString()!).ToArray();
         Assert.Equal(["settings not saved: [details omitted]", "[message omitted]",
             "the host did not start: [details omitted]"], lines);
     }

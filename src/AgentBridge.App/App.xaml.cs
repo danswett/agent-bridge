@@ -18,6 +18,8 @@ public partial class App : Application
     MainWindow? window;
     TrayIcon? tray;
     DispatcherTimer? timer;
+    UiWatchdog? watchdog;
+    long uiHeartbeat;
     DispatcherTimer? updateTimer;
     AutoUpdater? autoUpdater;
     UpdateReporter? updateReporter;
@@ -193,9 +195,14 @@ public partial class App : Application
         }
 
         tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, AppAssets.Icon), () => ShowWindow(null, null), window.FeedbackFromTray, Quit);
+        uiHeartbeat = TimeProvider.System.GetTimestamp();
+        watchdog = new UiWatchdog(TimeProvider.System, () => Interlocked.Read(ref uiHeartbeat),
+            TimeSpan.FromSeconds(30), Environment.CurrentManagedThreadId,
+            new RunMarker(Path.Combine(appData, options.Profile)), AppLog.Tail, AppLog.Write);
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += (_, _) =>
         {
+            Interlocked.Exchange(ref uiHeartbeat, TimeProvider.System.GetTimestamp());
             main.Tick();
             if (link is RelayFleetLink relay)
             {
@@ -391,6 +398,7 @@ public partial class App : Application
     {
         if (quitting) { return; }
         quitting = true;
+        watchdog?.Dispose();
         timer?.Stop();
         updateTimer?.Stop();
         // What was seen since the last tick's flush (SessionOrder.MarkSeen).
