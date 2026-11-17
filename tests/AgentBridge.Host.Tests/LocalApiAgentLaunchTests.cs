@@ -25,10 +25,11 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
     }
 
     public void Dispose() => Directory.Delete(root, true);
-    void Policy(bool enabled = true, int live = 6) => File.WriteAllText(Path.Combine(root, HostSettings.FileName),
+    void Policy(bool enabled = true, int live = 6, int machine = 10, int attempts = 20) => File.WriteAllText(Path.Combine(root, HostSettings.FileName),
         JsonSerializer.Serialize(new { agents = new { enabled = true, launch = new { enabled },
             inbound = new { local = new { launch = new { workspaces = new[] { "App" }, agents = new[] { "claude" }, permissions = "ask" } } },
-            limits = new { launchesPerOriginPerHour = 3, launchesPerMachinePerHour = 10, liveAgentLaunched = live, agentLaunchedIdleHours = 2 } } }));
+            limits = new { launchesPerOriginPerHour = 3, launchesPerMachinePerHour = machine,
+                launchAttemptsPerOriginPerHour = attempts, liveAgentLaunched = live, agentLaunchedIdleHours = 2 } } }));
 
     void Authenticate(string scope = AgentProtocol.ScopeReadReplyLaunch, int depth = 0, string launch = "launch")
     {
@@ -126,6 +127,60 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task A_prestart_refund_preserves_prior_successful_hourly_charges()
+    {
+        Policy(machine: 2);
+        Assert.Equal(LaunchOutcome.Started, (await Launch(Body())).Outcome);
+        launcher.BeforeStartOutcome = LaunchOutcome.Refused;
+        Assert.Equal(LaunchOutcome.Refused, (await Launch(Body())).Outcome);
+        launcher.BeforeStartOutcome = null;
+        Assert.Equal(LaunchOutcome.Started, (await Launch(Body())).Outcome);
+        Assert.Contains("rate-limited", (await Launch(Body())).Reason);
+        Assert.Equal(2, launcher.Starts);
+    }
+
+    [Theory]
+    [InlineData(LaunchOutcome.Refused)]
+    [InlineData(LaunchOutcome.Busy)]
+    public async Task A_proven_prestart_refusal_refunds_hourly_and_live_slots(LaunchOutcome outcome)
+    {
+        Policy(live: 1, machine: 1);
+        launcher.BeforeStartOutcome = outcome;
+        for (var i = 0; i < 3; i++) { Assert.Equal(outcome, (await Launch(Body())).Outcome); }
+        launcher.BeforeStartOutcome = null;
+        Assert.Equal(LaunchOutcome.Started, (await Launch(Body())).Outcome);
+        Assert.Contains("live-limit", (await Launch(Body())).Reason);
+        Assert.Equal(1, launcher.Starts);
+    }
+
+    [Theory]
+    [InlineData(LaunchOutcome.Unconfirmed)]
+    [InlineData(LaunchOutcome.Failed)]
+    public async Task An_uncertain_dispatch_keeps_its_live_reservation(LaunchOutcome outcome)
+    {
+        Policy(live: 1);
+        launcher.BeforeStartOutcome = outcome;
+        Assert.Equal(outcome, (await Launch(Body())).Outcome);
+        launcher.BeforeStartOutcome = null;
+        Assert.Contains("live-limit", (await Launch(Body())).Reason);
+        Assert.Equal(0, launcher.Starts);
+    }
+
+    [Fact]
+    public async Task A_refunded_request_stays_remembered_and_refusals_still_spend_attempts()
+    {
+        Policy(attempts: 2);
+        var body = Body();
+        launcher.BeforeStartOutcome = LaunchOutcome.Refused;
+        Assert.Equal(LaunchOutcome.Refused, (await Launch(body)).Outcome);
+        launcher.BeforeStartOutcome = null;
+        Assert.Contains("duplicate", (await Launch(body)).Reason);
+        Assert.Equal(LaunchOutcome.Started, (await Launch(Body())).Outcome);
+        Assert.Contains("rate-limited", (await Launch(Body())).Reason);
+        Assert.Equal(1, launcher.Starts);
+    }
+
+    [Fact]
     public async Task The_hourly_cap_refuses_the_fourth_launch_and_records_the_reason()
     {
         for (var i = 0; i < 3; i++) { Assert.Equal(LaunchOutcome.Started, (await Launch(Body())).Outcome); }
@@ -150,6 +205,7 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
         public bool Available => true;
         public int Starts;
         public string? Principal;
+        public LaunchOutcome? BeforeStartOutcome;
         public string[] Extras = [];
         public Action? BeforePrepare;
         readonly Dictionary<string, LaunchResult> results = [];
@@ -167,6 +223,7 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
         public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare, CancellationToken cancellationToken = default)
         {
             BeforePrepare?.Invoke();
+            if (BeforeStartOutcome is { } outcome) { return Task.FromResult(new LaunchResult(outcome, "prestart outcome")); }
             if (prepare(Guid.NewGuid()) is not { } registered) { return Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "prestart refusal")); }
             Starts++;
             Principal = peer;
