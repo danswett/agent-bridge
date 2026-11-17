@@ -73,7 +73,19 @@ static partial class SelfTest
             var standard = t * t * (3 - 2 * t);
             check(elapsed < 120 && progress > standard + 0.12,
                 $"interrupted shift decelerates toward its new position ({elapsed:0} ms, {progress:0.00} progress)");
-            check(Math.Abs(target - later) > 1, $"retarget is still moving before motion is disabled ({later}, {target})");
+            await Task.Delay(250);
+            items.Remove(added);
+            list.UpdateLayout();
+            await Task.Delay(40);
+            items.Insert(0, added);
+            list.UpdateLayout();
+            var retarget = ElementCompositionPreview.GetElementVisual(neighbour).TryGetAnimationController("Offset");
+            retarget?.Pause();
+            if (retarget is not null) { retarget.Progress = 0.25f; }
+            await CaptureFrame(root);
+            var paused = TrackedTop();
+            check(retarget is not null && Math.Abs(target - paused) > 1,
+                $"retarget is paused before motion is disabled ({paused}, {target})");
             animations = false;
             shifts.Changing([]);
             await CaptureFrame(root);
@@ -81,13 +93,19 @@ static partial class SelfTest
                 "disabling motion settles an interrupted shift without another list change");
             animations = true;
             shifts.Changing([]);
+            var implicitStart = TrackedTop();
             items.Insert(0, first);
             list.UpdateLayout();
             var reducedSlot = LayoutInformation.GetLayoutSlot(neighbour).Y;
-            await CaptureFrame(root);
-            var implicitMove = TrackedTop();
-            check(implicitMove < reducedSlot - 1 && implicitMove > target,
-                $"row is moving before its implicit shift is disabled ({implicitMove}, {reducedSlot})");
+            var implicitMove = double.NaN;
+            for (var sample = 0; sample < 4; sample++)
+            {
+                await CaptureFrame(root);
+                implicitMove = TrackedTop();
+                if (implicitMove < reducedSlot - 1 && implicitMove > implicitStart + 1) { break; }
+            }
+            check(implicitMove < reducedSlot - 1 && implicitMove > implicitStart + 1,
+                $"row is moving before its implicit shift is disabled ({implicitStart}, {implicitMove}, {reducedSlot})");
             animations = false;
             shifts.Changing([]);
             await CaptureFrame(root);
