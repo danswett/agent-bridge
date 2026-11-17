@@ -11,6 +11,8 @@ public sealed record HaConnectorOptions
 {
     // The computer's name, as agent-ha-bridge keys everything per machine on it.
     public required string MachineName { get; init; }
+    // This host process's run id, used to fence retries across restarts.
+    public string? MachineInstance { get; init; }
     // The host's version, for the machine row's version.
     public required string Version { get; init; }
     public bool Dev { get; init; }
@@ -988,7 +990,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             nodes = published.ToDictionary(p => p.Key, p => p.Value.Node, StringComparer.Ordinal);
         }
         var capabilities = HaPayloads.Capabilities(helperExists, options.Dev, LaunchCapabilities());
-        var attributes = HaPayloads.GlobalAttributes(descriptors, options.MachineName, Slug, capabilities, now, source.Held?.Reason ?? "");
+        var attributes = HaPayloads.GlobalAttributes(descriptors, options.MachineName, Slug, capabilities, now, source.Held?.Reason ?? "", instance: options.MachineInstance);
         // The signature leaves the load out: its figures change every sample and would republish
         // every pass; they ride along on a change or after LoadRefresh.
         var signature = Signature(attributes);

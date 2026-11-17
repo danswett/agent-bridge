@@ -471,7 +471,7 @@ public static class HaPayloads
 
     // Publish-CopilotMqttGlobalStatus's attributes. discoveryHeld is what holds the host's
     // discovery, as Get-DaemonDiscoveryHoldSummary words it for the status line, or "".
-    public static JsonObject GlobalAttributes(IEnumerable<Descriptor> sessions, string machineName, string slug, JsonObject     capabilities, DateTimeOffset now, string discoveryHeld = "", JsonObject? load = null)
+    public static JsonObject GlobalAttributes(IEnumerable<Descriptor> sessions, string machineName, string slug, JsonObject capabilities, DateTimeOffset now, string discoveryHeld = "", JsonObject? load = null, string? instance = null)
     {
             var attributes = new JsonObject
             {
@@ -489,6 +489,7 @@ public static class HaPayloads
         ["discovery_held"] = discoveryHeld,
         ["updated"] = Stamp(now),
         };
+        if (!string.IsNullOrWhiteSpace(instance)) { attributes["instance"] = instance; }
         if (load is not null) { attributes["load"] = load; }
         return attributes;
     }

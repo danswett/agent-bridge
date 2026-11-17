@@ -63,19 +63,31 @@ else {
   else { [Console]::Error.WriteLine("No session named '$Session' was found. Use its full session id or agent_bridge_<16 hex> node."); exit 1 }
 }
 
-function Assert-NodeLive {
+function Assert-NodeLive([switch]$Retry) {
   try { $states = Get-Json 'states' }
-  catch { Complete-Reply 'unconfirmed' 1 'Not delivered: receiver liveness could not be read; nothing submitted.' }
+  catch {
+    if ($Retry) { Complete-Reply 'unconfirmed' 2 'The first submission may have been delivered; receiver liveness could not be read, so the automatic retry was skipped.' }
+    Complete-Reply 'unconfirmed' 1 'Not delivered: receiver liveness could not be read; nothing submitted.'
+  }
   $lists = @($states | Where-Object { $_.entity_id -match '^sensor\.agent_bridge_.+_sessions$' })
   $owners = @($lists | Where-Object { @($_.attributes.sessions | Where-Object { $_.node -eq $node }).Count -gt 0 })
   if ($lists.Count -gt 0 -and $owners.Count -eq 0) {
+    if ($Retry) { Complete-Reply 'unconfirmed' 2 "The first submission may have been delivered; $node is no longer listed by a host, so the automatic retry was skipped." }
     Complete-Reply 'node-gone' 1 "Not delivered: $node is absent from the host session lists."
   }
   if ($owners.Count -eq 1 -and $owners[0].state -notin 'unavailable', 'unknown') {
     $onlineId = $owners[0].entity_id -replace '^sensor\.', 'binary_sensor.' -replace '_sessions$', '_online'
     $online = @($states | Where-Object { $_.entity_id -eq $onlineId })
-    if ($online.Count -eq 1 -and $online[0].state -eq 'on') { return }
+    if ($online.Count -eq 1 -and $online[0].state -eq 'on') {
+      $instance = [string]$owners[0].attributes.instance
+      if ($Retry -and [string]::IsNullOrWhiteSpace($instance)) {
+        Complete-Reply 'unconfirmed' 2 'The first submission may have been delivered; the receiver instance is unknown, so the automatic retry was skipped.'
+      }
+      # This is machine.instance from the host, stable only for this process run.
+      return $instance
+    }
   }
+  if ($Retry) { Complete-Reply 'unconfirmed' 2 "The first submission may have been delivered; $node has no unique online host session-list membership, so the automatic retry was skipped." }
   Complete-Reply 'unconfirmed' 1 "Not delivered: $node has no unique online host session-list membership; registration is not liveness."
 }
 
@@ -106,13 +118,19 @@ try {
   if (-not $have) { [Console]::Error.WriteLine('Another reply on this machine held the send lock for over a minute; not sent.'); exit 1 }
   $script:staleAt = $null
   try { $before = (Get-Json "states/sensor.${node}_activity").attributes.reply_ack; if ($before -and $before.rid -eq $Rid) { $script:staleAt = "$($before.at)" } } catch { }
+  $firstPayload = $null; $firstAt = $null; $firstReceiverInstance = $null
   for ($deliveryAttempt = 1; $deliveryAttempt -le 2; $deliveryAttempt++) {
     $last = 'unknown'; $pressed = $false
     for ($a = 1; $a -le $Attempts -and -not $pressed; $a++) {
-      Assert-NodeLive
+      $receiverInstance = Assert-NodeLive -Retry:($deliveryAttempt -gt 1)
+      if ($deliveryAttempt -gt 1 -and $receiverInstance -cne $firstReceiverInstance) {
+        Complete-Reply 'unconfirmed' 2 'The first submission may have been delivered; the receiver instance changed, so the automatic retry was skipped.'
+      }
       try {
-        $at = [DateTime]::UtcNow.ToString('o')
-        $payload = @{ at = $at; text = $Text; driver = 'agent'; rid = $Rid; sender = $Sender } | ConvertTo-Json -Compress
+        if ($deliveryAttempt -eq 1) {
+          $at = [DateTime]::UtcNow.ToString('o')
+          $payload = @{ at = $at; text = $Text; driver = 'agent'; rid = $Rid; sender = $Sender } | ConvertTo-Json -Compress
+        } else { $payload = $firstPayload }
         if ([Text.Encoding]::UTF8.GetByteCount($payload) -gt 60000) { Complete-Reply 'not-delivered' 1 'Message is over the 60 KB limit; not sent.' }
         Post 'services/script/agent_bridge_reply_payload' @{ node = $node; payload = $payload }
         $seen = $false
@@ -120,10 +138,22 @@ try {
           Start-Sleep -Milliseconds 700
           $got = (Get-Json "states/sensor.${node}_reply_payload").attributes.at
           if ($got -is [DateTime]) { $got = $got.ToUniversalTime().ToString('o') }
-          $seen = ($got -eq $at)
+          $expectedAt = if ($deliveryAttempt -eq 1) { $at } else { $firstAt }
+          if ($expectedAt -is [DateTime]) { $expectedAt = $expectedAt.ToUniversalTime().ToString('o') }
+          $seen = ($got -eq $expectedAt)
         }
         if (-not $seen) { $last = "the payload did not reach sensor.${node}_reply_payload (the single reply slot was overwritten or is slow)"; throw $last }
         $statusBefore = Get-Status
+        if ($deliveryAttempt -eq 1) {
+          $firstPayload = $payload
+          $firstAt = $at
+          $firstReceiverInstance = $receiverInstance
+        } else {
+          $receiverInstance = Assert-NodeLive -Retry
+          if ($receiverInstance -cne $firstReceiverInstance) {
+            Complete-Reply 'unconfirmed' 2 'The first submission may have been delivered; the receiver instance changed before retry submission, so the automatic retry was skipped.'
+          }
+        }
         # A lost HTTP response may still have pressed Send: wait for its ack before any same-rid retry.
         $pressed = $true
         Post 'services/button/press' @{ entity_id = "button.${node}_submit" }
@@ -132,7 +162,10 @@ try {
         if (-not $pressed -and $a -lt $Attempts) { Start-Sleep -Milliseconds (2000 + (Get-Random -Minimum 0 -Maximum 3000)) }
       }
     }
-    if (-not $pressed) { Complete-Reply 'not-delivered' 1 "Not delivered to $node after $Attempts attempts: $last" }
+    if (-not $pressed) {
+      if ($deliveryAttempt -gt 1) { Complete-Reply 'unconfirmed' 2 "The first submission may have been delivered; automatic retry preparation failed: $last" }
+      Complete-Reply 'not-delivered' 1 "Not delivered to $node after $Attempts attempts: $last"
+    }
 
     $deadline = [DateTime]::UtcNow.AddSeconds($AckSeconds)
     $delivered = $false; $unconfirmed = $false

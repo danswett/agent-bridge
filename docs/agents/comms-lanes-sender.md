@@ -24,6 +24,12 @@ pre-submit payload/stamp attempts, not acknowledgement retries. A lost submit HT
 response also waits for an acknowledgement before that bounded re-offer. Refusal,
 input-full, already-handled and exit 5 never cause an automatic retry.
 
+The re-offer is the exact serialized payload from the first submission, including its
+original `at` and RID. It is submitted only while the host session-list sensor's
+`instance` marker is unchanged; a missing, changed or unreadable marker skips the retry.
+Because the first submission may already have reached the session, any retry-preparation
+failure remains `unconfirmed` (exit 2), not `not-delivered`.
+
 The existing sender mutex remains unchanged; this cut adds no per-machine lock,
 host send queue, receiver FIFO or relay storage. The receiver inbox is host-local;
 its later relay write-through seam is separate. GitHub is not a live inbox.

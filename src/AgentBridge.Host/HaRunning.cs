@@ -18,7 +18,7 @@ public sealed class HaRunning : IAsyncDisposable
     HaRunning(HaConnector connector, HttpClient http, Mutex claim) { this.connector = connector; this.http = http; this.claim = claim; }
 
     public static HaRunning? Start(HostSettings settings, string folder, ISessionSource source, UsageMonitor? usage,
-        Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log, ISessionAnswerer? answers = null,
+        Func<string?>? agentHaBridge, bool devBuild, string version, string machineInstance, Action<string> log, ISessionAnswerer? answers = null,
         Func<HaReply, CancellationToken, Task<AgentBridge.Protocol.ReplyResult>>? reply = null, ISessionStopper? stops = null,
         AgentBridge.Host.Delivery.Launch.ISessionLauncher? launcher = null, IHostUpdates? updates = null, SessionDrivers? drivers = null,
         HaAuthGuard? auth = null, Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load = null, AgentAuditLog? launchAudit = null)
@@ -74,6 +74,7 @@ public sealed class HaRunning : IAsyncDisposable
         var connector = new HaConnector(new HaConnectorOptions
         {
             MachineName = machine,
+            MachineInstance = machineInstance,
             Version = version,
             Dev = devBuild,
             DetailedActivityFallback = ha.DetailedActivity,
