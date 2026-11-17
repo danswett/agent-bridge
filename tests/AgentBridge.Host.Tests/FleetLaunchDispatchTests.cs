@@ -132,6 +132,7 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         var profile = Path.Combine(f.Root, "fleet-profile");
         var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
             wait: TimeSpan.FromMilliseconds(100), credentials: new AgentCredentials(profile, "machine"),
+            account: new AllowedAccount(),
             agentWorktreeCheck: AgentLaunchWorktreeCheck.Check, agentWorktreeRefusalAudit: (_, _, _) => true);
         var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         launcher.RequestFailed += _ => failed.TrySetResult();
@@ -148,5 +149,11 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         var (rows, complete) = GateAuditProjection.Load(profile);
         Assert.True(complete);
         Assert.Equal("failed", Assert.Single(rows, row => row.Gate?.Phase == "terminal").Outcome);
+    }
+
+    sealed class AllowedAccount : ILaunchAccount
+    {
+        public Task<LaunchAccount> CheckAsync(string? expectedLogin, CancellationToken cancellationToken) =>
+            Task.FromResult(LaunchAccount.Allowed("fixture"));
     }
 }
