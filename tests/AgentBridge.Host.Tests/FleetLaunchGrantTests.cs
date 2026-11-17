@@ -255,7 +255,8 @@ public sealed class FleetLaunchGrantTests : IDisposable
         {
             var origin = $"agent:{i}";
             var request = Guid.NewGuid().ToString();
-            Assert.True(agent.CheckLaunch(origin, request, "hash").Allowed);
+            var admission = agent.CheckLaunch(origin, request, "hash");
+            Assert.True(admission.Allowed, admission.Reason);
             Assert.True(agent.LaunchFinished(origin, request));
         }
         var launcher = new AdmissionLauncher(live);
@@ -288,7 +289,9 @@ public sealed class FleetLaunchGrantTests : IDisposable
         Assert.Equal(hourly, launcher.Dispatches);
         Assert.Equal(live, launcher.LaunchedProcesses().Count);
         Assert.True(agent.CheckLaunch("agent:last", Guid.NewGuid().ToString(), "hash").Allowed);
-        Assert.False(agent.CheckLaunch("agent:overflow", Guid.NewGuid().ToString(), "hash").Allowed);
+        var overflow = agent.CheckLaunch("agent:overflow", Guid.NewGuid().ToString(), "hash");
+        Assert.False(overflow.Allowed);
+        Assert.Equal("rate-limited", overflow.Reason);
     }
 
     sealed class AdmissionLauncher(int live) : ISessionLauncher
