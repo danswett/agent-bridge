@@ -22,7 +22,7 @@ public sealed class LoadPayloadTests : IDisposable
         var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(FakeSessions.T0);
         await using var c = new HaConnector(new HaConnectorOptions
         {
-            MachineName = "M", Version = "0.1.0", StateFile = Path.Combine(folder, "c.json"), PublishLoad = publishLoad, PublishSessionLoad = sessionRows,
+            MachineName = "M", MachineInstance = "host-run-1", Version = "0.1.0", StateFile = Path.Combine(folder, "c.json"), PublishLoad = publishLoad, PublishSessionLoad = sessionRows,
             FieldPinDelay = TimeSpan.Zero, SelectDelay = TimeSpan.Zero, DiscoveryReset = TimeSpan.Zero,
             RegisteredDelay = TimeSpan.Zero, HelperStateDelay = TimeSpan.Zero,
         }, ha, sessions, () => null, null, null, time, load: report ?? Report);
@@ -47,6 +47,15 @@ public sealed class LoadPayloadTests : IDisposable
     public async Task The_sensor_carries_the_load_once_publishing_it_is_switched_on()
     {
         Assert.NotNull(await SensorLoadAsync(publish: true));
+    }
+
+    [Fact]
+    public async Task The_sessions_sensor_identifies_the_host_run()
+    {
+        var ha = await RunAsync(publishLoad: false, sessionRows: false);
+        var attributes = System.Text.Json.Nodes.JsonNode.Parse(ha.Retained[HaContract.GlobalAttributesTopic(HaContract.MachineSlug("M"))])!;
+
+        Assert.Equal("host-run-1", (string?)attributes["instance"]);
     }
 
     static readonly string[] V1Keys = ["version", "machine", "observedAt", "cpuPercent", "cpuPeakPercent", "cores", "availableMemoryMiB", "sessions", "runQueue", "runQueueAvg", "runQueueMax"];

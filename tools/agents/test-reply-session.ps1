@@ -17,7 +17,7 @@ $port = Get-Random -Minimum 20000 -Maximum 40000
 $fake = [hashtable]::Synchronized(@{ Mode = 'deliver'; Slot = $null; Ack = $null; Delivered = [System.Collections.ArrayList]::new(); Stop = $false
     Status = 'idle'; StatusChanged = '2026-11-10T08:00:00+00:00'; Moves = $true; FlipTo = $null; Rids = [System.Collections.ArrayList]::new()
     Live = $true; Online = $true; PressRids = [System.Collections.ArrayList]::new(); Payloads = [System.Collections.ArrayList]::new()
-    Updated = '2026-11-17T08:00:00.0000000+00:00' })
+    Instance = 'host-run-1' })
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://127.0.0.1:$port/")
 $listener.Start()
@@ -45,7 +45,7 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
             if ($fake.Mode -eq 'restart-after-first' -and $fake.PressRids.Count -eq 1) {
                 [void]$fake.Delivered.Add($slot.text)
                 [void]$fake.Rids.Add($slot.rid)
-                $fake.Updated = '2026-11-17T08:00:01.0000000+00:00'
+                $fake.Instance = 'host-run-2'
                 $fake.Rids.Clear()
             }
             # A status change that is not a turn, such as background agents finishing, made as Send is pressed.
@@ -97,7 +97,7 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
                 @{ entity_id = "sensor.${node}_status"; state = $fake.Status; attributes = @{ friendly_name = 'Copilot: Test receiver Status' } }
                 @{ entity_id = 'binary_sensor.agent_bridge_test_online'; state = $(if ($fake.Online) { 'on' } else { 'off' }) }
                 @{ entity_id = 'sensor.agent_bridge_test_sessions'; state = '1'; attributes = @{
-                    sessions = @($(if ($fake.Live) { @{ node = $node } })); updated = $fake.Updated
+                    sessions = @($(if ($fake.Live) { @{ node = $node } })); instance = $fake.Instance
                 } }
             )
         }
@@ -133,7 +133,7 @@ try {
         }
     }
     $fake.Mode = 'restart-after-first'; $fake.Ack = $null; $fake.Live = $true; $fake.Online = $true
-    $fake.Updated = '2026-11-17T08:00:00.0000000+00:00'; $fake.PressRids.Clear(); $fake.Delivered.Clear(); $fake.Payloads.Clear()
+    $fake.Instance = 'host-run-1'; $fake.PressRids.Clear(); $fake.Delivered.Clear(); $fake.Payloads.Clear()
     $r = Send 'do not duplicate after host restart' 'r-restart'
     Assert ($r.Exit -eq 2 -and $fake.PressRids.Count -eq 1 -and $fake.Delivered.Count -eq 1 -and $r.Out -match 'outcome=unconfirmed') 'a changed receiver instance prevents retry and preserves first-submission uncertainty'
     foreach ($kind in 'gone', 'offline', 'gone-after-first') {
