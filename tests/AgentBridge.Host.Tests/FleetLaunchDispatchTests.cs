@@ -138,14 +138,17 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
             account: new AllowedAccount(),
             agentWorktreeCheck: (_, _, _) => null, agentWorktreeRefusalAudit: (_, _, _) => true);
         var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         launcher.RequestFailed += _ => failed.TrySetResult();
+        launcher.SessionStarted += (_, _) => registered.TrySetResult();
         var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot",
             Workspace = "App", Permissions = LaunchProtocol.AllowAll };
         const string principal = "script:machine/dispatcher";
         var audit = new AgentAuditLog(profile);
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null), fleet: true);
         Assert.True(result.Outcome == LaunchOutcome.Unconfirmed, result.Reason);
-        Assert.NotNull(source.Get(result.Session!));
+        await source.RefreshAsync();
+        await registered.Task.WaitAsync(Patience);
         starter.Exit(Assert.Single(starter.Pids));
         await source.RefreshAsync();
         await failed.Task.WaitAsync(Patience);
