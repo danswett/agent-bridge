@@ -215,7 +215,19 @@ public sealed class UiThreadTests
         int count;
         readonly int total = cases.Length;
 
-        public Task<RunSummary> RunCollectionsAsync() => RunAsync();
+        public async Task<RunSummary> RunCollectionsAsync()
+        {
+            using var bus = new SynchronousMessageBus(ExecutionMessageSink, false);
+            using var cancel = new CancellationTokenSource();
+            // Exercise admission itself, not xunit's nested assembly scheduler on the caller's UI.
+            var runs = TestCases.Select(testCase =>
+                RunTestCollectionAsync(bus, testCase.TestMethod.TestClass.TestCollection, [testCase], cancel));
+            var summaries = await Task.WhenAll(runs);
+            var summary = new RunSummary();
+            foreach (var collection in summaries)
+                summary.Aggregate(collection);
+            return summary;
+        }
 
         public Task<RunSummary> RunCollectionAsync(WaitingCase testCase, IMessageBus bus, CancellationTokenSource cancel) =>
             base.RunTestCollectionAsync(bus, testCase.TestMethod.TestClass.TestCollection, [testCase], cancel);
