@@ -41,3 +41,23 @@ The same dependency-free fixture assertions can run directly with
 `replacement`, `readonly`, `no-survivors`, `partial`, `ambiguous`, `metric-values`, `entrypoint`).
 Only `entrypoint` uses a real 10 ms window; injected tests never sleep. The AST guard rejects named mutation commands,
 `Invoke-Expression` and dynamic call operators; it is a guard, not a proof.
+
+## Pure short-form CPU verdict (#2761)
+
+Dot-source the script and call `Get-EfficiencyCpuVerdict` with `Samples` and
+`ControlSamples`: three target records each from the existing output contract
+(`status` and `cpuSecondsPerMinute`). Supply the component's `Budget`; the margin
+fraction/floor, spin multiple and control ceiling are inputs, not budget-file edits.
+The function performs no sampling, waiting, process access or CI wiring.
+
+It compares the component median less the control median. Over the spin ceiling
+fails immediately; within budget plus margin passes. Borderline, missing/invalid
+samples, a failed quiet check or a noisy control request one rerun via
+`rerunRequired`, with verdict `not measured` until supplied. Call again with the
+original samples and `RerunSamples` / `RerunControlSamples` (and the corresponding
+quiet-check flags). No third attempt is accepted or requested. A noisy or invalid
+rerun stays `not measured`, never a pass. Confirmed borderline fails only with
+`BudgetsApproved = $true`; otherwise the comparison remains report-only.
+Results include the reason, attempt count, adjusted CPU, thresholds and
+`budgetComparison` (`within budget`, `within margin`, `over margin`, or
+`not measured`). Nothing writes or widens budgets.

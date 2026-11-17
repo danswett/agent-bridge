@@ -144,6 +144,84 @@ function Invoke-EfficiencyBaseline {
     }
 }
 
+function Get-EfficiencyCpuVerdict {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Samples,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $ControlSamples,
+        [Parameter(Mandatory)][ValidateScript({ [double]::IsFinite($_) -and $_ -ge 0 })][double] $Budget,
+        [ValidateScript({ [double]::IsFinite($_) -and $_ -ge 0 })][double] $MarginFraction = 0.5,
+        [ValidateScript({ [double]::IsFinite($_) -and $_ -gt 0 })][double] $MarginFloor = 0.15,
+        [ValidateScript({ [double]::IsFinite($_) -and $_ -gt 0 })][double] $SpinMultiple = 20,
+        [ValidateScript({ [double]::IsFinite($_) -and $_ -ge 0 })][double] $ControlCeiling = 0.1,
+        [bool] $BudgetsApproved = $false,
+        [bool] $QuietCheckPassed = $true,
+        [object[]] $RerunSamples,
+        [object[]] $RerunControlSamples,
+        [bool] $RerunQuietCheckPassed = $true
+    )
+    function Get-CpuMedian([object[]] $Readings) {
+        if ($Readings.Count -ne 3) { return $null }
+        foreach ($reading in $Readings) {
+            if ($reading -isnot [Collections.IDictionary] -or -not $reading.Contains('status') -or $reading.status -ne 'available' -or
+                -not $reading.Contains('cpuSecondsPerMinute')) { return $null }
+            $value = $reading.cpuSecondsPerMinute
+            if ($value -isnot [double] -and $value -isnot [float] -and $value -isnot [decimal] -and
+                $value -isnot [int] -and $value -isnot [long]) { return $null }
+            if (-not [double]::IsFinite($value) -or $value -lt 0) { return $null }
+        }
+        return @($Readings | ForEach-Object { [double]$_.cpuSecondsPerMinute } | Sort-Object)[1]
+    }
+    $margin = [math]::Max($Budget * $MarginFraction, $MarginFloor)
+    $ceiling = $SpinMultiple * [math]::Max($Budget, $MarginFloor)
+    if (-not [double]::IsFinite($Budget + $margin) -or -not [double]::IsFinite($ceiling)) {
+        throw 'CPU thresholds must be finite.'
+    }
+    $result = [ordered]@{
+        verdict = 'not measured'; reason = ''; rerunRequired = $false; attempts = 0
+        adjustedCpuSecondsPerMinute = $null; budgetComparison = 'not measured'
+        budget = $Budget; margin = $margin; spinCeiling = $ceiling
+    }
+    $attempts = @(
+        @{ samples = $Samples; control = $ControlSamples; quiet = $QuietCheckPassed }
+        @{ samples = $RerunSamples; control = $RerunControlSamples; quiet = $RerunQuietCheckPassed }
+    )
+    for ($index = 0; $index -lt 2; $index++) {
+        $attempt = $attempts[$index]; $result.attempts++
+        $component = Get-CpuMedian @($attempt.samples)
+        $control = Get-CpuMedian @($attempt.control)
+        $result.adjustedCpuSecondsPerMinute = $null; $result.budgetComparison = 'not measured'
+        if (-not $attempt.quiet) { $result.reason = 'Quiet check failed.' }
+        elseif ($null -eq $component -or $null -eq $control) { $result.reason = 'Three available finite CPU samples and control samples are required.' }
+        elseif ($control -gt $ControlCeiling) { $result.reason = 'The control is noisy.' }
+        else {
+            $adjusted = $component - $control
+            $result.adjustedCpuSecondsPerMinute = $adjusted
+            $result.budgetComparison = if ($adjusted -le $Budget) { 'within budget' }
+                elseif ($adjusted -le $Budget + $margin) { 'within margin' } else { 'over margin' }
+            if ($adjusted -gt $ceiling) {
+                $result.verdict = 'fail'; $result.reason = 'Spin ceiling exceeded.'
+                return $result
+            }
+            if ($adjusted -le $Budget + $margin) {
+                $result.verdict = 'pass'; $result.reason = $result.budgetComparison
+                return $result
+            }
+            if ($index -eq 1) {
+                $result.verdict = if ($BudgetsApproved) { 'fail' } else { 'pass' }
+                $result.reason = if ($BudgetsApproved) { 'Budget plus margin exceeded on the rerun.' }
+                    else { 'Budget comparison is report-only until approval.' }
+                return $result
+            }
+            $result.reason = 'Borderline CPU requires one rerun.'
+        }
+        if ($index -eq 0 -and $null -eq $RerunSamples -and $null -eq $RerunControlSamples) {
+            $result.rerunRequired = $true
+            return $result
+        }
+    }
+    return $result
+}
+
 function Resolve-EfficiencyProcess([int] $ProcessId, [string] $Name,
     [scriptblock] $Find = { param($name) [Diagnostics.Process]::GetProcessesByName($name) }) {
     $result = @{ processId = $null; unavailable = $null }
