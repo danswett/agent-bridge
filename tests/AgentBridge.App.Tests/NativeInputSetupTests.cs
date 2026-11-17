@@ -4,6 +4,17 @@ namespace AgentBridge.App.Tests;
 
 public sealed class NativeInputSetupTests
 {
+    [Theory]
+    [InlineData(true, false, "2026-11-20T07:59:59Z", true)]
+    [InlineData(true, true, "2026-11-20T07:59:59Z", false)]
+    [InlineData(false, false, "2026-11-20T07:59:59Z", false)]
+    [InlineData(true, false, "2026-11-20T08:00:00Z", false)]
+    [InlineData(true, false, "2026-11-20T08:00:01Z", false)]
+    public void Older_drawing_is_inconclusive_only_for_hosted_arm64_foreground_loss_before_expiry(
+        bool hostedArm64, bool foregroundMatches, string now, bool inconclusive) =>
+        Assert.Equal(inconclusive, NativeInputSetup.CanQuarantineHistoryForeground(
+            hostedArm64, foregroundMatches, DateTimeOffset.Parse(now, System.Globalization.CultureInfo.InvariantCulture)));
+
     [Fact]
     public void A_background_window_fails_before_any_later_input()
     {
