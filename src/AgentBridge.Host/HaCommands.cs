@@ -101,14 +101,6 @@ public static class HaCommands
 
     static int Connection(string folder, bool enabled, TextWriter output, TextWriter error, bool devBuild, bool canCheckAgentHaBridge)
     {
-        var (settings, problem) = HostSettings.Load(folder);
-        if (problem is not null) { error.WriteLine(problem); return 1; }
-        if (enabled && HaGate.WhyNot(settings.HomeAssistant with { Enabled = true }, devBuild,
-            HaTokenStore.Exists(folder), canCheckAgentHaBridge) is { } why)
-        {
-            error.WriteLine($"Not changed: the Home Assistant connector would be {why}.");
-            return 1;
-        }
         var audit = new AgentAuditLog(folder, log: error.WriteLine);
         var state = enabled ? "on" : "off";
         var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString(), "person:local", [],
@@ -118,8 +110,22 @@ public static class HaCommands
             error.WriteLine("Not changed: the Home Assistant control audit could not be written.");
             return 1;
         }
-        var result = ConfigCommands.Run(["config", "set", "homeAssistant.enabled", enabled ? "true" : "false"], folder, output, error);
-        if (!audit.Append(entry with { Outcome = result == 0 ? $"configured-{state}" : "failed" }))
+        var result = 1;
+        string outcome;
+        var (settings, problem) = HostSettings.Load(folder);
+        if (problem is not null) { error.WriteLine(problem); outcome = "refused"; }
+        else if (enabled && HaGate.WhyNot(settings.HomeAssistant with { Enabled = true }, devBuild,
+            HaTokenStore.Exists(folder), canCheckAgentHaBridge) is { } why)
+        {
+            error.WriteLine($"Not changed: the Home Assistant connector would be {why}.");
+            outcome = "refused";
+        }
+        else
+        {
+            result = ConfigCommands.SetAuditedHaConnection(folder, enabled, output, error);
+            outcome = result == 0 ? $"configured-{state}" : "failed";
+        }
+        if (!audit.Append(entry with { Outcome = outcome, Reason = result == 0 ? entry.Reason : $"{state}; {outcome}" }))
         {
             error.WriteLine(result == 0
                 ? "The connection setting was saved, but its terminal audit is incomplete. It takes effect only after restarting the host."

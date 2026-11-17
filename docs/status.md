@@ -493,7 +493,7 @@ agent-ha-bridge releases from this work:
 - **View only** (e.g. HOME), run at the machine in a normal PowerShell window, not from
   an agent session, then restart the host from the app:
   ```
-  $h="$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h config set delivery.readOnly true; & $h config set push.enabled false; & $h config set homeAssistant.enabled false
+  $h="$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h config set delivery.readOnly true; & $h config set push.enabled false; & $h ha off
   ```
 - **Migrate** a machine ([migration.md](migration.md)); migrate refuses on the
   publication writer. Check first, then migrate:
@@ -506,7 +506,7 @@ agent-ha-bridge releases from this work:
   Then turn the HA connector on. `ha token set` asks for a Home Assistant long-lived
   token. Restart the host from the app afterwards:
   ```
-  $h="$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h config set homeAssistant.enabled true; & $h ha token set; & $h ha status
+  $h="$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h ha token set; & $h ha on; & $h ha status
   ```
 - **Rollback:**
   ```
