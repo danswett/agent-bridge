@@ -41,6 +41,19 @@ public sealed class AgentLaunchRequestCheckTests
     public void Agent_controlled_unsafe_fields_are_refused(string fields, string reason) =>
         Assert.Contains(reason, AgentLaunchRequestCheck.Check(Request(fields), []));
 
+    [Theory]
+    [InlineData("\"profile\":\"yolo\"")]
+    [InlineData("\"profile\":\"allow-all\"")]
+    [InlineData("\"profile\":\"allow_all\"")]
+    [InlineData("\"profile\":\"ALLOW-ALL\"")]
+    [InlineData("\"profile\":\"\"")]
+    [InlineData("\"profile\":\" \"")]
+    [InlineData("\"profile\":\"--allow-all-tools\"")]
+    [InlineData("\"profile\":\"home\"")]
+    [InlineData("\"profile\":null")]
+    public void Agent_controlled_profiles_are_refused_without_echoing_the_value(string fields) =>
+        Assert.Equal("An agent launch cannot set profile.", AgentLaunchRequestCheck.Check(Request(fields), []));
+
     [Fact]
     public void Configured_extra_arguments_are_refused_without_disclosing_values()
     {

@@ -21,8 +21,9 @@ public static class AgentLaunchRequestCheck
                 case "attachments": return "An agent launch cannot set attachments.";
                 case "extraArgs": return "An agent launch cannot set extraArgs.";
                 case "agentScope": return "An agent launch cannot set agentScope.";
+                case "profile": return "An agent launch cannot set profile.";
                 case "request": case "agent": case "workspace": case "fleetName":
-                case "profile": case "model": case "effort": case "context":
+                case "model": case "effort": case "context":
                 case "permissions": case "role": case "prompt":
                     break;
                 default: return "The agent launch request contains an unsupported field.";
