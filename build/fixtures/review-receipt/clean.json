@@ -1,0 +1,6 @@
+{
+  "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "reviewerFamily": "OpenAI",
+  "verdict": "CLEAN",
+  "files": ["AGENTS.md", "build/review-receipt.ps1"]
+}

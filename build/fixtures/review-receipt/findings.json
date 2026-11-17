@@ -1,0 +1,6 @@
+{
+  "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "reviewerFamily": "Anthropic",
+  "verdict": "FINDINGS",
+  "files": ["AGENTS.md", "build/review-receipt.ps1"]
+}

@@ -88,6 +88,17 @@ readiness on their PR and yield the merge slot; a ready packet is not a merge gr
 
 Keep iterative PRs draft (fast CI only); submit readiness to Quality. Never push merely to retrigger CI; Quality owns reruns. The lifted general admission rule does not release a specific held head.
 
+### Local review receipt ledger
+Quality can record or verify local evidence with `build/review-receipt.ps1` (PowerShell 7):
+`pwsh build/review-receipt.ps1 -Action Record -Ledger <ledger.jsonl> -Head <full-sha> -Evidence <review.json>`
+Use `-Action Verify` with the same arguments to check it without writing.
+Evidence JSON has `head`, `reviewerFamily`, `verdict` (`CLEAN` or `FINDINGS`), and a nonempty `files` array.
+Files are unique repository-relative, forward-slash paths without control characters or dot segments.
+The file-list hash is SHA-256 of ordinal-sorted paths joined by LF, without a final LF.
+Keep evidence bytes unchanged: receipts also bind their SHA-256; each head/family may be recorded once.
+The append-only hash chain detects edited entries, not authenticated whole-ledger rewrites or tail removal.
+Keep trusted ledger copies; this offline tool neither posts GitHub receipts nor replaces Quality's checks.
+
 ## Tests
 
 - `dotnet test AgentBridge.slnx` runs on Windows and Linux in CI.
