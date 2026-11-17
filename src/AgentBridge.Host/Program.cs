@@ -744,7 +744,10 @@ async Task<int> ServeAsync(HostHandover handover)
             : RemoteDiagnostics.AgentHaBridge(g5),
         log: Log);
     var fleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder);
-    var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare, name: fleetNames.Get, log: Log);
+    var hostRoster = new HostRosterReader(Path.Combine(identity.Folder, "roster-pin.json"), HostRoster.Now);
+    var fleetTrust = new AgentBridge.Host.Fleet.FleetTrust(hostRoster, identity.Folder, () => identity.Account?.AccountId);
+    var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
+        name: fleetNames.Get, log: Log, sign: fleetTrust.Sign);
     var loadService = new LoadService(source, () => load.Current, () => settings.LoadEnabled, Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
@@ -924,7 +927,7 @@ async Task<int> ServeAsync(HostHandover handover)
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
-    var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster();
+    var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.VerifiedRoster);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
     try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
     catch (EndpointInUseException e)
@@ -1015,7 +1018,7 @@ async Task<int> ServeAsync(HostHandover handover)
             // Off mode: read and verify the roster in the background, log what it says, enforce nothing.
             _ = Task.Run(async () =>
             {
-                var check = await HostRoster.SyncAsync(relay, HostRoster.Now, current.Token);
+                var check = await HostRoster.SyncAsync(relay, HostRoster.Now, current.Token, hostRoster);
                 Log($"device roster (security.roster {settings.Security.Roster}): {check.Summary}");
             });
             since.Restart();

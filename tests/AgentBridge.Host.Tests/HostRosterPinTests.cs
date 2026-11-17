@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Host.Delivery.Staging;
+using AgentBridge.Host.Fleet;
 using AgentBridge.Roster;
 using AgentBridge.Transport;
 using Xunit;
@@ -42,6 +43,29 @@ public sealed class HostRosterPinTests : IDisposable
         Assert.Contains("unpinned", reader.Update(Relay("G", "B"), RosterFixture.Account).Reasons);
         Assert.Null(reader.Verified);
         Assert.False(File.Exists(PathName));
+    }
+
+    [Fact]
+    public async Task A_pinned_roster_with_the_switch_off_neither_signs_nor_supplies_registry_authority()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
+        try
+        {
+            using var key = HostSignKey.LoadOrCreate(folder, KeyStorage.Dpapi);
+            var trust = new FleetTrust(reader, folder, () => RosterFixture.Account);
+            Assert.Null(trust.VerifiedRoster());
+            var publication = new FleetPublication(new FleetPublisherTests.Source(), "machine", share: true, sign: trust.Sign);
+            Assert.True(await publication.PollAsync((record, ct) =>
+            {
+                Assert.False(record.TryGetProperty("sig", out _));
+                return Task.CompletedTask;
+            }));
+            Assert.False(reader.Verified!.AcceptHostSign);
+        }
+        finally { Directory.Delete(Path.Combine(folder, "host-sign"), recursive: true); }
     }
 
     [Fact]
