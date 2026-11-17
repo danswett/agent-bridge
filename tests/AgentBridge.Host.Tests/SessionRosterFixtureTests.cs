@@ -85,6 +85,148 @@ public sealed class SessionRosterFixtureTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_crash_is_removed_only_after_discovery_knows_the_process_is_gone(bool unreadable)
+    {
+        using var fixture = new Fixture();
+        Fixture.Append(fixture.CopilotSession(Id, 100), Copilot.User("go", 1), Copilot.TurnStart(2));
+        fixture.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        fixture.Processes.Exit(AgentKind.Copilot, 100);
+        fixture.Processes.Unreadable(AgentKind.Copilot, unreadable);
+        await source.RefreshAsync();
+        if (unreadable)
+        {
+            Assert.NotNull(source.Held);
+            AssertRow(JsonSerializer.SerializeToElement(Assert.Single(source.List().Sessions), ProtocolJson.Options), "host-id");
+            fixture.Processes.Unreadable(AgentKind.Copilot, false);
+            await source.RefreshAsync();
+        }
+        Assert.Null(source.Held);
+        Assert.Empty(source.List().Sessions);
+        Assert.Null(source.Get(Id));
+        using var subscription = source.Subscribe();
+        Assert.Equal(0, subscription.Result.Count);
+    }
+
+    [Fact]
+    public async Task A_host_restart_and_same_id_reregistration_do_not_reuse_ending_or_completion_evidence()
+    {
+        using var fixture = new Fixture();
+        Fixture.Append(fixture.CopilotSession(Id, 100), Copilot.User("go", 1), Copilot.TurnStart(2));
+        fixture.Processes.Run(AgentKind.Copilot, 100);
+        var options = fixture.Options(stateFile: Path.Combine(fixture.Root, "host-state.json"));
+        await using (var first = new SessionSource(options, fixture.Processes, fixture.Time, hostId: "host-id"))
+        {
+            await first.RefreshAsync();
+            await first.SetEndingAsync(Id, true);
+            Assert.Equal(SessionStatus.Ending, first.Get(Id)!.Status);
+        }
+        await using var restarted = new SessionSource(options, fixture.Processes, fixture.Time, hostId: "host-id");
+        await restarted.RefreshAsync();
+        Assert.Equal(SessionStatus.Working, restarted.Get(Id)!.Status);
+        AssertRow(JsonSerializer.SerializeToElement(restarted.Get(Id), ProtocolJson.Options), "host-id");
+        fixture.Processes.Exit(AgentKind.Copilot, 100);
+        await restarted.RefreshAsync();
+        Assert.Empty(restarted.Snapshot());
+        fixture.CopilotSession(Id, 101);
+        fixture.Processes.Run(AgentKind.Copilot, 101);
+        await restarted.RefreshAsync();
+        var returned = Assert.Single(restarted.List().Sessions);
+        Assert.Equal((Id, 101, SessionStatus.Working), (returned.Id, returned.ProcessId, returned.Status));
+        AssertRow(JsonSerializer.SerializeToElement(returned, ProtocolJson.Options), "host-id");
+    }
+
+    [Fact]
+    public async Task Roster_evidence_survives_the_session_budget_in_list_get_and_subscription()
+    {
+        using var fixture = new Fixture();
+        var text = new string('\u0001', 16_000);
+        Fixture.Append(fixture.CopilotSession(Id, 100), Copilot.User(text, 1),
+            Copilot.Assistant(text, 2, reasoning: text));
+        fixture.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.True(ProtocolJson.ByteCount(source.GetUnbudgeted(Id)!) > SessionBudget.MaxSessionBytes);
+        var service = new SessionService(source, new MachineInfo("host-id", "Fixture host", "windows", "0.1.0"));
+        var channel = new CaptureChannel();
+        var data = JsonSerializer.SerializeToElement(new { id = Id });
+        var list = Assert.IsType<SessionList>(await service.HandleAsync(channel, Ops.SessionsList, data));
+        var get = Assert.IsType<Session>(await service.HandleAsync(channel, Ops.SessionGet, data));
+        using var subscription = source.Subscribe();
+        Assert.True(subscription.Events.TryRead(out var upsert));
+        var sent = Assert.IsType<Session>(upsert!.Data);
+        foreach (var row in new[] { Assert.Single(list.Sessions), get, sent })
+        {
+            Assert.InRange(ProtocolJson.ByteCount(row), 1, SessionBudget.MaxSessionBytes);
+            AssertRow(JsonSerializer.SerializeToElement(row, ProtocolJson.Options), "host-id");
+        }
+        Assert.InRange(ProtocolJson.ByteCount(list), 1, ProtocolJson.MaxMessageBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Removal_bypasses_both_a_queued_upsert_and_a_held_quiet_change(bool patch)
+    {
+        using var fixture = new Fixture();
+        var events = fixture.CopilotSession(Id, 100);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2));
+        fixture.Processes.Run(AgentKind.Copilot, 100);
+        var options = fixture.Options();
+        await using var source = new SessionSource(options, fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        var service = new SessionService(source, new MachineInfo("host-id", "Fixture host", "windows", "0.1.0"))
+            { Time = fixture.Time };
+        SessionService.Feed? captured = null;
+        service.FeedCreated += created => captured = (SessionService.Feed)created;
+        var channel = new CaptureChannel();
+        var reply = Assert.IsType<ChannelReply>(await service.HandleAsync(channel, Ops.SessionsSubscribe,
+            JsonSerializer.SerializeToElement(new { patch })));
+        var running = reply.Then(channel);
+        try
+        {
+            await channel.NextAsync();
+            await channel.NextAsync();
+            await service.HandleAsync(channel, Ops.SessionsFocus, JsonSerializer.SerializeToElement(new { visible = false }));
+            fixture.Time.Advance(TimeSpan.FromSeconds(1));
+            Fixture.Append(events, Copilot.Assistant("first", 3));
+            await source.RefreshAsync();
+            var first = await channel.NextAsync();
+            fixture.Time.Advance(options.CoalesceInterval);
+            Fixture.Append(events, Copilot.Assistant("quiet held", 4));
+            await source.RefreshAsync();
+            await HostWait.UntilAsync(() => captured!.Held == 1, "quiet roster change held", Patience);
+            Fixture.Append(events, Copilot.Assistant("coalesced", 5));
+            await source.RefreshAsync();
+            Assert.Equal("coalesced", source.Get(Id)!.Activity.Response);
+            var beforeRemoval = fixture.Time.GetUtcNow();
+            fixture.Processes.Exit(AgentKind.Copilot, 100);
+            await source.RefreshAsync();
+            var removed = await channel.NextAsync();
+            Assert.Equal((Events.SessionRemove, first.Seq + 1), (removed.Name, removed.Seq));
+            Assert.Equal(Id, removed.Data.GetProperty("id").GetString());
+            Assert.Equal(beforeRemoval, fixture.Time.GetUtcNow());
+            Assert.Equal(0, captured!.Held);
+            Assert.Empty(source.List().Sessions);
+            Assert.Null(source.Get(Id));
+            fixture.Time.Advance(service.QuietInterval + options.CoalesceInterval);
+            using var fresh = source.Subscribe();
+            Assert.Equal(0, fresh.Result.Count);
+            Assert.True(fresh.Events.TryRead(out var synced));
+            Assert.Equal(Events.SessionsSynced, synced!.Name);
+            Assert.False(fresh.Events.TryRead(out _));
+        }
+        finally
+        {
+            channel.Close();
+            await running.WaitAsync(Patience);
+        }
+    }
+
     static void AssertRow(JsonElement row, string machine)
     {
         Assert.Equal(machine, row.GetProperty("machine").GetString());
