@@ -58,13 +58,16 @@ public sealed partial class HaConnector
         public JsonObject? Ack { get => Log.Ack; set => Log.Ack = value; }
         public void TakeRid(string rid) => Log.TakeRid(rid);
         public void ForgetRid(string rid) => Log.ForgetRid(rid);
-        public bool IsHandled(string stamp) => Handled.Contains(stamp, StringComparer.Ordinal);
+        public bool IsHandled(string stamp) { lock (Handled) { return Handled.Contains(stamp, StringComparer.Ordinal); } }
 
         public void Handle(string stamp)
         {
-            if (IsHandled(stamp)) { return; }
-            Handled.Add(stamp);
-            if (Handled.Count > 64) { Handled.RemoveAt(0); }
+            lock (Handled)
+            {
+                if (IsHandled(stamp)) { return; }
+                Handled.Add(stamp);
+                if (Handled.Count > 64) { Handled.RemoveAt(0); }
+            }
         }
     }
 
@@ -206,7 +209,7 @@ public sealed partial class HaConnector
             replies.TryDequeue(out _);
             underWay.TryRemove(new KeyValuePair<string, long>(done.SessionId, done.Delivery));
             if (p is not null) { p.Reply.ReadAgain = true; }
-            else if (!underWay.ContainsKey(done.SessionId) && !source.Snapshot().Any(s => s.Id == done.SessionId)) { ridLogs.TryRemove(done.SessionId, out _); }
+            else if (!underWay.ContainsKey(done.SessionId) && !source.Snapshot().Any(s => s.Id == done.SessionId)) { inbox?.Forget(HaContract.NodeId(done.SessionId)); ridLogs.TryRemove(done.SessionId, out _); }
         }
     }
 
@@ -220,6 +223,7 @@ public sealed partial class HaConnector
         if (done.Rid is { } rid)
         {
             var outcome = result.Outcome switch { AnswerOutcome.Delivered => "delivered", AnswerOutcome.Unconfirmed => "unconfirmed", _ => "refused" };
+            CompleteInbox(p.Node, rid, outcome);
             if (outcome == "refused") { p.Reply.ForgetRid(rid); }
             else if (p.Reply.Rids.ContainsKey(rid)) { p.Reply.Rids[rid] = outcome; }
             p.Reply.Ack = MakeAck(rid, done.Sender, outcome);
@@ -313,6 +317,7 @@ public sealed partial class HaConnector
         p.Reply.Waiting.Clear();
         p.Reply.Boundary = boundary;
         p.Reply.Baselined = true;
+        p.Reply.ReadAgain = inbox is not null;
         return true;
     }
 
@@ -350,6 +355,8 @@ public sealed partial class HaConnector
             if (read == CardRead.Delivering) { return; }
         }
         var current = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
+        if (current.Present && StoreInbox(new HaTrigger(SessionEntities.ReplyPayload(p.Node), current.Snapshot!))) { await InboxReceiptsAsync(ct); }
+        if (await DispatchInboxAsync(sessionId, p, ct)) { return; }
         if (current.Present && await CardReplyAsync(sessionId, p, current.Snapshot!, ct) != CardRead.Nothing) { return; }
         await BoxReplyAsync(sessionId, p, now, ct);
     }
@@ -369,9 +376,9 @@ public sealed partial class HaConnector
     // Send-DaemonCardPayload: one publish from the reply card, unless it was read before. Says
     // whether it was nothing to send, taken without a delivery (refused, or words for a question),
     // or is being delivered.
-    async Task<CardRead> CardReplyAsync(string sessionId, Published p, HaState state, CancellationToken ct)
+    async Task<CardRead> CardReplyAsync(string sessionId, Published p, HaState state, CancellationToken ct, bool fromInbox = false)
     {
-        if (!IsStamp(state.State) || p.Reply.IsHandled(state.State)) { return CardRead.Nothing; }
+        if (!IsStamp(state.State) || (!fromInbox && p.Reply.IsHandled(state.State))) { return CardRead.Nothing; }
         var stamp = state.State;
         var a = state.Attributes;
         var attributes = a.ValueKind == JsonValueKind.Object;

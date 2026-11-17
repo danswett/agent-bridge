@@ -99,7 +99,11 @@ public sealed partial class HaConnector
     {
         if (LaunchHit(hit) || UpdateHit(hit)) { return; }
         if (MixedReplyPayload(hit.EntityId, hit.State)) { return; }
-        hits.Enqueue((Interlocked.Increment(ref hitSeq), hit));
+        lock (gate)
+        {
+            StoreInbox(hit);
+            hits.Enqueue((Interlocked.Increment(ref hitSeq), hit));
+        }
     }
 
     // The entities a watch should cover: every published session's controls.
@@ -597,6 +601,7 @@ public sealed partial class HaConnector
     {
         if (!ServesAnswers || !options.ConsumeAnswers) { hits.Clear(); taps.Clear(); return; }
         await TapsAsync(now, ct);
+        await InboxReceiptsAsync(ct);
         await RepliesDoneAsync(now, ct);
         await StopsDoneAsync(now, ct);
         await StopLapsesAsync(now, ct);
@@ -707,6 +712,7 @@ public sealed partial class HaConnector
         if (armed.Superseded) { return; }
         // A question that takes no typed answer takes no words from the reply card: said, not left unanswered (#1634).
         // An agent's words are never an owner's answer: only a payload naming this very question is (#1636).
+        await RefuseInboxAtQuestionAsync(p, ct);
         if (await RefuseReplyAtQuestionAsync(p, armed, ct)) { return; }
         var since = seen.Where(h => h.Seq > armed.Boundary && !(h.Hit.EntityId == SessionEntities.ReplyPayload(p.Node) && p.Reply.IsHandled(h.Hit.State.State))).Select(h => h.Hit).ToList();
         var outcome = await ReadAnswerAsync(sessionId, p, armed, since, ct);

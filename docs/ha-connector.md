@@ -560,7 +560,7 @@ the same service calls.
 **Request id and acknowledgement.** A sender may add `rid` (1 to 64 letters, digits, `-`, `_`, `.`;
 anything else is ignored) and `sender` (a name, at most 64 characters). The host then publishes
 `reply_ack` `{rid, outcome, at, sender?, duplicate?}` in the session's activity attributes in the same
-update as `Reply sent` / `Reply NOT sent`. `outcome` is `delivered`, `unconfirmed` or `refused`. The ack
+update as `Reply sent` / `Reply NOT sent`. `outcome` is `queued` (durable ingress), `delivered`, `unconfirmed` or `refused`. The ack
 stays until a newer one replaces it, so a sender that finds another rid there knows its message was
 swapped or lost and sends again. A rid seen before (the last 50 per session) is not delivered again; the
 host re-acks it with `duplicate: true`. A `refused` rid is forgotten, so the same rid may be retried.
@@ -575,7 +575,21 @@ logs `refused a reply to <node> from <sender>` and types nothing, so the sender 
 closes. A reply already waiting when a question opens is refused the same way (#1634).
 Publishes without a `rid` behave as before.
 
-**Durable inbox foundation.** `DurableInbox` is an internal, not-yet-connected store: it
+**Durable reply ingress (#2780).** With `StateFile` configured, rid-bearing reply publishes
+are saved synchronously at observation in `<StateFile>.inbox`, in the host's user-owned state
+directory, before `queued` is acknowledged. Legacy publishes without a rid stay unchanged.
+The existing connector pass and per-session delivery fence provide one FIFO dispatcher per
+node; queued messages survive process restart and bypass the old 16-message memory limit.
+Each rid is acknowledged as queued, then with its delivery outcome; the sender waits through
+queued without calling it delivered. Refused rids may be retried. Terminal outcomes survive
+restart and are re-acknowledged on duplicate sends, without typing again.
+An attempt marker is persisted before calling delivery. A restart during an attempt reports
+`unconfirmed` and logs the interruption rather than risking duplicate typing; later queued
+messages still drain. This is not a native receipt or a claim that uncertain submissions landed.
+Busy/failed-submit requeue and person-draft preservation remain separate host-side work.
+No live HA, host management, authorization or 16 KiB publication limits change.
+
+**Durable inbox store.** `DurableInbox` is the reused internal store: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,
 and returns the original entry on a matching rid retry, even if a retry is restamped. It keeps
 at most 100 entries per node and 1000 total; when full, it prunes the oldest delivered entries
@@ -586,10 +600,8 @@ For #2780 integration, deduplication lasts only while that metadata is retained 
 delivered rid is accepted as new and may be delivered again; this is not permanent deduplication.
 Load and save remove this inbox's GUID-named crash-leftover temporary files under its lock,
 so obsolete copies cannot retain payloads after a later delivery.
-Power-loss durability is not established. It does not change the live reply path, publish acks,
-or provide native receipt. A later slice must provide an access-controlled storage directory,
-one dispatcher per node (a peek does not reserve a message), and reconcile the crash window
-between typing and recording delivery before enabling it.
+Power-loss durability is not established. A peek alone does not reserve a message; ingress
+serializes dispatch and persists the attempt marker before submitting it.
 
 **`tools/agents/reply-session.ps1`** is the in-repo sender. It posts the payload with a rid, waits
 for the reply sensor to show its own stamp (there is one slot per node, so rapid sends can overwrite
