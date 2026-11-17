@@ -730,7 +730,7 @@ public class CopilotPlannerTests
         Assert.True(ProtocolJson.ByteCount(atBound) > Limits.AnswerRequest);
         Assert.True(ProtocolJson.ByteCount(shorter) <= Limits.AnswerRequest);
         Assert.Null(question.AnswerAtMachine);
-        Assert.Equal($"the answer is larger than {Limits.AnswerRequest / 1024} KiB", Answers.Check(question, atBound));
+        Assert.Equal($"the answer is larger than {Limits.AnswerRequest / 1024} KiB; send it as a reply instead", Answers.Check(question, atBound));
         Assert.Null(Answers.Check(question, shorter));
         var (plan, problem) = CopilotPlanner.Plan(form, shorter);
         Assert.Null(problem);
@@ -791,7 +791,7 @@ public class CopilotPlannerTests
         Assert.Equal(lowerBound > Limits.AnswerRequest ? true : null, question.AnswerAtMachine);
         if (question.AnswerAtMachine != true)
         {
-            Assert.Equal(over > 0 ? $"the answer is larger than {Limits.AnswerRequest / 1024} KiB" : null, Answers.Check(question, smallest));
+            Assert.Equal(over > 0 ? $"the answer is larger than {Limits.AnswerRequest / 1024} KiB; send it as a reply instead" : null, Answers.Check(question, smallest));
         }
     }
 
@@ -851,22 +851,23 @@ public class CopilotPlannerTests
     [Fact]
     public void A_required_pattern_is_counted_at_its_minimum_length_and_a_too_large_answer_is_refused_before_any_key()
     {
+        var filler = new string('x', 3_900 + 2 * 1024);
         var properties = new Dictionary<string, object>
         {
             ["a"] = new { type = "string", @default = new string('x', 4_000) },
             ["b"] = new { type = "string", @default = new string('x', 4_000) },
             ["c"] = new { type = "string", @default = new string('x', 4_000) },
-            ["d"] = new { type = "string", @default = new string('x', 3_900) },
+            ["d"] = new { type = "string", @default = filler },
             ["p"] = new { type = "string", pattern = "^x{600}$" },
         };
         var (question, _) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties, required = new[] { "p" } } }));
         var answer = Answer(new Dictionary<string, string>
         {
-            ["a"] = new string('x', 4_000), ["b"] = new string('x', 4_000), ["c"] = new string('x', 4_000), ["d"] = new string('x', 3_900), ["p"] = new string('x', 600),
+            ["a"] = new string('x', 4_000), ["b"] = new string('x', 4_000), ["c"] = new string('x', 4_000), ["d"] = filler, ["p"] = new string('x', 600),
         });
 
         Assert.Null(question.AnswerAtMachine);
-        Assert.Equal($"the answer is larger than {Limits.AnswerRequest / 1024} KiB", Answers.Check(question, answer));
+        Assert.Equal($"the answer is larger than {Limits.AnswerRequest / 1024} KiB; send it as a reply instead", Answers.Check(question, answer));
     }
 
     // A number default spelled long is still one short number: neither client sends it as
