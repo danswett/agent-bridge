@@ -6,7 +6,7 @@ using AgentBridge.Transport;
 namespace AgentBridge.Host;
 
 // CallerGuard and scoped credentials govern pipe ops; script management is host-CLI-only (docs/protocol/local-pipe.md).
-public static class LocalApi
+public static partial class LocalApi
 {
     // Management ops that only read.
     static readonly HashSet<string> Reads = [HostOps.Status, HostOps.Subscribe];
@@ -175,6 +175,10 @@ public static class LocalApi
                     if (!store.IsLive(launchReader)) { throw Refuse(op, callers.Classify(channel), "the credential is no longer live", log); }
                     if (offered is not LaunchOptions choices) { throw Refuse(op, callers.Classify(channel), "launch options are unavailable", log); }
                     return store.LaunchGate.ProjectOptions(choices);
+                }
+                if (op == LaunchProtocol.Launch && launchReader.Scope == AgentProtocol.ScopeReadReplyLaunch)
+                {
+                    return await LaunchAgentAsync(sessions, store, launchReader, channel, data, audit, refusals, log);
                 }
             }
             if (op == LaunchProtocol.Options)

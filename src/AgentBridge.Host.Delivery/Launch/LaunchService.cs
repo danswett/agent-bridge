@@ -24,6 +24,7 @@ public interface ISessionLauncher
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot write durable launch evidence."));
 
     Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
+    LaunchDispatchSnapshot? CaptureDispatch(string launcherId, string? authenticatedPrincipal) => null;
     Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
         CancellationToken cancellationToken = default) => Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "fleet launch is unavailable"));
     bool IsFleetWorker(string session, SessionProcess? process) => false;
@@ -1124,6 +1125,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // arguments carrying a prompt would submit one with nobody pressing Continue (Copilot on
             // #837), so it is refused before anything is made, and stays offered.
             var extras = Config.Agent(plan.Launcher.Id).ExtraArgs;
+            if (agentPrincipal?.StartsWith("agent:", StringComparison.Ordinal) == true && extras.Count != 0)
+            {
+                return RefuseAgentWorktree(key, agentPrincipal, "Agent launches cannot use configured extra arguments.");
+            }
             if (restoring && Launchers.PromptFlag(plan.Launcher) is var flag && extras.Contains(flag, StringComparer.Ordinal))
             {
                 return Refused($"{plan.Launcher.Label}'s extraArgs in the host's config carry {flag}, which would start the restored session with a prompt; resume it from Launch");

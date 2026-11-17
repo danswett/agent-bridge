@@ -1,0 +1,240 @@
+using System.Text.Json;
+using AgentBridge.Host;
+using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Local;
+using AgentBridge.Protocol;
+using AgentBridge.Transport;
+using Xunit;
+
+public sealed class LocalApiAgentLaunchTests : IDisposable
+{
+    readonly string root = Directory.CreateTempSubdirectory("ab-agent-launch-").FullName;
+    readonly AgentCredentials credentials;
+    readonly Launcher launcher = new();
+    readonly Channel channel = new();
+    readonly Func<IProtocolChannel, string, JsonElement, Task<object?>> handle;
+    const string Principal = "agent:machine/parent";
+
+    public LocalApiAgentLaunchTests()
+    {
+        Policy();
+        credentials = new(root, "machine");
+        Authenticate();
+        handle = LocalApi.Handler(new SessionService(null!, new("machine", "Test", "windows", "0.1.0"), launcher: launcher),
+            null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: credentials, audit: new(root));
+    }
+
+    public void Dispose() => Directory.Delete(root, true);
+    void Policy(bool enabled = true, int live = 6) => File.WriteAllText(Path.Combine(root, HostSettings.FileName),
+        JsonSerializer.Serialize(new { agents = new { enabled = true, launch = new { enabled },
+            inbound = new { local = new { launch = new { workspaces = new[] { "App" }, agents = new[] { "claude" }, permissions = "ask" } } },
+            limits = new { launchesPerOriginPerHour = 3, launchesPerMachinePerHour = 10, liveAgentLaunched = live, agentLaunchedIdleHours = 2 } } }));
+
+    void Authenticate(string scope = AgentProtocol.ScopeReadReplyLaunch, int depth = 0, string launch = "launch")
+    {
+        var at = DateTimeOffset.UtcNow;
+        var token = credentials.Mint("parent", launch, 100, at, scope, depth);
+        credentials.Accept(channel, credentials.Check(token, new ProcessAncestry([new PeerProcess(100, at, "agent.exe")], true)).Accepted!);
+    }
+
+    static JsonElement Body(string? request = null, string permissions = "ask", string workspace = "App", string prompt = "private prompt") =>
+        JsonSerializer.SerializeToElement(new { request = request ?? Guid.NewGuid().ToString("D"), agent = "claude", workspace, permissions, prompt });
+    async Task<LaunchResult> Launch(JsonElement body) => Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch, body));
+    JsonElement[] Rows() => Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), "launches-*.jsonl")
+        .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line))
+        .Where(row => row.TryGetProperty("action", out _)).ToArray();
+
+    [Fact]
+    public async Task A_permitted_agent_launch_starts_as_its_credential_principal_and_repeats_without_starting_again()
+    {
+        var body = Body();
+        launcher.BeforePrepare = () => Assert.Equal(0, launcher.Starts);
+        var result = await Launch(body);
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        Assert.Equal(Launcher.Session, result.Session);
+        Assert.Equal(Principal, launcher.Principal);
+        Assert.Null(result.Trust);
+        Assert.Null(result.Launched?.Cwd);
+        Assert.Equal(result.Session, (await Launch(body)).Session);
+        Assert.Equal(1, launcher.Starts);
+        Assert.Contains(Rows(), row => row.GetProperty("outcome").GetString() == "reserved");
+        Assert.Contains(Rows(), row => row.GetProperty("outcome").GetString() == "started");
+        Assert.DoesNotContain("private prompt", string.Join("\n", Rows().Select(row => row.GetRawText())));
+        Assert.Equal(LaunchOutcome.Refused, (await Launch(Body(body.GetProperty("request").GetString(), prompt: "changed"))).Outcome);
+        Assert.Equal(1, launcher.Starts);
+    }
+
+    [Theory]
+    [InlineData("switch", "agents.launch.enabled")]
+    [InlineData("permissions", "permissions")]
+    [InlineData("arguments", "extra arguments")]
+    [InlineData("workspace", "approved workspace")]
+    [InlineData("depth", "agent-started")]
+    [InlineData("adopted", "adopted")]
+    [InlineData("unlisted-agent", "agent")]
+    [InlineData("unknown-field", "unsupported field")]
+    public async Task A_disallowed_agent_launch_returns_a_readable_audited_refusal_without_dispatch(string condition, string reason)
+    {
+        var body = Body();
+        if (condition == "switch") { Policy(false); }
+        if (condition == "permissions") { body = Body(permissions: "allowAll"); }
+        if (condition == "arguments") { launcher.Extras = ["--private-value"]; }
+        if (condition == "workspace") { body = Body(workspace: "Other"); }
+        if (condition == "depth") { Authenticate(depth: 1); }
+        if (condition == "adopted") { Authenticate(launch: AgentCredentials.AdoptedLaunch); }
+        if (condition == "unlisted-agent") { body = JsonSerializer.SerializeToElement(new { request = Guid.NewGuid().ToString("D"), agent = "copilot", workspace = "App", permissions = "ask" }); }
+        if (condition == "unknown-field") { body = JsonSerializer.SerializeToElement(new { request = Guid.NewGuid().ToString("D"), permissions = "ask", principal = "person" }); }
+
+        var result = await Launch(body);
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Contains(reason, result.Reason);
+        Assert.Equal(0, launcher.Starts);
+        Assert.Contains(Rows(), row => row.GetProperty("outcome").GetString() == "refused"
+            && row.GetProperty("principal").GetString() == Principal);
+        Assert.DoesNotContain("--private-value", string.Join("\n", Rows().Select(row => row.GetRawText())));
+    }
+
+    [Fact]
+    public async Task Read_scope_stays_read_only_and_revocation_prevents_both_launch_and_readback()
+    {
+        Authenticate(AgentProtocol.ScopeRead);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => handle(channel, LaunchProtocol.Launch, Body()));
+        Assert.Equal("refused", Assert.Single(Rows()).GetProperty("outcome").GetString());
+        Authenticate();
+        var body = Body();
+        Assert.Equal(LaunchOutcome.Started, (await Launch(body)).Outcome);
+        credentials.RevokeSession("parent", "fixture");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => handle(channel, LaunchProtocol.Launch, body));
+        Assert.Equal(1, launcher.Starts);
+    }
+
+    [Theory]
+    [InlineData("credential")]
+    [InlineData("switch")]
+    [InlineData("arguments")]
+    public async Task The_last_prestart_check_rejects_authority_or_arguments_changed_during_dispatch(string change)
+    {
+        launcher.BeforePrepare = () =>
+        {
+            if (change == "credential") { credentials.RevokeSession("parent", "fixture"); }
+            if (change == "switch") { Policy(false); }
+            if (change == "arguments") { launcher.Extras = ["--changed"]; }
+        };
+        Assert.Equal(LaunchOutcome.Refused, (await Launch(Body())).Outcome);
+        Assert.Equal(0, launcher.Starts);
+        Assert.Contains(Rows(), row => row.GetProperty("outcome").GetString() == "refused");
+    }
+
+    [Fact]
+    public async Task The_live_cap_refuses_a_second_launch_but_a_proven_prestart_refusal_releases_its_slot()
+    {
+        Policy(live: 1);
+        launcher.Refuse = true;
+        for (var i = 0; i < 3; i++) { Assert.Equal(LaunchOutcome.Refused, (await Launch(Body())).Outcome); }
+        launcher.Refuse = false;
+        Assert.Equal(LaunchOutcome.Started, (await Launch(Body())).Outcome);
+        var result = await Launch(Body());
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Contains("live-limit", result.Reason);
+        Assert.Equal(1, launcher.Starts);
+    }
+
+    [Fact]
+    public async Task The_hourly_cap_refuses_the_fourth_launch_and_records_the_reason()
+    {
+        for (var i = 0; i < 3; i++) { Assert.Equal(LaunchOutcome.Started, (await Launch(Body())).Outcome); }
+        var result = await Launch(Body());
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Contains("rate-limited", result.Reason);
+        Assert.Contains(Rows(), row => row.TryGetProperty("reason", out var reason) && reason.GetString()?.Contains("rate-limited") == true);
+        Assert.Equal(3, launcher.Starts);
+    }
+
+    [Fact]
+    public async Task An_unwritable_audit_never_reaches_the_starter()
+    {
+        File.WriteAllText(Path.Combine(root, AgentAuditLog.FolderName), "blocked");
+        Assert.Equal(LaunchOutcome.Refused, (await Launch(Body())).Outcome);
+        Assert.Equal(0, launcher.Starts);
+    }
+
+    sealed class Launcher : ISessionLauncher
+    {
+        public const string Session = "22222222-2222-4222-8222-222222222222";
+        public bool Available => true;
+        public int Starts;
+        public string? Principal;
+        public bool Refuse;
+        public string[] Extras = [];
+        public Action? BeforePrepare;
+        readonly Dictionary<string, LaunchResult> results = [];
+        public LaunchDispatchSnapshot CaptureDispatch(string agent, string? principal) => new(Extras, principal);
+        public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => Task.FromResult(new LaunchOptions
+        {
+            Agents = [new() { Id = "claude", Label = "Claude", Kind = AgentKind.Claude }],
+            Workspaces = [new() { Label = "App", Path = @"C:\fixture", Isolate = true }],
+            Defaults = new() { Permissions = LaunchProtocol.Ask },
+        });
+        public Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) =>
+            results.TryGetValue(principal + LaunchService.RequestBinding(request), out var result) ? Task.FromResult(result) : null;
+        public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Agent launches must use the audited entry point.");
+        public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare, CancellationToken cancellationToken = default)
+        {
+            BeforePrepare?.Invoke();
+            if (Refuse || prepare(Guid.NewGuid()) is not { } registered) { return Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "prestart refusal")); }
+            Starts++;
+            Principal = peer;
+            var session = Starts == 1 ? Session : Guid.NewGuid().ToString("D");
+            registered(session);
+            var result = new LaunchResult(LaunchOutcome.Started) { Session = session };
+            results.Add(peer + LaunchService.RequestBinding(request), result);
+            return Task.FromResult(result);
+        }
+    }
+
+    internal sealed class Channel : IProtocolChannel
+    {
+        public string PeerId => "untrusted-peer-label";
+        public string PeerName => "fixture";
+        public string PeerKind => "fixture";
+        public bool IsOpen => true;
+        public Task Closed => Task.CompletedTask;
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
+    }
+}
+
+public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
+{
+    private protected override bool UsesRelay => false;
+
+    [Fact]
+    public async Task A_permitted_pipe_launch_uses_the_real_worktree_checks_and_only_the_fake_process_starter()
+    {
+        File.WriteAllText(Path.Combine(f.Root, HostSettings.FileName), """
+            {"agents":{"enabled":true,"launch":{"enabled":true},
+              "inbound":{"local":{"launch":{"workspaces":["App"],"agents":["claude"],"permissions":"ask"}}},
+              "limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":10,"liveAgentLaunched":6,"agentLaunchedIdleHours":2}}}
+            """);
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture");
+        Git(app, "add", "README.md");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        var credentials = new AgentCredentials(f.Root, "machine");
+        var channel = new LocalApiAgentLaunchTests.Channel();
+        var at = DateTimeOffset.UtcNow;
+        var token = credentials.Mint("parent", "launch", 100, at, AgentProtocol.ScopeReadReplyLaunch);
+        credentials.Accept(channel, credentials.Check(token, new ProcessAncestry([new PeerProcess(100, at, "agent.exe")], true)).Accepted!);
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
+            credentials: credentials, agentWorktreeCheck: AgentLaunchWorktreeCheck.Check);
+        var handle = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher),
+            null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: credentials, audit: new(f.Root));
+        var body = JsonSerializer.SerializeToElement(new { request = Guid.NewGuid().ToString("D"), agent = "claude", workspace = "App", permissions = "ask" });
+        var result = Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch, body));
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        Assert.NotNull(result.Session);
+        Assert.Single(starter.Specs);
+        Assert.Null(result.Launched?.Cwd);
+    }
+}
