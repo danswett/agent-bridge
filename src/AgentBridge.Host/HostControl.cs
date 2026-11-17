@@ -77,6 +77,7 @@ public sealed class HostControlOptions
 public sealed class HostControl
 {
     public LifecycleCoordinator? Lifecycle => options.Lifecycle;
+    internal string Folder => options.Folder;
     // #805 N1: the committed-departure watchdog's state, for this host's status/health readers.
     // Deliberately not in HostStatus: that is the app's local-pipe contract.
     public DepartureStatus Departure => options.Lifecycle?.Departure ?? DepartureStatus.None;
