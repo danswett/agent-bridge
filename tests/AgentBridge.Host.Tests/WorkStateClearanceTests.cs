@@ -49,6 +49,9 @@ public sealed class WorkStateClearanceTests
         var unavailable = new WorkStateClearanceProvider(repo.Source, client).Read(repo.Session.Id, repo.Process);
         Assert.Equal(WorkState.Unknown, unavailable.OpenOwnedPr.State);
         Assert.Equal(WorkState.Unknown, unavailable.UnpushedWork.State);
+        using var forkClient = repo.Client(fork: true);
+        var fork = new WorkStateClearanceProvider(repo.Source, forkClient).Read(repo.Session.Id, repo.Process);
+        Assert.Equal(WorkState.Unknown, fork.OpenOwnedPr.State);
     }
 
     sealed class Repository : IDisposable
@@ -82,10 +85,11 @@ public sealed class WorkStateClearanceTests
             Source = new Source(Session, Process);
         }
 
-        public HttpClient Client(bool openPullRequest = false, int aheadBy = 0) =>
+        public HttpClient Client(bool openPullRequest = false, int aheadBy = 0, bool fork = false) =>
             new(new ApiHandler(request =>
             {
                 var path = request.RequestUri!.AbsolutePath;
+                if (path == "/repos/octo/demo") { return Json(System.Text.Json.JsonSerializer.Serialize(new { fork })); }
                 if (path.EndsWith("/pulls", StringComparison.Ordinal))
                 {
                     return Json(openPullRequest ? """[{"number":42}]""" : "[]");

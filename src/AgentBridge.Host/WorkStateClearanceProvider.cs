@@ -39,7 +39,7 @@ public sealed class WorkStateClearanceProvider(ISessionSource source, HttpClient
         var liveBranch = Git.Run(cwd, ["branch", "--show-current"]);
         var head = Git.Run(cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
         var remote = Git.Run(cwd, ["remote", "get-url", "origin"]);
-        var status = Git.Run(cwd, ["--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"]);
+        var status = Git.Run(cwd, ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"]);
         var physicalTop = top.Ok ? Folders.Physical(top.Output.Trim()) : null;
         var physicalCwd = Folders.Physical(cwd);
         if (!top.Ok || !gitDirectory.Ok || !liveBranch.Ok || !head.Ok || !remote.Ok || !status.Ok
@@ -66,6 +66,12 @@ public sealed class WorkStateClearanceProvider(ISessionSource source, HttpClient
     {
         try
         {
+            var repositoryResponse = GetJson($"/repos/{owner}/{repository}");
+            using var repositoryBody = repositoryResponse.Body;
+            if (repositoryResponse.Status != HttpStatusCode.OK || repositoryBody is null || repositoryBody.RootElement.ValueKind != JsonValueKind.Object
+                || !repositoryBody.RootElement.TryGetProperty("fork", out var fork) || fork.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            { return new(WorkState.Unknown, "the branch's pull-request targets could not be proved"); }
+            if (fork.GetBoolean()) { return new(WorkState.Unknown, "upstream pull requests could not be checked for a fork"); }
             var response = GetJson($"/repos/{owner}/{repository}/pulls?state=open&head={Uri.EscapeDataString(owner + ":" + branch)}&per_page=100");
             using var body = response.Body;
             if (response.Status != HttpStatusCode.OK || body is null || body.RootElement.ValueKind != JsonValueKind.Array)
