@@ -15,6 +15,7 @@ public sealed class ReplyClaimStore : IDisposable
     const int Schema = 1, MaxPerSession = 4096;
     static readonly TimeSpan Lifetime = TimeSpan.FromHours(24), LockWait = TimeSpan.FromSeconds(2);
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    internal static readonly AsyncLocal<Action?> BeforeRecoveryFileFlush = new();
     static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
@@ -163,7 +164,13 @@ public sealed class ReplyClaimStore : IDisposable
     static ReplyClaimSnapshot Load(Paths paths, ref ReplyClaimMarker marker, bool repairTail)
     {
         var ledger = ReplyClaimJournal.Read(paths.Ledger, paths.ProfileKey, marker, repairTail);
-        if (ledger.Sequence > marker.Sequence) { marker = Advance(paths, marker, ledger); }
+        if (ledger.Sequence > marker.Sequence)
+        {
+            using (var stream = new FileStream(paths.Ledger, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
+            { BeforeRecoveryFileFlush.Value?.Invoke(); stream.Flush(true); }
+            ClaimDirectorySync.Flush(paths.Directory);
+            marker = Advance(paths, marker, ledger);
+        }
         return ledger;
     }
 

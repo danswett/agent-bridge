@@ -483,6 +483,39 @@ public sealed class ReplyClaimStoreTests : IDisposable
         Assert.Equal(claim.Generation, recovered.Acquire("session", "request", Hash("text")).Generation);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Recovery_cannot_advance_past_a_compaction_until_the_journal_and_directory_can_flush(bool blockJournal)
+    {
+        using var store = ReplyClaimStore.Open(profile, time);
+        var claim = store.Acquire("session", "request", Hash("text"));
+        var marker = File.ReadAllBytes(PathInProfile(Marker));
+        var journal = PathInProfile(Ledger);
+        try
+        {
+            ClaimDirectorySync.BeforeFlush.Value = path =>
+            {
+                if (path == Path.GetDirectoryName(journal)) { throw new IOException("injected journal directory flush failure"); }
+            };
+            Assert.Throws<IOException>(() => store.Compact());
+            Assert.True(File.Exists(journal + ".bak"));
+            Assert.Equal(marker, File.ReadAllBytes(PathInProfile(Marker)));
+            if (blockJournal)
+            {
+                ClaimDirectorySync.BeforeFlush.Value = null;
+                ReplyClaimStore.BeforeRecoveryFileFlush.Value = () => throw new IOException("injected journal file flush failure");
+            }
+            Assert.Throws<IOException>(() => ReplyClaimStore.Open(profile, time));
+            Assert.Equal(marker, File.ReadAllBytes(PathInProfile(Marker)));
+        }
+        finally { ClaimDirectorySync.BeforeFlush.Value = null; ReplyClaimStore.BeforeRecoveryFileFlush.Value = null; }
+
+        using var recovered = ReplyClaimStore.Open(profile, time);
+        Assert.Equal(2, JsonNode.Parse(File.ReadAllText(PathInProfile(Marker)))!["sequence"]!.GetValue<long>());
+        Assert.Equal(claim.Generation, recovered.Acquire("session", "request", Hash("text")).Generation);
+    }
+
     [Fact]
     public void A_directory_flush_failure_never_acknowledges_the_new_claim()
     {
