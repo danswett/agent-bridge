@@ -471,6 +471,9 @@ async Task<int> ServeAsync(HostHandover handover)
     }
     // Started at logon there is no console; the app shows the end of this file.
     HostLog.OpenFile(Path.Combine(identity.Folder, "logs", "host.log"));
+    try { AgentBridge.Host.Lite.ReplyClaimStore.EnsureInitialized(identity.Folder); }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
+    { Log($"reply delivery is held because its claim store could not be initialized: {e.Message}"); return 3; }
     var name = Option("--name") ?? HostConfigFile.ReadName(identity.Folder) ?? $"{Environment.MachineName}{(profile == "default" ? "" : $"/{profile}")}";
     // Instance: this run's own id. A client that lost an outcome sends the request again only to
     // the run that may have acted on it, which remembers the request; never to a fresh one.
