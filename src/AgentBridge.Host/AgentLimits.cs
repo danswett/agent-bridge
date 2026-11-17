@@ -9,10 +9,10 @@ public readonly record struct AgentLimitVerdict(bool Allowed, string? Reason, in
     public static AgentLimitVerdict Admit { get; } = new(true, null, 0);
 }
 
-// Sliding in-memory windows; a restart resets them. Message/read limits are constructor
+// Sliding windows; the launch ledger can restore them. Message/read limits are constructor
 // arguments; the launch gate supplies freshly read policy. Refusals spend no launch slot,
 // but distinct requests and mismatched retries spend the separate attempt budget.
-public sealed class AgentLimits
+public sealed partial class AgentLimits
 {
     static readonly TimeSpan Minute = TimeSpan.FromMinutes(1);
     static readonly TimeSpan Hour = TimeSpan.FromHours(1);
@@ -260,6 +260,12 @@ public sealed class AgentLimits
         public bool IsIdle(DateTimeOffset now) => WaitFor(now, int.MaxValue) == 0 && hits.Count == 0;
 
         public void Hit(DateTimeOffset now, object? charge = null) => hits.Enqueue((now, charge));
+
+        public SavedHit[] Snapshot(DateTimeOffset now, Dictionary<object, Guid> tags)
+        {
+            WaitFor(now, int.MaxValue);
+            return hits.Select(h => new SavedHit(h.At, h.Charge is not null && tags.TryGetValue(h.Charge, out var tag) ? tag : null)).ToArray();
+        }
 
         public void UndoHit(object? charge)
         {

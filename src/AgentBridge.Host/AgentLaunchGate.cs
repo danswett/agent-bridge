@@ -9,7 +9,7 @@ public sealed record AgentLaunchPolicyVerdict(bool Allowed, string? Reason, Agen
 // Shared policy and reservations for credentialed local launches.
 public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock = null, TimeProvider? auditTime = null)
 {
-    readonly AgentLimits limits = new(clock);
+    readonly AgentLaunchLedger limits = new(folder, clock);
     readonly AgentAuditLog audit = new(folder);
     readonly LocalApi.RefusalAudits refusals = new(auditTime ?? TimeProvider.System);
 
@@ -17,7 +17,10 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
     {
         var policy = CheckPolicy();
         if (!policy.Allowed || policy.Limits is null) { return policy; }
-        var result = limits.ReserveLaunch(origin, request, requestSha256, policy.Limits);
+        AgentLimitVerdict result;
+        try { result = limits.Use(l => l.ReserveLaunch(origin, request, requestSha256, policy.Limits)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        { return policy with { Allowed = false, Reason = "capRebuilding: needs-person; the durable launch admission ledger is unavailable" }; }
         var reason = result.Reason == AgentLimitVerdict.LiveLimited
             ? $"live-limit: this machine has reached its limit of {policy.Limits.LiveAgentLaunched} live agent-started sessions; wait for one to end"
             : result.Reason;
@@ -37,19 +40,20 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
     }
 
     // Host lifecycle API for the ingress/idle-loop composition; never exposed as agent operations.
-    public void LaunchStarted(string origin, string request, string session) => limits.LaunchStarted(origin, request, session);
-    public bool LaunchFinished(string origin, string request) => limits.LaunchFinished(origin, request);
-    internal bool LaunchRefused(string origin, string request) => limits.LaunchRefused(origin, request);
-    public bool SessionEnded(string session) => limits.SessionEnded(session);
+    public void LaunchStarted(string origin, string request, string session) =>
+        limits.Use(l => { l.LaunchStarted(origin, request, session); return true; });
+    public bool LaunchFinished(string origin, string request) => limits.Use(l => l.LaunchFinished(origin, request));
+    internal bool LaunchRefused(string origin, string request) => limits.Use(l => l.LaunchRefused(origin, request));
+    public bool SessionEnded(string session) => limits.Use(l => l.SessionEnded(session));
     public bool ObserveSession(string session, DateTimeOffset? idleSince, bool personTyped) =>
-        limits.ObserveSession(session, idleSince, personTyped);
+        limits.Use(l => l.ObserveSession(session, idleSince, personTyped));
 
     public IReadOnlyList<string> IdleSessions()
     {
         var policy = CheckPolicy();
         if (!policy.Allowed || policy.Limits is null)
         { throw new InvalidOperationException($"Idle-end policy is unavailable: {policy.Reason}"); }
-        return limits.IdleSessions(policy.Limits);
+        return limits.Use(l => l.IdleSessions(policy.Limits));
     }
 
     internal object ProjectOptions(LaunchOptions offered)
