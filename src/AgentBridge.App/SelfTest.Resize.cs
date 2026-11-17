@@ -25,18 +25,21 @@ static partial class SelfTest
     // and never judged (#681).
     static readonly TimeSpan SweepBudget = TimeSpan.FromSeconds(30);
 
-    static async Task MeasureResize(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
+    static async Task MeasureResize(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check, string outFile, Dictionary<string, object?> result, Func<string, Task> progress)
     {
+        await progress("01 light setup");
         var layout = window.Sessions.Layout!;
         window.ShowPage("sessions");
         Resize(window, SweepWide, SweepHeight);
         layout.InspectorWanted = true;
         await Choose(window, main, "demo-approval", "Response");
         await Task.Delay(700);
+        await progress("02 light sweep");
         var budget = Stopwatch.StartNew();
         var (light, lightDone) = await Sweep(window, SweepBudget / 2);
         var lightTook = budget.Elapsed;
 
+        await progress("03 heavy setup");
         await demo.AddHeavyAsync();
         await Until(() => main.AllCards.Any(c => c.Id == DemoHost.HeavyId), TimeSpan.FromSeconds(10));
         Resize(window, SweepWide, SweepHeight);
@@ -61,23 +64,28 @@ static partial class SelfTest
         check(drawn && data["sessions"] > 15 && data["responseBlocks"] + data["delegateEvents"] > 200 && data["delegates"] == DemoHost.HeavyDelegates,
             $"draws a window as heavy as a real one for the resize pass, every delegate in its strip ({string.Join(", ", data.Select(d => $"{d.Value} {d.Key}"))})");
         // A block in the middle of the response at the top of the conversation, part scrolled past.
+        await progress("04 anchor capture");
         var anchored = list is null ? null : await Anchor(list, outFile);
         await Task.Delay(700);
         var heavyLimit = SweepBudget - lightTook;
+        await progress("05 heavy sweep");
         var (newWidthsBefore, remeasuredBefore) = (FlowPanel.NewWidths, FlowPanel.Remeasured);
         var (heavy, heavyDone) = await Sweep(window, heavyLimit);
         var (newWidths, remeasured) = (FlowPanel.NewWidths - newWidthsBefore, FlowPanel.Remeasured - remeasuredBefore);
 
         // Back where the drag began, the session still chosen and every pane drawn.
+        await progress("06 settle");
         var settled = await Until(() => layout.Mode == PaneMode.Three && main.Selected == card && layout.ShowInspector, TimeSpan.FromSeconds(5));
         check(settled, "keeps the session chosen, with its inspector, through a live resize across every width class");
         // The footer's lines (a delegate starting, one reporting back) are laid out at every new width,
         // off screen too; each piece of one fits its line at every width the drag reaches, so none is
         // measured again. Each was, at every step under the reading measure, until #765 kept them.
         check(newWidths > 0 && remeasured == 0, $"lays out every flowing line, the conversation's delegate lines among them, at each new width of a live resize without measuring any piece of one again, each fitting its line ({newWidths} lines at a new width, {remeasured} pieces measured again)");
+        await progress("07 anchor comparison");
         await Picture(window.RootElement, Path.ChangeExtension(outFile, ".resize.png"));
         var moved = list is null || anchored is null ? "measured: the response not drawn" : await Anchored(list, anchored, outFile);
         check(moved is null, $"keeps the block at the top of the conversation where it was through a live resize, drawn alike before and after{Not(moved)}");
+        await progress("08 page and arrow keys");
         var (unkeyed, pressedBy, postedInputMissing) = list is null ? ("measured: the response not drawn", "none", false) : await Keyed(window, list);
         var keyDetails = new { problem = unkeyed, method = pressedBy, postedInputMissing };
         result["conversationKeys"] = keyDetails;
@@ -85,26 +93,34 @@ static partial class SelfTest
         {
             check(unkeyed is null, $"scrolls the conversation's text with Page Down and Down pressed on a link in it, focus left where it was and nothing selected ({pressedBy}){Not(unkeyed)}");
         }
+        await progress("09 tab next block");
         var untabbed = list is null ? "measured: the response not drawn" : await Tabbed(list);
         check(untabbed is null, $"takes Tab from the last link or Copy button the conversation has drawn to the first in the next block with one, which it realises, inside the block and not onto it{Not(untabbed)}");
+        await progress("10 tab in view");
         var (unplaced, placedPressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedInView(window, list);
         check(unplaced is null, $"takes Tab onto a Copy button in a block across the conversation's bottom edge with the block's start to the leading edge, and onto one in a block wholly in view without moving it ({placedPressedBy}){Not(unplaced)}");
+        await progress("11 tab near edge");
         var (unedged, edgePressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedNearEdge(window, list);
         check(unedged is null, $"takes Shift+Tab onto the Copy button of a block wholly in view, its top within 20 px of the conversation's, without moving it ({edgePressedBy}){Not(unedged)}");
+        await progress("12 tab tall block");
         var (untall, tallPressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedTall(window, list);
         check(untall is null, $"takes Tab onto the first link of a block taller than the conversation with the block's start to the leading edge, and Shift+Tab onto its last with that link wholly in view at the nearest edge ({tallPressedBy}){Not(untall)}");
+        await progress("13 tab linked block");
         var (unlinked, linkPressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedLink(window, list);
         check(unlinked is null, $"takes Tab, pressed on the last link of the last block the conversation has drawn, to the first link of the next block, which it realises at the leading edge, numbered in its set ({linkPressedBy}){Not(unlinked)}");
         var chrome = list is null ? "measured: the response not drawn" : Contained(list);
         check(chrome is null, $"draws no block's container as a tab stop, selected, filled or with a focus visual of its own{Not(chrome)}");
+        await progress("14 reader find");
         var unreachable = list is null ? "measured: the response not drawn" : await Reachable(list);
         check(unreachable is null, $"finds the response's last block, off screen, by its name, which no other block has, and brings it into view for a screen reader{Not(unreachable)}");
         // After Reachable, which needs the last block off screen to begin with: this walk realises every block.
-        var (unlisted, listRealised, listSeconds) = list is null ? ("measured: the response not drawn", 0, 0d) : await Listed(list);
+        await progress("15 reader list");
+        var (unlisted, listRealised, listSeconds) = list is null ? ("measured: the response not drawn", 0, 0d) : await Listed(list, progress);
         check(unlisted is null, $"gives a screen reader every block of the response as a list item numbered 1 to {list?.Items.Count} of {list?.Items.Count}, walked as a screen reader walks it, ItemContainer's FindItemByProperty for each next item and VirtualizedItem's Realize for one not yet realised ({listRealised} realised so, in {listSeconds:0.0} s), none -1, and the header and footer outside the set{Not(unlisted)}");
         if (card is not null) { card.Delegates.FinishedOpen = false; card.Delegates.EventsOpen = false; }
         static string Not(string? wrong) => wrong is null ? "" : $": not {wrong}";
 
+        await progress("16 report");
         var report = new Dictionary<string, object?>
         {
             ["method"] = $"AppWindow.Resize a step a frame, {SweepWide}→{SweepNarrow}→{SweepWide} effective px by {SweepStep}, height {SweepHeight}; the Stopwatch interval between CompositionTarget.Rendering callbacks, by the window's width class when drawn",

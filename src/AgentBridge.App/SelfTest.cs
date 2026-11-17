@@ -24,6 +24,8 @@ static partial class SelfTest
         var result = new Dictionary<string, object?>();
         var checks = new List<string>();
         var failures = new List<string>();
+        var writer = new SelfTestResult();
+        Task Write(string? stage, string? step = null) => writer.WriteAsync(outFile, result, checks, failures, stage, step);
         void Check(bool ok, string what)
         {
             (ok ? checks : failures).Add(what);
@@ -41,6 +43,7 @@ static partial class SelfTest
         DisplayPass? display = null;
         try
         {
+            await Write("startup and checks");
             display = await DisplayPass.BeginAsync(1600, 1000);
             result["display"] = display.How;
             AppLog.Write($"self-test: the screen {display.How}");
@@ -97,9 +100,9 @@ static partial class SelfTest
             await CheckCodeBlocks(window, Check, outFile);
             await CheckUnparsableMarkdown(window, Check);
             // Written down first: without its fix, the next check ends the process (0xC000027B).
-            await Write(outFile, result, checks, failures, "a word too long for WinUI's text layout");
+            await Write("a word too long for WinUI's text layout");
             await CheckLongWords(window, Check);
-            await Write(outFile, result, checks, failures, null);
+            await Write("checks and captures");
             await CheckFeedbackEntry(window, Check);
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
@@ -396,39 +399,31 @@ static partial class SelfTest
             await ShowADelegate(window, main, Check);
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
-            await Write(outFile, result, checks, failures, "high contrast");
+            await Write("high contrast");
             await CheckHighContrast(window, main, launch, demo, remote, Check, outFile, result);
             // Last, as it adds sessions every check above counts without (#765).
-            await Write(outFile, result, checks, failures, "live resize");
-            await MeasureResize(window, main, demo, Check, outFile, result);
+            await Write("live resize");
+            await MeasureResize(window, main, demo, Check, outFile, result, step => Write("live resize", step));
         }
         catch (Exception e)
         {
             failures.Add($"crashed: {e}");
         }
+        await Write("display restore");
         if (display is not null) { await display.EndAsync(); }
+        result["completedAt"] = DateTimeOffset.UtcNow;
         // Written again if a failure arrived while it was written (a resource reference failing as
         // a theme settles), so the file always says why the run failed.
         int written;
         do
         {
             written = failures.Count;
-            await Write(outFile, result, checks, failures, null);
+            await Write(null);
         }
         while (failures.Count != written);
         var code = failures.Count == 0 ? 0 : 1;
         AppLog.Write($"self-test: finished, exit code {code}");
         exit(code);
-    }
-
-    // The result file. unfinished: the check under way, when written part-way through.
-    static async Task Write(string outFile, Dictionary<string, object?> result, List<string> checks, List<string> failures, string? unfinished)
-    {
-        result["passed"] = checks;
-        result["failed"] = failures;
-        result["unfinished"] = unfinished;
-        Directory.CreateDirectory(Path.GetDirectoryName(outFile)!);
-        await File.WriteAllTextAsync(outFile, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     // The design's generated resources (Design/DesignResources.xaml, tools/design-gen): every brush

@@ -21,6 +21,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'app-self-test-progress.ps1')
 
 $Result = [IO.Path]::GetFullPath($Result)
 if (-not $Logs) { $Logs = Split-Path $Result }
@@ -71,7 +72,9 @@ $null = $p.Handle
 $finished = $p.WaitForExit($TimeoutSeconds * 1000)
 try { Copy-Item (Join-Path (Split-Path $appLog) '*.log') $Logs }
 catch { Write-Output "::error::app log capture failed: $($_.Exception.Message)" }
-if (-not $finished) { Stop-Process -Id $p.Id -Force }
+$observedAt = [DateTimeOffset]::UtcNow
+$exitedAfterWait = $p.HasExited
+if (-not $finished -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force }
 $wrote = Test-Path $Result
 if ($wrote) { Get-Content $Result } else { Write-Output '::error::the self-test wrote no result' }
 $code = if ($finished) { $p.ExitCode } else { $null }
@@ -79,10 +82,20 @@ Write-Output "app process $($p.Id): exit code $code (finished=$finished)"
 # Written part-way through before a check that can end the process (SelfTest.Write): still set,
 # the app ended inside that check, whatever the exit code says. Every check before it passed.
 $unfinished = if ($wrote) { try { (Get-Content $Result -Raw | ConvertFrom-Json).unfinished } catch { $null } } else { $null }
+$stageTiming = $null
+try {
+    $document = if ($wrote) { Get-Content $Result -Raw | ConvertFrom-Json } else { $null }
+    $stageTiming = Get-SelfTestStageEvidence -Result $document -ObservedAt $observedAt -Deadline ([DateTimeOffset]$started).AddSeconds($TimeoutSeconds) -WaitFinished $finished -ProcessExited $exitedAfterWait
+    Write-Output "self-test timing: $($stageTiming.classification)"
+    foreach ($stage in $stageTiming.stages) {
+        Write-Output "self-test stage '$($stage.name)': start=$($stage.startedAt) end=$($stage.endedAt) elapsed=$($stage.elapsedSeconds) s observedElapsed=$($stage.elapsedAtObservationSeconds) s lastProgress=$($stage.lastProgressAt) step=$($stage.step)"
+    }
+}
+catch { Write-Output "::error::stage timing capture failed: $($_.Exception.Message)" }
 $evidence = [ordered]@{
     processId = $p.Id; exitCode = $code
     failed = ($null -eq $code -or $code -ne 0 -or -not $wrote -or [bool]$unfinished)
-    stderr = ''; events = @(); captureErrors = @()
+    stderr = ''; events = @(); captureErrors = @(); stageTiming = $stageTiming
 }
 try { $evidence.stderr = [IO.File]::ReadAllText($stderrPath) }
 catch {

@@ -1371,6 +1371,17 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   status and equal count-column widths for 1 and 8, and reuses a counted row for sign-in. Other
   metadata and the changing age remain tabular; the bundled font and shared type ramp are unchanged.
   Its progress gallery (#600, ui.md §6.5) puts a reply and an answer through each receipt state against the demo host, which holds a request or picks its outcome for the gallery's sessions (`DemoHost.Script`): Send's ring in the quiet window, Still sending…, Send's check, a failed reply with Send again, a tapped option's ring, unconfirmed and stale (the tapped option pressed, and heard as pressed through its Toggle pattern, the rest disabled), busy and refused (every option again), and You answered for a tap, free text and a form. It checks each and saves `result.progress.<state>.<pass>.png` in light, dark, at the narrowest window and in high contrast. A reply's receipt line on screen as high contrast turns on must turn to the window's text without being bound again: receipt lines and Send's held ring repaint on a theme or system colour change.
+  Self-test results also record `stages`: start/end UTC, monotonic elapsed seconds, last real
+  progress UTC and timed numbered steps. Live resize checkpoints separate 01 setup, 02 light
+  sweep, 03 heavy setup, 04 anchor, 05 heavy sweep, 06 settle, 07 capture, 08-13 keyboard,
+  14 reader find, 15 reader list (progress every 16 blocks), and 16 report. No heartbeat
+  invents progress and no file writes run inside measured frame sweeps. The wrapper prints
+  timings and saves them in `app-exit-cause.json`; 30 s without progress says "stalled",
+  not a proven hang. `completedAt` versus the guard deadline and observed process exit
+  distinguish late completion, missed exit and completed checks awaiting exit. These
+  diagnostics never turn a timeout or unfinished result into success. The reader walk's
+  `listWalkSeconds` and unchanged 30 s guard exclude checkpoint serialization/I/O time;
+  stage timings and the outer CI timeout still include it.
   Last, it measures a live resize (#765): it resizes the window a step a frame, 8 px at a time, from 1560 px to
   400 and back, and keeps every interval between the UI thread's frames (`CompositionTarget.Rendering`) by the window's width
   class, once with the demo's own sessions and once with a window as heavy as a real one (16 more sessions, a conversation of

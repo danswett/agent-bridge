@@ -29,7 +29,7 @@ static partial class SelfTest
             await CheckHistoryScrollBudget(window, main, demo, Check, result, observerDiagnostics: true);
         }
         catch (Exception e) { Check(false, $"history budget crashed: {e}"); }
-        await Write(outFile, result, passed, failed, null);
+        await new SelfTestResult().WriteAsync(outFile, result, passed, failed, null);
         exit(failed.Count == 0 ? 0 : 1);
     }
 
