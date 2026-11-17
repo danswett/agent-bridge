@@ -59,10 +59,11 @@ public static partial class Motion
         {
             if (disposed || !active()) { Clear(); return; }
             if (overlay is not null) { overlay.Size = new Vector2((float)list.ActualWidth, (float)list.ActualHeight); }
-            if (!animations()) { foreach (var item in rows.Keys.ToArray()) { Detach(item); } return; }
+            if (!animations()) { foreach (var item in rows.Keys.ToArray()) { if (!departures.ContainsKey(item)) { Detach(item); } } return; }
             if (list.ItemsPanelRoot is not { } panel) { return; }
             foreach (var item in rows.Keys.ToArray())
             {
+                if (departures.ContainsKey(item)) { continue; }
                 if (!panel.Children.Contains(item) || item.Content is null || !list.Items.Contains(item.Content)) { Detach(item); }
             }
             foreach (var item in panel.Children.OfType<ListViewItem>())
@@ -101,15 +102,13 @@ public static partial class Motion
 
         internal void Changing(IEnumerable<object> removed)
         {
-            Refresh();
-            if (disposed || !active()) { return; }
+            if (disposed || !active()) { Clear(); return; }
             foreach (var value in removed)
             {
                 if (list.ItemsPanelRoot?.Children.OfType<ListViewItem>().FirstOrDefault(row => ReferenceEquals(row.Content, value))
                     is not { ContentTemplateRoot: FrameworkElement drawing } item || departures.ContainsKey(item)
                     || drawing.ActualWidth <= 0 || drawing.ActualHeight <= 0) { continue; }
                 var origin = drawing.TransformToVisual(list).TransformPoint(default);
-                if (origin.Y >= list.ActualHeight || origin.Y + drawing.ActualHeight <= 0) { continue; }
                 var departure = new Departure { Source = drawing };
                 departures.Add(item, departure);
                 try
@@ -136,20 +135,29 @@ public static partial class Motion
                     departure.Sprite = compositor.CreateSpriteVisual();
                     departure.Sprite.Brush = departure.Brush;
                     departure.Sprite.Size = departure.Surface.SourceSize;
-                    departure.Sprite.Offset = new Vector3((float)origin.X, (float)origin.Y, 0);
                     overlay.Children.InsertAtTop(departure.Sprite);
                     var step = Catalogue.Exit("ListItem", animations());
+                    var rowVisual = ElementCompositionPreview.GetElementVisual(item);
+                    var position = compositor.CreateVector3KeyFrameAnimation();
+                    position.SetReferenceParameter("row", rowVisual);
+                    position.SetVector3Parameter("relative", new Vector3((float)origin.X, (float)origin.Y, 0) - rowVisual.Offset);
+                    // Expression keyframes are sampled once by the compositor, including the in-flight shift.
+                    position.InsertExpressionKeyFrame(0, "row.Offset + relative");
+                    position.InsertExpressionKeyFrame(1, "row.Offset + relative");
+                    position.Duration = step.Duration;
                     var fade = compositor.CreateScalarKeyFrameAnimation();
                     fade.InsertKeyFrame(0, 1);
                     fade.InsertKeyFrame(1, 0, Ease(compositor, step.Ease));
                     fade.Duration = step.Duration;
                     departure.Batch = compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
                     departure.Batch.Completed += (_, _) => Release(item);
+                    departure.Sprite.StartAnimation("Offset", position);
                     departure.Sprite.StartAnimation("Opacity", fade);
                     departure.Batch.End();
                 }
                 catch { Release(item); throw; }
             }
+            Refresh();
         }
 
         void Choosing(ListViewBase sender, ChoosingItemContainerEventArgs e)
@@ -164,6 +172,7 @@ public static partial class Motion
         void Release(ListViewItem item)
         {
             if (!departures.Remove(item, out var departure)) { return; }
+            Detach(item);
             if (departure.Sprite is { } sprite)
             {
                 sprite.StopAnimation("Opacity");
@@ -198,8 +207,8 @@ public static partial class Motion
 
         void Prepared(ListViewBase sender, ContainerContentChangingEventArgs e)
         {
-            if (e.InRecycleQueue && e.ItemContainer is ListViewItem item) { Detach(item); }
-            else if (e.ItemContainer is ListViewItem prepared && departures.ContainsKey(prepared)) { Release(prepared); }
+            if (e.InRecycleQueue && e.ItemContainer is ListViewItem item && !departures.ContainsKey(item)) { Detach(item); }
+            else if (!e.InRecycleQueue && e.ItemContainer is ListViewItem prepared && departures.ContainsKey(prepared)) { Release(prepared); }
         }
 
         void Detach(ListViewItem item)
