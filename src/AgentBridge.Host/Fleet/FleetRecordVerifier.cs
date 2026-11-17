@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AgentBridge.Roster;
@@ -9,7 +10,7 @@ namespace AgentBridge.Host.Fleet;
 internal sealed class FleetRecordVerifier(Func<RosterVerifier?> pinnedRoster, TimeProvider time)
 {
     readonly object gate = new();
-    readonly Dictionary<(string Account, string Generation, string Add), (string Epoch, long Seq, DateTimeOffset At)> accepted = [];
+    readonly Dictionary<(string Account, string Generation, string Add), (string Epoch, long Seq, DateTimeOffset At, byte[] RecordHash)> accepted = [];
 
     public bool Verify(string machine, JsonElement record, string? account = null)
     {
@@ -18,7 +19,7 @@ internal sealed class FleetRecordVerifier(Func<RosterVerifier?> pinnedRoster, Ti
             var roster = pinnedRoster();
             if (roster is not null && account is not null && roster.Account != account)
             { throw new InvalidOperationException("refused: the pinned registry roster belongs to another account"); }
-            if (roster?.State.ActiveAdd(machine) is not { } add
+            if (roster is null || !roster.Serving.TryGetValue(machine, out var add)
                 || roster.Graph[add].Body.Device is not { Kind: "host", HostSign: { } key }) { return false; }
             try
             {
@@ -28,9 +29,13 @@ internal sealed class FleetRecordVerifier(Func<RosterVerifier?> pinnedRoster, Ti
                 var epoch = record.GetProperty("epoch").GetString()!;
                 var seq = record.GetProperty("seq").GetInt64();
                 var identity = (roster.Account, roster.Generation, Convert.ToHexString(roster.Graph[add].Hash));
-                if (accepted.TryGetValue(identity, out var previous)
-                    && (epoch == previous.Epoch ? seq <= previous.Seq : at <= previous.At)) { return false; }
-                accepted[identity] = (epoch, seq, at);
+                var recordHash = SHA256.HashData(FleetRecordSigning.CanonicalBytes(record));
+                if (accepted.TryGetValue(identity, out var previous))
+                {
+                    if (epoch == previous.Epoch && seq == previous.Seq && recordHash.AsSpan().SequenceEqual(previous.RecordHash)) { return true; }
+                    if (epoch == previous.Epoch ? seq <= previous.Seq : at <= previous.At) { return false; }
+                }
+                accepted[identity] = (epoch, seq, at, recordHash);
                 return true;
             }
             catch (InvalidOperationException) { return false; }

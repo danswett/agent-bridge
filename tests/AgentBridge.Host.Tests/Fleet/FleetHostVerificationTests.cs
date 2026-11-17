@@ -50,12 +50,32 @@ public sealed class FleetHostVerificationTests
     public void Sequence_and_epoch_order_survive_reads_and_invalid_inputs_do_not_advance_them()
     {
         var f = new Fixture();
-        Assert.True(Assert.Single(f.Read(f.Record())).Verified);
-        foreach (var record in new[] { f.Record(), f.Record(seq: 1), f.Record(epoch: new string('c', 16)) })
+        var accepted = f.Record();
+        Assert.True(Assert.Single(f.Read(accepted)).Verified);
+        Assert.True(Assert.Single(f.Read(accepted)).Verified);
+        foreach (var record in new[] { f.Record(seq: 1), f.Record(epoch: new string('c', 16)) })
         { Assert.Empty(Assert.Single(f.Read(record)).Sessions); }
         Assert.True(Assert.Single(f.Read(f.Record(seq: 3))).Verified);
         Assert.True(Assert.Single(f.Read(f.Record(seq: 1, epoch: new string('c', 16), seconds: 1))).Verified);
         Assert.Empty(Assert.Single(f.Read(f.Record(seq: 4))).Sessions);
+    }
+
+    [Fact]
+    public void A_host_signed_by_an_approver_on_probation_cannot_authorize_its_fleet_record()
+    {
+        var f = new Fixture();
+        var world = new World();
+        world.Genesis();
+        world.Add("+A", "G", "A", "G");
+        world.AddHostV2("+H", "A", "H", "+A");
+        var roster = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => world.Now) { AcceptHostSign = true };
+        Assert.All(world.Feed(roster, [.. world.Labels]), offer => Assert.Equal(Verdict.Accepted, offer.Verdict));
+        Assert.NotNull(roster.State.ActiveAdd(f.Machine));
+        Assert.DoesNotContain(f.Machine, roster.Serving.Keys);
+        f.Trusted = roster;
+        var machine = Assert.Single(f.Read(f.Record()));
+        Assert.False(machine.Verified);
+        Assert.Empty(machine.Sessions);
     }
 
     [Fact]
