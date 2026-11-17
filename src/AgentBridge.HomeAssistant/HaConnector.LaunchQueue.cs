@@ -84,10 +84,9 @@ public sealed partial class HaConnector
     {
         if (launchBusy || launchQueue.Count == 0) { return; }
         var next = launchQueue[0];
-        launchQueue.RemoveAt(0);
-        try { await OutcomeAsync(next.Id, "starting", "Starting the queued launch.", pressed: next.Pressed, ct: ct); }
-        catch { launchQueue.Insert(0, next); throw; }
+        await OutcomeAsync(next.Id, "starting", "Starting the queued launch.", pressed: next.Pressed, ct: ct);
         await LaunchNoteAsync(StartingNote(next.Launched), ct);
         Dispatch(next.Request, next.Id, next.Pressed, next.Driver, next.Principal, next.Launched, null);
+        launchQueue.RemoveAt(0);
     }
 }

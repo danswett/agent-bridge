@@ -774,6 +774,8 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   no prompt, attachment or launch settings are persisted. Tombstones last 24 hours, capped at
   10,000 entries, oldest evicted first (Chief's #2743 ruling). A flushed atomic replacement
   records a dispatch claim before calling the launcher; a write failure prevents dispatch.
+  Failed outcome writes/publications retry on later passes, including refusals. A queued
+  request stays queued through guarded pre-dispatch reporting, until dispatch actually runs.
   With no `StateFile` (shadow connectors), all state is memory-only. Corrupt journals are
   quarantined with an error; subsequent launches fail closed until recovery.
   State belongs to each host, not a designated fleet machine; other hosts have independent queues.

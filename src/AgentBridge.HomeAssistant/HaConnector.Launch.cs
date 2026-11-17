@@ -51,6 +51,7 @@ public sealed partial class HaConnector
     readonly List<string> launchRequestsHandled = [];
     // The outcomes an agent reads, newest first (Set-DaemonLaunchOutcome).
     readonly List<JsonObject> launchOutcomes = [];
+    bool launchOutcomesDirty;
     Dictionary<string, (string Id, string Launcher)> resumeByLabel = new(StringComparer.Ordinal);
     // Sessions an agent's press launched, to show as the agent's from the moment they appear.
     readonly Dictionary<string, (DateTimeOffset At, string? Prompt, bool Resumed, string? Principal)> launchedByAgent = new(StringComparer.Ordinal);
@@ -94,6 +95,7 @@ public sealed partial class HaConnector
             await LaunchDefaultsAsync(pending.Offered, pending.Card, pending.Selected, ct);
         }
         if (!options.ConsumeAnswers) { Interlocked.Exchange(ref launchTouched, 0); return; }
+        if (launchOutcomesDirty) { await PublishLaunchOutcomesAsync(ct); }
         var pressed = Interlocked.Exchange(ref launchTouched, 0) == 1;
         if (pressed || now >= nextLaunchSweep || !launchPressBaselined)
         {
@@ -762,14 +764,21 @@ public sealed partial class HaConnector
             ["launched"] = launched?.DeepClone(),
         });
         PruneLaunchRecords();
+        launchOutcomesDirty = true;
+        await PublishLaunchOutcomesAsync(ct);
+    }
+
+    async Task PublishLaunchOutcomesAsync(CancellationToken ct)
+    {
         SaveLaunchJournal();
         try
         {
             await PublishAsync(HaContract.LaunchOutcomeTopic(Slug), new JsonObject { ["recent"] = new JsonArray([.. launchOutcomes.Select(o => (JsonNode)o.DeepClone())]) }, true, ct);
+            launchOutcomesDirty = false;
         }
         catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
         {
-            log($"Home Assistant connector: the launch outcome for {request} could not be published: {Describe(e)}");
+            log($"Home Assistant connector: the launch outcomes could not be published: {Describe(e)}");
         }
     }
 
@@ -821,19 +830,12 @@ public sealed partial class HaConnector
             }
         }
         PruneLaunchRecords();
-        if (launchOutcomes.Count > 0) { SaveLaunchJournal(); }
-        launchOutcomesRestored = true;
         if (cut || launchOutcomes.Count > 0 || state is not null)
         {
-            try
-            {
-                await PublishAsync(HaContract.LaunchOutcomeTopic(Slug), new JsonObject { ["recent"] = new JsonArray([.. launchOutcomes.Select(o => (JsonNode)o.DeepClone())]) }, true, ct);
-            }
-            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
-            {
-                log($"Home Assistant connector: the launch outcomes could not be published: {Describe(e)}");
-            }
+            launchOutcomesDirty = true;
+            await PublishLaunchOutcomesAsync(ct);
         }
+        launchOutcomesRestored = true;
         return true;
     }
 

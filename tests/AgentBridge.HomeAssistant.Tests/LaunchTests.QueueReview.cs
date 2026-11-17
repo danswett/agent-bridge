@@ -5,6 +5,46 @@ using Xunit;
 
 public sealed partial class LaunchTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_refusal_whose_reporting_failed_is_retried_without_another_press(bool journal)
+    {
+        await using var c = await Ready();
+        if (journal) { Directory.CreateDirectory(Path.Combine(folder, "ha-connector.json.launch.tmp")); }
+        ha.PublishFailsFor = (topic, _) => !journal && topic == HaContract.LaunchOutcomeTopic(Slug);
+        Payload(new JsonObject { ["request"] = "review-retry", ["settings"] = new JsonObject { ["agent"] = "missing" } });
+        await Launch(c, AgentUser);
+        if (journal) { Directory.Delete(Path.Combine(folder, "ha-connector.json.launch.tmp")); }
+        ha.PublishFailsFor = null;
+        await Pass(c);
+        Assert.Empty(launched);
+        Assert.Contains("review-retry", ha.Retained[HaContract.LaunchOutcomeTopic(Slug)], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_daemon_pause_before_dispatch_keeps_the_queued_request()
+    {
+        await using var c = await Ready();
+        ha.PublishFailsFor = (topic, body) =>
+        {
+            if (topic == HaContract.LaunchOutcomeTopic(Slug) && body.Contains("\"outcome\":\"starting\"", StringComparison.Ordinal)
+                && !body.Contains("\"phase\"", StringComparison.Ordinal)) { daemon = "agent-ha-bridge is running"; }
+            return false;
+        };
+        Payload(new JsonObject { ["request"] = "review-pause" });
+        await Launch(c, AgentUser);
+        Assert.Empty(launched);
+        ha.PublishFailsFor = null;
+        daemon = null;
+        await Pass(c);
+        await Pass(c, 2);
+        await Pass(c, 6);
+        await c.DeliveredAsync();
+        await Pass(c);
+        Assert.Single(launched);
+    }
+
     [Fact]
     public async Task A_memory_only_connector_can_report_a_launch_outcome()
     {
