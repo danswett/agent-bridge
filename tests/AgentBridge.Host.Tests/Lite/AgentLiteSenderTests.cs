@@ -63,7 +63,39 @@ public class AgentLiteSenderTests
     sealed class Deliver(LiteDelivery result) : ILiteDeliver
     {
         public string? Text;
-        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) { Text = text; return Task.FromResult(result); }
+        public VerifiedEnvelope? Envelope;
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) { Envelope = envelope; Text = text; return Task.FromResult(result); }
+    }
+
+    [Fact]
+    public async Task Script_credentials_arrive_as_scripts_without_leaking_credential_material()
+    {
+        using var r = new Rig();
+        Receiving(r);
+        const string canary = "abat1_CANARY_NOT_A_PRINCIPAL";
+        var script = AgentCredential.Script(canary, Self, "pump-wake", DateTimeOffset.UtcNow);
+        var result = await r.Sender().SendAsync(script, new LiteSendInput("vm2", "agent-b2", "hello"), default);
+        Assert.Equal(LiteKind.Delivered, result.Kind);
+        var wire = Encoding.UTF8.GetString(r.Deliver.Envelope!.Body.Encode());
+        Assert.Contains("\"kind\":\"script\"", wire);
+        Assert.Contains($"\"identity\":\"script:{Self}/pump-wake\"", wire);
+        Assert.DoesNotContain("\"agent\":", wire);
+        Assert.DoesNotContain(canary, wire);
+    }
+
+    [Theory]
+    [InlineData("session", "script:machine/pump")]
+    [InlineData("script", "agent:machine/session")]
+    [InlineData("script", "person:machine/person")]
+    [InlineData("person", null)]
+    public async Task Credential_kind_confusion_is_refused_before_signing(string kind, string? principal)
+    {
+        using var r = new Rig();
+        var caller = Caller with { Kind = kind, Principal = principal };
+        var result = await r.Sender().SendAsync(caller, new LiteSendInput("vm2", "agent-b2", "hello"), default);
+        Assert.Equal((LiteKind.Refused, AgentLiteSender.NoCredential), (result.Kind, result.Code));
+        Assert.Equal(0, r.Signed);
+        Assert.Equal(0, r.Link.Opened);
     }
 
     // Answers as the real receiver does, so the sealed envelope is checked end to end rather than assumed.

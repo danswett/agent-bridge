@@ -1,5 +1,5 @@
-using AgentBridge.Protocol;
 using AgentBridge.Host.Core.Updates;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
@@ -14,7 +14,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
 {
     readonly TimeProvider time = time ?? TimeProvider.System;
     internal Func<Task<HaltPolicySnapshot>> ReadHaltPolicy { get; set; } =
-        readHaltPolicy ?? (() => Task.FromResult(new HaltPolicySnapshot(null, null, false)));
+        readHaltPolicy ?? (() => Task.FromResult(inner.HaltPolicy ?? new HaltPolicySnapshot(null, null, false)));
     readonly SemaphoreSlim policyTurn = new(1, 1);
     HaltPolicySnapshot policy = new(null, null, false);
     bool policyRead;
@@ -38,7 +38,8 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
     }
 
     internal bool Halted(string? version) => version is not null
-        && policy.Policy?.Halted?.Contains(version, StringComparer.Ordinal) == true;
+        && (policy.Policy?.Halted?.Contains(version, StringComparer.Ordinal) == true
+            || inner.HaltPolicy?.Policy?.Halted?.Contains(version, StringComparer.Ordinal) == true);
     internal bool PolicyFresh => policy.Fresh && policy.Policy is { Body.Length: > 0 } && policy.At is { } at
         && at <= time.GetUtcNow() && time.GetUtcNow() - at < ReleaseDiscovery.GithubRevalidateEvery;
     internal UpdatePolicy Policy => new(PolicyFresh ? UpdatePolicyState.Ok
@@ -79,8 +80,8 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
     public event Action? Changed;
 
     // The release the last check found, null when it found nothing newer (or none has finished).
-    string? foundRelease;
-    public string? Found => Halted(foundRelease) ? null : foundRelease;
+    string? found;
+    public string? Found { get => Offered(found); private set => found = value; }
     public DateTimeOffset? CheckedAt { get; private set; }
     // As of when Found is known: the feed's own answer may be older than the check that read it,
     // from the machine's shared copy (#530), and the devices are told how old it really is.
@@ -89,6 +90,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
     public int? GitHubRemaining => inner.GitHubRemaining;
     public DateTimeOffset? GitHubQuotaAt => inner.GitHubQuotaAt;
     public DateTimeOffset? DiscoveredAt => inner.DiscoveredAt;
+    public HaltPolicySnapshot? HaltPolicy => inner.HaltPolicy;
     public UpdatePhase Phase => Volatile.Read(ref downloads) > 0 ? UpdatePhase.Downloading : Volatile.Read(ref checks) > 0 ? UpdatePhase.Checking : UpdatePhase.Idle;
     public int? Progress { get; private set; }
     public long? Bytes { get; private set; }
@@ -97,7 +99,17 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
 
     public string? InstalledVersion => inner.InstalledVersion;
     public string? PendingNotes => inner.PendingNotes;
-    public string? Ready => policyRead && !Halted(inner.Ready) ? inner.Ready : null;
+    public string? Ready => Offered(inner.Ready);
+
+    string? Offered(string? release) => Halted(release) ? null : release;
+
+    void RefuseHalted(string? release)
+    {
+        if (release is not null && Offered(release) is null)
+        {
+            throw new InvalidOperationException($"the update to {release} has been halted; nothing was started");
+        }
+    }
 
     public async Task<string?> CheckAsync()
     {
@@ -109,19 +121,14 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
             await RefreshHaltPolicyAsync();
             var from = Bound();
             var found = await inner.CheckAsync();
-            if (Halted(found))
-            {
-                foundRelease = null;
-                throw new InvalidOperationException(HaltedReason);
-            }
             // A check that finished after its source changed answers for the old one.
-            if (Bound() != from) { return found; }
+            if (Bound() != from) { return Offered(found); }
             if (Found != found) { (Bytes, Total) = (null, null); }
-            foundRelease = found;
+            Found = found;
             CheckedAt = time.GetUtcNow();
             FoundAsOf = inner.DiscoveredAt is { } at && at < CheckedAt ? at : CheckedAt;
             CheckSource = inner.CheckSource;
-            return found;
+            return Offered(found);
         }
         finally
         {
@@ -142,7 +149,9 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
             await downloading.WaitAsync();
             held = true;
             await RefreshHaltPolicyAsync();
-            if (Halted(foundRelease ?? inner.Ready)) { throw new InvalidOperationException(HaltedReason); }
+            // Read after the queue wait: a halt may have arrived since the check.
+            RefuseHalted(found);
+            RefuseHalted(inner.Ready);
             // The one waited for downloaded the release the last check found: nothing to do.
             if (inner.Ready is not null) { return; }
             var from = Source;
@@ -189,11 +198,15 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
         }
     }
 
-    public void ApplyAndRestart(string version, Action? handedOver = null) => ApplyConfirmed(version, false, handedOver);
+    public void ApplyAndRestart(string version, Action? handedOver = null)
+    {
+        RefuseHalted(version);
+        inner.ApplyAndRestart(version, handedOver);
+    }
 
     internal void ApplyConfirmed(string version, bool uncheckedPolicy, Action? handedOver)
     {
-        if (Halted(version)) { throw new InvalidOperationException(HaltedReason); }
+        RefuseHalted(version);
         if (!policyRead || (!PolicyFresh && !uncheckedPolicy)) { throw new InvalidOperationException("bad-release protection is stale or unreadable"); }
         inner.ApplyAndRestart(version, handedOver);
     }
@@ -209,7 +222,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
     public void SourceChanged()
     {
         changes++;
-        foundRelease = null;
+        Found = null;
         CheckedAt = null;
         FoundAsOf = null;
         CheckSource = null;
@@ -228,7 +241,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
     string Bound()
     {
         var now = inner.Source;
-        if (bound is not null && bound != now) { (foundRelease, CheckedAt, FoundAsOf, CheckSource, failed, Bytes, Total) = (null, null, null, null, null, null, null); }
+        if (bound is not null && bound != now) { (found, CheckedAt, FoundAsOf, CheckSource, failed, Bytes, Total) = (null, null, null, null, null, null, null); }
         bound = now;
         return now;
     }

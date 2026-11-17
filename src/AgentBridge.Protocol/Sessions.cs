@@ -369,6 +369,11 @@ public sealed record MachineInfo([property: Strict(Strictness.Identity)] string 
 
 public sealed record HelloResult([property: Strict(Strictness.Identity)] int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
 
+public sealed record TranscriptObservation(
+    [property: JsonPropertyName("observed_at")] DateTimeOffset ObservedAt,
+    string Source,
+    [property: JsonPropertyName("host_id")] string HostId);
+
 public sealed record Session
 {
     [Strict(Strictness.Identity)]
@@ -390,6 +395,12 @@ public sealed record Session
     public DateTimeOffset? StartedAt { get; init; }
     public required DateTimeOffset UpdatedAt { get; init; }
     public int? ProcessId { get; init; }
+    [JsonPropertyName("transcript_bytes")]
+    public long? TranscriptBytes { get; init; }
+    [JsonPropertyName("transcript_bytes_unavailable")]
+    public string? TranscriptBytesUnavailable { get; init; }
+    [JsonPropertyName("transcript_observation")]
+    public TranscriptObservation? TranscriptObservation { get; init; }
     public required Activity Activity { get; init; }
     public Question? Question { get; init; }
     // Agent while an agent drives the current turn: it launched the session, or answered or

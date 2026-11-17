@@ -63,11 +63,14 @@ public static class Answers
         _ => value.ValueKind == JsonValueKind.String ? TextProblem(value.GetString(), "the text") : "expected text",
     };
 
-    static string? ChoiceProblem(Field field, JsonElement value)
+    static string? ChoiceProblem(Field field, JsonElement value, HashSet<string>? optionValues = null)
     {
         if (value.ValueKind == JsonValueKind.String)
         {
-            return field.Options?.Any(o => o.Value == value.GetString()) == true ? null : "not one of the choices";
+            var known = optionValues is not null
+                ? optionValues.Contains(value.GetString()!)
+                : field.Options?.Any(o => o.Value == value.GetString()) == true;
+            return known ? null : "not one of the choices";
         }
         if (value.ValueKind == JsonValueKind.Object && value.TryGetProperty("other", out var other))
         {
@@ -81,11 +84,12 @@ public static class Answers
 
     static string? MultiProblem(Field field, JsonElement value)
     {
+        var optionValues = field.Options?.Select(o => o.Value).ToHashSet(StringComparer.Ordinal);
         var others = 0;
         foreach (var item in value.EnumerateArray())
         {
             if (item.ValueKind == JsonValueKind.Object) { others++; }
-            if (ChoiceProblem(field, item) is { } problem) { return problem; }
+            if (ChoiceProblem(field, item, optionValues) is { } problem) { return problem; }
         }
         return others > 1 ? "at most one other answer" : null;
     }

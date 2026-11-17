@@ -318,6 +318,13 @@ Both carry the device block (`identifiers: [<node>]`, `name`, `manufacturer: AI 
 republishes only these two configs (`Update-CopilotMqttSessionName`). Status and activity are
 published when they change, compared without their `updated` stamp.
 
+Session status attributes additionally carry `transcript_bytes`, or an explicit
+`transcript_bytes_unavailable` reason, and `transcript_observation` with `observed_at`,
+`source: "file-size"` and the public `host_id` (#2739). These belong to the same session node;
+size comes only from event-log file metadata, never its contents or process memory. Absence means
+unknown, not zero; only a measured empty file is zero. See the [Session contract](protocol/v1-sessions.md#session)
+for reasons and observation timing. This connector does not enforce a cap or change the census.
+
 How the host's `Session` maps to what the daemon kept, where the two differ:
 
 * The daemon remembers the newest message and whether it was a thought; the host keeps the
@@ -567,6 +574,22 @@ and the cut at 64 never splits a character. A reply that arrives while a questio
 logs `refused a reply to <node> from <sender>` and types nothing, so the sender retries after the card
 closes. A reply already waiting when a question opens is refused the same way (#1634).
 Publishes without a `rid` behave as before.
+
+**Durable inbox foundation.** `DurableInbox` is an internal, not-yet-connected store: it
+atomically saves per-node FIFO entries and their delivered timestamps for process restart,
+and returns the original entry on a matching rid retry, even if a retry is restamped. It keeps
+at most 100 entries per node and 1000 total; when full, it prunes the oldest delivered entries
+before refusing an enqueue if only undelivered entries remain. Delivery clears the payload while
+retaining rid metadata for deduplication; legacy senders get a generated rid and `legacy` sender.
+For #2780 integration, deduplication lasts only while that metadata is retained within the
+100-entry per-node and 1000-entry total caps, including pending entries. A retry of a pruned
+delivered rid is accepted as new and may be delivered again; this is not permanent deduplication.
+Load and save remove this inbox's GUID-named crash-leftover temporary files under its lock,
+so obsolete copies cannot retain payloads after a later delivery.
+Power-loss durability is not established. It does not change the live reply path, publish acks,
+or provide native receipt. A later slice must provide an access-controlled storage directory,
+one dispatcher per node (a peek does not reserve a message), and reconcile the crash window
+between typing and recording delivery before enabling it.
 
 **`tools/agents/reply-session.ps1`** is the in-repo sender. It posts the payload with a rid, waits
 for the reply sensor to show its own stamp (there is one slot per node, so rapid sends can overwrite
@@ -1271,7 +1294,7 @@ after its card has gone; retained topics under `copilot/cli/machine/<slug>/` and
 **administrator** (as the daemon's `homeAssistant.token` is: `mqtt.publish` and the entity
 registry are administrator-only). It is given at the machine with `agent-bridge-host ha token
 set`, read from standard input (never an argument, which would sit in shell history and the
-process list; not echoed at a console; refused inside an agent session, as `ha token clear` is,
+process list; echoed only as masks; refused inside an agent session, as `ha token clear` is,
 [host-config.md](host-config.md#approving-a-workspace-at-the-machine)), and kept the way the device key is: DPAPI to the Windows
 user in `ha-token.dpapi` beside it; elsewhere an owner-only file until the Keychain arrives
 (P5). It is never in `config.json`, never logged; failures name the HTTP status and never echo a
@@ -1489,13 +1512,19 @@ Assistant and broker).
 agent-bridge-host config set homeAssistant.baseUrl http://127.0.0.1:8123
 agent-bridge-host config set homeAssistant.disposable true
 agent-bridge-host config set homeAssistant.enabled true
-agent-bridge-host ha token set            # paste the token; it is not shown
+agent-bridge-host ha token set            # paste the token, then explicitly confirm
 agent-bridge-host ha status               # on, or why not, and any refusal; never the token
 agent-bridge-host ha shadow               # compare with agent-ha-bridge's retained topics; writes nothing
 ```
 
 `serve` logs `the Home Assistant connector is on: <url> as agent_bridge_<slug>` or why it is
 off, and `Home Assistant connector paused: …` while agent-ha-bridge runs.
+
+`ha token set` requires the base URL first. It reports length, whitespace and only eight SHA256
+hex characters, checks the local JWT shape (not validity), then warns about the recorded
+three-rejection budget (the real HA ban count is unknown). Only an explicit `yes` stores it
+and authorizes one attempt; a rejection stops it until consent is given again, even after
+restart. Neither this command nor a declined prompt contacts HA; malformed input changes nothing.
 
 ## Troubleshooting
 
