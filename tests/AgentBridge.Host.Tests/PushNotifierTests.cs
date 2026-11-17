@@ -1809,6 +1809,7 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(new PushSubscribeResult(true, 1), SubscribeApns(Phone, "prod", "01020304"));
         Assert.Equal(new PushSubscribeResult(true, 2), SubscribeApns(Phone, "dev", "11121314"));
         Assert.Equal(new PushSubscribeResult(true, 2), SubscribeApns(Phone, "prod", "aabbccdd", name: "iPhone"));
+        Assert.Equal(0, PushStore.Load(StorePath, "2").ApnsCount);
 
         var listed = Assert.IsType<PushListResult>(notifier.Handle(Peer(Phone), ApnsPushRequest.List, JsonSerializer.SerializeToElement(new { })));
         Assert.Equal([("apns:prod", true), ("apns:dev", true)], listed.Devices.Select(d => (d.Service, d.Current)));
@@ -1887,6 +1888,23 @@ public sealed class PushNotifierTests : IDisposable
         source.Upsert(S("new", SessionStatus.Waiting, question: Q("q")));
         await After(TimeSpan.FromSeconds(2));
         Assert.Single(sender.Sent);
+    }
+
+    [Fact]
+    public void Losing_a_person_grant_removes_native_registrations()
+    {
+        using var host = P256KeyPair.Generate();
+        using var person = P256KeyPair.Generate();
+        var pins = Enforce(host, person).Store;
+        Start();
+        var peer = PinnedPeer(person);
+        SubscribeApns(peer.Device, "prod", "01020304", peer);
+        Assert.Equal(1, store.ApnsCount);
+
+        pins.Revoke(person.Public);
+        trust!.Revalidate();
+        Assert.Equal(0, store.ApnsCount);
+        Assert.Equal(0, PushStore.Load(StorePath, Account).ApnsCount);
     }
 
     [Theory]

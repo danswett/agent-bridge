@@ -233,6 +233,10 @@ public sealed class SessionService
                 return SignInDevices!(((SecureChannel)channel).PeerStatic is { } peer ? Wire.DeviceId(peer) : null);
             case Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList when push is not null:
                 return await push.HandleAsync(channel, op, data);
+            case ApnsPushRequest.Subscribe or ApnsPushRequest.Unsubscribe or ApnsPushRequest.List when push is not null:
+                return await push.HandleAsync(channel, op, data);
+            case ApnsPushRequest.Subscribe or ApnsPushRequest.Unsubscribe or ApnsPushRequest.List:
+                throw new InvalidOperationException("native push is not supported by this host");
             // Notifications turned off on this machine (push.enabled), or never set up: a device
             // that asks anyway hears so, rather than an unknown op it might take for a fault.
             case Ops.PushSubscribe:
@@ -664,7 +668,7 @@ public sealed class SessionService
         if (attachments is not null && replies?.TakesAttachments == true && Direct(channel)) { offered.Add(Capabilities.SessionsAttachDirect); }
         if (stops?.Available == true) { offered.Add(Capabilities.SessionsStop); }
         // Web Push is for devices through the relay; an app on this machine has its own toasts.
-        if (push is not null && channel is SecureChannel) { offered.Add(Capabilities.Push); }
+        if (push is not null && channel is SecureChannel) { offered.Add(Capabilities.Push); offered.Add(ApnsPushRequest.Capability); }
         if (usage is not null) { offered.Add(UsageProtocol.Capability); }
         if (usage?.Shares == true) { offered.Add(UsageProtocol.SharedCapability); }
         if (launcher?.Available == true) { offered.Add(LaunchProtocol.Capability); }
