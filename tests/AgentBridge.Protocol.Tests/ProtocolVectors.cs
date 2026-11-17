@@ -409,9 +409,13 @@ public static class ProtocolVectors
             .Valid("listed", new SignInDevices(SignInDeviceStates.Ready, [new("iPhone", "phone", "iOS", true), new("Work laptop", "app", "Windows")]))
             .Valid("no-roster-yet", new SignInDevices(SignInDeviceStates.None, []))
             .Valid("unreadable", new SignInDevices(SignInDeviceStates.Unreadable, []));
+        var transcriptObservation = new TranscriptObservation(T1, "file-size", MachineId);
+        f.Record<TranscriptObservation>(Host).Valid("file-metadata", transcriptObservation);
         f.Record<Session>(Host)
             .Valid("full", FullSession)
             .Valid("minimal", MinimalSession)
+            .Valid("transcript-file-size", MinimalSession with { TranscriptBytes = 52_428_801, TranscriptObservation = transcriptObservation })
+            .Valid("transcript-unavailable", MinimalSession with { TranscriptBytesUnavailable = "not-found", TranscriptObservation = transcriptObservation })
             .Valid("waiting-on-a-delegate", MinimalSession with { Agent = AgentKind.Copilot, Status = SessionStatus.Waiting, Question = Plain with { Agent = "agent-1", AnswerAtMachine = true }, Subagents = [Delegate with { Status = SubagentStatus.Waiting }], WaitingOn = "agent-1" })
             .Valid("ending", MinimalSession with { Agent = AgentKind.Codex, Status = SessionStatus.Ending })
             // Idle, as its turn ended, with why beside it (#800): an older client reads only that.

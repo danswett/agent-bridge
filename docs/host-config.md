@@ -542,9 +542,14 @@ evidence; launch pruning and launch-handler wiring remain in later #1401 slices.
 `agent.send` now writes one outbound `agent.send` attempt after caller and input validation,
 before invoking the sender (#1985, #1401 A1). Its principal and chain come from the credential,
 not the request. The outcome is `attempted`, never proof of delivery, and `request` is a local
-attempt id, not the relay request id returned by the sender. Sender refusals or failures leave
-that one attempt record. An absent log, a false append or a thrown append refuses the send with
-`auditUnwritable`; nothing is sent or queued. Early caller/input refusals write no record in A1.
+attempt id, not the relay request id returned by the sender. A second record persists the terminal
+`delivered`, `refused`, `undeliverable`, `unconfirmed` or `off` outcome with the same attempt id,
+credential attribution, target and text hash/byte length, never plaintext or free-form sender codes.
+Sender exceptions and cancellation append `unconfirmed` without exception text, then rethrow.
+An absent log, a false append or a thrown append before dispatch refuses the send with
+`auditUnwritable`; nothing is sent or queued. A failed terminal append also raises `auditUnwritable`
+(taking precedence over a sender error), but the message may have been sent; the host never resends.
+Early caller/input refusals write no record in A1.
 Authenticated agent `session.answer` calls write one local `refused` record and still cannot
 answer (#2011, #1401 A5). The target is a normalized session UUID, or `unknown` for malformed
 input. `fleet.find` and `fleet.list` write one local `attempted` record before reading the

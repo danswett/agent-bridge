@@ -1025,16 +1025,21 @@ public sealed class StopFlowTests : IAsyncLifetime
         Assert.Contains(logged, line => line.Contains("SECRET-C:\\Users\\x\\denied.dll"));
     }
 
-    [Fact]
-    public async Task A_process_that_will_not_go_fails_and_the_session_shows_its_own_status_again()
+    [Theory]
+    [InlineData("OS-DENIED: C:\\private\\session.exe")]
+    [InlineData("OS-FAILURE: the handle is invalid\r\nsystem detail")]
+    public async Task A_process_that_will_not_go_says_fixed_words_logs_the_OS_error_and_restores_its_status(string osError)
     {
         injector.OnInject = null;
         control.TerminateWorks = false;
+        control.TerminateError = osError;
         var ch = await OpenAsync();
 
         var result = await StopAsync(ch);
 
-        Assert.Equal(("failed", "the host could not terminate the session's process (denied)"), (result.Outcome_, result.Reason));
+        Assert.Equal(("failed", "the machine couldn't end the session"), (result.Outcome_, result.Reason));
+        Assert.DoesNotContain(osError, result.Reason!);
+        Assert.Contains(logged, line => line.Contains(osError, StringComparison.Ordinal));
         Assert.Equal(SessionStatus.Idle, source.Get(Id)!.Status);
     }
 
@@ -1189,6 +1194,7 @@ public sealed class StopFlowTests : IAsyncLifetime
         public readonly List<int> Terminated = [];
         public string? Refusal;
         public bool TerminateWorks = true;
+        public string TerminateError = "the host could not terminate the session's process (denied)";
         public int Opens;
         // Open's nth call throws: the first is the press's check, the second the one that ends it.
         public (int Call, Exception Error)? ThrowOnOpen;
@@ -1228,7 +1234,7 @@ public sealed class StopFlowTests : IAsyncLifetime
             public string? Terminate()
             {
                 lock (control.gate) { control.Terminated.Add(pid); }
-                if (!control.TerminateWorks) { return "the host could not terminate the session's process (denied)"; }
+                if (!control.TerminateWorks) { return control.TerminateError; }
                 control.Exit(pid);
                 return null;
             }

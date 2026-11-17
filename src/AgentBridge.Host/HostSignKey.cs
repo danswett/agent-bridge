@@ -9,7 +9,7 @@ namespace AgentBridge.Host;
 
 // Custody only: no caller enrolls this key or enables roster v2 by creating it.
 [SupportedOSPlatform("windows")]
-internal sealed class HostSignKey : IDisposable
+internal sealed class HostSignKey : IHostEnrollmentKey
 {
     const string Unavailable = "hostSign custody is incomplete, damaged or inaccessible; the existing identity is not replaced";
     readonly RosterSigningKey key;
@@ -29,15 +29,12 @@ internal sealed class HostSignKey : IDisposable
             var folder = Path.Combine(profile, "host-sign");
             var expected = HostRosterReader.ReadPrivate(Path.Combine(folder, "host-sign.public"), 65, b => b).Value;
             if (expected is not { Length: 65 } || !AgentBridge.Roster.P256.IsPoint(expected)) { throw new InvalidDataException(); }
-            foreach (var name in new[] { "host-sign.lock", "signing-key.json" })
-            {
-                if (HostRosterReader.ReadPrivate(Path.Combine(folder, name), 4096, b => b).Value is null) { throw new InvalidDataException(); }
-            }
+            if (HostRosterReader.ReadPrivate(Path.Combine(folder, "host-sign.lock"), 4096, b => b).Value is null)
+            { throw new InvalidDataException(); }
             using var guard = new FileStream(Path.Combine(folder, "host-sign.lock"), FileMode.Open, FileAccess.Read, FileShare.Read);
             var software = Present(Path.Combine(folder, "signing-key.dpapi"));
-            if (software && HostRosterReader.ReadPrivate(Path.Combine(folder, "signing-key.dpapi"), 4096, b => b).Value is null)
-            { throw new InvalidDataException(); }
-            opened = RosterSigningKeys.OpenExisting(folder);
+            opened = RosterSigningKeys.OpenExisting(folder, path =>
+                HostRosterReader.ReadPrivate(path, 4096, b => b).Value ?? throw new InvalidDataException());
             if (!expected.AsSpan().SequenceEqual(opened.Public) || (opened.Storage == KeyStorage.Dpapi) != software)
             { throw new InvalidDataException(); }
             var result = new HostSignKey(opened);
