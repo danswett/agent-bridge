@@ -373,7 +373,6 @@ public sealed partial class HaConnector
             || (expected.ValueKind == JsonValueKind.String
                 && string.Equals(expected.GetString(), options.MachineInstance, StringComparison.Ordinal))) { return false; }
         if (p.Reply.IsHandled(state.State)) { return true; }
-        p.DriverPendingAt = null;
         if (CleanRid(Str(a, "rid")) is { } rid) { p.Reply.Ack = MakeAck(rid, CleanSender(Str(a, "sender")), "instance-mismatch"); }
         await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = "The reply was meant for a different host instance; no reply was sent." }, ct);
         p.Reply.Handle(state.State);

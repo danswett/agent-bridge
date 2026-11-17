@@ -127,7 +127,7 @@ public sealed partial class ReplyTests
         Idle();
         await using var c = ConnectorWithInstance("host-run-2");
         await Pass(c);
-        c.Observe(ha.SendFromCard(Node, "first", expectedInstance: "host-run-2"));
+        c.Observe(ha.SendFromCard(Node, "first", driver: "agent", expectedInstance: "host-run-2"));
         await Pass(c);
         await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
         try
@@ -151,8 +151,37 @@ public sealed partial class ReplyTests
             release.TrySetResult(new ReplyResult(AnswerOutcome.Delivered));
             await c.DeliveredAsync();
         }
-        await CardCloses(c);
+        await Pass(c);
+        Idle(turn: 2, message: "first");
+        await Pass(c);
+        Assert.Equal("agent", Detail.GetProperty("driver").GetString());
         Assert.Equal("first", Assert.Single(replied).Text);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Refusing_a_stale_payload_preserves_the_delivered_agent_replys_next_turn(bool questionOpen)
+    {
+        Idle();
+        await using var c = ConnectorWithInstance("host-run-2");
+        await Pass(c);
+        await Do(c, ha.SendFromCard(Node, "Carry on", driver: "agent", expectedInstance: "host-run-2"));
+        if (questionOpen)
+        {
+            Idle(question: Pick());
+            await Pass(c);
+        }
+
+        await Do(c, ha.SendFromCard(Node, "stale reply", driver: "agent",
+            rid: "r-stale-driver", expectedInstance: "host-run-1"));
+
+        Assert.Equal("instance-mismatch", Ack.GetProperty("outcome").GetString());
+        Assert.Equal("Carry on", Assert.Single(replied).Text);
+        Assert.Empty(answered);
+        Idle(turn: 2, message: "Carry on");
+        await Pass(c);
+        Assert.Equal("agent", Detail.GetProperty("driver").GetString());
     }
 
     [Fact]
