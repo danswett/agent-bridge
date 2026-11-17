@@ -7,7 +7,7 @@ namespace AgentBridge.HomeAssistant;
 public sealed partial class HaConnector
 {
     readonly DurableInbox? inbox;
-    readonly ConcurrentQueue<InboxMessage> inboxReceipts = new();
+    readonly ConcurrentQueue<(InboxMessage Message, bool Duplicate)> inboxReceipts = new();
 
     bool StoreInbox(HaTrigger hit)
     {
@@ -22,10 +22,10 @@ public sealed partial class HaConnector
                 Str(a, "at") != hit.State.State) { return false; }
             if (string.IsNullOrWhiteSpace(Str(a, "text")) && !HasAttachments(hit.State)) { return false; }
             if (p.Reply.IsHandled(hit.State)) { return true; }
-            var message = inbox.Enqueue(node, rid, CleanSender(Str(a, "sender")), JsonSerializer.Serialize(hit.State), time.GetUtcNow());
+            var message = inbox.Enqueue(node, rid, CleanSender(Str(a, "sender")), JsonSerializer.Serialize(hit.State), time.GetUtcNow(), out var duplicate);
             p.Reply.Handle(hit.State);
             p.Reply.ReadAgain = true;
-            inboxReceipts.Enqueue(message);
+            inboxReceipts.Enqueue((message, duplicate));
             return true;
         }
     }
@@ -35,14 +35,18 @@ public sealed partial class HaConnector
 
     async Task InboxReceiptsAsync(CancellationToken ct)
     {
-        while (inboxReceipts.TryPeek(out var message))
+        while (inboxReceipts.TryPeek(out var receipt))
         {
+            var message = receipt.Message;
             Published? p;
             lock (gate) { p = published.Values.FirstOrDefault(p => p.Node == message.Node); }
             if (p is not null)
             {
-                p.Reply.Ack = MakeAck(message.Rid, message.Sender, InboxOutcome(message), message.DeliveredAt is not null);
-                await TransientAsync(p, message.DeliveredAt is null ? "Reply queued" : "Duplicate reply dropped", [], ct);
+                var outcome = InboxOutcome(message);
+                p.Reply.Ack = MakeAck(message.Rid, message.Sender, outcome, receipt.Duplicate && message.DeliveredAt is not null);
+                await TransientAsync(p, outcome == "refused" ? "Reply NOT sent" :
+                    message.DeliveredAt is null ? "Reply queued" : "Duplicate reply dropped",
+                    outcome == "refused" ? new JsonObject { ["error"] = "This request was refused; check the session and inbox capacity before retrying with a new request id." } : [], ct);
             }
             inboxReceipts.TryDequeue(out _);
         }

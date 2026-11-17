@@ -721,7 +721,6 @@ public sealed partial class HaConnector : IAsyncDisposable
             // the next start would leave its retained entities for the orphan sweep alone to find.
             lock (gate)
             {
-                if (!underWay.ContainsKey(id)) { inbox?.Forget(node); }
                 published.Remove(id, out was);
                 starting.Remove(id);
                 // An ended session's rid history goes with it, unless a delivery is still running
@@ -743,7 +742,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         {
             foreach (var id in ridLogs.Keys)
             {
-                if (!live.ContainsKey(id) && !underWay.ContainsKey(id)) { inbox?.Forget(HaContract.NodeId(id)); ridLogs.TryRemove(id, out _); }
+                if (!live.ContainsKey(id) && !underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
             }
         }
         if (gone.Count > 0) { WatchSetChanged(); }
