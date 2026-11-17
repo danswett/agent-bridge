@@ -62,11 +62,10 @@ public static class ConversationBlocks
     // top of the viewport in place (KeepItemsInView). A response that grew keeps its head; one that
     // lost its earliest blocks (cut at the start to fit, SessionBudget) keeps the rest, the cut
     // falling between two blocks alike or partway through what is now its first block included.
-    // The longest run of blocks kept wins, the first found of two as long. False, with nothing
-    // changed, when nothing can be kept: the caller replaces the items whole, in one reset rather
-    // than an add for each block. Otherwise one change for each block removed or added, the fewest
-    // the list takes short of a reset, which would lose its realised blocks and its place; over
-    // ConversationItems none of them moves another block, so a cut of any size is linear.
+    // The longest run of blocks kept wins, the first found of two as long. Returns whether any
+    // existing block was kept. With none in common, replace the blocks in the SAME collection:
+    // resetting the outer list also resets the stored history in its header (#1739).
+    // Over ConversationItems, changes at either end move no other blocks, so a cut is linear.
     public static bool Update(Collection<ConversationBlock> shown, IReadOnlyList<MdBlock> next) => Update(shown, next, Same);
 
     // Linear in the blocks, never quadratic on repeated text (4,096 paragraphs alike once made 16.8
@@ -85,7 +84,14 @@ public static class ConversationBlocks
                 if (runs[s] > kept) { (start, from, kept) = (s, lead, runs[s]); }
             }
         }
-        if (kept == 0) { return false; }
+        if (kept == 0)
+        {
+            var replace = Math.Min(shown.Count, next.Count);
+            for (var i = 0; i < replace; i++) { shown[i] = new ConversationBlock(next[i]); }
+            for (var i = shown.Count - 1; i >= next.Count; i--) { shown.RemoveAt(i); }
+            for (var i = replace; i < next.Count; i++) { shown.Add(new ConversationBlock(next[i])); }
+            return false;
+        }
         for (var i = shown.Count - 1; i >= start + kept; i--) { shown.RemoveAt(i); }
         for (var i = 0; i < start; i++) { shown.RemoveAt(0); }
         for (var i = from - 1; i >= 0; i--) { shown.Insert(0, new ConversationBlock(next[i])); }

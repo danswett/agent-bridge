@@ -1142,6 +1142,12 @@ separate, explicit step ([migration.md](migration.md)).
 
 ## The app
 
+**Transcript updates** ([#1739](https://github.com/danswett/agent-bridge/issues/1739)):
+the current session keeps the conversation's items source even when a new reply
+shares no Markdown blocks with the previous one, or becomes empty. Blocks change
+individually; replacing the source is reserved for switching sessions, since the
+same list hosts stored history in its header.
+
 **Closed-question projection** (#1329, model slice): `HistoryDraw.Rows` can opt in to
 mixed response/question items with a per-session closed-record cache and the current
 question's id. It retains the latest 20 records in host order, including the latest
