@@ -52,6 +52,12 @@ change. Refusal audit records share the pipe's per-principal windowing: 60 per h
 then counted summaries at most once a minute. Live limits, idle ending, restart durability
 and temporary raises are C2 work, not guarantees of this staged readback.
 
+Fleet script launches have separate `agents.limits`: `fleetPerHour` defaults to 8 and
+`liveFleetWorkers` to 6. The person at the machine may lower either, never raise or
+disable it. Fleet admissions count against the hourly cap, including failed starts.
+Unresolved admissions conservatively retain a live slot; ordinary coordinator launches
+do not use these fleet limits.
+
 ## Dispatch facts seam (#2788, not wired)
 
 `LaunchService.CaptureDispatch` lets a trusted dispatcher take a read-only copy of
@@ -481,8 +487,7 @@ Prompts and attachment names are never logged, only their length and count.
 A person at the machine may run `agent-bridge-host scripts grant-fleet <name>` or
 `scripts revoke-fleet <name>` (optionally `--profile <name>`); agents and script connections cannot.
 The separate `launch:fleet` grant is off for each newly minted credential.
-Activation remains closed until atomic, durable fleet hourly/live admission is wired (#2770);
-enabling a credential's grant does not yet enable dispatch.
+Fleet dispatch reserves capacity durably before creating a worktree (#2770).
 Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
 (empty by default). Fleet launches require an explicitly named agent, permissions and
 an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,

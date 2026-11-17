@@ -1101,6 +1101,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         await starting.WaitAsync(ct);
         string? reservation = null, reserved = null;
         WorktreeResult? created = null;
+        var launchId = Guid.NewGuid().ToString("N");
+        Action<string>? auditRegistered = null;
         try
         {
             // Checked again: agent-ha-bridge may have started while this one waited its turn.
@@ -1158,6 +1160,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 log($"launch {Short(key)}: worker role MCP: {mcp.Disabled} of the person's servers disabled, {mcp.Kept} kept");
             }
 
+            if (fleet && prepare is not null && (auditRegistered = prepare(Guid.Parse(launchId))) is null)
+            { return Refused("the launch audit could not be written durably"); }
             var directory = plan.Directory;
             string? worktree = null;
             if (plan.Isolated is { } isolated)
@@ -1280,9 +1284,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // Where a prompt of the person's would show they got past its startup questions
             // (HeldForReply): what the transcript holds now is from before this agent.
             var transcriptFrom = TranscriptFrom(plan.Launcher, sessionId);
-            var launchId = Guid.NewGuid().ToString("N");
-            Action<string>? auditRegistered = null;
-            if (prepare is not null && plan.Resume is null && plan.Transfer is null)
+            if (!fleet && prepare is not null && plan.Resume is null && plan.Transfer is null)
             {
                 auditRegistered = prepare(Guid.Parse(launchId));
                 if (auditRegistered is null) { return Refused("the launch audit could not be written durably"); }

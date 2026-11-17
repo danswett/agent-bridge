@@ -87,13 +87,38 @@ public sealed class SessionService
     {
         if (launcher is null || audit is null) { return new(LaunchOutcome.Refused, "fleet launch service or audit is unavailable"); }
         if (ReadOnly?.Invoke() is { } readOnly) { return new(LaunchOutcome.Refused, readOnly); }
-        // #2770 must wire atomic, durable hourly/live admission before fleet activation.
-        string? Check() => refusal() ?? (launcher.FleetConfig is { } actual ? dispatchCheck(actual) : "fleet dispatch settings are unavailable")
-            ?? "fleet launch is disabled until fleet hourly/live admission controls are wired";
+        string? Check() => refusal() ?? (launcher.FleetConfig is { } actual ? dispatchCheck(actual) : "fleet dispatch settings are unavailable");
         if (Check() is { } problem) { return new(LaunchOutcome.Refused, problem); }
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
-            fleet: true, refusal: Check);
+            fleet: true, refusal: () => Check() ?? CheckFleetCapacity(audit));
         return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
+    }
+
+    string? CheckFleetCapacity(AgentAuditLog audit)
+    {
+        var (settings, problem) = HostSettings.Load(audit.Profile);
+        if (problem is not null || settings.SectionProblems.Any()) { return "fleet admission settings cannot be read safely"; }
+        if (!settings.Agents.Enabled) { return "fleet admission is disabled while agents.enabled is off"; }
+        var limits = settings.Agents.Limits.Launch;
+        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+        if (!complete || !audit.Verify(launch: true).Intact) { return "fleet admission history cannot be checked safely"; }
+        var intents = rows.Where(row => row.Grant == "fleet" && row.Action == "session.launch"
+            && row.Gate is { Phase: "intent" } && row.Outcome == "reserved").ToArray();
+        if (intents.Count(row => row.At > Time.GetUtcNow() - TimeSpan.FromHours(1)) >= limits.FleetPerHour)
+        { return $"the hourly fleet launch cap ({limits.FleetPerHour}) has been reached"; }
+        if (source is null || source.Held is not null) { return "fleet admission cannot check live workers while session discovery is incomplete"; }
+        var completed = rows.Where(row => row.Action == "session.launch" && row.Gate is { Phase: "terminal" })
+            .Select(row => row.Gate!.Operation).ToHashSet();
+        var live = intents.Count(row => !completed.Contains(row.Gate!.Operation));
+        try
+        {
+            foreach (var session in source.Snapshot())
+            {
+                if (launcher!.IsFleetWorker(session.Id, source.ProcessOf(session.Id))) { live++; }
+            }
+        }
+        catch (InvalidOperationException) { return "fleet admission cannot check live workers safely"; }
+        return live >= limits.LiveFleetWorkers ? $"the live fleet worker cap ({limits.LiveFleetWorkers}) has been reached" : null;
     }
 
     // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or
