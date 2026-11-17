@@ -95,6 +95,22 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var folderLock = Lock(folder, timing: LockTiming);
+                if (entry is { Action: "session.launch", Outcome: "refused", Gate: null }
+                    && Guid.TryParseExact(entry.Request, "D", out _))
+                {
+                    var prior = GateAuditProjection.Load(profile, alreadyLocked: true);
+                    if (prior.Rows.Any(r => r.Action == line.Action && r.Outcome == line.Outcome && r.Gate is null
+                        && r.Request == line.Request && r.Principal == line.Principal))
+                    {
+                        // A flushed refusal survives a failed checkpoint; never append its fallback twice.
+                        if (!VerifyProfile(profile, true, log, chainOnly: true).Intact || Files(folder, true).Any(EndsWithoutNewline))
+                        { throw new IOException("the persisted launch refusal cannot be verified"); }
+                        if (!prior.Complete || HasHeads(folder) && ReadHead(folder, true) is null)
+                        { log("agent launch refusal is persisted; its audit checkpoint remains incomplete"); }
+                        return true;
+                    }
+                    if (!prior.Complete) { throw new IOException("launch refusal evidence is incomplete"); }
+                }
                 if (entry.Gate is not null) { Bootstrap(folder); }
                 if (entry.Gate is { } metadata)
                 {

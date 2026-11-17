@@ -65,6 +65,9 @@ Proven prestart refusals and busy outcomes release only their own hourly and liv
 reservation; request memory and the separate attempt budget are retained.
 Prestart busy outcomes record a refusal even before a launch intent exists. A successful
 worktree refusal audit is acknowledged host-side so the pipe does not record it twice.
+Non-gate launch refusals are idempotent by principal and request UUID under the audit
+folder lock. A fallback verifies an already-flushed row instead of appending it again
+when its checkpoint write failed; checkpoint faults remain visible and are not repaired.
 
 ## Dispatch facts seam (#2788)
 
