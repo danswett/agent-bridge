@@ -41,3 +41,23 @@ The same dependency-free fixture assertions can run directly with
 `replacement`, `readonly`, `no-survivors`, `partial`, `ambiguous`, `metric-values`, `entrypoint`).
 Only `entrypoint` uses a real 10 ms window; injected tests never sleep. The AST guard rejects named mutation commands,
 `Invoke-Expression` and dynamic call operators; it is a guard, not a proof.
+
+## Recorded memory verdict (#2760)
+
+Dot-source the script and call `Get-EfficiencyMemoryVerdict -Run <hashtable>
+-Rerun <optional hashtable> -GrowthCeilingBytes <bytes> -SteadyPrivateCeilingBytes
+<bytes> -SteadyWorkingSetCeilingBytes <bytes> -Margin <fraction>` (default margin
+0.25). Each phase records `processIdentity`, `controlIdentity` (PID plus start
+time), and exactly 10 `samples` hashtables from completed activity cycles at rest,
+each with numeric `privateBytes`, `workingSetBytes`, `controlPrivateBytes`.
+For JS heap recordings, use heap bytes for both component memory fields.
+
+Growth is the last-three private-byte median minus the first-three median.
+Steady values are the last-three medians. Growth over ten times its ceiling fails
+immediately; other growth or steady excess requires one retry on the same warm
+component and control processes. Missing/invalid samples or control range over
+1 MB require the same single retry. Returns `verdict` (`pass`, `fail`, or
+`not measured`), `reason`, measured bytes, `rerunUsed` and `needsRerun`; a missing
+required retry never passes. Failed activity cycles are caller test failures,
+not inputs to this function. No collection, budget-file access or CI integration
+is added. The existing xUnit fixture runner includes the memory cases.

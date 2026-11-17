@@ -67,7 +67,7 @@ if ($Scenario -like 'memory-*') {
             Assert ((Get-EfficiencyMemoryVerdict @args).verdict -eq 'pass') 'Exactly ten times the ceiling failed without rerun.'
         }
         'memory-missing' {
-            foreach ($bad in 'count', 'null', 'negative', 'nan', 'field') {
+            foreach ($bad in 'count', 'null', 'negative', 'nan', 'field', 'phase') {
                 $phase = New-MemoryRun
                 switch ($bad) {
                     'count' { $phase.samples = @($phase.samples | Select-Object -First 9) }
@@ -75,6 +75,7 @@ if ($Scenario -like 'memory-*') {
                     'negative' { $phase.samples[4].privateBytes = -1 }
                     'nan' { $phase.samples[4].privateBytes = [double]::NaN }
                     'field' { $phase.samples[4].Remove('workingSetBytes') }
+                    'phase' { $phase.Remove('samples') }
                 }
                 $args.Run = $phase; $args.Rerun = $phase
                 $r = Get-EfficiencyMemoryVerdict @args
@@ -85,7 +86,11 @@ if ($Scenario -like 'memory-*') {
             foreach ($identity in 'processIdentity', 'controlIdentity') {
                 $args.Rerun = New-MemoryRun 104 104; $args.Rerun[$identity] = 'replacement/start'
                 $r = Get-EfficiencyMemoryVerdict @args
-                Assert ($r.verdict -eq 'not measured' -and $r.reason -eq 'identity') 'A replacement process passed.'
+                Assert ($r.verdict -eq 'not measured' -and $r.reason -eq 'identity' -and
+                    -not $r.needsRerun -and $null -eq $r.growthBytes) 'A replacement process passed or retained stale results.'
+                $args.Run = New-MemoryRun; $args.Run.Remove($identity); $args.Rerun = $args.Run
+                Assert ((Get-EfficiencyMemoryVerdict @args).reason -eq 'identity') 'Missing identity was accepted.'
+                $args.Run = New-MemoryRun
             }
         }
         'memory-retry' {
