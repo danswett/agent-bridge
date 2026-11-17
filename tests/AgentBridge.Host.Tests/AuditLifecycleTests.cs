@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 using AgentBridge.Host;
+using AgentBridge.Host.Core;
+using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
@@ -31,6 +33,65 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
         new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Prompt = "fixture" },
         "local", Writer(), new GateLaunchIngress("local", "person-client", "person:local", null));
     Dictionary<string, byte[]> Evidence() => Directory.GetFiles(Audit, "*.jsonl").ToDictionary(p => p, File.ReadAllBytes);
+
+    [Theory]
+    [InlineData("person-client", "person:local")]
+    [InlineData("agent", "agent:fixture")]
+    public async Task A_launch_records_its_verified_ingress_with_the_bound_process(string actor, string principal)
+    {
+        var request = Guid.NewGuid();
+        var result = await GateLaunchAudit.LaunchAsync(Launcher(Config()),
+            new LaunchRequest { Request = request.ToString(), Agent = "copilot", Workspace = "App", Prompt = "fixture" },
+            "local", Writer(), new GateLaunchIngress("local", actor, principal, null));
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        var path = Path.Combine(f.Root, "profile", "launch-provenance.json");
+        void Check()
+        {
+            var origin = JsonNode.Parse(File.ReadAllText(path))![request.ToString()]!;
+            Assert.Equal("local", origin["attribution"]?["path"]?.GetValue<string>());
+            Assert.Equal(actor, origin["attribution"]?["actorKind"]?.GetValue<string>());
+            Assert.Equal(principal, origin["attribution"]?["principal"]?.GetValue<string>());
+            Assert.Equal(result.Session, origin["session"]?.GetValue<string>());
+            Assert.Equal(source.ProcessOf(result.Session!)!.Id, origin["process"]!["id"]!.GetValue<int>());
+        }
+        Check();
+        var reopened = new LaunchProvenance(path, logged.Enqueue);
+        reopened.Bound(request, result.Session!, source.ProcessOf(result.Session!)!);
+        Check();
+    }
+
+    [Theory]
+    [InlineData("agent_bridge_1111111111111111")]
+    [InlineData("SG Builder 1")]
+    public async Task An_unaudited_peer_name_never_establishes_launch_attribution(string peer)
+    {
+        var request = Guid.NewGuid();
+        var result = await Launcher(Config()).LaunchAsync(
+            new LaunchRequest { Request = request.ToString(), Agent = "copilot", Workspace = "App", Prompt = "fixture" }, peer);
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        var path = Path.Combine(f.Root, "profile", "launch-provenance.json");
+        var origin = JsonNode.Parse(File.ReadAllText(path))![request.ToString()]!;
+        Assert.Null(origin["attribution"]);
+        Assert.True(new LaunchProvenance(path, logged.Enqueue).Contains(result.Session!, source.ProcessOf(result.Session!)));
+    }
+
+    [Theory]
+    [InlineData("""{"path":"local","actorKind":"agent"}""")]
+    [InlineData("""{"path":"local","actorKind":"agent","principal":""}""")]
+    [InlineData("""{"path":"guessed","actorKind":"agent","principal":"agent:fixture"}""")]
+    [InlineData("""{"path":"local","actorKind":"guessed","principal":"agent:fixture"}""")]
+    public void Invalid_saved_attribution_refuses_provenance_instead_of_granting_agent_origin(string attribution)
+    {
+        var path = Path.Combine(f.Root, "provenance.json");
+        File.WriteAllText(path, new JsonObject
+        {
+            [Guid.NewGuid().ToString()] = new JsonObject
+                { ["session"] = "fixture", ["process"] = null, ["attribution"] = JsonNode.Parse(attribution) },
+        }.ToJsonString());
+        var provenance = new LaunchProvenance(path, logged.Enqueue);
+        var refusal = Assert.Throws<InvalidOperationException>(() => provenance.Contains("another", new SessionProcess(1234, DateTimeOffset.UtcNow)));
+        Assert.Contains("provenance is unavailable", refusal.Message);
+    }
 
     [Fact]
     public async Task Clean_retention_advances_the_root_without_disabling_subsequent_production_launches()
