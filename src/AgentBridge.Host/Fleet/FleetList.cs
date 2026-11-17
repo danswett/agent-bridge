@@ -9,7 +9,7 @@ using AgentBridge.Transport;
 namespace AgentBridge.Host.Fleet;
 
 // One machine of the caller's own account, as the relay's session registry reports it.
-// Verified stays false until hostSign exists (design "Signing"); Truncated is the record's own cap flag.
+// Only the pinned-roster reader may verify a record; Truncated also marks rejected snapshots.
 public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSession> Sessions, bool Truncated = false, bool Verified = false, string? Name = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? LastSeen = null,
     [property: JsonIgnore] bool HasRegistryRecord = false);
@@ -34,6 +34,12 @@ public interface IScopedFleetRoster : IFleetRoster
 public sealed class RelayFleetRoster : IScopedFleetRoster
 {
     RelayClient? relay;
+    readonly FleetRecordVerifier? verifier;
+
+    public RelayFleetRoster(FleetRecordVerifier? verifier = null) => this.verifier = verifier;
+
+    public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames, string? account = null) =>
+        Parse(frames, (machine, record) => verifier?.Verify(machine, record, account) == true);
 
     public void Attach(RelayClient? connection) => Volatile.Write(ref relay, connection);
 
@@ -45,11 +51,13 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
         var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
         if (!ReferenceEquals(current, Volatile.Read(ref relay))) { throw new InvalidOperationException("refused: the fleet connection changed during lookup"); }
-        return new(current.AccountId, Parse(frames));
+        return new(current.AccountId, Read(frames, current.AccountId));
     }
 
     // Known-only machines have no sessions; registry liveness and supplied metadata take precedence.
-    public static IReadOnlyList<FleetMachine> Parse(IEnumerable<JsonElement> frames)
+    public static IReadOnlyList<FleetMachine> Parse(IEnumerable<JsonElement> frames) => Parse(frames, (_, _) => false);
+
+    static IReadOnlyList<FleetMachine> Parse(IEnumerable<JsonElement> frames, Func<string, JsonElement, bool> verify)
     {
         var machines = new List<FleetMachine>();
         var known = new List<FleetMachine>();
@@ -69,18 +77,21 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
             var sessions = new List<FleetSession>();
             var truncated = false;
             var hasRegistryRecord = false;
-            if (f.TryGetProperty("record", out var rec) && rec.ValueKind == JsonValueKind.Object && rec.TryGetProperty("sessions", out var list) && list.ValueKind == JsonValueKind.Array)
+            var signed = f.TryGetProperty("record", out var rec) && rec.ValueKind == JsonValueKind.Object && rec.TryGetProperty("sig", out _);
+            var verified = signed && verify(id, rec);
+            var rejected = signed && !verified;
+            if (!rejected && rec.ValueKind == JsonValueKind.Object && rec.TryGetProperty("sessions", out var list) && list.ValueKind == JsonValueKind.Array)
             {
                 hasRegistryRecord = true;
                 truncated = rec.TryGetProperty("truncated", out var tr) && tr.ValueKind == JsonValueKind.True;
                 foreach (var s in list.EnumerateArray())
                 {
                     sessions.Add(new FleetSession(s.GetProperty("node").GetString()!, s.TryGetProperty("name", out var n) ? n.GetString() : null,
-                        s.GetProperty("state").GetString()!, s.GetProperty("since").GetDateTimeOffset(), s.TryGetProperty("id", out var sid) ? sid.GetString() : null,
+                        s.GetProperty("state").GetString()!, verified ? FleetRecordVerifier.ReadTime(s.GetProperty("since")) : s.GetProperty("since").GetDateTimeOffset(), s.TryGetProperty("id", out var sid) ? sid.GetString() : null,
                         s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null));
                 }
             }
-            machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name, LastSeen: LastSeen(f), HasRegistryRecord: hasRegistryRecord));
+            machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated || rejected, verified, Name: name, LastSeen: LastSeen(f), HasRegistryRecord: hasRegistryRecord));
         }
         foreach (var entry in known)
         {
@@ -186,7 +197,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         return result;
     }
 
-    static object Find(FleetRosterSnapshot snapshot, string name, string? machine)
+    internal static object Find(FleetRosterSnapshot snapshot, string name, string? machine)
     {
         var fleetScope = snapshot.FleetScope;
         var scope = snapshot.Machines.Where(x => machine is null || x.Id == machine).ToList();
