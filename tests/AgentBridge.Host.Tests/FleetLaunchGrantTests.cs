@@ -140,10 +140,14 @@ public sealed class FleetLaunchGrantTests : IDisposable
         File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
             """{"agents":{"enabled":true,"launch":{"enabled":true},"limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":10,"liveAgentLaunched":6,"agentLaunchedIdleHours":2}}}""");
         var agent = new AgentLaunchGate(folder);
+        // Seed hourly history with completed launches, not concurrent live reservations.
         for (var i = 0; i < 9; i++)
         {
-            var admitted = agent.CheckLaunch($"agent:{i}", Guid.NewGuid().ToString(), "hash");
+            var origin = $"agent:{i}";
+            var request = Guid.NewGuid().ToString();
+            var admitted = agent.CheckLaunch(origin, request, "hash");
             Assert.True(admitted.Allowed, admitted.Reason);
+            Assert.True(agent.LaunchFinished(origin, request));
         }
         var launcher = new AdmissionLauncher(live);
         var audit = new AgentAuditLog(folder);
