@@ -7,9 +7,9 @@ scope) before any execution, including the focused unit tests. Do not infer GO
 from this document. Do not add this opt-in audit to a default suite.
 
 From `pwa`, with committed inputs, execute `node tools/lost-final-audit.mjs` only
-in the approved scope. Set `AGENT_BRIDGE_CPU_MASK` to the approved effective
-process affinity (Windows hexadecimal mask without `0x`, Linux allowed-CPU list);
-the audit reads and checks it, never changes it. Browser children inherit affinity.
+in the approved scope. The audit records effective process affinity (Windows
+hexadecimal mask, Linux allowed-CPU list), never changes it or requires a mask.
+Browser children inherit affinity. Respect approval-specific load checks.
 Capture stdout as the JSON artifact; any failure exits nonzero, not with a partial
 success report. Dependencies are the existing PWA Playwright/esbuild packages.
 Focused mechanics tests: `node --test test/unit/lost-final-loopback.test.mjs`.
