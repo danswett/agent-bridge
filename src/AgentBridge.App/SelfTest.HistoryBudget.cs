@@ -371,10 +371,12 @@ static partial class SelfTest
                     return WheelHistoryCount() > 0 && !wheelMoving && scroll.ScrollableHeight > 0
                         && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
                 }, TimeSpan.FromSeconds(10));
-                var wheelTarget = PostedInputTarget(window).Detail;
-                Wheel(window, list);
+                var wheel = Wheel(window, list);
+                var wheelTarget = wheel.Target;
                 var wheeled = await Until(() => wheelReceivedCount is not null
                     && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
+                wheel.RecordReceipt(wheelReceivedCount is not null);
+                wheelTarget = wheel.Target;
                 const string tookMessage = "a native wheel takes the view away from the latest";
                 var drawn = await Until(() => WheelHistoryCount() == turns, TimeSpan.FromSeconds(30));
                 await CaptureFrame(window.RootElement);
@@ -907,13 +909,52 @@ static partial class SelfTest
         }, result);
     }
 
-    static void Wheel(MainWindow window, ListView list)
+    static NativeWheelInput Wheel(MainWindow window, ListView list)
     {
-        var point = list.TransformToVisual(window.RootElement).TransformPoint(new Windows.Foundation.Point(list.ActualWidth / 2, list.ActualHeight / 2));
-        var scale = list.XamlRoot.RasterizationScale;
-        var mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
-        if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
-        if (!PostNativeInput(window.Handle, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
+        var wheel = new NativeWheelInput(new WheelInputPort(window, list));
+        wheel.Post();
+        return wheel;
+    }
+
+    sealed class WheelInputPort(MainWindow window, ListView list) : INativeWheelInputPort
+    {
+        WheelPoint mouse;
+        public bool FocusList() => list.Focus(FocusState.Programmatic);
+        public bool ListHasFocus => ReferenceEquals(FindAncestor<ListView>(
+            FocusManager.GetFocusedElement(list.XamlRoot) as DependencyObject), list);
+        public bool WindowIsForeground => GetForegroundWindow() == window.Handle;
+        public string DescribeTarget() => PostedInputTarget(window).Detail;
+        public void Log(string message) => AppLog.Write(message);
+
+        public nint PrepareTarget()
+        {
+            var point = list.TransformToVisual(window.RootElement).TransformPoint(new Windows.Foundation.Point(list.ActualWidth / 2, list.ActualHeight / 2));
+            var scale = list.XamlRoot.RasterizationScale;
+            mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
+            if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
+            return PrepareNativeInput(window.Handle);
+        }
+
+        public bool TargetIsVerified(nint target)
+        {
+            var thread = GetWindowThreadProcessId(target, out var process);
+            return target == GetFocus() && NativeInputSetup.TargetReady(window.Handle, target,
+                GetAncestor(target, 2), GetForegroundWindow(), GetCurrentThreadId(), (uint)Environment.ProcessId, thread, process);
+        }
+
+        public bool Post(nint target)
+        {
+            var posted = PostMessageW(target, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff));
+            if (!posted) { AppLog.Write($"self-test: message 20A not posted (target: {target:X}; {ForegroundOwner()})"); }
+            return posted;
+        }
+
+        public IReadOnlyList<nint> ReadHwndChain()
+        {
+            var chain = new List<nint>();
+            for (var hwnd = PostedTarget(window.Handle).Target; hwnd != 0; hwnd = GetAncestor(hwnd, 1)) { chain.Add(hwnd); }
+            return chain;
+        }
     }
 
     struct WheelPoint { public int X, Y; }
