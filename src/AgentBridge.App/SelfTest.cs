@@ -29,6 +29,8 @@ static partial class SelfTest
             (ok ? checks : failures).Add(what);
             if (!ok) { AppLog.Write($"self-test: failed: {what}; {ForegroundOwner()}"); }
         }
+        using var resizeTrace = new ResizeDiagnostics(window, outFile, result, Check);
+        resizeDiagnostics = resizeTrace;
         // A ThemeResource or StaticResource that resolves to nothing, in any theme: logged, and a
         // failure, since an installed app may die of it with nothing but 0xC000027B.
         // Off by default: without it, the event is never raised and a failed reference passes.
@@ -399,6 +401,7 @@ static partial class SelfTest
             await Write(outFile, result, checks, failures, "high contrast");
             await CheckHighContrast(window, main, launch, demo, remote, Check, outFile, result);
             // Last, as it adds sessions every check above counts without (#765).
+            resizeTrace.Record("live resize");
             await Write(outFile, result, checks, failures, "live resize");
             await MeasureResize(window, main, demo, Check, outFile, result);
         }
@@ -1125,7 +1128,9 @@ static partial class SelfTest
             var systemCaptions = await Until(() => window.AppWindow.TitleBar.ButtonForegroundColor is null, TimeSpan.FromSeconds(10));
             check(systemCaptions, $"leaves the caption buttons in the system's colours in high contrast ({window.AppWindow.TitleBar.ButtonForegroundColor?.ToString() ?? "system"})");
             // The sign-in banner and sheet in high contrast (#800, Creative 6655285995).
+            resizeDiagnostics?.Record("high-contrast sign-in capture");
             await CaptureSignIn(window, main, remote, check, outFile, contrast: true);
+            await CheckResizeAfterHighContrastSignIn(window, check);
             // The update bar and Settings' update row in high contrast (#719, Creative 6643004091).
             await CaptureUpdate(window, main, check, outFile, contrast: true);
             // The held machine's row and a held resume's line in high contrast (#1064).

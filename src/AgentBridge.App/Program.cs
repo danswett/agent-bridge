@@ -78,7 +78,11 @@ static class SelfTestTrace
         {
             if (writing || Interlocked.Increment(ref written) > Most) { return; }
             writing = true;
-            try { AppLog.Write($"self-test: thrown on thread {Environment.CurrentManagedThreadId}: {e.Exception.GetType().FullName}: {e.Exception.Message}"); }
+            try
+            {
+                AppLog.Write($"self-test: thrown on thread {Environment.CurrentManagedThreadId}: {e.Exception.GetType().FullName}: {e.Exception.Message}");
+                if (e.Exception.HResult == unchecked((int)0x80004005)) { AppLog.Write($"self-test: E_FAIL exception/stack: {e.Exception}"); }
+            }
             finally { writing = false; }
         };
         AppDomain.CurrentDomain.ProcessExit += (_, _) => AppLog.Write($"self-test: the process exits with code {Environment.ExitCode}");

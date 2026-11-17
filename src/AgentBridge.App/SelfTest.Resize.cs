@@ -34,6 +34,7 @@ static partial class SelfTest
         await Choose(window, main, "demo-approval", "Response");
         await Task.Delay(700);
         var budget = Stopwatch.StartNew();
+        resizeDiagnostics?.Record("live resize light sweep");
         var (light, lightDone) = await Sweep(window, SweepBudget / 2);
         var lightTook = budget.Elapsed;
 
@@ -65,7 +66,9 @@ static partial class SelfTest
         await Task.Delay(700);
         var heavyLimit = SweepBudget - lightTook;
         var (newWidthsBefore, remeasuredBefore) = (FlowPanel.NewWidths, FlowPanel.Remeasured);
+        resizeDiagnostics?.Record("live resize heavy sweep");
         var (heavy, heavyDone) = await Sweep(window, heavyLimit);
+        resizeDiagnostics?.Record("live resize verification");
         var (newWidths, remeasured) = (FlowPanel.NewWidths - newWidthsBefore, FlowPanel.Remeasured - remeasuredBefore);
 
         // Back where the drag began, the session still chosen and every pane drawn.
@@ -178,10 +181,12 @@ static partial class SelfTest
             stepping = window.DispatcherQueue.TryEnqueue(() =>
             {
                 stepping = false;
+                if (resizeDiagnostics is { } trace) { trace.ResizeStepQueued = false; }
                 // A step queued as the limit ran out is dropped: the window goes back where it began.
                 if (done.Task.IsCompleted) { return; }
                 window.AppWindow.Resize(new Windows.Graphics.SizeInt32((int)Math.Ceiling(next * scale), (int)Math.Ceiling(SweepHeight * scale)));
             });
+            if (resizeDiagnostics is { } queuedTrace) { queuedTrace.ResizeStepQueued = stepping; }
         }
         CompositionTarget.Rendering += OnFrame;
         try
@@ -193,6 +198,7 @@ static partial class SelfTest
         {
             CompositionTarget.Rendering -= OnFrame;
             done.TrySetResult();
+            if (resizeDiagnostics is { } trace) { trace.ResizeStepQueued = false; }
             // Where it began, however far a sweep cut short got.
             Resize(window, SweepWide, SweepHeight);
         }

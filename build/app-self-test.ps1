@@ -78,11 +78,30 @@ $code = if ($finished) { $p.ExitCode } else { $null }
 Write-Output "app process $($p.Id): exit code $code (finished=$finished)"
 # Written part-way through before a check that can end the process (SelfTest.Write): still set,
 # the app ended inside that check, whatever the exit code says. Every check before it passed.
-$unfinished = if ($wrote) { try { (Get-Content $Result -Raw | ConvertFrom-Json).unfinished } catch { $null } } else { $null }
+$report = if ($wrote) { try { Get-Content $Result -Raw | ConvertFrom-Json } catch { Write-Output "::error::self-test result capture failed: $($_.Exception.Message)" | Out-Host; $null } } else { $null }
+$unfinished = if ($report) { $report.unfinished } else { $null }
 $evidence = [ordered]@{
     processId = $p.Id; exitCode = $code
     failed = ($null -eq $code -or $code -ne 0 -or -not $wrote -or [bool]$unfinished)
     stderr = ''; events = @(); captureErrors = @()
+    selfTest = @{ unfinished = $unfinished; resizeDiagnostics = @() }
+    xamlFailure = $null
+}
+foreach ($capture in @(
+        @{ extension = '.resize-state.json'; field = 'resize state' },
+        @{ extension = '.xaml-failure.json'; field = 'XAML exception' })) {
+    $path = [IO.Path]::ChangeExtension($Result, $capture.extension)
+    if (-not (Test-Path -LiteralPath $path)) { continue }
+    try {
+        $detail = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        if ($detail.processId -ne $p.Id) { throw [IO.InvalidDataException]::new('capture does not belong to the app process') }
+        if ($capture.extension -eq '.resize-state.json') { $evidence.selfTest.resizeDiagnostics = @($detail.states) }
+        else { $evidence.xamlFailure = $detail }
+    }
+    catch {
+        $evidence.captureErrors += "$($capture.field) capture failed: $($_.Exception.Message)"
+        Write-Output "::error::$($evidence.captureErrors[-1])"
+    }
 }
 try { $evidence.stderr = [IO.File]::ReadAllText($stderrPath) }
 catch {
@@ -95,6 +114,9 @@ $evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $evidencePath
 # Ended with 0 having written nothing, or with a check never finished: it did not pass.
 if (-not $evidence.failed) { exit 0 }
 
+if ($null -eq $evidence.xamlFailure) { Write-Output '--- no managed XAML exception captured; a native fail-fast may bypass the event; cause remains unproven' }
+else { Write-Output ($evidence.xamlFailure | ConvertTo-Json -Depth 6) }
+Write-Output ($evidence.selfTest | ConvertTo-Json -Depth 6)
 if ($null -eq $code) { Write-Output "::error::the self-test did not finish in $TimeoutSeconds s" }
 elseif ($code -ne 0) {
     $hex = '0x{0:X8}' -f $code
@@ -156,7 +178,7 @@ if ($dump -and (Test-Path $cdb)) {
     $symbols = Join-Path $dumps 'symbols'
     $analysis = Join-Path $Logs 'app-crash-analysis.txt'
     try {
-        $cdbRun = Start-Process $cdb -ArgumentList '-z', "`"$($dump.FullName)`"", '-y', "`"srv*$symbols*https://msdl.microsoft.com/download/symbols`"", '-c', '"!analyze -v; q"' -RedirectStandardOutput $analysis -NoNewWindow -PassThru
+        $cdbRun = Start-Process $cdb -ArgumentList '-z', "`"$($dump.FullName)`"", '-y', "`"srv*$symbols*https://msdl.microsoft.com/download/symbols`"", '-c', '".exr -1; .ecxr; k; !analyze -v; q"' -RedirectStandardOutput $analysis -NoNewWindow -PassThru
         if (-not $cdbRun.WaitForExit(120000)) { Stop-Process -Id $cdbRun.Id -Force; Write-Output 'cdb took too long; only partial text analysis may be published' }
         $text = @(Get-Content $analysis -ErrorAction SilentlyContinue)
         $text | Where-Object { $_ -match '^(FAILURE_BUCKET_ID|SYMBOL_NAME|EXCEPTION_CODE_STR|IMAGE_NAME):' }

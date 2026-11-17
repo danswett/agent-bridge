@@ -1293,6 +1293,19 @@ only Quality-ordered hosted execution can establish actual RED.
 The reported x64 failure is intermittent: one green run is neither a reproduced
 failure nor proof that it is fixed. Cause capture must come from a failing run.
 
+For [the ARM64 stowed-exception investigation](https://github.com/danswett/agent-bridge/issues/1019),
+the self-test records theme, high contrast, physical/window and XAML sizes, layout-update
+count and queued resize state before/after the high-contrast sign-in capture and at
+live-resize entry and sweep boundaries. WinUI exposes no pending-layout dirty flags;
+that field explicitly remains unknown. A single one-pixel resize and restore immediately
+after the contrast capture checks for an unhandled XAML exception using rendering barriers,
+not sleeps. Unhandled XAML message, HRESULT, exception/stack and last observed state are
+saved without marking the exception handled. The wrapper embeds process-matched state
+and exception sidecars in `app-exit-cause.json`; native fail-fast may bypass that event,
+so existing debugger text remains necessary. The cause is unproven. The focused
+`pwsh -NoProfile -File .\build\test-app-self-test-stowed.ps1` checks synthetic wrapper
+contracts only, not a real crash; Quality owns repeated hosted ARM64 samples.
+
 ## Deferred, explicitly
 
 * **Pairing and a Devices page**: the account's other devices are trusted by signing in to

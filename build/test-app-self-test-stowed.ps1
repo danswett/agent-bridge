@@ -39,7 +39,7 @@ $root = Join-Path ([IO.Path]::GetTempPath()) ('ab-stowed-contract-' + [guid]::Ne
 $failures = [Collections.Generic.List[string]]::new()
 $passed = 0
 try {
-    foreach ($case in @('stowed', 'native-only', 'unfinished-zero')) {
+    foreach ($case in @('stowed', 'native-only', 'unfinished-zero', 'stale-state')) {
         $dir = Join-Path $root $case
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         $state = @{
@@ -49,11 +49,13 @@ try {
         }
         @{
             passed = @(); failed = @(); unfinished = 'live resize'
-            resizeDiagnostics = @($state)
+            resizeDiagnostics = @()
         } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $dir 'result.json')
+        @{ processId = $(if ($case -eq 'stale-state') { 4243 } else { 4242 }); states = @($state) } |
+            ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $dir 'result.resize-state.json')
         if ($case -eq 'stowed') {
             @{
-                stage = 'live resize'; hresult = '0x80004005'
+                processId = 4242; stage = 'live resize'; hresult = '0x80004005'
                 xamlMessage = 'synthetic XAML E_FAIL'
                 exception = "System.Runtime.InteropServices.COMException: E_FAIL`n   at Synthetic.Measure()"
                 lastState = $state
@@ -65,8 +67,15 @@ try {
         try {
             $evidence = Get-Content -LiteralPath (Join-Path $dir 'app-exit-cause.json') -Raw | ConvertFrom-Json
             if ($actualExit -eq 0 -or -not $evidence.failed) { throw 'a crash or unfinished result must remain a failure' }
+            if ($evidence.exitCode -ne $code) { throw 'the actual app exit code must be retained' }
             if ($null -eq $evidence.PSObject.Properties['selfTest']) { throw 'failure evidence lost the last self-test resize state' }
-            if ($evidence.selfTest.unfinished -ne 'live resize' -or
+            if ($case -eq 'stale-state') {
+                if ($evidence.selfTest.resizeDiagnostics.Count -ne 0 -or
+                    -not ($evidence.captureErrors -match 'does not belong to the app process')) {
+                    throw 'another process must not supply this crash state, and the evidence gap must be explicit'
+                }
+            }
+            elseif ($evidence.selfTest.unfinished -ne 'live resize' -or
                 $evidence.selfTest.resizeDiagnostics[0].windowWidth -ne 1440 -or
                 $evidence.selfTest.resizeDiagnostics[0].pendingLayout -ne 'not exposed by WinUI') {
                 throw 'failure evidence changed the stage, window size or pending-layout observation'
