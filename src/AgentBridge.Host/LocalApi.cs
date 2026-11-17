@@ -23,7 +23,13 @@ public static class LocalApi
 
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
-        credentials?.CheckScriptOperation(channel, op, log);
+        try { credentials?.CheckScriptOperation(channel, op, log); }
+        catch (InvalidOperationException)
+        {
+            AuditScriptAction(credentials?.ScriptPrincipal(channel), op, "refused",
+                "script operation is not allowed", audit);
+            throw;
+        }
         if (op is "scripts.add" or "scripts.revoke")
         { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
         if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
@@ -89,12 +95,15 @@ public static class LocalApi
                 try { request = data.Deserialize<AgentHelloRequest>(ProtocolJson.Options) ?? throw new ArgumentException("agent.hello needs a token"); }
                 catch (JsonException) { throw new ArgumentException("agent.hello needs a token"); }
                 var ancestry = (channel as LocalChannel)?.Peer?.Ancestry ?? ProcessAncestry.Unknown;
+                var scriptPrincipal = credentials.ScriptPrincipal(request.Token);
                 var decision = credentials.Check(request.Token, ancestry, agentCaller: callers.Classify(channel, fresh: true).Kind == CallerKind.Agent);
                 if (decision.Accepted is not { } credential)
                 {
+                    AuditScriptAction(scriptPrincipal, op, "refused", decision.Refusal, audit);
                     log?.Invoke($"local pipe: refused agent.hello: {decision.Refusal}");
                     throw new InvalidOperationException($"refused: {decision.Refusal}");
                 }
+                AuditScriptAction(scriptPrincipal, op, "accepted", null, audit);
                 return credentials.Accept(channel, credential);
             }
         // Managing a machine from another device (#801) is for the relay alone. Refused here for
@@ -250,6 +259,19 @@ public static class LocalApi
         var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), credentials.PrincipalOf(caller), caller.Chain, op, target, outcome, Gate: gate);
         bool written;
         try { written = audit?.Append(entry) == true; }
+        catch (Exception) { throw AgentActionAuditUnavailable(); }
+        if (!written) { throw AgentActionAuditUnavailable(); }
+    }
+
+    static void AuditScriptAction(string? principal, string op, string outcome, string? reason, AgentAuditLog? audit)
+    {
+        if (principal is null || audit is null) { return; }
+        bool written;
+        try
+        {
+            written = audit.Append(new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), principal, [],
+                op, "credential", outcome, reason ?? ""));
+        }
         catch (Exception) { throw AgentActionAuditUnavailable(); }
         if (!written) { throw AgentActionAuditUnavailable(); }
     }

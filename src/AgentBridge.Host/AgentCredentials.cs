@@ -74,6 +74,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     readonly Action<string> log;
     readonly List<Record> records = [];
     readonly System.Runtime.CompilerServices.ConditionalWeakTable<IProtocolChannel, Connection> connections = new();
+    readonly List<(string Hash, string Principal)> foreignScripts = [];
     string? problem;
 
     sealed record Record(string Hash, AgentCredential Credential);
@@ -100,6 +101,30 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     public int Count { get { lock (gate) { return records.Count; } } }
 
     internal bool IsCredentialed(IProtocolChannel channel) => connections.TryGetValue(channel, out _);
+
+    internal string? ScriptPrincipal(string? token)
+    {
+        if (token is not { Length: AgentProtocol.TokenLength } || !token.StartsWith(AgentProtocol.TokenPrefix, StringComparison.Ordinal)) { return null; }
+        var hash = Hash(token);
+        lock (gate)
+        {
+            var candidate = Convert.FromHexString(hash);
+            Record? matched = null;
+            foreach (var record in records)
+            {
+                if (CryptographicOperations.FixedTimeEquals(candidate, Convert.FromHexString(record.Hash))) { matched = record; }
+            }
+            if (matched?.Credential is { Kind: "script" } live) { return live.Principal; }
+            foreach (var foreign in foreignScripts)
+            {
+                if (CryptographicOperations.FixedTimeEquals(candidate, Convert.FromHexString(foreign.Hash))) { return foreign.Principal; }
+            }
+            return null;
+        }
+    }
+
+    internal string? ScriptPrincipal(IProtocolChannel channel) =>
+        connections.TryGetValue(channel, out var connection) && connection.Script ? connection.Principal : null;
 
     // The launch id an adopted session's credential carries: it was not launched by the host.
     public const string AdoptedLaunch = "adopted";
@@ -507,6 +532,9 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             var ids = new HashSet<string>(StringComparer.Ordinal);
             foreach (var r in saved.Records)
             {
+                if (r?.Credential is { Kind: "script" } foreign && r.Hash is { Length: 64 } hash && IsHex(hash)
+                    && ScriptMachine(foreign) is { } originalMachine && originalMachine != machine && ValidScript(foreign, originalMachine))
+                { foreignScripts.Add((hash, foreign.Principal!)); }
                 if (r?.Credential is not { } c || r.Hash is not { Length: 64 } || !IsHex(r.Hash) || c.Id is not { Length: > 0 } || !ids.Add(c.Id)
                     || !AgentProtocol.Scopes.Contains(c.Scope, StringComparer.Ordinal) || c.Chain is null
                     || !(c.Kind == "session" ? ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
@@ -539,6 +567,14 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     static string Hash(string token) => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.ASCII.GetBytes(token)));
 
     static bool IsHex(string s) => s.All(Uri.IsHexDigit);
+
+    static string? ScriptMachine(AgentCredential c)
+    {
+        const string Prefix = "script:";
+        if (c.Principal is not { } principal || !principal.StartsWith(Prefix, StringComparison.Ordinal)) { return null; }
+        var slash = principal.IndexOf('/', Prefix.Length);
+        return slash > Prefix.Length ? principal[Prefix.Length..slash] : null;
+    }
 
     internal static bool ValidScript(AgentCredential c, string machine)
     {

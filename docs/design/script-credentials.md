@@ -146,7 +146,8 @@ revocable at the machine in one command.
 ## 7. Placing it on each machine
 
 * **Per machine, minted on that machine.** A credential works only on the host that minted it.
-  Nothing is synced, and the relay never holds one (agent-token-rotation.md §3).
+  Copying its hash record and token to another machine is a recorded refusal, never a rebind;
+  nothing is synced, and the relay never holds one (agent-token-rotation.md §3).
 * **Where it lives.** One owner-only file per script, outside session folders and the profile
   bundle area, wrapped by the platform's user-bound protection (DPAPI on Windows), the same
   rules as agent-token-rotation.md §1. The host keeps only the hash.
@@ -158,6 +159,8 @@ revocable at the machine in one command.
 * **Rollout, one machine at a time.** The owner runs `scripts add` for each script on each of
   the four machines. A fleet roll-out that wants to avoid running it by hand needs a
   person-approved remote mint, which is out of scope here (Q3).
+* **Audit before use.** Each accepted presentation, fleet read and refused operation writes one
+  private audit row under the script principal. The token and operation content are never copied.
 * **No Apple host yet.** Apple machines are out for now (epic #1396), and the session
   credential has no Mac or Linux path until peer identification exists (agent-principals.md
   §3.4); the same holds here.
