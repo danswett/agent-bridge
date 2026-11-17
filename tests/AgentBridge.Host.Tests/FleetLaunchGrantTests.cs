@@ -185,6 +185,134 @@ public sealed class FleetLaunchCapacityTests : LaunchFlowFixture
     private protected override bool UsesRelay => false;
 
     [Fact]
+    public async Task Concurrent_admission_reserves_hourly_slots_before_registration_and_replay_does_not_consume_another()
+    {
+        var (service, audit) = Setup(wait: TimeSpan.FromSeconds(1), follow: TimeSpan.FromSeconds(2));
+        for (var i = 0; i < 6; i++)
+        {
+            Assert.Equal(LaunchOutcome.Started, (await FleetLaunch(service, audit)).Outcome);
+        }
+        foreach (var pid in starter.Pids.ToArray()) { starter.Exit(pid); }
+        await source.RefreshAsync();
+        Assert.Equal(LaunchOutcome.Started, (await FleetLaunch(service, audit)).Outcome);
+        foreach (var pid in starter.Pids.ToArray()) { starter.Exit(pid); }
+        await source.RefreshAsync();
+
+        starter.Registers = false;
+        var burst = Enumerable.Range(0, 6).Select(_ => FleetRequest()).ToArray();
+        var results = await Task.WhenAll(burst.Select(async request =>
+            (Request: request, Result: await FleetLaunch(service, audit, request, refresh: false))));
+        var admitted = Assert.Single(results, item => item.Result.Outcome == LaunchOutcome.Unconfirmed);
+        Assert.Equal(5, results.Count(item => item.Result.Outcome == LaunchOutcome.Refused));
+        Assert.All(results.Where(item => item.Result.Outcome == LaunchOutcome.Refused),
+            item => Assert.Contains("hourly fleet", item.Result.Reason));
+        Assert.Equal(8, starter.Specs.Count);
+
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await FleetLaunch(service, audit, admitted.Request, refresh: false)).Outcome);
+        Assert.Equal(8, starter.Specs.Count);
+        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+        Assert.True(complete);
+        Assert.Equal(8, rows.Count(row => row.Grant == "fleet" && row.Action == "session.launch"
+            && row.Gate is { Phase: "intent" } && row.Outcome == "reserved"));
+    }
+
+    [Fact]
+    public async Task Failed_fleet_starts_close_live_reservations_but_still_consume_hourly_admissions()
+    {
+        var (service, audit) = Setup();
+        starter.Throws = new IOException("start failed");
+        var failed = Enumerable.Range(0, 6).Select(_ => FleetRequest()).ToArray();
+        foreach (var request in failed)
+        {
+            Assert.Equal(LaunchOutcome.Failed, (await FleetLaunch(service, audit, request)).Outcome);
+        }
+
+        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+        Assert.True(complete);
+        Assert.All(failed, request => Assert.Contains(rows, row => row.Request == request.Request
+            && row.Gate is { Phase: "terminal", ReasonCode: "failed" } && row.Outcome == "failed"));
+
+        starter.Throws = null;
+        Assert.Equal(LaunchOutcome.Started, (await FleetLaunch(service, audit)).Outcome);
+    }
+
+    [Fact]
+    public async Task A_fleet_launch_without_a_credential_closes_its_live_reservation()
+    {
+        var credentials = new NoFleetCredentials();
+        var (service, audit) = Setup(credentials: credentials);
+        var request = FleetRequest();
+        Assert.Equal(LaunchOutcome.Refused, (await FleetLaunch(service, audit, request)).Outcome);
+
+        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+        Assert.True(complete);
+        Assert.Contains(rows, row => row.Request == request.Request
+            && row.Gate is { Phase: "terminal", ReasonCode: "refused" } && row.Outcome == "refused");
+        Assert.Empty(starter.Specs);
+        credentials.IssueFleet = true;
+        Assert.Equal(LaunchOutcome.Started, (await FleetLaunch(service, audit)).Outcome);
+    }
+
+    [Fact]
+    public async Task An_unregistered_launcher_exit_without_child_proof_stays_fail_closed()
+    {
+        var (service, audit) = Setup(wait: TimeSpan.FromSeconds(2), follow: TimeSpan.FromSeconds(3));
+        starter.Registers = false;
+        starter.ExitsAtOnce = true;
+        var request = FleetRequest();
+        Assert.Equal(LaunchOutcome.Failed, (await FleetLaunch(service, audit, request)).Outcome);
+
+        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+        Assert.True(complete);
+        Assert.DoesNotContain(rows, row => row.Request == request.Request && row.Gate?.Phase == "terminal");
+        starter.Registers = true;
+        starter.ExitsAtOnce = false;
+        var refused = await FleetLaunch(service, audit);
+        Assert.Equal(LaunchOutcome.Refused, refused.Outcome);
+        Assert.Contains("cannot be checked safely", refused.Reason);
+        Assert.Single(starter.Specs);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Restart_reconciles_only_a_fleet_reservation_with_durable_exit_proof(bool processWasBound)
+    {
+        var (_, audit) = Setup();
+        var request = FleetRequest();
+        var requestId = Guid.Parse(request.Request);
+        var operation = Guid.NewGuid();
+        var gate = new GateAuditMetadata(1, operation, Guid.Empty, 0, "intent", "local", "agent", operation,
+            "none", LaunchBinding: new string('a', 64));
+        Assert.True(audit.Append(new AgentAuditEntry("local", request.Request, "script:machine/dispatcher", [],
+            "session.launch", request.Request, "reserved", Gate: gate) { Grant = "fleet" }));
+        var provenance = new LaunchProvenance(Path.Combine(audit.Profile, "launch-provenance.json"), logged.Enqueue);
+        provenance.Preparing(requestId, request.Request, "fleet");
+        if (processWasBound) { provenance.Bound(requestId, request.Request, new(999999, DateTimeOffset.UtcNow)); }
+
+        var restarted = CreateService(audit);
+        var next = FleetRequest();
+        var result = await FleetLaunch(restarted, audit, next);
+        if (processWasBound)
+        {
+            Assert.Equal(LaunchOutcome.Started, result.Outcome);
+            var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+            Assert.True(complete);
+            Assert.Contains(rows, row => row.Request == request.Request
+                && row.Gate is { Phase: "terminal", ReasonCode: "failed" } && row.Outcome == "failed");
+        }
+        else
+        {
+            Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+            Assert.Contains("cannot be checked safely", result.Reason);
+            var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+            Assert.True(complete);
+            Assert.DoesNotContain(rows, row => row.Request == request.Request && row.Gate?.Phase == "terminal");
+            Assert.Empty(starter.Specs);
+        }
+    }
+
+    [Fact]
     public async Task A_script_credential_cannot_exceed_the_fleet_cap_of_8_an_hour_nor_6_live_workers()
     {
         var (service, audit) = Setup();
@@ -238,7 +366,8 @@ public sealed class FleetLaunchCapacityTests : LaunchFlowFixture
         Assert.Equal(LaunchOutcome.Started, coordinator.Outcome);
     }
 
-    (SessionService Service, AgentAuditLog Audit) Setup()
+    (SessionService Service, AgentAuditLog Audit) Setup(TimeSpan? wait = null, TimeSpan? follow = null,
+        AgentBridge.Host.Delivery.ILaunchCredentials? credentials = null)
     {
         locator.Installed["claude"] = @"C:\fake\claude.exe";
         Git(f.Root, "init", "-q", "-b", "main", app);
@@ -250,21 +379,37 @@ public sealed class FleetLaunchCapacityTests : LaunchFlowFixture
         File.WriteAllText(Path.Combine(profile, HostSettings.FileName),
             JsonSerializer.Serialize(new { agents = new { enabled = true, fleet = new { workspaces = new[] { "App" } },
                 limits = new { fleetPerHour = 8, liveFleetWorkers = 6 } } }));
-        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
-            credentials: new AgentCredentials(profile, "machine"),
-            agentWorktreeCheck: AgentLaunchWorktreeCheck.Check,
-            agentWorktreeRefusalAudit: (_, _, _) => true);
-        var service = new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"), launcher: launcher);
-        return (service, new AgentAuditLog(profile, clock));
+        var audit = new AgentAuditLog(profile, clock);
+        return (CreateService(audit, wait, follow, credentials), audit);
     }
 
-    async Task<LaunchResult> FleetLaunch(SessionService service, AgentAuditLog audit)
+    SessionService CreateService(AgentAuditLog audit, TimeSpan? wait = null, TimeSpan? follow = null,
+        AgentBridge.Host.Delivery.ILaunchCredentials? credentials = null)
     {
-        var result = await service.LaunchFleetAsync(
-            new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "claude",
-                Workspace = "App", Permissions = LaunchProtocol.AllowAll },
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }), wait: wait, follow: follow,
+            credentials: credentials ?? new AgentCredentials(audit.Profile, "machine"),
+            agentWorktreeCheck: AgentLaunchWorktreeCheck.Check,
+            agentWorktreeRefusalAudit: (_, _, _) => true);
+        return new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"), launcher: launcher);
+    }
+
+    LaunchRequest FleetRequest() => new() { Request = Guid.NewGuid().ToString("D"), Agent = "claude",
+        Workspace = "App", Permissions = LaunchProtocol.AllowAll };
+
+    sealed class NoFleetCredentials : AgentBridge.Host.Delivery.ILaunchCredentials
+    {
+        public bool IssueFleet;
+        public string? Prepare(string session, string launchId) => null;
+        public string? PrepareFleet(string session, string launchId) => IssueFleet ? "fixture" : null;
+        public void Bind(string launchId, int processId, DateTimeOffset startedAt) { }
+        public void Abandon(string launchId) { }
+    }
+
+    async Task<LaunchResult> FleetLaunch(SessionService service, AgentAuditLog audit, LaunchRequest? request = null, bool refresh = true)
+    {
+        var result = await service.LaunchFleetAsync(request ?? FleetRequest(),
             "script:machine/dispatcher", audit, () => null, _ => null);
-        await source.RefreshAsync();
+        if (refresh) { await source.RefreshAsync(); }
         return result;
     }
 }

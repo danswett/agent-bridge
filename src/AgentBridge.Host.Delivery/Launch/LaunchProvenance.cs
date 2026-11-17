@@ -13,7 +13,7 @@ internal sealed class LaunchProvenance
     readonly Lock gate = new();
     readonly Dictionary<Guid, Origin> origins = [];
     bool unavailable;
-    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null);
+    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, bool Registered = false);
 
     public LaunchProvenance(string? path, Action<string> log)
     {
@@ -51,12 +51,24 @@ internal sealed class LaunchProvenance
         lock (gate) { Check(); origins.Remove(request); Save(); }
     }
 
-    public void Bound(Guid request, string session, SessionProcess process)
+    public void Started(Guid request, string session, SessionProcess process)
     {
         lock (gate)
         {
             Check();
             var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant);
+            if (origins.GetValueOrDefault(request) == origin) { return; }
+            origins[request] = origin;
+            Save();
+        }
+    }
+
+    public void Bound(Guid request, string session, SessionProcess process)
+    {
+        lock (gate)
+        {
+            Check();
+            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant, Registered: true);
             if (origins.GetValueOrDefault(request) == origin) { return; }
             origins[request] = origin;
             Save();
@@ -82,8 +94,29 @@ internal sealed class LaunchProvenance
             if (origins.Values.Any(o => o.Grant == "fleet" && o.Process is null
                 && (o.Session.Length == 0 || string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase))))
             { throw new InvalidOperationException("refused: a fleet launch has no durable process binding"); }
-            return process is not null && origins.Values.Any(o => o.Grant == "fleet"
-                && string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase) && o.Process == process);
+            var workers = origins.Values.Where(o => o.Grant == "fleet"
+                && string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (workers.Length > 0 && process?.StartedAt is null)
+            { throw new InvalidOperationException("refused: a fleet worker process cannot be checked safely"); }
+            return process is not null && workers.Any(o => o.Process == process);
+        }
+    }
+
+    public SessionProcess? FleetProcess(Guid request)
+    {
+        lock (gate)
+        {
+            Check();
+            return origins.GetValueOrDefault(request) is { Grant: "fleet", Process: { } process } ? process : null;
+        }
+    }
+
+    public bool FleetRegistered(Guid request)
+    {
+        lock (gate)
+        {
+            Check();
+            return origins.GetValueOrDefault(request) is { Grant: "fleet", Registered: true };
         }
     }
 

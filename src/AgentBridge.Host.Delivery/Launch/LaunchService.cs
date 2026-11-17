@@ -9,6 +9,8 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery.Launch;
 
+public sealed record LaunchAuditCallbacks(Func<string, bool> Registered, Func<string, bool> Terminal);
+
 // launch.options and session.launch for a host: what hello offers, the options, and one launch.
 public interface ISessionLauncher
 {
@@ -19,14 +21,17 @@ public interface ISessionLauncher
 
     Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default);
 
-    Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
+    Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, LaunchAuditCallbacks?> prepare,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot write durable launch evidence."));
 
     Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
-    Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
+    Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, LaunchAuditCallbacks?> prepare,
         CancellationToken cancellationToken = default) => Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "fleet launch is unavailable"));
     bool IsFleetWorker(string session, SessionProcess? process) => false;
+    SessionProcess? FleetLaunchProcess(Guid request) => null;
+    bool FleetLaunchRegistered(Guid request) => false;
+    bool FleetProcessRunning(SessionProcess process) => false;
     LaunchConfig? FleetConfig => null;
     Task<LaunchResult>? ReplayAuditedAsync(LaunchRequest request, string peer) => null;
 
@@ -760,19 +765,23 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
         LaunchOnceAsync(request, peer, null);
-    public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
+    public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, LaunchAuditCallbacks?> prepare,
         CancellationToken cancellationToken = default) => LaunchOnceAsync(request, principal, prepare, fleet: true);
     public bool IsFleetWorker(string session, SessionProcess? process) => provenance.IsFleetWorker(session, process);
+    public SessionProcess? FleetLaunchProcess(Guid request) => provenance.FleetProcess(request);
+    public bool FleetLaunchRegistered(Guid request) => provenance.FleetRegistered(request);
+    public bool FleetProcessRunning(SessionProcess process) =>
+        process.StartedAt is { } at && starter.Running(new Started(process.Id, at));
     public LaunchConfig FleetConfig => Config;
 
-    public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
+    public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, LaunchAuditCallbacks?> prepare,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(prepare);
         return LaunchOnceAsync(request, peer, prepare);
     }
 
-    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false)
+    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, LaunchAuditCallbacks?>? prepare, bool fleet = false)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
         return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet)
@@ -848,7 +857,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
     async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+        Func<Guid, LaunchAuditCallbacks?>? prepare = null, bool fleet = false)
     {
         try
         {
@@ -1094,7 +1103,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     }
 
     async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+        Func<Guid, LaunchAuditCallbacks?>? prepare = null, bool fleet = false)
     {
         Pending follow;
         LaunchedWith launched;
@@ -1281,14 +1290,21 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // (HeldForReply): what the transcript holds now is from before this agent.
             var transcriptFrom = TranscriptFrom(plan.Launcher, sessionId);
             var launchId = Guid.NewGuid().ToString("N");
-            Action<string>? auditRegistered = null;
+            LaunchAuditCallbacks? auditCallbacks = null;
             if (prepare is not null && plan.Resume is null && plan.Transfer is null)
             {
-                auditRegistered = prepare(Guid.Parse(launchId));
-                if (auditRegistered is null) { return Refused("the launch audit could not be written durably"); }
+                auditCallbacks = prepare(Guid.Parse(launchId));
+                if (auditCallbacks is null) { return Refused("the launch audit could not be written durably"); }
             }
             // A crash before registration must not turn an unbound launch into an adoptable process.
-            provenance.Preparing(key, sessionId, fleet ? "fleet" : null);
+            try { provenance.Preparing(key, sessionId, fleet ? "fleet" : null); }
+            catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
+            {
+                if (auditCallbacks is not null && !auditCallbacks.Terminal("refused"))
+                { log($"launch {Short(key)}: the unstarted launch audit could not be closed durably"); }
+                log($"launch {Short(key)}: process provenance could not be prepared: {e.GetType().Name}");
+                return Refused("launch provenance could not be saved; no process was started");
+            }
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)
@@ -1299,15 +1315,29 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     log($"launch {Short(key)}: no agent credential was issued: {e.Message}");
                 }
             }
-            if (fleet && !credentialIssued) { provenance.Abandon(key); return Refused("a read+reply fleet worker credential could not be issued"); }
+            if (fleet && !credentialIssued)
+            {
+                var closed = auditCallbacks?.Terminal("refused") ?? true;
+                provenance.Abandon(key);
+                return Refused(closed ? "a read+reply fleet worker credential could not be issued"
+                    : "a read+reply fleet worker credential could not be issued and its launch audit could not be closed durably");
+            }
             Started started;
             try { started = starter.Start(spec); created = null; }
             catch (Exception e)
             {
+                var closed = auditCallbacks?.Terminal("failed") ?? true;
                 if (credentialIssued) { credentials!.Abandon(launchId); }
                 provenance.Abandon(key);
                 log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
-                return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} couldn't be started") { Launched = launched };
+                return new LaunchResult(LaunchOutcome.Failed, closed ? $"{plan.Launcher.Label} couldn't be started"
+                    : $"{plan.Launcher.Label} couldn't be started and its launch audit could not be closed durably") { Launched = launched };
+            }
+            if (fleet && sessionId.Length > 0)
+            {
+                try { provenance.Started(key, sessionId, new SessionProcess(started.ProcessId, started.StartedAt)); }
+                catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
+                { log($"launch {Short(key)}: fleet process provenance could not be bound: {e.GetType().Name}"); }
             }
             if (credentialIssued) { credentials!.Bind(launchId, started.ProcessId, started.StartedAt); }
             if (claim is not null) { attachments!.Consume(claim); handed.Value = true; }
@@ -1315,7 +1345,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
             // The reservation is the follow's now, released when the session registers.
             follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched)
-                { Transcript = transcriptFrom, AuditRegistered = auditRegistered };
+                { Transcript = transcriptFrom, AuditRegistered = auditCallbacks?.Registered, AuditTerminal = auditCallbacks?.Terminal };
             reservation = null;
             lock (pendingGate) { pending.Add(follow); }
             resumable.Forget();
@@ -1648,10 +1678,16 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         if (result is { Outcome: LaunchOutcome.Started, Session: { } id })
         {
             Noted(p, id);
-            Interlocked.Exchange(ref p.AuditRegistered, null)?.Invoke(id);
+            if (Interlocked.Exchange(ref p.AuditRegistered, null)?.Invoke(id) == true)
+            { Interlocked.Exchange(ref p.AuditTerminal, null); }
             RequestRegistered?.Invoke(p.Key, id);
         }
-        if (result.Outcome == LaunchOutcome.Failed) { RequestFailed?.Invoke(p.Key); }
+        if (result.Outcome == LaunchOutcome.Failed)
+        {
+            if (p.RegisteredAt is not null && Interlocked.Exchange(ref p.AuditTerminal, null) is { } terminal && !terminal("failed"))
+            { log($"launch {Short(p.Key)}: the failed launch audit could not be closed durably"); }
+            RequestFailed?.Invoke(p.Key);
+        }
         if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started)
         {
             p.RegisteredLate = true;
@@ -1995,7 +2031,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         public string? Worktree { get; } = worktree;
         public string? Reservation { get; } = reservation;
         public LaunchedWith Launched { get; } = launched;
-        public Action<string>? AuditRegistered;
+        public Func<string, bool>? AuditRegistered;
+        public Func<string, bool>? AuditTerminal;
         public TaskCompletionSource<LaunchResult> Decided { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public volatile StartupQuestion Question;
         // Seen to close after a person's Quit: it asks nothing from then on, whatever Question

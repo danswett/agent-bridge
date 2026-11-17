@@ -103,27 +103,57 @@ public sealed class SessionService
         var (rows, complete) = GateAuditProjection.Load(audit.Profile);
         if (!complete || !audit.Verify(launch: true).Intact) { return "fleet launch history cannot be checked safely"; }
         var since = Time.GetUtcNow() - TimeSpan.FromHours(1);
-        if (rows.Count(row => row.Grant == "fleet" && row.Action == "session.launch" && row.Outcome == "started" && row.At >= since)
+        if (rows.Where(row => row.Grant == "fleet" && row.Action == "session.launch"
+                && row.Gate is { Phase: "intent" } && row.Outcome == "reserved" && row.At >= since)
+                .Select(row => row.Request).Distinct(StringComparer.Ordinal).Count()
             >= limits.FleetPerHour)
         { return $"the hourly fleet launch cap ({limits.FleetPerHour}) has been reached"; }
         if (source.Held is not null) { return "live fleet worker count cannot be checked while session discovery is incomplete"; }
 
-        var completed = rows.Where(row => row.Action == "session.launch" && row.Gate is { Phase: "terminal" })
+        var completed = rows.Where(row => row.Action == "session.launch" && row.Gate is { Phase: "terminal" }
+                && (row.Outcome is "started" or "failed" or "refused"))
             .Select(row => row.Gate!.Operation).ToHashSet();
-        var live = rows.Count(row => row.Grant == "fleet" && row.Action == "session.launch"
-            && row.Gate is { Phase: "intent" } gate && row.Outcome == "reserved" && !completed.Contains(gate.Operation));
+        var live = new HashSet<SessionProcess>();
+        foreach (var intent in rows.Where(row => row.Grant == "fleet" && row.Action == "session.launch"
+            && row.Gate is { Phase: "intent" } gate && row.Outcome == "reserved" && !completed.Contains(gate.Operation)))
+        {
+            if (!Guid.TryParseExact(intent.Request, "D", out var request)) { return "live fleet worker count cannot be checked safely"; }
+            SessionProcess? process;
+            bool running;
+            try
+            {
+                process = launcher!.FleetLaunchProcess(request);
+                if (process is null) { return "live fleet worker count cannot be checked safely"; }
+                running = launcher.FleetProcessRunning(process);
+            }
+            catch (InvalidOperationException)
+            {
+                return "live fleet worker count cannot be checked safely";
+            }
+            if (!running)
+            {
+                bool registered;
+                try { registered = launcher.FleetLaunchRegistered(request); }
+                catch (InvalidOperationException) { return "live fleet worker count cannot be checked safely"; }
+                if (!registered) { return "live fleet worker count cannot be checked safely"; }
+                if (!GateLaunchAudit.CloseReservation(audit, intent)) { return "fleet launch history cannot be checked safely"; }
+                continue;
+            }
+            live.Add(process);
+        }
         try
         {
             foreach (var session in source.Snapshot())
             {
-                if (launcher!.IsFleetWorker(session.Id, source.ProcessOf(session.Id))) { live++; }
+                var process = source.ProcessOf(session.Id);
+                if (launcher!.IsFleetWorker(session.Id, process) && process is not null) { live.Add(process); }
             }
         }
         catch (InvalidOperationException)
         {
             return "live fleet worker count cannot be checked safely";
         }
-        return live >= limits.LiveFleetWorkers
+        return live.Count >= limits.LiveFleetWorkers
             ? $"the live fleet worker cap ({limits.LiveFleetWorkers}) has been reached"
             : null;
     }
