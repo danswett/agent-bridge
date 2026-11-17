@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AgentBridge.AgentEnvelope;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -569,17 +570,14 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     internal static bool ValidScript(AgentCredential c, string machine)
     {
-        var prefix = $"script:{machine}/";
-        return ValidScriptPart(machine) && c.Principal is { Length: <= 128 } principal
-            && principal.StartsWith(prefix, StringComparison.Ordinal) && ValidScriptPart(principal[prefix.Length..])
+        return AgentPrincipal.ValidScriptIdentity(c.Principal, machine)
             && c.Session == "" && c.LaunchId == "" && c.RootPid == 0 && c.RootStartUtc == default
             && c.Scope == AgentProtocol.ScopeReadReply && c.Depth == 0 && c.Chain is { Length: 0 }
             && c.IssuedAt != default && c.ExpiresAt > c.IssuedAt
             && c.ExpiresAt - c.IssuedAt <= TimeSpan.FromDays(DefaultScriptDays);
     }
 
-    internal static bool ValidScriptPart(string? value) => value is { Length: > 0 and <= 64 } && value is not "." and not ".."
-        && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+    internal static bool ValidScriptPart(string? value) => AgentPrincipal.ValidScriptPart(value);
 
     // A session id is at most 36 characters (a UUID).
     internal static bool ValidSession(string? s) => s is { Length: > 0 and <= 36 } && s.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
