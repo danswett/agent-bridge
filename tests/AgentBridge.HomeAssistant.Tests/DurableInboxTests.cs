@@ -142,6 +142,32 @@ public sealed class DurableInboxTests : IDisposable
         Assert.Equal("legacy", second.Sender);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Crash_leftovers_are_removed_before_reading_and_delivering(bool partial)
+    {
+        var inbox = new DurableInbox(Pathname);
+        inbox.Enqueue("one", "a", "sender", "secret", Now);
+        var snapshot = File.ReadAllText(Pathname);
+        var leftover = Pathname + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        var unrelated = Path.Combine(folder, "other.json." + Guid.NewGuid().ToString("N") + ".tmp");
+        var lookalike = Pathname + ".not-an-inbox-temp.tmp";
+        File.WriteAllText(leftover, partial ? snapshot[..^5] : snapshot);
+        File.WriteAllText(unrelated, "unrelated");
+        File.WriteAllText(lookalike, "unrelated");
+
+        Assert.Equal("a", new DurableInbox(Pathname).Peek("one")!.Rid);
+        Assert.False(File.Exists(leftover));
+        File.WriteAllText(leftover, partial ? snapshot[..^5] : snapshot);
+        inbox.Deliver("one", "a", Now);
+        Assert.False(File.Exists(leftover));
+        Assert.DoesNotContain("secret", File.ReadAllText(Pathname));
+        Assert.Equal("unrelated", File.ReadAllText(unrelated));
+        Assert.Equal("unrelated", File.ReadAllText(lookalike));
+        Assert.Null(new DurableInbox(Pathname).Peek("one"));
+    }
+
     [Fact]
     public void Inbox_caps_reject_full_queues_and_prune_delivered_entries()
     {

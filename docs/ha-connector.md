@@ -577,6 +577,8 @@ retaining rid metadata for deduplication; legacy senders get a generated rid and
 For #2780 integration, deduplication lasts only while that metadata is retained within the
 100-entry per-node and 1000-entry total caps, including pending entries. A retry of a pruned
 delivered rid is accepted as new and may be delivered again; this is not permanent deduplication.
+Load and save remove this inbox's GUID-named crash-leftover temporary files under its lock,
+so obsolete copies cannot retain payloads after a later delivery.
 Power-loss durability is not established. It does not change the live reply path, publish acks,
 or provide native receipt. A later slice must provide an access-controlled storage directory,
 one dispatcher per node (a peek does not reserve a message), and reconcile the crash window

@@ -86,6 +86,7 @@ internal sealed class DurableInbox
 
     List<InboxMessage> Load()
     {
+        DeleteLeftovers();
         FileStream file;
         try { file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); }
         catch (FileNotFoundException) { return []; }
@@ -114,6 +115,7 @@ internal sealed class DurableInbox
 
     void Save(List<InboxMessage> messages)
     {
+        DeleteLeftovers();
         var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
         if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
@@ -129,6 +131,20 @@ internal sealed class DurableInbox
         finally
         {
             if (File.Exists(temp)) { File.Delete(temp); }
+        }
+    }
+
+    void DeleteLeftovers()
+    {
+        var prefix = Path.GetFileName(path) + ".";
+        foreach (var candidate in Directory.EnumerateFiles(Path.GetDirectoryName(path)!))
+        {
+            var name = Path.GetFileName(candidate);
+            if (name.Length == prefix.Length + 36 && name.StartsWith(prefix, StringComparison.Ordinal) &&
+                name.EndsWith(".tmp", StringComparison.Ordinal) && Guid.TryParseExact(name.AsSpan(prefix.Length, 32), "N", out _))
+            {
+                File.Delete(candidate);
+            }
         }
     }
 }
