@@ -18,6 +18,7 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
     [InlineData(true, "audit")]
     [InlineData(true, "command")]
     [InlineData(true, "held")]
+    [InlineData(true, "start")]
     [InlineData(true, "activation")]
     public async Task Fleet_dispatch_requires_fresh_isolation_and_removes_unstarted_trees_on_every_refusal(bool isolated, string? failure)
     {
@@ -31,6 +32,7 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         var profile = Path.Combine(f.Root, "fleet-profile");
         var credentials = new AgentCredentials(profile, "machine");
         if (failure == "credential") { Directory.CreateDirectory(Path.Combine(profile, AgentCredentials.FileName) + ".tmp"); }
+        if (failure == "start") { starter.Throws = new InvalidOperationException("fixture"); }
         var config = Config(c => c with { Workspaces = [new("App", app, isolated)] });
         if (failure == "command") { config = config with { Agents = new Dictionary<string, AgentConfig> { ["claude"] = new() { ExtraArgs = [new string('x', 40000)] } } }; }
         var launcher = Launcher(config, credentials: credentials, agentWorktreeCheck: (workspace, made, _) =>
@@ -47,7 +49,8 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
                 .LaunchFleetAsync(request, principal, new AgentAuditLog(profile), () => null, _ => null)
             : await GateLaunchAudit.LaunchAsync(launcher, request, principal, new AgentAuditLog(profile),
                 new("local", "agent", principal, null), fleet: true, refusal: () => failure == "grant" ? "grant off" : null);
-        var expected = failure == "held" ? LaunchOutcome.Busy : isolated && failure is null ? LaunchOutcome.Started : LaunchOutcome.Refused;
+        var expected = failure == "held" ? LaunchOutcome.Busy : failure == "start" ? LaunchOutcome.Failed
+            : isolated && failure is null ? LaunchOutcome.Started : LaunchOutcome.Refused;
         Assert.True(result.Outcome == expected, $"{result.Outcome}: {result.Reason}");
         if (!isolated || failure is not null)
         {
@@ -55,6 +58,17 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
             Assert.Empty(starter.Specs);
             if (isolated && failure is not ("activation" or "grant" or "audit")) { Assert.Empty(Directory.GetDirectories(config.WorktreeRoot)); }
             else { Assert.False(Directory.Exists(config.WorktreeRoot)); }
+            if (failure is "command" or "held" or "credential" or "start")
+            {
+                var (evidence, complete) = GateAuditProjection.Load(profile);
+                Assert.True(complete);
+                var terminal = Assert.Single(evidence, row => row.Gate?.Phase == "terminal");
+                Assert.Equal(failure == "start" ? "failed" : "refused", terminal.Outcome);
+                var replay = await GateLaunchAudit.LaunchAsync(Launcher(config), request, principal, new AgentAuditLog(profile),
+                    new("local", "agent", principal, null), fleet: true);
+                Assert.Equal(failure == "start" ? LaunchOutcome.Failed : LaunchOutcome.Refused, replay.Outcome);
+                Assert.Empty(starter.Specs);
+            }
             return;
         }
         Assert.NotEqual(app, Assert.Single(starter.Specs).WorkingDirectory);
