@@ -394,7 +394,10 @@ host sends:
 
 These reads use the host's in-memory live source, also used by its fleet registry
 publisher, without Home Assistant reads or a separate roster store. Every `Session`
-is scoped to `hello.machine.id`. `owner`, `pr` and `finished` carry explicit evidence:
+is scoped to `hello.machine.id`. The in-memory roster is bounded to 250 sessions;
+overflow holds discovery for the affected agent until a slot is freed, without
+evicting a live row or silently allowing an omitted session to resume.
+`owner`, `pr` and `finished` carry explicit evidence:
 unknown is not confirmed none or false. Idle does not mean work-finished. Once discovery
 observes a session ended, removal bypasses upsert coalescing and quiet-session holding;
 list/get and the next subscription exclude it immediately. A discovery hold is not
@@ -616,23 +619,17 @@ an absence, and never reads the failed look as "every session ended" (design §6
 agent-ha-bridge's "session discovery uncertain … absence-based work is held"). While an agent
 in `agents` is held:
 
-* its sessions are not removed for being missing, and those the host has go on updating;
+* its sessions are not removed merely for being missing, and those the host has go on
+  updating; positive ended evidence removes a session immediately, even during a hold;
 * none of them is offered for resume, a resume is `busy`, and no worktree is reclaimed
   ([v1-launch.md](v1-launch.md#while-discovery-is-held));
 * the Home Assistant connector retires no session's entities, of any agent
   ([ha-connector.md](../ha-connector.md#lifecycle)).
 
-A hold survives a restart of the host (#147). The serving host keeps the sessions it lists in
-`sessions-listed.json` in its profile's folder: each one's id, agent, pid and process start time,
-and never a path, which is found again as discovery finds it. To the first pass after it starts,
-their processes count as known, so one whose runtime cannot be read holds its agent as it would
-have before the restart. That pass brings back each of them of an agent it holds, as long as its
-own process is still running (the same pid, started at the same time) and no session found has
-that process now.
-A session such a pass cannot see, which only the hold was keeping, is therefore still listed
-after a restart, as it was before one. It is then kept like any other session a hold keeps, until
-a complete pass decides. A complete first pass is believed, as ever, and so is a registration
-that says the session ended, even when its runtime cannot be read.
+Host-bound roster membership is memory-only. The serving host neither loads nor writes
+`sessions-listed.json`; a restart requires fresh live discovery for each row, never disk
+membership to fill in an incomplete pass. An unavailable, empty or corrupt source supplies
+no membership. Holds are rediscovered, not restored from the earlier host's roster.
 
 Sessions of the other agents are removed and resumed as usual. `reason` says what holds it, in
 words for a person, at most 512 bytes; a client shows it as it is ("discovery held: …", as the

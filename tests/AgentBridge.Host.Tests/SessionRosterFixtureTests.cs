@@ -227,6 +227,90 @@ public sealed class SessionRosterFixtureTests
         }
     }
 
+    [Theory]
+    [InlineData("alive")]
+    [InlineData("unidentified")]
+    [InlineData("gone")]
+    [InlineData("pidless")]
+    public async Task Positive_ended_evidence_removes_a_session_even_while_another_process_holds_its_agent(string process)
+    {
+        using var fixture = new Fixture();
+        fixture.CodexRegistration(Id, 950, null);
+        fixture.Processes.Run(AgentKind.Codex, 950, "codex.exe");
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(SessionStatus.Working, source.Get(Id)!.Status);
+        using var subscription = source.Subscribe();
+        while (subscription.Events.TryRead(out _)) { }
+        fixture.Processes.RunUndated(AgentKind.Codex, 960, "codex.exe");
+        fixture.CodexRegistration(Id, process == "pidless" ? 0 : 950, null, status: "ended", ended: true);
+        if (process == "unidentified") { fixture.Processes.Unidentify(AgentKind.Codex, 950); }
+        if (process == "gone") { fixture.Processes.Exit(AgentKind.Codex, 950); }
+        await source.RefreshAsync();
+        Assert.NotNull(source.Held);
+        Assert.Null(source.Get(Id));
+        Assert.Empty(source.List().Sessions);
+        var changes = new List<SessionEvent>();
+        while (subscription.Events.TryRead(out var change)) { changes.Add(change); }
+        Assert.Equal(Id, Assert.IsType<SessionRemoved>(Assert.Single(changes, c => c.Name == Events.SessionRemove).Data).Id);
+    }
+
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("empty")]
+    [InlineData("corrupt")]
+    [InlineData("missing")]
+    public async Task A_host_roster_never_loads_or_rewrites_disk_membership_when_discovery_is_incomplete(string state)
+    {
+        using var fixture = new Fixture();
+        var path = Path.Combine(fixture.Root, "sessions-listed.json");
+        string? saved = state switch
+        {
+            "valid" => JsonSerializer.Serialize(new { sessions = new[] { new { id = Id, agent = "codex", pid = 950, processStartedAt = Fixture.T0.AddHours(-1) } } }),
+            "empty" => "",
+            "corrupt" => "{",
+            _ => null,
+        };
+        if (saved is not null) { File.WriteAllText(path, saved); }
+        fixture.CodexRegistration(Id, 950, null);
+        File.WriteAllText(Path.Combine(fixture.CodexRegistrations, Id + ".json"), "{");
+        fixture.Processes.Run(AgentKind.Codex, 950, "codex.exe");
+        await using var source = new SessionSource(fixture.Options(stateFile: path), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.NotNull(source.Held);
+        Assert.Empty(source.Snapshot());
+        Assert.Null(source.Get(Id));
+        Assert.Equal(saved, File.Exists(path) ? File.ReadAllText(path) : null);
+        using var subscription = source.Subscribe();
+        Assert.Equal(0, subscription.Result.Count);
+    }
+
+    [Fact]
+    public async Task A_full_roster_holds_overflow_and_admits_it_when_an_ended_session_frees_a_slot()
+    {
+        using var fixture = new Fixture();
+        var ids = Enumerable.Range(0, 251).Select(i => $"{i:D8}-0000-4000-8000-000000000000").ToArray();
+        for (var i = 0; i < ids.Length; i++)
+        {
+            fixture.CodexRegistration(ids[i], 1000 + i, null);
+            fixture.Processes.Run(AgentKind.Codex, 1000 + i, "codex.exe");
+        }
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(250, source.Snapshot().Count);
+        Assert.Contains("250-session roster limit", source.Held!.Reason);
+        var omitted = Assert.Single(ids.Except(source.Snapshot().Select(s => s.Id)));
+        var ended = source.Snapshot()[0].Id;
+        fixture.CodexRegistration(ended, 1000 + Array.IndexOf(ids, ended), null, status: "ended", ended: true);
+        await source.RefreshAsync();
+        Assert.Equal(250, source.Snapshot().Count);
+        Assert.Null(source.Get(ended));
+        Assert.NotNull(source.Get(omitted));
+        Assert.Null(source.Held);
+        using var subscription = source.Subscribe();
+        Assert.Equal(250, subscription.Result.Count);
+    }
+
     static void AssertRow(JsonElement row, string machine)
     {
         Assert.Equal(machine, row.GetProperty("machine").GetString());
