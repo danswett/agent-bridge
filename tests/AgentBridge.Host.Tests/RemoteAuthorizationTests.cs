@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Host.SignIn;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -23,10 +24,11 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
     TrustedPeerStore store = null!;
     RemoteAuthorization authorization = null!;
     SessionService service = null!;
+    string events = "";
 
     public async Task InitializeAsync()
     {
-        var events = fixture.CopilotSession(SessionId, 100, name: "Read without taking over");
+        events = fixture.CopilotSession(SessionId, 100, name: "Read without taking over");
         Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2));
         fixture.Processes.Run(AgentKind.Copilot, 100);
         source = new SessionSource(fixture.Options(), fixture.Processes, TimeProvider.System);
@@ -477,6 +479,78 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Assert.Equal("this host does not take answers; answer at the machine", response.GetProperty("reason").GetString());
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Relay_answers_audit_the_channel_device_and_relay_origin_not_payload_claims(bool pinned)
+    {
+        Fixture.Append(events, AnswerAuditStub.Ask);
+        await source.RefreshAsync();
+        var answers = new AnswerAuditStub(source);
+        var profile = Path.Combine(fixture.Root, "answer-audit");
+        var audit = new AgentAuditLog(profile);
+        if (!pinned)
+        {
+            authorization.Dispose();
+            authorization = new RemoteAuthorization(false, store, time);
+            authorization.Attach(host.Hub);
+        }
+        host.Hub.Handler = authorization.Handler(
+            new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0"), answers: answers), audit);
+        var peer = await PeerAsync("pwa");
+        if (pinned) { Pin(peer, TrustedPeerStore.Person); }
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var request = new
+        {
+            id = SessionId, question = "q1", request = Guid.NewGuid().ToString(), text = "yes",
+            principal = "person:forged", actor = "person:local", source = "local", origin = "local", path = "local",
+        };
+
+        var result = Result(await channel.RequestAsync(Ops.SessionAnswer, request, Patience));
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(1, answers.Deliveries);
+        var (rows, complete) = GateAuditProjection.Load(profile);
+        Assert.True(complete);
+        Assert.Equal(new[] { "intent", "terminal" }, rows.Select(r => r.Gate!.Phase));
+        Assert.All(rows, row =>
+        {
+            Assert.Equal(Ops.SessionAnswer, row.Action);
+            Assert.Equal($"person:{peer.Id}", row.Principal);
+            Assert.Equal("relay", row.Direction);
+            Assert.Equal("relay", row.Gate!.Path);
+            Assert.Equal("person-client", row.Gate.ActorKind);
+            Assert.Equal(Guid.Empty, row.Gate.Run);
+            Assert.Null(row.DataSha256);
+            Assert.Null(row.TextLength);
+        });
+        Assert.Equal(rows[0].Gate!.Operation, rows[1].Gate!.Operation);
+        Assert.Equal(rows[0].Gate!.Question, rows[1].Gate!.Question);
+        Assert.Equal("attempted", rows[0].Outcome);
+        Assert.Equal("delivered", rows[1].Outcome);
+        Assert.True(PhoneApprovalEvidence.Read(profile, [peer.Id]).Passed);
+    }
+
+    [Theory]
+    [InlineData(TrustedPeerStore.Host)]
+    [InlineData(TrustedPeerStore.Service)]
+    public async Task Relay_answer_auditing_does_not_grant_non_person_roles_permission(string role)
+    {
+        var answers = new AnswerAuditStub(source);
+        var profile = Path.Combine(fixture.Root, "answer-audit");
+        host.Hub.Handler = authorization.Handler(
+            new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0"), answers: answers),
+            new AgentAuditLog(profile));
+        var peer = await PeerAsync("pwa");
+        Pin(peer, role);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+
+        await DeniedAsync(channel, Ops.SessionAnswer);
+
+        Assert.Equal(0, answers.Deliveries);
+        Assert.False(Directory.Exists(Path.Combine(profile, AgentAuditLog.FolderName)));
+    }
+
     [Fact]
     public async Task Diagnostics_reach_only_a_device_pinned_as_a_person_whatever_it_claims_or_sends()
     {
@@ -640,5 +714,32 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         await source.DisposeAsync();
         foreach (var device in devices) { device.Key.Dispose(); }
         fixture.Dispose();
+    }
+}
+
+sealed class AnswerAuditStub(ISessionSource source) : ISessionAnswerer
+{
+    public static string Ask => Copilot.ToolStart("q1", "ask_user", new { message = "Continue?" }, 4);
+    public bool Available => true;
+    public int Deliveries { get; private set; }
+
+    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default,
+        DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null)
+    {
+        Deliveries++;
+        return Task.FromResult(new AnswerResult(AnswerOutcome.Delivered));
+    }
+
+    public async Task<AnswerResult> AnswerAuditedAsync(AnswerRequest request,
+        Func<Guid, Session, Question, Action<AnswerOutcome>?> prepare, CancellationToken cancellationToken = default,
+        DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null)
+    {
+        var session = Assert.IsType<Session>(source.Get(request.Id));
+        var question = Assert.IsType<Question>(session.Question);
+        var terminal = prepare(Guid.Parse(request.Request), session, question);
+        if (terminal is null) { return new AnswerResult(AnswerOutcome.Refused, "audit intent unavailable"); }
+        var result = await AnswerAsync(request, cancellationToken, watch, confirmed, sender);
+        terminal(result.Outcome);
+        return result;
     }
 }

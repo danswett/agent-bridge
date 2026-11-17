@@ -197,6 +197,42 @@ public sealed class LocalApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Local_answers_keep_local_audit_attribution_despite_payload_claims()
+    {
+        Fixture.Append(events, AnswerAuditStub.Ask);
+        await source.RefreshAsync();
+        var answers = new AnswerAuditStub(source);
+        var auditProfile = Path.Combine(profile, "answer");
+        var endpoint = LocalEndpoint.For(auditProfile);
+        await using var answerServer = LocalServer.Start(endpoint, LocalApi.Handler(
+            new SessionService(source, new MachineInfo("host-id", "Host", "windows", "0.1.0"), answers: answers),
+            control, callers, audit: new AgentAuditLog(auditProfile)));
+        await using var channel = await LocalClient.ConnectAsync(endpoint, Patience);
+
+        var result = await channel.CallAsync<AnswerResult>(Ops.SessionAnswer, new
+        {
+            id = Id, question = "q1", request = Guid.NewGuid().ToString(), text = "yes",
+            principal = "person:forged", actor = "person:forged", source = "relay", origin = "relay", path = "relay",
+        });
+
+        Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
+        Assert.Equal(1, answers.Deliveries);
+        var (rows, complete) = GateAuditProjection.Load(auditProfile);
+        Assert.True(complete);
+        Assert.Equal(new[] { "intent", "terminal" }, rows.Select(r => r.Gate!.Phase));
+        Assert.All(rows, row =>
+        {
+            Assert.Equal(Ops.SessionAnswer, row.Action);
+            Assert.Equal("person:local", row.Principal);
+            Assert.Equal("local", row.Direction);
+            Assert.Equal("local", row.Gate!.Path);
+            Assert.Equal("person-client", row.Gate.ActorKind);
+        });
+        Assert.Equal("delivered", rows[1].Outcome);
+        Assert.False(PhoneApprovalEvidence.Read(auditProfile, ["forged"]).Passed);
+    }
+
+    [Fact]
     public async Task Web_push_registration_is_refused_on_the_pipe()
     {
         var ch = await ConnectAsync();
