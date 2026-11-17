@@ -1,7 +1,7 @@
 # Cross-transport reply deduplication (#2819)
 
-Status: revised proposed design; the two reader families and owner or Chief must accept
-the placement tradeoff before implementation. Written 2026-11-17 PT.
+Status: Accepted by the Chief (owner proxy) Nov 17 at b4196e14; see #2819.
+Written 2026-11-17 PT.
 
 ## Scope and current gap
 
