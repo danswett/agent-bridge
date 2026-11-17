@@ -133,7 +133,8 @@ public sealed class SessionRegistry(TimeProvider time)
         var now = time.GetUtcNow();
         return [.. held.Where(h => h.Key.Account == account).Select(h =>
         {
-            var fresh = h.Value.Json != "null" && now - h.Value.ReceivedAt <= RosterFields.HeartbeatWindow;
+            var age = now - h.Value.ReceivedAt;
+            var fresh = h.Value.Json != "null" && age >= TimeSpan.Zero && age <= RosterFields.HeartbeatWindow;
             // JSON null is a tombstone: a clock rewind cannot revive an erased payload.
             if (!fresh && h.Value.Json != "null") { held.TryUpdate(h.Key, h.Value with { Json = "null" }, h.Value); }
             return (h.Key.Machine, fresh ? h.Value.Json : "null", h.Value.ReceivedAt, fresh);
