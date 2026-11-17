@@ -8,7 +8,7 @@ using Xunit;
 // The launch card, against an in-process Home Assistant and a stand-in for the host's launcher
 // offering what the exporter's recording offered: the controls, the labels and the notes, as the
 // daemon's own functions produced them (Fixtures/ha-launch.json), and what reaches the host.
-public sealed class LaunchTests : IDisposable
+public sealed partial class LaunchTests : IDisposable
 {
     const string Machine = "DSWETT-DEV-VM1";
     const string AgentUser = "agent-user";
@@ -321,7 +321,7 @@ public sealed class LaunchTests : IDisposable
         Assert.Equal(HaContract.PermissionAsk, o["launched"]!["permissions"]!.GetValue<string>());
         Assert.False(string.IsNullOrEmpty(o["pressed"]!.GetValue<string>()));
         // Received first, as the daemon answers before it clears the slot.
-        Assert.Contains(ha.Log, p => p.Topic == HaContract.LaunchOutcomeTopic(Slug) && p.Payload.Contains("Received; checking its settings before launching.", StringComparison.Ordinal));
+        Assert.Contains(ha.Log, p => p.Topic == HaContract.LaunchOutcomeTopic(Slug) && p.Payload.Contains("Received; waiting for the host launch queue.", StringComparison.Ordinal));
         Assert.Equal("{}", ha.Retained[HaContract.PromptPayloadTopic(Slug)]);
 
         // The session it started is the agent's from the moment it appears: the purple edge.
@@ -406,11 +406,9 @@ public sealed class LaunchTests : IDisposable
         ha.Now = ha.Now.AddSeconds(11);
         Payload(new JsonObject { ["text"] = "again", ["request"] = "req-0003-abcd", ["at"] = ha.Now.ToString("o", System.Globalization.CultureInfo.InvariantCulture) + "x" });
         await Launch(c, AgentUser);
-        Assert.Equal(2, launched.Count);
-        // From the card: neither the request's words nor a second answer to it.
+        Assert.Single(launched);
+        // A duplicate id never falls through to a fresh card launch.
         Assert.Single(JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray());
-        Assert.Null(launched[1].Prompt);
-        Assert.Equal("copilot", launched[1].Agent);
     }
 
     [Fact]
@@ -521,7 +519,7 @@ public sealed class LaunchTests : IDisposable
     }
 
     [Fact]
-    public async Task A_press_made_while_a_launch_started_is_busy_even_when_that_launch_finished_before_it_was_read()
+    public async Task A_request_pressed_while_a_launch_starts_runs_after_that_launch_finishes()
     {
         var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         answer = _ => release.Task;
@@ -534,8 +532,10 @@ public sealed class LaunchTests : IDisposable
         release.SetResult(new LaunchResult(LaunchOutcome.Started) { Session = "6f000000-0000-4000-8000-0000000000ee" });
         await c.DeliveredAsync();
         await Pass(c);
-        lock (launched) { Assert.Single(launched); }
-        Assert.Equal(("req-0013-abcd", "busy"), (Outcome()["request"]!.GetValue<string>(), Outcome()["outcome"]!.GetValue<string>()));
+        await c.DeliveredAsync();
+        await Pass(c);
+        lock (launched) { Assert.Equal(2, launched.Count); }
+        Assert.Equal(("req-0013-abcd", "started"), (Outcome()["request"]!.GetValue<string>(), Outcome()["outcome"]!.GetValue<string>()));
     }
 
     [Fact]
@@ -603,8 +603,7 @@ public sealed class LaunchTests : IDisposable
         // The payload a lost clear left behind: not served a second time.
         Payload(new JsonObject { ["text"] = "the request's words", ["request"] = "req-0018-abcd" });
         await Launch(c, AgentUser);
-        var r = Assert.Single(launched);
-        Assert.Null(r.Prompt);
+        Assert.Empty(launched);
         Assert.Equal(2, JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Count);
     }
 
@@ -632,9 +631,8 @@ public sealed class LaunchTests : IDisposable
         ha.Now = ha.Now.AddSeconds(11);
         Payload(new JsonObject { ["text"] = "the daemon's request", ["request"] = "req-0020-abcd" });
         await Launch(c, AgentUser);
-        Assert.Equal(2, launched.Count);
-        Assert.Null(launched[1].Prompt);
-        Assert.Equal(["req-0020-abcd"], JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Select(o => o!["request"]!.GetValue<string>()));
+        Assert.Single(launched);
+        Assert.Equal(["req-0019-abcd", "req-0020-abcd"], JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Select(o => o!["request"]!.GetValue<string>()));
     }
 
     [Fact]
@@ -690,7 +688,7 @@ public sealed class LaunchTests : IDisposable
     }
 
     [Fact]
-    public async Task A_press_while_a_launch_is_still_starting_launches_nothing_more_and_a_request_hears_it_is_busy()
+    public async Task A_press_while_a_launch_is_still_starting_queues_a_request_but_not_a_card_launch()
     {
         var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         answer = _ => release.Task;
@@ -703,7 +701,7 @@ public sealed class LaunchTests : IDisposable
         c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
         await Pass(c);
         lock (launched) { Assert.Single(launched); }
-        Assert.Equal("busy", Outcome()["outcome"]!.GetValue<string>());
+        Assert.Equal("queued", Outcome()["outcome"]!.GetValue<string>());
         // A person's press, from the card, is not a second launch either.
         c.Observe(ha.Press(Entity("button", "new_session")));
         await Pass(c);
@@ -711,7 +709,9 @@ public sealed class LaunchTests : IDisposable
         release.SetResult(new LaunchResult(LaunchOutcome.Started) { Session = "6f000000-0000-4000-8000-0000000000bb" });
         await c.DeliveredAsync();
         await Pass(c, 0.01);
-        lock (launched) { Assert.Single(launched); }
+        await c.DeliveredAsync();
+        await Pass(c);
+        lock (launched) { Assert.Equal(2, launched.Count); }
     }
 
     [Fact]

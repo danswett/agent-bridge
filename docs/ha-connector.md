@@ -741,9 +741,9 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   machine's default, never what the card shows; one this machine does not offer is refused in
   the daemon's words, naming what it does offer. Names are matched in any case, as the daemon's
   PowerShell compares them, and the host is given the offered spelling; permissions alone must
-  be exact. Its outcome (`starting`, then `started`,
+  be exact. Its outcome (`queued`, `starting`, then `started`,
   `refused`, `busy`, `failed` or `unconfirmed`, with the session id and what was launched) is
-  kept with the four before it, newest first, on `new_session_result`'s `recent`, which is what
+  kept for at least 15 minutes (and at least five entries), newest first, on `new_session_result`'s `recent`, which is what
   the bridge's MCP `launch_agent_session` reads. A request published after the press waits for
   its own; one more than 60 s older than the press is skipped, words and all, and the press
   launches from the card; an id not matching `^[A-Za-z0-9-]{8,64}$` is refused; one already
@@ -767,14 +767,20 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
 * **The purple edge**: a session an agent's press launched is `agent`-driven from the moment it
   appears, for the turn it was launched with (already under way or still to come); the turn
   after that is whoever's it is.
-* **One at a time.** The launch runs beside the passes (the host follows it to registration); a
-  press meanwhile launches nothing, and a request hears `busy`, even when the launch finished
-  before the press was read: the card still said `Starting...` when it was made.
+* **One at a time.** The launch runs beside the passes (the host follows it to registration).
+  Accepted request ids wait in a durable FIFO; card-only presses while busy launch nothing.
+  The queue and outcomes live beside the connector's `StateFile`, in its `.launch` journal.
+  Every accepted id is remembered beyond outcome expiry. A flushed atomic replacement records
+  a dispatch claim before calling the launcher; a write failure prevents dispatch.
+  This per-host state follows that host's restart, not another machine; removing a host leaves
+  its pending work on its disk. Other hosts continue serving their own independent queues.
 * **A restart**, or taking the machine back after agent-ha-bridge had it, reads the outcomes back
-  before taking any press: what Home Assistant holds is the newest account, the requests it
+  before taking any press: local durable history is merged with Home Assistant's, the requests it
   names are not served again, the history agents read carries on, and one left at `starting`
   (other than the connector's own launch still under way) is reported `unconfirmed` rather than
-  launched a second time.
+  launched a second time. Undispatched queued requests resume after restart. Payload capture
+  before a shared-slot overwrite is a separate ingress step; this queue alone cannot recover
+  a payload the connector never observed.
 * What the button holds when the connector first reads it is not a press, and the note is
   cleared after ten minutes, as the daemon clears it. A note that cannot be shown does not stop
   the launch it describes.
