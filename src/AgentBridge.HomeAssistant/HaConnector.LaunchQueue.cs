@@ -10,6 +10,7 @@ public sealed partial class HaConnector
 {
     sealed record QueuedLaunch(LaunchRequest Request, string Id, string Pressed, string Driver, string? Principal, JsonObject Launched);
     readonly List<QueuedLaunch> launchQueue = [];
+    readonly List<JsonObject> launchTombstones = [];
     bool launchJournalLoaded;
 
     void LoadLaunchJournal()
@@ -33,8 +34,7 @@ public sealed partial class HaConnector
                     var outcome = Text(item?["outcome"]);
                     var at = Text(item?["at"]);
                     if (!RequestIdPattern().IsMatch(id) || !DateTimeOffset.TryParse(at, out _)) { throw new JsonException("Invalid launch tombstone."); }
-                    return new JsonObject { ["request"] = id, ["outcome"] = outcome, ["at"] = at,
-                        ["pressed"] = "", ["session"] = "", ["note"] = "", ["launched"] = null };
+                    return new JsonObject { ["request"] = id, ["outcome"] = outcome, ["at"] = at };
                 }).ToList();
             }
             catch (Exception e) when (e is JsonException or InvalidOperationException)
@@ -43,7 +43,7 @@ public sealed partial class HaConnector
                 Problem("launch-journal", $"Launch journal quarantined: {e.GetType().Name}; recovery is required before launching.");
                 throw new IOException("Launch journal quarantined.", e);
             }
-            launchOutcomes.AddRange(loaded);
+            launchTombstones.AddRange(loaded);
         }
         launchJournalLoaded = true;
     }
@@ -54,10 +54,7 @@ public sealed partial class HaConnector
         var path = stateFile + ".launch";
         var journal = new JsonObject
         {
-            ["tombstones"] = new JsonArray([.. launchOutcomes.Select(o => (JsonNode)new JsonObject
-            {
-                ["request"] = o["request"]!.DeepClone(), ["outcome"] = o["outcome"]!.DeepClone(), ["at"] = o["at"]!.DeepClone(),
-            })]),
+            ["tombstones"] = new JsonArray([.. launchTombstones.Select(o => (JsonNode)o.DeepClone())]),
         };
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         // The claim must reach disk before dispatch. A crash after it is unconfirmed, never retried.
@@ -73,11 +70,51 @@ public sealed partial class HaConnector
     {
         var now = time.GetUtcNow();
         static DateTimeOffset At(JsonObject o) => DateTimeOffset.Parse(o["at"]!.GetValue<string>(), CultureInfo.InvariantCulture);
-        var kept = launchOutcomes.Where(o => now - At(o) <= TimeSpan.FromHours(24)).OrderByDescending(At).Take(10000).ToArray();
-        launchOutcomes.Clear();
-        launchOutcomes.AddRange(kept);
+        var kept = launchTombstones.Where(o => now - At(o) <= TimeSpan.FromHours(24)).OrderByDescending(At).Take(10000).ToArray();
+        launchTombstones.Clear();
+        launchTombstones.AddRange(kept);
+        launchOutcomes.RemoveAll(o => now - At(o) > HaContract.LaunchOutcomeRetention);
+        launchOutcomes.Sort((a, b) => At(b).CompareTo(At(a)));
+        if (launchOutcomes.Count > 20) { launchOutcomes.RemoveRange(20, launchOutcomes.Count - 20); }
         launchRequestsHandled.Clear();
-        launchRequestsHandled.AddRange(launchOutcomes.Select(o => o["request"]!.GetValue<string>()));
+        launchRequestsHandled.AddRange(kept.Select(o => o["request"]!.GetValue<string>()));
+    }
+
+    static JsonObject LaunchTombstone(JsonObject o) => new()
+    {
+        ["request"] = o["request"]!.DeepClone(), ["outcome"] = o["outcome"]!.DeepClone(), ["at"] = o["at"]!.DeepClone(),
+    };
+
+    JsonObject LaunchOutcomePayload()
+    {
+        var details = launchOutcomes.ToDictionary(o => o["request"]!.GetValue<string>(), StringComparer.Ordinal);
+        var recent = new JsonArray([.. launchTombstones
+            .Where(o => time.GetUtcNow() - DateTimeOffset.Parse(o["at"]!.GetValue<string>(), CultureInfo.InvariantCulture) <= HaContract.LaunchOutcomeRetention)
+            .Select(o => (JsonNode)(details.GetValueOrDefault(o["request"]!.GetValue<string>()) ?? o).DeepClone())]);
+        var payload = new JsonObject { ["recent"] = recent };
+        static int Bytes(JsonNode node) => Encoding.UTF8.GetByteCount(HaContract.Serialize(node));
+        var bytes = Bytes(payload);
+        // Prefer keeping ids/outcomes over older verbose diagnostics.
+        for (var i = recent.Count - 1; i >= 1 && bytes > 12 * 1024; i--)
+        {
+            var o = recent[i]!.AsObject();
+            var before = Bytes(o);
+            o.Remove("launched");
+            o.Remove("note");
+            bytes += Bytes(o) - before;
+        }
+        while (recent.Count > 1 && bytes > 12 * 1024)
+        {
+            bytes -= Bytes(recent[^1]!) + (recent.Count > 1 ? 1 : 0);
+            recent.RemoveAt(recent.Count - 1);
+        }
+        if (recent.Count == 1 && bytes > 12 * 1024)
+        {
+            recent[0]!.AsObject().Remove("launched");
+            recent[0]!.AsObject().Remove("note");
+            if (Bytes(payload) > 12 * 1024) { recent.Clear(); }
+        }
+        return payload;
     }
 
     async Task DispatchQueuedLaunchAsync(CancellationToken ct)

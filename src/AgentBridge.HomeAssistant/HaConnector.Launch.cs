@@ -750,7 +750,7 @@ public sealed partial class HaConnector
         if (previous is not null)
         {
             launched ??= previous["launched"]?.DeepClone().AsObject();
-            if (pressed.Length == 0) { pressed = previous["pressed"]!.GetValue<string>(); }
+            if (pressed.Length == 0) { pressed = previous["pressed"]?.GetValue<string>() ?? ""; }
             launchOutcomes.Remove(previous);
         }
         launchOutcomes.Insert(0, new JsonObject
@@ -763,6 +763,8 @@ public sealed partial class HaConnector
             ["at"] = time.GetUtcNow().ToString("o", CultureInfo.InvariantCulture),
             ["launched"] = launched?.DeepClone(),
         });
+        launchTombstones.RemoveAll(o => o["request"]!.GetValue<string>() == request);
+        launchTombstones.Insert(0, LaunchTombstone(launchOutcomes[0]));
         PruneLaunchRecords();
         launchOutcomesDirty = true;
         await PublishLaunchOutcomesAsync(ct);
@@ -773,7 +775,7 @@ public sealed partial class HaConnector
         SaveLaunchJournal();
         try
         {
-            await PublishAsync(HaContract.LaunchOutcomeTopic(Slug), new JsonObject { ["recent"] = new JsonArray([.. launchOutcomes.Select(o => (JsonNode)o.DeepClone())]) }, true, ct);
+            await PublishAsync(HaContract.LaunchOutcomeTopic(Slug), LaunchOutcomePayload(), true, ct);
             launchOutcomesDirty = false;
         }
         catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
@@ -807,30 +809,42 @@ public sealed partial class HaConnector
                     o["at"] = time.GetUtcNow().ToString("o", CultureInfo.InvariantCulture);
                     log("Home Assistant connector normalized a legacy launch outcome without a timestamp");
                 }
-                var existing = launchOutcomes.FindIndex(entry => entry["request"]!.GetValue<string>() == id);
-                if (existing < 0) { launchOutcomes.Add(o); }
-                else if (launchOutcomes[existing]["outcome"]!.GetValue<string>() == o["outcome"]?.GetValue<string>()) { launchOutcomes[existing] = o; }
+                var existing = launchTombstones.Find(entry => entry["request"]!.GetValue<string>() == id);
+                if (existing is null) { launchTombstones.Add(LaunchTombstone(o)); }
+                if (existing is null || existing["outcome"]!.GetValue<string>() == o["outcome"]?.GetValue<string>())
+                {
+                    launchOutcomes.RemoveAll(entry => entry["request"]!.GetValue<string>() == id);
+                    launchOutcomes.Add(o);
+                }
             }
         }
         var cut = false;
-        foreach (var o in launchOutcomes)
+        foreach (var o in launchTombstones)
         {
             var id = o["request"]!.GetValue<string>();
+            string? note = null;
             if (o["outcome"]?.GetValue<string>() == "queued" && !launchQueue.Any(q => q.Id == id))
             {
                 o["outcome"] = "lost-restart";
-                o["note"] = "The bridge restarted without this pending payload; relaunch with a new request id.";
+                note = "The bridge restarted without this pending payload; relaunch with a new request id.";
                 cut = true;
             }
             if (o["outcome"] is JsonValue v && v.TryGetValue<string>(out var outcome) && outcome == "starting" && id != launchInFlight)
             {
                 o["outcome"] = "unconfirmed";
-                o["note"] = "This machine's bridge restarted while the launch was starting, so whether it started is not known; check the machine.";
+                note = "This machine's bridge restarted while the launch was starting, so whether it started is not known; check the machine.";
                 cut = true;
+            }
+            if (note is not null)
+            {
+                launchOutcomes.RemoveAll(entry => entry["request"]!.GetValue<string>() == id);
+                var detail = o.DeepClone().AsObject();
+                detail["note"] = note;
+                launchOutcomes.Add(detail);
             }
         }
         PruneLaunchRecords();
-        if (cut || launchOutcomes.Count > 0 || state is not null)
+        if (cut || launchTombstones.Count > 0 || state is not null)
         {
             launchOutcomesDirty = true;
             await PublishLaunchOutcomesAsync(ct);

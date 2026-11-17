@@ -743,7 +743,7 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   PowerShell compares them, and the host is given the offered spelling; permissions alone must
   be exact. Its outcome (`queued`, `starting`, then `started`,
   `refused`, `busy`, `failed` or `unconfirmed`, with the session id and what was launched) is
-  kept for at least 15 minutes (and at least five entries), newest first, on `new_session_result`'s `recent`, which is what
+  published within a 15-minute window, newest first, on `new_session_result`'s `recent`, which is what
   the bridge's MCP `launch_agent_session` reads. A request published after the press waits for
   its own; one more than 60 s older than the press is skipped, words and all. Only a person's
   press can fall back to the card; agents always need a fresh request. An id not matching
@@ -774,6 +774,11 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   no prompt, attachment or launch settings are persisted. Tombstones last 24 hours, capped at
   10,000 entries, oldest evicted first (Chief's #2743 ruling). A flushed atomic replacement
   records a dispatch claim before calling the launcher; a write failure prevents dispatch.
+  It still rewrites the bounded tombstone journal per outcome (O(n)); append/compaction is deferred.
+  Recent publication is separate: at most 20 entries retain full details in memory; the
+  published JSON has a 12 KB UTF-8 budget, removing older note/launched details first, then
+  oldest entries. This size budget takes precedence over the 15-minute readback window;
+  tombstones still dedupe ids whose outcomes no longer fit. There is no per-id readback.
   Failed outcome writes/publications retry on later passes, including refusals. A queued
   request stays queued through guarded pre-dispatch reporting, until dispatch actually runs.
   With no `StateFile` (shadow connectors), all state is memory-only. Corrupt journals are

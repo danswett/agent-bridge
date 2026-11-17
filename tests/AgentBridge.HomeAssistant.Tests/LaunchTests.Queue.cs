@@ -6,7 +6,7 @@ using Xunit;
 public sealed partial class LaunchTests
 {
     [Fact]
-    public async Task More_than_fifty_requests_keep_their_outcomes_for_fifteen_minutes_and_dedupe_after_restart()
+    public async Task More_than_fifty_requests_keep_recent_metadata_and_dedupe_after_restart()
     {
         var c = await Ready();
         for (var i = 0; i < 52; i++)
@@ -14,7 +14,7 @@ public sealed partial class LaunchTests
             Payload(new JsonObject { ["request"] = $"queue-{i:D4}" });
             await Launch(c, AgentUser);
         }
-        await Pass(c, 15 * 60);
+        await Pass(c, 14 * 60);
         Assert.Equal(52, JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Count);
         await c.DisposeAsync();
         // HA's retained history is not the durable dedupe authority.

@@ -102,7 +102,8 @@ public sealed partial class LaunchTests
             })]),
         }));
         await using var c = await Ready();
-        Assert.Equal(expected, JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Count);
+        Assert.Equal(expected, JsonNode.Parse(File.ReadAllText(Path.Combine(folder, "ha-connector.json.launch")))!["tombstones"]!.AsArray().Count);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)]) <= 12 * 1024);
     }
 
     [Fact]
