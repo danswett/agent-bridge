@@ -16,7 +16,7 @@ public sealed class FeedbackSendViewModel : Observable
     public const string GatheringText = "Gathering what's included…";
     public const string SendingText = "Sending…";
 
-    readonly IFeedbackSender? sender;
+    IFeedbackSender? sender;
     readonly IUiDispatcher ui;
     readonly Func<DateTimeOffset> now;
     readonly Action<string, bool>? announce;
@@ -107,6 +107,16 @@ public sealed class FeedbackSendViewModel : Observable
     }
 
     public void RefreshRetry() { Raise(nameof(CanRetry)); Raise(nameof(RetryHint)); }
+
+    public void RefreshSender(IFeedbackSender? available)
+    {
+        lock (gate)
+        {
+            if (closed || running is not null || state is FeedbackSendState.Sending or FeedbackSendState.Sent) { return; }
+            sender = available;
+        }
+        Raise(nameof(CanSend)); Raise(nameof(CanRetry));
+    }
 
     // The screen is gathering (first open, or after the person changed the report).
     public void BeginGathering()
@@ -203,13 +213,14 @@ public sealed class FeedbackSendViewModel : Observable
 
     async Task Run()
     {
-        if (sender is null) { return; }
+        IFeedbackSender active;
         FeedbackBundle send;
         CancellationTokenSource cancel;
         int mine;
         lock (gate)
         {
-            if (closed || bundle is null || state == FeedbackSendState.Sending) { return; }
+            if (closed || sender is not { } available || bundle is null || state == FeedbackSendState.Sending) { return; }
+            active = available;
             send = bundle;
             cancel = running = new CancellationTokenSource();
             mine = ++generation;
@@ -217,7 +228,7 @@ public sealed class FeedbackSendViewModel : Observable
         }
         Apply(FeedbackSendState.Sending, SendingText, Tone.Progress, null, null, null, false);
         FeedbackSendResult? result;
-        try { result = await sender.SendAsync(send, cancel.Token).ConfigureAwait(false); }
+        try { result = await active.SendAsync(send, cancel.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested) { result = null; }
         catch { result = new FeedbackSendResult.Failed(FeedbackFailureReason.UploadRejected, FeedbackRetry.WhenOnline); }
         bool current;

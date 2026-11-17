@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
 using AgentBridge.App.Core;
+using AgentBridge.App.Core.Feedback;
 using AgentBridge.Protocol;
 using Microsoft.UI;
 using Microsoft.UI.Dispatching;
@@ -36,11 +37,18 @@ public sealed partial class MainWindow : Window
     bool closed;
     bool feedbackDialogOpen;
     bool feedbackWhenLoaded;
+    readonly AppFeedbackSources feedbackSources;
+    readonly FeedbackSenderFactory feedbackSenders;
+    readonly RecoveryReportOffer recovery;
 
-    internal MainWindow(MainViewModel viewModel, LaunchViewModel launch, bool selfTest, string? placementFile = null)
+    internal MainWindow(MainViewModel viewModel, LaunchViewModel launch, bool selfTest,
+        AppFeedbackSources feedbackSources, FeedbackSenderFactory feedbackSenders, RecoveryReportOffer recovery, string? placementFile = null)
     {
         ViewModel = viewModel;
         Launch = launch;
+        this.feedbackSources = feedbackSources;
+        this.feedbackSenders = feedbackSenders;
+        this.recovery = recovery;
         this.placementFile = selfTest ? null : placementFile;
         InitializeComponent();
         Title = Product.Name;
@@ -71,7 +79,11 @@ public sealed partial class MainWindow : Window
         Root.Loaded += (_, _) =>
         {
             if (Root.XamlRoot is { } x) { x.Changed += (_, _) => KeepSmallest(); }
-            if (feedbackWhenLoaded) { feedbackWhenLoaded = false; _ = ShowFeedbackAsync(); }
+            if (feedbackWhenLoaded || recovery.Visible)
+            {
+                feedbackWhenLoaded = false;
+                ui.TryEnqueue(DispatcherQueuePriority.Low, () => _ = ShowFeedbackAsync());
+            }
         };
         Root.SizeChanged += (_, e) => FitSearch(e.NewSize.Width);
         AppWindow.Changed += OnWindowChanged;
@@ -84,6 +96,7 @@ public sealed partial class MainWindow : Window
             active = e.WindowActivationState != WindowActivationState.Deactivated;
             SyncSessionsOnScreen();
             if (active) { Reactivated(); }
+            if (active && recovery.Visible) { ui.TryEnqueue(DispatcherQueuePriority.Low, () => _ = ShowFeedbackAsync()); }
             if (active && maximizeWhenShown && AppWindow.Presenter is OverlappedPresenter p)
             {
                 maximizeWhenShown = false;
@@ -235,7 +248,7 @@ public sealed partial class MainWindow : Window
 
     internal async Task ShowFeedbackAsync()
     {
-        if (feedbackDialogOpen) { return; }
+        if (closed || feedbackDialogOpen) { return; }
         if (Root.XamlRoot is not { } root) { feedbackWhenLoaded = true; return; }
         feedbackDialogOpen = true;
         try
@@ -244,12 +257,15 @@ public sealed partial class MainWindow : Window
             {
                 XamlRoot = root,
                 Title = "Send feedback",
-                Content = "Feedback isn't available in the Windows app yet.",
                 CloseButtonText = "Close",
                 DefaultButton = ContentDialogButton.Close,
             };
-            AutomationProperties.SetAutomationId(dialog, "FeedbackUnavailable");
-            await dialog.ShowAsync();
+            AutomationProperties.SetAutomationId(dialog, "FeedbackDialog");
+            if (recovery.Visible)
+            {
+                await recovery.OpenWhenReadyAsync(Root.IsLoaded && AppWindow.IsVisible, () => FeedbackDialogView.ShowAsync(dialog, feedbackSources, feedbackSenders, recovery, ViewModel.Selected?.Id));
+            }
+            else { await FeedbackDialogView.ShowAsync(dialog, feedbackSources, feedbackSenders, null, ViewModel.Selected?.Id); }
         }
         catch (Exception e) when (e is COMException or InvalidOperationException)
         {

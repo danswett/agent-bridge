@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.App.Core;
+using AgentBridge.App.Core.Feedback;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -173,8 +174,15 @@ public partial class App : Application
         }
         else { _ = StartFleetAsync(connection, ui, Remote, l => link = l); }
         var launch = new LaunchViewModel(main, ui);
+        var feedbackSources = new AppFeedbackSources(
+            () => AppFeedbackSources.Describe(version, prefs.Prereleases ? "prerelease" : "stable",
+                connection.Hello is { } hello ? [hello.Machine.HostVersion] : []),
+            appData, prefsFile, _ => Task.FromResult(connection.Status?.Agents),
+            async (id, _, ct) => await connection.ReadAsync<HistoryResult>(HistoryProtocol.Op, new HistoryRequest { Id = id }, ct: ct));
+        var feedbackSenders = new FeedbackSenderFactory(Prefs, () => (link as RelayFleetLink)?.Relay, new HttpClient());
+        var recovery = new RecoveryReportOffer(options.Demo || options.SelfTest is not null ? null : Program.Marker?.Previous);
         // Where the window was left, kept beside the settings (#180).
-        window = new MainWindow(main, launch, options.SelfTest is not null, Path.Combine(appData, $"{options.Profile}-window.json"));
+        window = new MainWindow(main, launch, options.SelfTest is not null, feedbackSources, feedbackSenders, recovery, Path.Combine(appData, $"{options.Profile}-window.json"));
         // The panes' widths as their dividers were left, beside them too (#297); the self-test's are its own.
         window.Sessions.Widths = new PaneWidths(options.SelfTest is null ? Path.Combine(appData, $"{options.Profile}-panes.json") : null);
         window.CloseRequested += OnWindowClosing;

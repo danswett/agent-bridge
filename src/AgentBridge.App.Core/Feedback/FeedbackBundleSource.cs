@@ -207,7 +207,8 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
                 var lines = recovery.LastLogLines;
                 w.WritePropertyName("LastLogLines");
                 if (lines.Count > FeedbackLimits.MaxJournalLines || lines.Any(line => line.Length > MaxLineChars)
-                    || FeedbackRedactor.MentionsSensitiveField(string.Join('\n', lines))) { w.WriteStringValue(JournalOmitted); }
+                    || FeedbackRedactor.MentionsSensitiveField(string.Join('\n', lines))
+                    || FeedbackRedactor.MentionsSensitiveField(string.Concat(lines))) { w.WriteStringValue(JournalOmitted); }
                 else
                 {
                     w.WriteStartArray();

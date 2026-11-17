@@ -39,13 +39,17 @@ Each profile keeps `runs/<profile>/run-marker.json` under `Paths.AppData` (the d
 and UTC start time; an empty/corrupt marker counts as unclean. Only an actual exit,
 not hiding to the tray, calls `Complete()`. Crash evidence survives closing; a teardown
 crash restores the marker. Self-tests leave markers alone. `RecordHang` is the seam for
-the separate watchdog slice; recovery UI and the existing feedback submission remain separate work.
+the separate watchdog slice.
 
 The recovery feedback core builds a prefilled request from that previous-run snapshot:
 version/start time, machine/session identifiers, crash or hang details and bounded log lines.
 It uses the existing redactor, bundle preview and sender; no session turns are attached.
 Accept is single-use; dismiss drops only the snapshot, leaving the active run marker intact.
 An unavailable feedback sender still permits a redacted preview, but never a send.
+After the window loads, an unclean previous run opens the shared feedback dialog once;
+clean runs, demos and self-tests do not. Settings and the tray use that same dialog.
+The included-item list and exact redacted preview appear before Send becomes available.
+Feedback still needs the existing configured recipient and accepting relay; no plaintext fallback exists.
 
 ## Decisions
 
