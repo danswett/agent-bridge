@@ -95,28 +95,27 @@ public sealed class ReplyClaimStore : IDisposable
         ValidateHash(textHash, nameof(textHash));
         if (attachmentHash is not null) { ValidateHash(attachmentHash, nameof(attachmentHash)); }
         using var held = Lock(paths);
-        var marker = Read<MarkerDocument>(paths.Marker, required: true);
-        ValidateProfile(marker!.Schema, marker.ProfileKey, paths, "marker");
-        if (marker.State != "active") { throw new InvalidDataException("The reply-claim marker is not active."); }
+        ValidateReady(paths);
         var ledger = Read<LedgerDocument>(paths.Ledger, required: true);
         ValidateLedger(ledger, paths);
         var now = time.GetUtcNow();
-        var removed = ledger!.Claims.RemoveAll(c => c.FirstClaimUtc + Lifetime <= now) > 0;
+        var removed = ledger!.Claims.RemoveAll(c => now - c.FirstClaimUtc >= Lifetime) > 0;
         var requestHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(requestId)));
-        var existing = ledger.Claims.FirstOrDefault(c => c.Session == sessionId && c.RequestHash == requestHash);
+        var existing = ledger.Claims.FirstOrDefault(c => c.Session == sessionId && string.Equals(c.RequestHash, requestHash, StringComparison.OrdinalIgnoreCase));
         if (existing is not null)
         {
             if (removed) { Write(paths.Ledger, ledger); }
-            return existing.TextHash == textHash && existing.AttachmentHash == attachmentHash
+            return string.Equals(existing.TextHash, textHash, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(existing.AttachmentHash, attachmentHash, StringComparison.OrdinalIgnoreCase)
                 ? new(ReplyClaimStatus.Existing, existing.Generation)
-                : new(ReplyClaimStatus.RequestReused, existing.Generation);
+                : new(ReplyClaimStatus.RequestReused, Guid.Empty);
         }
         if (ledger.Claims.Count(c => c.Session == sessionId) >= MaxPerSession)
         {
             if (removed) { Write(paths.Ledger, ledger); }
             return new(ReplyClaimStatus.Full, Guid.Empty);
         }
-        var claim = new Claim(sessionId, requestHash, textHash, attachmentHash, Guid.NewGuid(), now);
+        var claim = new Claim(sessionId, requestHash, textHash.ToUpperInvariant(), attachmentHash?.ToUpperInvariant(), Guid.NewGuid(), now);
         ledger.Claims.Add(claim);
         Write(paths.Ledger, ledger);
         return new(ReplyClaimStatus.Acquired, claim.Generation);
@@ -128,10 +127,11 @@ public sealed class ReplyClaimStore : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(sessionId);
         ArgumentException.ThrowIfNullOrEmpty(requestId);
         using var held = Lock(paths);
+        ValidateReady(paths);
         var ledger = Read<LedgerDocument>(paths.Ledger, required: true);
         ValidateLedger(ledger, paths);
         var requestHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(requestId)));
-        var index = ledger!.Claims.FindIndex(c => c.Session == sessionId && c.RequestHash == requestHash && c.Generation == generation);
+        var index = ledger!.Claims.FindIndex(c => c.Session == sessionId && string.Equals(c.RequestHash, requestHash, StringComparison.OrdinalIgnoreCase) && c.Generation == generation);
         if (index < 0) { return false; }
         ledger.Claims.RemoveAt(index);
         Write(paths.Ledger, ledger);
@@ -185,12 +185,22 @@ public sealed class ReplyClaimStore : IDisposable
         {
             if (claim is null || string.IsNullOrEmpty(claim.Session) || !IsHash(claim.RequestHash) || !IsHash(claim.TextHash)
                 || claim.AttachmentHash is not null && !IsHash(claim.AttachmentHash) || claim.Generation == Guid.Empty
-                || claim.FirstClaimUtc.Offset != TimeSpan.Zero
-                || !keys.Add((claim.Session, claim.RequestHash)))
+                || claim.FirstClaimUtc == default || claim.FirstClaimUtc.Offset != TimeSpan.Zero
+                || !keys.Add((claim.Session, claim.RequestHash.ToUpperInvariant())))
             { throw new InvalidDataException("The reply-claim ledger is invalid; delivery remains held."); }
             counts[claim.Session] = counts.GetValueOrDefault(claim.Session) + 1;
             if (counts[claim.Session] > MaxPerSession) { throw new InvalidDataException("The reply-claim ledger exceeds its per-session bound."); }
         }
+    }
+
+    static void ValidateReady(Paths paths)
+    {
+        var migration = Read<MigrationDocument>(paths.Migration, required: true)!;
+        var marker = Read<MarkerDocument>(paths.Marker, required: true)!;
+        ValidateProfile(migration.Schema, migration.ProfileKey, paths, "migration");
+        ValidateProfile(marker.Schema, marker.ProfileKey, paths, "marker");
+        if (migration.State != "complete" || marker.State != "active")
+        { throw new InvalidDataException("The reply-claim migration or marker is not active."); }
     }
 
     static void ValidateProfile(int schema, string profileKey, Paths paths, string name)
@@ -209,10 +219,12 @@ public sealed class ReplyClaimStore : IDisposable
         const UnixFileMode ownerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
         if (OperatingSystem.IsWindows()) { Directory.CreateDirectory(directory); }
         else { Directory.CreateDirectory(directory, ownerOnly); File.SetUnixFileMode(directory, ownerOnly); }
+        ClaimDirectorySync.Flush(Path.GetDirectoryName(directory)!);
         DurableFile.Write(path, JsonSerializer.SerializeToUtf8Bytes(value, Json));
+        ClaimDirectorySync.Flush(directory);
     }
 
-    static bool IsHash(string value) => value.Length == 64 && value.All(Uri.IsHexDigit);
+    static bool IsHash(string? value) => value is { Length: 64 } && value.All(Uri.IsHexDigit);
     static void ValidateHash(string value, string name)
     { if (!IsHash(value)) { throw new ArgumentException("Expected a SHA-256 hash in hexadecimal form.", name); } }
 

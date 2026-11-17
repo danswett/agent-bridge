@@ -471,9 +471,7 @@ async Task<int> ServeAsync(HostHandover handover)
     }
     // Started at logon there is no console; the app shows the end of this file.
     HostLog.OpenFile(Path.Combine(identity.Folder, "logs", "host.log"));
-    try { AgentBridge.Host.Lite.ReplyClaimStore.EnsureInitialized(identity.Folder); }
-    catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
-    { Log($"reply delivery is held because its claim store could not be initialized: {e.Message}"); return 3; }
+    var replyIngress = AgentBridge.Host.Lite.ReplyIngress.Initialize(identity.Folder, Log);
     var name = Option("--name") ?? HostConfigFile.ReadName(identity.Folder) ?? $"{Environment.MachineName}{(profile == "default" ? "" : $"/{profile}")}";
     // Instance: this run's own id. A client that lost an outcome sends the request again only to
     // the run that may have acted on it, which remembers the request; never to a fresh one.
@@ -620,7 +618,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit);
     launcher.SessionStarted += restore.Launched;
     launcher.StartScanning();
-    var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => settings.AgentMessaging.AllowAllTargets, launcher, Log);
+    var liteDeliver = replyIngress.Lite(AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => settings.AgentMessaging.AllowAllTargets, launcher, Log));
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
     // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
@@ -669,7 +667,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // rejected token is never repeated into a ban (#227); the app shows what it says.
     var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
-        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current, launchAudit: agentAudit);
+        replyIngress.HomeAssistant(HaReplies.For(replies, attachments)), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current, launchAudit: agentAudit);
     load.SetConsumerDemand((!localOnly && settings.LoadEnabled) || homeAssistant is not null);
     // What takes answering, replying, ending and launching away while it runs (design G5).
     // Asked afresh by what acts on it (updates, the readiness checks, the app's status).

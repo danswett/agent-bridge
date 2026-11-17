@@ -9,6 +9,12 @@ public static class Program
 {
     public static int Main(string[] args)
     {
+        if (args is ["reply-claim-child", var profile, var hash])
+        {
+            Console.WriteLine("ready");
+            using var store = AgentBridge.Host.Lite.ReplyClaimStore.Open(profile);
+            return store.Acquire("session", "request", hash).Status == AgentBridge.Host.Lite.ReplyClaimStatus.Acquired ? 0 : 1;
+        }
         if (args is ["host-sign-command-child"])
         {
             var result = typeof(HostSettings).Assembly.EntryPoint!.Invoke(null, [new[] { "host-sign", "init", "--profile", "private-sentinel:invalid" }]);

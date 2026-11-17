@@ -1,18 +1,20 @@
 using System.Text.Json.Nodes;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using AgentBridge.AgentEnvelope;
 using AgentBridge.Host.Lite;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed class ReplyClaimStoreTests : IDisposable
 {
-    const string Marker = "reply-claims.marker", Migration = "reply-claims.migration.json", Ledger = "reply-claims\\claims.json";
+    const string Marker = "reply-claims.marker", Migration = "reply-claims.migration.json", Ledger = "ledger";
     readonly string profile = Path.Combine(Path.GetTempPath(), "ab-claims-" + Guid.NewGuid().ToString("N"));
     readonly FakeTimeProvider time = new(new DateTimeOffset(2026, 11, 17, 12, 0, 0, TimeSpan.Zero));
 
     public void Dispose() { try { Directory.Delete(profile, recursive: true); } catch (DirectoryNotFoundException) { } }
-    string PathInProfile(string name) => Path.Combine(profile, name);
+    string PathInProfile(string name) => name == Ledger ? Path.Combine(profile, "reply-claims", "claims.json") : Path.Combine(profile, name);
     static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
     [Fact]
@@ -103,6 +105,157 @@ public sealed class ReplyClaimStoreTests : IDisposable
         Assert.NotEqual(first.Generation, second.Generation);
         Assert.False(store.Release("session", "request", first.Generation));
         Assert.Equal(second.Generation, store.Acquire("session", "request", Hash("text")).Generation);
+    }
+
+    [Theory]
+    [InlineData("firstClaimUtc", null)]
+    [InlineData("firstClaimUtc", "0001-01-01T00:00:00+00:00")]
+    [InlineData("firstClaimUtc", "invalid")]
+    [InlineData("requestHash", null)]
+    [InlineData("textHash", null)]
+    public void Missing_or_invalid_claim_fields_hold_acquisition(string field, string? value)
+    {
+        using var store = ReplyClaimStore.Open(profile, time);
+        store.Acquire("session", "request", Hash("text"));
+        var path = PathInProfile(Ledger);
+        var json = JsonNode.Parse(File.ReadAllText(path))!;
+        var claim = json["claims"]![0]!.AsObject();
+        if (value is null) { claim.Remove(field); } else { claim[field] = value; }
+        File.WriteAllText(path, json.ToJsonString());
+
+        Assert.Throws<InvalidDataException>(() => store.Acquire("session", "request", Hash("text")));
+        var messages = new List<string>();
+        var ingress = ReplyIngress.Initialize(profile, messages.Add);
+        Assert.Null(ingress.HomeAssistant((_, _) => throw new InvalidOperationException()));
+        Assert.NotEmpty(messages);
+    }
+
+    [Theory]
+    [InlineData(Marker)]
+    [InlineData(Migration)]
+    public void Release_holds_when_profile_state_is_missing(string missing)
+    {
+        using var store = ReplyClaimStore.Open(profile, time);
+        var claim = store.Acquire("session", "request", Hash("text"));
+        File.Delete(PathInProfile(missing));
+        Assert.Throws<InvalidDataException>(() => store.Release("session", "request", claim.Generation));
+        Assert.Throws<InvalidDataException>(() => store.Acquire("session", "request", Hash("text")));
+        Assert.Contains(claim.Generation.ToString(), File.ReadAllText(PathInProfile(Ledger)), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Hash_case_is_normalized_and_reused_requests_cannot_release_a_claim()
+    {
+        using var store = ReplyClaimStore.Open(profile, time);
+        var first = store.Acquire("session", "request", Hash("text").ToLowerInvariant(), Hash("attachment").ToLowerInvariant());
+        var path = PathInProfile(Ledger);
+        var json = JsonNode.Parse(File.ReadAllText(path))!;
+        foreach (var key in new[] { "requestHash", "textHash", "attachmentHash" })
+        { json["claims"]![0]![key] = json["claims"]![0]![key]!.GetValue<string>().ToLowerInvariant(); }
+        File.WriteAllText(path, json.ToJsonString());
+        var duplicate = store.Acquire("session", "request", Hash("text"), Hash("attachment"));
+        var reused = store.Acquire("session", "request", Hash("text"), Hash("other"));
+        Assert.Equal(ReplyClaimStatus.Existing, duplicate.Status);
+        Assert.Equal(first.Generation, duplicate.Generation);
+        Assert.Equal(ReplyClaimStatus.RequestReused, reused.Status);
+        Assert.Equal(Guid.Empty, reused.Generation);
+        Assert.False(store.Release("session", "request", reused.Generation));
+    }
+
+    [Fact]
+    public void A_full_session_refuses_without_evicting_a_live_claim()
+    {
+        using var store = ReplyClaimStore.Open(profile, time);
+        var first = store.Acquire("session", "request", Hash("text"));
+        var path = PathInProfile(Ledger);
+        var json = JsonNode.Parse(File.ReadAllText(path))!;
+        var claims = json["claims"]!.AsArray();
+        for (var i = 1; i < 4096; i++)
+        {
+            var claim = claims[0]!.DeepClone();
+            claim["requestHash"] = Hash($"request-{i}");
+            claim["generation"] = Guid.NewGuid().ToString();
+            claims.Add(claim);
+        }
+        File.WriteAllText(path, json.ToJsonString());
+        Assert.Equal(ReplyClaimStatus.Full, store.Acquire("session", "overflow", Hash("text")).Status);
+        Assert.Equal(first.Generation, store.Acquire("session", "request", Hash("text")).Generation);
+    }
+
+    [Fact]
+    public void Corrupt_ledger_holds_without_overwriting_the_evidence()
+    {
+        using var store = ReplyClaimStore.Open(profile, time);
+        File.WriteAllText(PathInProfile(Ledger), "{broken");
+        Assert.Throws<InvalidDataException>(() => store.Acquire("session", "request", Hash("text")));
+        Assert.Equal("{broken", File.ReadAllText(PathInProfile(Ledger)));
+    }
+
+    [Fact]
+    public void A_directory_flush_failure_never_acknowledges_the_new_claim()
+    {
+        using var store = ReplyClaimStore.Open(profile, time);
+        try
+        {
+            ClaimDirectorySync.BeforeFlush.Value = path =>
+            {
+                if (path == Path.GetDirectoryName(PathInProfile(Ledger))) { throw new IOException("injected directory flush failure"); }
+            };
+            Assert.Throws<IOException>(() => store.Acquire("session", "request", Hash("text")));
+        }
+        finally { ClaimDirectorySync.BeforeFlush.Value = null; }
+        using var restarted = ReplyClaimStore.Open(profile, time);
+        Assert.Equal(ReplyClaimStatus.Existing, restarted.Acquire("session", "request", Hash("text")).Status);
+    }
+
+    [Fact]
+    public async Task Another_process_waits_for_the_profile_lock()
+    {
+        ReplyClaimStore.EnsureInitialized(profile);
+        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+        { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        foreach (var arg in new[] { typeof(AgentBridge.Host.Tests.Program).Assembly.Location, "reply-claim-child", profile, Hash("text") })
+        { start.ArgumentList.Add(arg); }
+        using var held = new FileStream(PathInProfile("reply-claims.lock"), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        using var child = Process.Start(start)!;
+        try
+        {
+            Assert.Equal("ready", await child.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.False(child.WaitForExit(300));
+            held.Dispose();
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(child.ExitCode == 0, await child.StandardError.ReadToEndAsync());
+            using var store = ReplyClaimStore.Open(profile, time);
+            Assert.Equal(ReplyClaimStatus.Existing, store.Acquire("session", "request", Hash("text")).Status);
+        }
+        finally { if (!child.HasExited) { child.Kill(entireProcessTree: true); await child.WaitForExitAsync(); } }
+    }
+
+    [Fact]
+    public async Task Initialization_precedes_both_reply_ingress_paths_and_failure_holds_only_them()
+    {
+        var observed = new List<string>();
+        var gate = ReplyIngress.Initialize(profile, observed.Add);
+        Assert.True(File.Exists(PathInProfile(Marker)));
+        Assert.True(File.Exists(PathInProfile(Ledger)));
+        var lite = new TestDelivery();
+        Assert.True((await gate.Lite(lite).DeliverAsync(null!, "text", default)).Typed);
+        Assert.NotNull(gate.HomeAssistant((_, _) => throw new InvalidOperationException()));
+        File.Delete(PathInProfile(Marker));
+        var held = ReplyIngress.Initialize(profile, observed.Add);
+        Assert.NotEmpty(observed);
+        var refused = await held.Lite(lite).DeliverAsync(null!, "text", default);
+        Assert.False(refused.Typed);
+        Assert.Equal("claimUnavailable", refused.Code);
+        Assert.Equal(1, lite.Calls);
+        Assert.Null(held.HomeAssistant((_, _) => throw new InvalidOperationException()));
+    }
+
+    sealed class TestDelivery : ILiteDeliver
+    {
+        public int Calls;
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct)
+        { Calls++; return Task.FromResult(new LiteDelivery(true, null)); }
     }
 
     void SetState(string file, string state)
