@@ -2,6 +2,9 @@ namespace AgentBridge.App;
 
 static class NativeInputSetup
 {
+    public static bool CanQuarantineHistoryForeground(bool hostedArm64, bool foregroundMatches, DateTimeOffset now) =>
+        hostedArm64 && !foregroundMatches && now < new DateTimeOffset(2026, 11, 20, 8, 0, 0, TimeSpan.Zero);
+
     public static void RequireForeground(Func<bool> acquireAndVerify, Func<string> describeForeground) =>
         RequireForeground(acquireAndVerify, describeForeground, () => { });
 

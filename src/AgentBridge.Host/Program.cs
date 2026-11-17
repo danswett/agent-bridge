@@ -112,7 +112,6 @@ if (command == "approve")
     return await ApproveCommands.RunAsync(args, Identity.DefaultRoot, () => Refused("approving a question"), Console.Out, Console.Error);
 }
 
-// Inventory must return before even intake or device/account identity files are opened.
 if (command == "devices" && arguments.ElementAtOrDefault(1) == "descriptor")
 {
     // No verified reader is wired here yet; neither identity nor custody may be opened.
@@ -130,6 +129,7 @@ if (command == "host-sign")
         !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_BRIDGE_TOKEN")), Console.Out, Console.Error);
 }
 
+// Inventory must return before even intake or device/account identity files are opened.
 if (command == "ha" && HaCommands.TryInventoryCommand(arguments, Identity.DefaultRoot, Console.Out, Console.Error) is { } inventoryExit)
 {
     return inventoryExit;
@@ -338,7 +338,7 @@ switch (command)
             if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
             if (HaCommands.Writes(rest) && Refused("change the host's Home Assistant token")) { return 4; }
             Func<string?>? active = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().Active : null;
-            return HaCommands.Run(rest, LoadIdentity().Folder, () => HaCommands.ReadSecret(Console.Error), Console.Out, Console.Error, IsDevBuild(), active);
+            return HaCommands.Run(rest, LoadIdentity().Folder, () => HaCommands.ReadSecret(Console.Error), Console.Out, Console.Error, IsDevBuild(), active, () => SecretInput.Read(Console.Error));
         }
     case "shadow":
         return await AgentBridge.Host.Shadow.ShadowCommand.RunAsync(arguments, options, HostVersion(), IsDevBuild(), Console.Out, Console.Error);
@@ -419,17 +419,7 @@ switch (command)
 Identity LoadIdentity() => Identity.Load(Option("--profile") ?? "default");
 
 // The password is typed or piped in, never an argument, which a process list or history would keep.
-static string? ReadMaskedPassword()
-{
-    if (Console.IsInputRedirected) { return Console.In.ReadLine(); }
-    var typed = new System.Text.StringBuilder();
-    while (Console.ReadKey(intercept: true) is var key && key.Key != ConsoleKey.Enter)
-    {
-        if (key.Key == ConsoleKey.Backspace) { if (typed.Length > 0) { typed.Length--; } }
-        else if (!char.IsControl(key.KeyChar)) { typed.Append(key.KeyChar); }
-    }
-    return typed.ToString();
-}
+static string? ReadMaskedPassword() => SecretInput.Read(Console.Error);
 
 // What may only be done by a person never runs inside an agent session (§6.3 invariant 13): the
 // host's own command line refuses it there, as the pipe does.
@@ -504,7 +494,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // its command lines are already known.
     var processes = new SystemProcessInspector();
     var attempts = new AttemptLedger(Path.Combine(identity.Folder, "answer-attempts.json"), log: Log);
-    await using var source = new SessionSource(options, processes, drivers: drivers, answerAttempted: attempts.IsClaimed);
+    await using var source = new SessionSource(options, processes, drivers: drivers, answerAttempted: attempts.IsClaimed, hostId: machine.Id);
     attempts.Changed += source.AnswerAttemptsChanged;
     // Five-second samples for sessions or feeds; otherwise only the minute host-log cadence.
     await using var load = HostLoadSampling.Create(settings, source, new AgentBridge.Host.Core.Load.SystemProcessTable(), relay: !localOnly);
@@ -744,7 +734,10 @@ async Task<int> ServeAsync(HostHandover handover)
             : RemoteDiagnostics.AgentHaBridge(g5),
         log: Log);
     var fleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder);
-    var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare, name: fleetNames.Get, log: Log);
+    var hostRoster = new HostRosterReader(Path.Combine(identity.Folder, "roster-pin.json"), HostRoster.Now);
+    var fleetTrust = new AgentBridge.Host.Fleet.FleetTrust(hostRoster, identity.Folder, () => identity.Account?.AccountId);
+    var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
+        name: fleetNames.Get, log: Log, sign: fleetTrust.Sign);
     var loadService = new LoadService(source, () => load.Current, () => settings.LoadEnabled, Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
@@ -924,7 +917,7 @@ async Task<int> ServeAsync(HostHandover handover)
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
-    var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster();
+    var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.VerifiedRoster);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
     try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
     catch (EndpointInUseException e)
@@ -1015,7 +1008,7 @@ async Task<int> ServeAsync(HostHandover handover)
             // Off mode: read and verify the roster in the background, log what it says, enforce nothing.
             _ = Task.Run(async () =>
             {
-                var check = await HostRoster.SyncAsync(relay, HostRoster.Now, current.Token);
+                var check = await HostRoster.SyncAsync(relay, HostRoster.Now, current.Token, hostRoster);
                 Log($"device roster (security.roster {settings.Security.Roster}): {check.Summary}");
             });
             since.Restart();

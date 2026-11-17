@@ -8,7 +8,7 @@ namespace AgentBridge.Host;
 //
 //   agent-bridge-host ha status          whether the connector would run, and why not
 //   agent-bridge-host ha inventory       HA credential/state file presence only
-//   agent-bridge-host ha token set       the token, from standard input; nothing is echoed
+//   agent-bridge-host ha token set       masked input, local format check and attempt consent
 //   agent-bridge-host ha token clear
 //   agent-bridge-host ha shadow          what the connector would publish beside what the broker
 //                                        holds now; reads only, safe while agent-ha-bridge runs
@@ -39,7 +39,7 @@ public static class HaCommands
     }
 
     public static int Run(IReadOnlyList<string> args, string folder, Func<string?> readSecret, TextWriter output, TextWriter error,
-        bool devBuild, Func<string?>? agentHaBridge)
+        bool devBuild, Func<string?>? agentHaBridge, Func<string?>? confirm = null)
     {
         switch (args.ElementAtOrDefault(1), args.ElementAtOrDefault(2))
         {
@@ -50,20 +50,37 @@ public static class HaCommands
             case ("token", "set"):
                 {
                     var token = readSecret();
-                    if (string.IsNullOrWhiteSpace(token)) { error.WriteLine("No token was given; nothing changed."); return 1; }
-                    HaTokenStore.Save(folder, token);
-                    // Given again, it is a change: one fresh attempt, even if this token was refused before.
-                    if (HostSettings.Load(folder).Settings.HomeAssistant.BaseUrl is { } baseUrl)
+                    if (token is null) { error.WriteLine("No token was given; nothing changed."); return 1; }
+                    SecretInput.Received(token, output, fingerprint: true);
+                    if (SecretInput.HaFormatProblem(token) is { } malformed)
                     {
-                        var record = HaAuthGuard.FileFor(folder);
-                        var auth = new HaAuthGuard(record);
-                        if (!auth.Forget(auth.Credential(baseUrl, token.Trim())))
-                        {
-                            // Stored, but without the record of it the host still holds the token back.
-                            error.WriteLine($"Stored the Home Assistant token, but could not record in {record} that it was given again, so the host may still hold it back. " +
-                                "Make sure that file can be written, then run `agent-bridge-host ha token set` again.");
-                            return 1;
-                        }
+                        error.WriteLine($"Token refused locally: {malformed}; nothing changed.");
+                        return 1;
+                    }
+                    var (settings, problem) = HostSettings.Load(folder);
+                    if (problem is not null) { error.WriteLine(problem); return 1; }
+                    if (settings.HomeAssistant.BaseUrl is not { } baseUrl)
+                    {
+                        error.WriteLine("Set homeAssistant.baseUrl before authorizing a token attempt; nothing changed.");
+                        return 1;
+                    }
+                    output.WriteLine("Local format: Home Assistant JWT shape only; not authenticated.");
+                    var remaining = HaAuthGuard.RemainingAttempts(folder)?.ToString() ?? "unknown";
+                    output.WriteLine($"{remaining} of {HaAuthGuard.MaxRejections} local rejection-budget attempts remain; Home Assistant's actual ban count is unknown.");
+                    error.Write("A rejection may contribute to an IP ban. No network call now; type yes to store and authorize one attempt when the host uses it [no]: ");
+                    if (!string.Equals(confirm?.Invoke(), "yes", StringComparison.OrdinalIgnoreCase))
+                    {
+                        error.WriteLine("Not confirmed; nothing changed.");
+                        return 1;
+                    }
+                    HaTokenStore.Save(folder, token);
+                    var record = HaAuthGuard.FileFor(folder);
+                    var auth = new HaAuthGuard(record);
+                    if (!auth.Forget(auth.Credential(baseUrl, token), singleAttempt: true))
+                    {
+                        error.WriteLine($"Stored the Home Assistant token, but could not record in {record} that it was given again, so the host may still hold it back. " +
+                            "Make sure that file can be written, then run `agent-bridge-host ha token set` again.");
+                        return 1;
                     }
                     output.WriteLine($"Stored the Home Assistant token, protected{(OperatingSystem.IsWindows() ? " (DPAPI, this Windows user)" : " (readable by you only)")}, in {folder}. Restart agent-bridge-host serve to use it.");
                     return 0;
@@ -199,20 +216,9 @@ public static class HaCommands
         return auth.Describe(auth.Credential(baseUrl, token));
     }
 
-    // Reads a line without echoing it when a person is typing; a pipe is read as it is.
-    public static string? ReadSecret(TextWriter prompt)
+    public static string? ReadSecret(TextWriter prompt, Func<ConsoleKeyInfo>? readKey = null)
     {
-        if (Console.IsInputRedirected) { return Console.In.ReadLine(); }
-        prompt.Write("Home Assistant long-lived access token (not shown): ");
-        var text = new System.Text.StringBuilder();
-        while (true)
-        {
-            var key = Console.ReadKey(intercept: true);
-            if (key.Key == ConsoleKey.Enter) { break; }
-            if (key.Key == ConsoleKey.Backspace) { if (text.Length > 0) { text.Length--; } continue; }
-            if (!char.IsControl(key.KeyChar)) { text.Append(key.KeyChar); }
-        }
-        prompt.WriteLine();
-        return text.ToString();
+        prompt.Write("Home Assistant long-lived access token (masked): ");
+        return SecretInput.Read(prompt, readKey);
     }
 }
