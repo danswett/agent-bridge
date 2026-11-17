@@ -116,4 +116,38 @@ public sealed class RunMarkerTests : IDisposable
             ["-----BEGIN PRIVATE KEY-----", .. Enumerable.Repeat(material, 45), "-----END PRIVATE KEY-----"]);
         Assert.DoesNotContain(material, File.ReadAllText(Assert.Single(Directory.GetFiles(folder))));
     }
+
+    [Theory]
+    [InlineData("start", 0)]
+    [InlineData("start", 7)]
+    [InlineData("crash", 0)]
+    [InlineData("crash", 7)]
+    [InlineData("hang", 0)]
+    [InlineData("hang", 7)]
+    public void A_failed_or_truncated_write_preserves_the_old_marker_and_removes_the_temporary_file(string operation, int written)
+    {
+        var marker = RunMarker.Start(folder, "1", clock);
+        var file = Assert.Single(Directory.GetFiles(folder));
+        var before = File.ReadAllBytes(file);
+        RunMarker.WriteFileOverride = (target, bytes) =>
+        {
+            Assert.Equal(Path.GetDirectoryName(file), Path.GetDirectoryName(target));
+            File.WriteAllBytes(target, bytes[..written]);
+            throw new IOException("Simulated incomplete write");
+        };
+        try
+        {
+            Action update = operation switch
+            {
+                "start" => () => RunMarker.Start(folder, "2", clock),
+                "crash" => () => marker.RecordCrash(new InvalidOperationException()),
+                _ => () => marker.RecordHang(42, TimeSpan.FromSeconds(15), ["diagnostic"]),
+            };
+            Assert.Throws<IOException>(update);
+            Assert.Equal(before, File.ReadAllBytes(file));
+            Assert.Equal(file, Assert.Single(Directory.GetFiles(folder)));
+            Assert.Equal("1", RunMarker.ReadPrevious(folder).Version);
+        }
+        finally { RunMarker.WriteFileOverride = null; }
+    }
 }

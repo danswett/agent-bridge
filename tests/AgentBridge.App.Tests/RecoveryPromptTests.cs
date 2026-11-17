@@ -93,7 +93,7 @@ public sealed class RecoveryPromptTests
     }
 
     [Fact]
-    public async Task Recovery_log_fragments_are_checked_together_before_the_preview_can_expose_a_secret_value()
+    public async Task Recovery_log_fragments_are_excluded_from_the_structured_preview()
     {
         var folder = Path.Combine(Path.GetTempPath(), "ab-recovery-" + Guid.NewGuid().ToString("N"));
         var sources = new AppFeedbackSources(() => AppFeedbackSources.Describe("current", "prerelease", []),
@@ -101,7 +101,8 @@ public sealed class RecoveryPromptTests
             (_, _, _) => Task.FromResult<AgentBridge.Protocol.HistoryResult?>(null));
         var request = new FeedbackRequest { Recovery = new(new PreviousRun(true, "previous"), "local", null, ["pass", "word=", "MapleBoat7!"]) };
         var bundle = Assert.IsType<FeedbackGatherResult.Ready>(await new FeedbackBundleSource(sources).GatherAsync(request, null, default)).Bundle;
-        Assert.Contains(FeedbackBundleSource.JournalOmitted, bundle.Text);
+        Assert.Equal("recovery", Assert.Single(bundle.Items).Id);
+        Assert.DoesNotContain("LastLogLines", bundle.Text);
         Assert.DoesNotContain("MapleBoat7!", bundle.Text);
     }
 }

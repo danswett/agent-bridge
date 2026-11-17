@@ -263,9 +263,9 @@ public sealed partial class MainWindow : Window
             AutomationProperties.SetAutomationId(dialog, "FeedbackDialog");
             if (recovery.Visible)
             {
-                await recovery.OpenWhenReadyAsync(Root.IsLoaded && AppWindow.IsVisible, () => FeedbackDialogView.ShowAsync(dialog, feedbackSources, feedbackSenders, recovery, ViewModel.Selected?.Id));
+                await recovery.OpenWhenReadyAsync(Root.IsLoaded && AppWindow.IsVisible, () => FeedbackDialogView.ShowAsync(dialog, feedbackSources, feedbackSenders, recovery));
             }
-            else { await FeedbackDialogView.ShowAsync(dialog, feedbackSources, feedbackSenders, null, ViewModel.Selected?.Id); }
+            else { await FeedbackDialogView.ShowAsync(dialog, feedbackSources, feedbackSenders, null); }
         }
         catch (Exception e) when (e is COMException or InvalidOperationException)
         {

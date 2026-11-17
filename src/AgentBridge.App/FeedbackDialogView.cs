@@ -12,7 +12,7 @@ namespace AgentBridge.App;
 static class FeedbackDialogView
 {
     public static async Task ShowAsync(ContentDialog dialog, AppFeedbackSources sources, FeedbackSenderFactory senders,
-        RecoveryReportOffer? offer, string? sessionId)
+        RecoveryReportOffer? offer)
     {
         using var cancel = new CancellationTokenSource();
         var status = new TextBlock { TextWrapping = TextWrapping.Wrap };
@@ -24,7 +24,7 @@ static class FeedbackDialogView
             FrameworkElementAutomationPeer.CreatePeerForElement(status)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
         });
         var request = offer?.Previous is { } previous
-            ? await Task.Run(() => sources.RecoveryRequestAsync(previous, Environment.MachineName, sessionId, cancel.Token))
+            ? await sources.RecoveryRequestAsync(previous, "", null, cancel.Token)
             : new FeedbackRequest();
         var source = new FeedbackBundleSource(sources);
         var note = new TextBox { Header = "Optional note", AcceptsReturn = true, MaxLength = FeedbackLimits.MaxNoteChars };
@@ -35,10 +35,10 @@ static class FeedbackDialogView
         body.Children.Add(new TextBlock
         {
             Text = offer is null ? "Review what will be sent. Session turns and screenshots are not attached."
-                : "The app closed unexpectedly. Review the report below. Nothing is sent unless you choose Send report.",
+                : "The app closed unexpectedly. Only structured recovery metadata is included, not diagnostic text, names or session identifiers. Nothing is sent unless you choose Send report.",
             TextWrapping = TextWrapping.Wrap,
         });
-        body.Children.Add(note);
+        if (offer is null) { body.Children.Add(note); }
         body.Children.Add(new TextBlock { Text = "What's included" });
         body.Children.Add(included);
         body.Children.Add(preview);
