@@ -36,14 +36,51 @@ and isolated, approved workspace labels in that grant. It retains offered models
 efforts and contexts, but no paths, resumable sessions, profiles or trust questions.
 The read scope is sufficient; missing or revoked credentials cannot read these choices.
 
-Only the person at the machine changes `agents.limits` in the host's config.
-The hourly defaults and ceilings are 3 launches per agent, 10 per machine and 20
-attempts per agent; they may be lowered, never made unlimited. The gate reads changes
-on its next check and records `rate-limited` refusals with the retry delay and caps in
-force. Watch refusal counts and retry delays in the launch audit before and after a
-change. Refusal audit records share the pipe's per-principal windowing: 60 per hour,
-then counted summaries at most once a minute. Live limits, idle ending, restart durability
-and temporary raises are C2 work, not guarantees of this staged readback.
+### Tuning agent launch limits (#2768, held #2174)
+
+Only the person at the machine edits `agents.limits` in the profile's `config.json`.
+The config CLI does not currently expose these keys. Host config changes from an
+agent session are refused (exit 4); no remote or agent operation changes them.
+The launch gate reads the file again on every check; no restart is needed.
+Values are whole numbers from 1 through the default ceiling, never unlimited.
+Invalid settings refuse agent launches with a diagnostic.
+
+| Key under `agents.limits` | Default and ceiling | What to watch |
+|---|---|---|
+| `launchesPerOriginPerHour` | 3 | Per-agent cap use, refusal counts and retry delays |
+| `launchesPerMachinePerHour` | 10 | Machine cap use and refusal counts |
+| `launchAttemptsPerOriginPerHour` | 20 | Rejected/reused requests and attempt refusals |
+| `liveAgentLaunched` | 6 | Live agent-started sessions and live-limit refusals |
+| `agentLaunchedIdleHours` | 2 | Idle endings and evidence of person input |
+
+For a temporary raise of a lowered launch limit, keep its baseline and add
+`temporaryRaise` beside it. Set explicit ISO 8601 timestamps with an offset;
+`expiresAt` must be later than `startedAt` and no more than four hours later.
+For example, this restores a baseline of 1 launch per agent to 3 for four hours
+(example times are Pacific Standard Time, not a current grant):
+
+```json
+"launchesPerOriginPerHour": 1,
+"temporaryRaise": {
+  "startedAt": "2026-11-16T12:00:00-08:00",
+  "expiresAt": "2026-11-16T16:00:00-08:00",
+  "limits": { "launchesPerOriginPerHour": 3 }
+}
+```
+
+The override accepts only the five launch-limit keys above and their existing
+ceilings. Omitted limits retain their baseline. Before the start and at or after
+the deadline the baseline applies automatically, including after a host restart;
+reading or restarting never renews the deadline. Remove the expired object when
+tidying the config. Bad timestamps, ranges or keys refuse launch, never grant it.
+
+Check refusal counts, cap use and retry delays in the launch audit before and
+after a change; `rate-limited` refusal lines record the effective hourly caps
+and attempt limit. Refusal records share the pipe's per-principal windowing:
+60 per hour, then counted summaries at most once a minute. Check `capRebuilding`
+in `host.status` before raising limits once restart reconstruction lands (#2767);
+do not treat unavailable status as an empty cap. Live enforcement/idle ending
+(#2766) and restart durability (#2767) are separate slices, not guarantees here.
 
 ## What agent-ha-bridge does
 

@@ -295,7 +295,7 @@ public sealed record AgentPolicyLimits
                 case "perPairPerMinute": result = result with { PerPairPerMinute = AgentPolicy.Int(p.Value, path, 1, d.PerPairPerMinute, d.PerPairPerMinute, problems) }; break;
                 case "perTargetPerMinute": result = result with { PerTargetPerMinute = AgentPolicy.Int(p.Value, path, 1, d.PerTargetPerMinute, d.PerTargetPerMinute, problems) }; break;
                 case "launchesPerOriginPerHour" or "launchesPerMachinePerHour" or "launchAttemptsPerOriginPerHour"
-                    or "liveAgentLaunched" or "agentLaunchedIdleHours": break;
+                    or "liveAgentLaunched" or "agentLaunchedIdleHours" or "temporaryRaise": break;
                 default: problems.Add($"{path} is not a setting; ignored"); break;
             }
         }
