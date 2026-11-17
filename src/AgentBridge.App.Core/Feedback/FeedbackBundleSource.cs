@@ -43,6 +43,13 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
 
     public async Task<FeedbackGatherResult> GatherAsync(FeedbackRequest request, IProgress<FeedbackGatherStage>? progress, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (request.Recovery is { } recovery)
+        {
+            var result = RecoveryFeedback.Build(recovery.Run, now());
+            progress?.Report(FeedbackGatherStage.Done);
+            return result;
+        }
         var note = request.Note ?? "";
         if (note.Length > FeedbackLimits.MaxNoteChars) { return new FeedbackGatherResult.Refused(FeedbackRefusalReason.NoteTooLong); }
         if (request.ScreenshotPng is { } shot)
@@ -187,39 +194,6 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
             items.Add(Item("crashes", "Crash records", crashes is null ? "Unavailable" : crashesOmitted
                 ? CrashOmitted
                 : $"{crashRecords!.Length} recent, redacted", w, buffer, ref mark, false));
-
-            if (request.Recovery is { } recovery)
-            {
-                w.WriteStartObject("recovery");
-                w.WriteString("Version", Clean(recovery.Run.Version, 128));
-                w.WriteString("StartedAt", recovery.Run.StartedAt?.ToString("O"));
-                w.WriteString("Machine", Clean(recovery.Machine, 128));
-                w.WriteString("SessionId", Clean(recovery.SessionId, 128));
-                if (recovery.Run.Crash is { } crash) { w.WriteString("Crash", CleanLog(crash, MaxCrashChars)); }
-                if (recovery.Run.Hang is { } hang)
-                {
-                    w.WriteStartObject("Hang");
-                    w.WriteString("At", hang.At);
-                    w.WriteNumber("ThreadId", hang.ThreadId);
-                    w.WriteNumber("SecondsStalled", hang.SecondsStalled);
-                    w.WriteEndObject();
-                }
-                var lines = recovery.LastLogLines;
-                w.WritePropertyName("LastLogLines");
-                if (lines.Count > FeedbackLimits.MaxJournalLines || lines.Any(line => line.Length > MaxLineChars)
-                    || FeedbackRedactor.MentionsSensitiveField(string.Join('\n', lines))) { w.WriteStringValue(JournalOmitted); }
-                else
-                {
-                    w.WriteStartArray();
-                    foreach (var line in FeedbackRedactor.RedactLogLines(string.Join('\n', lines), privateNames).Split('\n', StringSplitOptions.RemoveEmptyEntries))
-                    {
-                        w.WriteStringValue(CleanLog(line, MaxLineChars));
-                    }
-                    w.WriteEndArray();
-                }
-                w.WriteEndObject();
-                items.Add(Item("recovery", "Previous app run", "Version, machine, session and crash or hang details, redacted; check the preview", w, buffer, ref mark, false));
-            }
 
             if (note.Trim().Length > 0)
             {

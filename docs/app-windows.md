@@ -43,9 +43,12 @@ not hiding to the tray, calls `Complete()`. Crash evidence survives closing; a t
 crash restores the marker. Self-tests leave markers alone. `RecordHang` is the seam for
 the separate watchdog slice; recovery UI and the existing feedback submission remain separate work.
 
-The recovery feedback core builds a prefilled request from that previous-run snapshot:
-version/start time, machine/session identifiers, crash or hang details and bounded log lines.
-It uses the existing redactor, bundle preview and sender; no session turns are attached.
+Recovery feedback uses a strict allow-list: numeric version, fixed crash/hang/exit stage,
+UTC timings and an exact known framework exception type. HResult is unavailable in legacy
+markers and remains null, never inferred. Hang snapshot text, app/crash logs, paths,
+machine/session identifiers, notes, images and session turns are never attached or collected
+by the recovery gatherer. The existing sender independently enforces this recovery schema
+before requesting an upload slot; preview and upload remain the exact same bytes.
 Accept is single-use; dismiss drops only the snapshot, leaving the active run marker intact.
 An unavailable feedback sender still permits a redacted preview, but never a send.
 

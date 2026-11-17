@@ -48,6 +48,7 @@ public sealed class FeedbackBundle
 // Typed progress for the gathering state; the screen shows these and nothing else.
 public enum FeedbackGatherStage { Versions, Agents, Config, Journal, Crashes, Screenshot, SessionTurns, Done }
 
+// Only allow-listed structured fields from Run are exported; legacy raw inputs are never sent.
 public sealed record FeedbackRecovery(PreviousRun Run, string Machine, string? SessionId, IReadOnlyList<string> LastLogLines);
 
 // What the person chose on the review screen. Everything optional is off by default.
