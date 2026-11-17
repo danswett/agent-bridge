@@ -8,6 +8,7 @@ public sealed class InstallBlockerDiagnosticsTests : IAsyncLifetime
 {
     readonly string root = Path.Combine(Path.GetTempPath(), "holder-fixture-" + Guid.NewGuid().ToString("N"));
     Process? holder;
+    nint ownImage;
     string FilePath => Path.Combine(root, "current", "blocked-runtime.dll");
 
     public async Task InitializeAsync()
@@ -15,6 +16,9 @@ public sealed class InstallBlockerDiagnosticsTests : IAsyncLifetime
         VelopackLocator.Current.RootAppDir = root;
         if (!OperatingSystem.IsWindows()) { return; }
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+        var ownFile = Path.Combine(root, "current", "own-runtime.dll");
+        File.Copy(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "version.dll"), ownFile);
+        ownImage = System.Runtime.InteropServices.NativeLibrary.Load(ownFile);
         File.Copy(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "version.dll"), FilePath);
         var start = new ProcessStartInfo("pwsh")
         {
@@ -46,6 +50,7 @@ public sealed class InstallBlockerDiagnosticsTests : IAsyncLifetime
             await holder.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
             holder.Dispose();
         }
+        if (ownImage != 0) { System.Runtime.InteropServices.NativeLibrary.Free(ownImage); }
         if (Directory.Exists(root)) { Directory.Delete(root, recursive: true); }
     }
 
@@ -58,6 +63,7 @@ public sealed class InstallBlockerDiagnosticsTests : IAsyncLifetime
         Assert.NotNull(blockers);
         Assert.Contains($"pid {holder!.Id}", blockers, StringComparison.Ordinal);
         Assert.Contains("blocked-runtime.dll", blockers, StringComparison.Ordinal);
+        Assert.DoesNotContain("own-runtime.dll", blockers, StringComparison.Ordinal);
         Assert.Contains(blockers, new UpdateBlockedException(blockers).Message, StringComparison.Ordinal);
     }
 

@@ -706,7 +706,11 @@ controls consume that same contract; this extraction does not disable or remove 
     (checks back off to ten seconds). A scan started within that wait may finish afterwards.
     An unreadable/changing holder list is unknown, never permission to install. A SYSTEM service
     is named even when its image is unreadable; known holders include PID and image path when
-    readable. A scan timeout names Restart Manager and 120 s, never claiming a confirmed holder.
+    readable. For a confirmed external holder, verify its association with one installation file
+    before naming that relative path ([holder diagnostics](https://github.com/danswett/agent-bridge/issues/2858));
+    the aggregate registered-file list is not proof of which file a process holds. A holder that
+    releases between queries has an explicitly unconfirmed path, never a guessed filename.
+    A scan timeout names Restart Manager and 120 s, never claiming a confirmed holder.
     Waiting carries no Installing credit; timeout
     keeps the old install intact with recovery text and the existing 10/20/40/60-minute backoff.
     This path never stops a service or self-elevates; it does not replace the later slot design.

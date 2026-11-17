@@ -8,7 +8,7 @@ namespace AgentBridge.App;
 // What outside the installation holds a file in its current folder, which Update.exe has to move
 // aside to install an update (#1092): on 2026-11-06 the Windows telemetry service (DiagTrack)
 // held current\mscordaccore.dll, the move failed with error 5, and the retries stopped the host
-// every three minutes. Asked through the Restart Manager, best effort: names and process ids only,
+// every three minutes. Asked through the Restart Manager: process identities and confirmed files,
 // and never an exception. Processes running from the installation itself are not blockers: the
 // update stops them (the host is stopped for it, and Update.exe ends the rest of the package).
 // Unelevated, Restart Manager still lists a service's process; only its path can't be read by
@@ -21,7 +21,7 @@ static class InstallBlockers
     const int MostNamed = 5;
     static readonly object scan = new();
 
-    // The processes outside the installation holding files in it, as "name (service, pid n)", or
+    // The processes outside the installation holding files in it, with their confirmed file, or
     // null only when the completed scan found none; a failed scan is explicitly unknown.
     public static string? Find()
     {
@@ -43,7 +43,12 @@ static class InstallBlockers
                 return held.Any(p => p.Pid != Environment.ProcessId && string.IsNullOrWhiteSpace(p.Image) && string.IsNullOrWhiteSpace(p.Service))
                     ? InstallationFiles.Unknown : null;
             }
-            var names = found.Take(MostNamed).Select(p => $"{p.Name} ({(p.Service.Length > 0 ? p.Service + ", " : "")}pid {p.Pid}, {p.Image ?? "image path unavailable"})");
+            var names = found.Take(MostNamed).Select(p =>
+            {
+                var file = HeldFile(files, p.Pid);
+                var resource = file is null ? "an installation file (path could not be confirmed)" : Path.GetRelativePath(root, file);
+                return $"{p.Name} ({(p.Service.Length > 0 ? p.Service + ", " : "")}pid {p.Pid}, {p.Image ?? "image path unavailable"}) holding {resource}";
+            });
             return string.Join(", ", names) + (found.Count > MostNamed ? $" and {found.Count - MostNamed} more" : "");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception
@@ -71,6 +76,17 @@ static class InstallBlockers
     }
 
     const uint ProcessQueryLimitedInformation = 0x1000;
+
+    // The aggregate RM result has no resource association. Bisect only for confirmed external
+    // holders, then verify the single file: listing every registered file would falsely blame it.
+    static string? HeldFile(List<string> files, int pid)
+    {
+        if (files.Count == 1) { return Held(files).Any(p => p.Pid == pid) ? files[0] : null; }
+        var half = files.Count / 2;
+        var first = files.Take(half).ToList();
+        return Held(first).Any(p => p.Pid == pid)
+            ? HeldFile(first, pid) : HeldFile(files.Skip(half).ToList(), pid);
+    }
 
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern IntPtr OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, int pid);
