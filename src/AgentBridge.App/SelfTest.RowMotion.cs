@@ -62,8 +62,8 @@ static partial class SelfTest
             var clock = System.Diagnostics.Stopwatch.StartNew();
             await Task.Delay(10);
             await CaptureFrame(root);
-            var elapsed = clock.Elapsed.TotalMilliseconds;
             var later = TrackedTop();
+            var elapsed = clock.Elapsed.TotalMilliseconds;
             var progress = (later - moving) / (target - moving);
             var t = Math.Clamp(elapsed / Motion.Catalogue.Enter("Shift", true).Duration.TotalMilliseconds, 0, 1);
             var standard = t * t * (3 - 2 * t);
