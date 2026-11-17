@@ -56,6 +56,7 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
         }
         Check();
         var reopened = new LaunchProvenance(path, logged.Enqueue);
+        Assert.Equal(new LaunchAttribution("local", actor, principal), reopened.AttributionOf(request));
         reopened.Bound(request, result.Session!, source.ProcessOf(result.Session!)!);
         Check();
     }
