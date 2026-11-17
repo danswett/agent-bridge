@@ -47,9 +47,12 @@ public sealed partial class MainViewModel : Observable
     public MainViewModel(HostConnection host, CardContext cards, UsageViewModel usage, SettingsViewModel? settings = null, ToastPlanner? toasts = null, SessionOrder? order = null)
         : this(new Machine(Machine.LocalKey, host, cards, toasts), usage, settings, order) { }
 
-    public MainViewModel(Machine local, UsageViewModel usage, SettingsViewModel? settings = null, SessionOrder? order = null)
+    public MainViewModel(Machine local, UsageViewModel usage, SettingsViewModel? settings = null, SessionOrder? order = null, SessionRecovery? recovery = null)
     {
         this.local = local;
+        Recovery = recovery;
+        pendingReading = recovery?.Current;
+        restoreSelection = recovery is not null;
         Usage = usage;
         Settings = settings;
         Order = order ?? new SessionOrder(null);
@@ -559,6 +562,7 @@ public sealed partial class MainViewModel : Observable
         finally { askedNow = null; }
         Raise(nameof(Empty));
         if (pendingOpens.Contains((m.Key, s.Id)) || launchOpens.Contains((m.Key, s.Id))) { Open(m.Key, s.Id); }
+        if (m.Host.Sessions.Complete) { RestoreSelection(m); }
     }
 
     void OnRemoved(Machine m, string id)
@@ -595,6 +599,7 @@ public sealed partial class MainViewModel : Observable
         focusOpens.RemoveWhere(p => p.Machine == m.Key && !byId.ContainsKey(CardKey(p.Machine, p.Session)) && !launchOpens.Contains(p));
         Order.Synced(m.Key, owner.Where(p => p.Value == m).Select(p => p.Key.Id).ToHashSet(StringComparer.Ordinal));
         Rearrange();
+        RestoreSelection(m);
         RefreshLabels();
         Restale(m);
         SyncNeedsYou();

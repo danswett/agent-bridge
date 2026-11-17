@@ -31,8 +31,9 @@ public sealed class SessionRecoveryTests : IDisposable
     {
         var store = new SessionRecovery(FilePath, log.Add);
         if (saved is not null) { store.Remember(new("local\n" + saved, new(80, false))); }
+        store = new SessionRecovery(FilePath, log.Add);
         await using var host = Connection();
-        var main = Main(host, store);
+        var main = CreateMain(host, store);
         host.Sessions.BeginSnapshot();
         host.Sessions.Upsert(Make.Session("first"));
         Assert.Null(main.Selected);
@@ -46,9 +47,11 @@ public sealed class SessionRecoveryTests : IDisposable
     public async Task Selecting_a_different_session_saves_immediately_and_discards_the_old_anchor()
     {
         await using var host = Connection();
-        var main = Main(host, new SessionRecovery(FilePath, log.Add));
+        var main = CreateMain(host, new SessionRecovery(FilePath, log.Add));
         host.Sessions.Upsert(Make.Session("first"));
         host.Sessions.Upsert(Make.Session("second"));
+        main.Selected = main.Sessions.Single(c => c.Id == "first");
+        main.Recovery!.Remember(new("local\nfirst", new(100, false)));
         main.Selected = main.Sessions.Single(c => c.Id == "second");
         Assert.Equal(new SessionReading("local\nsecond", null), new SessionRecovery(FilePath, log.Add).Current);
         host.Sessions.BeginSnapshot();
@@ -63,7 +66,7 @@ public sealed class SessionRecoveryTests : IDisposable
         var saved = new SessionReading("peer-id\nsame", new(90, false));
         store.Remember(saved);
         await using var local = Connection();
-        var main = Main(local, store);
+        var main = CreateMain(local, store);
         Snapshot(local, "same");
         await using var remote = Connection();
         main.Add(new Machine("peer-id", remote, Context(remote)));
@@ -78,7 +81,7 @@ public sealed class SessionRecoveryTests : IDisposable
         var store = new SessionRecovery(FilePath, log.Add);
         store.Remember(new("local\nsecond", null));
         await using var host = Connection();
-        var main = Main(host, store);
+        var main = CreateMain(host, store);
         host.Sessions.BeginSnapshot();
         host.Sessions.Upsert(Make.Session("first"));
         main.Selected = main.Sessions.Single();
@@ -87,11 +90,14 @@ public sealed class SessionRecoveryTests : IDisposable
         Assert.Equal("first", main.Selected?.Id);
     }
 
-    [Fact]
-    public void Corrupt_or_unwritable_state_is_reported_without_preventing_app_use()
+    [Theory]
+    [InlineData("{")]
+    [InlineData("{}")]
+    [InlineData("{\"Key\":null}")]
+    public void Corrupt_or_unwritable_state_is_reported_without_preventing_app_use(string corrupt)
     {
         Directory.CreateDirectory(folder);
-        File.WriteAllText(FilePath, "{");
+        File.WriteAllText(FilePath, corrupt);
         Assert.Null(new SessionRecovery(FilePath, log.Add).Current);
         var store = new SessionRecovery(Path.Combine(FilePath, "blocked.json"), log.Add);
         var saved = new SessionReading("local\nfirst", null);
@@ -102,7 +108,7 @@ public sealed class SessionRecoveryTests : IDisposable
 
     static HostConnection Connection() => new(_ => Task.FromException<IClientChannel>(new InvalidOperationException("No connection expected")), new LockedDispatcher());
     static CardContext Context(HostConnection host) => new() { Deliveries = new Deliveries(host, new LockedDispatcher()), Folds = new FoldStore(null), Capabilities = () => [], Host = host };
-    static MainViewModel Main(HostConnection host, SessionRecovery store) => new(new Machine(Machine.LocalKey, host, Context(host)), new UsageViewModel(), recovery: store);
+    static MainViewModel CreateMain(HostConnection host, SessionRecovery store) => new(new Machine(Machine.LocalKey, host, Context(host)), new UsageViewModel(), recovery: store);
     static void Snapshot(HostConnection host, string id) { host.Sessions.BeginSnapshot(); host.Sessions.Upsert(Make.Session(id)); host.Sessions.EndSnapshot(); }
     public void Dispose() { if (Directory.Exists(folder)) { Directory.Delete(folder, recursive: true); } }
 }

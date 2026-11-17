@@ -36,6 +36,12 @@ new line, Ctrl+Enter still sends). The choice is local to this device/profile an
 applies immediately, including the Send tooltip and accessible description.
 Enter during IME composition is left to the text control and never sends a reply.
 
+The last selected session and conversation scroll anchor are saved on change in the
+profile's `*-reading.json` beside the other app stores. Startup restores that selection
+and reading position; a missing or stale session falls back to the first available session.
+The record contains only opaque session/turn keys and scroll geometry, not transcript text.
+This recovery is independent of crash reporting and sends nothing.
+
 Sent person-message bubbles recognise host-staged attachment references, including earlier
 turns. Images available on a local disk show thumbnails that open a named image viewer;
 missing, oversized and non-image attachments keep filename chips without exposing paths.

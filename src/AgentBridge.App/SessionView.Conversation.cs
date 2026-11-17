@@ -89,6 +89,7 @@ public sealed partial class SessionView
             scrolling = e.IsIntermediate;
             if (!e.IsIntermediate) { anchoring = null; keyTarget = null; }
             HistoryScrolled(e.IsIntermediate);
+            if (!e.IsIntermediate) { SaveReading(); }
         };
         scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); ReleasePin(); };
         scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
@@ -423,6 +424,7 @@ public sealed partial class SessionView
     // the person pans or a scroll is under way, nor while a correction of ours is on its way.
     void OnConversationLaidOut(object? sender, object e)
     {
+        if (RestoreReading()) { return; }
         if (pinEnd) { return; }
         if (panning || scrolling || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
             || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }

@@ -4,6 +4,54 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
+public sealed record SessionPosition(double Offset, bool AtEnd, ScrollAnchor? Block = null, string? Turn = null, double TurnTop = 0);
+public sealed record SessionReading(string Key, SessionPosition? Position);
+
+// Only opaque session/turn keys and geometry, never transcript content.
+public sealed class SessionRecovery
+{
+    readonly string? path;
+    readonly Action<string> log;
+    public SessionReading? Current { get; private set; }
+
+    public SessionRecovery(string? path, Action<string> log)
+    {
+        this.path = path;
+        this.log = log;
+        try
+        {
+            if (path is not null && File.Exists(path))
+            {
+                var reading = JsonSerializer.Deserialize<SessionReading>(File.ReadAllText(path));
+                if (reading is not null && string.IsNullOrEmpty(reading.Key)) { throw new JsonException("Missing session key."); }
+                Current = reading;
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        {
+            log($"session reading not loaded: {e.Message}");
+        }
+    }
+
+    public void Remember(SessionReading? reading)
+    {
+        if (Current == reading) { return; }
+        Current = reading;
+        if (path is null) { return; }
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+            // A crash during the write leaves the previous complete record readable.
+            File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(reading));
+            File.Move(path + ".tmp", path, overwrite: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log($"session reading not saved: {e.Message}");
+        }
+    }
+}
+
 // Whether each session's card is folded, kept across restarts of the app (pwa/js/ui/
 // fold-store.js). It also remembers which question last opened a card: a new question opens a
 // folded card once, so it is never folded away unseen, but folding it again while the same

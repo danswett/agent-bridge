@@ -34,7 +34,8 @@ public sealed partial class SessionView
     {
         UnwatchHistory();
         history = Card?.Stored;
-        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; openPrompts.Clear(); historyVisible = 1; }
+        var key = Card?.Row?.Key ?? Card?.Id;
+        if (shownHistory != key) { shownHistory = key; pinEnd = true; RecoverReading(); openPrompts.Clear(); historyVisible = 1; }
         if (history is null) { ShowHistory(); return; }
         history.Changed += OnHistoryChanged;
         ShowHistory();
@@ -180,7 +181,7 @@ public sealed partial class SessionView
     void OnHistoryEarlier(object sender, RoutedEventArgs e) => LoadEarlier();
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
-    internal void ReleasePin() { pinEnd = false; anchoring = null; pinReleases++; }
+    internal void ReleasePin() { restoreReading = null; pinEnd = false; anchoring = null; pinReleases++; }
 
     // Content changed in the conversation can reflow it, so the place is put back once layout has settled:
     // the end if pinned, else the stored turn's screen position through a prepend (#1593).
@@ -191,7 +192,7 @@ public sealed partial class SessionView
         var (session, releases) = (shownHistory, pinReleases);
         void Restore()
         {
-            if (session != shownHistory || releases != pinReleases || ConversationScroll is not { } scroll) { return; }
+            if (session != shownHistory || releases != pinReleases || restoreReading is not null || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset + (earlierExtent is { } extent ? scroll.ScrollableHeight - extent : 0), scroll.ScrollableHeight);
             if (!atEnd && !pinEnd && reading is { } kept)
