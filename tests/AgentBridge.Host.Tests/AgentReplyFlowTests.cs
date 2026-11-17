@@ -218,6 +218,20 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_idle_only_agent_message_never_appends_to_a_Claude_person_draft()
+    {
+        console.Rows = ClaudeIdle("private person draft");
+        var result = await Replier().ReplyAsync(new ReplyRequest
+        {
+            Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "agent message", RequireIdle = true,
+        }, Peer);
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Empty(console.Plans);
+        Assert.Equal(ClaudeIdle("private person draft"), console.Rows);
+    }
+
+    [Fact]
     public async Task A_Codex_reply_is_refused_with_nothing_typed_while_words_are_already_in_its_input_box()
     {
         console.Rows = CodexIdle("half a thought");

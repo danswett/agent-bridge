@@ -52,11 +52,13 @@ public sealed class HaRepliesTests : IDisposable
 
     static HaReply Reply(params HaReplyFile[] files) => new("6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20", Guid.NewGuid().ToString(), "What is this?", files);
 
-    [Fact]
-    public async Task Words_alone_go_to_the_reply_delivery_as_the_cards()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Words_alone_go_to_the_reply_delivery_as_the_cards(bool requireIdle)
     {
         var typist = new Typist(store);
-        var reply = Reply();
+        var reply = Reply() with { RequireIdle = requireIdle };
         var result = await HaReplies.For(typist, store)!(reply, default);
 
         Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
@@ -66,17 +68,21 @@ public sealed class HaRepliesTests : IDisposable
         Assert.Equal("What is this?", request.Text);
         Assert.Null(request.Attachments);
         Assert.Equal(HaReplies.Peer, peer);
+        Assert.Equal(requireIdle, request.RequireIdle);
     }
 
-    [Fact]
-    public async Task Files_arrive_in_the_store_in_chunks_the_reply_names_them_and_nothing_is_left_held()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Files_arrive_in_the_store_in_chunks_the_reply_names_them_and_nothing_is_left_held(bool requireIdle)
     {
         var typist = new Typist(store);
         // One over the in-channel limit, which only a direct channel takes in chunks.
         var shot = Png(300 * 1024);
         var notes = "line one\nline two\n"u8.ToArray();
 
-        var result = await HaReplies.For(typist, store)!(Reply(new HaReplyFile("shot.png", "image/png", shot), new HaReplyFile("notes.txt", "text/plain", notes)), default);
+        var result = await HaReplies.For(typist, store)!(Reply(new HaReplyFile("shot.png", "image/png", shot), new HaReplyFile("notes.txt", "text/plain", notes))
+            with { RequireIdle = requireIdle }, default);
 
         Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
         var (request, _, files) = Assert.Single(typist.Replies);
@@ -84,6 +90,7 @@ public sealed class HaRepliesTests : IDisposable
         Assert.Equal(shot, files[0]);
         Assert.Equal(notes, files[1]);
         Assert.Equal(0, store.Count);
+        Assert.Equal(requireIdle, request.RequireIdle);
     }
 
     [Fact]

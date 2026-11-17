@@ -10,7 +10,10 @@ namespace AgentBridge.HomeAssistant;
 // A reply from a card, for the host's own reply delivery (session.reply): the words, and the
 // files that go with them, already fetched from Home Assistant's image store or decoded from the
 // card's publish. Request is one id per press or publish, so a resend is answered from the first.
-public sealed record HaReply(string SessionId, string Request, string? Text, IReadOnlyList<HaReplyFile> Files);
+public sealed record HaReply(string SessionId, string Request, string? Text, IReadOnlyList<HaReplyFile> Files)
+{
+    public bool RequireIdle { get; init; }
+}
 
 public sealed record HaReplyFile(string Name, string? Type, byte[] Bytes);
 
@@ -47,6 +50,7 @@ public sealed partial class HaConnector
         public DateTimeOffset PendingSince;
         // The card is read again at once after a delivery, for anything sent meanwhile.
         public bool ReadAgain;
+        public DateTimeOffset InboxRetryAt;
         // When the last reply-card publish went in (LastPayloadDeliveredAt).
         public DateTimeOffset? PayloadDeliveredAt;
 
@@ -219,6 +223,20 @@ public sealed partial class HaConnector
         var short8 = done.SessionId[..Math.Min(8, done.SessionId.Length)];
         // Still the arm this reply made, not consumed by its turn nor replaced since.
         var ours = done.Arm is { } arm && p.DriverPendingAt == arm;
+        // Refused/Busy prove no keys went; uncertain attempts must never enter this path.
+        if (!done.Failed && (result.Outcome == AnswerOutcome.Busy || result.Outcome == AnswerOutcome.Refused &&
+            result.Refusal is ReplyRefusal.Busy or ReplyRefusal.ComposerUnverified or ReplyRefusal.Retryable) &&
+            done.Rid is { } retry && inbox?.Peek(p.Node)?.Rid == retry)
+        {
+            inbox.Requeue(p.Node, retry);
+            p.Reply.ForgetRid(retry);
+            p.Reply.InboxRetryAt = now + options.ReplySweep;
+            p.Reply.Ack = MakeAck(retry, done.Sender, "queued");
+            if (ours) { p.DriverPendingAt = null; }
+            await TransientAsync(p, "Reply queued", new JsonObject { ["error"] = ReplyReasons.Shared(result.Reason ?? "The session is busy; the reply will be retried.") }, ct);
+            log($"Home Assistant connector requeued reply {retry}: nothing was typed");
+            return;
+        }
         // The delivered rid goes out with the same update that says how the delivery ended.
         if (done.Rid is { } rid)
         {
@@ -376,9 +394,9 @@ public sealed partial class HaConnector
     // Send-DaemonCardPayload: one publish from the reply card, unless it was read before. Says
     // whether it was nothing to send, taken without a delivery (refused, or words for a question),
     // or is being delivered.
-    async Task<CardRead> CardReplyAsync(string sessionId, Published p, HaState state, CancellationToken ct, bool fromInbox = false)
+    async Task<CardRead> CardReplyAsync(string sessionId, Published p, HaState state, CancellationToken ct, int? inboxAttempt = null)
     {
-        if (!IsStamp(state.State) || (!fromInbox && p.Reply.IsHandled(state.State))) { return CardRead.Nothing; }
+        if (!IsStamp(state.State) || (inboxAttempt is null && p.Reply.IsHandled(state.State))) { return CardRead.Nothing; }
         var stamp = state.State;
         var a = state.Attributes;
         var attributes = a.ValueKind == JsonValueKind.Object;
@@ -467,7 +485,8 @@ public sealed partial class HaConnector
         }
         p.Reply.Handle(stamp);
         var shown = Preview(text, images.Count + files.Count);
-        var request = RequestId(sessionId, "reply", "card:" + stamp);
+        var request = RequestId(sessionId, "reply", inboxAttempt is { } attempt
+            ? FormattableString.Invariant($"inbox:{rid}:{stamp}:{attempt}") : "card:" + stamp);
         Deliver(p, sessionId, shown, box: false, text: null, [.. images.Select(i => i.Id)], async token =>
         {
             var staged = new List<HaReplyFile>();
@@ -492,7 +511,8 @@ public sealed partial class HaConnector
                 }
                 staged.Add(new HaReplyFile(string.IsNullOrWhiteSpace(name) ? "file" : name, type, bytes));
             }
-            return (await reply!(new HaReply(sessionId, request, string.IsNullOrWhiteSpace(text) ? null : text, staged), token), false);
+            return (await reply!(new HaReply(sessionId, request, string.IsNullOrWhiteSpace(text) ? null : text, staged)
+                { RequireIdle = inboxAttempt is not null }, token), false);
         }, rid, sender);
         log($"Home Assistant connector took a reply-card reply for {sessionId[..Math.Min(8, sessionId.Length)]}" +
             (images.Count + files.Count > 0 ? $" with {images.Count + files.Count} attachment(s)" : ""));
@@ -580,7 +600,7 @@ public sealed partial class HaConnector
             (ReplyResult Result, bool Failed) outcome;
             try { outcome = await send(token); }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { outcome = (new ReplyResult(AnswerOutcome.Unconfirmed, "the host stopped while the reply was being delivered"), false); }
-            catch (Exception e) { outcome = (new ReplyResult(AnswerOutcome.Unconfirmed, $"delivery failed: {e.GetType().Name}"), false); }
+            catch (Exception e) { outcome = (new ReplyResult(AnswerOutcome.Unconfirmed, $"delivery could not be confirmed: {e.GetType().Name}"), false); }
             replies.Enqueue(new ReplyDone(number, sessionId, shown, box, text, images, arm, outcome.Result, outcome.Failed, rid, sender));
         }, CancellationToken.None);
         Track(task);

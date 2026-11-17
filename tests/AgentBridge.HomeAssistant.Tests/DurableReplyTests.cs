@@ -8,6 +8,89 @@ public sealed partial class ReplyTests
     string InboxPath => Path.Combine(folder, "ha-connector.json.inbox");
 
     [Fact]
+    public async Task A_busy_session_keeps_its_FIFO_head_until_idle_without_typing()
+    {
+        await using var c = await Ready();
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Working));
+        c.Observe(ha.SendFromCard(Node, "wait for idle", rid: "busy-head"));
+        await Pass(c);
+        await c.DeliveredAsync();
+
+        Assert.Empty(replied);
+        Assert.Null(new DurableInbox(InboxPath).Peek(Node)!.StartedAt);
+        Idle();
+        for (var n = 0; n < 3; n++) { await Pass(c, 20); await c.DeliveredAsync(); }
+        Assert.Equal("wait for idle", Assert.Single(replied).Text);
+        Assert.True(replied[0].RequireIdle);
+    }
+
+    [Theory]
+    [InlineData(AnswerOutcome.Busy, ReplyRefusal.Other)]
+    [InlineData(AnswerOutcome.Refused, ReplyRefusal.Retryable)]
+    [InlineData(AnswerOutcome.Refused, ReplyRefusal.ComposerUnverified)]
+    public async Task A_no_effect_attempt_requeues_its_original_words_before_later_messages_and_survives_restart(
+        AnswerOutcome result, ReplyRefusal refusal)
+    {
+        outcome = _ => Task.FromResult(new ReplyResult(result, "nothing was typed") { Refusal = refusal });
+        await using (var first = await Ready())
+        {
+            first.Observe(ha.SendFromCard(Node, "original", rid: "retry-head"));
+            first.Observe(ha.SendFromCard(Node, "later", rid: "retry-tail"));
+            await Pass(first);
+            await first.DeliveredAsync();
+            await Pass(first);
+
+            var pending = new DurableInbox(InboxPath).Peek(Node);
+            Assert.Equal("retry-head", pending?.Rid);
+            Assert.Null(pending!.StartedAt);
+            Assert.Contains("original", pending.Payload);
+            Assert.Equal("queued", Ack.GetProperty("outcome").GetString());
+        }
+        var firstRequest = Assert.Single(replied).Request;
+        var delivered = new List<string?>();
+        outcome = r => { delivered.Add(r.Text); return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered)); };
+        await using var restarted = Connector();
+        for (var n = 0; n < 5; n++) { await Pass(restarted, 20); await restarted.DeliveredAsync(); }
+        await Do(restarted, ha.SendFromCard(Node, "changed retry", rid: "retry-head"));
+
+        Assert.Equal(["original", "later"], delivered);
+        Assert.NotEqual(firstRequest, replied[1].Request);
+        Assert.Null(new DurableInbox(InboxPath).Peek(Node));
+    }
+
+    [Fact]
+    public async Task A_person_draft_stays_untouched_while_a_refused_agent_message_remains_queued()
+    {
+        outcome = _ => Task.FromResult(new ReplyResult(AnswerOutcome.Refused, ReplyReasons.Draft("private draft", "private draft"))
+            { Refusal = ReplyRefusal.ComposerUnverified });
+        await using var c = await Ready();
+        ha.Type(SessionEntities.Reply(Node), "person's follow-up");
+        var services = ha.Services.Count;
+        await Do(c, ha.SendFromCard(Node, "agent message", rid: "draft-safe", driver: "agent"));
+
+        Assert.Equal("draft-safe", new DurableInbox(InboxPath).Peek(Node)?.Rid);
+        Assert.Equal("person's follow-up", (await ha.GetStateAsync(SessionEntities.Reply(Node)))!.State);
+        Assert.DoesNotContain(ha.Services.Skip(services), s => s.EntityId == SessionEntities.Reply(Node));
+        Assert.DoesNotContain("private draft", Detail.GetRawText());
+    }
+
+    [Fact]
+    public async Task An_interrupted_attempt_is_unconfirmed_not_failed_and_is_never_retried()
+    {
+        outcome = _ => throw new IOException("interrupted");
+        await using var c = await Ready();
+        var mark = ha.Log.Count;
+        await Do(c, ha.SendFromCard(Node, "possibly sent", rid: "interrupted"));
+        for (var n = 0; n < 3; n++) { await Pass(c, 20); await c.DeliveredAsync(); }
+
+        Assert.Single(replied);
+        Assert.Equal("unconfirmed", Ack.GetProperty("outcome").GetString());
+        var note = Assert.Single(NotesSince(mark), n => n.Summary.StartsWith("Reply unconfirmed", StringComparison.Ordinal));
+        Assert.DoesNotContain("failed", note.Attributes.GetProperty("error").GetString()!);
+        Assert.Null(new DurableInbox(InboxPath).Peek(Node));
+    }
+
+    [Fact]
     public async Task Concurrent_senders_retrying_one_rid_queue_and_deliver_it_only_once()
     {
         await using var c = await Ready();

@@ -23,7 +23,10 @@ public static class HaReplies
         {
             if (reply.Files.Count == 0)
             {
-                return await replies.ReplyAsync(new ReplyRequest { Id = reply.SessionId, Request = reply.Request, Text = reply.Text }, Peer, ct);
+                return await replies.ReplyAsync(new ReplyRequest
+                {
+                    Id = reply.SessionId, Request = reply.Request, Text = reply.Text, RequireIdle = reply.RequireIdle,
+                }, Peer, ct);
             }
             if (attachments is null || !replies.TakesAttachments) { return Refused("this host does not take attachments"); }
             if (reply.Files.Count > AttachmentLimits.PerReply) { return Refused($"a reply carries at most {AttachmentLimits.PerReply} attachments"); }
@@ -44,6 +47,7 @@ public static class HaReplies
                     Request = reply.Request,
                     Text = reply.Text,
                     Attachments = refs,
+                    RequireIdle = reply.RequireIdle,
                 }, Peer, ct);
             }
             finally

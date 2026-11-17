@@ -266,7 +266,7 @@ public sealed class ReplyService : ISessionReplier
                 }
                 var outcome = session.Agent == AgentKind.Copilot
                     ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent)
-                    : await AgentAsync(session, request.Text ?? "", claim, timeline);
+                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle);
                 keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result; }
                 typed = outcome.Typed!;
@@ -530,7 +530,7 @@ public sealed class ReplyService : ISessionReplier
             InjectionStatus.NothingTyped when retryChanged => Done(Stale(retryChangedReason)),
             InjectionStatus.NothingTyped => Done(Refused(result.Detail == WorkerInjector.ScreenChanged
                 ? "Copilot's input box changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
-                : DeliveryReasons.Of(result.Detail))),
+                : DeliveryReasons.Of(result.Detail)) with { Refusal = ReplyRefusal.Retryable }),
             InjectionStatus.Interrupted when result.Detail == WorkerInjector.ScreenChangedPartway =>
                 new Attempt(Unconfirmed("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent and its words are still in the box"), null, KeysWent: true),
             InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{DeliveryReasons.Of(result.Detail)}; part of the reply may have reached the session"), null, KeysWent: true),
@@ -584,7 +584,7 @@ public sealed class ReplyService : ISessionReplier
     // (Composer). Then, as Confirm-DaemonClaudeSubmit did, an Enter the agent took as part of a
     // paste (Claude absorbs it; Codex makes it a new line, seen live) is pressed again, at most
     // twice, and only while the box on screen still holds exactly this reply.
-    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline)
+    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle)
     {
         var agent = session.Agent;
         var name = agent == AgentKind.Claude ? "Claude" : "Codex";
@@ -621,6 +621,10 @@ public sealed class ReplyService : ISessionReplier
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
             if (now.Question is { } asking) { return Done(Asking(asking)); }
+            if (requireIdle && now.Status != SessionStatus.Idle)
+            {
+                return Done(Refused("the session is no longer idle, so the agent message was not typed") with { Refusal = ReplyRefusal.Busy });
+            }
             // Again once its turn has come: a launch of it may have begun meanwhile.
             if (LaunchHeld?.Invoke(session.Id) is { } held) { return Done(Refused(held)); }
             working = now.Status == SessionStatus.Working;
@@ -637,7 +641,10 @@ public sealed class ReplyService : ISessionReplier
             // prompt in an empty box, which a screen read cannot tell from typed words, so its
             // box is typed into whatever it shows: words someone left there would go with the
             // reply, and Claude's record of them would leave the reply unconfirmed.
-            if (agent == AgentKind.Codex && !box.Empty) { return Done(Refused($"something is already typed in {name}'s input box at the machine; send or clear it there first")); }
+            if ((agent == AgentKind.Codex || requireIdle) && !box.Empty)
+            {
+                return Done(Unverified($"something is already typed in {name}'s input box at the machine; send or clear it there first"));
+            }
             // A box whose words start with / or ! holds a command waiting for Enter, and a reply
             // typed after it would send it, with whatever the reply adds. Claude Code drops
             // invisible characters from what it is given and leaves the rest in its box unsent,
@@ -690,7 +697,7 @@ public sealed class ReplyService : ISessionReplier
             case InjectionStatus.NothingTyped when !sent:
                 return Done(Refused(result.Detail == WorkerInjector.ScreenChanged
                     ? $"{name}'s screen changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
-                    : DeliveryReasons.Of(result.Detail)));
+                    : DeliveryReasons.Of(result.Detail)) with { Refusal = ReplyRefusal.Retryable });
             case InjectionStatus.NothingTyped or InjectionStatus.Interrupted:
                 return new Attempt(Unconfirmed($"{DeliveryReasons.Of(result.Detail)}; part of the reply may have reached the session"), null, KeysWent: true);
         }

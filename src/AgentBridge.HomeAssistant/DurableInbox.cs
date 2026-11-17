@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace AgentBridge.HomeAssistant;
 
 internal sealed record InboxMessage(string Node, string Rid, string Sender, string Payload, DateTimeOffset QueuedAt, DateTimeOffset? DeliveredAt,
-    DateTimeOffset? StartedAt = null, string? Outcome = null);
+    DateTimeOffset? StartedAt = null, string? Outcome = null, int Attempts = 0);
 
 internal sealed class DurableInbox
 {
@@ -50,7 +50,7 @@ internal sealed class DurableInbox
         return Load().Find(m => m.Node == node && m.DeliveredAt is null);
     }
 
-    public void Start(string node, string rid, DateTimeOffset at)
+    public InboxMessage Start(string node, string rid, DateTimeOffset at)
     {
         using var held = Lock();
         var messages = Load();
@@ -59,7 +59,19 @@ internal sealed class DurableInbox
         {
             throw new InvalidOperationException("Only an unclaimed FIFO head can start delivery.");
         }
-        messages[index] = messages[index] with { StartedAt = at };
+        messages[index] = messages[index] with { StartedAt = at, Attempts = checked(messages[index].Attempts + 1) };
+        Save(messages);
+        return messages[index];
+    }
+
+    public void Requeue(string node, string rid)
+    {
+        using var held = Lock();
+        var messages = Load();
+        var index = messages.FindIndex(m => m.Node == node && m.DeliveredAt is null);
+        if (index < 0 || messages[index].Rid != rid) { throw new InvalidOperationException("Only the FIFO head can be requeued."); }
+        if (messages[index].StartedAt is null) { return; }
+        messages[index] = messages[index] with { StartedAt = null };
         Save(messages);
     }
 
@@ -116,7 +128,7 @@ internal sealed class DurableInbox
         using (file) { snapshot = JsonSerializer.Deserialize<Snapshot>(file); }
         if (snapshot is null || snapshot.Version != 1 || snapshot.Messages is null ||
             snapshot.Messages.Any(m => m is null || string.IsNullOrWhiteSpace(m.Node) || string.IsNullOrWhiteSpace(m.Rid) ||
-                string.IsNullOrWhiteSpace(m.Sender) || m.Payload is null || (m.DeliveredAt is null && string.IsNullOrWhiteSpace(m.Payload))) ||
+                string.IsNullOrWhiteSpace(m.Sender) || m.Attempts < 0 || m.Payload is null || (m.DeliveredAt is null && string.IsNullOrWhiteSpace(m.Payload))) ||
             snapshot.Messages.Any(m => m.Outcome is not (null or "delivered" or "unconfirmed") || (m.DeliveredAt is null && m.Outcome is not null)) ||
             snapshot.Messages.Select(m => (m.Node, m.Rid)).Distinct().Count() != snapshot.Messages.Count)
         {

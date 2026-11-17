@@ -1484,6 +1484,21 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     // ---- Copilot's input box, read before a reply is typed (#825) ----
 
     [Fact]
+    public async Task A_submit_refused_before_any_key_is_explicitly_safe_to_requeue()
+    {
+        injector.Holding = () => injector.Screen = _ => CopilotBox("person's draft");
+        var result = await Replier().ReplyAsync(new ReplyRequest
+        {
+            Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent message", RequireIdle = true,
+        });
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Equal(ReplyRefusal.Retryable, result.Refusal);
+        Assert.Empty(injector.Plans);
+        Assert.Equal(CopilotBox("person's draft"), injector.Screen(100));
+    }
+
+    [Fact]
     public async Task A_reply_to_Copilot_whose_input_box_holds_a_draft_is_refused_with_the_draft_shown_and_nothing_typed()
     {
         injector.Screen = _ => CopilotBox("half a thought \u202E");

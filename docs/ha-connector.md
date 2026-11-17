@@ -586,7 +586,16 @@ restart and are re-acknowledged on duplicate sends, without typing again.
 An attempt marker is persisted before calling delivery. A restart during an attempt reports
 `unconfirmed` and logs the interruption rather than risking duplicate typing; later queued
 messages still drain. This is not a native receipt or a claim that uncertain submissions landed.
-Busy/failed-submit requeue and person-draft preservation remain separate host-side work.
+Busy sessions retain the FIFO head without typing until idle. A delivery that proves
+no keys went (`Busy`, or a host-classified busy, unverified-composer or retryable refusal)
+resets its attempt marker, preserves the original payload and retries no sooner than the
+reply sweep. Each attempt has a persisted sequence and a distinct host request id;
+the sender's rid stays unchanged. Permanent refusals still release the head.
+Idle-only delivery is rechecked by the host. A person draft is never cleared or appended
+to, including Claude boxes whose suggestions cannot be distinguished from drafts.
+Interrupted or partly typed attempts remain `unconfirmed` and are never retried.
+Draft-independent delivery and safely removing stuck agent text need a later host-side
+slice; this cut waits rather than clearing any terminal text or replaying uncertain keys.
 No live HA, host management, authorization or 16 KiB publication limits change.
 
 **Durable inbox store.** `DurableInbox` is the reused internal store: it

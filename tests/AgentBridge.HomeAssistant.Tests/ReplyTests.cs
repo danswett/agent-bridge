@@ -402,6 +402,7 @@ public sealed partial class ReplyTests : IDisposable
 
         Assert.Equal([false], duringSend);
         Assert.Equal(2, replied.Count);
+        Assert.NotEqual(replied[0].Request, replied[1].Request);
         Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
         Assert.False(Ack.TryGetProperty("duplicate", out _));
     }

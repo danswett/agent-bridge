@@ -853,7 +853,7 @@ public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
     public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments);
 }
 
-public enum ReplyRefusal { Other, Asking, ComposerUnverified, Busy }
+public enum ReplyRefusal { Other, Asking, ComposerUnverified, Busy, Retryable }
 
 public static class Ops
 {

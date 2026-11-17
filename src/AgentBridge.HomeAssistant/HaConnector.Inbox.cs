@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.HomeAssistant;
 
@@ -65,13 +66,14 @@ public sealed partial class HaConnector
         }
         else
         {
+            if (time.GetUtcNow() < p.Reply.InboxRetryAt || CardSession(sessionId) is not { Status: SessionStatus.Idle, Question: null }) { return true; }
             var state = JsonSerializer.Deserialize<HaState>(next.Payload) ?? throw new InvalidDataException("Invalid inbox reply.");
             var prior = p.Reply.Ack;
             p.Reply.Ack = MakeAck(next.Rid, next.Sender, "queued");
             await TransientAsync(p, "Reply queued", [], ct);
             p.Reply.Ack = prior;
-            inbox.Start(p.Node, next.Rid, time.GetUtcNow());
-            var read = await CardReplyAsync(sessionId, p, state, ct, fromInbox: true);
+            var started = inbox.Start(p.Node, next.Rid, time.GetUtcNow());
+            var read = await CardReplyAsync(sessionId, p, state, ct, inboxAttempt: started.Attempts);
             if (read == CardRead.Delivering) { return true; }
             if (read == CardRead.Nothing) { throw new InvalidDataException("Inbox entry is not a reply."); }
             var outcome = p.Reply.Ack?["outcome"]?.GetValue<string>() ?? throw new InvalidDataException("Inbox reply has no outcome.");
