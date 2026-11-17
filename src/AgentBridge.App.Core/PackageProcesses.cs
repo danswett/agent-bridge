@@ -10,7 +10,10 @@ namespace AgentBridge.App.Core;
 // never from leftover locks or launcher records; a profile's launcher and host are one profile.
 public static partial class PackageProcesses
 {
-    internal sealed record Observed(int Pid, string Name, string? Image, string? CommandLine);
+    internal sealed record Observed(int Pid, string Name, string? Image, string? CommandLine)
+    {
+        public DateTimeOffset? StartedAt { get; init; }
+    }
 
     public static string? Others(string profile, int? ownHost) =>
         Others(AppContext.BaseDirectory, profile, Environment.ProcessId, ownHost, Running());
@@ -20,24 +23,29 @@ public static partial class PackageProcesses
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(appFolder)) + Path.DirectorySeparatorChar;
         foreach (var p in running)
         {
-            if (p.Pid == ownApp || p.Pid == ownHost) { continue; }
+            // Only our still-running app has a PID that cannot have been recycled.
+            if (p.Pid == ownApp) { continue; }
             var kind = p.Name switch { "AgentBridge" => "app", "agent-bridge-host" => "host", "agent-bridge-hostw" => "launcher", _ => null };
             if (kind is null) { continue; }
             if (p.Image is not null && !p.Image.StartsWith(root, StringComparison.OrdinalIgnoreCase)) { continue; }
-            var other = Profile(p.CommandLine, kind);
-            // An unreadable image is still a blocker, even if its command line names our profile.
-            if (p.Image is not null && string.Equals(other, profile, StringComparison.OrdinalIgnoreCase)) { continue; }
+            var other = Profile(p.CommandLine, kind, out var demo);
+            // ownHost is a cached PID, not identity. Only fresh, readable process identity can
+            // establish our profile; demo apps have independent instances even with its name.
+            if (p.StartedAt is not null && p.Image is not null && !demo && string.Equals(other, profile, StringComparison.OrdinalIgnoreCase)) { continue; }
+            if (demo) { kind = "demo app"; }
             var who = other is null ? "unknown" : $"'{other}'";
             return $"bridge profile {who} {kind} (pid {p.Pid}) "
-                + (p.Image is null ? "runs and cannot be looked at" : "runs from this installation");
+                + (p.Image is null || p.StartedAt is null ? "runs and cannot be looked at" : "runs from this installation");
         }
         return null;
     }
 
-    static string? Profile(string? commandLine, string kind)
+    static string? Profile(string? commandLine, string kind, out bool demo)
     {
+        demo = false;
         if (string.IsNullOrWhiteSpace(commandLine)) { return null; }
         var args = CommandLine.Split(commandLine).Skip(1).ToArray();
+        demo = kind == "app" && args.Any(a => a is "--demo" or "--self-test" or "--self-test-history-scroll" or "--self-test-live-list");
         if (kind != "app" && args.FirstOrDefault() != "serve") { return null; }
         var options = args.Select((a, i) => (a, i)).Where(x => x.a.StartsWith("--profile", StringComparison.Ordinal)).ToArray();
         if (options.Length == 0) { return "default"; }
@@ -53,11 +61,18 @@ public static partial class PackageProcesses
             {
                 using (p)
                 {
+                    DateTimeOffset? started = null;
                     string? path;
-                    try { path = p.MainModule?.FileName; }
+                    try
+                    {
+                        // Pin this generation's PID while the command-line reader opens it.
+                        _ = p.SafeHandle;
+                        started = new DateTimeOffset(p.StartTime.ToUniversalTime(), TimeSpan.Zero);
+                        path = p.MainModule?.FileName;
+                    }
                     catch (InvalidOperationException) { continue; }
                     catch (Win32Exception) { path = null; }
-                    yield return new(p.Id, name, path, SystemProcessInspector.ReadCommandLine(p.Id));
+                    yield return new(p.Id, name, path, SystemProcessInspector.ReadCommandLine(p.Id)) { StartedAt = started };
                 }
             }
         }
@@ -66,6 +81,6 @@ public static partial class PackageProcesses
     // Only the detector's bounded, path-free identity report may bypass the generic UI wording.
     internal static string? RefusalDetail(string why) => Refusal().IsMatch(why) ? why : null;
 
-    [GeneratedRegex(@"\Abridge profile (?:'[A-Za-z0-9_.-]{1,64}'|unknown) (?:app|host|launcher) \(pid [1-9][0-9]{0,9}\) runs (?:from this installation|and cannot be looked at)\z")]
+    [GeneratedRegex(@"\Abridge profile (?:'[A-Za-z0-9_.-]{1,64}'|unknown) (?:app|demo app|host|launcher) \(pid [1-9][0-9]{0,9}\) runs (?:from this installation|and cannot be looked at)\z")]
     private static partial Regex Refusal();
 }

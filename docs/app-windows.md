@@ -735,9 +735,11 @@ controls consume that same contract; this extraction does not disable or remove 
     agent-ha-bridge. That is how a shadow beside agent-ha-bridge keeps itself current.
   * It never installs while another profile's app or host runs from this installation (Velopack
     stops every process in the package and restarts only this profile). Running apps, hosts and
-    host launchers are identified by their executable folder and command-line profile: this
+    host launchers are identified by a held process handle, creation time, executable folder and
+    command-line profile, never a cached host PID alone: this
     profile's host/launcher pair is not another profile, even without a connected host PID.
     Leftover profile markers alone never block; unreadable process identity still refuses.
+    A demo app is a separate blocking instance, even when it names the updating profile.
     An Install pressed on
     another device also waits while the host is not running or its sessions are not yet read in
     full (`sessions.synced`), so that it cannot say whether they are busy. Just before stopping the

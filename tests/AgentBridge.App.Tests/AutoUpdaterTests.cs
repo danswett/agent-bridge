@@ -1319,8 +1319,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     {
         await StartAsync(FakeHost.StatusOf() with { ProcessId = 20 });
         othersProbe = () => PackageProcesses.Others(app, "default", 10, othersAskedFor,
-            [new(20, "agent-bridge-host", Path.Combine(app, "agent-bridge-host.exe"), "host.exe serve --profile default"),
-             new(30, "agent-bridge-hostw", Path.Combine(app, "agent-bridge-hostw.exe"), "hostw.exe serve --profile default")]);
+            [new(20, "agent-bridge-host", Path.Combine(app, "agent-bridge-host.exe"), "host.exe serve --profile default") { StartedAt = Make.T0 },
+             new(30, "agent-bridge-hostw", Path.Combine(app, "agent-bridge-hostw.exe"), "hostw.exe serve --profile default") { StartedAt = Make.T0 }]);
         await auto.TickAsync();
 
         Assert.Null(await auto.RestartToUpdateAsync());
@@ -1334,7 +1334,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     {
         await StartAsync(FakeHost.StatusOf() with { ProcessId = 20 });
         othersProbe = () => PackageProcesses.Others(app, "default", 10, othersAskedFor,
-            [new(4242, "agent-bridge-host", Path.Combine(app, "agent-bridge-host.exe"), "host.exe serve --profile work")]);
+            [new(4242, "agent-bridge-host", Path.Combine(app, "agent-bridge-host.exe"), "host.exe serve --profile work") { StartedAt = Make.T0 }]);
         await auto.TickAsync();
         var banner = AppUpdateViewModel.For(auto);
 
