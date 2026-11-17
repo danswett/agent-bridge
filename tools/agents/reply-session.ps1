@@ -130,7 +130,7 @@ try {
       try {
         if ($deliveryAttempt -eq 1) {
           $at = [DateTime]::UtcNow.ToString('o')
-          $payload = @{ at = $at; text = $Text; driver = 'agent'; rid = $Rid; sender = $Sender } | ConvertTo-Json -Compress
+          $payload = @{ at = $at; text = $Text; driver = 'agent'; rid = $Rid; sender = $Sender; expected_instance = $receiverInstance } | ConvertTo-Json -Compress
         } else { $payload = $firstPayload }
         if ([Text.Encoding]::UTF8.GetByteCount($payload) -gt 60000) { Complete-Reply 'not-delivered' 1 'Message is over the 60 KB limit; not sent.' }
         Post 'services/script/agent_bridge_reply_payload' @{ node = $node; payload = $payload }
@@ -175,6 +175,10 @@ try {
           Complete-Reply 'already-handled' 2 "The host already handled rid $Rid for $node (outcome then: $($ack.Outcome)) and typed nothing this time. Check the session before resending."
         }
         switch ($ack.Outcome) {
+          'instance-mismatch' {
+            if ($deliveryAttempt -gt 1 -and $firstAttemptUnconfirmed) { Complete-RetryUnconfirmed "the receiver refused the retry because its instance changed; check the session before resending." }
+            Complete-Reply 'unconfirmed' 2 'The receiver refused the payload because its instance did not match; delivery is unconfirmed.'
+          }
           'delivered' { $delivered = $true }
           'unconfirmed' {
             if ($deliveryAttempt -eq 1) { $firstAttemptUnconfirmed = $true }

@@ -412,6 +412,16 @@ public sealed partial class HaConnector
         }
         var rid = attributes ? CleanRid(Str(a, "rid")) : null;
         var sender = attributes ? CleanSender(Str(a, "sender")) : null;
+        if (attributes && a.TryGetProperty("expected_instance", out var expectedInstance)
+            && (expectedInstance.ValueKind != JsonValueKind.String
+                || !string.Equals(expectedInstance.GetString(), options.MachineInstance, StringComparison.Ordinal)))
+        {
+            p.DriverPendingAt = null;
+            if (rid is not null) { p.Reply.Ack = MakeAck(rid, sender, "instance-mismatch"); }
+            await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = "The reply was meant for a different host instance; no reply was sent." }, ct);
+            p.Reply.Handle(stamp);
+            return CardRead.Taken;
+        }
         // A message delivered twice is dropped: nothing is typed again, and the sender is told
         // what came of the first. While the first is still going in, its own outcome will say.
         if (rid is not null && p.Reply.Rids.TryGetValue(rid, out var prior))

@@ -34,6 +34,7 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
                 $payload = ($body | ConvertFrom-Json).payload
                 $fake.Slot = $payload | ConvertFrom-Json
                 [void]$fake.Payloads.Add($payload)
+                if ($fake.Mode -eq 'restart-on-retry-payload' -and $fake.Payloads.Count -eq 2) { $fake.Instance = 'host-run-2' }
             }
         }
         elseif ($path -eq 'services/button/press') {
@@ -52,7 +53,20 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
             }
             # A status change that is not a turn, such as background agents finishing, made as Send is pressed.
             if ($fake.FlipTo) { $fake.Status = $fake.FlipTo; $fake.StatusChanged = [DateTime]::UtcNow.ToString('o') }
-            if ($slot -and $fake.Mode -eq 'restart-after-first' -and $fake.PressRids.Count -eq 1) {
+            if ($slot -and $slot.expected_instance -and $slot.expected_instance -cne $fake.Instance) {
+                $fake.Ack = @{ rid = $slot.rid; outcome = 'instance-mismatch'; at = [DateTime]::UtcNow.Ticks; error = 'the payload is for a different receiver instance' }
+            }
+            elseif ($slot -and $fake.Mode -eq 'restart-on-retry-payload' -and $fake.PressRids.Count -eq 1) {
+                [void]$fake.Delivered.Add($slot.text)
+                $fake.Rids.Clear()
+                $fake.Ack = @{ rid = $slot.rid; outcome = 'unconfirmed'; at = [DateTime]::UtcNow.Ticks; error = 'the session ended before it recorded the reply' }
+            }
+            elseif ($slot -and $fake.Mode -eq 'restart-on-retry-payload' -and $fake.PressRids.Count -eq 2) {
+                [void]$fake.Delivered.Add($slot.text)
+                $fake.Ack = @{ rid = $slot.rid; outcome = 'delivered'; at = [DateTime]::UtcNow.Ticks }
+                if ($fake.Moves) { $fake.Status = 'working'; $fake.StatusChanged = [DateTime]::UtcNow.ToString('o') }
+            }
+            elseif ($slot -and $fake.Mode -eq 'restart-after-first' -and $fake.PressRids.Count -eq 1) {
                 $fake.Ack = @{ rid = $slot.rid; outcome = 'unconfirmed'; at = [DateTime]::UtcNow.Ticks; error = 'the session ended before it recorded the reply' }
             }
             elseif ($slot -and $fake.Mode -eq 'restart-after-first') {
@@ -110,11 +124,13 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
             $out = @{ state = $fake.Status; last_changed = $fake.StatusChanged; attributes = @{} }
         }
         elseif ($path -eq 'states') {
+            # The restarted receiver has not yet refreshed its session-list sensor.
+            $reportedInstance = if ($fake.Mode -eq 'restart-on-retry-payload' -and $fake.Payloads.Count -eq 2) { 'host-run-1' } else { $fake.Instance }
             $out = @(
                 @{ entity_id = "sensor.${node}_status"; state = $fake.Status; attributes = @{ friendly_name = 'Copilot: Test receiver Status' } }
                 @{ entity_id = 'binary_sensor.agent_bridge_test_online'; state = $(if ($fake.Online) { 'on' } else { 'off' }) }
                 @{ entity_id = 'sensor.agent_bridge_test_sessions'; state = '1'; attributes = @{
-                    sessions = @($(if ($fake.Live) { @{ node = $node } })); instance = $fake.Instance
+                    sessions = @($(if ($fake.Live) { @{ node = $node } })); instance = $reportedInstance
                 } }
             )
         }
@@ -153,6 +169,14 @@ try {
     $fake.Instance = 'host-run-1'; $fake.PressRids.Clear(); $fake.Delivered.Clear(); $fake.Payloads.Clear()
     $r = Send 'do not duplicate after host restart' 'r-restart'
     Assert ($r.Exit -eq 2 -and $fake.PressRids.Count -eq 1 -and $fake.Delivered.Count -eq 1 -and $r.Out -match 'outcome=unconfirmed') 'a changed receiver instance prevents retry and preserves first-submission uncertainty'
+    $fake.Mode = 'restart-on-retry-payload'; $fake.Ack = $null; $fake.Live = $true; $fake.Online = $true
+    $fake.Instance = 'host-run-1'; $fake.PressRids.Clear(); $fake.Delivered.Clear(); $fake.Payloads.Clear(); $fake.Rids.Clear()
+    $r = Send 'fence a restart during retry publication' 'r-restart-payload'
+    $first = $fake.Payloads[0] | ConvertFrom-Json
+    $retry = $fake.Payloads[1] | ConvertFrom-Json
+    Assert ($r.Exit -eq 2 -and $fake.PressRids.Count -eq 2 -and $fake.Delivered.Count -eq 1 -and $r.Out -match 'outcome=unconfirmed') 'a restart after retry preflight refuses the retry without typing twice'
+    Assert ($first.expected_instance -eq 'host-run-1' -and $retry.expected_instance -eq 'host-run-1' -and $fake.Payloads[0] -ceq $fake.Payloads[1]) 'the exact retry payload carries the original expected receiver instance'
+    Assert ($fake.Ack.outcome -eq 'instance-mismatch') 'the restarted receiver returns a distinct instance-mismatch refusal'
     $fake.Mode = 'retry-prep-fails'; $fake.Ack = $null; $fake.Instance = 'host-run-1'
     $fake.PressRids.Clear(); $fake.Delivered.Clear(); $fake.Payloads.Clear()
     $r = Send 'retry preparation can fail' 'r-prep-fails'

@@ -236,7 +236,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
 
     // The reply card's Send: a retained publish to the session's reply-payload topic.
     public HaTrigger SendFromCard(string node, string text, string? decisionId = null, string? driver = null, string? at = null,
-        JsonArray? images = null, JsonArray? files = null, string? rid = null, string? sender = null)
+        JsonArray? images = null, JsonArray? files = null, string? rid = null, string? sender = null, string? expectedInstance = null)
     {
         var payload = new JsonObject { ["at"] = at ?? $"{Now:O}", ["text"] = text };
         if (images is not null) { payload["images"] = images; }
@@ -245,6 +245,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         if (driver is not null) { payload["driver"] = driver; }
         if (rid is not null) { payload["rid"] = rid; }
         if (sender is not null) { payload["sender"] = sender; }
+        if (expectedInstance is not null) { payload["expected_instance"] = expectedInstance; }
         Now = Now.AddSeconds(1);
         PublishAsync(HaContract.Topics(node).ReplyPayload, HaContract.Serialize(payload), true).GetAwaiter().GetResult();
         var entityId = SessionEntities.ReplyPayload(node);

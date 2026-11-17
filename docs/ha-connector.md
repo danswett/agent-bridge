@@ -553,7 +553,8 @@ the same service calls.
 **Request id and acknowledgement.** A sender may add `rid` (1 to 64 letters, digits, `-`, `_`, `.`;
 anything else is ignored) and `sender` (a name, at most 64 characters). The host then publishes
 `reply_ack` `{rid, outcome, at, sender?, duplicate?}` in the session's activity attributes in the same
-update as `Reply sent` / `Reply NOT sent`. `outcome` is `delivered`, `unconfirmed` or `refused`. The ack
+update as `Reply sent` / `Reply NOT sent`. `outcome` is `delivered`, `unconfirmed`, `refused` or
+`instance-mismatch` (the payload's expected host instance no longer matches). The ack
 stays until a newer one replaces it, so a sender that finds another rid there knows its message was
 swapped or lost and sends again. A rid seen before (the last 50 per session) is not delivered again; the
 host re-acks it with `duplicate: true`. A `refused` rid is forgotten, so the same rid may be retried.
@@ -586,15 +587,17 @@ too, so stop retrying until it is sent or cleared at the machine. Sends from one
 lock.
 
 **The reply card** publishes `{at, text, images: [{id, name, content_type}], files: [{name,
-content_type, b64}], driver?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read
+content_type, b64}], driver?, rid?, sender?, expected_instance?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read
 through the reply payload sensor: its state is `at`, the stamp that makes a publish new. A new
 stamp is one reply. One tagged with a `decision_id` is words for a question, used by stage 2 or
 not at all. Home Assistant can update the sensor's state and JSON attributes separately, even
 when both use the same MQTT topic. The host waits until the state stamp matches the attributes'
 own `at` before accepting a watch event or a REST observation (#1770). A mixed snapshot is
 logged and deferred, never delivered, acknowledged or marked handled; the complete update
-is still eligible. This also applies while a question is open, so a stale request id cannot
-take the current message's refusal acknowledgement.
+is still eligible. When `expected_instance` is present, the host accepts the reply only if it matches
+the current host instance; a mismatch is refused and acknowledged as `instance-mismatch` without
+typing. Older payloads without this optional field remain accepted. This also applies while a
+question is open, so a stale request id cannot take the current message's refusal acknowledgement.
 One whose `images` or `files` hold an entry the connector cannot read, or are not
 lists, says `Reply NOT sent` (`The attachment metadata is incomplete; no reply was sent.`) and sends nothing. The
 images are fetched from Home Assistant's image store (`GET /api/image/serve/<id>/original`,

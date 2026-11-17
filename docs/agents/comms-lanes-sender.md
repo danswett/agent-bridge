@@ -15,6 +15,8 @@ Before each submission, the target must belong to exactly one available host ses
 
 An explicit unconfirmed acknowledgement or acknowledgement timeout causes exactly one re-offer with the **same RID**, even with `-Attempts 1`. `-Attempts` still bounds pre-submit payload/stamp attempts, not acknowledgement retries. A lost submit HTTP response also waits for an acknowledgement before that bounded re-offer. Refusal, input-full, already-handled and exit 5 never cause an automatic retry.
 
-The re-offer is the exact serialized payload from the first submission, including its original `at` and RID. It is submitted only while the host session-list sensor's `instance` marker is unchanged; a missing, changed or unreadable marker skips the retry. Because the first submission may already have reached the session, any retry-preparation failure remains `unconfirmed` (exit 2), not `not-delivered`.
+The payload carries the expected host `instance`. The receiver checks it when consuming the payload and refuses a mismatch without typing; the sender reports that distinct `instance-mismatch` refusal as `unconfirmed` (exit 2). This receiver-side fence covers a restart after the sender's last liveness check. Legacy payloads without `expected_instance` remain accepted as before.
+
+The re-offer is the exact serialized payload from the first submission, including its original `at`, RID and expected host instance. It is submitted only while the host session-list sensor's `instance` marker is unchanged; a missing, changed or unreadable marker skips the retry. Because the first submission may already have reached the session, any retry-preparation failure remains `unconfirmed` (exit 2), not `not-delivered`.
 
 The existing sender mutex remains unchanged; this cut adds no per-machine lock, host send queue, receiver FIFO or relay storage. The receiver inbox is host-local; its later relay write-through seam is separate. GitHub is not a live inbox.

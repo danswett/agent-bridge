@@ -37,9 +37,12 @@ public sealed partial class ReplyTests : IDisposable
         if (Directory.Exists(folder)) { Directory.Delete(folder, true); }
     }
 
-    HaConnector Connector(params string[] agents) => new(new HaConnectorOptions
+    HaConnector Connector(params string[] agents) => ConnectorWithInstance(null, agents);
+
+    HaConnector ConnectorWithInstance(string? machineInstance, params string[] agents) => new(new HaConnectorOptions
     {
         MachineName = Machine,
+        MachineInstance = machineInstance,
         Version = "0.1.0",
         StateFile = Path.Combine(folder, "ha-connector.json"),
         AgentUserIds = agents,
@@ -196,6 +199,21 @@ public sealed partial class ReplyTests : IDisposable
         Assert.Equal("r-1", Ack.GetProperty("rid").GetString());
         Assert.Equal("SG Builder", Ack.GetProperty("sender").GetString());
         Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    public async Task A_reply_for_a_different_host_instance_is_refused_without_delivery()
+    {
+        Idle();
+        await using var c = ConnectorWithInstance("host-run-2");
+        await Pass(c);
+
+        await Do(c, ha.SendFromCard(Node, "do not type after restart", rid: "r-old-instance", expectedInstance: "host-run-1"));
+
+        Assert.Empty(replied);
+        Assert.Equal("r-old-instance", Ack.GetProperty("rid").GetString());
+        Assert.Equal("instance-mismatch", Ack.GetProperty("outcome").GetString());
+        Assert.Contains("instance", Detail.GetProperty("error").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
