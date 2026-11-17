@@ -318,6 +318,13 @@ Both carry the device block (`identifiers: [<node>]`, `name`, `manufacturer: AI 
 republishes only these two configs (`Update-CopilotMqttSessionName`). Status and activity are
 published when they change, compared without their `updated` stamp.
 
+Session status attributes additionally carry `transcript_bytes`, or an explicit
+`transcript_bytes_unavailable` reason, and `transcript_observation` with `observed_at`,
+`source: "file-size"` and the public `host_id` (#2739). These belong to the same session node;
+size comes only from event-log file metadata, never its contents or process memory. Absence means
+unknown, not zero; only a measured empty file is zero. See the [Session contract](protocol/v1-sessions.md#session)
+for reasons and observation timing. This connector does not enforce a cap or change the census.
+
 How the host's `Session` maps to what the daemon kept, where the two differ:
 
 * The daemon remembers the newest message and whether it was a thought; the host keeps the

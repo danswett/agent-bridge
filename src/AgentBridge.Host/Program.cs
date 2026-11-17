@@ -504,7 +504,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // its command lines are already known.
     var processes = new SystemProcessInspector();
     var attempts = new AttemptLedger(Path.Combine(identity.Folder, "answer-attempts.json"), log: Log);
-    await using var source = new SessionSource(options, processes, drivers: drivers, answerAttempted: attempts.IsClaimed);
+    await using var source = new SessionSource(options, processes, drivers: drivers, answerAttempted: attempts.IsClaimed, hostId: machine.Id);
     attempts.Changed += source.AnswerAttemptsChanged;
     // Five-second samples for sessions or feeds; otherwise only the minute host-log cadence.
     await using var load = HostLoadSampling.Create(settings, source, new AgentBridge.Host.Core.Load.SystemProcessTable(), relay: !localOnly);
