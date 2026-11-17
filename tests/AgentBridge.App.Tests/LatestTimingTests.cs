@@ -20,6 +20,7 @@ public sealed class LatestTimingTests
         timing.Boundary("");
 
         var record = JsonSerializer.SerializeToElement(timing.Records);
+        Assert.Equal(4, record.GetArrayLength());
         var failed = record[2];
         Assert.Equal("check", failed.GetProperty("Kind").GetString());
         Assert.Equal("latest wheel", failed.GetProperty("Section").GetString());
