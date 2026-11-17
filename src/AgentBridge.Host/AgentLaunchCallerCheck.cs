@@ -5,10 +5,15 @@ namespace AgentBridge.Host;
 
 public sealed record AgentLaunchCallerVerdict(bool Allowed, string? Reason);
 
-// Takes an already verified, freshly read credential; pipe wiring remains a separate slice.
-public sealed class AgentLaunchCallerCheck(AgentAuditLog audit, TimeProvider? auditTime = null)
+// Takes an already verified, freshly read credential.
+public sealed class AgentLaunchCallerCheck
 {
-    readonly LocalApi.RefusalAudits refusals = new(auditTime ?? TimeProvider.System);
+    readonly AgentAuditLog audit;
+    readonly LocalApi.RefusalAudits refusals;
+    public AgentLaunchCallerCheck(AgentAuditLog audit, TimeProvider? auditTime = null)
+        : this(audit, new LocalApi.RefusalAudits(auditTime ?? TimeProvider.System)) { }
+    internal AgentLaunchCallerCheck(AgentAuditLog audit, LocalApi.RefusalAudits refusals)
+    { this.audit = audit; this.refusals = refusals; }
 
     public AgentLaunchCallerVerdict Check(AgentCredential caller, string principal, string request,
         string? workspace, IReadOnlyCollection<string> approvedWorkspaces)
