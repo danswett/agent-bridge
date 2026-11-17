@@ -1,9 +1,22 @@
 #Requires -Version 7.4
+param([switch]$FromWorkflow)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$workflow = Get-Content -Raw (Join-Path $root '.github/workflows/ci.yml')
-$stages = [regex]::Matches($workflow, '(?ms)^      - name: Stage named (?<installed>installed )?self-test text, never WER dumps or archives\r?\n.*?^        run: \|\r?\n(?<body>.*?)(?=^      - )')
-if ($stages.Count -ne 2) { throw 'Both public diagnostic staging steps must be tested.' }
+$stages = if ($FromWorkflow) {
+    $workflow = Get-Content -Raw (Join-Path $root '.github/workflows/ci.yml')
+    $matches = [regex]::Matches($workflow, '(?ms)^      - name: Stage named (?<installed>installed )?self-test text, never WER dumps or archives\r?\n.*?^        run: \|\r?\n(?<body>.*?)(?=^      - )')
+    if ($matches.Count -ne 2) { throw 'Both public diagnostic staging steps must be tested.' }
+    foreach ($match in $matches) {
+        @{ Installed = $match.Groups['installed'].Success
+            Body = [scriptblock]::Create(($match.Groups['body'].Value -replace '(?m)^          ', '')) }
+    }
+} else {
+    foreach ($installed in @($false, $true)) {
+        @{ Installed = $installed; Body = {
+                & (Join-Path $root 'quality\public-diagnostics.ps1') -Source (Join-Path $env:RUNNER_TEMP 'selftest') -Out $out -Installed:$installed
+            } }
+    }
+}
 function Require([bool]$ok, [string]$message) { if (-not $ok) { throw $message } }
 $failed = 0
 $passed = 0
@@ -11,9 +24,9 @@ $previousTemp = $env:RUNNER_TEMP
 Push-Location $root
 try {
     foreach ($stage in $stages) {
-        $installed = $stage.Groups['installed'].Success
-        $stageBody = [scriptblock]::Create(($stage.Groups['body'].Value -replace '(?m)^          ', ''))
-        foreach ($case in 'scrubbing', 'oversized', 'invalid-json', 'invalid-utf8', 'dump', 'linked-directory', 'stale-output') {
+        $installed = $stage.Installed
+        $stageBody = $stage.Body
+        foreach ($case in 'scrubbing', 'at-limit', 'oversized', 'expanded-json', 'invalid-json', 'invalid-utf8', 'dump', 'linked-directory', 'stale-output') {
             $scratch = Join-Path ([IO.Path]::GetTempPath()) "public-diagnostics-$([guid]::NewGuid().ToString('N'))"
             $env:RUNNER_TEMP = $scratch
             $source = Join-Path $scratch 'selftest'
@@ -28,14 +41,20 @@ try {
                 foreach ($name in $names) {
                     $text = if ($name.EndsWith('.json')) {
                         @{ failed = $true; exitCode = -1; events = @(@{ eventId = 1000; message = $private })
+                            checks = @('2026-01-01T00:00:00Z', @('private-free-text', $true, $null))
                             'private-free-text-key' = $private; stderr = $private } | ConvertTo-Json -Depth 6
-                    } else { "EXCEPTION_CODE_STR: 0xc0000005`n$private" }
+                    } else { "EXCEPTION_CODE_STR: c0000005`n$private" }
                     [IO.File]::WriteAllText((Join-Path $logs $name), $text)
                 }
                 if ($installed) { [IO.File]::WriteAllText((Join-Path $source 'installer-input.json'), '{"version":"private-free-text"}') }
                 [IO.File]::WriteAllText((Join-Path $logs 'unselected.dmp'), 'MDMP')
                 switch ($case) {
+                    at-limit { [IO.File]::WriteAllText((Join-Path $logs 'app.log'), ([string][char]0xE9 * 32768)) }
                     oversized { [IO.File]::WriteAllText((Join-Path $logs 'app.log'), ('x' * 65537)) }
+                    expanded-json {
+                        $expanded = '{"checks":[' + ((@('""') * 7000) -join ',') + ']}'
+                        [IO.File]::WriteAllText((Join-Path $logs 'result.json'), $expanded)
+                    }
                     invalid-json { [IO.File]::WriteAllText((Join-Path $logs 'result.json'), '{broken') }
                     invalid-utf8 { [IO.File]::WriteAllBytes((Join-Path $logs 'app.log'), [byte[]]@(255)) }
                     dump { [IO.File]::WriteAllText((Join-Path $logs 'app.log'), 'MDMPfake') }
@@ -53,7 +72,7 @@ try {
                 }
                 $refused = $false
                 try { & $stageBody | Out-Null } catch { $refused = $true }
-                if ($case -ne 'scrubbing') {
+                if ($case -notin @('scrubbing', 'at-limit')) {
                     Require $refused "$case must refuse staging, so the success-gated upload cannot run."
                 } else {
                     Require (-not $refused) 'Valid diagnostic text must stage successfully.'
@@ -62,7 +81,7 @@ try {
                     foreach ($file in $files) {
                         $public = [IO.File]::ReadAllText($file.FullName)
                         Require ($file.Length -le 65536) 'Every public diagnostic must be size-capped.'
-                        Require ($public -notmatch 'private-|C:\\Users\\|Authorization:|Bearer ') 'Runner paths, arbitrary keys, user text and credentials must not be public.'
+                        Require ($public -notmatch 'private-|C:\\Users\\|Authorization:|Bearer |2026-01-01') 'Runner paths, arbitrary keys, user text, dates and credentials must not be public.'
                         if ($file.Extension -eq '.json') { $null = $public | ConvertFrom-Json -ErrorAction Stop }
                     }
                     $resultPath = Join-Path $out $(if ($installed) { 'installed/result.json' } else { 'result.json' })
