@@ -72,6 +72,28 @@ public sealed class DurableInboxV2Tests : IDisposable
         Assert.Equal(original, File.ReadAllText(Pathname));
     }
 
+    [Fact]
+    public void First_snapshot_survives_interruption_before_its_version_marker_is_written()
+    {
+        Directory.CreateDirectory(Pathname + ".v2");
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            new DurableInbox(Pathname).Enqueue("node", "r", "sender", "private", Now));
+        Assert.True(File.Exists(Pathname));
+        Assert.False(File.Exists(Pathname + ".v2"));
+        Assert.Empty(Directory.GetFiles(folder, "*.tmp"));
+
+        Directory.Delete(Pathname + ".v2");
+        var recovered = new DurableInbox(Pathname);
+        var pending = recovered.Peek("node");
+        Assert.NotNull(pending);
+        Assert.Equal("r", pending.Rid);
+        Assert.Equal("private", pending.Payload);
+        Assert.True(File.Exists(Pathname + ".v2"));
+        Assert.Equal(pending, recovered.Enqueue("node", "r", "other", "retry", Now.AddMinutes(1)));
+        File.Delete(Pathname);
+        Assert.Throws<FileNotFoundException>(() => new DurableInbox(Pathname).Peek("node"));
+    }
+
     [Theory]
     [InlineData("unconfirmed", false)]
     [InlineData("unconfirmed", true)]
