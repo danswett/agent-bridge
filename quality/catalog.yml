@@ -80,6 +80,16 @@ no_test_paths:
   - .github/ISSUE_TEMPLATE/**   # issue forms; GitHub renders them, nothing builds or tests from them
 
 suites:
+  - id: ring-drift
+    validation_plan: native
+    kind: static
+    ring: 3
+    select: always
+    platforms: [linux-x64]
+    runner: hosted
+    command: see ring-drift.yml (failed daily full-ring CI on main)
+    where: ring-drift.yml
+    status: exists
   # ---------------------------------------------------------------- .NET unit and component
   - id: protocol
     validation_plan: native

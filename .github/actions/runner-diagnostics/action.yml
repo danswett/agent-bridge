@@ -1,0 +1,10 @@
+name: Runner image and SDK
+description: Record the hosted image and the SDK actually used by this job
+runs:
+  using: composite
+  steps:
+    - shell: pwsh
+      run: |
+        Write-Output "Runner image: $env:ImageOS $env:ImageVersion"
+        dotnet --info
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }

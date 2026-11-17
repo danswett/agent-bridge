@@ -1,6 +1,9 @@
 name: CI
 
 on:
+  schedule:
+    # 04:17 PST / 05:17 PDT, away from the nightly flake hunt.
+    - cron: '17 12 * * *'
   push:
     branches: [main]
   pull_request:
@@ -55,6 +58,7 @@ env:
 
 jobs:
   plan:
+    if: github.event_name != 'schedule' || (github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge')
     # What this run tests (quality/README.md §4): the selector reads quality/catalog.yml and the
     # change, and each job below runs only when a suite it runs is selected. A ready pull request
     # is ring 1 over what merging it adds. A push to main is ring 1 too, over everything since the
@@ -162,7 +166,7 @@ jobs:
           SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          $roots = '^(\.github|quality|tools/AgentBridge\.Quality|tests/AgentBridge\.Quality\.Tests|build)/|(^|/)(Directory\.[^/]+\.(props|targets)|[^/]+\.slnx?|global\.json|nuget\.config)$'
+          $roots = '^(\.github|quality|tools/AgentBridge\.Quality|tests/AgentBridge\.Quality\.Tests|build)/|^\.config/dotnet-tools\.json$|(^|/)(Directory\.[^/]+\.(props|targets)|[^/]+\.slnx?|global\.json|nuget\.config)$'
           $odd = '^"|[\x00-\x1f\x7f\uFFFD]'
           $base = 'HEAD^1'
           $known = $env:EVENT -eq 'pull_request'
@@ -186,7 +190,7 @@ jobs:
           # PowerShell splits native output into lines; a path with a newline in it is put back.
           $changed = @((@($out) -join "`n") -split "`0" | Where-Object { $_ })
           $touched = @($changed | Where-Object { $_ -match $roots -or $_ -match $odd })
-          # A run by hand, and main without a known base, run everything.
+          # A schedule, a run by hand, and main without a known base run everything.
           $whole = if (-not $known) { $true } elseif ($env:DRAFT -eq 'true') { $false } else { $touched.Count -gt 0 }
           "whole-ring=$($whole.ToString().ToLowerInvariant())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
           "base=$base" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
@@ -265,6 +269,7 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
+      - uses: ./.github/actions/runner-diagnostics
       - name: Choose what to test
         # The whole solution when the whole ring runs (a change to the solution, a workflow or
         # quality/, or main with no passed base), as before. Otherwise a solution filter of the selected test
@@ -627,6 +632,7 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
+      - uses: ./.github/actions/runner-diagnostics
       - run: dotnet tool install -g vpk --version 1.2.161
       - name: Publish and pack
         shell: pwsh
@@ -778,6 +784,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/arm64-foreground
         if: matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'
+      - uses: ./.github/actions/runner-diagnostics
       - name: The matching tested release files from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

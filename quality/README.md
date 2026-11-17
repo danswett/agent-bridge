@@ -809,6 +809,10 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
 
 ## 5. Coverage, timing, flakes and reports
 
+- **Daily full ring** (#2567): CI runs main at 04:17 PST / 05:17 PDT, including both Arm64
+  app legs and product on Windows Arm. Shared diagnostics log the image and SDK; failures
+  comment once per run on standing issue #2567 (`ring-drift`, `priority:P1`); success is silent.
+
 - **Coverage** (collected since #363, no gates yet): the `dotnet-coverage` tool (Cobertura,
   pinned in `.config/dotnet-tools.json`) around `dotnet test` for .NET, with no test project
   changed. Node's built-in coverage for the PWA's unit tests, later Playwright's V8 coverage,

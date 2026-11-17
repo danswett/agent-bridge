@@ -1,0 +1,30 @@
+name: Scheduled ring drift
+on:
+  # Executes only default-branch code; failed job logs are parsed as data, never executed.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+permissions: {}
+concurrency:
+  group: ring-drift
+  cancel-in-progress: false
+jobs:
+  report:
+    if: github.event.workflow_run.event == 'schedule' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion != 'success' && github.repository == 'danswett/agent-bridge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: ./quality/ring-drift.ps1 -Repository $env:REPOSITORY -RunId $env:RUN_ID
