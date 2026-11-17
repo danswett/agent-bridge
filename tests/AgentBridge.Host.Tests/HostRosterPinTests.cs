@@ -279,7 +279,7 @@ public sealed class HostRosterPinTests : IDisposable
         snapshot[field == "null-head" ? "heads" : field] = field switch
         {
             "account" => JsonValue.Create("another-account"), "generation" => JsonValue.Create(new string('f', 32)),
-            "genesis" => JsonValue.Create(Codec.Base64Url(new byte[32])), "v" => JsonValue.Create(2),
+            "genesis" => JsonValue.Create(Codec.Base64Url(new byte[32])), "v" => JsonValue.Create(3),
             "acceptHostSign" => JsonValue.Create(true), "requests" => new JsonArray(snapshot["requests"]![0]!.DeepClone(), snapshot["requests"]![0]!.DeepClone()),
             "heads" => new JsonArray(), "null-head" => new JsonArray((JsonNode?)null), _ => JsonValue.Create("secret-marker"),
         };
@@ -365,7 +365,7 @@ public sealed class HostRosterPinTests : IDisposable
         var text = snapshot.ToJsonString();
         text = defect switch
         {
-            "duplicate" => text.Replace("\"v\":1", "\"v\":1,\"v\":1"),
+            "duplicate" => text.Replace("\"v\":2", "\"v\":2,\"v\":2"),
             "oversize" => text + new string(' ', 256 * 1024 + 1),
             "surrogate" => text.Replace(snapshot["highWater"]!.GetValue<string>(), "\\ud800"),
             _ => text,
@@ -417,6 +417,119 @@ public sealed class HostRosterPinTests : IDisposable
         Assert.Null(reader.RecordCommand(next, Context));
     }
 
+    static CapConsumed Capability(int i, string expires = "2026-11-04T12:04:00Z") =>
+        new($"00000000-0000-0000-0000-{i:x12}", Codec.Base64Url(System.Security.Cryptography.SHA256.HashData(BitConverter.GetBytes(i))),
+            Codec.Base64Url(new byte[32]), "2026-11-04T11:59:00Z", expires);
+    static CapEvidence Evidence => new(Codec.Base64Url(Encoding.UTF8.GetBytes("[ \n ]")),
+        Codec.Base64Url(new byte[32]), Codec.Base64Url(new byte[32]), "2026-11-04T12:04:00Z");
+
+    [Fact]
+    public void V1_migrates_on_commit_and_v2_evidence_survives_without_enabling_support()
+    {
+        var reader = PinnedReader();
+        Assert.Null(reader.RecordCommand(Command(), Context));
+        var old = Snapshot();
+        old["v"] = 1;
+        foreach (var name in new[] { "capHighestIssuedAt", "consumed", "evidence" }) { old.Remove(name); }
+        ReplaceSnapshot(old);
+        reader = PinnedReader();
+        Assert.Null(reader.ReadEvidence());
+        Assert.Equal(1, Snapshot()["v"]!.GetValue<int>());
+        Assert.Null(reader.ConsumeCapability(Capability(1), Context.Now));
+        Assert.Null(reader.StoreEvidence(Evidence));
+        Assert.Equal(2, Snapshot()["v"]!.GetValue<int>());
+        reader = PinnedReader();
+        Assert.Equal(Evidence, reader.ReadEvidence());
+        Assert.Equal("replay", reader.RecordCommand(Command(), Context));
+        Assert.Null(reader.RecordCommand(Command(request: "00000000-0000-0000-0000-000000000099"), Context));
+        Assert.Equal(Evidence, PinnedReader().ReadEvidence());
+        Assert.Single(Snapshot()["consumed"]!.AsArray());
+        Assert.Equal("unsupported-verifier", reader.CheckAcceptHostSign(Command(), Context));
+        Assert.False(reader.Verified!.AcceptHostSign);
+    }
+
+    [Fact]
+    public void Consumed_bound_replay_and_strict_pruning_survive_restart()
+    {
+        var reader = PinnedReader();
+        for (var i = 0; i < 32; i++) { Assert.Null(reader.ConsumeCapability(Capability(i), Context.Now)); }
+        var before = File.ReadAllBytes(TransitionPath);
+        reader = PinnedReader();
+        Assert.Equal("replay", reader.ConsumeCapability(Capability(0), Context.Now));
+        Assert.Equal("replay", reader.ConsumeCapability(Capability(33) with { Nonce = Capability(0).Nonce }, Context.Now));
+        Assert.Equal("consumed-full", reader.ConsumeCapability(Capability(33), Context.Now));
+        var boundary = Instant.Parse("2026-11-04T12:06:00Z");
+        Assert.Equal("consumed-full", reader.ConsumeCapability(Capability(33), boundary));
+        Assert.Equal(before, File.ReadAllBytes(TransitionPath));
+        Assert.Null(reader.ConsumeCapability(Capability(33, "2026-11-04T12:10:00Z") with { IssuedAt = "2026-11-04T12:05:00Z" },
+            Instant.Parse("2026-11-04T12:06:00.000000001Z")));
+        Assert.Single(Snapshot()["consumed"]!.AsArray());
+    }
+
+    [Fact]
+    public void Capability_marks_ratchet_and_clock_reset_raises_floor_without_clearing_replay()
+    {
+        var reader = PinnedReader();
+        Assert.Null(reader.ConsumeCapability(Capability(0), Context.Now));
+        Assert.Null(reader.ConsumeCapability(Capability(1) with { IssuedAt = "2026-11-04T11:58:00Z" },
+            Instant.Parse("2026-11-04T11:58:30Z")));
+        Assert.Equal("2026-11-04T12:00:00.123456789Z", Snapshot()["highWater"]!.GetValue<string>());
+        Assert.Equal(Instant.Parse("2026-11-04T11:59:00Z"), Instant.Parse(Snapshot()["floor"]!.GetValue<string>()));
+        Assert.Equal("2026-11-04T11:59:00Z", Snapshot()["capHighestIssuedAt"]!.GetValue<string>());
+        Assert.Equal(2, Snapshot()["consumed"]!.AsArray().Count);
+        var changed = Snapshot(); changed["capHighestIssuedAt"] = null; ReplaceSnapshot(changed);
+        Assert.Equal("pin-unreadable", reader.ConsumeCapability(Capability(2), Context.Now));
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("duplicate")]
+    [InlineData("accept")]
+    [InlineData("identity")]
+    [InlineData("future")]
+    [InlineData("missing")]
+    [InlineData("downgrade")]
+    [InlineData("count")]
+    [InlineData("nonce")]
+    public void Capability_snapshot_damage_is_never_repaired(string defect)
+    {
+        var reader = PinnedReader();
+        Assert.Null(reader.ConsumeCapability(Capability(0), Context.Now));
+        var snapshot = Snapshot();
+        if (defect == "unknown") { snapshot["consumed"]![0]!["extra"] = true; }
+        if (defect == "accept") { snapshot["acceptHostSign"] = true; }
+        if (defect == "identity") { snapshot["generation"] = new string('f', 32); }
+        if (defect == "future") { snapshot["v"] = 3; }
+        if (defect == "downgrade") { snapshot["v"] = 1; }
+        if (defect == "count") { snapshot["consumed"] = JsonSerializer.SerializeToNode(Enumerable.Range(0, 33).Select(i => Capability(i)), CamelCase); }
+        if (defect == "nonce") { snapshot["consumed"]!.AsArray().Add(JsonSerializer.SerializeToNode(Capability(1) with { Nonce = Capability(0).Nonce }, CamelCase)); }
+        if (defect == "missing") { snapshot.Remove("evidence"); }
+        var text = snapshot.ToJsonString();
+        if (defect == "duplicate") { text = text.Replace("\"v\":2", "\"v\":2,\"v\":2"); }
+        File.Delete(TransitionPath); Write(text, TransitionPath);
+        Assert.Equal(defect == "identity" ? "pin-mismatch" : "pin-unreadable",
+            PinnedReader().ConsumeCapability(Capability(1), Context.Now));
+        Assert.Equal(text, File.ReadAllText(TransitionPath));
+    }
+
+    [Fact]
+    public void Evidence_size_and_atomic_write_failures_preserve_committed_state()
+    {
+        var reader = PinnedReader();
+        Assert.Equal("transition-store", reader.StoreEvidence(Evidence));
+        Assert.Null(reader.ConsumeCapability(Capability(0), Context.Now));
+        var before = File.ReadAllBytes(TransitionPath);
+        Assert.Equal("transition-store", reader.StoreEvidence(Evidence with { Collection = Codec.Base64Url(new byte[132097]) }));
+        reader.BeforeTransitionCommit = () => throw new IOException("secret-marker");
+        Assert.Equal("transition-store", reader.ConsumeCapability(Capability(1), Context.Now));
+        Assert.Equal("transition-store", reader.StoreEvidence(Evidence));
+        Assert.Equal(before, File.ReadAllBytes(TransitionPath));
+        Assert.Empty(Directory.GetFiles(folder, "roster-transition.json.*.tmp"));
+        reader.BeforeTransitionCommit = null;
+        Assert.Null(reader.ConsumeCapability(Capability(1), Context.Now));
+    }
+
+    static readonly JsonSerializerOptions CamelCase = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     public void Dispose()
     {
         File.Delete(TransitionPath);
