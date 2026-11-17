@@ -45,11 +45,8 @@ namespace AgentBridge.App.Tests
         {
             var calls = new List<string>();
             Func<Task> Runner(string name) => () => { calls.Add(name); return Task.CompletedTask; };
-            // Reflection lets the tests-first head compile before the new dispatch seam exists.
-            var dispatch = typeof(AppOptions).GetMethod("RunSelfTestAsync");
-            Assert.NotNull(dispatch);
-            await (Task)dispatch.Invoke(options,
-                [Runner("full"), Runner("history"), Runner("wheel"), Runner("live-list")])!;
+            await options.RunSelfTestAsync(
+                Runner("full"), Runner("history"), Runner("wheel"), Runner("live-list"));
             return Assert.Single(calls);
         }
     }

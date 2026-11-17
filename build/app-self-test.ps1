@@ -17,7 +17,8 @@ param(
     # 30 s, and again in high contrast on CI, about 25 s) added about 55 s, and the progress gallery
     # (ui.md §6.5) adds four passes of about 25 s each; the live resize pass runs last and is the one
     # a tight limit cuts off (reported as unfinished).
-    [int]$TimeoutSeconds = 360
+    [int]$TimeoutSeconds = 360,
+    [ValidateSet('history', 'wheel')][string]$Group
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -64,7 +65,9 @@ try {
 $started = Get-Date
 $stderrPath = Join-Path $Logs 'app.stderr.log'
 $evidencePath = Join-Path $Logs 'app-exit-cause.json'
-$p = Start-Process $Exe -ArgumentList '--self-test', "`"$Result`"" -RedirectStandardError $stderrPath -PassThru
+$arguments = @('--self-test', "`"$Result`"")
+if ($Group) { $arguments += '--self-test-group', $Group }
+$p = Start-Process $Exe -ArgumentList $arguments -RedirectStandardError $stderrPath -PassThru
 # Held from the start: a Process from Start-Process that is first asked for its exit code after
 # it has gone can report it wrongly.
 $null = $p.Handle

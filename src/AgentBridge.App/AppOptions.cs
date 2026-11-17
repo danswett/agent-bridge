@@ -20,6 +20,7 @@ sealed record AppOptions
     public string? SelfTest { get; init; }
     public bool HistoryScrollBudget { get; init; }
     public bool LiveListReplay { get; init; }
+    public string? SelfTestGroup { get; init; }
 
     public static AppOptions Parse(string[] args)
     {
@@ -35,10 +36,31 @@ sealed record AppOptions
                 case "--self-test" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true }; break;
                 case "--self-test-history-scroll" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, HistoryScrollBudget = true }; break;
                 case "--self-test-live-list" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, LiveListReplay = true }; break;
+                case "--self-test-group":
+                    if (o.SelfTestGroup is not null || i + 1 == args.Length ||
+                        args[i + 1].ToLowerInvariant() is not ("history" or "wheel"))
+                    {
+                        throw new ArgumentException("--self-test-group requires exactly one of: history, wheel.");
+                    }
+                    o = o with { SelfTestGroup = args[++i].ToLowerInvariant() };
+                    break;
             }
+        }
+        if (o.SelfTestGroup is not null && (o.SelfTest is null || o.HistoryScrollBudget || o.LiveListReplay))
+        {
+            throw new ArgumentException("--self-test-group requires --self-test <result> and cannot be combined with a legacy self-test selector.");
         }
         return o;
     }
+
+    public Task RunSelfTestAsync(Func<Task> full, Func<Task> history, Func<Task> wheel, Func<Task> liveList) =>
+        LiveListReplay ? liveList() : HistoryScrollBudget ? wheel() : SelfTestGroup switch
+        {
+            null => full(),
+            "history" => history(),
+            "wheel" => wheel(),
+            _ => throw new ArgumentException("Unknown self-test group."),
+        };
 
     // The default profile is the installed app's; another (a developer's) keeps its own
     // toasts, Run entry and single-instance lock out of the way of it.

@@ -12,7 +12,10 @@ namespace AgentBridge.App;
 
 static partial class SelfTest
 {
-    public static async Task RunHistoryScrollBudgetAsync(MainWindow window, MainViewModel main, DemoHost demo, string outFile, Action<int> exit)
+    public static Task RunHistoryScrollBudgetAsync(MainWindow window, MainViewModel main, DemoHost demo, string outFile, Action<int> exit) =>
+        RunHistoryAsync(window, main, demo, outFile, exit, budget: true);
+
+    public static async Task RunHistoryAsync(MainWindow window, MainViewModel main, DemoHost demo, string outFile, Action<int> exit, bool budget = false)
     {
         var result = new Dictionary<string, object?>();
         var passed = new List<string>();
@@ -22,13 +25,30 @@ static partial class SelfTest
             (ok ? passed : failed).Add(what);
             if (!ok) { AppLog.Write($"self-test: failed: {what}; {ForegroundOwner()}"); }
         }
+        DisplayPass? display = null;
         try
         {
+            if (!budget)
+            {
+                display = await DisplayPass.BeginAsync(1600, 1000);
+                result["display"] = display.How;
+            }
             if (!await Until(() => window.RootElement.XamlRoot is not null && main.AllCards.Any(c => c.Id == "demo-approval"), TimeSpan.FromSeconds(10))) { throw new InvalidOperationException("The demo conversation window did not load."); }
-            CheckGrowthObserverDiagnostics(Check);
-            await CheckHistoryScrollBudget(window, main, demo, Check, result, observerDiagnostics: true);
+            if (budget)
+            {
+                // The wheel and foreground checks depend on this complete fixture sequence.
+                CheckGrowthObserverDiagnostics(Check);
+                await CheckHistoryScrollBudget(window, main, demo, Check, result, observerDiagnostics: true);
+            }
+            else
+            {
+                await CheckHistoryScroll(window, main, Check);
+                await CheckHistoryYourMessages(window, main, Check);
+                await CheckMessageTimes(window, main, Check);
+            }
         }
-        catch (Exception e) { Check(false, $"history budget crashed: {e}"); }
+        catch (Exception e) { Check(false, $"{(budget ? "history budget" : "history")} crashed: {e}"); }
+        if (display is not null) { await display.EndAsync(); }
         await Write(outFile, result, passed, failed, null);
         exit(failed.Count == 0 ? 0 : 1);
     }

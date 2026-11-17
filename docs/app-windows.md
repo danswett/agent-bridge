@@ -1364,6 +1364,16 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   200 ms, reader content within 1.5 DIP, and blocks unselected. Client drawing only, not host reads
   or physical input. Run published `AgentBridge.exe --self-test-history-scroll <result.json>`;
   normal `--self-test` includes it on both Windows CI architectures.
+  For a focused pass, use `--self-test <result.json> --self-test-group history` or
+  `wheel` (also `build\app-self-test.ps1 -Exe <exe> -Result <result.json> -Group history`,
+  substituting `wheel` as needed). The history pass reuses the full pass's CI display setup.
+  `history` reuses `CheckHistoryScroll`, `CheckHistoryYourMessages`, then `CheckMessageTimes`.
+  `wheel` runs the existing complete history-budget runner, including its growth-observer
+  diagnostics, 500-turn setup, Page Up, F24 canary, foreground, focus and native-wheel checks;
+  it is not wheel-only because those checks share ordered fixture prerequisites.
+  Unknown, missing, repeated or conflicting group selectors fail explicitly. A group requires
+  `--self-test`; the legacy selectors remain supported separately. Omitting the group keeps
+  the full self-test and its case order unchanged. Live passes belong only on disposable VMs.
   The sign-in row captures run `CheckSignInRowTypography` in Light, Dark and CI high contrast:
   the status run alone uses proportional figures for words-only text, fixing the bundled face's
   wide tabular hyphen (#903); any digit keeps the whole run tabular. The check measures the drawn
