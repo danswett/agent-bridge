@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using AgentBridge.App.Core;
+using AgentBridge.App.Core.Feedback;
 using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -723,8 +724,7 @@ static partial class SelfTest
         else { check(false, "finds Needs you and a second session to scroll the list to"); }
     }
 
-    // Send feedback (#738), from Settings and from the tray's menu: both open the one dialog that
-    // says feedback isn't available yet, and nothing offers to send. The tray's menu is Win32's
+    // Send feedback (#738), from Settings and from the tray's menu. The tray's menu is Win32's
     // and can't be clicked here, so its choice goes through the same dispatch (TrayIcon.Run) and
     // the same action the app gives the tray, from a window hidden in the notification area.
     static async Task CheckFeedbackEntry(MainWindow window, Action<bool, string> check)
@@ -732,14 +732,21 @@ static partial class SelfTest
         ContentDialog? Dialog() => VisualTreeHelper.GetOpenPopupsForXamlRoot(window.RootElement.XamlRoot)
             .Select(p => p.Child).OfType<UIElement>()
             .SelectMany(c => c is ContentDialog d ? (IEnumerable<ContentDialog>)new[] { d } : Find<ContentDialog>(c))
-            .FirstOrDefault(d => AutomationProperties.GetAutomationId(d) == "FeedbackUnavailable");
+            .FirstOrDefault(d => AutomationProperties.GetAutomationId(d) is "FeedbackDialog" or "FeedbackUnavailable");
         async Task Unavailable(string from)
         {
             var opened = await Until(() => Dialog() is not null, TimeSpan.FromSeconds(5));
             var dialog = Dialog();
-            check(opened && dialog is { Title: "Send feedback", Content: "Feedback isn't available in the Windows app yet.", CloseButtonText: "Close", PrimaryButtonText: "", SecondaryButtonText: "" },
+            check(opened && dialog is { Title: "Send feedback", CloseButtonText: "Close", PrimaryButtonText: "", SecondaryButtonText: "" }
+                && AutomationProperties.GetAutomationId(dialog) == "FeedbackDialog"
+                && ById<TextBlock>(dialog, "FeedbackStatus")?.Text == FeedbackSenderFactory.UnavailableText
+                && ById<Button>(dialog, "FeedbackSend") is not { Visibility: Visibility.Visible },
                 $"says feedback is unavailable without offering a send, from {from}");
-            dialog?.Hide();
+            if (dialog is not null && ById<Button>(dialog, "FeedbackClose") is { } close)
+            {
+                ((IInvokeProvider)new ButtonAutomationPeer(close).GetPattern(PatternInterface.Invoke)).Invoke();
+            }
+            else { dialog?.Hide(); check(false, $"finds Close in the feedback dialog from {from}"); }
             check(await Until(() => Dialog() is null && !window.FeedbackOpen, TimeSpan.FromSeconds(5)), $"closes the feedback dialog opened from {from}");
         }
 
