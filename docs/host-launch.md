@@ -42,8 +42,15 @@ attempts per agent; they may be lowered, never made unlimited. The gate reads ch
 on its next check and records `rate-limited` refusals with the retry delay and caps in
 force. Watch refusal counts and retry delays in the launch audit before and after a
 change. Refusal audit records share the pipe's per-principal windowing: 60 per hour,
-then counted summaries at most once a minute. Live limits, idle ending, restart durability
-and temporary raises are C2 work, not guarantees of this staged readback.
+then counted summaries at most once a minute.
+
+Fleet script launches have separate per-machine limits in the same `agents.limits`
+section: `fleetPerHour` defaults to 8 and `liveFleetWorkers` to 6. The owner may lower
+either value; values above their defaults or an unlimited setting are refused. The
+ninth fleet launch in a rolling hour and the seventh live fleet worker are refused.
+These limits do not apply to a coordinator's ordinary launch. General agent-launch
+live limits, idle ending, restart durability and temporary raises remain C2 work, not
+guarantees of this staged readback.
 
 ## What agent-ha-bridge does
 

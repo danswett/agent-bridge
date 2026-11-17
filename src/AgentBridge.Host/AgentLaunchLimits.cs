@@ -10,6 +10,8 @@ public sealed record AgentLaunchLimits
     public int LaunchAttemptsPerOriginPerHour { get; init; } = 20;
     public int LiveAgentLaunched { get; init; } = 6;
     public int AgentLaunchedIdleHours { get; init; } = 2;
+    public int FleetPerHour { get; init; } = 8;
+    public int LiveFleetWorkers { get; init; } = 6;
 
     internal static AgentLaunchLimits Read(JsonElement? limits, bool required, List<string> problems)
     {
@@ -21,6 +23,8 @@ public sealed record AgentLaunchLimits
             LaunchAttemptsPerOriginPerHour = ReadLimit("launchAttemptsPerOriginPerHour", d.LaunchAttemptsPerOriginPerHour, optional: true),
             LiveAgentLaunched = ReadLimit("liveAgentLaunched", d.LiveAgentLaunched),
             AgentLaunchedIdleHours = ReadLimit("agentLaunchedIdleHours", d.AgentLaunchedIdleHours),
+            FleetPerHour = ReadLimit("fleetPerHour", d.FleetPerHour, optional: true),
+            LiveFleetWorkers = ReadLimit("liveFleetWorkers", d.LiveFleetWorkers, optional: true),
         };
 
         int ReadLimit(string key, int ceiling, bool optional = false)

@@ -90,8 +90,41 @@ public sealed class SessionService
         string? Check() => refusal() ?? (launcher.FleetConfig is { } actual ? dispatchCheck(actual) : "fleet dispatch settings are unavailable");
         if (Check() is { } problem) { return new(LaunchOutcome.Refused, problem); }
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
-            fleet: true, refusal: Check);
+            fleet: true, refusal: () => Check() ?? CheckFleetCapacity(audit));
         return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
+    }
+
+    string? CheckFleetCapacity(AgentAuditLog audit)
+    {
+        var (settings, problem) = HostSettings.Load(audit.Profile);
+        if (problem is not null || settings.SectionProblems.Any()) { return "fleet launch settings cannot be read safely"; }
+        var limits = settings.Agents.Limits.Launch;
+        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+        if (!complete || !audit.Verify(launch: true).Intact) { return "fleet launch history cannot be checked safely"; }
+        var since = Time.GetUtcNow() - TimeSpan.FromHours(1);
+        if (rows.Count(row => row.Grant == "fleet" && row.Action == "session.launch" && row.Outcome == "started" && row.At >= since)
+            >= limits.FleetPerHour)
+        { return $"the hourly fleet launch cap ({limits.FleetPerHour}) has been reached"; }
+        if (source.Held is not null) { return "live fleet worker count cannot be checked while session discovery is incomplete"; }
+
+        var completed = rows.Where(row => row.Action == "session.launch" && row.Gate is { Phase: "terminal" })
+            .Select(row => row.Gate!.Operation).ToHashSet();
+        var live = rows.Count(row => row.Grant == "fleet" && row.Action == "session.launch"
+            && row.Gate is { Phase: "intent" } gate && row.Outcome == "reserved" && !completed.Contains(gate.Operation));
+        try
+        {
+            foreach (var session in source.Snapshot())
+            {
+                if (launcher!.IsFleetWorker(session.Id, source.ProcessOf(session.Id))) { live++; }
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            return "live fleet worker count cannot be checked safely";
+        }
+        return live >= limits.LiveFleetWorkers
+            ? $"the live fleet worker cap ({limits.LiveFleetWorkers}) has been reached"
+            : null;
     }
 
     // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or
