@@ -479,6 +479,9 @@ The byte-budget/truncation contract above preserves all caps; no silent rollout 
 
 ## Who may read, and how a client authenticates
 
+The proposed [agent-readable role roster](role-roster.md) (#2378) is a read-only
+projection of this registry, not a second identity store or a routing rollout.
+
 | Reader | How it reads | Needs |
 |---|---|---|
 | Person device (`app`, `pwa`, `phone`) | `registry-get`, `registry-subscribe` and `registry-changed` over its relay socket | Being admitted to the account (today's pairing) |
