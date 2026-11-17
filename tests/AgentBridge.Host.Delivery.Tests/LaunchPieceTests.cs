@@ -360,13 +360,17 @@ public sealed class LaunchPieceTests : IDisposable
         var starter = new WindowsAgentStarter(hidden: true);
         var cwd = Directory.CreateDirectory(Path.Combine(root, "work dir")).FullName;
         var started = starter.Start(new StartSpec(Echo, ["--args", Out("start.json"), "-i", "a prompt"], cwd));
-        Assert.True(started.ProcessId > 0);
-        Assert.True(Math.Abs((started.StartedAt - DateTimeOffset.UtcNow).TotalSeconds) < 60);
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        Assert.Equal(["-i", "a prompt"], ReadOnceWritten("start.json", deadline));
-        while (starter.Running(started) && DateTime.UtcNow < deadline) { Thread.Sleep(50); }
-        Assert.False(starter.Running(started));
-        Assert.False(starter.Running(started with { StartedAt = started.StartedAt.AddMinutes(-5) }));
+        try
+        {
+            Assert.True(started.ProcessId > 0);
+            Assert.True(Math.Abs((started.StartedAt - DateTimeOffset.UtcNow).TotalSeconds) < 60);
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            Assert.Equal(["-i", "a prompt"], ReadOnceWritten("start.json", deadline));
+            while (starter.Running(started) && DateTime.UtcNow < deadline) { Thread.Sleep(50); }
+            Assert.False(starter.Running(started));
+            Assert.False(starter.Running(started with { StartedAt = started.StartedAt.AddMinutes(-5) }));
+        }
+        finally { starter.Release(started); }
     }
 
     [WindowsFact]
@@ -398,17 +402,21 @@ public sealed class LaunchPieceTests : IDisposable
         Environment.SetEnvironmentVariable("AGENT_BRIDGE_TEST_INHERITED", "kept");
         var shim = Path.Combine(root, "env.cmd");
         File.WriteAllText(shim, $"@echo %{Launchers.SessionVariable}% %AGENT_BRIDGE_TEST_INHERITED%> \"{Out("env.txt")}\"\r\n");
-        var started = new WindowsAgentStarter(hidden: true).Start(new StartSpec(shim, [], root, new Dictionary<string, string?> { [Launchers.SessionVariable] = "5b0e1f2a" }));
-
-        Assert.True(started.ProcessId > 0);
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        string? said = null;
-        while (said is null && DateTime.UtcNow < deadline)
+        var starter = new WindowsAgentStarter(hidden: true);
+        var started = starter.Start(new StartSpec(shim, [], root, new Dictionary<string, string?> { [Launchers.SessionVariable] = "5b0e1f2a" }));
+        try
         {
-            try { said = File.ReadAllText(Out("env.txt")).Trim(); }
-            catch (IOException) { Thread.Sleep(50); }
+            Assert.True(started.ProcessId > 0);
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            string? said = null;
+            while (said is null && DateTime.UtcNow < deadline)
+            {
+                try { said = File.ReadAllText(Out("env.txt")).Trim(); }
+                catch (IOException) { Thread.Sleep(50); }
+            }
+            Assert.Equal("5b0e1f2a kept", said);
         }
-        Assert.Equal("5b0e1f2a kept", said);
+        finally { starter.Release(started); }
     }
 
     [WindowsFact]
@@ -455,7 +463,51 @@ public sealed class LaunchPieceTests : IDisposable
         finally
         {
             if (agent != 0) { try { Process.GetProcessById(agent).Kill(); } catch (ArgumentException) { } }
+            starter.Release(started);
         }
+    }
+
+    [WindowsFact]
+    public void A_recycled_launcher_pid_cannot_claim_a_child_created_after_its_exit()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var startedAt = new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var started = new Started(100, startedAt);
+        var parents = new Dictionary<int, int> { [200] = 100 };
+        var created = new Dictionary<int, DateTimeOffset> { [200] = startedAt.AddSeconds(20) };
+        DateTimeOffset? CreatedAt(int pid) => created.TryGetValue(pid, out var at) ? at : null;
+
+        Assert.False(WindowsAgentStarter.OwnsProcessTree(started, 200, parents, CreatedAt, startedAt.AddSeconds(10), launcherRunning: false));
+    }
+
+    [WindowsFact]
+    public void An_older_orphan_cannot_claim_a_new_launch_through_the_dead_parent_pid()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var launchedAt = new DateTimeOffset(2025, 1, 1, 0, 0, 10, TimeSpan.Zero);
+        var started = new Started(100, launchedAt);
+        var parents = new Dictionary<int, int> { [300] = 200, [200] = 100 };
+        var created = new Dictionary<int, DateTimeOffset>
+        {
+            [300] = launchedAt.AddSeconds(5),
+            [200] = launchedAt.AddSeconds(-5),
+        };
+        DateTimeOffset? CreatedAt(int pid) => created.TryGetValue(pid, out var at) ? at : null;
+
+        Assert.False(WindowsAgentStarter.OwnsProcessTree(started, 300, parents, CreatedAt, launchedAt.AddSeconds(10), launcherRunning: false));
+    }
+
+    [WindowsFact]
+    public void A_direct_child_started_during_the_launch_is_owned_after_the_launcher_exits()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var launchedAt = new DateTimeOffset(2025, 1, 1, 0, 0, 10, TimeSpan.Zero);
+        var started = new Started(100, launchedAt);
+        var parents = new Dictionary<int, int> { [200] = 100 };
+        var created = new Dictionary<int, DateTimeOffset> { [200] = launchedAt.AddSeconds(5) };
+        DateTimeOffset? CreatedAt(int pid) => created.TryGetValue(pid, out var at) ? at : null;
+
+        Assert.True(WindowsAgentStarter.OwnsProcessTree(started, 200, parents, CreatedAt, launchedAt.AddSeconds(10), launcherRunning: false));
     }
 
     static string Echo => Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "agent-bridge-console-echo.exe" : "agent-bridge-console-echo");

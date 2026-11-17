@@ -1083,6 +1083,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     {
         Pending follow;
         LaunchedWith launched;
+        Started? startedForCleanup = null;
+        var followed = false;
         await starting.WaitAsync(ct);
         string? reservation = null, reserved = null;
         try
@@ -1298,6 +1300,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
                 return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} couldn't be started") { Launched = launched };
             }
+            startedForCleanup = started;
             if (credentialIssued) { credentials!.Bind(launchId, started.ProcessId, started.StartedAt); }
             if (claim is not null) { attachments!.Consume(claim); handed.Value = true; }
             if (sessionId.Length > 0) { Launched(sessionId, started); }
@@ -1308,11 +1311,20 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             reservation = null;
             lock (pendingGate) { pending.Add(follow); }
             resumable.Forget();
+            followed = true;
         }
         finally
         {
-            if (reservation is not null && reserved is not null) { Worktrees.Release(reserved, reservation); }
-            starting.Release();
+            try
+            {
+                if (!followed && startedForCleanup is { } untracked)
+                {
+                    lock (pendingGate) { pending.RemoveAll(p => p.Started == untracked); }
+                    starter.Release(untracked);
+                }
+                if (reservation is not null && reserved is not null) { Worktrees.Release(reserved, reservation); }
+            }
+            finally { starting.Release(); }
         }
 
         _ = Task.Run(() => FollowAsync(follow));
@@ -1480,42 +1492,46 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
         finally
         {
-            // Stopped following before its window was seen ready: replies stay held while that agent
-            // runs, until a turn runs (HeldForReply).
-            var started = p.RegisteredLate || p.Decided.Task.IsCompletedSuccessfully && p.Decided.Task.Result.Outcome == LaunchOutcome.Started;
-            var unready = !started && !p.Closed ? p.LiveId ?? (p.SessionId.Length > 0 ? p.SessionId : null) : null;
-            var holding = false;
-            // Outside pendingGate: the session's own process is read from the source.
-            var alive = unready is null ? null : AgentHeld(p, unready);
-            lock (pendingGate)
+            try
             {
-                pending.Remove(p);
-                if (unready is not null && alive is not null)
+                // Stopped following before its window was seen ready: replies stay held while that agent
+                // runs, until a turn runs (HeldForReply).
+                var started = p.RegisteredLate || p.Decided.Task.IsCompletedSuccessfully && p.Decided.Task.Result.Outcome == LaunchOutcome.Started;
+                var unready = !started && !p.Closed ? p.LiveId ?? (p.SessionId.Length > 0 ? p.SessionId : null) : null;
+                var holding = false;
+                // Outside pendingGate: the session's own process is read from the source.
+                var alive = unready is null ? null : AgentHeld(p, unready);
+                lock (pendingGate)
                 {
-                    neverReady[unready] = new Unready(alive, p.Launcher.Label, p.Launcher.RegistersBeforeReady,
-                        p.Transcript is { } tr && string.Equals(tr.Id, unready, StringComparison.OrdinalIgnoreCase) ? (tr.Path, tr.From) : null);
-                    holding = true;
+                    pending.Remove(p);
+                    if (unready is not null && alive is not null)
+                    {
+                        neverReady[unready] = new Unready(alive, p.Launcher.Label, p.Launcher.RegistersBeforeReady,
+                            p.Transcript is { } tr && string.Equals(tr.Id, unready, StringComparison.OrdinalIgnoreCase) ? (tr.Path, tr.From) : null);
+                        holding = true;
+                    }
                 }
-            }
-            if (holding) { log($"launch {Short(p.Key)}: replies to session {Short(unready!)} wait until a prompt is typed at the machine or it exits"); }
-            if (p.Reservation is { } token && p.Worktree is { } worktree)
-            {
-                // Only once it has registered: one still starting stays protected, and one that
-                // never did is left locked for a person to look at, as agent-ha-bridge leaves it.
-                // A session seen registered counts, ready or not.
-                if (p.Decided.Task.IsCompletedSuccessfully && p.Decided.Task.Result.Outcome == LaunchOutcome.Started || p.RegisteredLate || p.RegisteredAt is not null)
+                if (holding) { log($"launch {Short(p.Key)}: replies to session {Short(unready!)} wait until a prompt is typed at the machine or it exits"); }
+                if (p.Reservation is { } token && p.Worktree is { } worktree)
                 {
-                    try { Worktrees.Release(worktree, token); } catch (Exception) { }
+                    // Only once it has registered: one still starting stays protected, and one that
+                    // never did is left locked for a person to look at, as agent-ha-bridge leaves it.
+                    // A session seen registered counts, ready or not.
+                    if (p.Decided.Task.IsCompletedSuccessfully && p.Decided.Task.Result.Outcome == LaunchOutcome.Started || p.RegisteredLate || p.RegisteredAt is not null)
+                    {
+                        try { Worktrees.Release(worktree, token); } catch (Exception) { }
+                    }
                 }
+                p.Decided.TrySetResult(new LaunchResult(LaunchOutcome.Unconfirmed, $"{label} in {p.Where} was not seen to start; check its window") { Launched = p.Launched });
             }
-            p.Decided.TrySetResult(new LaunchResult(LaunchOutcome.Unconfirmed, $"{label} in {p.Where} was not seen to start; check its window") { Launched = p.Launched });
+            finally { starter.Release(p.Started); }
         }
     }
 
     // The session a launch produced, once it is live: by the id it was given, or for Codex, which
     // chooses its own, a new Codex session that started after the launch and runs in the process
     // the launch started or one under it. Only when that cannot be told (its process is not
-    // known, or the launcher has gone) is timing enough, and then only while no other Codex
+    // known or its ancestry cannot be read) is timing enough, and then only while no other Codex
     // launch is waiting for its session, which could be this one. A session bound to one launch
     // is never bound to another.
     string? Registered(Pending p)

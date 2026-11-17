@@ -46,6 +46,9 @@ public interface IAgentStarter
     // Whether a process is the one started or runs under it (an npm shim's cmd.exe starts node,
     // which may start the agent's own binary); null when the process tree cannot be read.
     bool? Owns(Started started, int processId) => null;
+
+    // Release any process identity retained while following this start.
+    void Release(Started started) { }
 }
 
 // Exactly as agent-ha-bridge starts one on Windows (Start-BridgeCopilotSession: Start-Process,
@@ -65,6 +68,10 @@ public interface IAgentStarter
 [SupportedOSPlatform("windows")]
 public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
 {
+    readonly object processGate = new();
+    readonly Dictionary<Started, nint> processHandles = [];
+    readonly Dictionary<Started, DateTimeOffset> processExitTimes = [];
+
     public string? Unavailable()
     {
         var level = TargetGuard.IntegrityLevel(Environment.ProcessId);
@@ -114,61 +121,129 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
         return block.Append('\0').ToString();
     }
 
-    static Started Finish(ProcessInformation process)
+    Started Finish(ProcessInformation process)
     {
+        var retained = false;
         try
         {
             var startedAt = GetProcessTimes(process.Process, out var created, out _, out _, out _)
                 ? DateTimeOffset.FromFileTime(created)
                 : DateTimeOffset.UtcNow;
-            return new Started(process.ProcessId, startedAt.ToUniversalTime());
+            var started = new Started(process.ProcessId, startedAt.ToUniversalTime());
+            lock (processGate) { processHandles.Add(started, process.Process); }
+            retained = true;
+            return started;
         }
         finally
         {
             CloseHandle(process.Thread);
-            CloseHandle(process.Process);
+            if (!retained) { CloseHandle(process.Process); }
         }
     }
 
     public bool Running(Started started)
     {
+        lock (processGate)
+        {
+            if (processHandles.TryGetValue(started, out var retained))
+            {
+                var running = Running(retained, started);
+                if (!running) { RecordExit(retained, started); }
+                return running;
+            }
+        }
         var process = OpenProcess(ProcessQueryLimitedInformation, false, (uint)started.ProcessId);
         if (process == 0) { return false; }
-        try
-        {
-            if (!GetExitCodeProcess(process, out var code) || code != StillActive) { return false; }
-            // A recycled id is another process: only the one started at that moment counts.
-            return !GetProcessTimes(process, out var created, out _, out _, out _)
-                || Math.Abs((DateTimeOffset.FromFileTime(created).ToUniversalTime() - started.StartedAt).TotalMilliseconds) < 1000;
-        }
+        try { return Running(process, started); }
         finally { CloseHandle(process); }
+    }
+
+    static bool Running(nint process, Started started)
+    {
+        if (!GetExitCodeProcess(process, out var code) || code != StillActive || WaitForSingleObject(process, 0) != WaitTimeout) { return false; }
+        // A recycled id is another process: only the one started at that moment counts.
+        return !GetProcessTimes(process, out var created, out _, out _, out _)
+            || Math.Abs((DateTimeOffset.FromFileTime(created).ToUniversalTime() - started.StartedAt).TotalMilliseconds) < 1000;
     }
 
     public bool? Owns(Started started, int processId)
     {
+        DateTimeOffset? exitedAt = null;
+        bool running;
+        lock (processGate)
+        {
+            if (!processHandles.TryGetValue(started, out var launched)) { return null; }
+            if (!GetProcessTimes(launched, out var created, out _, out _, out _)) { return null; }
+            if (!SameStart(DateTimeOffset.FromFileTime(created).ToUniversalTime(), started.StartedAt)) { return false; }
+            if (!GetExitCodeProcess(launched, out var code)) { return null; }
+            running = WaitForSingleObject(launched, 0) == WaitTimeout && code == StillActive;
+            if (!running)
+            {
+                exitedAt = RecordExit(launched, started);
+                if (exitedAt is null) { return null; }
+                if (exitedAt < started.StartedAt) { return false; }
+            }
+        }
         var parents = Parents();
         if (parents is null) { return null; }
+        return OwnsProcessTree(started, processId, parents, CreatedAt, exitedAt, running);
+    }
+
+    public void Release(Started started)
+    {
+        lock (processGate)
+        {
+            processExitTimes.Remove(started);
+            if (processHandles.Remove(started, out var process)) { CloseHandle(process); }
+        }
+    }
+
+    DateTimeOffset? RecordExit(nint process, Started started)
+    {
+        if (processExitTimes.TryGetValue(started, out var observed)) { return observed; }
+        if (WaitForSingleObject(process, 1000) != WaitObject0) { return null; }
+        // The retained handle keeps this process identity alive, so its PID cannot be recycled.
+        observed = DateTimeOffset.UtcNow;
+        if (GetProcessTimes(process, out _, out var exited, out _, out _) && exited != 0)
+        {
+            observed = DateTimeOffset.FromFileTime(exited).ToUniversalTime();
+        }
+        processExitTimes[started] = observed;
+        return observed;
+    }
+
+    internal static bool OwnsProcessTree(
+        Started started, int processId, IReadOnlyDictionary<int, int> parents, Func<int, DateTimeOffset?> createdAt,
+        DateTimeOffset? launcherExitedAt, bool launcherRunning)
+    {
         var current = processId;
-        var targetCreated = CreatedAt(current);
-        var created = targetCreated;
+        if (current == started.ProcessId)
+        {
+            return launcherRunning && SameStart(createdAt(current), started.StartedAt);
+        }
+        var created = createdAt(current);
         for (var depth = 0; depth < 16; depth++)
         {
-            if (current == started.ProcessId)
-            {
-                var launchCreated = CreatedAt(current);
-                if (launchCreated is { } actual)
-                { return Math.Abs((actual - started.StartedAt).TotalMilliseconds) < 1000; }
-                // An exited launcher disappears from the snapshot, but its child retains its parent id.
-                return !parents.ContainsKey(current) && targetCreated is { } target && target >= started.StartedAt;
-            }
             if (!parents.TryGetValue(current, out var parent) || parent == 0 || parent == current) { return false; }
+            if (parent == started.ProcessId)
+            {
+                if (created is not { } childCreated || childCreated < started.StartedAt) { return false; }
+                if (launcherRunning) { return SameStart(createdAt(parent), started.StartedAt); }
+                return launcherExitedAt is { } exited && childCreated <= exited;
+            }
             // An id recycled since: a parent cannot have started after its child.
-            var parentCreated = CreatedAt(parent);
+            var parentCreated = createdAt(parent);
             if (created is { } c && parentCreated is { } pc && pc > c) { return false; }
             (current, created) = (parent, parentCreated);
         }
         return false;
     }
+
+    static bool SameStart(DateTimeOffset? actual, DateTimeOffset expected) =>
+        actual is { } at && SameStart(at, expected);
+
+    static bool SameStart(DateTimeOffset actual, DateTimeOffset expected) =>
+        Math.Abs((actual - expected).TotalMilliseconds) < 1000;
 
     // Every process's parent, from one snapshot.
     static Dictionary<int, int>? Parents()
@@ -209,6 +284,8 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
     const int UoiName = 2;
     const uint ProcessQueryLimitedInformation = 0x1000;
     const uint StillActive = 259;
+    const uint WaitObject0 = 0;
+    const uint WaitTimeout = 258;
     const uint Th32csSnapProcess = 0x2;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -237,6 +314,9 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
 
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool GetExitCodeProcess(nint process, out uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern uint WaitForSingleObject(nint handle, uint milliseconds);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     struct StartupInfo

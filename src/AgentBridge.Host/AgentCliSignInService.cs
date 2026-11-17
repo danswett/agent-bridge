@@ -34,9 +34,14 @@ public sealed class AgentCliSignInService(
             limit.Token.ThrowIfCancellationRequested();
             preflight(request.Agent);
             if (starter.Unavailable() is { } unavailable) { throw new InvalidOperationException(unavailable); }
-            if (windows.TryGetValue(request.Agent, out var previous) && starter.Running(previous))
+            if (windows.TryGetValue(request.Agent, out var previous))
             {
-                return new(true, "A sign-in window is already open for this CLI. Complete or cancel there; account access is still unverified.");
+                if (starter.Running(previous))
+                {
+                    return new(true, "A sign-in window is already open for this CLI. Complete or cancel there; account access is still unverified.");
+                }
+                starter.Release(previous);
+                windows.Remove(request.Agent);
             }
             var (settings, problem) = HostSettings.Load(profile);
             if (problem is not null || settings.LaunchProblems.Count > 0)
