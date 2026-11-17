@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Cli;
+using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -97,6 +98,26 @@ public sealed class FleetLaunchGrantTests : IDisposable
     }
 
     [Fact]
+    public void Fleet_limits_default_to_8_and_6_and_cannot_be_raised_or_disabled()
+    {
+        var defaults = HostSettings.Parse("""{"agents":{"enabled":true,"limits":{}}}""", "fixture").Settings;
+        Assert.Equal((8, 6), (defaults.Agents.Limits.Launch.FleetPerHour, defaults.Agents.Limits.Launch.LiveFleetWorkers));
+
+        var lowered = HostSettings.Parse("""{"agents":{"enabled":true,"limits":{"fleetPerHour":2,"liveFleetWorkers":3}}}""", "fixture").Settings;
+        Assert.Equal((2, 3), (lowered.Agents.Limits.Launch.FleetPerHour, lowered.Agents.Limits.Launch.LiveFleetWorkers));
+
+        var raised = HostSettings.Parse("""{"agents":{"enabled":true,"limits":{"fleetPerHour":9,"liveFleetWorkers":7}}}""", "fixture").Settings;
+        Assert.Equal((8, 6), (raised.Agents.Limits.Launch.FleetPerHour, raised.Agents.Limits.Launch.LiveFleetWorkers));
+        Assert.Contains(raised.AgentsProblems, problem => problem.Contains("fleetPerHour"));
+        Assert.Contains(raised.AgentsProblems, problem => problem.Contains("liveFleetWorkers"));
+
+        var disabled = HostSettings.Parse("""{"agents":{"enabled":true,"limits":{"fleetPerHour":0,"liveFleetWorkers":0}}}""", "fixture").Settings;
+        Assert.Equal((8, 6), (disabled.Agents.Limits.Launch.FleetPerHour, disabled.Agents.Limits.Launch.LiveFleetWorkers));
+        Assert.Contains(disabled.AgentsProblems, problem => problem.Contains("fleetPerHour"));
+        Assert.Contains(disabled.AgentsProblems, problem => problem.Contains("liveFleetWorkers"));
+    }
+
+    [Fact]
     public async Task A_granted_script_still_refuses_scope_overrides_and_an_untraceable_pipe()
     {
         Config();
@@ -124,5 +145,95 @@ public sealed class FleetLaunchGrantTests : IDisposable
         public bool IsOpen => true;
         public Task Closed => Task.CompletedTask;
         public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
+    }
+}
+
+[Trait("Category", "Process")]
+public sealed class FleetLaunchCapacityTests : LaunchFlowFixture
+{
+    private protected override bool UsesRelay => false;
+
+    [Fact]
+    public async Task A_script_credential_cannot_exceed_the_fleet_cap_of_8_an_hour_nor_6_live_workers()
+    {
+        var (service, audit) = Setup();
+        for (var i = 0; i < 6; i++)
+        {
+            var launch = await FleetLaunch(service, audit);
+            Assert.True(launch.Outcome == LaunchOutcome.Started, $"{launch.Outcome}: {launch.Reason}");
+        }
+        var seventhWorker = await FleetLaunch(service, audit);
+        Assert.Equal(LaunchOutcome.Refused, seventhWorker.Outcome);
+        Assert.Contains("live fleet worker", seventhWorker.Reason);
+
+        foreach (var pid in starter.Pids.ToArray()) { starter.Exit(pid); }
+        await source.RefreshAsync();
+        for (var i = 0; i < 2; i++)
+        {
+            var launch = await FleetLaunch(service, audit);
+            Assert.True(launch.Outcome == LaunchOutcome.Started, $"{launch.Outcome}: {launch.Reason}");
+        }
+        var ninthLaunch = await FleetLaunch(service, audit);
+        Assert.Equal(LaunchOutcome.Refused, ninthLaunch.Outcome);
+        Assert.Contains("hourly fleet", ninthLaunch.Reason);
+    }
+
+    [Fact]
+    public async Task A_coordinator_can_launch_while_the_fleet_cap_is_full()
+    {
+        var (service, audit) = Setup();
+        for (var i = 0; i < 6; i++)
+        {
+            var launch = await FleetLaunch(service, audit);
+            Assert.True(launch.Outcome == LaunchOutcome.Started, $"{launch.Outcome}: {launch.Reason}");
+        }
+        foreach (var pid in starter.Pids.ToArray()) { starter.Exit(pid); }
+        await source.RefreshAsync();
+        for (var i = 0; i < 2; i++)
+        {
+            var launch = await FleetLaunch(service, audit);
+            Assert.True(launch.Outcome == LaunchOutcome.Started, $"{launch.Outcome}: {launch.Reason}");
+        }
+
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
+            credentials: new AgentCredentials(Path.Combine(f.Root, "profile"), "machine"),
+            agentWorktreeCheck: AgentLaunchWorktreeCheck.Check,
+            agentWorktreeRefusalAudit: (_, _, _) => true);
+        var coordinator = await GateLaunchAudit.LaunchAsync(launcher,
+            new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "claude",
+                Workspace = "App", Permissions = LaunchProtocol.Ask },
+            "person:local", audit, new("local", "person-client", "person:local", null));
+
+        Assert.Equal(LaunchOutcome.Started, coordinator.Outcome);
+    }
+
+    (SessionService Service, AgentAuditLog Audit) Setup()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        var profile = Path.Combine(f.Root, "profile");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(Path.Combine(profile, HostSettings.FileName),
+            JsonSerializer.Serialize(new { agents = new { enabled = true, fleet = new { workspaces = new[] { "App" } },
+                limits = new { fleetPerHour = 8, liveFleetWorkers = 6 } } }));
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
+            credentials: new AgentCredentials(profile, "machine"),
+            agentWorktreeCheck: AgentLaunchWorktreeCheck.Check,
+            agentWorktreeRefusalAudit: (_, _, _) => true);
+        var service = new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"), launcher: launcher);
+        return (service, new AgentAuditLog(profile, clock));
+    }
+
+    async Task<LaunchResult> FleetLaunch(SessionService service, AgentAuditLog audit)
+    {
+        var result = await service.LaunchFleetAsync(
+            new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "claude",
+                Workspace = "App", Permissions = LaunchProtocol.AllowAll },
+            "script:machine/dispatcher", audit, () => null, _ => null);
+        await source.RefreshAsync();
+        return result;
     }
 }
