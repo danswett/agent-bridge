@@ -23,8 +23,8 @@ public sealed record GateDecision(bool Allowed, string? Code, string? Reason)
 }
 
 // Decides whether a session may be typed into by a verified lite message. The host composes
-// every registered gate as OR (any Allowed wins), so a gate only ever adds targets: L5's default
-// allows forced-ask sessions launched here, and L5b adds named allow-all sessions.
+// every registered gate as OR (any Allowed wins): forced-ask sessions launched here or
+// allow-all sessions with the machine switch enabled and an exact session-id grant.
 public interface IReplyTargetGate
 {
     Task<GateDecision> CheckAsync(VerifiedEnvelope env, string targetSession);
@@ -44,8 +44,8 @@ public sealed class LiteLaunchLog : ILiteLaunches
     public string? PermissionsOf(string session) => modes.GetValueOrDefault(session);
 }
 
-// The one registration point for the delivery routine and its gates. L5b adds its allowlist gate to
-// `gates` here; the routine never names a gate itself.
+// Registers the delivery routine's forced-ask and allowlisted allow-all gates;
+// the routine never names a gate itself.
 public static class LiteComposition
 {
     public static LiteDeliver Create(ISessionSource source, ISessionReplier replier, IConsoleInjector injector, Func<AgentMessagingSettings> currentSettings, LaunchService launcher, Action<string> log)
