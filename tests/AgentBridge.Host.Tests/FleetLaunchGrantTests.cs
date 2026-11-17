@@ -284,7 +284,7 @@ public sealed class FleetLaunchGrantTests : IDisposable
         public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public IReadOnlyList<Started> LaunchedProcesses() => Enumerable.Range(1, live).Select(i => new Started(i, Now)).ToArray();
-        public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare, CancellationToken cancellationToken = default)
+        public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare, Action<string>? terminal = null, CancellationToken cancellationToken = default)
         {
             var registered = prepare(Guid.NewGuid());
             if (registered is null) { return Task.FromResult(new LaunchResult(LaunchOutcome.Refused)); }

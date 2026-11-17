@@ -57,6 +57,8 @@ Fleet script launches have separate `agents.limits`: `fleetPerHour` defaults to 
 disable it. Fleet admissions count against the hourly cap, including failed starts.
 Unresolved admissions conservatively retain a live slot; ordinary coordinator launches
 do not use these fleet limits.
+Proven pre-start refusals and failures release the live slot once recorded; a registered
+worker that closes before becoming ready also releases it. Ambiguous starts stay reserved.
 
 ## Dispatch facts seam (#2788, not wired)
 
