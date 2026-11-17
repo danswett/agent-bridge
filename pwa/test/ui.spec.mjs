@@ -436,7 +436,7 @@ test('a gap in seq subscribes again, and the new snapshot replaces the list', as
   expect(await calls(page, 'sessions.list')).toBe(0);
 });
 
-test('an upsert leaves every row where it is, and a remove takes the session to Ended', async ({ page }) => {
+test('an upsert leaves every row where it is, and a remove leaves no Ended row', async ({ page }) => {
   await openDemo(page);
   await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later() });
   await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
@@ -445,7 +445,7 @@ test('an upsert leaves every row where it is, and a remove takes the session to 
   await expect(card(page, CLAUDE)).toHaveCount(0);
   expect(await order(page)).toEqual([COPILOT, CODEX, DELEGATING]);
   await expect(page.locator('#session-count')).toHaveText('3 live on Demo machine');
-  await expect(page.locator('.ended-group > summary')).toHaveText('Ended \u00b7 1');
+  await expect(page.locator('.ended-group')).toHaveCount(0);
 });
 
 test('in Most recent, an upsert moves a session to the top', async ({ page }) => {

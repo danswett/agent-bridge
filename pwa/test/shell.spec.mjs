@@ -258,15 +258,15 @@ test('Skip to content skips to the page it is on, and leaves the address alone',
   expect(await page.evaluate(() => location.hash)).toBe('#/machines');
 });
 
-test('a search that matches only an ended session shows it in Ended, and does not say nothing matches', async ({ page }) => {
+test('a search that matches only a removed session has no matches or Ended archive', async ({ page }) => {
   await openDemo(page);
   await page.evaluate((id) => window.agentBridgeDemo.remove(id), CODEX);
-  await expect(page.locator('.ended-group > summary')).toHaveText('Ended \u00b7 1');
+  await expect(page.locator('.ended-group')).toHaveCount(0);
   await page.keyboard.press('Control+k');
   await page.keyboard.type('flaky');
   await expect(page.locator('.session')).toHaveCount(0);
-  await expect(page.locator('.ended-group > summary')).toHaveText('Ended \u00b7 1');
-  await expect(page.locator('#sessions-empty')).toBeHidden();
+  await expect(page.locator('.ended-group')).toHaveCount(0);
+  await expect(page.locator('#sessions-empty')).toBeVisible();
 });
 
 test('a link that leaves its page takes focus to the new page, not to the document', async ({ page }) => {

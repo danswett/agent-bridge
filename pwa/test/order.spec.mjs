@@ -1,7 +1,7 @@
 // The person's order (#164, ui.md §1 principle 2 and §6.1), in demo mode: rows never move on
 // their own; Alt+Up/Down, a drag by the handle and the row menu (a long press on a phone, a
 // right-click) move them and pin them, and every move survives a reload; a new session lands at
-// the top once; a row not open with news gets the dot; ended sessions fold into Ended · N; and the
+// the top once; a row not open with news gets the dot; removed sessions leave the list; and the
 // sort menu offers Most recent and Machine.
 import { test, expect } from '@playwright/test';
 import { open, view, selectSort } from './nav.mjs';
@@ -285,19 +285,13 @@ test('news that comes while another page shows is not marked seen until Sessions
   await expect.poll(seen).toBe(t);
 });
 
-test('ended sessions fold into Ended · N at the bottom', async ({ page }) => {
+test('removed sessions leave the list without an Ended archive', async ({ page }) => {
   await openDemo(page);
   await page.evaluate((ids) => { for (const id of ids) { window.agentBridgeDemo.remove(id); } }, [CLAUDE, DELEGATING]);
   await expect(page.locator('.session')).toHaveCount(2);
   const ended = page.locator('#session-list > details.ended-group');
-  await expect(page.locator('#session-list > *').last()).toHaveClass(/ended-group/);
-  await expect(ended.locator('summary')).toHaveText('Ended \u00b7 2');
-  await expect(ended).not.toHaveAttribute('open', '');
-  await expect(ended.locator('.ended-title').first()).toBeHidden();
-  await ended.locator('summary').click();
-  await expect(ended.locator('.ended-title')).toHaveText(['Land the P1 slices', 'Refactor the relay client']);
-  expect((await ended.locator('.ended').evaluateAll((els) => els.map((e) => e.dataset.id)))).toEqual([DELEGATING, CLAUDE]);
-  await expect(ended.locator('.ended-meta').first()).toHaveText(/^ended /);
+  expect(await order(page)).toEqual([COPILOT, CODEX]);
+  await expect(ended).toHaveCount(0);
 });
 
 test('the sort menu offers Most recent and Machine, and remembers the choice', async ({ page }) => {
@@ -631,14 +625,14 @@ for (const width of [900, 1440]) {
       expect(await card(page, CLAUDE).evaluate((e) => getComputedStyle(e, '::before').forcedColorAdjust)).toBe('none');
     });
 
-    test('group headings and Ended span the whole list, never sharing a line with a row', async ({ page }) => {
+    test('group headings span the whole live list, never sharing a line with a row', async ({ page }) => {
       await openDemo(page);
       await card(page, CODEX).locator('.row-main').click({ button: 'right' });
       await card(page, CODEX).getByRole('menuitem', { name: 'Pin' }).click();
       await page.evaluate((id) => window.agentBridgeDemo.remove(id), CLAUDE);
-      await expect(page.locator('.ended-group')).toBeVisible();
+      await expect(page.locator('.ended-group')).toHaveCount(0);
       const list = await page.locator('#session-list').boundingBox();
-      for (const el of [page.locator('.list-group').first(), page.locator('.list-group').last(), page.locator('.ended-group')]) {
+      for (const el of [page.locator('.list-group').first(), page.locator('.list-group').last()]) {
         const box = await el.boundingBox();
         expect(Math.abs(box.width - list.width)).toBeLessThan(1);
       }

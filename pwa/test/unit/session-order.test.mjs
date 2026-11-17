@@ -212,7 +212,7 @@ test('legacy timestamp marks baseline replies without losing pins or order on re
   assert.deepEqual(shown(again, list).sessions, ['a']);
 });
 
-test('a session the host removes ends up in the ended group, and one only gone from view does not', () => {
+test('a session the host removes is forgotten, and one only gone from view is not ended', () => {
   const store = new SessionsStore();
   const o = new SessionOrder({ storage: new MemoryStorage(), now: () => Date.parse(at(40)) });
   store.onChange((c) => o.observe({ ...c, hostId: 'h1' }));
@@ -226,14 +226,11 @@ test('a session the host removes ends up in the ended group, and one only gone f
   store.retain(new Set(['c']));
   const r = o.arrange(live());
   assert.deepEqual(ids(r.sessions), ['c']);
-  assert.deepEqual(r.ended.map((e) => [e.session.title, e.endedAt]), [['B', at(40)], ['A', at(40)]]);
+  assert.deepEqual(r.ended, []);
   assert.equal(o.isPinned(key('a')), false);
-  // A machine not shown: its ended sessions aren't either.
   assert.deepEqual(o.arrange(live(), { shows: () => false }).ended, []);
   // Clearing a machine's store (it went offline) ends nothing.
   store.clear();
-  assert.equal(o.arrange([]).ended.length, 2);
-  o.clearEnded();
   assert.equal(o.arrange([]).ended.length, 0);
 });
 

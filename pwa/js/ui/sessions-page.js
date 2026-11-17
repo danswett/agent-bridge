@@ -852,7 +852,6 @@ export class SessionsPage {
     this.stops.clear();
     this.launches.clear();
     stopReceipts();
-    this.order.clearEnded();
     this.launchPanel.setMachines(null);
     this.launchPanel.setTarget(null);
     this.launchPanel.clear();

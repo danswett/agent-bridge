@@ -42,7 +42,6 @@ public sealed class LiveRosterListTests : IAsyncLifetime
     {
         Snapshot(local, "here");
         Snapshot(remote, "there");
-
         Assert.Equal(["here", "there"], main.AllCards.Select(c => c.Id).Order());
         Assert.Empty(main.Ended);
     }
@@ -56,10 +55,8 @@ public sealed class LiveRosterListTests : IAsyncLifetime
         var ended = main.Sessions.Single(c => c.Id == "ended");
         main.SetPinned(ended, true);
         main.Selected = ended;
-
         if (replacementSnapshot) { Snapshot(local, "live"); }
         else { local.Sessions.Remove("ended"); }
-
         Assert.Equal("live", Assert.Single(main.Sessions).Id);
         Assert.DoesNotContain(main.AllCards, c => c.Id == "ended");
         Assert.Null(main.Selected);
@@ -73,9 +70,7 @@ public sealed class LiveRosterListTests : IAsyncLifetime
         Snapshot(local, "old");
         Snapshot(remote, "there");
         remote.Sessions.BeginSnapshot();
-
         Snapshot(local, "new");
-
         Assert.Equal(["new", "there"], main.AllCards.Select(c => c.Id).Order());
         Assert.False(main.MachineOf("other-host")!.Current);
         Assert.NotNull(main.MachineOf("other-host")!.Away(Make.T0));

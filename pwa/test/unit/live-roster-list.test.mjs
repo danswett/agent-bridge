@@ -38,7 +38,6 @@ test('the list uses each host snapshot without a Home Assistant client', (t) => 
   const f = fixture(t);
   f.snapshot('first', ['here']);
   f.snapshot('second', ['there']);
-
   assert.deepEqual(f.ids(), ['first/here', 'second/there']);
   assert.deepEqual(f.arranged().ended, []);
 });
@@ -49,10 +48,8 @@ for (const replacementSnapshot of [false, true]) {
     f.snapshot('first', ['ended', 'live']);
     f.order.setPinned('first\nended', true);
     f.arranged();
-
     if (replacementSnapshot) f.snapshot('first', ['live']);
     else f.hosts.link('first').store.remove('ended');
-
     const list = f.arranged();
     assert.deepEqual(f.ids(), ['first/live']);
     assert.deepEqual(list.pinned, []);
@@ -67,9 +64,7 @@ test('one host replacement snapshot preserves a silent hosts stale rows', (t) =>
   f.snapshot('second', ['there']);
   f.connection.presence = [{ id: 'first', kind: 'host' }];
   f.connection.emit('presence');
-
   f.snapshot('first', ['new']);
-
   assert.deepEqual(f.ids(), ['first/new', 'second/there']);
   assert.equal(f.hosts.staleOf('second').reason, 'offline');
   assert.equal(f.hosts.route('second'), null);
