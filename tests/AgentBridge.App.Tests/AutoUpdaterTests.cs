@@ -1539,7 +1539,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("final-scan")]
+    [InlineData("scan")]
     [InlineData("usage-probe")]
     [InlineData("confirm")]
     [Trait("Category", "Network")]
@@ -1556,7 +1556,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Assert.True(TestUi.Read(() => connection.Sessions.All.Any(s => s.Id == "s2")));
         }
         var scans = 0;
-        preflight = () => { if (phase == "final-scan" && ++scans == 2) { Turn(); } return null; };
+        preflight = () => { if (phase == "scan" && ++scans == 1) { Turn(); } return null; };
         host.On(HostOps.ProbeHold, _ => { if (phase == "usage-probe") { Turn(); } return new ProbeHoldResult(false); });
 
         await auto.RestartToUpdateAsync(_ => { if (phase == "confirm") { Turn(); return Task.FromResult(true); } return Task.FromResult(false); });
@@ -1634,7 +1634,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
                 return Task.FromResult(true);
             });
             Assert.Contains("held-during-dialog.dll", why, StringComparison.Ordinal);
-            Assert.True(scans >= 3);
+            Assert.Equal(2, scans);
             Assert.False(updater.Applied);
             Assert.Null(prefs.UpdatedFrom);
             Assert.Empty(host.Sent(HostOps.Stop));
@@ -3544,7 +3544,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         try
         {
             await NowAsync();
-            Assert.True(scans >= 3);
+            Assert.Equal(2, scans);
             Assert.False(updater.Applied);
             Assert.False(prefs.UpdateHandedOver);
             Assert.Null(prefs.UpdatedFrom);
