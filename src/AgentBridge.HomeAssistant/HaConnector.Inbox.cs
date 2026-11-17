@@ -51,8 +51,7 @@ public sealed partial class HaConnector
     void CompleteInbox(string node, string rid, string outcome)
     {
         if (inbox?.Peek(node)?.Rid != rid) { return; }
-        if (outcome == "refused") { inbox.Forget(node, rid); }
-        else { inbox.Deliver(node, rid, time.GetUtcNow(), outcome); }
+        inbox.Deliver(node, rid, time.GetUtcNow(), outcome);
     }
 
     async Task<bool> DispatchInboxAsync(string sessionId, Published p, CancellationToken ct)

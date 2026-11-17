@@ -47,13 +47,28 @@ public sealed class DurableInboxV2Tests : IDisposable
         Assert.Equal(original, File.ReadAllText(Pathname));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Rollback_or_loss_of_the_v2_store_holds_dispatch_instead_of_replaying_v1(bool missing)
+    {
+        Write(1, [Message("r")]);
+        var inbox = new DurableInbox(Pathname);
+        Assert.NotNull(inbox.Peek("node"));
+        inbox.Start("node", "r", Now);
+        if (missing) { File.Delete(Pathname); }
+        else { File.Copy(Pathname + ".v1", Pathname, overwrite: true); }
+        if (missing) { Assert.Throws<FileNotFoundException>(() => new DurableInbox(Pathname).Peek("node")); }
+        else { Assert.Throws<InvalidDataException>(() => new DurableInbox(Pathname).Peek("node")); }
+    }
+
     [Fact]
     public void Failed_migration_does_not_dispatch_or_replace_the_original()
     {
         Write(1, [Message("r")]);
         var original = File.ReadAllText(Pathname);
         Directory.CreateDirectory(Pathname + ".v1");
-        Assert.ThrowsAny<IOException>(() => new DurableInbox(Pathname).Peek("node"));
+        Assert.Throws<UnauthorizedAccessException>(() => new DurableInbox(Pathname).Peek("node"));
         Assert.Equal(original, File.ReadAllText(Pathname));
     }
 
@@ -91,5 +106,59 @@ public sealed class DurableInboxV2Tests : IDisposable
         Assert.Equal("refused", refused.Outcome);
         Assert.Empty(refused.Payload);
         Assert.Null(inbox.Peek("node"));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void Consumed_tokens_are_one_shot_until_explicit_resolution_permanently_fences_the_node(int resolution)
+    {
+        var inbox = new DurableInbox(Pathname);
+        inbox.Enqueue("node", "r", "sender", "private", Now);
+        inbox.Start("node", "r", Now, "host-1", "process-1");
+        var fence = new InboxCleanupFence("token", 7, 1, "host-1", "process-1");
+        Assert.Throws<InvalidOperationException>(() => inbox.ConsumeCleanup("node", "r", fence with { Attempt = 2 }));
+        Assert.Throws<InvalidOperationException>(() => inbox.ConsumeCleanup("node", "r", fence with { HostRequest = "other" }));
+        Assert.Throws<InvalidOperationException>(() => inbox.ConsumeCleanup("node", "r", fence with { Incarnation = "other" }));
+        Assert.True(inbox.ConsumeCleanup("node", "r", fence));
+        inbox.Deliver("node", "r", Now, "unconfirmed");
+        inbox.Forget("node");
+        inbox = new DurableInbox(Pathname);
+        Assert.False(inbox.ConsumeCleanup("node", "r", fence));
+        Assert.Equal(7, inbox.Find("node", "r")!.ConsumedTokens![0].Revision);
+        inbox.ResolveAndFence("node", (InboxResolution)resolution, Now);
+        inbox.ForgetExcept(new HashSet<string>());
+        inbox = new DurableInbox(Pathname);
+        Assert.Null(inbox.Find("node", "r"));
+        Assert.False(inbox.ConsumeCleanup("node", "r", fence));
+        Assert.Equal("refused", inbox.Enqueue("node", "r", "s", "retry", Now).Outcome);
+        Assert.Equal("refused", inbox.Enqueue("node", "new", "s", "new identity", Now).Outcome);
+        Assert.Null(inbox.Peek("node"));
+        Assert.Empty(JsonNode.Parse(File.ReadAllText(Pathname))!["Messages"]!.AsArray());
+        Assert.Single(JsonNode.Parse(File.ReadAllText(Pathname))!["Retired"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task Concurrent_instances_can_consume_a_cleanup_token_only_once()
+    {
+        var inbox = new DurableInbox(Pathname);
+        inbox.Enqueue("node", "r", "sender", "private", Now);
+        inbox.Start("node", "r", Now, "host-1", "process-1");
+        var fence = new InboxCleanupFence("token", 7, 1, "host-1", "process-1");
+        var consumed = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+            new DurableInbox(Pathname).ConsumeCleanup("node", "r", fence))));
+        Assert.Single(consumed, c => c);
+        Assert.Single(new DurableInbox(Pathname).Find("node", "r")!.ConsumedTokens!);
+    }
+
+    [Fact]
+    public void Malformed_receipt_identity_cannot_silently_discard_its_fence()
+    {
+        var m = Message("r", "delivered");
+        m["ConsumedTokens"] = JsonNode.Parse("""[{"Token":"t","Revision":1,"Attempt":1,"Incarnation":"process-1"}]""");
+        Write(2, [m]);
+        var original = File.ReadAllText(Pathname);
+        Assert.Throws<InvalidDataException>(() => new DurableInbox(Pathname).Peek("node"));
+        Assert.Equal(original, File.ReadAllText(Pathname));
     }
 }
