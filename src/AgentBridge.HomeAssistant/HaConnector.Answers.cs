@@ -819,6 +819,8 @@ public sealed partial class HaConnector
     // per press, rather than dropped.
     async Task UnservedAsync(Published p, HaTrigger hit, CancellationToken ct)
     {
+        if (hit.EntityId == SessionEntities.ReplyPayload(p.Node)
+            && await RefuseInstanceMismatchAsync(p, hit.State, ct)) { return; }
         var words = hit.EntityId == SessionEntities.ReplyPayload(p.Node)
             ? (hit.State.Attributes is { ValueKind: JsonValueKind.Object } a && a.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null)
               ?? (HasAttachments(hit.State) ? "(attachments)" : null)
@@ -859,6 +861,8 @@ public sealed partial class HaConnector
         var current = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
         if (!Changed(armed.PayloadBaseline, current) || !IsStamp(current.Value) || current.Value == armed.UsedStamp) { return false; }
         if (current.Snapshot is not { Attributes.ValueKind: JsonValueKind.Object } state) { return false; }
+        if (p.Reply.IsHandled(current.Value)) { return false; }
+        if (await RefuseInstanceMismatchAsync(p, state, ct)) { return true; }
         var tag = Str(state.Attributes, "decision_id");
         var fromAgent = Str(state.Attributes, "driver") == SessionDrivers.Agent;
         var takesNoWords = ServesReplies && (armed.Plan.UsesFieldSlots || armed.Plan.AnswerOnTap) && !armed.Plan.TakesTypedAnswer;
@@ -948,7 +952,7 @@ public sealed partial class HaConnector
                 ResetDecision = true,
             };
         }
-        var card = await CardTextAsync(node, armed, ct);
+        var card = await CardTextAsync(p, armed, ct);
         if (card is { Retry: true } && !plan.AnswerOnTap)
         {
             // Words typed into the reply box since reply-card words were held are newer: they
@@ -1200,12 +1204,14 @@ public sealed partial class HaConnector
 
     // What the reply card published for the armed question, if anything new
     // (Read-DaemonDecisionCardText): words only, tagged for this question or not at all.
-    async Task<(string Text, string Stamp, string Driver, bool Retry)?> CardTextAsync(string node, Armed armed, CancellationToken ct)
+    async Task<(string Text, string Stamp, string Driver, bool Retry)?> CardTextAsync(Published p, Armed armed, CancellationToken ct)
     {
         if (armed.PayloadBaseline.Kind == "unknown") { return null; }
-        var current = await ObserveAsync(SessionEntities.ReplyPayload(node), ct);
-        if (!Changed(armed.PayloadBaseline, current) || current.Value == armed.UsedStamp) { return null; }
+        var current = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
+        if (!Changed(armed.PayloadBaseline, current) || current.Value == armed.UsedStamp || p.Reply.IsHandled(current.Value)) { return null; }
         if (current.Snapshot is not { } state || state.Attributes.ValueKind != JsonValueKind.Object) { return null; }
+        // This read can see a newer payload than the question's initial refusal check.
+        if (await RefuseInstanceMismatchAsync(p, state, ct)) { return null; }
         // An image cannot be typed into a prompt; replies with attachments are a later stage.
         if (HasAttachments(state)) { return null; }
         var a = state.Attributes;

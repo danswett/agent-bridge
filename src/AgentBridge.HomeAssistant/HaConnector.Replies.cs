@@ -366,6 +366,20 @@ public sealed partial class HaConnector
         return true;
     }
 
+    async Task<bool> RefuseInstanceMismatchAsync(Published p, HaState state, CancellationToken ct)
+    {
+        var a = state.Attributes;
+        if (a.ValueKind != JsonValueKind.Object || !a.TryGetProperty("expected_instance", out var expected)
+            || (expected.ValueKind == JsonValueKind.String
+                && string.Equals(expected.GetString(), options.MachineInstance, StringComparison.Ordinal))) { return false; }
+        if (p.Reply.IsHandled(state.State)) { return true; }
+        p.DriverPendingAt = null;
+        if (CleanRid(Str(a, "rid")) is { } rid) { p.Reply.Ack = MakeAck(rid, CleanSender(Str(a, "sender")), "instance-mismatch"); }
+        await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = "The reply was meant for a different host instance; no reply was sent." }, ct);
+        p.Reply.Handle(state.State);
+        return true;
+    }
+
     // Send-DaemonCardPayload: one publish from the reply card, unless it was read before. Says
     // whether it was nothing to send, taken without a delivery (refused, or words for a question),
     // or is being delivered.
@@ -403,6 +417,7 @@ public sealed partial class HaConnector
         var usable = !string.IsNullOrWhiteSpace(text) || images.Count > 0 || files.Count > 0;
         // Nothing to send, and nothing it meant to: not a reply, and left unread.
         if (!usable && requested == 0) { return CardRead.Nothing; }
+        if (await RefuseInstanceMismatchAsync(p, state, ct)) { return CardRead.Taken; }
         // Words for a question, published as it went: never a reply in their own right, and no
         // reason to pass over a Send pressed meanwhile.
         if (attributes && Str(a, "decision_id") is { Length: > 0 })
@@ -412,16 +427,6 @@ public sealed partial class HaConnector
         }
         var rid = attributes ? CleanRid(Str(a, "rid")) : null;
         var sender = attributes ? CleanSender(Str(a, "sender")) : null;
-        if (attributes && a.TryGetProperty("expected_instance", out var expectedInstance)
-            && (expectedInstance.ValueKind != JsonValueKind.String
-                || !string.Equals(expectedInstance.GetString(), options.MachineInstance, StringComparison.Ordinal)))
-        {
-            p.DriverPendingAt = null;
-            if (rid is not null) { p.Reply.Ack = MakeAck(rid, sender, "instance-mismatch"); }
-            await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = "The reply was meant for a different host instance; no reply was sent." }, ct);
-            p.Reply.Handle(stamp);
-            return CardRead.Taken;
-        }
         // A message delivered twice is dropped: nothing is typed again, and the sender is told
         // what came of the first. While the first is still going in, its own outcome will say.
         if (rid is not null && p.Reply.Rids.TryGetValue(rid, out var prior))

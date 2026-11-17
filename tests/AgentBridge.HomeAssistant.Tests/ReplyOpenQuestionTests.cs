@@ -34,6 +34,90 @@ public sealed partial class ReplyTests
         await Pass(c);
     }
 
+    [Theory]
+    [InlineData("q1", "agent")]
+    [InlineData(null, "human")]
+    [InlineData(null, "agent")]
+    public async Task A_stale_instance_at_an_open_question_is_refused_before_answer_or_reply_routing(string? decisionId, string driver)
+    {
+        Idle();
+        await using var c = ConnectorWithInstance("host-run-2");
+        await Pass(c);
+        Idle(question: Pick() with { Fields = [] });
+        await Pass(c);
+
+        await Do(c, ha.SendFromCard(Node, "stale answer", decisionId: decisionId, driver: driver,
+            rid: "r-stale-question", expectedInstance: "host-run-1"));
+
+        Assert.Empty(answered);
+        Assert.Empty(replied);
+        Assert.Equal("instance-mismatch", Ack.GetProperty("outcome").GetString());
+        Assert.Equal("r-stale-question", Ack.GetProperty("rid").GetString());
+        await Pass(c, 20);
+        Assert.Empty(answered);
+        await CardCloses(c);
+        Assert.Empty(replied);
+    }
+
+    [Theory]
+    [InlineData(false, null, "human")]
+    [InlineData(true, "q1", "agent")]
+    [InlineData(true, null, "human")]
+    public async Task A_matching_instance_is_delivered_through_the_idle_or_question_path(bool question, string? decisionId, string driver)
+    {
+        Idle();
+        await using var c = ConnectorWithInstance("host-run-2");
+        await Pass(c);
+        if (question)
+        {
+            Idle(question: Pick() with { Fields = [] });
+            await Pass(c);
+        }
+
+        await Do(c, ha.SendFromCard(Node, "current answer", decisionId: decisionId, driver: driver,
+            rid: "r-current-instance", expectedInstance: "host-run-2"));
+
+        if (question)
+        {
+            Assert.Equal("current answer", Assert.Single(answered).Text);
+            Assert.Empty(replied);
+        }
+        else
+        {
+            Assert.Equal("current answer", Assert.Single(replied).Text);
+            Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
+            Assert.Empty(answered);
+        }
+    }
+
+    [Fact]
+    public async Task A_stale_payload_arriving_between_question_reads_is_refused_without_blocking_a_later_answer()
+    {
+        Idle();
+        await using var c = ConnectorWithInstance("host-run-2");
+        await Pass(c);
+        Idle(question: Pick() with { Fields = [] });
+        await Pass(c);
+        ha.AfterRead = entity =>
+        {
+            if (entity != SessionEntities.ReplyPayload(Node)) { return; }
+            ha.AfterRead = null;
+            ha.SendFromCard(Node, "stale between reads", decisionId: "q1", driver: "agent",
+                rid: "r-between-reads", expectedInstance: "host-run-1");
+        };
+
+        await Pass(c, 20);
+
+        Assert.Empty(answered);
+        Assert.Empty(replied);
+        Assert.Equal("instance-mismatch", Ack.GetProperty("outcome").GetString());
+        Assert.Equal("r-between-reads", Ack.GetProperty("rid").GetString());
+        await Do(c, ha.SendFromCard(Node, "fresh answer", decisionId: "q1", driver: "agent",
+            expectedInstance: "host-run-2"));
+        Assert.Equal("fresh answer", Assert.Single(answered).Text);
+        Assert.Empty(replied);
+    }
+
     [Fact]
     public async Task Three_rapid_sends_while_a_question_is_open_are_each_refused_to_their_sender_and_none_is_lost_silently()
     {
