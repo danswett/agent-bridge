@@ -25,6 +25,66 @@ static partial class SelfTest
         if (main.AllCards.FirstOrDefault(c => c.Id == "demo-choice") is { } other) { window.Sessions.Rows.SelectedItem = other; }
     }
 
+    static async Task CheckLiveResponseSource(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check)
+    {
+        const string id = "demo-live-source";
+        var fixture = new Session
+        {
+            Id = id, Agent = AgentKind.Copilot, Title = "Live reply source",
+            Status = SessionStatus.Idle, StatusSince = StoredFrom, UpdatedAt = StoredFrom,
+            Activity = new Activity { Turn = "source-a", ResponseTurn = "source-a", Response = "First reply." },
+        };
+        await demo.PutAsync(fixture);
+        if (!await Until(() => main.AllCards.Any(c => c.Id == id), TimeSpan.FromSeconds(5)))
+        { check(false, "receives the live source fixture"); return; }
+        var card = main.AllCards.Single(c => c.Id == id);
+        var view = await Choose(window, main, id, "Response");
+        if (view is null || ById<ListView>(view, "Conversation") is not { } list || ConversationScroller(view) is not { } scroll)
+        { check(false, "opens the live reply source fixture"); return; }
+        var source = list.ItemsSource;
+        var resets = 0;
+        if (source is not System.Collections.Specialized.INotifyCollectionChanged observable)
+        { check(false, "observes the bound live reply source"); return; }
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler changed = (_, e) =>
+        {
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset) { resets++; }
+        };
+        observable.CollectionChanged += changed;
+        try
+        {
+            async Task Put(Activity activity)
+            {
+                fixture = fixture with { UpdatedAt = DateTimeOffset.UtcNow, Activity = activity };
+                await demo.PutAsync(fixture);
+                check(await Until(() => card.Session.Activity == activity, TimeSpan.FromSeconds(5)),
+                    "receives the next live reply snapshot");
+            }
+            await Put(new Activity { Turn = "source-a", ResponseTurn = "source-a", Response = "Unrelated replacement.\n\nIts ending." });
+            check(await Until(() => list.Items.Count == 2, TimeSpan.FromSeconds(3)) && ReferenceEquals(source, list.ItemsSource),
+                "replaces unrelated live words without rebinding the conversation");
+            await Put(new Activity
+            {
+                Turn = "source-b", ResponseTurn = "source-a", UserMessage = "Next prompt",
+                Response = "Unrelated replacement.\n\nIts ending.",
+            });
+            check(await Until(() => list.Items.Count == 0, TimeSpan.FromSeconds(3)) && ReferenceEquals(source, list.ItemsSource),
+                "moves the previous reply into history without rebinding the conversation");
+            await Put(new Activity { Turn = "source-b", ResponseTurn = "source-b", UserMessage = "Next prompt", Response = "Newest reply." });
+            check(await Until(() =>
+            {
+                if (list.Items.Count != 1 || list.ContainerFromIndex(0) is not Microsoft.UI.Xaml.FrameworkElement last) { return false; }
+                var top = last.TransformToVisual(scroll).TransformPoint(default).Y;
+                return last.ActualHeight > 0 && top < scroll.ViewportHeight && top + last.ActualHeight > 0
+                    && Find<MarkdownView>(last).Any(m => m.ActualHeight > 0 && m.Children.Count > 0);
+            }, TimeSpan.FromSeconds(5)) && ReferenceEquals(source, list.ItemsSource),
+                "renders the newest reply in the original conversation source");
+            check(card.Stored?.Turns.Any(t => t.Id == "source-a" && t.Parts.Any(p => p.Text == "Unrelated replacement.\n\nIts ending.")) == true,
+                "retains the preceding reply under its own stored turn");
+            check(resets == 0, "live reply transitions never reset the bound conversation source");
+        }
+        finally { observable.CollectionChanged -= changed; Away(window, main); }
+    }
+
     static async Task CheckHistoryScroll(MainWindow window, MainViewModel main, Action<bool, string> check)
     {
         window.ShowPage("sessions");

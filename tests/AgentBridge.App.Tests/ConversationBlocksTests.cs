@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using AgentBridge.App.Core;
 using Xunit;
 
@@ -89,15 +90,48 @@ public sealed class ConversationBlocksTests
     }
 
     [Fact]
-    public void A_response_with_nothing_in_common_is_left_alone_for_the_caller_to_replace_whole()
+    public void A_response_with_nothing_in_common_updates_the_bound_collection_without_a_reset()
     {
         var shown = Shown("One.\n\nTwo.");
-        var had = shown.ToList();
+        var changes = new List<NotifyCollectionChangedAction>();
+        shown.CollectionChanged += (_, e) =>
+        {
+            changes.Add(e.Action);
+            Assert.NotEmpty(shown);
+        };
 
         Assert.False(ConversationBlocks.Update(shown, MarkdownModel.Parse("Something else.")));
-        Assert.False(ConversationBlocks.Update(shown, []));
 
-        Assert.Equal(had, shown);
+        Assert.Equal(["Something else."], shown.Select(b => b.Text));
+        Assert.DoesNotContain(NotifyCollectionChangedAction.Reset, changes);
+    }
+
+    [Fact]
+    public void A_first_reply_populates_the_already_bound_empty_collection()
+    {
+        var shown = new ConversationItems();
+        var changes = new List<NotifyCollectionChangedAction>();
+        shown.CollectionChanged += (_, e) => changes.Add(e.Action);
+
+        Assert.False(ConversationBlocks.Update(shown, MarkdownModel.Parse("First reply.\n\nIts ending.")));
+
+        Assert.Equal(["First reply.", "Its ending."], shown.Select(b => b.Text));
+        Assert.Equal([NotifyCollectionChangedAction.Add, NotifyCollectionChangedAction.Add], changes);
+    }
+
+    [Fact]
+    public void A_queued_turn_clears_the_live_reply_then_draws_its_answer_in_the_same_source()
+    {
+        var shown = new ConversationItems(MarkdownModel.Parse("Previous reply.").Select(b => new ConversationBlock(b)));
+        var changes = new List<NotifyCollectionChangedAction>();
+        shown.CollectionChanged += (_, e) => changes.Add(e.Action);
+
+        Assert.False(ConversationBlocks.Update(shown, []));
+        Assert.Empty(shown);
+        Assert.False(ConversationBlocks.Update(shown, MarkdownModel.Parse("New answer.")));
+
+        Assert.Equal(["New answer."], shown.Select(b => b.Text));
+        Assert.Equal([NotifyCollectionChangedAction.Remove, NotifyCollectionChangedAction.Add], changes);
     }
 
     [Fact]
@@ -241,7 +275,12 @@ public sealed class ConversationBlocksTests
                     if (run > kept) { (start, from, kept) = (s, lead, run); }
                 }
             }
-            if (kept == 0) { return false; }
+            if (kept == 0)
+            {
+                shown.Clear();
+                foreach (var block in next) { shown.Add(new ConversationBlock(block)); }
+                return false;
+            }
             for (var i = shown.Count - 1; i >= start + kept; i--) { shown.RemoveAt(i); }
             for (var i = 0; i < start; i++) { shown.RemoveAt(0); }
             for (var i = from - 1; i >= 0; i--) { shown.Insert(0, new ConversationBlock(next[i])); }
