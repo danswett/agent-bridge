@@ -300,11 +300,15 @@ and are never returned as live by `fleet.find`. The cache exists for two reasons
 It runs in each reading host; closing that host loses its cache, with no machine-specific service.
 It is not connected to `RelayFleetRoster`, `fleet.list` or `fleet.find`; production verification
 and v2 gates are unchanged. `VerifiedRecord` is an internal handoff, never a relay assertion.
-The eventual reader calls `OptIn()` when sending get/subscribe, then supplies verified records
-with the authenticated frame account. Other-account, unsolicited and unverified inputs refuse.
+The eventual reader gives a separate `FleetRegistrySubscription` adapter its authenticated
+account and dedicated cache, calls `OptIn("registry-get")` or `OptIn("registry-subscribe")`
+at the send boundary, then supplies C1-verified records with the authenticated frame account.
+The adapter rejects unsolicited and other-account changes, removals and listings.
+`VerifiedRecord` carries account, machine ID, epoch, sequence, signed time and C1's `FleetMachine`;
+`CachedRecord` wraps it with stale/online flags. No wire field can opt in or assert verification.
 After a complete get, `Reconcile` receives the union of registry and known IDs; IDs without an
 accepted record since opt-in become offline with no sessions. Removal/omission clears ordering
-history and blocks records until relisting. Serving applies the signed 60 s window and purges
+history and blocks records until a registry/known listing relists the ID. Serving applies the signed 60 s window and purges
 records older than 24 h; stale projections also set `FleetMachine.Online` false.
 
 ## Names

@@ -1,39 +1,33 @@
 namespace AgentBridge.Host.Fleet;
 
-internal sealed record VerifiedRecord(FleetMachine Machine, string Epoch, long Seq, DateTimeOffset At);
-internal sealed record CachedRecord(FleetMachine Machine, bool Stale, bool Online);
+internal sealed record VerifiedRecord(string Account, string MachineId, string Epoch, long Seq, DateTimeOffset At, FleetMachine Machine);
+internal sealed record CachedRecord(VerifiedRecord Record, bool Stale, bool Online);
 
 internal sealed class FleetRegistryCache
 {
     readonly TimeProvider time;
-    readonly string account;
     readonly object gate = new();
     readonly Dictionary<string, VerifiedRecord> records = new(StringComparer.Ordinal);
     readonly HashSet<string> removed = new(StringComparer.Ordinal);
     readonly HashSet<string> received = new(StringComparer.Ordinal);
-    bool optedIn;
 
-    public FleetRegistryCache(TimeProvider time, string account)
+    public FleetRegistryCache(TimeProvider time)
     {
         ArgumentNullException.ThrowIfNull(time);
-        ArgumentException.ThrowIfNullOrWhiteSpace(account);
         this.time = time;
-        this.account = account;
     }
 
-    // Called at the send boundary of get/subscribe, never from an incoming frame.
-    public void OptIn()
+    public void BeginRead()
     {
-        lock (gate) { optedIn = true; received.Clear(); }
+        lock (gate) { received.Clear(); }
     }
 
-    public bool Accept(VerifiedRecord record, string frameAccount)
+    public bool Accept(VerifiedRecord record)
     {
         lock (gate)
         {
             var machine = record.Machine;
-            if (!optedIn || !string.Equals(frameAccount, account, StringComparison.Ordinal)
-                || !machine.Verified || removed.Contains(machine.Id)) { return false; }
+            if (!machine.Verified || record.MachineId != machine.Id || removed.Contains(machine.Id)) { return false; }
             if (records.TryGetValue(machine.Id, out var previous)
                 && (previous.Epoch == record.Epoch ? record.Seq <= previous.Seq : record.At <= previous.At)) { return false; }
             records[machine.Id] = record with
@@ -62,7 +56,6 @@ internal sealed class FleetRegistryCache
     {
         lock (gate)
         {
-            if (!optedIn) { return; }
             foreach (var id in records.Keys.ToArray())
             {
                 if (!listed.Contains(id)) { RemoveCore(id); }
@@ -105,8 +98,13 @@ internal sealed class FleetRegistryCache
             {
                 var age = now - record.At;
                 var online = record.Machine.Online && age >= TimeSpan.FromSeconds(-60) && age <= TimeSpan.FromSeconds(60);
-                return new CachedRecord(record.Machine with { Online = online }, !online, online);
+                return new CachedRecord(record with { Machine = record.Machine with { Online = online } }, !online, online);
             }).ToArray();
         }
+    }
+
+    public void Relist(IReadOnlySet<string> listed)
+    {
+        lock (gate) { removed.ExceptWith(listed); }
     }
 }
