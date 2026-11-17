@@ -181,8 +181,11 @@ from the host's own known version, the host forwards `last` as `failed`, with
 request, releases and outcome time stay correlated; the installed/downloaded release
 facts remain available for recovery. Existing failures and refusals are not replaced.
 A later matching-version report is forwarded normally. An unknown app/host version,
-or an app that is not installed, does not establish skew. This detects false success;
-it does not itself restart either process, apply a package or prove self-repair.
+including the unavailable-version sentinel `0.0.0`, or an app that is not installed,
+does not establish skew. Release identity ignores surrounding whitespace, an optional
+`v` prefix and build metadata; identities are compared case-insensitively.
+This detects false success; it does not itself restart either process, apply a package
+or prove self-repair.
 
 ### `UpdateCommandResult`
 

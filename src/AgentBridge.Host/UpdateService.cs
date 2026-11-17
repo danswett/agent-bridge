@@ -266,8 +266,11 @@ public sealed class UpdateService
             }
             reported = UpdateProtocol.Fit(report.State);
             // An app's successful restart/check alone does not establish a converged installation.
+            var appRelease = UpdateVersions.Identity(reported.Current);
+            var hostRelease = UpdateVersions.Identity(HostVersion);
             if (reported.Installer && reported.Current is { Length: > 0 } appVersion
-                && HostVersion.Length > 0 && appVersion != HostVersion
+                && appRelease is not null && hostRelease is not null
+                && !string.Equals(appRelease, hostRelease, StringComparison.OrdinalIgnoreCase)
                 && reported.Last is { Outcome: UpdateOutcome.Updated or UpdateOutcome.Current } last)
             {
                 reported = reported with

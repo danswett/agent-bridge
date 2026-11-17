@@ -9,6 +9,27 @@ public sealed class UpdateVersionSkewTests
     static readonly DateTimeOffset Now = new(2026, 11, 17, 22, 0, 0, TimeSpan.Zero);
 
     [Theory]
+    [InlineData("0.2.0", "0.2.0+build123", UpdateOutcome.Updated)]
+    [InlineData("0.2.0", "0.2.0+build123", UpdateOutcome.Current)]
+    [InlineData("0.2.0+build123", "0.2.0", UpdateOutcome.Updated)]
+    [InlineData("0.2.0+build123", "0.2.0", UpdateOutcome.Current)]
+    [InlineData("0.2.0-RC.1", "0.2.0-rc.1", UpdateOutcome.Updated)]
+    [InlineData("0.2.0-RC.1", "0.2.0-rc.1", UpdateOutcome.Current)]
+    [InlineData("0.0.0", "0.2.0", UpdateOutcome.Updated)]
+    [InlineData("0.0.0", "0.2.0", UpdateOutcome.Current)]
+    public void Equivalent_release_identities_and_the_unknown_host_sentinel_do_not_invent_skew(
+        string hostVersion, string appVersion, UpdateOutcome outcome)
+    {
+        var updates = new UpdateService(hostVersion);
+        using var app = new AppChannel();
+        var report = Report(appVersion, outcome);
+
+        updates.Report(app, report);
+
+        Assert.Equal(report.State, updates.State());
+    }
+
+    [Theory]
     [InlineData("0.1.0", "0.2.0", UpdateOutcome.Updated)]
     [InlineData("0.2.0", "0.1.0", UpdateOutcome.Updated)]
     [InlineData("0.1.0", "0.2.0", UpdateOutcome.Current)]
@@ -74,6 +95,8 @@ public sealed class UpdateVersionSkewTests
     [InlineData("0.1.0", "", true)]
     [InlineData("0.1.0", "0.2.0", false)]
     [InlineData("", "0.2.0", true)]
+    [InlineData("0.0.0+build123", "0.2.0", true)]
+    [InlineData("0.2.0", "0.0.0", true)]
     public void Unknown_or_uninstalled_versions_do_not_invent_skew(string hostVersion, string? appVersion, bool installed)
     {
         var updates = new UpdateService(hostVersion);
