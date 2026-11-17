@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Host;
+using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Cli;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -94,6 +95,91 @@ public sealed class FleetLaunchGrantTests : IDisposable
         var actual = HostSettings.Load(folder).Settings.Launch;
         Assert.Null(grant.CheckDispatch(actual, Request));
         Assert.NotNull(grant.CheckDispatch(actual with { Workspaces = [new("workers", Path.GetTempPath(), true)] }, Request));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_failed_grant_save_latches_the_store_closed_even_after_storage_recovers(bool enabled)
+    {
+        Config();
+        var store = new AgentCredentials(folder, "machine");
+        var (script, _) = store.MintScript("dispatcher");
+        if (!enabled) { store.SetFleetLaunch("dispatcher", true); }
+        var channel = new Channel();
+        store.Accept(channel, script);
+        var blocked = Path.Combine(folder, AgentCredentials.FileName) + ".tmp";
+        Directory.CreateDirectory(blocked);
+        Assert.NotNull(Record.Exception(() => store.SetFleetLaunch("dispatcher", enabled)));
+        Directory.Delete(blocked);
+        Assert.NotNull(store.Problem);
+        Assert.Null(store.Of(channel));
+        Assert.Throws<InvalidOperationException>(() => store.SetFleetLaunch("dispatcher", enabled));
+        var reopened = new AgentCredentials(folder, "machine");
+        reopened.Accept(channel, script);
+        Assert.Equal(!enabled, reopened.Of(channel)!.FleetLaunch);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(7, 0)]
+    [InlineData(8, 0)]
+    [InlineData(0, 5)]
+    [InlineData(0, 6)]
+    [InlineData(8, 6)]
+    public async Task Fleet_activation_stays_closed_at_hourly_and_live_boundaries_under_concurrency_and_replay(int hourly, int live)
+    {
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
+            """{"agents":{"enabled":true,"launch":{"enabled":true},"limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":10,"liveAgentLaunched":6,"agentLaunchedIdleHours":2}}}""");
+        var agent = new AgentLaunchGate(folder);
+        for (var i = 0; i < 9; i++) { Assert.True(agent.CheckLaunch($"agent:{i}", Guid.NewGuid().ToString(), "hash").Allowed); }
+        var launcher = new AdmissionLauncher(live);
+        var audit = new AgentAuditLog(folder);
+        var replay = Request;
+        const string principal = "script:machine/dispatcher";
+        for (var i = 0; i < hourly; i++)
+        {
+            replay = Request;
+            Assert.Equal(LaunchOutcome.Started, (await GateLaunchAudit.LaunchAsync(launcher, replay, principal,
+                audit, new("local", "agent", principal, null), fleet: true)).Outcome);
+        }
+        var sessions = new SessionService(null!, new("machine", "fixture", "windows", "1"), launcher: launcher);
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<LaunchResult> Attempt(LaunchRequest request)
+        {
+            await ready.Task;
+            return await sessions.LaunchFleetAsync(request, principal, audit, () => null, _ => null);
+        }
+        var attempts = new[] { Attempt(Request), Attempt(Request) };
+        ready.SetResult();
+        foreach (var result in await Task.WhenAll(attempts))
+        {
+            Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+            Assert.Contains("admission", result.Reason);
+        }
+        Assert.Equal(LaunchOutcome.Refused, (await Attempt(replay)).Outcome);
+        Assert.Equal(LaunchOutcome.Refused, (await Attempt(replay)).Outcome);
+        Assert.Equal(hourly, launcher.Dispatches);
+        Assert.Equal(live, launcher.LaunchedProcesses().Count);
+        Assert.True(agent.CheckLaunch("agent:last", Guid.NewGuid().ToString(), "hash").Allowed);
+        Assert.False(agent.CheckLaunch("agent:overflow", Guid.NewGuid().ToString(), "hash").Allowed);
+    }
+
+    sealed class AdmissionLauncher(int live) : ISessionLauncher
+    {
+        public int Dispatches;
+        public bool Available => true;
+        public LaunchConfig FleetConfig => LaunchConfig.Default;
+        public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public IReadOnlyList<Started> LaunchedProcesses() => Enumerable.Range(1, live).Select(i => new Started(i, Now)).ToArray();
+        public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref Dispatches);
+            var session = Guid.NewGuid().ToString();
+            prepare(Guid.NewGuid())?.Invoke(session);
+            return Task.FromResult(new LaunchResult(LaunchOutcome.Started) { Session = session });
+        }
     }
 
     [Fact]

@@ -87,7 +87,9 @@ public sealed class SessionService
     {
         if (launcher is null || audit is null) { return new(LaunchOutcome.Refused, "fleet launch service or audit is unavailable"); }
         if (ReadOnly?.Invoke() is { } readOnly) { return new(LaunchOutcome.Refused, readOnly); }
-        string? Check() => refusal() ?? (launcher.FleetConfig is { } actual ? dispatchCheck(actual) : "fleet dispatch settings are unavailable");
+        // #2770 must wire atomic, durable hourly/live admission before fleet activation.
+        string? Check() => refusal() ?? (launcher.FleetConfig is { } actual ? dispatchCheck(actual) : "fleet dispatch settings are unavailable")
+            ?? "fleet launch is disabled until fleet hourly/live admission controls are wired";
         if (Check() is { } problem) { return new(LaunchOutcome.Refused, problem); }
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
             fleet: true, refusal: Check);

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Host;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -9,10 +10,11 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
     private protected override bool UsesRelay => false;
 
     [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, false)]
-    [InlineData(true, true)]
-    public async Task Fleet_dispatch_requires_fresh_isolation_and_persists_its_grant_with_a_reply_only_worker(bool isolated, bool revoked)
+    [InlineData(true, false, false)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    public async Task Fleet_dispatch_requires_fresh_isolation_and_persists_its_grant_with_a_reply_only_worker(bool isolated, bool revoked, bool credentialFailure)
     {
         locator.Installed["claude"] = @"C:\fake\claude.exe";
         Git(f.Root, "init", "-q", "-b", "main", app);
@@ -22,14 +24,21 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         var profile = Path.Combine(f.Root, "fleet-profile");
         var credentials = new AgentCredentials(profile, "machine");
         var config = Config(c => c with { Workspaces = [new("App", app, isolated)] });
-        var launcher = Launcher(config, credentials: credentials, agentWorktreeCheck: AgentLaunchWorktreeCheck.Check,
+        var launcher = Launcher(config, credentials: credentialFailure ? new RefusedCredentials() : credentials, agentWorktreeCheck: AgentLaunchWorktreeCheck.Check,
             agentWorktreeRefusalAudit: (_, _, _) => true);
         var result = await GateLaunchAudit.LaunchAsync(launcher,
             new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "claude",
                 Workspace = "App", Permissions = LaunchProtocol.AllowAll },
             "script:machine/dispatcher", new AgentAuditLog(profile),
             new("local", "agent", "script:machine/dispatcher", null), fleet: true, refusal: () => revoked ? "grant off" : null);
-        Assert.Equal(isolated && !revoked ? LaunchOutcome.Started : LaunchOutcome.Refused, result.Outcome);
+        Assert.Equal(isolated && !revoked && !credentialFailure ? LaunchOutcome.Started : LaunchOutcome.Refused, result.Outcome);
+        if (credentialFailure)
+        {
+            Assert.Contains("credential", result.Reason);
+            Assert.Empty(starter.Specs);
+            Assert.Empty(Directory.GetDirectories(config.WorktreeRoot));
+            return;
+        }
         if (revoked) { Assert.Contains("grant off", result.Reason); }
         if (!isolated || revoked) { Assert.Empty(starter.Specs); return; }
         Assert.NotEqual(app, Assert.Single(starter.Specs).WorkingDirectory);
@@ -43,5 +52,13 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
             .GetProperty("credential").GetProperty("scope").GetString());
         var rows = File.ReadAllLines(Assert.Single(Directory.GetFiles(Path.Combine(profile, "audit"), "launches-*.jsonl")));
         Assert.All(rows.Skip(1), row => Assert.Equal("fleet", JsonDocument.Parse(row).RootElement.GetProperty("grant").GetString()));
+    }
+
+    sealed class RefusedCredentials : ILaunchCredentials
+    {
+        public string? Prepare(string session, string launchId) => throw new NotSupportedException();
+        public string? PrepareFleet(string session, string launchId) => throw new IOException("fixture credential save failure");
+        public void Bind(string launchId, int processId, DateTimeOffset startedAt) => throw new NotSupportedException();
+        public void Abandon(string launchId) { }
     }
 }
