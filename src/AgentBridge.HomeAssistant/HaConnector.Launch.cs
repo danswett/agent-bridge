@@ -72,13 +72,18 @@ public sealed partial class HaConnector
     bool LaunchHit(HaTrigger hit)
     {
         if (!launchServing) { return false; }
-        if (hit.EntityId == LaunchEntity("button", "new_session")) { Interlocked.Exchange(ref launchTouched, 1); return true; }
+        if (hit.EntityId == LaunchEntity("button", "new_session") || hit.EntityId == LaunchEntity("sensor", "new_prompt_payload"))
+        {
+            launchIngress.Enqueue(hit with { State = hit.State with { Attributes = hit.State.Attributes.Clone() } });
+            Interlocked.Exchange(ref launchTouched, 1);
+            return true;
+        }
         if (hit.EntityId == LaunchEntity("select", "new_agent")) { Interlocked.Exchange(ref launchAgentTouched, 1); return true; }
         return false;
     }
 
     IEnumerable<string> LaunchWatched() =>
-        launchServing ? [LaunchEntity("button", "new_session"), LaunchEntity("select", "new_agent")] : [];
+        launchServing ? [LaunchEntity("button", "new_session"), LaunchEntity("select", "new_agent"), LaunchEntity("sensor", "new_prompt_payload")] : [];
 
     async Task LaunchAsync(DateTimeOffset now, CancellationToken ct)
     {
@@ -96,11 +101,20 @@ public sealed partial class HaConnector
         }
         if (!options.ConsumeAnswers) { Interlocked.Exchange(ref launchTouched, 0); return; }
         if (launchOutcomesDirty) { await PublishLaunchOutcomesAsync(ct); }
+        if (launchPressBaselined) { await CaptureLaunchIngressAsync(ct); }
         var pressed = Interlocked.Exchange(ref launchTouched, 0) == 1;
-        if (pressed || now >= nextLaunchSweep || !launchPressBaselined)
+        if (pressed || now >= nextLaunchSweep || !launchPressBaselined || launchPressSnapshots.Count > 0)
         {
             nextLaunchSweep = now + options.AnswerSweep;
-            try { await LaunchPressAsync(now, ct); }
+            try
+            {
+                do
+                {
+                    var remaining = launchPressSnapshots.Count;
+                    await LaunchPressAsync(now, ct);
+                    if (launchPressSnapshots.Count >= remaining) { break; }
+                } while (launchPressSnapshots.Count > 0);
+            }
             catch { if (pressed) { Interlocked.Exchange(ref launchTouched, 1); } throw; }
         }
         // After the presses: one made while a launch was starting is busy, even when that launch
@@ -243,7 +257,9 @@ public sealed partial class HaConnector
     // Test-DaemonNewSessionPressed, Use-DaemonLaunchRequest and Resolve-DaemonLaunchRequest.
     async Task LaunchPressAsync(DateTimeOffset now, CancellationToken ct)
     {
-        var press = await ObserveAsync(LaunchEntity("button", "new_session"), ct);
+        var captured = launchPressSnapshots.FirstOrDefault();
+        var press = captured is null ? await ObserveAsync(LaunchEntity("button", "new_session"), ct)
+            : new Observation("present", captured.Press.State, captured.Press, true);
         if (!launchPressBaselined)
         {
             // Once Home Assistant has the card on its ids (the pins land a pass or two after the
@@ -254,12 +270,16 @@ public sealed partial class HaConnector
             launchPressBaselined = true;
             return;
         }
-        if (!press.Present || press.Value == launchPressHandled) { return; }
+        if (!press.Present || press.Value == launchPressHandled)
+        {
+            if (captured is not null) { launchPressSnapshots.RemoveAt(0); }
+            return;
+        }
         // The prompt payload first, and read for certain: unreadable is not "no request", which
         // would launch an agent's press with the card's settings (Allow all, say, for a request
         // that asked to be asked). The press waits for the next pass instead.
         HaState? payload;
-        try { payload = await ha.GetStateAsync(LaunchEntity("sensor", "new_prompt_payload"), ct); }
+        try { payload = captured?.Payload ?? await ha.GetStateAsync(LaunchEntity("sensor", "new_prompt_payload"), ct); }
         catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
         {
             if (launchPayloadUnreadable != press.Value) { log($"Home Assistant connector: a Launch press waits, its launch request unreadable: {Describe(e)}"); }
@@ -269,12 +289,13 @@ public sealed partial class HaConnector
         }
         launchPayloadUnreadable = null;
         launchPressHandled = press.Value;
+        if (captured is not null) { launchPressSnapshots.RemoveAt(0); }
         if (!DateTimeOffset.TryParse(press.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var pressedAt)) { return; }
         var driver = DriverOf(press.Snapshot?.UserId);
         var principal = PrincipalOf(press.Snapshot?.UserId);
         var pressed = Instant(pressedAt);
 
-        var read = ReadLaunchRequest(payload, pressedAt);
+        var read = ReadLaunchRequest(payload, pressedAt, captured?.Payload is not null);
         var payloadSkip = false;
         switch (read.Kind)
         {
@@ -447,7 +468,7 @@ public sealed partial class HaConnector
 
     // Get-DaemonLaunchRequest: the request and settings riding on the prompt payload, and whether
     // they belong to the press at pressedAt. Both times are Home Assistant's.
-    PayloadRequest ReadLaunchRequest(HaState? state, DateTimeOffset pressedAt)
+    PayloadRequest ReadLaunchRequest(HaState? state, DateTimeOffset pressedAt, bool captured = false)
     {
         if (state is null || Stale(state.State) || state.Attributes.ValueKind != JsonValueKind.Object) { return new("none"); }
         var a = state.Attributes;
@@ -455,7 +476,8 @@ public sealed partial class HaConnector
         var hasSettings = a.TryGetProperty("settings", out var settings) && settings.ValueKind != JsonValueKind.Null;
         if (!hasId && !hasSettings) { return new("none"); }
         var id = idElement.ValueKind == JsonValueKind.String ? idElement.GetString() : null;
-        if (id is not null && launchRequestsHandled.Contains(id, StringComparer.Ordinal)) { return new("handled"); }
+        if (id is not null && launchRequestsHandled.Contains(id, StringComparer.Ordinal)
+            && (!captured || launchOutcomes.FirstOrDefault(o => o["request"]!.GetValue<string>() == id)?["outcome"]?.GetValue<string>() != "waiting-press")) { return new("handled"); }
         var age = state.LastUpdated is { } published ? (pressedAt - published).TotalSeconds : double.PositiveInfinity;
         if (age < 0) { return new("newer"); }
         if (age > 60) { return new("stale"); }
@@ -804,6 +826,11 @@ public sealed partial class HaConnector
             foreach (var item in recent.EnumerateArray())
             {
                 if (JsonNode.Parse(item.GetRawText()) is not JsonObject o || o["request"] is not JsonValue r || !r.TryGetValue<string>(out var id)) { continue; }
+                if (o["outcome"]?.GetValue<string>() == "starting" && o["phase"]?.GetValue<string>() is "queued" or "waiting-press")
+                {
+                    o["outcome"] = o["phase"]!.DeepClone();
+                    o.Remove("phase");
+                }
                 if (!DateTimeOffset.TryParse(o["at"]?.GetValue<string>(), out _))
                 {
                     o["at"] = time.GetUtcNow().ToString("o", CultureInfo.InvariantCulture);
@@ -823,7 +850,8 @@ public sealed partial class HaConnector
         {
             var id = o["request"]!.GetValue<string>();
             string? note = null;
-            if (o["outcome"]?.GetValue<string>() == "queued" && !launchQueue.Any(q => q.Id == id))
+            if (o["outcome"]?.GetValue<string>() is "queued" or "waiting-press"
+                && !launchQueue.Any(q => q.Id == id) && !HasLaunchPayload(id))
             {
                 o["outcome"] = "lost-restart";
                 note = "The bridge restarted without this pending payload; relaunch with a new request id.";

@@ -789,9 +789,15 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   names are not served again, the history agents read carries on, and one left at `starting`
   (other than the connector's own launch still under way) is reported `unconfirmed` rather than
   launched a second time. A queued id whose memory-only payload was lost becomes `lost-restart`;
-  the client must relaunch with a new id. Payload capture
-  before a shared-slot overwrite is a separate ingress step; this queue alone cannot recover
-  a payload the connector never observed.
+  the client must relaunch with a new id.
+* **Shared-slot ingress (#2743).** The host watches payload updates as well as button presses,
+  retaining the first snapshot for each id before a later write or clear can overwrite the slot.
+  Each observed press consumes the oldest waiting snapshot not newer than that press; multiple
+  presses before a tick stay separate. Accepted snapshots count toward the pending limit.
+  `waiting-press` and `queued` are internal phases; HA publishes `outcome: starting` plus `phase`
+  so existing `launch-remote.ps1` clients continue waiting. Snapshot payloads remain memory-only;
+  their tombstones survive restart as `lost-restart`. Nothing can recover a payload never
+  observed while the host's watch was disconnected; clients must confirm a request-id outcome.
 * What the button holds when the connector first reads it is not a press, and the note is
   cleared after ten minutes, as the daemon clears it. A note that cannot be shown does not stop
   the launch it describes.

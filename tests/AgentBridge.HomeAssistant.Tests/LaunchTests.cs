@@ -701,7 +701,7 @@ public sealed partial class LaunchTests : IDisposable
         c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
         await Pass(c);
         lock (launched) { Assert.Single(launched); }
-        Assert.Equal("queued", Outcome()["outcome"]!.GetValue<string>());
+        Assert.Equal("queued", Outcome()["phase"]!.GetValue<string>());
         // A person's press, from the card, is not a second launch either.
         c.Observe(ha.Press(Entity("button", "new_session")));
         await Pass(c);

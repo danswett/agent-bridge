@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using AgentBridge.HomeAssistant;
+using AgentBridge.Protocol;
 using Xunit;
 
 public sealed partial class LaunchTests
@@ -57,16 +58,33 @@ public sealed partial class LaunchTests
     }
 
     [Fact]
-    public async Task A_captured_payload_survives_restart_before_its_press_without_using_the_overwritten_slot()
+    public async Task A_captured_payload_lost_at_restart_is_reported_without_replaying_its_id()
     {
         var c = await Ready();
         await SnapshotPayload(c, "ingress-saved", "saved words");
         await Pass(c);
         await c.DisposeAsync();
-        Payload(new JsonObject { ["request"] = "ingress-other", ["text"] = "wrong words" });
         await using var restarted = await Ready();
+        Payload(new JsonObject { ["request"] = "ingress-saved", ["text"] = "must not replay" });
         await Launch(restarted, AgentUser);
-        Assert.Equal("saved words", Assert.Single(launched).Prompt);
+        Assert.Empty(launched);
+        Assert.Equal("lost-restart", Outcome()["outcome"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Legacy_clients_see_starting_while_a_request_waits_in_the_queue()
+    {
+        var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        answer = _ => release.Task;
+        await using var c = await Ready();
+        c.Observe(ha.Press(Entity("button", "new_session")));
+        await Pass(c);
+        await SnapshotPayload(c, "ingress-legacy", "queued prompt");
+        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        await Pass(c);
+        release.SetResult(new LaunchResult(LaunchOutcome.Started));
+        Assert.Equal("starting", Outcome()["outcome"]!.GetValue<string>());
+        Assert.Equal("queued", Outcome()["phase"]!.GetValue<string>());
     }
 
     [Fact]

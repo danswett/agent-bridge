@@ -92,6 +92,12 @@ public sealed partial class HaConnector
             .Where(o => time.GetUtcNow() - DateTimeOffset.Parse(o["at"]!.GetValue<string>(), CultureInfo.InvariantCulture) <= HaContract.LaunchOutcomeRetention)
             .Select(o => (JsonNode)(details.GetValueOrDefault(o["request"]!.GetValue<string>()) ?? o).DeepClone())]);
         var payload = new JsonObject { ["recent"] = recent };
+        foreach (var o in recent.OfType<JsonObject>())
+        {
+            if (o["outcome"]?.GetValue<string>() is not ("queued" or "waiting-press")) { continue; }
+            o["phase"] = o["outcome"]!.DeepClone();
+            o["outcome"] = "starting";
+        }
         static int Bytes(JsonNode node) => Encoding.UTF8.GetByteCount(HaContract.Serialize(node));
         var bytes = Bytes(payload);
         // Prefer keeping ids/outcomes over older verbose diagnostics.

@@ -37,7 +37,7 @@ public sealed partial class LaunchTests
         Payload(new JsonObject { ["request"] = "queue-second", ["text"] = "second prompt" });
         c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
         await Pass(c);
-        Assert.Equal("queued", Outcome()["outcome"]!.GetValue<string>());
+        Assert.Equal("queued", Outcome()["phase"]!.GetValue<string>());
         var journal = File.ReadAllText(Path.Combine(folder, "ha-connector.json.launch"));
         release.SetResult(new LaunchResult(LaunchOutcome.Started));
         await c.DeliveredAsync();
