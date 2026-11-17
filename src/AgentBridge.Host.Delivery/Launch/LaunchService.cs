@@ -63,6 +63,8 @@ public sealed class LaunchServiceOptions
     public required string ClaudeHome { get; init; }
     public bool? ClaudeConfigDirExplicit { get; init; }
     public required string CodexHome { get; init; }
+    public bool HomeAssistantEnabled { get; init; }
+    public Uri? HomeAssistantBaseUrl { get; init; }
     public LaunchConfig Config { get; init; } = LaunchConfig.Default;
     public bool PlatformSupported { get; init; } = OperatingSystem.IsWindows();
 
@@ -1096,6 +1098,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
         Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
     {
+        if (options.HomeAssistantEnabled && options.HomeAssistantBaseUrl is null)
+        {
+            return Refused("Home Assistant is enabled on this host but its endpoint is not configured; no session was started");
+        }
         Pending follow;
         LaunchedWith launched;
         await starting.WaitAsync(ct);
@@ -1225,6 +1231,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var environment = AgentEnvironment.For(options.CopilotHome, options.ClaudeHome,
                 options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath());
             environment[Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched";
+            if (options.HomeAssistantEnabled) { environment["AGENT_HA_URL"] = options.HomeAssistantBaseUrl!.ToString(); }
             // Set to nothing when none is issued, so a token of the host's own is never inherited.
             environment[Launchers.TokenVariable] = null;
             // GH_TOKEN and GITHUB_TOKEN are left alone: the CLI prefers this one, and the session's

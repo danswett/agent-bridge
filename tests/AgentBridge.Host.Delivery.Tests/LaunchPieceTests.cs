@@ -391,6 +391,26 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [WindowsFact]
+    public void A_configured_HA_endpoint_overrides_a_stale_inherited_value_and_keeps_other_settings()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var inheritedUrl = Environment.GetEnvironmentVariable("AGENT_HA_URL");
+        try
+        {
+            Environment.SetEnvironmentVariable("AGENT_HA_URL", "https://stale.example/");
+            var entries = WindowsAgentStarter.EnvironmentBlock(new Dictionary<string, string?>
+            {
+                ["AGENT_HA_URL"] = "https://configured.example/",
+                ["AGENT_BRIDGE_TEST_RETAINED"] = "host-setting",
+            }).Split('\0', StringSplitOptions.RemoveEmptyEntries);
+
+            Assert.Contains("AGENT_HA_URL=https://configured.example/", entries);
+            Assert.Contains("AGENT_BRIDGE_TEST_RETAINED=host-setting", entries);
+        }
+        finally { Environment.SetEnvironmentVariable("AGENT_HA_URL", inheritedUrl); }
+    }
+
+    [WindowsFact]
     [Trait("Category", "Process")]
     public void A_started_agent_gets_the_session_variable_on_top_of_the_hosts_own_environment()
     {

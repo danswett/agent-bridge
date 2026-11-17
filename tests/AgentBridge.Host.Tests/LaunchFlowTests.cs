@@ -92,7 +92,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     }
 
     private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null, IDiagnosticsJournal? journal = null,
-        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null)
+        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null,
+        bool homeAssistantEnabled = false, Uri? homeAssistantBaseUrl = null)
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
@@ -104,6 +105,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             ClaudeHome = homes?.Claude ?? f.ClaudeHome,
             ClaudeConfigDirExplicit = homes?.ClaudeConfigDirExplicit,
             CodexHome = homes?.Codex ?? f.CodexHome,
+            HomeAssistantEnabled = homeAssistantEnabled,
+            HomeAssistantBaseUrl = homeAssistantBaseUrl,
             Config = config,
             PlatformSupported = true,
             RegistrationWait = wait ?? TimeSpan.FromSeconds(5),
@@ -191,6 +194,35 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(saved.Codex, environment["CODEX_HOME"]);
         Assert.Equal(locator.PathEnvironment, environment["PATH"]);
         Assert.False(string.IsNullOrEmpty(environment[Launchers.SessionVariable]));
+    }
+
+    [Fact]
+    public async Task A_remote_HA_launch_passes_the_receiving_hosts_URL_and_agent_token_to_its_child()
+    {
+        var url = new Uri("https://ha.receiver.invalid:8123/");
+        var credentials = new RecordedCredentials();
+        var launcher = Launcher(Config(), credentials: credentials, homeAssistantEnabled: true, homeAssistantBaseUrl: url);
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"), launcher: launcher).HandleAsync;
+        var channel = await OpenAsync();
+
+        await LaunchAsync(channel, new { agent = "copilot", workspace = "App" });
+
+        var environment = Assert.Single(starter.Specs).Environment!;
+        Assert.True(environment.TryGetValue("AGENT_HA_URL", out var configuredUrl));
+        Assert.Equal(url.ToString(), configuredUrl);
+        var launchId = credentials.Calls[0].Split(' ')[2];
+        Assert.Equal("tok-" + launchId, environment[Launchers.TokenVariable]);
+    }
+
+    [Fact]
+    public async Task An_HA_enabled_launch_without_an_endpoint_is_refused_before_starting_a_child()
+    {
+        var result = await Launcher(Config(), homeAssistantEnabled: true).LaunchAsync(
+            new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Contains("endpoint", result.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(starter.Specs);
     }
 
     sealed class RecordedCredentials : ILaunchCredentials

@@ -1114,6 +1114,8 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         ClaudeHome = options.ClaudeHome,
         ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,
         CodexHome = options.CodexHome,
+        HomeAssistantEnabled = settings.HomeAssistant.Enabled,
+        HomeAssistantBaseUrl = settings.HomeAssistant.BaseUrl,
         Config = settings.Launch,
         // A session waiting to be restored keeps its worktree as a live one does (#780).
         WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),
