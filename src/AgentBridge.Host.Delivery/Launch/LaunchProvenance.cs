@@ -61,17 +61,28 @@ internal sealed class LaunchProvenance
         lock (gate) { Check(); origins.Remove(request); Save(); }
     }
 
-    public void Bound(Guid request, string session, SessionProcess process)
+    public void Bound(Guid request, string session, SessionProcess process, Started launched, bool verifiedHandoff = false)
     {
         lock (gate)
         {
             Check();
-            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Attribution);
+            var current = origins.GetValueOrDefault(request);
+            var alreadyBound = current is { } existing
+                && string.Equals(existing.Session, session, StringComparison.OrdinalIgnoreCase)
+                && existing.Process == process;
+            if (!alreadyBound && !MatchesStartedProcess(launched, process) && !verifiedHandoff)
+            { throw new InvalidOperationException("refused: process is not the launched process or a verified handoff"); }
+            var origin = new Origin(session, process, current?.Attribution);
             if (origins.GetValueOrDefault(request) == origin) { return; }
             origins[request] = origin;
             Save();
         }
     }
+
+    internal static bool MatchesStartedProcess(Started launched, SessionProcess process) =>
+        process.Id == launched.ProcessId
+        && process.StartedAt is { } at
+        && Math.Abs((at - launched.StartedAt).TotalMilliseconds) < 1000;
 
     public bool Contains(string session, SessionProcess? process)
     {

@@ -1656,9 +1656,19 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     {
         if (source.ProcessOf(id) is { StartedAt: not null } process)
         {
-            try { provenance.Bound(p.Key, id, process); }
-            catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
-            { log($"launch {Short(p.Key)}: process provenance could not be bound: {e.Message}"); }
+            var launchedProcess = LaunchProvenance.MatchesStartedProcess(p.Started, process);
+            var verifiedHandoff = !launchedProcess && starter.Owns(p.Started, process.Id) == true;
+            if (launchedProcess || verifiedHandoff)
+            {
+                try { provenance.Bound(p.Key, id, process, p.Started, verifiedHandoff); }
+                catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
+                { log($"launch {Short(p.Key)}: process provenance could not be bound: {e.Message}"); }
+            }
+            else if (!p.ProcessBindingRefusalLogged)
+            {
+                p.ProcessBindingRefusalLogged = true;
+                log($"launch {Short(p.Key)}: process provenance was not bound; the session's current process is not the launched process or a verified handoff");
+            }
         }
         if (p.NotedId == id || SessionStarted is not { } started) { return; }
         p.NotedId = id;
@@ -2013,6 +2023,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         public bool HandedOn { get; set; }
         public bool RegisteredLate { get; set; }
         public string? Bound { get; set; }
+        public bool ProcessBindingRefusalLogged { get; set; }
     }
 
     static string Short(Guid key) => key.ToString()[..8];

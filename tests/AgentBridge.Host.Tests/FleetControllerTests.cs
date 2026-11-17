@@ -40,7 +40,8 @@ public sealed partial class StopFlowTests
         if (recorded)
         {
             provenance.Preparing(request, Id, new LaunchAttribution("local", personOrigin ? "person-client" : "agent", credential.Principal!, fleetOrigin));
-            provenance.Bound(request, Id, source.ProcessOf(Id)!);
+            var process = source.ProcessOf(Id)!;
+            provenance.Bound(request, Id, process, new Started(process.Id, process.StartedAt!.Value));
         }
         var controller = new FleetController(credentials, source, new FleetLauncher(provenance), Stopper(graceMs: 1),
             new AgentAuditLog(Path.Combine(f.Root, "fleet-audit"), clock), clearance, clock);

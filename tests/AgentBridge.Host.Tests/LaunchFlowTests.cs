@@ -1353,6 +1353,33 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     }
 
     [Fact]
+    public async Task A_pending_fleet_launch_does_not_bind_a_person_resumed_process_with_the_same_session_id()
+    {
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(10));
+        var registered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        launcher.SessionStarted += (id, _) => registered.TrySetResult(id);
+
+        var result = await launcher.LaunchAuditedAsync(
+            new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" },
+            "fleet",
+            _ => _ => { },
+            attribution: new LaunchAttribution("local", "agent", "fleet", FleetController: true));
+
+        Assert.Equal(LaunchOutcome.Unconfirmed, result.Outcome);
+        var session = Assert.IsType<string>(result.Session);
+        var personProcess = starter.Pids[0] + 1000;
+        f.CopilotSession(session, personProcess, lockWrite: DateTimeOffset.UtcNow);
+        f.Processes.Run(AgentKind.Copilot, personProcess, $"copilot --session-id {session}", DateTimeOffset.UtcNow);
+        await source.RefreshAsync();
+
+        Assert.Equal(session, await registered.Task.WaitAsync(Patience));
+        var process = Assert.IsType<SessionProcess>(source.ProcessOf(session));
+        Assert.NotEqual(starter.Pids[0], process.Id);
+        var refusal = Assert.Throws<InvalidOperationException>(() => launcher.FleetLaunchedSession(session, process));
+        Assert.Contains("unfinished launch", refusal.Message);
+    }
+
+    [Fact]
     public void A_failed_process_binding_keeps_the_durable_launch_intent_after_restart()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -1360,9 +1387,10 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var provenance = new LaunchProvenance(file, logged.Enqueue);
         var request = Guid.NewGuid();
         provenance.Preparing(request);
+        var started = new Started(1234, DateTimeOffset.UtcNow);
         using (var locked = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            Assert.Throws<InvalidOperationException>(() => provenance.Bound(request, starter.CodexId, new SessionProcess(1234, DateTimeOffset.UtcNow)));
+            Assert.Throws<InvalidOperationException>(() => provenance.Bound(request, starter.CodexId, new SessionProcess(1234, started.StartedAt), started));
         }
         var restarted = new LaunchProvenance(file, logged.Enqueue);
         Assert.Throws<InvalidOperationException>(() => restarted.Contains(starter.CodexId, new SessionProcess(1234, DateTimeOffset.UtcNow)));
