@@ -293,7 +293,8 @@ export const wellFormed = (s) => s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(
 // with nothing in it is sent as such, for checkAnswer to name.
 export function buildAnswer(question, state) {
   if (question.fields.length === 0) { return { answer: { text: wellFormed(state.text ?? '') }, problems: [] }; }
-  const fields = {};
+  // Field names are data: __proto__ must not invoke Object.prototype's setter.
+  const fields = Object.create(null);
   const problems = [];
   for (const field of question.fields) {
     const st = state[field.name];
@@ -329,7 +330,7 @@ export function buildAnswer(question, state) {
         break;
     }
   }
-  return { answer: { fields }, problems };
+  return { answer: { fields: { ...fields } }, problems };
 }
 
 // The field a problem from checkAnswer is about, by its quoted label, so the form can mark

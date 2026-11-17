@@ -96,6 +96,17 @@ Do not remove or bypass those live compatibility controls in this documentation 
 Whether optional HA gains a native replacement is a #2407 design/runtime question;
 it cannot be recorded as passed by pointing at the old selectors.
 
+### PWA serialization follow-up (November 17, 2026, Pacific)
+
+The focused [answer-model tests](../../pwa/test/unit/answers.test.mjs) now carry
+all five row-17 fields together through question reading, form state, validation
+and JSON request serialization. They also rename each field to `__proto__` in
+turn: it remains an own named value, never a prototype setter or an omitted answer.
+Answer construction uses a prototype-free temporary dictionary, then returns the
+ordinary JSON object expected by existing callers. No authority or guard changes.
+This is unit-level PWA evidence only, not a browser, Android, host-transcript or
+live rehearsal receipt. Every client/stage run and the retained gaps below remain.
+
 ## Live contract to retain
 
 Use the checklist's P4 five-field question without Other, in one native surface.
