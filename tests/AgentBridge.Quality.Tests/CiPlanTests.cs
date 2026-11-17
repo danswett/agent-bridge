@@ -447,12 +447,14 @@ public class CiPlanTests
         Assert.False(prep.Children.ContainsKey("continue-on-error"));
     }
 
-    [Fact, Trait("Category", "Process")]
-    public async Task Popup_preparation_parses_and_obeys_the_popup_and_probe_failure_rule_offline()
+    [Theory, Trait("Category", "Process")]
+    [InlineData(".github/actions/arm64-foreground/test-dismiss.ps1")]
+    [InlineData("quality/test-ring-drift.ps1")]
+    public async Task Workflow_scripts_obey_their_failure_rules_offline(string script)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var start = new System.Diagnostics.ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", Path.Combine(root, ".github", "actions", "arm64-foreground", "test-dismiss.ps1") })
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", Path.Combine(root, script) })
             start.ArgumentList.Add(arg);
         using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
         var output = process.StandardOutput.ReadToEndAsync();
