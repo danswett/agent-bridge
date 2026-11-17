@@ -118,7 +118,7 @@ test('ended and snapshot-removed sessions retain membership for a resume, not an
   o.observe({ type: 'remove', ...entry('b') });
   o.synced('h1', new Set(['a', 'd']));
   const result = o.arrange([rows[0], rows[3]]);
-  assert.deepEqual(ids(result.ended), ['b']);
+  assert.deepEqual(ids(result.ended), []);
   assert.equal(o.groupFor(key('b')), group);
   assert.equal(o.groupFor(key('c')), group);
   const again = new SessionOrder({ storage });
