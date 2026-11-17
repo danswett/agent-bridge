@@ -141,6 +141,15 @@ const HOST_V2_ORDER = ['id', 'dh', 'hostSign', 'hostSignAlg', 'hostSignProof', '
 // What `hostSignProof` signs: F("agent-bridge host key binding v1", account, generation, dh).
 export const hostKeyBinding = (account, generation, dh) => frame(utf8(LABEL.hostKeyBinding), utf8(account), utf8(generation), dh);
 
+// A public HostEnrollment.Describe result, not a roster add or enrollment approval.
+export async function parseHostDescriptor(bytes, account, generation) {
+  const node = parseStrict(bytes, 'device');
+  if (typeof account !== 'string' || typeof generation !== 'string') throw new RosterFormatError(REFUSAL.type, 'descriptor context');
+  if (account.length === 0 || utf8Bytes(account) > MAX_ACCOUNT_BYTES || hasControl(account)) throw new RosterFormatError(REFUSAL.account, 'descriptor account');
+  if (!isId(generation)) throw new RosterFormatError(REFUSAL.id, 'descriptor generation');
+  return parseDevice(node, 2, account, generation);
+}
+
 async function parseDevice(node, version, account, generation) {
   const d = object(node, 'body.device');
   if (!d.has('kind')) throw new RosterFormatError(REFUSAL.missing, 'body.device.kind');

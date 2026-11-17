@@ -9,7 +9,7 @@ import { RosterFormatError } from '../../js/roster/refusal.js';
 import { base64Url, tryBase64Url, fromBase64Url, fromHex, hex } from '../../js/roster/codec.js';
 import { frame, utf8 } from '../../js/roster/framing.js';
 import { point, checkRosterSignature, verify, fromRaw } from '../../js/roster/p256.js';
-import { parseEntry, deviceId, fingerprint, signedBy, signedByCosigner, presenceChallenge, isUtc } from '../../js/roster/entry.js';
+import { parseEntry, parseHostDescriptor, deviceId, fingerprint, signedBy, signedByCosigner, presenceChallenge, isUtc } from '../../js/roster/entry.js';
 import { checkAssertion } from '../../js/roster/webauthn.js';
 import * as enrollment from '../../js/roster/enrollment.js';
 
@@ -98,6 +98,53 @@ test('every refused entry is refused with the library\'s code', async () => {
     if (code !== v.code) wrong.push(`${v.name}: expected ${v.code}, got ${code}`);
   }
   assert.deepEqual(wrong, []);
+});
+
+const hostVector = vectors.entries.valid.find((v) => v.name === 'add-host-v2');
+const vectorBody = (v) => JSON.parse(new TextDecoder().decode(b64(JSON.parse(v.wrapper).body)));
+const hostBody = vectorBody(hostVector);
+const descriptorBytes = (device) => utf8(JSON.stringify(device));
+
+test('the C# host-v2 descriptor round trips without an entry signature or signer authority', async () => {
+  const parsed = await parseHostDescriptor(descriptorBytes(hostBody.device), hostBody.account, hostBody.generation);
+  const entry = await parseEntry(utf8(hostVector.wrapper));
+  assert.deepEqual(parsed, entry.body.device);
+  assert.equal(parsed.sign, null);
+  assert.equal(parsed.presence, null);
+});
+
+test('standalone host descriptors replay every shared C# host-proof refusal', async () => {
+  for (const v of vectors.entries.refused.filter((v) => v.name.startsWith('host-proof-') || v.name.startsWith('host-sign-'))) {
+    const body = vectorBody(v);
+    assert.equal(await refusal(parseHostDescriptor(descriptorBytes(body.device), body.account, body.generation)), v.code, v.name);
+  }
+});
+
+test('wrong account, wrong generation, tampered dh and tampered proof each fail the binding', async (t) => {
+  const other = vectorBody(vectors.entries.valid.find((v) => v.name === 'add-grandfathered')).device;
+  for (const [name, account, generation, device] of [
+    ['wrong account', 'another-account', hostBody.generation, hostBody.device],
+    ['wrong generation', hostBody.account, '0'.repeat(32), hostBody.device],
+    ['tampered dh', hostBody.account, hostBody.generation, { ...hostBody.device, id: other.id, dh: other.dh }],
+    ['tampered proof', hostBody.account, hostBody.generation, { ...hostBody.device,
+      hostSignProof: vectorBody(vectors.entries.refused.find((v) => v.name === 'host-proof-by-another-key')).device.hostSignProof }],
+  ]) {
+    await t.test(name, async () => {
+      assert.equal(await refusal(parseHostDescriptor(descriptorBytes(device), account, generation)), 'host-proof');
+    });
+  }
+});
+
+test('standalone descriptor parsing keeps strict JSON, host-only schema and context checks', async () => {
+  const bytes = descriptorBytes(hostBody.device);
+  assert.equal(await refusal(parseHostDescriptor(utf8(new TextDecoder().decode(bytes).replace('"id":', '"kind":"host","id":')),
+    hostBody.account, hostBody.generation)), 'duplicate-member');
+  assert.equal(await refusal(parseHostDescriptor(descriptorBytes({ ...hostBody.device, sign: hostBody.device.hostSign }),
+    hostBody.account, hostBody.generation)), 'unknown-member');
+  assert.equal(await refusal(parseHostDescriptor(descriptorBytes({ ...hostBody.device, kind: 'pwa' }),
+    hostBody.account, hostBody.generation)), 'version');
+  assert.equal(await refusal(parseHostDescriptor(bytes, '', hostBody.generation)), 'account');
+  assert.equal(await refusal(parseHostDescriptor(bytes, hostBody.account, 'not-a-generation')), 'id');
 });
 
 test('a presence assertion passes or fails each check as the library\'s does', async () => {

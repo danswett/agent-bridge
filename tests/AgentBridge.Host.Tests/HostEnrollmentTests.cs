@@ -114,6 +114,44 @@ public sealed class HostEnrollmentTests : IDisposable
     }
 
     [WindowsFact("host enrollment uses Windows hostSign custody")]
+    public async Task Generated_descriptor_round_trips_through_the_PWA_reader()
+    {
+        var reader = Reader();
+        using var key = HostSignKey.LoadOrCreate(profile, KeyStorage.Dpapi);
+        var result = new HostEnrollment(reader, Account, Generation).Describe(profile, World.Keys("H").Dh.Public);
+        Assert.Null(result.Refusal);
+        var start = new ProcessStartInfo("node")
+        {
+            WorkingDirectory = Path.GetFullPath(Path.Combine(VectorFiles.Folder, "..", "..", "..", "pwa")),
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        foreach (var argument in new[] { "--input-type=module", "--eval", """
+            import assert from 'node:assert/strict';
+            import { readFileSync } from 'node:fs';
+            import { parseHostDescriptor } from './js/roster/entry.js';
+            import { base64Url } from './js/roster/codec.js';
+            import { utf8 } from './js/roster/framing.js';
+            const { descriptor, account, generation } = JSON.parse(readFileSync(0, 'utf8'));
+            const parsed = await parseHostDescriptor(utf8(descriptor), account, generation);
+            const expected = JSON.parse(descriptor);
+            for (const field of ['id', 'kind', 'platform', 'name', 'hostSignAlg']) assert.equal(parsed[field], expected[field]);
+            for (const field of ['dh', 'hostSign', 'hostSignProof']) assert.equal(base64Url(parsed[field]), expected[field]);
+            assert.equal(parsed.sign, null);
+            assert.equal(parsed.presence, null);
+            """ })
+        { start.ArgumentList.Add(argument); }
+        using var child = Process.Start(start)!;
+        var output = child.StandardOutput.ReadToEndAsync();
+        var error = child.StandardError.ReadToEndAsync();
+        await child.StandardInput.WriteAsync(JsonSerializer.Serialize(new { descriptor = result.Descriptor, account = Account, generation = Generation }));
+        child.StandardInput.Close();
+        try { await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30)); }
+        finally { if (!child.HasExited) { child.Kill(entireProcessTree: true); await child.WaitForExitAsync(); } }
+        Assert.True(child.ExitCode == 0, await error);
+        Assert.Equal("", await output);
+    }
+
+    [WindowsFact("host enrollment uses Windows hostSign custody")]
     public void Descriptor_proof_round_trips_but_only_the_exact_active_approver_add_and_matched_exchange_enroll()
     {
         var reader = Reader();
