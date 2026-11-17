@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Host;
+using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -52,6 +53,10 @@ public sealed class FleetLaunchRetirementTests : LaunchFlowFixture
         Assert.Equal(LaunchOutcome.Unconfirmed, (await Service().LaunchFleetAsync(request, "script:machine/dispatcher",
             new AgentAuditLog(Profile, clock), () => null, _ => null)).Outcome);
         Assert.Equal(1, launcher.Dispatches);
+        var late = Guid.NewGuid().ToString("D");
+        launcher.Registered!(late);
+        Assert.Equal(LaunchOutcome.Started, (await Service().LaunchFleetAsync(request, "script:machine/dispatcher",
+            new AgentAuditLog(Profile, clock), () => null, _ => null)).Outcome);
         var (rows, complete) = GateAuditProjection.Load(Profile);
         Assert.True(complete);
         var retirement = Assert.Single(rows, row => row.Action == "fleet.retire");
@@ -61,6 +66,11 @@ public sealed class FleetLaunchRetirementTests : LaunchFlowFixture
         Assert.Equal(LaunchOutcome.Unconfirmed, (await Service().LaunchFleetAsync(Request, "script:machine/dispatcher",
             new AgentAuditLog(Profile, clock), () => null, _ => null)).Outcome);
         Assert.Equal(2, (await Call("fleet.status", new { })).GetProperty("Hourly").GetInt32());
+        f.CopilotSession(late, 901);
+        f.Processes.Run(AgentKind.Copilot, 901, "--session-id " + late, DateTimeOffset.UtcNow);
+        launcher.LiveSession = late;
+        await source.RefreshAsync();
+        Assert.Equal(2, (await Call("fleet.status", new { })).GetProperty("Live").GetInt32());
     }
 
     [Theory]
@@ -88,13 +98,22 @@ public sealed class FleetLaunchRetirementTests : LaunchFlowFixture
         var request = await Reserve();
         foreach (var id in new[] { "not-a-uuid", Guid.NewGuid().ToString("D") })
         { await Assert.ThrowsAnyAsync<ArgumentException>(() => Call("fleet.retire", new { request = id })); }
+        var file = Assert.Single(Directory.GetFiles(Path.Combine(Profile, "audit"), "launches-*.jsonl"));
+        using (var held = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var unwritable = await Assert.ThrowsAsync<InvalidOperationException>(() => Call("fleet.retire", new { request = request.Request }));
+            Assert.Contains("could not be recorded", unwritable.Message);
+        }
+        Assert.Equal(1, (await Call("fleet.status", new { })).GetProperty("Live").GetInt32());
+        Assert.DoesNotContain(GateAuditProjection.Load(Profile).Rows, row => row.Action == "fleet.retire");
         launcher.Registered!(Guid.NewGuid().ToString("D"));
         var settled = await Assert.ThrowsAsync<InvalidOperationException>(() => Call("fleet.retire", new { request = request.Request }));
         Assert.Contains("unresolved", settled.Message);
         File.AppendAllText(Assert.Single(Directory.GetFiles(Path.Combine(Profile, "audit"), "launches-*.jsonl")), "broken\n");
         foreach (var op in new[] { "fleet.status", "fleet.retire" })
         {
-            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Call(op, new { request = request.Request }));
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                Call(op, op == "fleet.status" ? new { } : (object)new { request = request.Request }));
             Assert.Contains("history", error.Message);
         }
     }
@@ -103,6 +122,8 @@ public sealed class FleetLaunchRetirementTests : LaunchFlowFixture
     {
         public int Dispatches;
         public Action<string>? Registered;
+        public string? LiveSession;
+        public bool IsFleetWorker(string session, SessionProcess? process) => session == LiveSession && process is not null;
         public bool Available => true;
         public LaunchConfig FleetConfig => LaunchConfig.Default;
         public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -110,8 +131,9 @@ public sealed class FleetLaunchRetirementTests : LaunchFlowFixture
         public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
             Action<string>? terminal = null, CancellationToken cancellationToken = default)
         {
-            Registered = prepare(Guid.NewGuid());
-            if (Registered is null) { return Task.FromResult(new LaunchResult(LaunchOutcome.Refused)); }
+            var registered = prepare(Guid.NewGuid());
+            if (registered is null) { return Task.FromResult(new LaunchResult(LaunchOutcome.Refused)); }
+            Registered = registered;
             Dispatches++;
             return Task.FromResult(new LaunchResult(LaunchOutcome.Unconfirmed));
         }

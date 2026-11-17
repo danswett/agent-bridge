@@ -59,6 +59,16 @@ Unresolved admissions conservatively retain a live slot; ordinary coordinator la
 do not use these fleet limits.
 Proven pre-start refusals and failures release the live slot once recorded; a registered
 worker that closes before becoming ready also releases it. Ambiguous starts stay reserved.
+At the machine, `agent-bridge-host fleet status [--profile <name>]` reports the configured
+caps, `enabled`, hourly admissions (`hourly`), combined registered/reserved live count
+(`live`), and unresolved request UUIDs (`reserved`), using admission's own projection.
+After checking an ambiguous start, the owner may run `agent-bridge-host fleet retire
+<request UUID> [--profile <name>]`. It durably retires only that unresolved reservation,
+idempotently, without stopping a process, refunding hourly usage or rewriting launch
+outcomes/replay. A late registered worker still counts as live. Both commands require
+an uncredentialed host-CLI caller, freshly checked outside agent ancestry; app, agent,
+script and remote callers cannot use them. Unreadable history refuses both operations;
+an unwritable audit refuses retirement, retaining the reservation.
 
 ## Dispatch facts seam (#2788, not wired)
 

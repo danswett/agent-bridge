@@ -94,31 +94,18 @@ public sealed class SessionService
         return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
     }
 
+    internal FleetLaunchState FleetState(AgentAuditLog audit) => new(audit, source, launcher, Time);
+
     string? CheckFleetCapacity(AgentAuditLog audit)
     {
-        var (settings, problem) = HostSettings.Load(audit.Profile);
-        if (problem is not null || settings.SectionProblems.Any()) { return "fleet admission settings cannot be read safely"; }
-        if (!settings.Agents.Enabled) { return "fleet admission is disabled while agents.enabled is off"; }
-        var limits = settings.Agents.Limits.Launch;
-        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
-        if (!complete || !audit.Verify(launch: true).Intact) { return "fleet admission history cannot be checked safely"; }
-        var intents = rows.Where(row => row.Grant == "fleet" && row.Action == "session.launch"
-            && row.Gate is { Phase: "intent" } && row.Outcome == "reserved").ToArray();
-        if (intents.Count(row => row.At > Time.GetUtcNow() - TimeSpan.FromHours(1)) >= limits.FleetPerHour)
-        { return $"the hourly fleet launch cap ({limits.FleetPerHour}) has been reached"; }
-        if (source is null || source.Held is not null) { return "fleet admission cannot check live workers while session discovery is incomplete"; }
-        var completed = rows.Where(row => row.Action == "session.launch" && row.Gate is { Phase: "terminal" })
-            .Select(row => row.Gate!.Operation).ToHashSet();
-        var live = intents.Count(row => !completed.Contains(row.Gate!.Operation));
         try
         {
-            foreach (var session in source.Snapshot())
-            {
-                if (launcher!.IsFleetWorker(session.Id, source.ProcessOf(session.Id))) { live++; }
-            }
+            var status = FleetState(audit).Status();
+            if (!status.Enabled) { return "fleet admission is disabled while agents.enabled is off"; }
+            if (status.Hourly >= status.FleetPerHour) { return $"the hourly fleet launch cap ({status.FleetPerHour}) has been reached"; }
+            return status.Live >= status.LiveFleetWorkers ? $"the live fleet worker cap ({status.LiveFleetWorkers}) has been reached" : null;
         }
-        catch (InvalidOperationException) { return "fleet admission cannot check live workers safely"; }
-        return live >= limits.LiveFleetWorkers ? $"the live fleet worker cap ({limits.LiveFleetWorkers}) has been reached" : null;
+        catch (InvalidOperationException e) { return e.Message; }
     }
 
     // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or

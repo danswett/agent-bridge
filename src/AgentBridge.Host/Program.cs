@@ -351,6 +351,9 @@ switch (command)
             if (ConfigCommands.Writes(rest) && Refused("change the host's config")) { return 4; }
             return ConfigCommands.Run(rest, LoadIdentity().Folder, Console.Out, Console.Error);
         }
+    case "fleet":
+        if (Refused("inspect or retire fleet reservations")) { return 4; }
+        return await AgentBridge.Host.Cli.FleetLaunchCommands.RunAsync(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
     case "scripts":
         if (Refused("change script credentials")) { return 4; }
         return await AgentBridge.Host.Cli.ScriptCredentialCommands.RunAsync(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
@@ -404,6 +407,7 @@ switch (command)
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Cli.ScriptCredentialCommands.Usage);
+        Console.Error.WriteLine("       " + AgentBridge.Host.Cli.FleetLaunchCommands.Usage);
         Console.Error.WriteLine("       " + AgentCommands.Usage);
         Console.Error.WriteLine("       " + StopCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);

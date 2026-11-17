@@ -205,6 +205,18 @@ the app Rename entry remains follow-on work on #1777. The local app backend may 
 Registry publication, launch-time `fleetName` and host-linked resume carry-over are also follow-ons;
 setting a name here does not yet make it discoverable through `fleet.find`.
 
+## Fleet reservation management (`fleet.status`, `fleet.retire`)
+
+Only a freshly classified, uncredentialed host-CLI caller may use these local-only ops.
+`fleet.status` takes `{}` and returns `{ enabled, fleetPerHour, liveFleetWorkers, hourly,
+live, reserved }`; `reserved` contains unresolved launch request UUIDs, excluding owner
+retirements. Settings, audit or discovery failures refuse status rather than report zeros.
+`fleet.retire` takes exactly `{ "request": "<launch request UUID>" }` and returns
+`{ request, retired: true }`. Unknown or settled requests are refused; repeated retirement
+is idempotent. A `person:local` `fleet.retire` row in the durable launch-audit stream
+releases only the unresolved reservation, without changing replay, hourly charges or
+registered live-worker accounting. Retirement refuses unreadable or unwritable audit.
+
 ## Script credential management (`scripts.add`, `scripts.revoke`)
 
 Host CLI only, with fresh ancestry checks; a same-user safety rail, not a security boundary.

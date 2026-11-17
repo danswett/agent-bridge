@@ -109,7 +109,7 @@ public sealed class AgentAuditLog
                     }
                     line = line with { Gate = metadata, Reason = metadata.ReasonCode, DataSha256 = null, TextLength = null };
                 }
-                var launch = entry.Action == "session.launch";
+                var launch = entry.Action is "session.launch" or "fleet.retire";
                 var anchored = entry.Gate is not null || HasHeads(folder);
                 var expected = ReadHead(folder, launch);
                 string[] faults = anchored ? new[] { Continuity(profile, false, log), Continuity(profile, true, log) } : [];
