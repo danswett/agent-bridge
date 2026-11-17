@@ -44,6 +44,7 @@ internal static class GateLaunchAudit
         }
 
         string? denied = null;
+        AgentAuditEntry? reserved = null;
         Action<string>? Prepare(Guid operation)
         {
             if ((denied = refusal?.Invoke()) is not null) { return null; }
@@ -52,10 +53,18 @@ internal static class GateLaunchAudit
             var intent = new AgentAuditEntry(ingress.Path == "relay" ? "in" : "local", id.ToString(),
                 ingress.Principal, [], "session.launch", id.ToString(), "reserved", Gate: gate) { Grant = fleet ? "fleet" : null };
             if (!audit.Append(intent)) { return null; }
+            reserved = intent;
             return session => { audit.Append(intent with { Target = session, Outcome = "started", Gate = gate with { Phase = "terminal" } }); };
         }
         var outcome = fleet ? await launcher.LaunchFleetAsync(request, peer, Prepare, ct)
             : await launcher.LaunchAuditedAsync(request, peer, Prepare, ct);
+        if (fleet && reserved is not null && outcome.Outcome is LaunchOutcome.Refused or LaunchOutcome.Busy or LaunchOutcome.Failed)
+        {
+            var reason = outcome.Outcome switch { LaunchOutcome.Failed => "failed", LaunchOutcome.Busy => "busy", _ => "refused" };
+            if (!audit.Append(reserved with { Outcome = reason == "busy" ? "refused" : reason,
+                Gate = reserved.Gate! with { Phase = "terminal", ReasonCode = reason } }))
+            { return Refused("the fleet launch reservation could not be released durably"); }
+        }
         return denied is null ? outcome : Refused(denied);
     }
 

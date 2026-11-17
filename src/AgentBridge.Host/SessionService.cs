@@ -104,17 +104,22 @@ public sealed class SessionService
         if (!complete || !audit.Verify(launch: true).Intact) { return "fleet admission history cannot be checked safely"; }
         var intents = rows.Where(row => row.Grant == "fleet" && row.Action == "session.launch"
             && row.Gate is { Phase: "intent" } && row.Outcome == "reserved").ToArray();
-        if (intents.Count(row => row.At > Time.GetUtcNow() - TimeSpan.FromHours(1)) >= limits.FleetPerHour)
+        var now = Time.GetUtcNow();
+        if (intents.Where(row => row.At > now - TimeSpan.FromHours(1)).DistinctBy(row => row.Request).Count() >= limits.FleetPerHour)
         { return $"the hourly fleet launch cap ({limits.FleetPerHour}) has been reached"; }
         if (source is null || source.Held is not null) { return "fleet admission cannot check live workers while session discovery is incomplete"; }
         var completed = rows.Where(row => row.Action == "session.launch" && row.Gate is { Phase: "terminal" })
             .Select(row => row.Gate!.Operation).ToHashSet();
-        var live = intents.Count(row => !completed.Contains(row.Gate!.Operation));
+        // A crash or an unconfirmed registration must not occupy a slot forever.
+        var live = intents.Where(row => row.At > now - TimeSpan.FromMinutes(10) && !completed.Contains(row.Gate!.Operation))
+            .DistinctBy(row => row.Request).Count();
+        var processes = new HashSet<SessionProcess>();
         try
         {
             foreach (var session in source.Snapshot())
             {
-                if (launcher!.IsFleetWorker(session.Id, source.ProcessOf(session.Id))) { live++; }
+                var process = source.ProcessOf(session.Id);
+                if (launcher!.IsFleetWorker(session.Id, process) && process is not null && processes.Add(process)) { live++; }
             }
         }
         catch (InvalidOperationException) { return "fleet admission cannot check live workers safely"; }
