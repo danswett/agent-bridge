@@ -46,6 +46,23 @@ for (const phase of ['baseline', 'faults']) {
   });
 }
 
+for (const ok of [true, false]) {
+  test(`correlated progress passes before the first final response with ok=${ok} is dropped`, async () => {
+    const f = fixture('faults'), t = f.transport;
+    const sent = t.send({ id: 1, op: 'session.reply', data: { request: 'uuid-a' } });
+    await f.advance(); await sent;
+    const progress = { re: 1, progress: { stage: 'typed' } };
+    t.deliver(progress);
+    await f.advance();
+    assert.deepEqual(f.delivered, [progress]);
+    assert.equal(f.stats.dropped, 0);
+    t.deliver(ok ? { re: 1, ok, result: { outcome: 'delivered' } } : { re: 1, ok, error: 'refused' });
+    await f.advance();
+    assert.deepEqual(f.delivered, [progress]);
+    assert.equal(f.stats.dropped, 1);
+  });
+}
+
 test('an unknown phase is refused without replacing the transport', () => {
   const transport = { send() {}, deliver() {} }, original = { ...transport };
   assert.throws(() => lostFinalLoopback(transport, 'production'), /phase/);

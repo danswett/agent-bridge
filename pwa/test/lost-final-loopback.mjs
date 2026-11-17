@@ -11,7 +11,7 @@ export function lostFinalLoopback(transport, phase, schedule = setTimeout) {
     return new Promise((resolve) => schedule(resolve, 200)).then(() => send(frame));
   };
   transport.deliver = (frame) => {
-    if (frame.re != null && selected.delete(frame.re)) { stats.dropped++; return; }
+    if (frame.re != null && typeof frame.ok === 'boolean' && selected.delete(frame.re)) { stats.dropped++; return; }
     schedule(() => deliver(frame), 200);
   };
   return stats;
