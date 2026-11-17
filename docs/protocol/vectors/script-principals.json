@@ -1,0 +1,17 @@
+{
+  "cases": [
+    { "identity": "script:{machine}/pump-wake", "accepted": true },
+    { "identity": "script:{machine}/Board_1.v2", "accepted": true },
+    { "identity": "script:{machine}/", "accepted": false },
+    { "identity": "script:{machine}/.", "accepted": false },
+    { "identity": "script:{machine}/..", "accepted": false },
+    { "identity": "script:{machine}/a/b", "accepted": false },
+    { "identity": "script:{machine}/bad name", "accepted": false },
+    { "identity": "script:{machine}/bad:name", "accepted": false },
+    { "identity": "script:other/pump", "accepted": false },
+    { "identity": "agent:{machine}/pump", "accepted": false },
+    { "identity": "person:{machine}/pump", "accepted": false },
+    { "identity": "script:{machine}/pump", "kind": "person", "accepted": false },
+    { "identity": "script:{machine}/pump", "kind": "agent", "accepted": false }
+  ]
+}

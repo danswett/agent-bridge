@@ -65,6 +65,36 @@ public sealed class AgentLiteDeliveryTests
 
     static Task<LiteDelivery> Send(Fixture f, string text = "hi") => f.Build().DeliverAsync(Envelope(text), text, default);
     [Fact]
+    public async Task Script_delivery_is_labelled_and_logged_as_a_script_never_an_agent()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        var original = Envelope("hi").Body;
+        var machine = new string('1', 32);
+        var identity = $"script:{machine}/pump-wake";
+        var root = System.Text.Json.Nodes.JsonNode.Parse(original.Encode())!;
+        root["account"] = new string('a', 32); root["generation"] = new string('0', 32);
+        root["heads"] = new System.Text.Json.Nodes.JsonArray(new string('A', 43));
+        root["principal"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["kind"] = "script", ["machine"] = machine, ["add"] = new string('A', 43),
+            ["identity"] = identity, ["credential"] = new string('A', 22),
+        };
+        root["chain"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["root"] = Req, ["rootAt"] = 0, ["depth"] = 1, ["messages"] = 1,
+            ["via"] = new System.Text.Json.Nodes.JsonArray(new System.Text.Json.Nodes.JsonObject
+                { ["account"] = new string('a', 32), ["machine"] = machine, ["session"] = identity }),
+        };
+        root["target"]!["account"] = new string('a', 32); root["target"]!["machine"] = new string('2', 32);
+        root["expiresAt"] = 60;
+        var body = EnvelopeBody.Parse(Encoding.UTF8.GetBytes(root.ToJsonString()));
+        Assert.True((await f.Build().DeliverAsync(new VerifiedEnvelope(body, []), "hi", default)).Typed);
+        Assert.Contains($"from script {identity}", Assert.Single(f.Typed).Text);
+        Assert.DoesNotContain("from an agent", f.Typed[0].Text);
+        Assert.Contains(f.Log, line => line.Contains(identity) && line.Contains("typed"));
+    }
+
+    [Fact]
     public async Task A_forced_ask_idle_session_gets_the_text_behind_the_provenance_line()
     {
         var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
