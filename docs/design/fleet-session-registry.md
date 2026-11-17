@@ -294,6 +294,19 @@ A reader may keep its last copy of a machine's record as a **cache**, with a max
 and are never returned as live by `fleet.find`. The cache exists for two reasons only: showing
 "this session was on machine X, last seen at …", and the `ambiguous` and `offline` results in "Names and lookup".
 
+### Host cache core (#2462; not wired)
+
+`FleetRegistryCache` is an internal, in-memory consumer of C1-verified records, not a verifier.
+It runs in each reading host; closing that host loses its cache, with no machine-specific service.
+It is not connected to `RelayFleetRoster`, `fleet.list` or `fleet.find`; production verification
+and v2 gates are unchanged. `VerifiedRecord` is an internal handoff, never a relay assertion.
+The eventual reader calls `OptIn()` when sending get/subscribe, then supplies verified records
+with the authenticated frame account. Other-account, unsolicited and unverified inputs refuse.
+After a complete get, `Reconcile` receives the union of registry and known IDs; IDs without an
+accepted record since opt-in become offline with no sessions. Removal/omission clears ordering
+history and blocks records until relisting. Serving applies the signed 60 s window and purges
+records older than 24 h; stale projections also set `FleetMachine.Online` false.
+
 ## Names
 
 A session name is **display text from an untrusted source**. This section says where one comes
