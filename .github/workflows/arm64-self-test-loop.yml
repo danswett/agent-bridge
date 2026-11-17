@@ -1,9 +1,9 @@
 name: ARM64 self-test loop (non-gating)
 
 # Manual diagnostic samples for the history and wheel flakes (#2535, #2483, #2508).
-# There is no group/case filter: each loop runs the whole self-test, from one publish.
+# Each loop runs only the selected groups, one process per group, from one publish.
 # This reports failures honestly; it is not CI, a required check or merge evidence.
-# Quality dispatches this after landing, with the exact source SHA to investigate.
+# Quality controls dispatch, with the exact source SHA to investigate.
 on:
   workflow_dispatch:
     inputs:
@@ -12,9 +12,14 @@ on:
         type: string
         required: true
       loops:
-        description: Requested samples (1 to 30); the time budget may stop earlier
+        description: Integer samples (clamped to 1 to 30); time budget may stop earlier
         type: number
         default: 10
+        required: true
+      groups:
+        description: Comma-separated groups (history, wheel); no whole-suite fallback
+        type: string
+        default: history,wheel
         required: true
 
 permissions:
@@ -40,17 +45,25 @@ jobs:
     env:
       HEAD_SHA: ${{ inputs.head-sha }}
       LOOPS: ${{ inputs.loops }}
+      GROUPS: ${{ inputs.groups }}
     steps:
       - name: Validate inputs
         run: |
-          if ($env:HEAD_SHA -cnotmatch '^[0-9a-f]{40}$') {
+          if ($env:HEAD_SHA -cnotmatch '^[0-9a-f]{40}\z') {
             throw 'head-sha must be a full lowercase 40-character commit SHA'
           }
           $count = 0
-          if ($env:LOOPS -notmatch '^[0-9]+$' -or
-              -not [int]::TryParse($env:LOOPS, [ref]$count) -or $count -lt 1 -or $count -gt 30) {
-            throw 'loops must be an integer from 1 to 30'
+          if ($env:LOOPS -notmatch '^[+-]?[0-9]+\z' -or
+              -not [int]::TryParse($env:LOOPS, [ref]$count)) {
+            throw 'loops must be a 32-bit integer; valid integers are clamped to 1 to 30'
           }
+          $groups = @(([string]$env:GROUPS).Split(',') | ForEach-Object {
+            $group = $_.Trim().ToLowerInvariant()
+            if ($group -cnotin @('history', 'wheel')) { throw 'groups must contain only history or wheel, with no empty tokens' }
+            $group
+          } | Select-Object -Unique)
+          "LOOPS=$([Math]::Clamp($count, 1, 30))" >> $env:GITHUB_ENV
+          "GROUPS=$($groups -join ',')" >> $env:GITHUB_ENV
           "LOOP_JOB_STARTED=$([DateTimeOffset]::UtcNow.ToString('o'))" >> $env:GITHUB_ENV
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,13 +77,20 @@ jobs:
           }
           $dir = Join-Path $env:RUNNER_TEMP 'arm64-loop'
           New-Item -ItemType Directory -Force $dir | Out-Null
-          "source: $actual`nrequested loops: $env:LOOPS`nstarted: $env:LOOP_JOB_STARTED" |
+          "source: $actual`nrequested loops: $env:LOOPS`ngroups: $env:GROUPS`nstarted: $env:LOOP_JOB_STARTED" |
             Set-Content (Join-Path $dir 'source.txt')
       - uses: ./.github/actions/arm64-foreground
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
-      - run: dotnet tool install -g vpk --version 1.2.161
+      - name: Configure internal package and audit sources
+        run: |
+          . .\quality\nuget-mirror.ps1
+          $config = Join-Path $env:RUNNER_TEMP 'NuGet.Config'
+          New-NuGetMirrorConfig -Source 'https://packagefeedproxy.microsoft.io/nuget/v3/index.json' -Path $config
+          # pack-app invokes dotnet publish directly; this MSBuild property reaches every restore.
+          "RestoreConfigFile=$config" >> $env:GITHUB_ENV
+      - run: dotnet tool install -g vpk --version 1.2.161 --configfile "$env:RestoreConfigFile"
       - name: Publish and pack once
         # Same dev app build as CI; no release-feed reads, signing or publishing.
         run: ./build/pack-app.ps1 -Version $env:APP_VERSION -Runtime win-arm64 -Out out/app-arm64 -Release:($env:APP_RELEASE -eq 'true')
@@ -82,6 +102,7 @@ jobs:
           New-Item -ItemType Directory -Force $root | Out-Null
           $started = [DateTimeOffset]::Parse($env:LOOP_JOB_STARTED)
           $requested = [int]$env:LOOPS
+          $groups = $env:GROUPS.Split(',')
           $completed = 0
           $passed = 0
           $failed = 0
@@ -91,39 +112,52 @@ jobs:
               Write-Output 'Time budget reached; no further loop will start.'
               break
             }
-            $dir = Join-Path $root ('run-{0:D2}' -f $i)
-            New-Item -ItemType Directory -Force $dir | Out-Null
-            $result = Join-Path $dir 'result.json'
-            & pwsh -NoProfile -File ./build/app-self-test.ps1 -Exe out/app-arm64/publish/AgentBridge.exe -Result $result -TimeoutSeconds 720 *> (Join-Path $dir 'self-test.log')
-            $code = $LASTEXITCODE
-            $problems = [Collections.Generic.List[string]]::new()
-            if ($code -ne 0) { $problems.Add("exit code $code") }
-            if (Test-Path -LiteralPath $result) {
+            $details = [Collections.Generic.List[string]]::new()
+            $loopFailed = $false
+            foreach ($group in $groups) {
+              $dir = Join-Path $root ('run-{0:D2}\{1}' -f $i, $group)
+              New-Item -ItemType Directory -Force $dir | Out-Null
+              $result = Join-Path $dir 'result.json'
+              $log = Join-Path $dir 'self-test.log'
+              $code = 'not-started'
+              $cases = 'passed: unavailable; failed: unavailable; unfinished: unavailable'
+              $problems = [Collections.Generic.List[string]]::new()
               try {
+                $LASTEXITCODE = $null
+                & pwsh -NoProfile -File ./build/app-self-test.ps1 -Exe out/app-arm64/publish/AgentBridge.exe -Result $result -Group $group -TimeoutSeconds 720 *> $log
+                $code = $LASTEXITCODE
+                if ($null -eq $code) { $code = 'unavailable' }
+                if ($code -ne 0) { $problems.Add("exit code $code") }
+                if (-not (Test-Path -LiteralPath $result)) { throw 'missing result.json' }
                 $report = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json -AsHashtable
                 if ($report -isnot [Collections.IDictionary] -or
+                    -not $report.Contains('passed') -or $report.passed -isnot [array] -or
                     -not $report.Contains('failed') -or $report.failed -isnot [array] -or
                     -not $report.Contains('unfinished') -or
                     ($null -ne $report.unfinished -and $report.unfinished -isnot [string])) {
-                  throw 'expected failed array and unfinished string or null'
+                  throw 'invalid result.json: expected passed/failed arrays and unfinished string or null'
                 }
+                $cases = "passed: $($report.passed -join ', '); failed: $($report.failed -join ', '); unfinished: $($report.unfinished)"
+                foreach ($case in @($report.passed) + @($report.failed)) {
+                  if ($case -isnot [string] -or [string]::IsNullOrWhiteSpace($case)) { throw 'invalid result.json case name' }
+                }
+                if ($report.passed.Count -eq 0) { $problems.Add('no passing cases recorded') }
                 foreach ($case in $report.failed) { $problems.Add([string]$case) }
                 if ($report.unfinished) { $problems.Add("unfinished: $($report.unfinished)") }
               }
-              catch { $problems.Add("invalid result.json: $($_.Exception.Message)") }
+              catch {
+                $problems.Add($_.Exception.Message)
+                $_ | Out-String | Add-Content -LiteralPath $log
+              }
+              $status = if ($problems.Count -eq 0) { 'PASS' } else { $loopFailed = $true; 'FAIL' }
+              $detail = "$group`: $status; exit code: $code; $cases; $($problems -join '; ')" -replace '\s+', ' '
+              "source: $env:HEAD_SHA`nloop: $i/$requested`ngroup: $group`n$detail" |
+                Set-Content (Join-Path $dir 'receipt.txt')
+              $details.Add($detail)
             }
-            else { $problems.Add('missing result.json') }
             $completed++
-            if ($problems.Count -eq 0) {
-              $passed++
-              $line = "Loop $i/$requested`: PASS; all self-test cases"
-            }
-            else {
-              $failed++
-              $line = "Loop $i/$requested`: FAIL; $($problems -join '; ')"
-            }
-            "source: $env:HEAD_SHA`nexit code: $code`n$line" |
-              Set-Content (Join-Path $dir 'receipt.txt')
+            $status = if ($loopFailed) { $failed++; 'FAIL' } else { $passed++; 'PASS' }
+            $line = "Loop $i/$requested`: $status; source: $env:HEAD_SHA; $($details -join ' | ')"
             Write-Output $line
             $line >> $env:GITHUB_STEP_SUMMARY
           }
@@ -137,15 +171,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: arm64-self-test-loops-${{ inputs.head-sha }}
+          name: arm64-self-test-loops-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            ${{ runner.temp }}/arm64-loop/source.txt
             ${{ runner.temp }}/arm64-loop/summary.txt
-            ${{ runner.temp }}/arm64-loop/run-*/result.json
-            ${{ runner.temp }}/arm64-loop/run-*/app-exit-cause.json
-            ${{ runner.temp }}/arm64-loop/run-*/app.stderr.log
-            ${{ runner.temp }}/arm64-loop/run-*/app.log
-            ${{ runner.temp }}/arm64-loop/run-*/app-crash-analysis.txt
-            ${{ runner.temp }}/arm64-loop/run-*/self-test.log
-            ${{ runner.temp }}/arm64-loop/run-*/receipt.txt
+            ${{ runner.temp }}/arm64-loop/run-*/*/result.json
+            ${{ runner.temp }}/arm64-loop/run-*/*/app-exit-cause.json
+            ${{ runner.temp }}/arm64-loop/run-*/*/app.stderr.log
+            ${{ runner.temp }}/arm64-loop/run-*/*/app.log
+            ${{ runner.temp }}/arm64-loop/run-*/*/app-crash-analysis.txt
+            ${{ runner.temp }}/arm64-loop/run-*/*/self-test.log
+            ${{ runner.temp }}/arm64-loop/run-*/*/receipt.txt
           if-no-files-found: error
           retention-days: 14
