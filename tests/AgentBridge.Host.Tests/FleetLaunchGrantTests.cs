@@ -86,6 +86,36 @@ public sealed class FleetLaunchGrantTests : IDisposable
         Assert.False(store.Of(channel)!.FleetLaunch);
     }
 
+    [Fact]
+    public void The_active_dispatch_workspace_must_match_current_approval()
+    {
+        Config();
+        var grant = new FleetLaunchGrant(folder);
+        var actual = HostSettings.Load(folder).Settings.Launch;
+        Assert.Null(grant.CheckDispatch(actual, Request));
+        Assert.NotNull(grant.CheckDispatch(actual with { Workspaces = [new("workers", Path.GetTempPath(), true)] }, Request));
+    }
+
+    [Fact]
+    public async Task A_granted_script_still_refuses_scope_overrides_and_an_untraceable_pipe()
+    {
+        Config();
+        var store = new AgentCredentials(folder, "machine");
+        var (script, _) = store.MintScript("dispatcher");
+        var owner = new FixedCallerGuard(new(CallerKind.HostCli, "fixture owner"));
+        ScriptCredentialCommands.Handle(new Channel(), "scripts.grant-fleet",
+            JsonSerializer.SerializeToElement(new { name = "dispatcher" }), owner, store, new AgentAuditLog(folder));
+        var channel = new Channel();
+        store.Accept(channel, script);
+        var handler = LocalApi.Handler(null!, null!, owner, credentials: store);
+        var shape = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, LaunchProtocol.Launch,
+            JsonSerializer.SerializeToElement(new { request = Request.Request, agentScope = "read+reply+launch" })));
+        Assert.Contains("unsupported fields", shape.Message);
+        var ancestry = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, LaunchProtocol.Launch,
+            JsonSerializer.SerializeToElement(Request, ProtocolJson.Options)));
+        Assert.Contains("ancestry", ancestry.Message);
+    }
+
     sealed class Channel : IProtocolChannel
     {
         public string PeerId => "fixture";

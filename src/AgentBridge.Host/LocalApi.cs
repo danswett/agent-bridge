@@ -23,8 +23,25 @@ public static class LocalApi
 
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
+        if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
+        {
+            if (credentials.Of(channel)?.FleetLaunch != true) { credentials.CheckScriptOperation(channel, op, log); }
+            if (data.ValueKind != JsonValueKind.Object || System.Text.Encoding.UTF8.GetByteCount(data.GetRawText()) > LaunchProtocol.MaxRequest
+                || data.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() != 1)
+                || data.EnumerateObject().Any(p => p.Name is not ("request" or "agent" or "workspace" or "permissions"
+                    or "model" or "effort" or "context" or "prompt" or "role" or "fleetName")))
+            { throw Refuse(op, callers.Classify(channel), "fleet launch contains unsupported fields or exceeds its size limit", log); }
+            var request = data.Deserialize<LaunchRequest>(ProtocolJson.Options) ?? throw new ArgumentException("fleet launch needs a request");
+            string? Refusal() => credentials.Of(channel) is not { } script ? "the script credential is no longer live"
+                : callers.Classify(channel, fresh: true).Kind == CallerKind.Agent ? "fleet launch is refused inside an agent session"
+                : credentials.FleetGrant.CheckLaunch(script, (channel as LocalChannel)?.Peer?.Ancestry ?? ProcessAncestry.Unknown, request);
+            if (Refusal() is { } reason) { throw Refuse(op, callers.Classify(channel), reason, log); }
+            var live = credentials.Of(channel) ?? throw Refuse(op, callers.Classify(channel), "the script credential is no longer live", log);
+            return await sessions.LaunchFleetAsync(request, credentials.PrincipalOf(live), audit, Refusal,
+                actual => credentials.FleetGrant.CheckDispatch(actual, request));
+        }
         credentials?.CheckScriptOperation(channel, op, log);
-        if (op is "scripts.add" or "scripts.revoke")
+        if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet")
         { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
         if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
         {

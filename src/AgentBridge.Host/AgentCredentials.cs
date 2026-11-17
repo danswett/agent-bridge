@@ -14,6 +14,7 @@ public sealed record AgentCredential(string Id, string Session, string LaunchId,
     string Scope, int Depth, string[] Chain, DateTimeOffset IssuedAt, DateTimeOffset ExpiresAt,
     string Kind = "session", string? Principal = null)
 {
+    public bool FleetLaunch { get; init; }
     // Record construction only; minting and persisting a script token are separate operations.
     public static AgentCredential Script(string id, string machine, string name, DateTimeOffset issuedAt, TimeSpan? lifetime = null)
     {
@@ -85,6 +86,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     public AgentCredentials(string folder, string machine, TimeProvider? time = null, Action<string>? log = null, Func<int, DateTimeOffset, bool>? rootAlive = null)
     {
         LaunchGate = new AgentLaunchGate(folder);
+        FleetGrant = new FleetLaunchGrant(folder);
         this.rootAlive = rootAlive ?? ((_, _) => true);
         path = Path.Combine(folder, FileName);
         this.machine = machine;
@@ -96,6 +98,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     public string? Problem { get { lock (gate) { return problem; } } }
 
     internal AgentLaunchGate LaunchGate { get; }
+    internal FleetLaunchGrant FleetGrant { get; }
+    internal bool IsScriptConnection(IProtocolChannel channel) => connections.TryGetValue(channel, out var c) && c.Script;
 
     public int Count { get { lock (gate) { return records.Count; } } }
 
@@ -216,6 +220,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // A launch's token is issued before its process exists, so it is bound to none and answers to
     // nobody until Bind. Launched agents may read only: the agents policy (§5.1) widens that later.
     public string? Prepare(string session, string launchId) => Mint(session, launchId, 0, default, AgentProtocol.ScopeRead);
+    public string PrepareFleet(string session, string launchId) => Mint(session, launchId, 0, default, AgentProtocol.ScopeReadReply, depth: 1);
 
     // Called only by the person-authorized management path, never a remote/agent operation.
     // No token is returned. Both hashes stand until a successful fleet read retires the old one.
@@ -468,6 +473,22 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         }
     }
 
+    internal void SetFleetLaunch(string name, bool enabled)
+    {
+        lock (gate)
+        {
+            if (problem is not null) { throw new InvalidOperationException("script credentials are unavailable"); }
+            var matches = records.FindAll(r => r.Credential.Kind == "script"
+                && r.Credential.Principal == $"script:{machine}/{name}" && r.Credential.ExpiresAt > time.GetUtcNow());
+            if (matches.Count == 0) { throw new InvalidOperationException("no live script credential exists for that name"); }
+            if (enabled && FleetGrant.CheckGrant(matches[0].Credential with { FleetLaunch = true }) is { } why)
+            { throw new InvalidOperationException($"refused: {why}"); }
+            foreach (var r in matches) { records[records.IndexOf(r)] = r with { Credential = r.Credential with { FleetLaunch = enabled } }; }
+            Save();
+            if (problem is not null) { throw new InvalidOperationException("could not save the fleet grant"); }
+        }
+    }
+
     // A session's process ended: whatever it held dies with it (§3.4 "Revocation").
     public int RevokeEnded(Func<int, DateTimeOffset, bool> sameProcessAlive)
     {
@@ -507,7 +528,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             {
                 if (r?.Credential is not { } c || r.Hash is not { Length: 64 } || !IsHex(r.Hash) || c.Id is not { Length: > 0 } || !ids.Add(c.Id)
                     || !AgentProtocol.Scopes.Contains(c.Scope, StringComparer.Ordinal) || c.Chain is null
-                    || !(c.Kind == "session" ? ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
+                    || !(c.Kind == "session" ? !c.FleetLaunch && ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
                 {
                     throw new JsonException("invalid credential record");
                 }
