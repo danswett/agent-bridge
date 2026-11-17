@@ -81,7 +81,10 @@ public sealed class SessionSourceOptions
 
     // A skim stops after this many bytes. Beyond it, counts (turns, compactions) start
     // from what the tail shows rather than costing seconds at startup.
-    public long MaxSkimBytes { get; init; } = 512L * 1024 * 1024;
+    public long MaxSkimBytes { get; init; } = 1024 * 1024;
+
+    // A long gap between reads restarts from the bounded tail, not an unbounded append.
+    public long MaxAppendBytes { get; init; } = 8 * 1024 * 1024;
 
     // A single transcript line longer than this is skipped rather than buffered. Tool
     // results can be megabytes; nothing the host shows needs a line this long.

@@ -9,12 +9,12 @@ namespace AgentBridge.Host.Core.Conversation;
 // looking for prompts, bytes parsed of any one turn and of a page, and the longest line read at all.
 internal sealed record HistoryBudgets
 {
-    public long ScanBytes { get; init; } = 256L * 1024 * 1024;
+    public long ScanBytes { get; init; } = 8L * 1024 * 1024;
     public long TurnBytes { get; init; } = 8L * 1024 * 1024;
     public long PageBytes { get; init; } = 32L * 1024 * 1024;
     public int MaxLineBytes { get; init; } = 32 * 1024 * 1024;
     // Where the session's first record and its first prompt are looked for.
-    public long FirstBytes { get; init; } = 64L * 1024 * 1024;
+    public long FirstBytes { get; init; } = 64 * 1024;
     public int ChunkBytes { get; init; } = 1024 * 1024;
     // What the patterns of every question one request reads may take, together (HistoryContext.Patterns).
     public TimeSpan PatternTime { get; init; } = PatternBudget.Total;
@@ -379,7 +379,17 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             {
                 if (!reached)
                 {
-                    foreach (var s in pending) { s.From = s.End; s.Unknown = true; cycleGaps.Add(s.Offset); }
+                    foreach (var s in pending)
+                    {
+                        // A known cycle after the prompt still owns its reply when the
+                        // scan budget stops before an older cycle.
+                        if (!unknownCycle && nextCycle >= s.End && nextCycle < end)
+                        {
+                            s.From = nextCycle;
+                            s.Queued = nextQueued;
+                        }
+                        else { s.From = s.End; s.Unknown = true; cycleGaps.Add(s.Offset); }
+                    }
                 }
                 // Several prompts queued before one cycle: only the last can own that cycle.
                 for (var i = 1; i < starts.Count; i++)

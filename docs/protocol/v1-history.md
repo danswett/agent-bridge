@@ -259,7 +259,7 @@ but a message is written at most 64 deep, and a default sits about ten levels in
 that still could not be written would be `unreadable` in its place, never the page's failure.
 
 **Reading is bounded too**, so a request costs a host a bounded amount whatever a transcript
-holds. A host reads at most 256 MiB of transcript backwards per request, finding the end of the
+holds. A host reads at most 8 MiB of transcript backwards per request, finding the end of the
 last whole line included (a line still being written that is longer than that leaves nothing to
 page, `start.limited` and `partial`). Going back it searches every line whole for the bytes a
 turn's record carries (`"user.message"` for Copilot, `"user"` and no tool-result block, `"type":"tool_result"`, for Claude,
@@ -268,7 +268,7 @@ and parses as JSON only the lines that carry them, wherever in the line the writ
 parses at most 32 MiB per request: what it reads of the transcript's first records (the start's time, and whether the oldest turn found is the first) and every line it parses looking for prompts, whether or not it starts a turn, count first, and it stops adding older
 turns there, at least one. If it runs out before finding any prompt (after the first line it examines, which is always read), the page has no turns, `start.limited` and `partial`. It parses at most 8 MiB of any one turn (a longer turn is read from
 its prompt and its **last** 8 MiB, `truncated` set, and what it skipped counted in neither
-`parts` nor `partsMore`). A turn whose prompt is more than 256 MiB before the cursor ends the
+`parts` nor `partsMore`). A turn whose prompt is more than 8 MiB before the cursor ends the
 history there, with `start.limited`. A transcript line longer than 32 MiB is not read, as the tail
 does not; one whose first 4 KiB carry a turn's bytes is an `unreadable` turn, which is all the
 live parser can see of it too. Within a turn, a delegate's end withdraws the questions of the
@@ -285,12 +285,20 @@ plus the one line it always examines (at most 32 MiB) and the one turn it always
 8 MiB). Its **memory** is bounded by the same ceilings, not by one line: the line being read (a
 buffer that can grow to about twice the 32 MiB line limit), each record's parsed document while it is
 read, and the turns it builds, whose transcript (at most 40 MiB) becomes text of up to about twice
-that before the page is cut to its caps. It **reads** at most 256 MiB back from
-the cursor or the end looking for prompts, plus one 1 MiB chunk; 64 MiB forward from the start
-twice (the start's time, and whether the oldest turn found is the first); 256 MiB forward from a
+that before the page is cut to its caps. It **reads** at most 8 MiB back from
+the cursor or the end looking for prompts, plus one 1 MiB chunk; 64 KiB forward from the start
+twice (the start's time, and whether the oldest turn found is the first); 8 MiB forward from a
 `before` to find its line's end, and that line (at most 32 MiB) to check its id; and the turns it
 builds (at most 40 MiB, by the parsing budget). Each is a fixed ceiling, whatever the transcript
 holds.
+
+For discovery, the host skims only a 1 MiB prefix (plus up to 64 KiB for a boundary
+line) before parsing its 4 MiB tail. An append over 8 MiB resets to that bounded
+window rather than replaying the gap. These host budgets apply to every client.
+History that cannot reach a prompt within its budget says `start.limited` and
+`partial`; clients show "Start of available history", never an unexplained blank.
+Windows render failures show a message and write `render-failure` to `app.log`
+with session, item index, UTF-8 size, exception type and HRESULT, not message text.
 
 ### The cursor
 

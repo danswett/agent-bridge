@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using System.Text;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -21,7 +22,13 @@ public sealed class MarkdownView : StackPanel
     string? markdown;
     bool approval;
 
-    public MarkdownView() => Spacing = 8;
+    public MarkdownView()
+    {
+        Spacing = 8;
+        Loaded += (_, _) => ReportFailure();
+    }
+
+    (Exception Error, int Bytes)? renderFailure;
 
     // Set in the reading role (docs/design/ui.md §4.3, the generated AbTypeReading): a response in
     // the conversation, a step larger than the UI around it. Headings and code keep their own sizes.
@@ -103,14 +110,41 @@ public sealed class MarkdownView : StackPanel
     void Render()
     {
         Children.Clear();
+        renderFailure = null;
         if (block is null && markdown is null) { return; }
-        IReadOnlyList<MdBlock> blocks = block is not null ? new[] { block } : Approval ? MarkdownModel.Approval(markdown) : MarkdownModel.Parse(markdown);
-        foreach (var b in blocks)
+        if (MessageRender.TryDraw(() =>
         {
-            var element = Draw(b);
-            if (Reading) { Read(element); }
-            Children.Add(element);
+            IReadOnlyList<MdBlock> blocks = block is not null ? new[] { block } : Approval ? MarkdownModel.Approval(markdown) : MarkdownModel.Parse(markdown);
+            foreach (var b in blocks)
+            {
+                var element = Draw(b);
+                if (Reading) { Read(element); }
+                Children.Add(element);
+            }
+        }, error =>
+        {
+            var text = block is null ? markdown ?? "" : ConversationBlocks.TextOf(block);
+            renderFailure = (error, Encoding.UTF8.GetByteCount(text));
+            ReportFailure();
+        })) { return; }
+        Children.Clear();
+        Children.Add(new TextBlock { Text = "This message couldn't be rendered. See app.log.", TextWrapping = TextWrapping.Wrap });
+    }
+
+    void ReportFailure()
+    {
+        if (renderFailure is not { } failure) { return; }
+        var index = -1;
+        string? session = null;
+        for (DependencyObject? node = this; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is ListViewItem item && ItemsControl.ItemsControlFromItemContainer(item) is { } list) { index = list.IndexFromContainer(item); }
+            if (node is UIElement element && VisualTreeHelper.GetParent(node) is ItemsRepeater repeater) { index = repeater.GetElementIndex(element); }
+            if (node is SessionView view) { session = view.Card?.Id; break; }
         }
+        AppLog.Write(MessageRender.Failure(session ?? "unattached", index, failure.Bytes, failure.Error));
+        // Bindings can draw before a template is attached; Loaded adds the session context.
+        if (session is not null || IsLoaded) { renderFailure = null; }
     }
 
     UIElement Draw(MdBlock block) => block switch

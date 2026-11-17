@@ -26,8 +26,7 @@ internal enum TailOutcome { Missing, Unreadable, Unchanged, Appended, Restarted 
 // again from the start, because length alone cannot tell a same-size replacement apart.
 //
 // The first read (and the first after a restart) parses only the last
-// InitialTailBytes; everything before is skimmed, so a 500 MB transcript costs a cheap
-// byte scan once rather than a JSON parse of every line.
+// InitialTailBytes; only a bounded prefix before it is skimmed.
 internal sealed class TranscriptTail(string path, SessionSourceOptions options)
 {
     const int AnchorBytes = 64;
@@ -112,7 +111,7 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
         var restart = !_started;
         if (_started)
         {
-            if (length < _offset || !AnchorStillMatches(stream)) { restart = true; }
+            if (length < _offset || length - _offset > options.MaxAppendBytes || !AnchorStillMatches(stream)) { restart = true; }
             else if (length == _offset) { return TailOutcome.Unchanged; }
         }
         if (restart)
@@ -125,9 +124,8 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
         }
 
         var from = _offset;
-        // Only the first read (or one after a restart) is bounded. An append, however
-        // big, is parsed whole: the parser still holds state from the last read, and a
-        // skimmed tool completion or answer would leave it running or pending for good.
+        // Ordinary appends preserve every completion; a gap over MaxAppendBytes resets
+        // the parser above before reading the bounded tail, so old tools cannot stay running.
         var parseFrom = restart ? Math.Max(from, length - options.InitialTailBytes) : from;
         var position = from;
         var aligned = _aligned;
@@ -136,7 +134,10 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
             var skimEnd = Math.Min(parseFrom, from + options.MaxSkimBytes);
             // Lines that start before the window are skimmed whole, so the line straddling
             // its edge is neither lost nor seen twice.
-            (position, aligned) = Scan(stream, from, length, aligned, stopAtLineStart: skimEnd, sink.Skim, sink);
+            // A giant unterminated line must not turn a bounded skim into a scan of the
+            // whole file. Allow a small overlap for ordinary boundary-straddling lines.
+            var skimLimit = Math.Min(length, skimEnd + 64 * 1024);
+            (position, aligned) = Scan(stream, from, skimLimit, aligned, stopAtLineStart: skimEnd, sink.Skim, sink);
             if (position < skimEnd || (position < parseFrom && skimEnd < parseFrom))
             {
                 // Skim budget spent (or one line longer than all of it): jump to the
