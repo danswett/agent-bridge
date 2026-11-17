@@ -338,7 +338,7 @@ switch (command)
             if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
             if (HaCommands.Writes(rest) && Refused("change the host's Home Assistant token")) { return 4; }
             Func<string?>? active = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().Active : null;
-            return HaCommands.Run(rest, LoadIdentity().Folder, () => HaCommands.ReadSecret(Console.Error), Console.Out, Console.Error, IsDevBuild(), active);
+            return HaCommands.Run(rest, LoadIdentity().Folder, () => HaCommands.ReadSecret(Console.Error), Console.Out, Console.Error, IsDevBuild(), active, () => SecretInput.Read(Console.Error));
         }
     case "shadow":
         return await AgentBridge.Host.Shadow.ShadowCommand.RunAsync(arguments, options, HostVersion(), IsDevBuild(), Console.Out, Console.Error);
@@ -419,17 +419,7 @@ switch (command)
 Identity LoadIdentity() => Identity.Load(Option("--profile") ?? "default");
 
 // The password is typed or piped in, never an argument, which a process list or history would keep.
-static string? ReadMaskedPassword()
-{
-    if (Console.IsInputRedirected) { return Console.In.ReadLine(); }
-    var typed = new System.Text.StringBuilder();
-    while (Console.ReadKey(intercept: true) is var key && key.Key != ConsoleKey.Enter)
-    {
-        if (key.Key == ConsoleKey.Backspace) { if (typed.Length > 0) { typed.Length--; } }
-        else if (!char.IsControl(key.KeyChar)) { typed.Append(key.KeyChar); }
-    }
-    return typed.ToString();
-}
+static string? ReadMaskedPassword() => SecretInput.Read(Console.Error);
 
 // What may only be done by a person never runs inside an agent session (§6.3 invariant 13): the
 // host's own command line refuses it there, as the pipe does.
