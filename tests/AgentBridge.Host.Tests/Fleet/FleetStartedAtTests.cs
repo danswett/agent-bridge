@@ -75,7 +75,8 @@ public sealed class FleetStartedAtTests
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var q = key.ExportParameters(false).Q;
         byte[] point = [4, .. q.X!, .. q.Y!];
-        var publisher = new FleetPublisher(source, new string('m', 64), _ => new string('+', 64), sign: r =>
+        // Ordinary 64-row records fit; oversize the fixture header to exercise defensive byte fitting.
+        var publisher = new FleetPublisher(source, new string('m', 2048), _ => new string('+', 64), sign: r =>
             FleetRecordSigning.Sign(r, bytes => P256.FromRaw(key.SignData(bytes, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))));
         Assert.True(await publisher.PublishAsync((record, _) =>
         {
