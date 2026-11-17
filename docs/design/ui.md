@@ -477,8 +477,8 @@ retargetable `shift` motion (#2105). This covers key and row-menu moves, drag/dr
 Most recent batches and #950 return-grace order changes; the dragged row still follows the
 pointer directly. The other #685 slices follow.
 
-Windows session-list neighbours use composition `Offset` shifts. The guarded fade for
-a departing row is a separate slice.
+Windows session-list neighbours use composition `Offset` shifts; a departing row fades
+on a guarded composition surface without a second automation subtree.
 
 Motion shows where something came from and where it went. It answers the person or a
 change, and never runs for its own sake. The values are in `tokens.json` under `motion`,

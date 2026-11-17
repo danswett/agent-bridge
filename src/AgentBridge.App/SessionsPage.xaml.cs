@@ -240,7 +240,7 @@ public sealed partial class SessionsPage : UserControl
     // list has settled. A session moved (a remove and an insert) is listed again by then.
     void OnSessionsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        rowShift.Changing();
+        rowShift.Changing(e.Action == NotifyCollectionChangedAction.Remove ? e.OldItems!.Cast<object>() : []);
         if (!ready) { Ready(); }
         // Rows coming, going or moving can scroll the list to keep those in sight in place, which
         // moves Needs you: not a scroll of the person's, even while they are scrolling (#491).

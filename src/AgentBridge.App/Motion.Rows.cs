@@ -19,6 +19,8 @@ public static partial class Motion
         readonly ListViewBase list;
         readonly Func<bool> active, animations;
         readonly Dictionary<ListViewItem, Shifted> rows = [];
+        readonly Dictionary<ListViewItem, Departure> departures = [];
+        ContainerVisual? overlay;
         bool listening, disposed;
 
         internal RowShift(ListViewBase list, Func<bool> active, Func<bool> animations)
@@ -28,6 +30,7 @@ public static partial class Motion
             this.animations = animations;
             list.LayoutUpdated += Layout;
             list.ContainerContentChanging += Prepared;
+            list.ChoosingItemContainer += Choosing;
             list.Loaded += Loaded;
             list.Unloaded += Unloaded;
             if (list.IsLoaded) { Loaded(list, new RoutedEventArgs()); }
@@ -54,7 +57,9 @@ public static partial class Motion
 
         internal void Refresh()
         {
-            if (disposed || !active() || !animations()) { Clear(); return; }
+            if (disposed || !active()) { Clear(); return; }
+            if (overlay is not null) { overlay.Size = new Vector2((float)list.ActualWidth, (float)list.ActualHeight); }
+            if (!animations()) { foreach (var item in rows.Keys.ToArray()) { Detach(item); } return; }
             if (list.ItemsPanelRoot is not { } panel) { return; }
             foreach (var item in rows.Keys.ToArray())
             {
@@ -93,7 +98,90 @@ public static partial class Motion
             }
         }
 
-        internal void Changing() => Refresh();
+        internal void Changing(IEnumerable<object> removed)
+        {
+            Refresh();
+            if (disposed || !active()) { return; }
+            foreach (var value in removed)
+            {
+                if (list.ItemsPanelRoot?.Children.OfType<ListViewItem>().FirstOrDefault(row => ReferenceEquals(row.Content, value))
+                    is not { ContentTemplateRoot: FrameworkElement drawing } item || departures.ContainsKey(item)
+                    || drawing.ActualWidth <= 0 || drawing.ActualHeight <= 0) { continue; }
+                var origin = drawing.TransformToVisual(list).TransformPoint(default);
+                if (origin.Y >= list.ActualHeight || origin.Y + drawing.ActualHeight <= 0) { continue; }
+                var departure = new Departure { Source = drawing };
+                departures.Add(item, departure);
+                try
+                {
+                    if (drawing.ReadLocalValue(FrameworkElement.DataContextProperty) == DependencyProperty.UnsetValue)
+                    {
+                        drawing.DataContext = value;
+                        departure.FrozenContext = true;
+                    }
+                    if (drawing is SessionRow row) { row.Park(); }
+                    var source = ElementCompositionPreview.GetElementVisual(drawing);
+                    var compositor = source.Compositor;
+                    if (overlay is null)
+                    {
+                        overlay = compositor.CreateContainerVisual();
+                        overlay.Size = new Vector2((float)list.ActualWidth, (float)list.ActualHeight);
+                        overlay.Clip = compositor.CreateInsetClip();
+                        ElementCompositionPreview.SetElementChildVisual(list, overlay);
+                    }
+                    departure.Surface = compositor.CreateVisualSurface();
+                    departure.Surface.SourceVisual = source;
+                    departure.Surface.SourceSize = new Vector2((float)drawing.ActualWidth, (float)drawing.ActualHeight);
+                    departure.Brush = compositor.CreateSurfaceBrush(departure.Surface);
+                    departure.Sprite = compositor.CreateSpriteVisual();
+                    departure.Sprite.Brush = departure.Brush;
+                    departure.Sprite.Size = departure.Surface.SourceSize;
+                    departure.Sprite.Offset = new Vector3((float)origin.X, (float)origin.Y, 0);
+                    overlay.Children.InsertAtTop(departure.Sprite);
+                    var step = Catalogue.Exit("ListItem", animations());
+                    var fade = compositor.CreateScalarKeyFrameAnimation();
+                    fade.InsertKeyFrame(0, 1);
+                    fade.InsertKeyFrame(1, 0, Ease(compositor, step.Ease));
+                    fade.Duration = step.Duration;
+                    departure.Batch = compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
+                    departure.Batch.Completed += (_, _) => Release(item);
+                    departure.Sprite.StartAnimation("Opacity", fade);
+                    departure.Batch.End();
+                }
+                catch { Release(item); throw; }
+            }
+        }
+
+        void Choosing(ListViewBase sender, ChoosingItemContainerEventArgs e)
+        {
+            if (e.ItemContainer is ListViewItem item && departures.ContainsKey(item))
+            {
+                e.ItemContainer = new ListViewItem();
+                e.IsContainerPrepared = false;
+            }
+        }
+
+        void Release(ListViewItem item)
+        {
+            if (!departures.Remove(item, out var departure)) { return; }
+            if (departure.Sprite is { } sprite)
+            {
+                sprite.StopAnimation("Opacity");
+                if (overlay?.Children.Contains(sprite) == true) { overlay.Children.Remove(sprite); }
+                sprite.Brush = null;
+                sprite.Dispose();
+            }
+            if (departure.Surface is { } surface) { surface.SourceVisual = null; surface.Dispose(); }
+            departure.Brush?.Dispose();
+            departure.Batch?.Dispose();
+            if (departure.FrozenContext) { departure.Source?.ClearValue(FrameworkElement.DataContextProperty); }
+            if (departures.Count == 0 && overlay is { } empty)
+            {
+                ElementCompositionPreview.SetElementChildVisual(list, null);
+                empty.Clip?.Dispose();
+                empty.Dispose();
+                overlay = null;
+            }
+        }
 
         static void Configure(Visual visual, MotionEase ease)
         {
@@ -109,6 +197,7 @@ public static partial class Motion
         void Prepared(ListViewBase sender, ContainerContentChangingEventArgs e)
         {
             if (e.InRecycleQueue && e.ItemContainer is ListViewItem item) { Detach(item); }
+            else if (e.ItemContainer is ListViewItem prepared && departures.ContainsKey(prepared)) { Release(prepared); }
         }
 
         void Detach(ListViewItem item)
@@ -121,6 +210,7 @@ public static partial class Motion
 
         internal void Clear()
         {
+            foreach (var item in departures.Keys.ToArray()) { Release(item); }
             foreach (var item in rows.Keys.ToArray()) { Detach(item); }
         }
 
@@ -131,6 +221,7 @@ public static partial class Motion
             Settings.AnimationsEnabledChanged -= AnimationChanged;
             list.LayoutUpdated -= Layout;
             list.ContainerContentChanging -= Prepared;
+            list.ChoosingItemContainer -= Choosing;
             list.Loaded -= Loaded;
             list.Unloaded -= Unloaded;
         }
@@ -140,6 +231,16 @@ public static partial class Motion
             internal object Item { get; } = item;
             internal Vector3 Offset = offset;
             internal long? Started;
+        }
+
+        sealed class Departure
+        {
+            internal FrameworkElement? Source;
+            internal bool FrozenContext;
+            internal CompositionVisualSurface? Surface;
+            internal CompositionSurfaceBrush? Brush;
+            internal SpriteVisual? Sprite;
+            internal CompositionScopedBatch? Batch;
         }
     }
 }

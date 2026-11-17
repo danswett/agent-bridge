@@ -42,7 +42,7 @@ static partial class SelfTest
         var items = new ObservableCollection<object> { first, tracked };
         var animations = true;
         using var shifts = Motion.Shift(list, () => true, () => animations);
-        items.CollectionChanged += (_, _) => shifts.Changing();
+        items.CollectionChanged += (_, e) => shifts.Changing(e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Remove ? e.OldItems!.Cast<object>() : []);
         list.ItemsSource = items;
         root.Children.Add(list);
         try
@@ -74,7 +74,7 @@ static partial class SelfTest
             check(elapsed < 120 && progress > standard + 0.12,
                 $"interrupted shift decelerates toward its new position ({elapsed:0} ms, {progress:0.00} progress)");
             animations = false;
-            shifts.Changing();
+            shifts.Changing([]);
             items.Remove(added);
             list.UpdateLayout();
             await CaptureFrame(root);
@@ -107,8 +107,9 @@ static partial class SelfTest
                 && Math.Abs(picture.Pixels[at + 1] - brush.Color.G) <= 2 && Math.Abs(picture.Pixels[at] - brush.Color.B) <= 2;
             check(!Matches(background) && !Matches(first) && !Matches(tracked),
                 "a cleared departure source still paints its faded copy");
-            shifts.Clear();
-            check(ElementCompositionPreview.GetElementChildVisual(list) is null, "cancelling a departure removes its composition copy");
+            fade?.Resume();
+            await Task.Delay(250);
+            check(ElementCompositionPreview.GetElementChildVisual(list) is null, "a completed departure releases its composition copy");
         }
         finally { root.Children.Remove(list); }
 
