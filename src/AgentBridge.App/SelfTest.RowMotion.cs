@@ -145,6 +145,31 @@ static partial class SelfTest
             fade?.Resume();
             await Task.Delay(250);
             check(ElementCompositionPreview.GetElementChildVisual(list) is null, "a completed departure releases its composition copy");
+
+            items.Insert(0, first);
+            list.UpdateLayout();
+            await Task.Delay(40);
+            items.Insert(0, background);
+            list.UpdateLayout();
+            var shiftedTarget = LayoutInformation.GetLayoutSlot(neighbour).Y;
+            var shifting = ElementCompositionPreview.GetElementVisual(neighbour).TryGetAnimationController("Offset");
+            shifting?.Pause();
+            if (shifting is not null) { shifting.Progress = 0.25f; }
+            await CaptureFrame(root);
+            var departingTop = TrackedTop();
+            check(shifting is not null && Math.Abs(departingTop - shiftedTarget) > 1,
+                $"departing row is mid-retarget ({departingTop}, {shiftedTarget})");
+            items.Remove(tracked);
+            list.UpdateLayout();
+            var movingGhost = (ElementCompositionPreview.GetElementChildVisual(list) as ContainerVisual)?
+                .Children.OfType<SpriteVisual>().SingleOrDefault();
+            var movingFade = movingGhost?.TryGetAnimationController("Opacity");
+            movingFade?.Pause();
+            await CaptureFrame(root);
+            var ghostTop = TrackedTop();
+            check(movingFade is not null && Math.Abs(ghostTop - departingTop) <= 2,
+                $"departing row fades at its presented position ({departingTop}, {ghostTop})");
+            movingFade?.Resume();
         }
         finally { root.Children.Remove(list); }
 
