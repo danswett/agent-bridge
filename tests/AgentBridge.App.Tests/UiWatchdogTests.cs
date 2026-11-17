@@ -23,11 +23,16 @@ public sealed class UiWatchdogTests : IDisposable
         return json.RootElement.GetProperty("Hang").ValueKind != JsonValueKind.Null;
     }
 
+    void Tick(int seconds)
+    {
+        for (var i = 0; i < seconds; i++) { clock.Advance(TimeSpan.FromSeconds(1)); }
+    }
+
     [Fact]
     public void The_background_timer_records_the_stalled_ui_thread_at_the_threshold()
     {
         using var watch = Watch("settings not saved: disk unavailable");
-        clock.Advance(TimeSpan.FromSeconds(29));
+        Tick(29);
         Assert.False(HasHang());
         clock.Advance(TimeSpan.FromSeconds(1));
         using var json = JsonDocument.Parse(File.ReadAllText(Marker));
@@ -42,15 +47,18 @@ public sealed class UiWatchdogTests : IDisposable
     public void A_hang_is_written_once_until_a_new_heartbeat_rearms_detection()
     {
         using var watch = Watch();
-        clock.Advance(TimeSpan.FromSeconds(30));
+        Tick(30);
         var first = File.ReadAllText(Marker);
-        clock.Advance(TimeSpan.FromSeconds(60));
+        Tick(60);
         Assert.Equal(first, File.ReadAllText(Marker));
+        Assert.Equal(1, snapshots);
+        clock.Advance(TimeSpan.FromMinutes(2));
+        Tick(30);
         Assert.Equal(1, snapshots);
         heartbeat = clock.GetTimestamp();
         clock.Advance(TimeSpan.FromSeconds(1));
         Assert.Equal(first, File.ReadAllText(Marker));
-        clock.Advance(TimeSpan.FromSeconds(29));
+        Tick(29);
         Assert.Equal(2, snapshots);
         Assert.NotEqual(first, File.ReadAllText(Marker));
     }
@@ -59,9 +67,9 @@ public sealed class UiWatchdogTests : IDisposable
     public void Healthy_heartbeats_do_not_record_a_hang()
     {
         using var watch = Watch();
-        clock.Advance(TimeSpan.FromSeconds(20));
+        Tick(20);
         heartbeat = clock.GetTimestamp();
-        clock.Advance(TimeSpan.FromSeconds(20));
+        Tick(20);
         Assert.False(HasHang());
         Assert.Equal(0, snapshots);
     }
@@ -71,7 +79,7 @@ public sealed class UiWatchdogTests : IDisposable
     {
         using var watch = Watch("settings not saved: password=sample-private-value",
             "transcript: private user conversation", "the host did not start: Bearer sample-private-value");
-        clock.Advance(TimeSpan.FromSeconds(30));
+        Tick(30);
         using var json = JsonDocument.Parse(File.ReadAllText(Marker));
         var lines = json.RootElement.GetProperty("Hang").GetProperty("LastLogLines")
             .EnumerateArray().Select(e => e.GetString()!).ToArray();
@@ -94,10 +102,39 @@ public sealed class UiWatchdogTests : IDisposable
         using var watch = Watch();
         File.Delete(Marker);
         Directory.CreateDirectory(Marker);
-        clock.Advance(TimeSpan.FromSeconds(30));
-        clock.Advance(TimeSpan.FromSeconds(30));
+        Tick(30);
+        Tick(30);
         Assert.Single(errors);
         Assert.Contains("hang report", errors[0]);
+        Assert.Equal(1, snapshots);
+    }
+
+    [Theory]
+    [InlineData(6)]
+    [InlineData(120)]
+    public void Missing_watchdog_ticks_restart_observation_after_resume_or_a_debugger_break(int pauseSeconds)
+    {
+        using var watch = Watch();
+        Tick(25);
+        clock.Advance(TimeSpan.FromSeconds(pauseSeconds));
+        Assert.False(HasHang());
+        Tick(29);
+        Assert.False(HasHang());
+        Tick(1);
+        using var json = JsonDocument.Parse(File.ReadAllText(Marker));
+        Assert.Equal(30, json.RootElement.GetProperty("Hang").GetProperty("SecondsStalled").GetDouble());
+    }
+
+    [Fact]
+    public void A_healthy_beat_after_resume_does_not_permanently_suppress_later_hangs()
+    {
+        using var watch = Watch();
+        clock.Advance(TimeSpan.FromMinutes(2));
+        heartbeat = clock.GetTimestamp();
+        Tick(29);
+        Assert.False(HasHang());
+        Tick(1);
+        Assert.True(HasHang());
         Assert.Equal(1, snapshots);
     }
 
