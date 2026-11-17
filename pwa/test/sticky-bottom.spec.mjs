@@ -15,20 +15,21 @@ test.use({
   userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
 });
 
-async function say(page, turn, lines) {
-  await page.evaluate(({ id, turn, response }) => {
+async function say(page, turn, lines, kind = null) {
+  await page.evaluate(({ id, turn, response, kind }) => {
     const d = window.agentBridgeDemo;
     const s = d.host.get(id);
     d.upsert({
       ...s, status: 'working', question: null, updatedAt: new Date().toISOString(),
       activity: {
-        ...s.activity, turnCount: turn, turn: `${id}-turn-${turn}`, responseTurn: `${id}-turn-${turn}`,
+        ...s.activity, turnCount: turn, turn: `${id}-turn-${turn}`, responseTurn: `${id}-turn-${turn}`, kind,
+        userMessageFrom: kind === 'scheduled' ? 'schedule' : kind === 'notification' ? 'notification' : 'person',
         userMessage: `Message ${turn}`, response, reasoning: null, currentTool: null,
         own: undefined, source: undefined,
       },
     });
-  }, { id: ID, turn, response: paragraphs(turn, lines) });
-  await expect(page.locator(`.session-view[data-id="${ID}"] .stream-scroll`)).toContainText(`Turn ${turn}, paragraph ${lines} of the streaming reply.`);
+  }, { id: ID, turn, response: paragraphs(turn, lines), kind });
+  await expect(page.locator(`.session-view[data-id="${ID}"] .stream-scroll`)).toContainText(lines ? `Turn ${turn}, paragraph ${lines} of the streaming reply.` : `Message ${turn}`);
   await motionsDone(page);
 }
 
@@ -103,4 +104,36 @@ test('wheel input back to the bottom re-engages following for new rows and strea
     await say(page, turn, lines);
     await expect.poll(() => gap(pane)).toBeLessThan(4);
   }
+});
+
+test('new reply turns keep the reader in place and jump to the first unread answer, not the latest notification', async ({ page }) => {
+  const pane = await start(page);
+  const held = await scrollUp(page, pane);
+  const v = page.locator(`.session-view[data-id="${ID}"]`);
+  const jump = v.getByRole('button', { name: /new · Jump to first unread/ });
+  await say(page, 13, 0);
+  await expect(jump).toHaveCount(0);
+  await say(page, 13, 30);
+  await expect(jump).toHaveText('1 new · Jump to first unread');
+  await say(page, 14, 30, 'scheduled');
+  await say(page, 15, 30, 'notification');
+  await say(page, 15, 40, 'notification');
+  await expect(jump).toHaveText('3 new · Jump to first unread');
+  expect(await position(pane)).toEqual(held);
+  const first = pane.locator(`.history-turn[data-turn="${ID}-turn-13"]`);
+  await expect(first).toHaveAttribute('data-first-unread', '');
+  await expect(pane.locator('[data-first-unread]')).toHaveCount(1);
+  await expect(jump).toBeVisible();
+  expect((await jump.boundingBox()).height).toBeGreaterThanOrEqual(44);
+  await jump.click();
+  await expect.poll(() => first.evaluate((el) => {
+    const pane = el.closest('.stream-scroll').getBoundingClientRect();
+    const reply = el.querySelector('.history-reply').getBoundingClientRect();
+    return reply.bottom > pane.top && reply.top < pane.bottom;
+  })).toBe(true);
+  expect(await gap(pane)).toBeGreaterThan(844);
+  await wheel(page, pane, 100000);
+  await expect.poll(() => gap(pane)).toBeLessThan(4);
+  await expect(jump).toHaveCount(0);
+  await expect(pane.locator('[data-first-unread]')).toHaveCount(0);
 });
