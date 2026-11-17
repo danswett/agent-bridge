@@ -3,6 +3,7 @@ using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.HomeAssistant;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -10,6 +11,7 @@ using Xunit;
 public sealed class LaunchHaEnvironmentCollection;
 
 [Collection("Launch HA environment")]
+[Trait("Category", "Network")]
 [SupportedOSPlatform("windows")]
 public sealed class LaunchHaEnvironmentFlowTests : LaunchFlowFixture
 {
@@ -34,12 +36,11 @@ public sealed class LaunchHaEnvironmentFlowTests : LaunchFlowFixture
             var spec = Assert.Single(starter.Specs);
             Assert.True(spec.Environment!.TryGetValue(UrlVariable, out var url));
             Assert.Equal(ConfiguredUrl.TrimEnd('/') + "/api", url);
-            var block = WindowsAgentStarter.EnvironmentBlock(spec.Environment);
-            Assert.Contains(UrlVariable + "=" + url + "\0", block, StringComparison.Ordinal);
-            if (inherited is not null) { Assert.DoesNotContain(inherited, block, StringComparison.Ordinal); }
+            Assert.Equal(UrlVariable + "=" + url, ChildUrlEntry(spec));
             Assert.Equal(f.CopilotHome, spec.Environment["COPILOT_HOME"]);
             Assert.Contains("controlled launch", spec.Arguments);
             Assert.False(string.IsNullOrEmpty(spec.Environment[Launchers.SessionVariable]));
+            Assert.Equal("synthetic-agent-principal", spec.Environment[Launchers.TokenVariable]);
             Assert.DoesNotContain("AGENT_HA_AGENT_TOKEN", spec.Environment.Keys);
         });
     }
@@ -74,32 +75,40 @@ public sealed class LaunchHaEnvironmentFlowTests : LaunchFlowFixture
                 new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
 
             Assert.Equal(LaunchOutcome.Started, result.Outcome);
-            var environment = Assert.Single(starter.Specs).Environment!;
+            var spec = Assert.Single(starter.Specs);
+            var environment = spec.Environment!;
             Assert.DoesNotContain(UrlVariable, environment.Keys);
-            var block = WindowsAgentStarter.EnvironmentBlock(environment);
-            if (inherited is null) { Assert.DoesNotContain(UrlVariable + "=", block, StringComparison.Ordinal); }
-            else { Assert.Contains(UrlVariable + "=" + inherited + "\0", block, StringComparison.Ordinal); }
+            Assert.Equal(inherited is null ? null : UrlVariable + "=" + inherited, ChildUrlEntry(spec));
         });
     }
 
     LaunchService HaLauncher(bool enabled, string? url)
     {
-        // A serialized options fixture lets the tests-first head compile before the new options exist.
-        var options = JsonSerializer.Deserialize<LaunchServiceOptions>(JsonSerializer.Serialize(new
+        var (ha, _) = HaSettings.Read(JsonSerializer.SerializeToElement(new { enabled, baseUrl = url }));
+        var options = new LaunchServiceOptions
         {
             CopilotHome = f.CopilotHome,
             ClaudeHome = f.ClaudeHome,
             CodexHome = f.CodexHome,
             Config = Config(),
             PlatformSupported = true,
-            HomeAssistantEnabled = enabled,
-            HomeAssistantBaseUrl = url,
+            HomeAssistantEnabled = ha.Enabled || ha.EnabledRequested,
+            HomeAssistantBaseUrl = ha.BaseUrl,
             PollInterval = TimeSpan.FromMilliseconds(25),
-        }))!;
-        typeof(LaunchServiceOptions).GetProperty(nameof(LaunchServiceOptions.IsSystemDirectory))!
-            .SetValue(options, (Func<string, bool>)(_ => false));
+            IsSystemDirectory = _ => false,
+        };
         return new LaunchService(source, probe, screens, starter, locator, new AgencyCatalog(agency), options,
-            log: logged.Enqueue, account: new HaTestAccount());
+            log: logged.Enqueue, credentials: new HaTestCredentials(), account: new HaTestAccount());
+    }
+
+    static string? ChildUrlEntry(StartSpec spec) => WindowsAgentStarter.EnvironmentBlock(spec.Environment!)
+        .Split('\0').SingleOrDefault(e => e.StartsWith(UrlVariable + "=", StringComparison.OrdinalIgnoreCase));
+
+    sealed class HaTestCredentials : ILaunchCredentials
+    {
+        public string? Prepare(string session, string launchId) => "synthetic-agent-principal";
+        public void Bind(string launchId, int processId, DateTimeOffset startedAt) { }
+        public void Abandon(string launchId) { }
     }
 
     sealed class HaTestAccount : ILaunchAccount

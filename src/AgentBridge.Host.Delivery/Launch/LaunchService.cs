@@ -61,6 +61,8 @@ public sealed class LaunchServiceOptions
     public required string CodexHome { get; init; }
     public LaunchConfig Config { get; init; } = LaunchConfig.Default;
     public bool PlatformSupported { get; init; } = OperatingSystem.IsWindows();
+    public bool HomeAssistantEnabled { get; init; }
+    public Uri? HomeAssistantBaseUrl { get; init; }
 
     // How long a launch request waits for the session to register before it answers
     // unconfirmed. Copilot registers in seconds; a first launch that has to sign in can take
@@ -848,6 +850,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             if (probe.Active() is { } active) { return Refused(active); }
             if (!Config.Enabled) { return Refused("launching is turned off on this machine (launch.enabled in the host's config)"); }
             if (starter.Unavailable() is { } unavailable) { return Refused(unavailable); }
+            if (options.HomeAssistantEnabled && options.HomeAssistantBaseUrl is null)
+            {
+                return Refused("Home Assistant reply path is not ready: homeAssistant.baseUrl is not configured on this host");
+            }
             if (LaunchProtocol.Check(request) is { } invalid) { return Refused(invalid); }
             var settings = string.Join(", ", new[] { ("agent", request.Agent), ("workspace", request.Workspace), ("resume", request.Resume), ("profile", request.Profile), ("model", request.Model), ("effort", request.Effort), ("context", request.Context), ("permissions", request.Permissions) }
                 .Where(x => x.Item2 is not null).Select(x => $"{x.Item1}={x.Item2}"));
@@ -1208,7 +1214,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
                 extras, plan.Profile, prompt);
             var environment = AgentEnvironment.For(options.CopilotHome, options.ClaudeHome,
-                options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath());
+                options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath(),
+                options.HomeAssistantEnabled ? options.HomeAssistantBaseUrl : null);
             environment[Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched";
             // Set to nothing when none is issued, so a token of the host's own is never inherited.
             environment[Launchers.TokenVariable] = null;

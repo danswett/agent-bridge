@@ -8,6 +8,13 @@ launcher, as the peer `home-assistant` ([ha-connector.md](ha-connector.md#stage-
 they draw on are the profile's `config.json` ([host-config.md](host-config.md)). The code is
 `src/AgentBridge.Host.Delivery/Launch/`.
 
+For an HA-enabled receiving host, launches explicitly overlay `AGENT_HA_URL` with
+that host's configured `homeAssistant.baseUrl` plus `/api`, replacing any inherited
+URL. No caller environment or User-scope URL is needed. A missing configured endpoint
+refuses the launch with "reply path is not ready", even when settings validation
+disabled the connector. Non-HA launches and all credential handling stay unchanged;
+providing this URL does not itself establish that an HA agent credential is available.
+
 ## Answering `launch.options` without waiting for Agency (#1527)
 
 Agency's `hub list-local-sessions --json` took 18.5 s on a cold run against its 20 s cap, so
