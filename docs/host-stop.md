@@ -10,8 +10,22 @@ worker to type `/exit`, the agent-ha-bridge guard (G5), request memory, and the 
 
 The approved agent-stop parity rule is [Q12](design/agent-principals.md): an agent may
 end any session proven to have been agent-started through the fleet launch route, never
-a person-started or unattributed session. #2741's first slice records verified launch
-attribution only; the agent stop gate is still pending and existing refusals remain.
+a person-started or unattributed session. #2741 adds an inert controller-only path:
+the host registers a separate grant against a live authenticated script credential,
+not a script name, session label, person role or ordinary read/reply scope.
+
+`fleet.stop` on the local pipe takes `{ node, request, confirm? }`. The node must match
+exactly one current local registration; the host binds its session, process id and start
+time to durable verified fleet-launch provenance. `IWorkStateClearance.Read` must return
+fresh (at most five seconds old), matching session/process evidence with **Cleared** and
+a reason for each safeguard: no open owned PR, no unpushed work, not held, not private.
+Refused, Unknown, stale/mismatched evidence and held discovery refuse. The host checks
+again before typing and before forced termination, retaining G5, confirmation and audit.
+Caller-supplied safety fields confer no authority.
+
+Production registers no controller grants in this slice and uses
+`UnknownWorkStateClearance`, which returns Unknown for every safeguard. No live agent
+stop is enabled; slice 3 supplies the real provider and controlled provisioning.
 
 On Windows, run `agent-bridge-host stop <session> [--confirm <token>] [--profile <name>]` from the person's
 own terminal, outside any agent session. It calls the running local host, not another machine.

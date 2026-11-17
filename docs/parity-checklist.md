@@ -440,8 +440,9 @@ Mark before each: `agent-bridge-rehearsal mark $cp`.
 
 **Open parity gap (#2741):** an agent ends a session that an agent started.
 The host must use verified fleet-launch provenance and preserve Q12's exact-node,
-work and ownership safeguards. The first slice records launch attribution only;
-agent stopping and its live verification remain pending.
+work and ownership safeguards. The controller path is tested with injected clearance;
+production clearance defaults to Unknown and no controller grants are provisioned.
+The real provider and live verification remain pending; this is not closed parity.
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|

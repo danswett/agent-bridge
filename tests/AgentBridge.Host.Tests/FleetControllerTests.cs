@@ -30,15 +30,18 @@ public sealed partial class StopFlowTests
     }
 
     (Func<IProtocolChannel, string, JsonElement, Task<object?>> Handle, AgentCredentials Credentials, FleetController Controller)
-        Fleet(Clearance? clearance = null, bool grant = true, bool fleetOrigin = true)
+        Fleet(Clearance? clearance = null, bool grant = true, bool fleetOrigin = true, bool personOrigin = false, bool recorded = true)
     {
-        var credentials = new AgentCredentials(Path.Combine(f.Root, "fleet-controller"), "fixture", clock);
+        var credentials = new AgentCredentials(Path.Combine(f.Root, "fleet-controller", Guid.NewGuid().ToString("N")), "fixture", clock);
         var credential = credentials.MintScript("sre").Credential;
         credentials.Accept(fleetChannel, credential);
         var provenance = new LaunchProvenance(null, logged.Enqueue);
         var request = Guid.NewGuid();
-        provenance.Preparing(request, Id, new LaunchAttribution("local", "agent", credential.Principal!, fleetOrigin));
-        provenance.Bound(request, Id, source.ProcessOf(Id)!);
+        if (recorded)
+        {
+            provenance.Preparing(request, Id, new LaunchAttribution("local", personOrigin ? "person-client" : "agent", credential.Principal!, fleetOrigin));
+            provenance.Bound(request, Id, source.ProcessOf(Id)!);
+        }
         var controller = new FleetController(credentials, source, new FleetLauncher(provenance), Stopper(graceMs: 1),
             new AgentAuditLog(Path.Combine(f.Root, "fleet-audit"), clock), clearance, clock);
         if (grant) { controller.RegisterController(credential); }
@@ -60,6 +63,10 @@ public sealed partial class StopFlowTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => FleetStop(setup.Handle));
         setup = Fleet(new Clearance(), fleetOrigin: false);
         Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(setup.Handle)).Outcome);
+        setup = Fleet(new Clearance(), fleetOrigin: false, personOrigin: true);
+        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(setup.Handle)).Outcome);
+        setup = Fleet(new Clearance(), recorded: false);
+        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(setup.Handle)).Outcome);
         setup = Fleet(new Clearance());
         setup.Credentials.RevokeScript("sre");
         await Assert.ThrowsAsync<InvalidOperationException>(() => FleetStop(setup.Handle));
@@ -79,6 +86,21 @@ public sealed partial class StopFlowTests
     }
 
     [Fact]
+    public async Task Fleet_stop_refuses_a_grant_revoked_during_clearance()
+    {
+        var clearance = new Clearance();
+        var setup = Fleet(clearance);
+        clearance.Change = (read, value) =>
+        {
+            if (read > 1) { setup.Credentials.RevokeScript("sre"); }
+            return value;
+        };
+        Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(setup.Handle)).Outcome);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+    }
+
+    [Fact]
     public async Task Fleet_stop_defaults_to_unknown_despite_caller_supplied_clearance()
     {
         Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await FleetStop(Fleet().Handle)).Outcome);
@@ -87,7 +109,7 @@ public sealed partial class StopFlowTests
     }
 
     [Theory]
-    [InlineData(0), InlineData(1), InlineData(2), InlineData(3), InlineData(4), InlineData(5), InlineData(6)]
+    [InlineData(0), InlineData(1), InlineData(2), InlineData(3), InlineData(4), InlineData(5), InlineData(6), InlineData(7)]
     public async Task Fleet_stop_rechecks_every_safeguard_and_identity_before_dispatch(int change)
     {
         var clearance = new Clearance();
@@ -101,6 +123,7 @@ public sealed partial class StopFlowTests
                 2 => value with { Held = refused }, 3 => value with { Private = new(WorkState.Unknown, "unknown") },
                 4 => value with { CheckedAt = value.CheckedAt.AddMinutes(-1) },
                 5 => value with { Process = new(Pid, Started.AddSeconds(1)) },
+                7 => value with { CheckedAt = value.CheckedAt.AddMinutes(1) },
                 _ => value with { Session = Other },
             };
         };
@@ -121,6 +144,9 @@ public sealed partial class StopFlowTests
         Assert.Equal(protect ? StopOutcome.Refused : StopOutcome.Ended, result.Outcome);
         Assert.Single(injector.Plans);
         Assert.Equal(protect ? 0 : 1, control.Terminated.Count);
+        var rows = GateAuditProjection.Load(Path.Combine(f.Root, "fleet-audit")).Rows;
+        Assert.Single(rows, r => r.Action == Ops.SessionStop && r.Gate?.Phase == "intent");
+        Assert.All(rows.Where(r => r.Action == Ops.SessionStop), r => Assert.Equal("agent", r.Gate!.ActorKind));
     }
 
     sealed class FleetChannel : IProtocolChannel

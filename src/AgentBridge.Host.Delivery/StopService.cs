@@ -269,6 +269,7 @@ public sealed class StopService : ISessionStopper
                 }
                 if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
                 await SetEndingAsync(session.Id, true);
+                if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
                 if (!asking)
                 {
                     InjectionResult typing;
@@ -295,6 +296,7 @@ public sealed class StopService : ISessionStopper
             {
                 return Failed($"{started}, so the host stopped short of terminating the session; check at the machine");
             }
+            if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
             var refused = held.Terminate();
             if (await held.WaitForExitAsync(options.TerminateWait))
             {

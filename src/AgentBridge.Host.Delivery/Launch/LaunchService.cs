@@ -39,6 +39,7 @@ public interface ISessionLauncher
     IReadOnlyList<Started> LaunchedProcesses() => [];
 
     bool LaunchedSession(string session, SessionProcess? process) => false;
+    bool FleetLaunchedSession(string session, SessionProcess process) => false;
 
     // launch.trust.answer, for a person whose signed command the caller has checked: answers a
     // folder-trust question a launched agent is waiting on (trust, or quit).
@@ -245,6 +246,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     }
 
     public bool LaunchedSession(string session, SessionProcess? process) => provenance.Contains(session, process);
+    public bool FleetLaunchedSession(string session, SessionProcess process) => provenance.FleetContains(session, process);
 
     // agent-ha-bridge's $script:BridgeResumeCacheLimit: how many of the newest sessions in
     // approved folders it caches, and so decides the resume labels over.

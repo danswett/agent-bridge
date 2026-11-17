@@ -8,7 +8,7 @@ launcher, as the peer `home-assistant` ([ha-connector.md](ha-connector.md#stage-
 they draw on are the profile's `config.json` ([host-config.md](host-config.md)). The code is
 `src/AgentBridge.Host.Delivery/Launch/`.
 
-## Verified launch provenance (#2741, first slice)
+## Verified launch provenance (#2741)
 
 Audited launches persist the host-verified ingress path, actor kind and principal in
 `launch-provenance.json` before starting the process. Registration binds that attribution
@@ -17,9 +17,12 @@ retains it. Peer names, fleet names and request fields never supply this attribu
 Older records and unaudited launches remain unattributed, not agent-launched. Invalid
 attribution makes the provenance store unavailable rather than guessing an origin.
 
-This slice records provenance only. It enables no new launch or stop authority. The
-fleet-launch ingress and agent stop gate must still enforce the complete
-[Q12 rule](design/agent-principals.md) before agent stopping is available.
+The controller-only local `fleet.launch` ingress adds a durable `fleetController`
+marker only after authenticating its separately host-registered grant. It retains
+the agent worktree checks and requires a fresh isolated session, standard permissions,
+and no resume, transfer or attachments. Ordinary launches never acquire that marker.
+Production provisions no controller grants yet; the [stop gate](host-stop.md) also
+defaults to Unknown clearance, so live agent stopping remains unavailable.
 
 ## Answering `launch.options` without waiting for Agency (#1527)
 

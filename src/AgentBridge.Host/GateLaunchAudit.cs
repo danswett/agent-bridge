@@ -5,7 +5,7 @@ namespace AgentBridge.Host;
 
 // Only the run-control writer assigns this context; ingress never infers it from a request or journal.
 internal sealed record GateRunContext(Guid Run);
-internal sealed record GateLaunchIngress(string Path, string ActorKind, string Principal, GateRunContext? Run);
+internal sealed record GateLaunchIngress(string Path, string ActorKind, string Principal, GateRunContext? Run, bool FleetController = false);
 
 internal static class GateLaunchAudit
 {
@@ -53,7 +53,7 @@ internal static class GateLaunchAudit
             return session => { audit.Append(intent with { Target = session, Outcome = "started", Gate = gate with { Phase = "terminal" } }); };
         }
         return await launcher.LaunchAuditedAsync(request, peer, Prepare, ct,
-            new LaunchAttribution(ingress.Path, ingress.ActorKind, ingress.Principal));
+            new LaunchAttribution(ingress.Path, ingress.ActorKind, ingress.Principal, ingress.FleetController));
     }
 
     static LaunchResult Refused(string reason) => new(LaunchOutcome.Refused, reason);

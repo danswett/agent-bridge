@@ -86,16 +86,17 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
         File.WriteAllText(Path.Combine(app, "README.md"), "fixture");
         Git(app, "add", "README.md");
         Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
         var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
             agentWorktreeCheck: AgentLaunchWorktreeCheck.Check);
         var controller = new FleetController(store, source, launcher, null, Writer());
         var handler = LocalApi.Handler(null!, null!, null!, credentials: store, fleetController: controller);
         var body = System.Text.Json.JsonSerializer.SerializeToElement(new LaunchRequest
-            { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Prompt = "fixture" });
+            { Request = Guid.NewGuid().ToString(), Agent = "claude", Workspace = "App", Permissions = LaunchProtocol.Ask, Prompt = "fixture" });
         await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, FleetController.LaunchOp, body));
         controller.RegisterController(credential);
         var launched = Assert.IsType<LaunchResult>(await handler(channel, FleetController.LaunchOp, body));
-        Assert.Equal(LaunchOutcome.Started, launched.Outcome);
+        Assert.True(launched.Outcome == LaunchOutcome.Started, launched.Reason);
         var saved = new LaunchProvenance(Path.Combine(f.Root, "profile", "launch-provenance.json"), logged.Enqueue);
         Assert.True(saved.FleetContains(launched.Session!, source.ProcessOf(launched.Session!)!));
         Assert.False(saved.FleetContains(launched.Session!, new SessionProcess(123, DateTimeOffset.UtcNow)));

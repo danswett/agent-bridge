@@ -7,6 +7,14 @@ connection reaches. Implemented by `AgentBridge.Local` (server and client) and
 `AgentBridge.Host` (`LocalApi`, `HostControl`). Why it looks like this:
 [app-windows.md](../app-windows.md#local-api-a-named-pipe-owned-by-the-host).
 
+## Fleet control (inert)
+
+The inert `fleet.launch` and `fleet.stop` controller operations require a separate
+host-registered grant on an authenticated script connection, never ordinary script
+read authority or person classification. `fleet.launch` uses the launch request shape;
+`fleet.stop` takes `{ node, request, confirm? }`, not a session id or caller clearance.
+See [host-stop](../host-stop.md) for fail-closed clearance and provisioning status.
+
 ## Endpoint
 
 One per host profile.

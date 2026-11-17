@@ -4,11 +4,12 @@ using AgentBridge.Host.Core;
 namespace AgentBridge.Host.Delivery.Launch;
 
 // Set by verified host ingress, never inferred from request fields, peer names or session ids.
-public sealed record LaunchAttribution(string Path, string ActorKind, string Principal)
+public sealed record LaunchAttribution(string Path, string ActorKind, string Principal, bool FleetController = false)
 {
     internal bool IsValid => Path is "local" or "relay" or "legacy-ha"
         && ActorKind is "person-client" or "agent" or "ha-component"
-        && !string.IsNullOrWhiteSpace(Principal) && Principal.Length <= 1024;
+        && !string.IsNullOrWhiteSpace(Principal) && Principal.Length <= 1024
+        && (!FleetController || Path == "local" && ActorKind == "agent");
 }
 
 internal sealed class LaunchProvenance
@@ -80,6 +81,15 @@ internal sealed class LaunchProvenance
             if (origins.Values.Any(o => o.Process is null && (o.Session.Length == 0 || string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase))))
             { throw new InvalidOperationException("refused: an unfinished launch has no durable process binding"); }
             return process is not null && origins.Values.Any(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase) && o.Process == process);
+        }
+    }
+
+    public bool FleetContains(string session, SessionProcess process)
+    {
+        lock (gate)
+        {
+            return Contains(session, process) && origins.Values.Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase))
+                .All(o => o.Process == process && o.Attribution is { FleetController: true, ActorKind: "agent" });
         }
     }
 
