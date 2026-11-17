@@ -372,6 +372,20 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
 
 ### Updates: Velopack, one version for app and host
 
+**Completion evidence** ([updater follow-up](https://github.com/danswett/agent-bridge/issues/2869)):
+`UpdateApplyCompletion` is a platform-neutral observer seam, not yet wired to apply or
+respawn. Its adapter must track the actual apply operation, including delegated workers,
+and freshly read the active installation's normalized version. A launcher exit, target
+files appearing, or a cached locator version does not establish worker completion.
+Only authoritative worker completion, a known zero apply exit code, and the matching
+active version produce `Completed`. A known nonzero worker exit produces `Failed`.
+Missing evidence, unreadable state, a timeout or a version mismatch stays `Unknown`;
+none authorizes a retry or claims app/host convergence. Cancellation stops observation,
+not the updater. The asynchronous probe must return promptly and cancel only its wait.
+Results retain the operation step, target/observed versions, actual exit/native error
+code when available, offset-bearing observation time and monotonic elapsed time,
+without copying exception messages or inventing holder PID/path evidence.
+
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
 into one folder with one version. An app update is a host update, so they never skew.

@@ -31,6 +31,7 @@ public sealed class UpdateApplyCompletionTests
 
         Assert.Equal(UpdateApplyEnd.Completed, result.End);
         Assert.Null(result.Code);
+        Assert.Equal(Target, result.TargetVersion);
         Assert.Equal(Target, result.ActiveVersion);
         Assert.Equal(TimeSpan.FromSeconds(1), result.Elapsed);
         Assert.Equal(time.GetUtcNow(), result.At);
@@ -124,6 +125,51 @@ public sealed class UpdateApplyCompletionTests
         Assert.Equal("timeout", result.Code);
         Assert.Equal(watch.Window, result.Elapsed);
         Assert.False(worker.Task.IsCompleted);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_result_arriving_after_the_deadline_cannot_replace_the_timeout(bool unreadable)
+    {
+        var watch = Watch(_ =>
+        {
+            time.Advance(TimeSpan.FromSeconds(5));
+            if (unreadable) throw new IOException("late read failure");
+            return Task.FromResult(new UpdateApplyEvidence(true, 0, Target));
+        });
+
+        var result = await watch.RunAsync(Target);
+
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Equal("timeout", result.Code);
+        Assert.Equal(watch.Window, result.Elapsed);
+        Assert.Equal(unreadable ? "IOException" : null, result.ErrorType);
+    }
+
+    [Fact]
+    public async Task A_process_query_failure_retains_the_native_code_but_not_its_message()
+    {
+        var error = new System.ComponentModel.Win32Exception(5, "private installation path");
+
+        var result = await Watch(_ => throw error).RunAsync(Target);
+
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Equal("probe-unreadable", result.Code);
+        Assert.Equal("Win32Exception", result.ErrorType);
+        Assert.Equal(5, result.ErrorCode);
+        Assert.DoesNotContain("private installation path", result.ToString());
+    }
+
+    [Fact]
+    public async Task A_probe_cancelling_itself_is_not_person_cancellation_or_an_apply_failure()
+    {
+        var result = await Watch(_ => Task.FromCanceled<UpdateApplyEvidence>(
+            new CancellationToken(true))).RunAsync(Target);
+
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Equal("probe-cancelled", result.Code);
+        Assert.Equal("apply-completion", result.Step);
     }
 
     [Fact]
