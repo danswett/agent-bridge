@@ -63,6 +63,8 @@ launches retain their existing paths. This wiring does not add restart-durable c
 idle-ending loop; unresolved/live reservations remain conservative.
 Proven prestart refusals and busy outcomes release only their own hourly and live
 reservation; request memory and the separate attempt budget are retained.
+Prestart busy outcomes record a refusal even before a launch intent exists. A successful
+worktree refusal audit is acknowledged host-side so the pipe does not record it twice.
 
 ## Dispatch facts seam (#2788)
 

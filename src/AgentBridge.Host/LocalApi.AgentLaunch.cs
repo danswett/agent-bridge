@@ -13,9 +13,13 @@ public static partial class LocalApi
     {
         var principal = credentials.PrincipalOf(caller);
         bool callerAudited = false;
-        LaunchResult Denied(string reason, bool recorded = false)
+        void RecordRefusal(string reason, bool recorded = false)
         {
             if (!recorded && !callerAudited) { AuditRefusal(credentials, caller, LaunchProtocol.Launch, data, audit, reason, refusals); }
+        }
+        LaunchResult Denied(string reason, bool recorded = false)
+        {
+            RecordRefusal(reason, recorded);
             log?.Invoke($"local pipe: refused agent launch: {reason}");
             return new(LaunchOutcome.Refused, reason);
         }
@@ -65,10 +69,12 @@ public static partial class LocalApi
         }
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
             refusal: () => lastRefusal = Check());
+        if (result.Outcome == LaunchOutcome.Busy)
+        { RecordRefusal("busy: the launch could not start because another startup is waiting", result.RefusalAudited); }
         if (result.Outcome is LaunchOutcome.Refused or LaunchOutcome.Busy) { gate.LaunchRefused(principal, request.Request); }
         if (result.Outcome == LaunchOutcome.Started && result.Session is { } session) { gate.LaunchStarted(principal, request.Request, session); }
         if (result.Outcome == LaunchOutcome.Refused)
-        { return Denied(lastRefusal ?? "the launch could not be completed; check details at the machine"); }
+        { return Denied(lastRefusal ?? "the launch could not be completed; check details at the machine", result.RefusalAudited); }
         return result with
         {
             Trust = null,

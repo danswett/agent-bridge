@@ -315,6 +315,7 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
         var result = Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch, body));
         Assert.Equal(LaunchOutcome.Refused, result.Outcome);
         Assert.Equal(1, calls);
+        Assert.DoesNotContain("refusalAudited", JsonSerializer.Serialize(result, ProtocolJson.Options));
         Assert.Empty(starter.Specs);
         var rows = Directory.GetFiles(Path.Combine(f.Root, AgentAuditLog.FolderName), "launches-*.jsonl")
             .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line))
