@@ -85,6 +85,7 @@ public static partial class Motion
                         // No starting key: replacing the implicit move starts from its drawn offset.
                         move.InsertKeyFrame(1, visual.Offset, Ease(visual.Compositor, decelerate));
                         move.Duration = step.Duration;
+                        move.StopBehavior = AnimationStopBehavior.SetToFinalValue;
                         visual.StartAnimation("Offset", move);
                     }
                     state.Offset = visual.Offset;
@@ -101,6 +102,7 @@ public static partial class Motion
             animation.Target = "Offset";
             animation.InsertExpressionKeyFrame(1, "this.FinalValue", Ease(visual.Compositor, ease));
             animation.Duration = Catalogue.Enter("Shift", true).Duration;
+            animation.StopBehavior = AnimationStopBehavior.SetToFinalValue;
             var implicitAnimations = visual.ImplicitAnimations ?? visual.Compositor.CreateImplicitAnimationCollection();
             implicitAnimations["Offset"] = animation;
             visual.ImplicitAnimations = implicitAnimations;

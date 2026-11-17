@@ -71,13 +71,26 @@ static partial class SelfTest
             var standard = t * t * (3 - 2 * t);
             check(elapsed < 120 && progress > standard + 0.12,
                 $"interrupted shift decelerates toward its new position ({elapsed:0} ms, {progress:0.00} progress)");
+            check(Math.Abs(target - later) > 1, $"retarget is still moving before motion is disabled ({later}, {target})");
             animations = false;
+            shifts.Changing();
+            await CaptureFrame(root);
+            check(Math.Abs(TrackedTop() - target) <= 1,
+                "disabling motion settles an interrupted shift without another list change");
+            animations = true;
             shifts.Changing();
             items.Remove(added);
             list.UpdateLayout();
+            var reducedSlot = LayoutInformation.GetLayoutSlot(neighbour).Y;
             await CaptureFrame(root);
-            check(Math.Abs(TrackedTop() - LayoutInformation.GetLayoutSlot(neighbour).Y) <= 1,
-                "reduced-motion row neighbours take their final positions without travel");
+            var implicitMove = TrackedTop();
+            check(implicitMove > reducedSlot + 1 && implicitMove < target,
+                $"row is moving before its implicit shift is disabled ({implicitMove}, {reducedSlot})");
+            animations = false;
+            shifts.Changing();
+            await CaptureFrame(root);
+            check(Math.Abs(TrackedTop() - reducedSlot) <= 1,
+                "disabling motion settles an implicit shift without another list change");
         }
         finally { root.Children.Remove(list); }
 
