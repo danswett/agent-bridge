@@ -189,8 +189,15 @@ static partial class SelfTest
             await CheckPostedInput(window, check, result);
             // #2483: hosted ARM64 can lose activation to the Microsoft account popup.
             AcquireNativeForeground(window.Handle);
+            bool SessionLaneFocused() => FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is DependencyObject focused
+                && (ReferenceEquals(focused, window.Sessions.Rows)
+                    || Above<ListView>(focused, lane => ReferenceEquals(lane, window.Sessions.Rows)) is not null);
+            var sessionLaneFocusBefore = SessionLaneFocused();
+            check(sessionLaneFocusBefore, "starts the pinned reopen with keyboard focus in the session lane");
             Away(window, main);
             var pinnedView = await Choose(window, main, id, "Response");
+            var sessionLaneFocusOpened = SessionLaneFocused();
+            check(sessionLaneFocusOpened, "keeps keyboard focus in the session lane when the pinned conversation opens");
             Button? pinnedPin = null, pinnedDetails = null;
             var controlsUnavailable = false;
             try { pinnedPin = ById<Button>(away, "HeaderPin"); pinnedDetails = ById<Button>(away, "Details"); }
@@ -215,10 +222,17 @@ static partial class SelfTest
                 int? drawnBefore = null;
                 pinnedObserver.Trace.Xaml(() => drawnBefore = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, GrowthGap.Drawn);
                 ObservePinned(pinnedObserver, pinnedSamples, GrowthStage.PinnedBefore, drawnBefore, null);
+                check(pinnedObserver.Trace.Snapshots.LastOrDefault() is { Stage: GrowthStage.PinnedBefore, PinEnd: true },
+                    "starts older drawing with the end pin held");
                 var pinned = await Until(() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count == turns
                     && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(30));
                 var pinnedFill = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, pinned };
                 ObservePinned(pinnedObserver, pinnedSamples, GrowthStage.PinnedAfter, pinnedFill.drawn, pinned, pinnedFill.offset, pinnedFill.extent);
+                check(pinnedObserver.Trace.Snapshots.LastOrDefault() is { Stage: GrowthStage.PinnedAfter, PinEnd: true, PinReleasesDelta: 0 },
+                    "keeps the end pin held without a release while older history draws");
+                var sessionLaneFocusAfter = SessionLaneFocused();
+                result["historyPinnedSessionFocus"] = new { before = sessionLaneFocusBefore, opened = sessionLaneFocusOpened, after = sessionLaneFocusAfter };
+                check(sessionLaneFocusAfter, "keeps keyboard focus in the session lane until older drawing finishes");
                 result["historyPinnedFill"] = pinnedFill;
                 const string pinnedMessage = "finishes older drawing at the end before focus moves away";
                 var foregroundMatches = GetForegroundWindow() == window.Handle;
