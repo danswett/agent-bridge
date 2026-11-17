@@ -421,6 +421,33 @@ public sealed class LaunchPieceTests : IDisposable
 
     [WindowsFact]
     [Trait("Category", "Process")]
+    public void A_live_process_is_still_running_after_its_retained_launcher_handle_is_released()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var starter = new WindowsAgentStarter(hidden: true);
+        var started = starter.Start(new StartSpec(Echo, ["--probe-child", Out("released.pid"), "keep"], root));
+        using var process = Process.GetProcessById(started.ProcessId);
+        try
+        {
+            Assert.False(process.HasExited);
+            Assert.True(starter.Running(started));
+            starter.Release(started);
+
+            Assert.True(starter.Running(started));
+            Assert.False(starter.Running(started with { StartedAt = started.StartedAt.AddMinutes(-5) }));
+            process.Kill();
+            Assert.True(process.WaitForExit(20_000));
+            Assert.False(starter.Running(started));
+        }
+        finally
+        {
+            if (!process.HasExited) { process.Kill(); process.WaitForExit(20_000); }
+            starter.Release(started);
+        }
+    }
+
+    [WindowsFact]
+    [Trait("Category", "Process")]
     public void A_process_is_the_launchs_own_only_if_it_runs_under_the_process_started_for_it()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -459,6 +486,9 @@ public sealed class LaunchPieceTests : IDisposable
             Assert.False(starter.Running(started));
             Assert.True(starter.Owns(started, agent));
             Assert.False(starter.Owns(started, Environment.ProcessId));
+            using var child = Process.GetProcessById(agent);
+            Assert.False(child.HasExited);
+            Assert.True(starter.Running(new Started(agent, child.StartTime.ToUniversalTime())));
         }
         finally
         {

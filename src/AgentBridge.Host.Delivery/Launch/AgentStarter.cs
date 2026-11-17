@@ -152,7 +152,7 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
                 return running;
             }
         }
-        var process = OpenProcess(ProcessQueryLimitedInformation, false, (uint)started.ProcessId);
+        var process = OpenProcess(ProcessQueryLimitedInformation | Synchronize, false, (uint)started.ProcessId);
         if (process == 0) { return false; }
         try { return Running(process, started); }
         finally { CloseHandle(process); }
@@ -283,6 +283,7 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
     const uint CreateUnicodeEnvironment = 0x400;
     const int UoiName = 2;
     const uint ProcessQueryLimitedInformation = 0x1000;
+    const uint Synchronize = 0x00100000;
     const uint StillActive = 259;
     const uint WaitObject0 = 0;
     const uint WaitTimeout = 258;
