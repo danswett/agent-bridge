@@ -125,6 +125,86 @@ public sealed partial class ReplyTests
     }
 
     [Fact]
+    public async Task Different_rids_with_the_same_stamp_have_distinct_durable_deliveries()
+    {
+        await using var c = await Ready();
+        c.Observe(ha.SendFromCard(Node, "sender A", rid: "same-at-a", at: "same-at"));
+        c.Observe(ha.SendFromCard(Node, "sender B", rid: "same-at-b", at: "same-at"));
+        for (var n = 0; n < 5; n++) { await Pass(c); await c.DeliveredAsync(); }
+
+        Assert.Equal(["sender A", "sender B"], replied.Select(r => r.Text));
+        Assert.Equal(2, replied.Select(r => r.Request).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task A_burst_larger_than_the_stamp_cache_never_retypes_a_submitted_reply_after_restart()
+    {
+        await using (var first = await Ready())
+        {
+            for (var n = 0; n < 65; n++) { first.Observe(ha.SendFromCard(Node, $"burst-{n}", rid: $"burst-{n}")); }
+            await Pass(first);
+            await first.DeliveredAsync();
+            Assert.Equal("burst-0", Assert.Single(replied).Text);
+        }
+        await using var restarted = Connector();
+        for (var n = 0; n < 68; n++) { await Pass(restarted); await restarted.DeliveredAsync(); }
+
+        Assert.Equal(Enumerable.Range(0, 65).Select(n => $"burst-{n}"), replied.Select(r => r.Text));
+        Assert.Null(new DurableInbox(InboxPath).Peek(Node));
+    }
+
+    [Fact]
+    public async Task A_terminal_only_question_refuses_and_removes_a_queued_reply_instead_of_delivering_it_later()
+    {
+        await using var c = await Ready();
+        c.Observe(ha.SendFromCard(Node, "queued before question", rid: "terminal-queued"));
+        Idle(question: Pick() with { AnswerAtMachine = true });
+        await Pass(c);
+
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        Assert.Null(new DurableInbox(InboxPath).Peek(Node));
+        await CardCloses(c);
+        Assert.Empty(replied);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_interrupted_rid_retried_during_a_question_keeps_its_unconfirmed_outcome(bool terminal)
+    {
+        await using (var first = await Ready())
+        {
+            first.Observe(ha.SendFromCard(Node, "possibly submitted", rid: "interrupted-question"));
+            new DurableInbox(InboxPath).Start(Node, "interrupted-question", time.GetUtcNow());
+        }
+        Idle(question: Pick() with { AnswerAtMachine = terminal });
+        await using var restarted = Connector();
+        await Pass(restarted);
+        await Do(restarted, ha.SendFromCard(Node, "retry", driver: "agent", rid: "interrupted-question"));
+
+        Assert.Equal("unconfirmed", Ack.GetProperty("outcome").GetString());
+        Assert.Null(new DurableInbox(InboxPath).Peek(Node));
+        await CardCloses(restarted);
+        Assert.Empty(replied);
+    }
+
+    [Fact]
+    public async Task A_session_ending_while_the_host_is_down_does_not_leave_pending_entries_using_inbox_capacity()
+    {
+        await using (var first = await Ready())
+        {
+            first.Observe(ha.SendFromCard(Node, "session will end", rid: "ended-offline"));
+        }
+        sessions.End(A);
+        await using var restarted = Connector();
+        await Pass(restarted);
+
+        Assert.Null(new DurableInbox(InboxPath).Peek(Node));
+        Assert.Empty(JsonNode.Parse(File.ReadAllText(InboxPath))!["Messages"]!.AsArray());
+        Assert.Empty(replied);
+    }
+
+    [Fact]
     public async Task Concurrent_senders_retrying_one_rid_queue_and_deliver_it_only_once()
     {
         await using var c = await Ready();

@@ -50,6 +50,19 @@ internal sealed class DurableInbox
         return Load().Find(m => m.Node == node && m.DeliveredAt is null);
     }
 
+    public InboxMessage? Find(string node, string rid)
+    {
+        using var held = Lock();
+        return Load().Find(m => m.Node == node && m.Rid == rid);
+    }
+
+    public void ForgetExcept(IReadOnlySet<string> nodes)
+    {
+        using var held = Lock();
+        var messages = Load();
+        if (messages.RemoveAll(m => !nodes.Contains(m.Node)) > 0) { Save(messages); }
+    }
+
     public InboxMessage Start(string node, string rid, DateTimeOffset at)
     {
         using var held = Lock();
