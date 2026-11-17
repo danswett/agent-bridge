@@ -673,6 +673,26 @@ The latest 20 stay without a timer; reloading uses the host's history, never a c
 `test/question-inline.spec.mjs` covers those records, reload and a later question; the refusal
 and reply-box regression is in `test/closed-question.spec.mjs`.
 
+### Typing latency baseline (#2736)
+
+`npx playwright test typing-perf.spec.mjs` runs in the existing Chromium/WebKit jobs,
+with desktop Windows and touch iPad viewport/platform profiles (emulation, not real devices).
+Local browser/server execution still follows root AGENTS permissions.
+Each case types 80 trusted native keystrokes: short history, 500 total turns with at least
+104 history turns rendered, the same with 20 Hz demo-host streaming, and streaming with
+200 sessions. Session age is simulated; this is not a long-running soak or real relay test.
+Raw samples, nearest-rank p50/p95/max, worst frame gap, storage-write count, transcript
+mutation count, DOM size and optional Chromium heap figures appear in `TYPING_PERF` JSON
+and the `typing-perf.json` test attachment. Heap data is null where unsupported.
+Latency starts at the native keydown timestamp and ends at the second animation frame
+after input: a conservative rendering-opportunity proxy, not a physical display timestamp.
+No warm-up samples or slow outliers are discarded. A 150 ms blocking-keydown control must fail
+the budget. The strict thresholds are p95, max and frame gap all **under 100 ms**.
+Breaches warn without failing this measurement slice; set `PWA_TYPING_PERF_GATE=1` to enforce
+them in the fix slice. Missing input, lost text and a broken sensitivity control always fail.
+The existing stack blocks service workers, so worker/push latency and actual device/OS/input-method
+latency remain unmeasured; these profiles do not establish the owner's all-platform guarantee.
+
 ```
 npm ci                                    # esbuild for the build (the unit tests build the site too), and Playwright
 node --test "test/unit/*.test.mjs"       # protocol client, tolerant reader, Markdown
