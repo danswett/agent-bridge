@@ -45,12 +45,24 @@ public static partial class LiteAgentSend
         try { written = appendAttempt?.Invoke(attempt, text) == true; }
         catch (Exception) { throw AuditUnavailable(); }
         if (!written) { throw AuditUnavailable(); }
-        var outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct);
+        LiteOutcome outcome;
+        try { outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct); }
+        catch (Exception)
+        {
+            AppendTerminal("unconfirmed");
+            throw;
+        }
         var name = outcome.Kind.ToString().ToLowerInvariant();
-        try { written = appendAttempt?.Invoke(attempt with { Outcome = name }, text) == true; }
-        catch (Exception) { throw TerminalAuditUnavailable(); }
-        if (!written) { throw TerminalAuditUnavailable(); }
+        AppendTerminal(name);
         return new LiteSendReply(name, outcome.Code, outcome.Request);
+
+        void AppendTerminal(string terminal)
+        {
+            bool terminalWritten;
+            try { terminalWritten = appendAttempt?.Invoke(attempt with { Outcome = terminal }, text) == true; }
+            catch (Exception) { throw TerminalAuditUnavailable(); }
+            if (!terminalWritten) { throw TerminalAuditUnavailable(); }
+        }
     }
 
     static InvalidOperationException AuditUnavailable() =>

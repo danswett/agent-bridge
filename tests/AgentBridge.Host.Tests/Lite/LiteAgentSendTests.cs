@@ -136,13 +136,49 @@ public sealed class LiteAgentSendTests : IDisposable
         Assert.Equal("attempted", Assert.Single(AuditLines()).GetProperty("outcome").GetString());
     }
 
-    [Fact]
-    public async Task A_sender_that_throws_leaves_one_attempt_record_and_its_error_is_not_hidden()
+    [Theory]
+    [InlineData(false, null)]
+    [InlineData(true, null)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Sender_faults_and_cancellation_are_audited_before_rethrow_unless_the_terminal_write_fails(bool cancelled, bool? appendThrows)
     {
-        sender.BeforeSend = () => throw new IOException("sender failed");
-        var error = await Assert.ThrowsAsync<IOException>(() => Send(hello, Body));
-        Assert.Equal("sender failed", error.Message);
-        Assert.Equal("attempted", Assert.Single(AuditLines()).GetProperty("outcome").GetString());
+        var failure = new IOException("private sender failure");
+        sender.Pending = cancelled ? Task.FromCanceled<LiteOutcome>(new CancellationToken(true)) : Task.FromException<LiteOutcome>(failure);
+        var calls = 0;
+        bool Append(AgentAuditEntry entry, string? text)
+        {
+            calls++;
+            if (calls == 1 || appendThrows is null) { return audit.Append(entry, text); }
+            if (appendThrows == true) { throw new IOException("private audit failure"); }
+            return false;
+        }
+        var error = await Record.ExceptionAsync(() =>
+            LiteAgentSend.HandleAsync(store, sender, hello, Json(), windows: true, appendAttempt: Append));
+
+        Assert.Equal(2, calls);
+        Assert.Single(sender.Calls);
+        var entries = AuditLines();
+        Assert.Equal("attempted", entries[0].GetProperty("outcome").GetString());
+        if (appendThrows is not null)
+        {
+            Assert.Equal("refused: auditUnwritable: the terminal agent audit outcome could not be written; the message may have been sent",
+                Assert.IsType<InvalidOperationException>(error).Message);
+            Assert.Single(entries);
+            return;
+        }
+        if (cancelled) { Assert.IsAssignableFrom<OperationCanceledException>(error); }
+        else { Assert.Same(failure, error); }
+        Assert.Equal(2, entries.Length);
+        Assert.Equal("unconfirmed", entries[1].GetProperty("outcome").GetString());
+        foreach (var field in new[] { "request", "principal", "chain", "direction", "action", "target", "dataSha256", "textLength" })
+        {
+            Assert.Equal(entries[0].GetProperty(field).GetRawText(), entries[1].GetProperty(field).GetRawText());
+        }
+        Assert.Equal("", entries[1].GetProperty("reason").GetString());
+        Assert.DoesNotContain("private", entries[1].GetRawText());
     }
 
     [Fact]
@@ -264,8 +300,9 @@ public sealed class LiteAgentSendTests : IDisposable
     {
         public List<(AgentCredential Caller, LiteSendInput Input)> Calls { get; } = [];
         public LiteOutcome Next { get; set; } = new(LiteKind.Delivered, null, "r");
+        public Task<LiteOutcome>? Pending { get; set; }
         public Action? BeforeSend { get; set; }
-        public Task<LiteOutcome> SendAsync(AgentCredential caller, LiteSendInput input, CancellationToken ct) { BeforeSend?.Invoke(); Calls.Add((caller, input)); return Task.FromResult(Next); }
+        public Task<LiteOutcome> SendAsync(AgentCredential caller, LiteSendInput input, CancellationToken ct) { BeforeSend?.Invoke(); Calls.Add((caller, input)); return Pending ?? Task.FromResult(Next); }
     }
 
     sealed class Chan : IProtocolChannel

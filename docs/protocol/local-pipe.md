@@ -323,8 +323,10 @@ Before replying, the host appends the terminal `delivered`, `refused`, `undelive
 target and text hash/byte length. Free-form sender codes are not logged. If this append
 returns false or throws, the caller receives
 `refused: auditUnwritable: the terminal agent audit outcome could not be written; the message may have been sent`,
-not a successful reply; the host does not resend. A sender exception is propagated and
-leaves the attempt without a terminal record.
+not a successful reply; the host does not resend. A sender exception or cancellation
+is recorded as `unconfirmed` before being rethrown, without logging exception text:
+delivery cannot be established. If that terminal append fails, `auditUnwritable`
+takes precedence over the sender error.
 See [the audit log](../host-config.md#the-agent-audit-log).
 
 ### The MCP server (`mcp/`)
