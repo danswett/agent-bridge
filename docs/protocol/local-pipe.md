@@ -298,17 +298,18 @@ code in the message:
 
 A body that isn't an object is refused with `badRequest`. The host hands the request to the AP5-lite
 sender, which answers
-`{ "outcome", "code", "request" }`:
+`{ "outcome", "code", "request", "nextStep" }`:
 
-| `outcome` | Meaning | Caller |
+| `outcome` | Meaning | `nextStep` |
 |---|---|---|
-| `delivered` | the target host typed it into the session | done |
-| `refused` | the target refused; `code` is its reason (`notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, `rate`, ...). A rate refusal is outcome `refused` with code `rate`: it is final, with no Home Assistant fallback | fall back to Home Assistant on `notReplyTarget` or `busy` only |
-| `undeliverable` | no channel to the target; **the message was not queued anywhere** and is never retried | fall back to Home Assistant |
-| `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived | fall back to Home Assistant |
-| `off` | the mode is off, killed, or the peer isn't pinned; no channel was opened | fall back to Home Assistant |
+| `delivered` | the target host typed it into the session | `done` |
+| `refused` | the target refused; `code` is its reason (`notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, `rate`, ...). A rate refusal is final, with no Home Assistant fallback | `fallback_to_home_assistant` for `notReplyTarget` or `busy`; otherwise `stop` |
+| `undeliverable` | no channel to the target; **the message was not queued anywhere** | `fallback_to_home_assistant` |
+| `unconfirmed` | the send may or may not have arrived | `check_conversation`; never send through Home Assistant or retry automatically |
+| `off` | the mode is off or killed; no relay send was attempted | `fallback_to_home_assistant` |
 
-`request` is the sender's request id.
+`request` is the sender's request id. The `nextStep` field is authoritative caller guidance:
+`check_conversation` means inspect the target before deciding whether a person should retry.
 
 After caller and input validation, the host must append one audit **attempt** before calling
 the sender. An absent audit log, a false append or a thrown append raises the fixed error

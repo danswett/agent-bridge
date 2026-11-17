@@ -29,8 +29,7 @@ own-agents-only.
 - Which sessions receive: the relay types only into sessions this host launched since its last restart, plus allow-all sessions while `allowAllTargets` is true. A session started by hand is refused as `notReplyTarget` and the messenger falls back to Home Assistant. After a host restart, sessions launched before it fall back to Home Assistant until they are relaunched.
 - Rate: the receiver allows at most 6 messages a minute and 60 an hour from one sending session to one
   receiving session. The sender side allows 6 a minute per sender-receiver pair, in the messenger script (fleet #56), covering both the relay and Home Assistant routes. Beyond that is refused as `rate`, which is final.
-- The duplicate memory covers the relay route only. The relay and Home Assistant keep separate in-memory stores, so after an `unconfirmed` relay send the Home Assistant fallback can deliver the same message twice. This is rare and a known limit of the first version; a shared store comes after the cut-over.
-  The duplicate memory is in memory only, so a host restart inside the 2 minute window can also deliver one message twice.
+- The duplicate memory covers the relay route only. The relay and Home Assistant keep separate in-memory stores, so they cannot prove whether an `unconfirmed` relay send was already delivered. Do not automatically fall back to Home Assistant after `unconfirmed`; only shared duplicate memory can make that safe. The duplicate memory is in memory only, so a host restart inside the 2 minute window can also deliver one message twice.
 - A message to an offline machine fails at once and falls back to Home Assistant. Nothing is queued.
 - "Delivered" means typed and acknowledged, not read.
 - **Not in the first version; each is required before anyone beyond the owner uses it:** the signed roster, a
@@ -87,7 +86,8 @@ What the sender gets, and what the messenger does:
 | Outcome | The messenger |
 | --- | --- |
 | `delivered` | success; the only success |
-| `off`, `undeliverable` (machine offline, nothing queued), `unconfirmed` (no acknowledgement in 10 seconds, or the mode went off while waiting) | falls back to Home Assistant once; after `unconfirmed` the first message may still have been typed, so the fallback can deliver it twice |
+| `off`, `undeliverable` (machine offline, nothing queued) | may fall back to Home Assistant; the relay did not send the message |
+| `unconfirmed` (no acknowledgement in 10 seconds, channel loss, or the mode went off while waiting) | do not send through Home Assistant or retry automatically; check the target conversation before deciding what to do next |
 | `refused` with `busy` or `notReplyTarget` | falls back to Home Assistant |
 | `refused` with `rate` | final failure shown to the sender; never sent over Home Assistant |
 | any other `refused` (other account, unpinned peer, replay, size, and so on) | final failure shown to the sender |

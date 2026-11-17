@@ -170,6 +170,15 @@ public class AgentLiteSenderTests
     }
 
     [Fact]
+    public async Task A_lost_channel_is_unconfirmed_not_a_confirmed_non_delivery()
+    {
+        using var r = new Rig();
+        r.Link.Reply = (_, _) => throw new IOException("connection dropped");
+        var o = await r.Send();
+        Assert.Equal((LiteKind.Unconfirmed, "channel lost"), (o.Kind, o.Code));
+    }
+
+    [Fact]
     public async Task A_mode_switched_off_while_waiting_is_unconfirmed_with_that_reason()
     {
         using var r = new Rig();

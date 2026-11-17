@@ -4,7 +4,7 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host.Lite;
 
-public sealed record LiteSendReply(string Outcome, string? Code, string Request);
+public sealed record LiteSendReply(string Outcome, string? Code, string Request, string NextStep);
 
 // The agent.send pipe op: an agent that passed agent.hello asks its host to send text to a
 // session on another of the person's machines (AP5-lite L7, #1355). The sender is whoever the
@@ -46,7 +46,16 @@ public static partial class LiteAgentSend
         catch (Exception) { throw AuditUnavailable(); }
         if (!written) { throw AuditUnavailable(); }
         var outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct);
-        return new LiteSendReply(outcome.Kind.ToString().ToLowerInvariant(), outcome.Code, outcome.Request);
+        var nextStep = outcome.Kind switch
+        {
+            LiteKind.Delivered => "done",
+            LiteKind.Refused when outcome.Code is "busy" or "notReplyTarget" => "fallback_to_home_assistant",
+            LiteKind.Refused => "stop",
+            LiteKind.Undeliverable or LiteKind.Off => "fallback_to_home_assistant",
+            LiteKind.Unconfirmed => "check_conversation",
+            _ => "stop",
+        };
+        return new LiteSendReply(outcome.Kind.ToString().ToLowerInvariant(), outcome.Code, outcome.Request, nextStep);
     }
 
     static InvalidOperationException AuditUnavailable() =>

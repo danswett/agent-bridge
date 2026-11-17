@@ -126,16 +126,33 @@ public sealed class LiteAgentSendTests : IDisposable
     }
 
     [Theory]
-    [InlineData(LiteKind.Delivered, null, "delivered")]
-    [InlineData(LiteKind.Refused, "busy", "refused")]
-    [InlineData(LiteKind.Undeliverable, null, "undeliverable")]
-    [InlineData(LiteKind.Unconfirmed, null, "unconfirmed")]
-    [InlineData(LiteKind.Off, null, "off")]
-    public async Task Each_outcome_comes_back_with_its_code_and_request(LiteKind kind, string? code, string name)
+    [InlineData(LiteKind.Delivered, null, "delivered", "done")]
+    [InlineData(LiteKind.Refused, "busy", "refused", "fallback_to_home_assistant")]
+    [InlineData(LiteKind.Refused, "notReplyTarget", "refused", "fallback_to_home_assistant")]
+    [InlineData(LiteKind.Refused, "rate", "refused", "stop")]
+    [InlineData(LiteKind.Undeliverable, null, "undeliverable", "fallback_to_home_assistant")]
+    [InlineData(LiteKind.Unconfirmed, null, "unconfirmed", "check_conversation")]
+    [InlineData(LiteKind.Off, null, "off", "fallback_to_home_assistant")]
+    public async Task Each_outcome_includes_its_safe_next_step(LiteKind kind, string? code, string name, string nextStep)
     {
         sender.Next = new LiteOutcome(kind, code, "req1");
         var reply = Assert.IsType<LiteSendReply>(await Send(hello, Body));
-        Assert.Equal(new LiteSendReply(name, code, "req1"), reply);
+        Assert.Equal(new LiteSendReply(name, code, "req1", nextStep), reply);
+        Assert.Equal(nextStep, JsonSerializer.SerializeToElement(reply, ProtocolJson.Options).GetProperty("nextStep").GetString());
+    }
+
+    [Fact]
+    public async Task An_unconfirmed_local_api_send_tells_the_caller_to_check_instead_of_falling_back()
+    {
+        sender.Next = new LiteOutcome(LiteKind.Unconfirmed, "timeout", "relay-request");
+        var handler = LocalApi.Handler(null!, null!, null!, null, null, store, sender, audit: audit);
+
+        var reply = Assert.IsType<LiteSendReply>(await handler(hello, LiteAgentSend.Op, Json()));
+        var response = JsonSerializer.SerializeToElement(reply, ProtocolJson.Options);
+
+        Assert.Equal("unconfirmed", response.GetProperty("outcome").GetString());
+        Assert.Equal("check_conversation", response.GetProperty("nextStep").GetString());
+        Assert.Single(sender.Calls);
     }
 
     [Fact]
