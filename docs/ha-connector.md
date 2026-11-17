@@ -568,6 +568,22 @@ logs `refused a reply to <node> from <sender>` and types nothing, so the sender 
 closes. A reply already waiting when a question opens is refused the same way (#1634).
 Publishes without a `rid` behave as before.
 
+**Durable inbox foundation.** `DurableInbox` is an internal, not-yet-connected store: it
+atomically saves per-node FIFO entries and their delivered timestamps for process restart,
+and returns the original entry on a matching rid retry, even if a retry is restamped. It keeps
+at most 100 entries per node and 1000 total; when full, it prunes the oldest delivered entries
+before refusing an enqueue if only undelivered entries remain. Delivery clears the payload while
+retaining rid metadata for deduplication; legacy senders get a generated rid and `legacy` sender.
+For #2780 integration, deduplication lasts only while that metadata is retained within the
+100-entry per-node and 1000-entry total caps, including pending entries. A retry of a pruned
+delivered rid is accepted as new and may be delivered again; this is not permanent deduplication.
+Load and save remove this inbox's GUID-named crash-leftover temporary files under its lock,
+so obsolete copies cannot retain payloads after a later delivery.
+Power-loss durability is not established. It does not change the live reply path, publish acks,
+or provide native receipt. A later slice must provide an access-controlled storage directory,
+one dispatcher per node (a peek does not reserve a message), and reconcile the crash window
+between typing and recording delivery before enabling it.
+
 **`tools/agents/reply-session.ps1`** is the in-repo sender. It posts the payload with a rid, waits
 for the reply sensor to show its own stamp (there is one slot per node, so rapid sends can overwrite
 each other), presses Send, then waits for the host's ack for its own rid. It prints `sent to <node>`
