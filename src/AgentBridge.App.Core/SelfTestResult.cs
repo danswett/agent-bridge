@@ -63,20 +63,26 @@ public sealed class SelfTestResult(TimeProvider? time = null)
     public sealed class WalkTimer(TimeProvider? time = null)
     {
         readonly TimeProvider clock = time ?? TimeProvider.System;
-        readonly long startedAt = (time ?? TimeProvider.System).GetTimestamp();
-        TimeSpan reporting;
-        long? pausedAt;
-        public TimeSpan Elapsed => clock.GetElapsedTime(startedAt, pausedAt ?? clock.GetTimestamp()) - reporting;
+        readonly object gate = new();
+        long? walkingFrom = (time ?? TimeProvider.System).GetTimestamp();
+        TimeSpan walked;
+        public TimeSpan Elapsed
+        {
+            get { lock (gate) { return walked + (walkingFrom is { } from ? clock.GetElapsedTime(from) : TimeSpan.Zero); } }
+        }
 
         public async Task ReportAsync(Func<Task> progress)
         {
-            var from = clock.GetTimestamp();
-            pausedAt = from;
+            lock (gate)
+            {
+                if (walkingFrom is not { } from) { throw new InvalidOperationException("Checkpoint reporting is already active."); }
+                walked += clock.GetElapsedTime(from);
+                walkingFrom = null;
+            }
             try { await progress(); }
             finally
             {
-                reporting += clock.GetElapsedTime(from);
-                pausedAt = null;
+                lock (gate) { walkingFrom = clock.GetTimestamp(); }
             }
         }
     }

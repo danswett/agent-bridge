@@ -1381,7 +1381,7 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   distinguish late completion, missed exit and completed checks awaiting exit. These
   diagnostics never turn a timeout or unfinished result into success. The reader walk's
   `listWalkSeconds` and unchanged 30 s guard exclude checkpoint serialization/I/O time;
-  stage timings and the outer CI timeout still include it.
+  stage timings and the outer CI timeout still include it. Nested or overlapping reporters are rejected.
   Last, it measures a live resize (#765): it resizes the window a step a frame, 8 px at a time, from 1560 px to
   400 and back, and keeps every interval between the UI thread's frames (`CompositionTarget.Rendering`) by the window's width
   class, once with the demo's own sessions and once with a window as heavy as a real one (16 more sessions, a conversation of
