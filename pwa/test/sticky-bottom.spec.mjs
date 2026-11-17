@@ -19,11 +19,20 @@ async function say(page, turn, lines, kind = null) {
   await page.evaluate(({ id, turn, response, kind }) => {
     const d = window.agentBridgeDemo;
     const s = d.host.get(id);
+    if (kind === 'notification') {
+      d.upsert({ ...s, activity: { ...s.activity, notice: {
+        id: `${id}-turn-${turn}`, at: new Date().toISOString(), kind,
+        prompt: { text: `Message ${turn}`, from: 'notification' },
+        parts: [{ id: `${id}-reply-${turn}`, kind: 'response', text: response }],
+        partsMore: 0, truncated: false, unreadable: false,
+      } } });
+      return;
+    }
     d.upsert({
       ...s, status: 'working', question: null, updatedAt: new Date().toISOString(),
       activity: {
         ...s.activity, turnCount: turn, turn: `${id}-turn-${turn}`, responseTurn: `${id}-turn-${turn}`, kind,
-        userMessageFrom: kind === 'scheduled' ? 'schedule' : kind === 'notification' ? 'notification' : 'person',
+        userMessageFrom: kind === 'scheduled' ? 'schedule' : 'person',
         userMessage: `Message ${turn}`, response, reasoning: null, currentTool: null,
         own: undefined, source: undefined,
       },
@@ -136,4 +145,16 @@ test('new reply turns keep the reader in place and jump to the first unread answ
   await expect.poll(() => gap(pane)).toBeLessThan(4);
   await expect(jump).toHaveCount(0);
   await expect(pane.locator('[data-first-unread]')).toHaveCount(0);
+});
+
+test('a carried notification alone marks its reply unread without changing the owner turn or reading position', async ({ page }) => {
+  const pane = await start(page);
+  const held = await scrollUp(page, pane);
+  await say(page, 13, 30, 'notification');
+  await say(page, 13, 40, 'notification');
+  const v = page.locator(`.session-view[data-id="${ID}"]`);
+  const jump = v.getByRole('button', { name: '1 new · Jump to first unread' });
+  await expect(jump).toBeVisible();
+  await expect(pane.locator('[data-first-unread]')).toHaveAttribute('data-turn', `${ID}-turn-13`);
+  expect(await position(pane)).toEqual(held);
 });
