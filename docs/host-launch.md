@@ -458,3 +458,16 @@ screen still shows it) -> Typed ok` and `folder-trust answer 5d0c9f3e from pwa 1
 a refusal, `folder-trust answer refused from 1a2b3c4d: …`. At start the host logs whether launching
 is on and which workspaces are approved, and any problem in `config.json`'s `launch` section.
 Prompts and attachment names are never logged, only their length and count.
+
+## Fleet script launch grant
+
+A person at the machine may run `agent-bridge-host scripts grant-fleet <name>` or
+`scripts revoke-fleet <name>` (optionally `--profile <name>`); agents and script connections cannot.
+The separate `launch:fleet` grant is off for each newly minted credential.
+Activation remains closed until atomic, durable fleet hourly/live admission is wired (#2770);
+enabling a credential's grant does not yet enable dispatch.
+Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
+(empty by default). Fleet launches require an explicitly named agent, permissions and
+an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,
+transfers and attachments. A fresh worktree is checked before starting; its worker receives
+only `read+reply`, and the durable launch audit records `grant: fleet`.
