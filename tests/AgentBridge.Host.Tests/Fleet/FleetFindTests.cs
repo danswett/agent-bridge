@@ -123,6 +123,27 @@ public sealed class FleetFindTests : IDisposable
     }
 
     [Theory]
+    [InlineData("one-shot")]
+    [InlineData("lead")]
+    [InlineData("preserved")]
+    public async Task The_registry_and_find_preserve_the_host_role_and_ignore_a_callers_role(string role)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var registry = new SessionRegistry(TimeProvider.System);
+        var hex = new string('a', 16);
+        Assert.Null(registry.Put("account-a", "fixture", Body(new
+        {
+            v = 1, machine = "fixture", epoch = hex, seq = 1, at = DateTimeOffset.UtcNow, truncated = false,
+            sessions = new[] { new { id = hex, node = "agent_bridge_" + hex, name = "Worker", state = "idle", since = Started, role } },
+        })));
+        var op = new FleetList(store, new RegistryRoster(registry, "account-a"), audit: new AgentAuditLog(root));
+        var reply = await Find(op, new { name = "Worker", role = "forged" });
+        Assert.Equal(role, reply.GetProperty("session").GetProperty("role").GetString());
+        var list = JsonSerializer.SerializeToElement(await op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { })), Web);
+        Assert.Equal(role, Assert.Single(list.GetProperty("sessions").EnumerateArray()).GetProperty("role").GetString());
+    }
+
+    [Theory]
     [InlineData(false, "notFound")]
     [InlineData(true, "found")]
     public async Task A_name_in_another_account_cannot_be_selected_or_create_ambiguity_by_spoofing_the_scope(bool ownMatch, string expected)
