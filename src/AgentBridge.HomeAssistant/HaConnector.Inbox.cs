@@ -21,9 +21,9 @@ public sealed partial class HaConnector
                 CleanRid(Str(a, "rid")) is not { } rid || Str(a, "decision_id") is { Length: > 0 } ||
                 Str(a, "at") != hit.State.State) { return false; }
             if (string.IsNullOrWhiteSpace(Str(a, "text")) && !HasAttachments(hit.State)) { return false; }
-            if (p.Reply.IsHandled(hit.State.State) && inbox.Find(node, rid) is not null) { return true; }
+            if (p.Reply.IsHandled(hit.State)) { return true; }
             var message = inbox.Enqueue(node, rid, CleanSender(Str(a, "sender")), JsonSerializer.Serialize(hit.State), time.GetUtcNow());
-            p.Reply.Handle(hit.State.State);
+            p.Reply.Handle(hit.State);
             p.Reply.ReadAgain = true;
             inboxReceipts.Enqueue(message);
             return true;

@@ -37,7 +37,7 @@ public sealed partial class HaConnector
         public string? HandledPress;
         // Reply-card publishes used or passed over, most recent last: one read again, from the
         // sensor or from the watch, is not new.
-        public readonly List<string> Handled = [];
+        public readonly List<(string Stamp, string? Rid)> Handled = [];
         // Publishes the watch reported that are not yet read, in the order they came. The sensor
         // shows only the latest, so two sent while a reply was being delivered would otherwise
         // be one.
@@ -58,14 +58,15 @@ public sealed partial class HaConnector
         public JsonObject? Ack { get => Log.Ack; set => Log.Ack = value; }
         public void TakeRid(string rid) => Log.TakeRid(rid);
         public void ForgetRid(string rid) => Log.ForgetRid(rid);
-        public bool IsHandled(string stamp) { lock (Handled) { return Handled.Contains(stamp, StringComparer.Ordinal); } }
+        static (string Stamp, string? Rid) Identity(HaState state) => (state.State, CleanRid(Str(state.Attributes, "rid")));
+        public bool IsHandled(HaState state) { lock (Handled) { return Handled.Contains(Identity(state)); } }
 
-        public void Handle(string stamp)
+        public void Handle(HaState state)
         {
             lock (Handled)
             {
-                if (IsHandled(stamp)) { return; }
-                Handled.Add(stamp);
+                if (IsHandled(state)) { return; }
+                Handled.Add(Identity(state));
                 if (Handled.Count > 64) { Handled.RemoveAt(0); }
             }
         }
@@ -312,7 +313,7 @@ public sealed partial class HaConnector
         var payload = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
         var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
         if (payload.Kind == "unknown" || submit.Kind == "unknown") { return false; }
-        if (payload.Present) { p.Reply.Handle(payload.Value); }
+        if (payload.Present) { p.Reply.Handle(payload.Snapshot!); }
         p.Reply.HandledPress = submit.Present ? submit.Value : null;
         p.Reply.PendingPress = null;
         p.Reply.Waiting.Clear();
@@ -334,8 +335,8 @@ public sealed partial class HaConnector
         }
         foreach (var (seq, hit) in seen)
         {
-            if (seq <= p.Reply.Boundary || hit.EntityId != SessionEntities.ReplyPayload(p.Node) || !IsStamp(hit.State.State) || p.Reply.IsHandled(hit.State.State)
-                || p.Reply.Waiting.Any(w => w.State == hit.State.State))
+            if (seq <= p.Reply.Boundary || hit.EntityId != SessionEntities.ReplyPayload(p.Node) || !IsStamp(hit.State.State) || p.Reply.IsHandled(hit.State)
+                || p.Reply.Waiting.Any(w => w.State == hit.State.State && CleanRid(Str(w.Attributes, "rid")) == CleanRid(Str(hit.State.Attributes, "rid"))))
             {
                 continue;
             }
@@ -379,7 +380,7 @@ public sealed partial class HaConnector
     // or is being delivered.
     async Task<CardRead> CardReplyAsync(string sessionId, Published p, HaState state, CancellationToken ct, bool fromInbox = false)
     {
-        if (!IsStamp(state.State) || (!fromInbox && p.Reply.IsHandled(state.State))) { return CardRead.Nothing; }
+        if (!IsStamp(state.State) || (!fromInbox && p.Reply.IsHandled(state))) { return CardRead.Nothing; }
         if (!fromInbox && StoreInbox(new HaTrigger(SessionEntities.ReplyPayload(p.Node), state)))
         {
             await InboxReceiptsAsync(ct);
@@ -420,7 +421,7 @@ public sealed partial class HaConnector
         // reason to pass over a Send pressed meanwhile.
         if (attributes && Str(a, "decision_id") is { Length: > 0 })
         {
-            p.Reply.Handle(stamp);
+            p.Reply.Handle(state);
             return CardRead.Nothing;
         }
         var rid = attributes ? CleanRid(Str(a, "rid")) : null;
@@ -434,7 +435,7 @@ public sealed partial class HaConnector
                 p.Reply.Ack = MakeAck(rid, sender, prior, duplicate: true);
                 await TransientAsync(p, "Duplicate reply dropped", [], ct);
             }
-            p.Reply.Handle(stamp);
+            p.Reply.Handle(state);
             return CardRead.Taken;
         }
         // Each said before the publish is marked used: if saying it fails, the next pass reads the
@@ -448,7 +449,7 @@ public sealed partial class HaConnector
             p.DriverPendingAt = null;
             if (rid is not null) { p.Reply.Ack = MakeAck(rid, sender, "refused"); }
             await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = "The attachment metadata is incomplete; no reply was sent." }, ct);
-            p.Reply.Handle(stamp);
+            p.Reply.Handle(state);
             return CardRead.Taken;
         }
         // More than a reply carries is refused before anything is fetched, not after.
@@ -457,7 +458,7 @@ public sealed partial class HaConnector
             p.DriverPendingAt = null;
             if (rid is not null) { p.Reply.Ack = MakeAck(rid, sender, "refused"); }
             await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = $"A reply carries at most {AttachmentLimits.PerReply} attachments; no reply was sent." }, ct);
-            p.Reply.Handle(stamp);
+            p.Reply.Handle(state);
             return CardRead.Taken;
         }
         if (rid is not null)
@@ -471,7 +472,7 @@ public sealed partial class HaConnector
             if (rid is not null) { p.Reply.ForgetRid(rid); }
             throw;
         }
-        p.Reply.Handle(stamp);
+        p.Reply.Handle(state);
         var shown = Preview(text, images.Count + files.Count);
         var request = RequestId(sessionId, "reply", fromInbox ? "rid:" + rid : "card:" + stamp);
         Deliver(p, sessionId, shown, box: false, text: null, [.. images.Select(i => i.Id)], async token =>
