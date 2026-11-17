@@ -1143,6 +1143,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Contains("stale or unreadable", await install);
         Assert.False(updater.Applied);
         Assert.NotEqual(UpdateOutcome.Failed, auto.State.Last?.Outcome);
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time);
+        Assert.NotEqual(UpdateOutcome.Failed, prefs.LastUpdate?.Outcome);
     }
 
     [Theory]
