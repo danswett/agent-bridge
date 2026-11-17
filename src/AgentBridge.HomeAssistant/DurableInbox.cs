@@ -318,8 +318,8 @@ internal sealed class DurableInbox
                 JsonSerializer.Serialize(file, state);
                 file.Flush(flushToDisk: true);
             }
-            MarkV2();
             File.Move(temp, path, overwrite: true);
+            MarkV2();
         }
         finally
         {

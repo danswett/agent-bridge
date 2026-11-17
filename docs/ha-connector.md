@@ -612,6 +612,9 @@ Version-1 migration preserves the original, user-restricted `.v1` backup (which 
 legacy payloads) and writes the `.v2` downgrade fence; missing or rolled-back state fails
 closed after that fence. The C2/C2b reader retains its recovery fields and retirement data
 instead of replacing that state with C1's empty retirement list on save.
+The snapshot is published before its `.v2` marker. If interrupted between them, the
+next load validates the committed snapshot and repairs the missing marker; an
+interrupted first save cannot leave a marker fencing a never-created snapshot.
 Load and save remove this inbox's GUID-named crash-leftover temporary files under its lock,
 so obsolete copies cannot retain payloads after a later delivery.
 Power-loss durability is not established. A peek alone does not reserve a message; ingress
