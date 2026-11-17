@@ -189,6 +189,10 @@ static partial class SelfTest
             await CheckPostedInput(window, check, result);
             // #2483: hosted ARM64 can lose activation to the Microsoft account popup.
             AcquireNativeForeground(window.Handle);
+            var pinnedFocus = ById<Button>(away, "HeaderPin");
+            var pinnedFocusReady = pinnedFocus is not null
+                && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(away.XamlRoot), pinnedFocus);
+            check(pinnedFocusReady, "starts the pinned reopen with focus outside recycled conversation history");
             Away(window, main);
             var pinnedView = await Choose(window, main, id, "Response");
             Button? pinnedPin = null, pinnedDetails = null;
