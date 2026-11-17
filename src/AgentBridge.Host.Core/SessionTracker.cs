@@ -344,6 +344,10 @@ internal sealed class SessionTracker
         return new Session
         {
             Id = d.Id,
+            Machine = _hostId,
+            Owner = _hostId is null ? null : new(),
+            Pr = _hostId is null ? null : new(),
+            Finished = _hostId is null ? null : new(),
             Agent = d.Agent,
             Title = Text.Title(title),
             Cwd = ws?.Cwd ?? _state.Cwd ?? reg?.WorkingDirectory,
