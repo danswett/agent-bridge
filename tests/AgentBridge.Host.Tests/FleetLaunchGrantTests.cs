@@ -146,6 +146,7 @@ public sealed class FleetLaunchGrantTests : IDisposable
             var request = Guid.NewGuid().ToString();
             var admission = agent.CheckLaunch(origin, request, "hash");
             Assert.True(admission.Allowed, admission.Reason);
+            Assert.True(agent.LaunchFinished(origin, request));
         }
         var launcher = new AdmissionLauncher(live);
         var audit = new AgentAuditLog(folder);
