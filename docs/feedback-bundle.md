@@ -1,7 +1,7 @@
 # Feedback bundle (Windows)
 
 What the Windows app gathers for "Send feedback" (#738), before it is sealed ([feedback.md](protocol/feedback.md))
-and uploaded. Code: `src/AgentBridge.App.Core/Feedback`. It has no UI; the review screen shows
+and uploaded. Code: `src/AgentBridge.App.Core/Feedback`; the Windows dialog shows
 `FeedbackBundle.Text` and the sender seals `FeedbackBundle.CanonicalBytes`, which are the same bytes.
 
 ## Contents
@@ -50,8 +50,11 @@ There is no offline queue and nothing is written to disk. The window keeps the n
 ## Review step (Windows)
 `FeedbackReviewViewModel` drives the review before sending. It gathers through `IFeedbackBundleSource` and hands each bundle to `FeedbackSendViewModel.Ready`; `Rows` has one entry per bundle item (label, summary, optional), and `RowsExpanded` starts collapsed. Session turns are a separate option, off by default, named after the session. Changing the note, the screenshot or that option gathers again with a new `FeedbackRequest`, cancels the earlier gather, and drops any gather that finishes after a newer request or after Close. A refusal (`FeedbackRefusalReason`) or a failed gather shows through the send view model (`TooLarge` for `BundleTooLarge`, `Refused` for the rest, `Failed` for an error). Nothing is sent until `SendAsync` is called.
 
+Settings and the tray open the dialog. Send and Retry require the expanded exact preview;
+the note, optional PNG and named session-turns choice regather it. Closing clears the draft.
+
 ## Sources and availability (Windows)
 
 `AppFeedbackSources` reads what the bundle holds: the last 200 lines of `app.log` (with `app.log.1` before it), the last five records of `crash.log` (newest first, stack lines kept), the app's settings scalars, the host's agent report, and a session's `session.history`. Reads are read-only and share the files with the running app; a missing, locked or malformed file leaves that part empty. An unknown session reads as not found; a host that cannot answer reads as unavailable.
 
-`FeedbackSenderFactory.Availability` says whether sending is possible: `Available`, `UploadOff`, `NoRecipientKey`, `NoRelay` or `RelayNotAccepting`. The feedback key id and public key are compiled in (`FeedbackSenderFactory.ProductionKeyId` and `ProductionPublicKey`, empty until the production values are issued, which keeps feedback unavailable). The app settings `feedbackKeyId` and `feedbackPublicKey` override them for staging, only when both are set; `feedbackUpload` turns feedback off. When unavailable the dialog is read-only with Send disabled and shows "Sending feedback isn't available right now". There is no plaintext or email fallback.
+`FeedbackSenderFactory.Availability` says whether sending is possible: `Available`, `UploadOff`, `NoRecipientKey`, `NoRelay` or `RelayNotAccepting`. The feedback key id and public key are compiled in (`FeedbackSenderFactory.ProductionKeyId` and `ProductionPublicKey`, empty until the production values are issued, which keeps feedback unavailable). The app settings `feedbackKeyId` and `feedbackPublicKey` override them for staging, only when both are set; `feedbackUpload` turns feedback off. When unavailable the dialog has no Send button and shows "Sending feedback isn't available right now". There is no plaintext or email fallback.

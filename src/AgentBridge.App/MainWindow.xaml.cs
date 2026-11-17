@@ -232,6 +232,7 @@ public sealed partial class MainWindow : Window
     }
 
     internal bool FeedbackOpen => feedbackDialogOpen;
+    internal Func<ContentDialog> CreateFeedback { get; set; } = () => new FeedbackDialog();
 
     internal async Task ShowFeedbackAsync()
     {
@@ -240,15 +241,8 @@ public sealed partial class MainWindow : Window
         feedbackDialogOpen = true;
         try
         {
-            var dialog = new ContentDialog
-            {
-                XamlRoot = root,
-                Title = "Send feedback",
-                Content = "Feedback isn't available in the Windows app yet.",
-                CloseButtonText = "Close",
-                DefaultButton = ContentDialogButton.Close,
-            };
-            AutomationProperties.SetAutomationId(dialog, "FeedbackUnavailable");
+            var dialog = CreateFeedback();
+            dialog.XamlRoot = root;
             await dialog.ShowAsync();
         }
         catch (Exception e) when (e is COMException or InvalidOperationException)

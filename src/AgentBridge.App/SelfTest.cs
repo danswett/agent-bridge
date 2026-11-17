@@ -768,6 +768,65 @@ static partial class SelfTest
         check(!wrong && window.AppWindow.IsVisible, "shows the window from the tray's Send feedback, and only that");
         await Unavailable("the tray");
         window.ShowInFront();
+
+        var probe = new FeedbackProbe();
+        var ready = new FeedbackDialog(probe, probe, "demo-session", "Test session") { XamlRoot = window.RootElement.XamlRoot };
+        var shown = ready.ShowAsync();
+        Button? Send() => ById<Button>(ready, "FeedbackSend");
+        void Press(Button b) => ((IInvokeProvider)new ButtonAutomationPeer(b).GetPattern(PatternInterface.Invoke)).Invoke();
+        check(await Until(() => probe.Request is not null, TimeSpan.FromSeconds(5)), "gathers feedback on opening");
+        var note = ById<TextBox>(ready, "FeedbackNote");
+        var turns = ById<CheckBox>(ready, "FeedbackTurns");
+        var included = ById<Expander>(ready, "FeedbackIncluded");
+        check(note is not null && turns is { IsChecked: false, Content: string label } && label.Contains("Test session", StringComparison.Ordinal)
+            && included is { IsExpanded: false } && probe.Sends == 0, "starts with named session turns off and the review collapsed");
+        if (note is not null) { note.Text = "too large"; }
+        check(await Until(() => ById<TextBlock>(ready, "FeedbackStatus")?.Text.Contains("over the", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(5))
+            && Send() is not { IsEnabled: true }, "reports an oversized bundle without enabling Send");
+        if (note is not null) { note.Text = "refuse"; }
+        check(await Until(() => ById<TextBlock>(ready, "FeedbackStatus")?.Text.Contains("Shorten it", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(5))
+            && Send() is not { IsEnabled: true }, "reports a refused bundle without enabling Send");
+        if (note is not null) { note.Text = "A test note"; }
+        if (turns is not null) { turns.IsChecked = true; }
+        check(await Until(() => probe.Request is { Note: "A test note", SessionTurnsFor: "demo-session" }, TimeSpan.FromSeconds(5)),
+            "regathers when the note and session choice change");
+        if (included is not null) { included.IsExpanded = true; }
+        check(await Until(() => Send() is { IsEnabled: true } && ById<TextBox>(ready, "FeedbackPreview")?.Text.Contains("A test note", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(5)),
+            "shows the reviewed bundle and enables Send");
+        if (Send() is { IsEnabled: true } sendButton) { Press(sendButton); }
+        check(await Until(() => ById<Button>(ready, "FeedbackRetry") is { IsEnabled: true, Visibility: Visibility.Visible }, TimeSpan.FromSeconds(5))
+            && ById<TextBlock>(ready, "FeedbackStatus")?.Text.Contains(FeedbackSendViewModel.FailedText, StringComparison.Ordinal) == true,
+            "shows a failed send and Retry");
+        if (ById<Button>(ready, "FeedbackRetry") is { IsEnabled: true } retry) { Press(retry); }
+        check(await Until(() => ById<TextBlock>(ready, "FeedbackStatus")?.Text.StartsWith("Thanks. Sent at", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(5))
+            && probe.Sends == 2 && probe.LastSent?.Text.Contains("A test note", StringComparison.Ordinal) == true, "retries the reviewed bundle and confirms Sent");
+        if (ById<Button>(ready, "FeedbackClose") is { } closeReady) { Press(closeReady); }
+        else { ready.Hide(); check(false, "offers Close after feedback is sent"); }
+        await shown;
+        check(note?.Text == "" && ById<TextBox>(ready, "FeedbackPreview")?.Text == "", "clears feedback when the dialog closes");
+    }
+
+    sealed class FeedbackProbe : IFeedbackBundleSource, IFeedbackSender
+    {
+        public FeedbackRequest? Request;
+        public FeedbackBundle? LastSent;
+        public int Sends;
+        public Task<FeedbackGatherResult> GatherAsync(FeedbackRequest request, IProgress<FeedbackGatherStage>? progress, CancellationToken ct)
+        {
+            Request = request;
+            if (request.Note == "too large") { return Task.FromResult<FeedbackGatherResult>(new FeedbackGatherResult.Refused(FeedbackRefusalReason.BundleTooLarge)); }
+            if (request.Note == "refuse") { return Task.FromResult<FeedbackGatherResult>(new FeedbackGatherResult.Refused(FeedbackRefusalReason.NoteTooLong)); }
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(new { note = request.Note });
+            return Task.FromResult<FeedbackGatherResult>(new FeedbackGatherResult.Ready(new FeedbackBundle(bytes, new byte[16], DateTimeOffset.UnixEpoch,
+                [new FeedbackItem("note", "Note", request.Note, bytes.Length, true)])));
+        }
+        public Task<FeedbackSendResult> SendAsync(FeedbackBundle bundle, CancellationToken ct)
+        {
+            LastSent = bundle;
+            return Task.FromResult<FeedbackSendResult>(++Sends == 1
+                ? new FeedbackSendResult.Failed(FeedbackFailureReason.Offline, FeedbackRetry.Now)
+                : new FeedbackSendResult.Sent(DateTimeOffset.Now));
+        }
     }
 
     // The Windows shell (ui.md §7, #180): the 48 px title bar with the mark, the name and the search

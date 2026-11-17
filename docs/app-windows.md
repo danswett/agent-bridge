@@ -1109,10 +1109,11 @@ arriving after a restart. The app needs no restart-on-failure and nothing more t
 Explorer's startup list, so a `Run` entry is enough for it. Either can be turned off in
 Settings, and stays off. Closing the window keeps the app in the notification area; its
 menu opens the window, quits it (which leaves the host running), or offers Send feedback
-(#738). Send feedback, there and at the top of Settings, opens one dialog saying feedback
-isn't available in the Windows app yet, with only Close: nothing is collected or sent, and
-there is no plaintext fallback until the encrypted upload lands. The self-test opens it from
-both (the tray's choice through `TrayIcon.Run`, from a hidden window).
+(#738). Both entries open the feedback review dialog. A note, optional PNG and off-by-default
+session turns are gathered for review under the initially collapsed **What's included**.
+Send requires the exact preview to be visible; failures offer Retry when permitted. Without
+an available sender it shows "Sending feedback isn't available right now" and only Close.
+The self-test opens it from both entries (the tray through `TrayIcon.Run`, from a hidden window).
 
 An elevated app (for example one started by an elevated installer) never starts the host
 directly: the host would be elevated too, unable to type into ordinary consoles and

@@ -1,0 +1,140 @@
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using AgentBridge.App.Core;
+using AgentBridge.App.Core.Feedback;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Controls;
+using Windows.Storage.Pickers;
+
+namespace AgentBridge.App;
+
+public sealed partial class FeedbackDialog : ContentDialog
+{
+    readonly FeedbackReviewViewModel? review;
+    readonly FeedbackSendViewModel? send;
+    readonly DispatcherTimer retryClock = new() { Interval = TimeSpan.FromSeconds(1) };
+    bool closed;
+    bool choosingScreenshot;
+    Button? sendingAction;
+
+    public FeedbackDialog(IFeedbackBundleSource? source = null, IFeedbackSender? sender = null, string? sessionId = null, string? sessionTitle = null)
+    {
+        InitializeComponent();
+        if (source is not null && sender is not null)
+        {
+            var ui = new QueueDispatcher(DispatcherQueue);
+            send = new FeedbackSendViewModel(sender, ui);
+            review = new FeedbackReviewViewModel(source, send, sessionId, sessionTitle, ui);
+            DataContext = review;
+            review.PropertyChanged += OnState;
+            send.PropertyChanged += OnState;
+            var label = review.HasSession ? review.TurnsLabel : "No session selected for session turns";
+            Turns.Content = label;
+            AutomationProperties.SetName(Turns, label);
+            Turns.IsEnabled = review.HasSession;
+        }
+        Opened += (_, _) =>
+        {
+            if (GetTemplateChild("CloseButton") is Button close)
+            {
+                AutomationProperties.SetAutomationId(close, "FeedbackClose");
+                AutomationProperties.SetName(close, "Close feedback");
+            }
+            review?.Start();
+            if (review is not null) { Note.Focus(FocusState.Programmatic); retryClock.Start(); }
+        };
+        Closed += (_, _) =>
+        {
+            closed = true;
+            retryClock.Stop();
+            if (send is not null) { send.PropertyChanged -= OnState; }
+            if (review is not null) { review.PropertyChanged -= OnState; }
+            review?.Close();
+            if (review is not null) { review.Note = ""; review.ScreenshotPng = null; review.IncludeSessionTurns = false; }
+            DataContext = null;
+            Note.Text = "";
+            Preview.Text = "";
+        };
+        retryClock.Tick += (_, _) => send?.RefreshRetry();
+        Included.RegisterPropertyChangedCallback(Expander.IsExpandedProperty, (_, _) => Draw());
+        Preview.SizeChanged += (_, _) => Draw();
+        Draw();
+    }
+
+    void OnState(object? sender, PropertyChangedEventArgs e) => Draw();
+    bool PreviewVisible => Included.IsExpanded && Preview.ActualHeight > 0 && Preview.Visibility == Visibility.Visible;
+
+    void Draw()
+    {
+        var focused = Send.FocusState != FocusState.Unfocused ? Send : Retry.FocusState != FocusState.Unfocused ? Retry : null;
+        Preview.Text = review?.PreviewText ?? "";
+        Choices.Visibility = Included.Visibility = Ui.Show(review is not null);
+        var editable = send is not null && !choosingScreenshot && !send.IsSending && send.State != FeedbackSendState.Sent;
+        Note.IsEnabled = ChooseScreenshot.IsEnabled = RemoveScreenshot.IsEnabled = editable;
+        Turns.IsEnabled = editable && review?.HasSession == true;
+        var sending = send?.IsSending == true;
+        Send.Visibility = Ui.Show(send is { State: FeedbackSendState.Gathering or FeedbackSendState.Ready } || sending && sendingAction == Send);
+        Send.IsEnabled = sending && sendingAction == Send || send?.CanSend == true && !choosingScreenshot && PreviewVisible;
+        Retry.Visibility = Ui.Show(sending && sendingAction == Retry || send is { State: FeedbackSendState.Failed, RetryAt: not null } || send?.CanRetry == true);
+        Retry.IsEnabled = sending && sendingAction == Retry || send?.CanRetry == true && !choosingScreenshot && PreviewVisible;
+        if (focused is { Visibility: Visibility.Collapsed })
+        {
+            var target = Retry.Visibility == Visibility.Visible && Retry.IsEnabled ? Retry : GetTemplateChild("CloseButton") as Button;
+            target?.Focus(FocusState.Programmatic);
+        }
+        RetryHint.Text = send?.RetryHint ?? "";
+        var text = choosingScreenshot ? "Reading screenshot..." : send?.Message ?? FeedbackSenderFactory.UnavailableText;
+        if (text.Length == 0) { text = PreviewVisible ? "Ready to send feedback." : "Expand What's included to review the report before sending."; }
+        if (send is { State: FeedbackSendState.Failed, FailureReason: { } reason })
+        {
+            text += " " + (reason switch
+            {
+                FeedbackFailureReason.Offline => "No connection.",
+                FeedbackFailureReason.RateLimited => "Too many reports.",
+                FeedbackFailureReason.Quota => "The feedback quota is full.",
+                FeedbackFailureReason.Unreachable => "The service could not be reached.",
+                FeedbackFailureReason.KeyUnavailable => "No feedback encryption key is available.",
+                _ => "The feedback service could not accept this report.",
+            });
+        }
+        var changed = Status.Text != text;
+        Status.Text = text;
+        ScreenshotStatus.Text = review?.ScreenshotPng is { Length: > 0 } ? "Screenshot included." : "No screenshot included.";
+        AutomationProperties.SetName(ScreenshotStatus, ScreenshotStatus.Text);
+        AutomationProperties.SetName(RetryHint, RetryHint.Text);
+        AutomationProperties.SetName(Status, Status.Text);
+        if (changed) { FrameworkElementAutomationPeer.CreatePeerForElement(Status)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged); }
+    }
+
+    async void OnSend(object sender, RoutedEventArgs e) { if (send?.CanSend == true && !choosingScreenshot && PreviewVisible) { sendingAction = Send; await send.SendAsync(); } }
+    async void OnRetry(object sender, RoutedEventArgs e) { if (send?.CanRetry == true && !choosingScreenshot && PreviewVisible) { sendingAction = Retry; await send.RetryAsync(); } }
+    void OnTurns(object sender, RoutedEventArgs e) { if (review is not null) { review.IncludeSessionTurns = Turns.IsChecked == true; } }
+    void OnRemoveScreenshot(object sender, RoutedEventArgs e) { if (review is not null) { review.ScreenshotPng = null; Draw(); } }
+
+    async void OnScreenshot(object sender, RoutedEventArgs e)
+    {
+        if (review is null) { return; }
+        choosingScreenshot = true;
+        Draw();
+        try
+        {
+            var picker = new FileOpenPicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, MainWindow.CurrentHandle);
+            picker.FileTypeFilter.Add(".png");
+            var file = await picker.PickSingleFileAsync();
+            if (file is null || closed) { return; }
+            using var stream = await file.OpenStreamForReadAsync();
+            var bytes = new byte[FeedbackLimits.MaxScreenshotBytes + 1];
+            var count = await stream.ReadAtLeastAsync(bytes, bytes.Length, throwOnEndOfStream: false);
+            if (!closed) { review.ScreenshotPng = bytes[..count]; Draw(); }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or COMException)
+        {
+            if (!closed) { review.ScreenshotPng = []; Draw(); }
+            AppLog.Write("feedback: the chosen screenshot could not be read");
+        }
+        finally { choosingScreenshot = false; if (!closed) { Draw(); } }
+    }
+}
