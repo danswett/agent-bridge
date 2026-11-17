@@ -1463,6 +1463,7 @@ public sealed class AutoUpdater
         var allowedUnchecked = allowance is { Unchecked: true, Batch: false } && allowance.Release == to;
         string? confirmed = null;
         var confirmedUnchecked = false;
+        var attemptRecorded = false;
         bool open;
         try { open = WindowOpen(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { open = false; }
@@ -1515,6 +1516,7 @@ public sealed class AutoUpdater
             {
                 Validate();
                 Record(prefs, save, updater, request, open);
+                attemptRecorded = true;
                 installingAt = time.GetUtcNow();
                 Changed();
             }, () =>
@@ -1531,7 +1533,7 @@ public sealed class AutoUpdater
         // is ready now is offered instead, with its own notes when it is installed.
         catch (PackageReplacedException e)
         {
-            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
+            ClearAttempt();
             installing = false;
             Pending = null;
             checkedAt = null;
@@ -1557,6 +1559,7 @@ public sealed class AutoUpdater
         catch (InstallRefusedException e)
         {
             installing = false;
+            if (attemptRecorded) { ClearAttempt(); }
             if (e.Hold) { HoldOver(); Changed(); return NotNow; }
             if (request is null) { Refused(e.Message); }
             else { End(UpdateOutcome.Refused, e.Message, e.Code); }
@@ -1567,7 +1570,7 @@ public sealed class AutoUpdater
             // Still this version: nothing to announce. Still offered while the updater has it
             // downloaded, for the person to try again when they choose; never tried again by itself.
             var step = prefs().UpdateHandedOver ? "restarting" : "installing";
-            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
+            ClearAttempt();
             if (updater.Ready != to) { Pending = null; }
             checkedAt = time.GetUtcNow();
             save(UpdateBackoff.Failed(prefs(), checkedAt.Value, to, out var retryAt));
@@ -1580,6 +1583,9 @@ public sealed class AutoUpdater
             else { End(UpdateOutcome.Failed, e.Message, step: step); }
             return $"installing {to} failed: {e.Message}";
         }
+
+        void ClearAttempt() =>
+            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
 
         void Validate(bool handoff = false)
         {
