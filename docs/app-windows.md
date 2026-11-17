@@ -28,20 +28,34 @@ has its hooks connected (`AppPreferences.GuidePending`, `SettingsViewModel.Guide
 only to a first install (no settings file existed, so upgraders never see it) and only to a launch that
 shows the window: a start at sign-in or a toast launch leaves it pending for the next one.
 
+## Local crash evidence
+
+The existing `AppLog` always writes redacted diagnostics to `Paths.AppData`'s `app.log`,
+rolling to `app.log.1` after 1 MB. Transcript text is not diagnostic input. `CrashLog`
+keeps exception types and frames, not messages or source paths, in `crash.log` and the
+existing diagnostics journal. Neither submits anything.
+Each profile keeps `runs/<profile>/run-marker.json` under `Paths.AppData` (the demo uses
+`runs/demo`). Startup captures `RunMarker.Previous` before writing the current version
+and UTC start time; an empty/corrupt marker counts as unclean. Only an actual exit,
+not hiding to the tray, calls `Complete()`. Crash evidence survives closing; a teardown
+crash restores the marker. Self-tests leave markers alone. `RecordHang` is the seam for
+the separate watchdog slice; recovery UI and the existing feedback submission remain separate work.
+
 ## Decisions
 
 ### UI hang evidence
 
 Part of [#2726](https://github.com/danswett/agent-bridge/issues/2726), slice B.
 A background watchdog checks the existing one-second UI heartbeat. After 30 seconds
-without a beat it atomically replaces the profile's `run-marker.json` under
+without a beat it records a hang in the profile's existing `run-marker.json` under
 `Paths.AppData` with one hang record: time, managed UI thread id, seconds stalled,
 and up to 20 recent AppLog stages. Free-text details and unknown messages are omitted,
 so no transcript, path or secret is copied. A new beat rearms detection; ticks during
 the same hang do not write again. Self-tests never start the watchdog, and quitting
 disposes it (hiding to the tray does not). AppLog/CrashLog remain the existing logs.
-Startup/clean-exit markers (A), recovery/submission (C), and state recovery (D) are
-separate work. This slice makes no network request and adds no submission path.
+Slice A supplies startup/clean-exit ownership through `Program.Marker`; B never starts
+a second marker. Recovery/submission (C) and state recovery (D) remain separate work.
+This slice makes no network request and adds no submission path.
 
 Settings' **Reply box** group offers **Return key in replies**: **New line** (the
 unchanged default, Ctrl+Enter sends) or **Send** (Enter sends, Shift+Enter makes a

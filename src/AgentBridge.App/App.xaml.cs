@@ -196,9 +196,11 @@ public partial class App : Application
 
         tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, AppAssets.Icon), () => ShowWindow(null, null), window.FeedbackFromTray, Quit);
         uiHeartbeat = TimeProvider.System.GetTimestamp();
-        watchdog = new UiWatchdog(TimeProvider.System, () => Interlocked.Read(ref uiHeartbeat),
-            TimeSpan.FromSeconds(30), Environment.CurrentManagedThreadId,
-            new RunMarker(Path.Combine(appData, options.Profile)), AppLog.Tail, AppLog.Write);
+        if (Program.Marker is { } marker)
+        {
+            watchdog = new UiWatchdog(TimeProvider.System, () => Interlocked.Read(ref uiHeartbeat),
+                TimeSpan.FromSeconds(30), Environment.CurrentManagedThreadId, marker, AppLog.Tail, AppLog.Write);
+        }
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += (_, _) =>
         {
@@ -389,9 +391,14 @@ public partial class App : Application
     // Closing the window keeps the app in the notification area, where its toasts come from.
     void OnWindowClosing(Microsoft.UI.Windowing.AppWindowClosingEventArgs e)
     {
-        if (quitting || tray is null) { return; }
-        e.Cancel = true;
-        window?.HideToTray();
+        if (!quitting && tray is not null)
+        {
+            e.Cancel = true;
+            window?.HideToTray();
+            return;
+        }
+        try { Program.Marker?.Complete(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { AppLog.Write($"run marker not cleared: {error.GetType().Name}"); }
     }
 
     void Quit()

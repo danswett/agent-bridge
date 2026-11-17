@@ -15,14 +15,20 @@ public sealed class UiWatchdogTests : IDisposable
     public UiWatchdogTests() => heartbeat = clock.GetTimestamp();
 
     UiWatchdog Watch(params string[] lines) => new(clock, () => heartbeat, TimeSpan.FromSeconds(30),
-        42, new RunMarker(folder), () => { snapshots++; return lines; }, errors.Add);
+        42, RunMarker.Start(folder, "1.0", clock), () => { snapshots++; return lines; }, errors.Add);
+
+    bool HasHang()
+    {
+        using var json = JsonDocument.Parse(File.ReadAllText(Marker));
+        return json.RootElement.GetProperty("Hang").ValueKind != JsonValueKind.Null;
+    }
 
     [Fact]
     public void The_background_timer_records_the_stalled_ui_thread_at_the_threshold()
     {
         using var watch = Watch("settings not saved: disk unavailable");
         clock.Advance(TimeSpan.FromSeconds(29));
-        Assert.False(File.Exists(Marker));
+        Assert.False(HasHang());
         clock.Advance(TimeSpan.FromSeconds(1));
         using var json = JsonDocument.Parse(File.ReadAllText(Marker));
         var hang = json.RootElement.GetProperty("Hang");
@@ -50,13 +56,13 @@ public sealed class UiWatchdogTests : IDisposable
     }
 
     [Fact]
-    public void Healthy_heartbeats_do_not_create_a_marker()
+    public void Healthy_heartbeats_do_not_record_a_hang()
     {
         using var watch = Watch();
         clock.Advance(TimeSpan.FromSeconds(20));
         heartbeat = clock.GetTimestamp();
         clock.Advance(TimeSpan.FromSeconds(20));
-        Assert.False(File.Exists(Marker));
+        Assert.False(HasHang());
         Assert.Equal(0, snapshots);
     }
 
@@ -79,14 +85,15 @@ public sealed class UiWatchdogTests : IDisposable
         var watch = Watch();
         watch.Dispose();
         clock.Advance(TimeSpan.FromMinutes(1));
-        Assert.False(File.Exists(Marker));
+        Assert.False(HasHang());
     }
 
     [Fact]
     public void A_marker_write_failure_is_logged_once_and_does_not_escape_the_timer()
     {
-        Directory.CreateDirectory(Marker);
         using var watch = Watch();
+        File.Delete(Marker);
+        Directory.CreateDirectory(Marker);
         clock.Advance(TimeSpan.FromSeconds(30));
         clock.Advance(TimeSpan.FromSeconds(30));
         Assert.Single(errors);

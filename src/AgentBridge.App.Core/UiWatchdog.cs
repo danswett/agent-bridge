@@ -45,7 +45,7 @@ public sealed class UiWatchdog : IDisposable
             try
             {
                 var lines = lastLogLines().TakeLast(20).Select(LogStage).ToArray();
-                marker.RecordHang(new(clock.GetUtcNow(), threadId, stalled.TotalSeconds, lines));
+                marker.RecordHang(threadId, stalled, lines);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
