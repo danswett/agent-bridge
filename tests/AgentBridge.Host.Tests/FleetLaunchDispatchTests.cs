@@ -136,7 +136,7 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
             wait: TimeSpan.FromMilliseconds(100), credentials: new AgentCredentials(profile, "machine"),
             account: new AllowedAccount(),
-            agentWorktreeCheck: AgentLaunchWorktreeCheck.Check, agentWorktreeRefusalAudit: (_, _, _) => true);
+            agentWorktreeCheck: (_, _, _) => null, agentWorktreeRefusalAudit: (_, _, _) => true);
         var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         launcher.RequestFailed += _ => failed.TrySetResult();
         var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot",
@@ -144,7 +144,7 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         const string principal = "script:machine/dispatcher";
         var audit = new AgentAuditLog(profile);
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null), fleet: true);
-        Assert.Equal(LaunchOutcome.Unconfirmed, result.Outcome);
+        Assert.True(result.Outcome == LaunchOutcome.Unconfirmed, result.Reason);
         Assert.NotNull(source.Get(result.Session!));
         starter.Exit(Assert.Single(starter.Pids));
         await source.RefreshAsync();
