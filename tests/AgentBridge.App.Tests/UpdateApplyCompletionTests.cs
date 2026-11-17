@@ -10,11 +10,12 @@ public sealed class UpdateApplyCompletionTests
     readonly FakeTimeProvider time = new(Make.T0);
     UpdateApplyEvidence evidence = new(null, null, null);
 
-    UpdateApplyCompletion Watch(Func<CancellationToken, Task<UpdateApplyEvidence>>? probe = null) =>
-        new(probe ?? (_ => Task.FromResult(evidence)), time)
+    UpdateApplyCompletion Watch(Func<CancellationToken, Task<UpdateApplyEvidence>>? probe = null, int pollSeconds = 1) =>
+        new((generation, ct) => probe is null
+            ? Task.FromResult(evidence with { Generation = generation }) : probe(ct), time)
         {
             Window = TimeSpan.FromSeconds(5),
-            Poll = TimeSpan.FromSeconds(1)
+            Poll = TimeSpan.FromSeconds(pollSeconds)
         };
 
     [Fact]
@@ -38,12 +39,14 @@ public sealed class UpdateApplyCompletionTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(null)]
-    public async Task Missing_worker_completion_remains_unknown_after_the_deadline(bool? finished)
+    [InlineData(false, 0, 1)]
+    [InlineData(null, 0, 1)]
+    [InlineData(false, 7, 1)]
+    [InlineData(false, 0, 30)]
+    public async Task Missing_worker_completion_remains_unknown_after_the_deadline(bool? finished, int exitCode, int pollSeconds)
     {
-        evidence = new(finished, 0, Target);
-        var watch = Watch();
+        evidence = new(finished, exitCode, Target);
+        var watch = Watch(pollSeconds: pollSeconds);
         var run = watch.RunAsync(Target);
         Assert.False(run.IsCompleted);
         time.Advance(watch.Window);
@@ -77,6 +80,9 @@ public sealed class UpdateApplyCompletionTests
     [Theory]
     [InlineData(null, UpdateApplyEnd.Unknown, "exit-unknown")]
     [InlineData(7, UpdateApplyEnd.Failed, "exit-failed")]
+    [InlineData(-1, UpdateApplyEnd.Failed, "exit-failed")]
+    [InlineData(int.MinValue, UpdateApplyEnd.Failed, "exit-failed")]
+    [InlineData(int.MaxValue, UpdateApplyEnd.Failed, "exit-failed")]
     [InlineData(0, UpdateApplyEnd.Completed, null)]
     public async Task Actual_worker_exit_is_required_even_when_the_target_is_active(
         int? exitCode, UpdateApplyEnd end, string? code)
@@ -170,6 +176,54 @@ public sealed class UpdateApplyCompletionTests
         Assert.Equal(UpdateApplyEnd.Unknown, result.End);
         Assert.Equal("probe-cancelled", result.Code);
         Assert.Equal("apply-completion", result.Step);
+    }
+
+    [Theory]
+    [InlineData("invalid-operation")]
+    [InlineData("invalid-data")]
+    [InlineData("format")]
+    [InlineData("not-supported")]
+    [InlineData("security")]
+    [InlineData("overflow")]
+    public async Task Every_probe_exception_is_unknown_without_its_sensitive_message(string kind)
+    {
+        const string message = "private probe detail";
+        Exception error = kind switch
+        {
+            "invalid-operation" => new InvalidOperationException(message),
+            "invalid-data" => new InvalidDataException(message),
+            "format" => new FormatException(message),
+            "not-supported" => new NotSupportedException(message),
+            "security" => new System.Security.SecurityException(message),
+            _ => new OverflowException(message),
+        };
+        var result = await Watch(_ => throw error).RunAsync(Target);
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Equal("probe-failed", result.Code);
+        Assert.Equal(error.GetType().Name, result.ErrorType);
+        Assert.DoesNotContain(message, result.ToString());
+    }
+
+    [Theory]
+    [InlineData("0.1.200", "v0.1.200")]
+    [InlineData("0.1.200", " 0.1.200")]
+    [InlineData("0.1.200", "0.1.200+build123")]
+    [InlineData("0.1.200-RC.1", " V0.1.200-rc.1+build123 ")]
+    public async Task Completion_compares_normalized_release_identities(string target, string active)
+    {
+        evidence = new(true, 0, active);
+        Assert.Equal(UpdateApplyEnd.Completed, (await Watch().RunAsync(target)).End);
+    }
+
+    [Fact]
+    public async Task A_cached_equal_snapshot_without_this_operations_generation_is_not_completion()
+    {
+        var cached = new UpdateApplyEvidence(true, 0, Target, Guid.NewGuid());
+        var result = await Watch(_ => Task.FromResult(cached)).RunAsync(Target);
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Equal("stale-evidence", result.Code);
+        Assert.Null(result.ApplyExitCode);
+        Assert.Null(result.ActiveVersion);
     }
 
     [Fact]

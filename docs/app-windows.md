@@ -377,10 +377,16 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
 respawn. Its adapter must track the actual apply operation, including delegated workers,
 and freshly read the active installation's normalized version. A launcher exit, target
 files appearing, or a cached locator version does not establish worker completion.
+Each run supplies a new operation generation; evidence with another (or no) generation
+is `Unknown`. Adapters must bind it to that operation's actual process, never re-tag a
+cached snapshot, and sample the active manifest after completion. Release identity
+uses the shared `UpdateVersions` normalizer (whitespace, one optional `v`, metadata
+ignored; case-insensitive comparison; `0.0.0` unknown).
 Only authoritative worker completion, a known zero apply exit code, and the matching
 active version produce `Completed`. A known nonzero worker exit produces `Failed`.
 Missing evidence, unreadable state, a timeout or a version mismatch stays `Unknown`;
-none authorizes a retry or claims app/host convergence. Cancellation stops observation,
+none authorizes a retry or claims app/host convergence. Any result arriving at or after
+the observation window is `Unknown`, even success. Cancellation stops observation,
 not the updater. The asynchronous probe must return promptly and cancel only its wait.
 Results retain the operation step, target/observed versions, actual exit/native error
 code when available, offset-bearing observation time and monotonic elapsed time,
