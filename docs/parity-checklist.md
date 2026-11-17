@@ -34,6 +34,25 @@ the row in parity.md section N whose first cell starts with those words. CI chec
 
 The checks live in `ChecklistTests`.
 
+### Phone approval audit evidence
+
+For [the per-client check](https://github.com/danswett/agent-bridge/issues/2649),
+the host subscribes to the existing `NoticeOutcome` hook. Its non-blocking queue
+drains into the existing private audit log before shutdown. No fixed node or new
+service is involved; each host retains its own existing profile audit files.
+The existing row fields hold action `push`, direction `out`, recipient
+`person:<device>` (or `person:unknown`), question in `request`, session in `target`,
+kind `question` in `reason`, and the push-service outcome. No endpoint, keys,
+notification words or new audit fields are recorded.
+
+`PhoneApprovalEvidence.Read` reports those notices and distinct delivered questions
+per client alongside audited answers. Every expected client needs both delivery
+and an answer through the relay; missing identities, absent delivery and
+incomplete audit history never pass. An empty expected-client list is not proof.
+Here **delivered means accepted by the push service**, not received by the phone.
+Synthetic tests are not real-device or away-from-home evidence; those checks still
+need recorded audit rows and the device rehearsal.
+
 ## What runs where
 
 The rehearsal needs **two** disposable machines.
