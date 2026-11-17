@@ -24,6 +24,11 @@ and no resume, transfer or attachments. Ordinary launches never acquire that mar
 Production provisions no controller grants yet; the [stop gate](host-stop.md) also
 defaults to Unknown clearance, so live agent stopping remains unavailable.
 
+Fleet launches refuse any configured `launch.agents.<launcher>.extraArgs`, including
+apparently harmless arguments: the host cannot otherwise guarantee standard permissions.
+It checks the actual extra arguments before creating a worktree or starting a process.
+Person-started launches retain their configured extra arguments.
+
 ## Answering `launch.options` without waiting for Agency (#1527)
 
 Agency's `hub list-local-sessions --json` took 18.5 s on a cold run against its 20 s cap, so

@@ -13,6 +13,7 @@ The inert `fleet.launch` and `fleet.stop` controller operations require a separa
 host-registered grant on an authenticated script connection, never ordinary script
 read authority or person classification. `fleet.launch` uses the launch request shape;
 `fleet.stop` takes `{ node, request, confirm? }`, not a session id or caller clearance.
+`fleet.launch` refuses configured extra arguments; completed `fleet.stop` retries replay the recorded `Ended`, bound to principal, request UUID and exact node, without another stop.
 See [host-stop](../host-stop.md) for fail-closed clearance and provisioning status.
 
 ## Endpoint

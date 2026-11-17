@@ -23,6 +23,12 @@ Refused, Unknown, stale/mismatched evidence and held discovery refuse. The host 
 again before typing and before forced termination, retaining G5, confirmation and audit.
 Caller-supplied safety fields confer no authority.
 
+A retry of a completed `fleet.stop` returns the recorded `Ended` outcome, including
+its forced-termination flag, bound to the authenticated principal, request UUID and
+exact node. The host validates that evidence before live-node admission, so a removed
+node does not turn a successful stop into a refusal or repeat its effects. The separate
+controller grant must still be live.
+
 Production registers no controller grants in this slice and uses
 `UnknownWorkStateClearance`, which returns Unknown for every safeguard. No live agent
 stop is enabled; slice 3 supplies the real provider and controlled provisioning.
