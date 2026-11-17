@@ -77,6 +77,19 @@ public sealed class PushNotifierTests : IDisposable
         return notifier.Handle(peer ?? Peer(device), Ops.PushSubscribe, data);
     }
 
+    object? SubscribeApns(string device, string target, string token, PushPeer? peer = null, string? name = null)
+    {
+        if (!browsers.TryGetValue(device, out var b)) { browsers[device] = b = (P256KeyPair.Generate(), System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)); }
+        return notifier.Handle(peer ?? Peer(device), ApnsPushRequest.Subscribe, JsonSerializer.SerializeToElement(new
+        {
+            token,
+            target,
+            keyId = B64Url.Encode(new byte[32]),
+            keys = new { p256dh = B64Url.Encode(b.Key.Public), auth = B64Url.Encode(b.Auth) },
+            device = name,
+        }));
+    }
+
     // What the browser decrypts: the endpoint's device, the notification and its push headers.
     List<(string Device, JsonElement Notification, int Ttl, string Urgency, string? Topic)> Received() =>
         [.. sender.Sent.Select(p =>
@@ -1786,6 +1799,32 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(new PushUnsubscribeResult(false), notifier.Handle(Peer(Phone), Ops.PushUnsubscribe, default));
         Assert.Equal(Laptop, Assert.Single(store.All).Device);
         Assert.Null(notifier.Handle(Peer(Phone), "push.other", default));
+    }
+
+    [Fact]
+    public async Task Native_registrations_are_replaced_persisted_listed_without_secrets_and_removed_per_target()
+    {
+        Start();
+        Assert.Throws<InvalidOperationException>(() => SubscribeApns(Phone, "prod", "01020304", Peer(Phone, account: "2")));
+        Assert.Equal(new PushSubscribeResult(true, 1), SubscribeApns(Phone, "prod", "01020304"));
+        Assert.Equal(new PushSubscribeResult(true, 2), SubscribeApns(Phone, "dev", "11121314"));
+        Assert.Equal(new PushSubscribeResult(true, 2), SubscribeApns(Phone, "prod", "aabbccdd", name: "iPhone"));
+
+        var listed = Assert.IsType<PushListResult>(notifier.Handle(Peer(Phone), ApnsPushRequest.List, JsonSerializer.SerializeToElement(new { })));
+        Assert.Equal([("apns:prod", true), ("apns:dev", true)], listed.Devices.Select(d => (d.Service, d.Current)));
+        Assert.DoesNotContain("aabbccdd", JsonSerializer.Serialize(listed));
+        Assert.DoesNotContain(B64Url.Encode(new byte[32]), JsonSerializer.Serialize(listed));
+        Assert.DoesNotContain("aabbccdd", string.Join('\n', logs));
+
+        await notifier.DisposeAsync();
+        store = PushStore.Load(StorePath, Account);
+        notifier = new PushNotifier(source, new MachineInfo(Machine, "DEV", "windows", "0.1.0"), store, null, logs.Add, time);
+        var afterRestart = Assert.IsType<PushListResult>(notifier.Handle(Peer(Phone), ApnsPushRequest.List, JsonSerializer.SerializeToElement(new { })));
+        Assert.Equal(["apns:prod", "apns:dev"], afterRestart.Devices.Select(d => d.Service));
+
+        Assert.Equal(new PushUnsubscribeResult(true), notifier.Handle(Peer(Phone), ApnsPushRequest.Unsubscribe, JsonSerializer.SerializeToElement(new { target = "dev" })));
+        Assert.Equal(new PushUnsubscribeResult(false), notifier.Handle(Peer(Phone), ApnsPushRequest.Unsubscribe, JsonSerializer.SerializeToElement(new { target = "dev" })));
+        Assert.Equal("apns:prod", Assert.Single(Assert.IsType<PushListResult>(notifier.Handle(Peer(Phone), ApnsPushRequest.List, JsonSerializer.SerializeToElement(new { }))).Devices).Service);
     }
 
     [Fact]
