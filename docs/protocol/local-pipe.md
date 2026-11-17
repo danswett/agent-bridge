@@ -189,7 +189,9 @@ on timeout or caller disconnect, and late completion cannot change the result. D
 during the check prevents saving. `unknown` does not prevent saving, but a failed save returns
 the normal error, not a saved result or warning. No other session's name or identity is returned.
 Older hosts omit `duplicateStatus`; clients must show that as unknown, not absent.
-The App/CLI disclosure and visible warning are follow-on #2519 work; lookup remains unverified.
+The host CLI prints the public-label disclosure before rename and shows present/unknown after
+a successful save; older hosts that omit `duplicateStatus` are shown as unknown. Windows app
+enrollment remains follow-on work; lookup remains unverified.
 
 At the Windows machine, open your own terminal (not an agent session), use
 `agent-bridge-host sessions --compact` to find the running session's full id, then run:
