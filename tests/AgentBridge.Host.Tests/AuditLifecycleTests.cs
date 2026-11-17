@@ -75,6 +75,42 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
         Assert.True(new LaunchProvenance(path, logged.Enqueue).Contains(result.Session!, source.ProcessOf(result.Session!)));
     }
 
+    [Fact]
+    public async Task Only_a_registered_controller_ingress_records_durable_fleet_origin()
+    {
+        var store = new AgentCredentials(Path.Combine(f.Root, "controller"), "fixture");
+        var credential = store.MintScript("sre").Credential;
+        var channel = new FleetTestChannel();
+        store.Accept(channel, credential);
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture");
+        Git(app, "add", "README.md");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
+            agentWorktreeCheck: AgentLaunchWorktreeCheck.Check);
+        var controller = new FleetController(store, source, launcher, null, Writer());
+        var handler = LocalApi.Handler(null!, null!, null!, credentials: store, fleetController: controller);
+        var body = System.Text.Json.JsonSerializer.SerializeToElement(new LaunchRequest
+            { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Prompt = "fixture" });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, FleetController.LaunchOp, body));
+        controller.RegisterController(credential);
+        var launched = Assert.IsType<LaunchResult>(await handler(channel, FleetController.LaunchOp, body));
+        Assert.Equal(LaunchOutcome.Started, launched.Outcome);
+        var saved = new LaunchProvenance(Path.Combine(f.Root, "profile", "launch-provenance.json"), logged.Enqueue);
+        Assert.True(saved.FleetContains(launched.Session!, source.ProcessOf(launched.Session!)!));
+        Assert.False(saved.FleetContains(launched.Session!, new SessionProcess(123, DateTimeOffset.UtcNow)));
+    }
+
+    sealed class FleetTestChannel : AgentBridge.Transport.IProtocolChannel
+    {
+        public string PeerId => "fixture";
+        public string PeerName => "fixture";
+        public string PeerKind => "fixture";
+        public bool IsOpen => true;
+        public Task Closed => Task.CompletedTask;
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
+    }
+
     [Theory]
     [InlineData("""{"path":"local","actorKind":"agent"}""")]
     [InlineData("""{"path":"local","actorKind":"agent","principal":""}""")]

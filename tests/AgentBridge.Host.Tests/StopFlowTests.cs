@@ -16,7 +16,7 @@ using Xunit;
 // process; the real worker and the real process control against a console of the tests' own
 // are in InjectorIntegrationTests.
 [Trait("Category", "Network")]
-public sealed class StopFlowTests : IAsyncLifetime
+public sealed partial class StopFlowTests : IAsyncLifetime
 {
     const string Id = "77777777-7777-4777-8777-777777777777";
     const string Other = "88888888-8888-4888-8888-888888888888";
