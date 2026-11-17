@@ -61,6 +61,17 @@ public sealed class FleetHostVerificationTests
     }
 
     [Fact]
+    public void A_clock_regression_within_an_epoch_cannot_reenable_a_retired_epoch()
+    {
+        var f = new Fixture();
+        var current = new string('c', 16);
+        Assert.True(Assert.Single(f.Read(f.Record())).Verified);
+        Assert.True(Assert.Single(f.Read(f.Record(epoch: current, seq: 1, seconds: 1))).Verified);
+        Assert.True(Assert.Single(f.Read(f.Record(epoch: current, seq: 2, seconds: -1))).Verified);
+        Assert.Empty(Assert.Single(f.Read(f.Record(seq: 3))).Sessions);
+    }
+
+    [Fact]
     public void A_host_signed_by_an_approver_on_probation_cannot_authorize_its_fleet_record()
     {
         var f = new Fixture();

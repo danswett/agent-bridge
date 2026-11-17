@@ -10,7 +10,7 @@ namespace AgentBridge.Host.Fleet;
 internal sealed class FleetRecordVerifier(Func<RosterVerifier?> pinnedRoster, TimeProvider time)
 {
     readonly object gate = new();
-    readonly Dictionary<(string Account, string Generation, string Add), (string Epoch, long Seq, DateTimeOffset At, byte[] RecordHash)> accepted = [];
+    readonly Dictionary<(string Account, string Generation, string Add), (string Epoch, long Seq, DateTimeOffset AtHighWater, byte[] RecordHash)> accepted = [];
 
     public bool Verify(string machine, JsonElement record, string? account = null)
     {
@@ -30,12 +30,14 @@ internal sealed class FleetRecordVerifier(Func<RosterVerifier?> pinnedRoster, Ti
                 var seq = record.GetProperty("seq").GetInt64();
                 var identity = (roster.Account, roster.Generation, Convert.ToHexString(roster.Graph[add].Hash));
                 var recordHash = SHA256.HashData(FleetRecordSigning.CanonicalBytes(record));
+                var atHighWater = at;
                 if (accepted.TryGetValue(identity, out var previous))
                 {
                     if (epoch == previous.Epoch && seq == previous.Seq && recordHash.AsSpan().SequenceEqual(previous.RecordHash)) { return true; }
-                    if (epoch == previous.Epoch ? seq <= previous.Seq : at <= previous.At) { return false; }
+                    if (epoch == previous.Epoch ? seq <= previous.Seq : at <= previous.AtHighWater) { return false; }
+                    if (previous.AtHighWater > at) { atHighWater = previous.AtHighWater; }
                 }
-                accepted[identity] = (epoch, seq, at, recordHash);
+                accepted[identity] = (epoch, seq, atHighWater, recordHash);
                 return true;
             }
             catch (InvalidOperationException) { return false; }
