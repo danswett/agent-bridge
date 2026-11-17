@@ -61,6 +61,8 @@ precedes dispatch, which rechecks credential liveness, policy and arguments befo
 Refusals are audited; missing audit evidence fails closed. Read-only credentials and person
 launches retain their existing paths. This wiring does not add restart-durable caps or an
 idle-ending loop; unresolved/live reservations remain conservative.
+Proven prestart refusals and busy outcomes release only their own hourly and live
+reservation; request memory and the separate attempt budget are retained.
 
 ## Dispatch facts seam (#2788)
 

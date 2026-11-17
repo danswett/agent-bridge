@@ -65,7 +65,7 @@ public static partial class LocalApi
         }
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
             refusal: () => lastRefusal = Check());
-        if (result.Outcome is LaunchOutcome.Refused or LaunchOutcome.Busy) { gate.LaunchFinished(principal, request.Request); }
+        if (result.Outcome is LaunchOutcome.Refused or LaunchOutcome.Busy) { gate.LaunchRefused(principal, request.Request); }
         if (result.Outcome == LaunchOutcome.Started && result.Session is { } session) { gate.LaunchStarted(principal, request.Request, session); }
         if (result.Outcome == LaunchOutcome.Refused)
         { return Denied(lastRefusal ?? "the launch could not be completed; check details at the machine"); }
