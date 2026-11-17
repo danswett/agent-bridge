@@ -703,6 +703,8 @@ controls consume that same contract; this extraction does not disable or remove 
     An unreadable/changing holder list is unknown, never permission to install. A SYSTEM service
     is named even when its image is unreadable. Waiting carries no Installing credit; timeout
     keeps the old install intact with recovery text and the existing 10/20/40/60-minute backoff.
+    The final pre-stop scan runs after the policy checks, using that path's existing file-check
+    budget; time spent in a person's confirmation does not consume it.
     This path never stops a service or self-elevates; it does not replace the later slot design.
   * **Usage probes hold the host's stop** (#238): before the host is stopped, for an install or
     anything else (Settings' Stop, Restart and Restart to update), the app asks it to hold its

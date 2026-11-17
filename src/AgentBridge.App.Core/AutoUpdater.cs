@@ -1453,9 +1453,10 @@ public sealed class AutoUpdater
         // The host comes back from a failed install, or from the app quitting mid-way (HostManager).
         try
         {
+            InstallationFiles.Budget fileBudget;
             if (departed is null)
             {
-                var fileBudget = await WaitForFilesAsync();
+                fileBudget = await WaitForFilesAsync();
                 var nonFileWork = time.GetTimestamp();
                 if (local && host.State == LinkState.Connected) { await manager.WaitForUsageProbesAsync(); }
                 if (!local && await ProbeBusyAsync() is { } probe) { lastProbe = probe; Changed(); return NotNow; }
@@ -1471,18 +1472,18 @@ public sealed class AutoUpdater
                     if (vetted.Why is { } since) { throw new InstallRefusedException(since, vetted.Code); }
                 }
                 fileBudget.ExcludeSince(nonFileWork);
-                await manager.CheckInstallationFilesAsync(preflight, fileBudget);
             }
-            else { await manager.CheckInstallationFilesAsync(preflight, new InstallationFiles.Budget(time)); }
+            else
+            {
+                fileBudget = new InstallationFiles.Budget(time);
+            }
             Validate();
-            updatingIn = open ? to : null;
-            installingAt = null;
-            installing = true;
-            Changed();
-            log($"auto-update: installing {to}, as {because}");
             await manager.StopAndApplyAsync(() =>
             {
                 Validate();
+                updatingIn = open ? to : null;
+                installing = true;
+                log($"auto-update: installing {to}, as {because}");
                 Record(prefs, save, updater, request, open);
                 installingAt = time.GetUtcNow();
                 Changed();
@@ -1493,7 +1494,7 @@ public sealed class AutoUpdater
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
                 if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
                 updater.ApplyAndRestart(to, HandedOver(prefs, save));
-            }, waitForFiles: false);
+            }, preflight, waitForFiles: false, fileBudget: fileBudget);
             return null;
         }
         // Replaced while the host stopped: nothing failed, and the host is back (HostManager). What

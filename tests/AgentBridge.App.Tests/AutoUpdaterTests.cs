@@ -1595,6 +1595,90 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_file_locked_during_the_last_policy_check_does_not_stop_the_host()
+    {
+        await StartAsync();
+        await auto.TickAsync();
+        var path = Path.Combine(app, "held-at-handoff.dll");
+        File.WriteAllText(path, "old install");
+        FileStream? holder = null;
+        var scans = 0;
+        var policyChecks = 0;
+        preflight = () =>
+        {
+            Interlocked.Increment(ref scans);
+            try { using var check = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None); return null; }
+            catch (IOException) { return "a fixture holding held-at-handoff.dll"; }
+        };
+        othersProbe = () =>
+        {
+            if (Volatile.Read(ref scans) >= 2 && ++policyChecks == 2)
+            {
+                holder = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            }
+            return null;
+        };
+        try
+        {
+            var why = await auto.RestartToUpdateAsync();
+            Assert.NotNull(holder);
+            Assert.Contains("held-at-handoff.dll", why, StringComparison.Ordinal);
+            Assert.False(updater.Applied);
+            Assert.Empty(host.Sent(HostOps.Stop));
+            Assert.Null(prefs.UpdatedFrom);
+        }
+        finally { holder?.Dispose(); }
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_last_file_scan_uses_the_remaining_budget_before_stopping_the_host()
+    {
+        await StartAsync();
+        await auto.TickAsync();
+        var scans = 0;
+        var policyChecks = 0;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        othersProbe = () =>
+        {
+            if (Volatile.Read(ref scans) >= 2) { Interlocked.Increment(ref policyChecks); }
+            return null;
+        };
+        preflight = () =>
+        {
+            var scan = Interlocked.Increment(ref scans);
+            if (scan == 1) { time.Advance(TimeSpan.FromSeconds(90)); }
+            if (Volatile.Read(ref policyChecks) >= 2)
+            {
+                entered.TrySetResult();
+                release.Task.GetAwaiter().GetResult();
+            }
+            return null;
+        };
+        var update = auto.RestartToUpdateAsync();
+        try
+        {
+            var ready = await Task.WhenAny(entered.Task, update).WaitAsync(TimeSpan.FromSeconds(5));
+            if (ready != entered.Task) { Assert.Fail($"Only {scans} scans: {await update}"); }
+            Assert.NotEqual(UpdatePhase.Installing, auto.State.Phase);
+            time.Advance(TimeSpan.FromSeconds(30));
+            var why = await update.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Contains(InstallationFiles.Unknown, why, StringComparison.Ordinal);
+            Assert.False(updater.Applied);
+            Assert.Empty(host.Sent(HostOps.Stop));
+            Assert.Null(prefs.UpdatedFrom);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await update.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Time_in_a_local_confirmation_does_not_exhaust_the_completed_file_check_budget()
     {
         await StartAsync(null, Make.Session("s1", SessionStatus.Working));
