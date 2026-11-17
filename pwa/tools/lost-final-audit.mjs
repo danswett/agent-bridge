@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { buildSite } from './build-site.mjs';
 import { startStaticServer } from '../test/serve.mjs';
 
+const started = performance.now();
 const root = fileURLToPath(new URL('../', import.meta.url));
 const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
 const cpuMask = process.platform === 'win32'
@@ -57,6 +58,7 @@ try {
   }
   process.stdout.write(`${JSON.stringify({
     label: 'reconstruction, not comparable to 2026-11-13 runs',
+    runtimeMs: performance.now() - started,
     atPT: new Date().toLocaleString('sv-SE', { timeZone: 'America/Los_Angeles' }),
     runtime: { node: process.version, platform: platform(), arch: arch(), os: release(), cpuMask },
     browser: { name: 'chromium', version: browser.version(), headless: true },
