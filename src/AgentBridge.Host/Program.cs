@@ -216,12 +216,14 @@ switch (command)
                 Console.Error.WriteLine("usage: agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>]; empty name clears");
                 return 2;
             }
+            AgentBridge.Host.Fleet.FleetNameEnrollmentNotice.WriteDisclosure(Console.Error);
             try
             {
                 await using var local = await LocalClient.ConnectAsync(LocalEndpoint.For(Path.Combine(Identity.DefaultRoot, profileName)));
                 await local.HelloAsync();
                 var renamed = await local.CallAsync(AgentBridge.Host.Fleet.FleetNames.Op, new { id = arguments[1], name = arguments[2] });
                 Console.WriteLine(renamed.GetRawText());
+                AgentBridge.Host.Fleet.FleetNameEnrollmentNotice.WriteWarning(renamed, Console.Error);
                 return 0;
             }
             catch (Exception e) when (e is IOException or HostErrorException)
