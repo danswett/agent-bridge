@@ -1,10 +1,10 @@
 namespace AgentBridge.Host;
 
-// The verdict of a rate check. A refusal is always 'rate-limited' with the whole seconds until
-// enough hits leave its window, so an agent is told when to try again and never just "no".
+// Hourly refusals carry seconds to retry; a live-limit refusal waits for a process to exit.
 public readonly record struct AgentLimitVerdict(bool Allowed, string? Reason, int RetryAfterSeconds, bool Duplicate = false)
 {
     public const string RateLimited = "rate-limited";
+    public const string LiveLimited = "live-limit";
 
     public static AgentLimitVerdict Admit { get; } = new(true, null, 0);
 }
@@ -25,8 +25,11 @@ public sealed class AgentLimits
     readonly Dictionary<string, Window> targets = [], originLaunches = [], reads = [];
     readonly Dictionary<string, Window> launchAttempts = [];
     readonly Dictionary<(string Origin, string Request), (string Hash, DateTimeOffset At)> launchRequests = [];
+    readonly Dictionary<(string Origin, string Request), LiveLaunch> liveLaunches = [];
     readonly Window machineLaunches = new(Hour);
     DateTimeOffset? lastLaunchCheck;
+
+    sealed record LiveLaunch(string? Session = null, DateTimeOffset? IdleSince = null, bool PersonTyped = false);
 
     public AgentLimits(
         Func<DateTimeOffset>? clock = null,
@@ -70,11 +73,18 @@ public sealed class AgentLimits
         }
     }
 
-    public AgentLimitVerdict CheckLaunch(string origin, string request, string requestSha256, AgentLaunchLimits limits)
+    public AgentLimitVerdict CheckLaunch(string origin, string request, string requestSha256, AgentLaunchLimits limits) =>
+        CheckLaunch(origin, request, requestSha256, limits, reserveLive: false);
+
+    public AgentLimitVerdict ReserveLaunch(string origin, string request, string requestSha256, AgentLaunchLimits limits) =>
+        CheckLaunch(origin, request, requestSha256, limits, reserveLive: true);
+
+    AgentLimitVerdict CheckLaunch(string origin, string request, string requestSha256, AgentLaunchLimits limits, bool reserveLive)
     {
         var originLimit = Positive(limits.LaunchesPerOriginPerHour);
         var machineLimit = Positive(limits.LaunchesPerMachinePerHour);
         var attemptLimit = Positive(limits.LaunchAttemptsPerOriginPerHour);
+        var liveLimit = Positive(limits.LiveAgentLaunched);
         lock (gate)
         {
             var now = LaunchTime();
@@ -93,7 +103,67 @@ public sealed class AgentLimits
             attempts.Hit(now);
             if (known) { return new(false, "requestReused", 0); }
             launchRequests.Add(key, (requestSha256, now));
-            return CheckLaunch(origin, now, originLimit, machineLimit);
+            if (reserveLive && liveLaunches.Count >= liveLimit) { return new(false, AgentLimitVerdict.LiveLimited, 0); }
+            var result = CheckLaunch(origin, now, originLimit, machineLimit);
+            if (reserveLive && result.Allowed) { liveLaunches.Add(key, new()); }
+            return result;
+        }
+    }
+
+    public void LaunchStarted(string origin, string request, string session)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(session);
+        lock (gate)
+        {
+            var key = (origin, request);
+            if (!liveLaunches.TryGetValue(key, out var launch)
+                || launch.Session is { } existing && existing != session
+                || liveLaunches.Any(p => p.Key != key && p.Value.Session == session))
+            { throw new InvalidOperationException("The session must bind to its own reserved agent launch exactly once."); }
+            liveLaunches[key] = launch with { Session = session };
+        }
+    }
+
+    // Neither an hourly-window expiry nor an unconfirmed start proves the process has exited.
+    public bool LaunchFinished(string origin, string request)
+    {
+        lock (gate) { return liveLaunches.Remove((origin, request)); }
+    }
+
+    public bool SessionEnded(string session)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(session);
+        lock (gate)
+        {
+            var entry = liveLaunches.FirstOrDefault(p => p.Value.Session == session);
+            return entry.Value is not null && liveLaunches.Remove(entry.Key);
+        }
+    }
+
+    // Only the trusted lifecycle observer supplies personTyped; agent input never clears it.
+    // A null idleSince means busy, waiting, or unknown and cancels any idle-end eligibility.
+    public bool ObserveSession(string session, DateTimeOffset? idleSince, bool personTyped)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(session);
+        lock (gate)
+        {
+            var entry = liveLaunches.FirstOrDefault(p => p.Value.Session == session);
+            if (entry.Value is not { } launch) { return false; }
+            liveLaunches[entry.Key] = launch with { IdleSince = idleSince, PersonTyped = launch.PersonTyped || personTyped };
+            return true;
+        }
+    }
+
+    // Candidates only: the caller must refresh/recheck before stopping and retain the live slot
+    // until the process is confirmed gone. This policy never types into or ends a process itself.
+    public IReadOnlyList<string> IdleSessions(AgentLaunchLimits limits)
+    {
+        var idle = TimeSpan.FromHours(Positive(limits.AgentLaunchedIdleHours));
+        lock (gate)
+        {
+            var now = clock();
+            return liveLaunches.Values.Where(l => !l.PersonTyped && l.Session is not null
+                && l.IdleSince is { } since && now - since >= idle).Select(l => l.Session!).ToArray();
         }
     }
 
@@ -121,7 +191,7 @@ public sealed class AgentLimits
         foreach (var entry in launchRequests.ToArray())
         {
             var at = entry.Value.At > now ? now : entry.Value.At;
-            if (now - at >= Hour) { launchRequests.Remove(entry.Key); }
+            if (now - at >= Hour && !liveLaunches.ContainsKey(entry.Key)) { launchRequests.Remove(entry.Key); }
             else if (at != entry.Value.At) { launchRequests[entry.Key] = (entry.Value.Hash, at); }
         }
         return now;
