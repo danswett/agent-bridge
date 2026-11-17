@@ -404,6 +404,7 @@ public sealed class HostSettingsTests : IDisposable
     {
         Assert.Equal(AgentMessagingSettings.Default, With(null).Settings.AgentMessaging);
         Assert.Equal(("off", false), (AgentMessagingSettings.Default.Remote, AgentMessagingSettings.Default.AllowAllTargets));
+        Assert.Empty(AgentMessagingSettings.Default.AllowAllTargetSessions);
         // An upgrade or install that writes other sections never turns it on.
         var settings = With("""{ "devBox": { "keepAwake": true } }""").Settings;
         Assert.False(settings.AgentMessaging.RemoteEnabled);
@@ -415,6 +416,7 @@ public sealed class HostSettingsTests : IDisposable
     [InlineData("""{ "agentMessaging": { "remote": true } }""", "agentMessaging.remote")]
     [InlineData("""{ "agentMessaging": { "remote": "on", "allowAllTargets": true } }""", "agentMessaging.remote")]
     [InlineData("""{ "agentMessaging": { "allowAllTargets": "yes" } }""", "agentMessaging.allowAllTargets")]
+    [InlineData("""{ "agentMessaging": { "allowAllTargetSessions": "*" } }""", "agentMessaging.allowAllTargetSessions")]
     [InlineData("""{ "agentMessaging": "own-account" }""", "agentMessaging is not an object")]
     public void A_remote_agent_messaging_value_that_cannot_be_read_means_off_and_says_so(string text, string said)
     {
@@ -434,6 +436,19 @@ public sealed class HostSettingsTests : IDisposable
     }
 
     [Fact]
+    public void Allow_all_sessions_require_an_explicit_list_of_non_empty_session_ids()
+    {
+        const string session = "11111111-1111-1111-1111-111111111111";
+        var listed = With("""{"agentMessaging":{"remote":"own-account","allowAllTargets":true,"allowAllTargetSessions":["11111111-1111-1111-1111-111111111111","11111111-1111-1111-1111-111111111111"]}}""").Settings.AgentMessaging;
+        Assert.Equal([session], listed.AllowAllTargetSessions);
+        Assert.Empty(With("""{"agentMessaging":{"remote":"own-account","allowAllTargets":true,"allowAllTargetSessions":[]}}""").Settings.AgentMessaging.AllowAllTargetSessions);
+
+        var malformed = With("""{"agentMessaging":{"allowAllTargetSessions":["",true]}}""").Settings;
+        Assert.Empty(malformed.AgentMessaging.AllowAllTargetSessions);
+        Assert.Contains(malformed.AgentMessagingProblems, p => p.Contains("allowAllTargetSessions", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Switching_remote_agent_messaging_off_takes_effect_on_the_next_read_without_a_restart_and_a_newer_file_is_off()
     {
         Assert.Equal(0, Run("config", "set", "agentMessaging.remote", "own-account"));
@@ -442,6 +457,11 @@ public sealed class HostSettingsTests : IDisposable
 
         Assert.Equal(0, Run("config", "set", "agentMessaging.remote", "off"));
         Assert.False(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
+        const string session = "11111111-1111-1111-1111-111111111111";
+        Assert.Equal(0, Run("config", "set", "agentMessaging.allowAllTargetSessions", """["11111111-1111-1111-1111-111111111111"]"""));
+        Assert.Equal([session], HostSettings.CurrentAgentMessaging(folder).AllowAllTargetSessions);
+        Assert.Equal(1, Run("config", "set", "agentMessaging.allowAllTargetSessions", """[""]"""));
+        Assert.Contains("Not written", Said);
 
         // config set refuses a value that would be read as off for being wrong.
         Assert.Equal(1, Run("config", "set", "agentMessaging.remote", "everyone"));

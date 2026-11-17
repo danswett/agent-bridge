@@ -10,10 +10,12 @@ namespace AgentBridge.Host.Core.AgentMessaging;
 //   remote           "off" (the default) or "own-account"
 //   allowAllTargets  false (the default) or true: whether own-agent text may enter an allow-all
 //                    session. Matters only while remote is "own-account"; otherwise such a
-//                    target falls back to Home Assistant. Not turned on anywhere.
+//                    target falls back to Home Assistant.
+//   allowAllTargetSessions [] (the default): exact session ids that may receive while the
+//                    allowAllTargets switch is on. Names and wildcards do not grant access.
 //
-// Fail closed: a value that is not exactly one of those, a section that is not an object, or a
-// file that cannot be read, is off. Installing or upgrading never writes either key.
+// Fail closed: an invalid switch, target list, section or file enables no allow-all targets.
+// Installing or upgrading never writes these keys.
 //
 // A change needs no restart: later slices call HostSettings.CurrentAgentMessaging(folder) per message, which reads
 // the file afresh, so switching to off holds from the next message and loses none (a message
@@ -27,6 +29,7 @@ public sealed record AgentMessagingSettings
 
     public string Remote { get; init; } = Off;
     public bool AllowAllTargets { get; init; }
+    public IReadOnlyList<string> AllowAllTargetSessions { get; init; } = [];
 
     public bool RemoteEnabled => Remote == OwnAccount;
 
@@ -50,6 +53,25 @@ public sealed record AgentMessagingSettings
         {
             if (all.ValueKind is JsonValueKind.True or JsonValueKind.False) { settings = settings with { AllowAllTargets = all.ValueKind == JsonValueKind.True }; }
             else { problems.Add("agentMessaging.allowAllTargets is not true or false, so own agents may not type into allow-all sessions"); }
+        }
+        if (s.TryGetProperty("allowAllTargetSessions", out var targets) && targets.ValueKind != JsonValueKind.Null)
+        {
+            if (targets.ValueKind != JsonValueKind.Array) { problems.Add("agentMessaging.allowAllTargetSessions is not a list, so no allow-all sessions are enabled"); }
+            else
+            {
+                var sessions = new List<string>();
+                foreach (var entry in targets.EnumerateArray())
+                {
+                    if (entry.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(entry.GetString()))
+                    {
+                        problems.Add("agentMessaging.allowAllTargetSessions contains an empty or non-string entry; it is ignored");
+                        continue;
+                    }
+                    var id = entry.GetString()!;
+                    if (!sessions.Contains(id, StringComparer.Ordinal)) { sessions.Add(id); }
+                }
+                settings = settings with { AllowAllTargetSessions = sessions };
+            }
         }
         // allowAllTargets counts only in own-account mode, so it reads false otherwise.
         if (!settings.RemoteEnabled) { settings = settings with { AllowAllTargets = false }; }

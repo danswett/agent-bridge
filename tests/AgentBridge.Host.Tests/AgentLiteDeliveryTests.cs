@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using AgentBridge.AgentEnvelope;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.AgentMessaging;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Lite;
 using AgentBridge.Protocol;
@@ -19,6 +20,7 @@ public sealed class AgentLiteDeliveryTests
     {
         public SessionStatus Status = SessionStatus.Idle;
         public bool Exists = true, FlipAfterFirstGet, AllowAllTargets;
+        public string[] AllowAllTargetSessions = [];
         public string[] Rows = EmptyBox;
         public int Gets;
         public AnswerOutcome Outcome = AnswerOutcome.Delivered;
@@ -29,7 +31,15 @@ public sealed class AgentLiteDeliveryTests
         int reads;
         public readonly List<ReplyRequest> Typed = []; public readonly List<string> Log = [];
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches = new();
-        public LiteDeliver Build() => new([new ForcedAskGate(Launches, () => AllowAllTargets)], this, this, this, Log.Add, Clock);
+        public LiteDeliver Build() => new([
+            new ForcedAskGate(Launches),
+            new AllowlistedAllTargetsGate(Launches, () => new AgentMessagingSettings
+            {
+                Remote = AgentMessagingSettings.OwnAccount,
+                AllowAllTargets = AllowAllTargets,
+                AllowAllTargetSessions = AllowAllTargetSessions
+            })
+        ], this, this, this, Log.Add, Clock);
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public IReadOnlyList<Session> Snapshot() => []; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -87,7 +97,26 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await Send(f));
         Assert.Empty(f.Typed);
         f.AllowAllTargets = true;
-        Assert.Equal(permissions is not null, (await Send(f)).Typed);
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await Send(f));
+        Assert.Empty(f.Typed);
+    }
+    [Fact]
+    public async Task An_allow_all_session_requires_its_exact_listed_identity_and_audits_without_message_text()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.AllowAll);
+        const string text = "private relay message that must not enter the audit";
+        f.AllowAllTargetSessions = ["*", "Copilot display name"];
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await Send(f, text));
+        Assert.Empty(f.Typed);
+        Assert.Contains(f.Log, l => l.Contains("notReplyTarget", StringComparison.Ordinal));
+        Assert.DoesNotContain(f.Log, l => l.Contains(text, StringComparison.Ordinal));
+
+        f.AllowAllTargetSessions = [Target];
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await Send(f, text));
+        f.AllowAllTargets = true;
+        Assert.True((await Send(f, text)).Typed);
+        Assert.Contains(f.Log, l => l.Contains("typed", StringComparison.Ordinal));
+        Assert.DoesNotContain(f.Log, l => l.Contains(text, StringComparison.Ordinal));
     }
     [Fact]
     public async Task An_unknown_session_is_refused_with_nothing_typed()
@@ -138,7 +167,7 @@ public sealed class AgentLiteDeliveryTests
         var replier = new ReplyService(gate, f, home.Processes, new NoBridge(), new NoGuard(), f,
             new ReplyOptions { CopilotHome = home.CopilotHome, PlatformSupported = true, PreRead = false,
                 ConfirmTimeout = TimeSpan.FromSeconds(1), PollInterval = TimeSpan.FromMilliseconds(10) });
-        var deliver = new LiteDeliver([new ForcedAskGate(f.Launches, () => false)], f, replier, f, f.Log.Add);
+        var deliver = new LiteDeliver([new ForcedAskGate(f.Launches)], f, replier, f, f.Log.Add);
         await gate.WaitToTypeAsync();
         Task<LiteDelivery>? delivery = null;
         Task<ReplyResult>? reply = null;
