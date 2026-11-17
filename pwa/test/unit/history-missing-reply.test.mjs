@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HistoryStore } from '../../js/history-store.js';
 import { HISTORY, readHistoryResult } from '../../js/history.js';
-import { shownParts } from '../../js/ui/history-view.js';
+import { historyPlan, shownParts } from '../../js/ui/history-view.js';
 import { readSession } from '../../js/protocol.js';
 
 const A = { id: 'a', at: '2026-11-11T06:37:19Z', prompt: { text: 'Question A', from: 'person' },
@@ -23,6 +23,23 @@ async function setup() {
     hold: () => { let release; pending = new Promise((resolve) => { release = resolve; }); return () => { pending = null; release(); }; } };
 }
 const settle = () => new Promise(setImmediate);
+
+test('a later reply in the same turn preserves the first answer in the visible conversation', async () => {
+  const { store, serve } = await setup();
+  const first = { id: 'first', kind: 'response', text: 'First answer' };
+  const later = { id: 'later', kind: 'response', text: 'Background result' };
+  serve([{ ...A, parts: [first] }]);
+  store.live('h', said(A, first.text));
+  await store.open('h', 's');
+
+  serve([{ ...A, parts: [first, later] }]);
+  store.live('h', said(A, later.text));
+  await settle();
+  const snapshot = store.get('h', 's');
+  const plan = historyPlan(snapshot, A.id);
+  assert.deepEqual(plan.turns.flatMap((turn) => shownParts(turn).filter((p) => p.kind === 'response').map((p) => p.text)),
+    ['First answer', 'Background result']);
+});
 
 test('capped turns replace moved reply ids whole without overriding host budget drops', async () => {
   const { store, serve } = await setup();
