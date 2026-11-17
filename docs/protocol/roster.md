@@ -162,10 +162,14 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
   A known-only machine uses this socket `online` flag even before it publishes; a held
   record's liveness still takes precedence. Older relays can omit the flag.
 * **Allow-list.** A record is `v, machine, epoch, seq, at, truncated, total, sessions, sig`; a
-  session is `id, node, name, state, since` (`state`: `working`, `waiting`, `idle`, `ending`;
+  session is `id, node, name, state, since, role, startedAt` (`state`: `working`, `waiting`, `idle`, `ending`;
   name at most 64 printable ASCII characters; at most 64 sessions). Any other member, such as
   a prompt, a question, a path or a token, refuses the whole record. Time in state is now minus
   `since`.
+  Optional `role` is the host's persisted launch role (`one-shot`, `lead`, `preserved`);
+  unknown values refuse the record. `fleet.list` and verified `fleet.find` preserve it,
+  ignoring a caller-supplied role. Missing roles never imply a one-shot worker.
+  The publisher's optional `startedAt` is accepted only as a UTC second (`yyyy-MM-ddTHH:mm:ssZ`).
 * **Same account only; memory only.** Records are never logged, never in the roster blob, and
   are dropped when the host's socket closes. `online` is false, and `record` null, when the host
   is gone or has sent nothing for 60 seconds.

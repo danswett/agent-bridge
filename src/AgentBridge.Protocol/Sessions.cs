@@ -384,6 +384,7 @@ public sealed record Session
     public string? Repository { get; init; }
     public string? Branch { get; init; }
     public string? Model { get; init; }
+    public string? Role { get; init; }
     // The agent's own option ids for effort and context (v1-launch.md), when the host reports them: absent,
     // never empty, and absent when longer than Limits.OptionId. Older hosts send neither; older clients ignore them.
     public string? Effort { get => effort; init => effort = OptionId(value); }
@@ -440,6 +441,11 @@ public sealed record Session
 
     // The list and event form: everything but the tool history.
     public Session WithoutHistory() => Activity.History is null ? this : this with { Activity = Activity with { History = null } };
+}
+
+public static class SessionRoles
+{
+    public static string? Known(string? role) => role is "one-shot" or "lead" or "preserved" ? role : null;
 }
 
 // session.attention (#800, v1-sessions.md "Attention"). Which fields a kind uses is the spec's;

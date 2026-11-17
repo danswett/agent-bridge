@@ -22,6 +22,13 @@ clients restart paging without `before` and merge by turn id.
 
 ## Rules for every message
 
+`sessions.list` and `session.get` may include a host-owned `role`: `one-shot`, `lead`,
+or `preserved`. It comes only from `LaunchRequest.Role`, durably bound to the launched
+session and process incarnation, never from workspace metadata or a session edit.
+Absent, legacy, unknown, unbound or conflicting roles confer no self-stop eligibility.
+Only the explicit `one-shot` role can be considered for a separately admitted self-stop
+grant; a role alone never grants a stop. Resuming without a recognized role fails closed.
+
 * JSON, UTF-8, `camelCase` names. A field that is absent and one that is `null` mean
   the same thing. Text in the Basic Multilingual Plane, accented letters and CJK
   included, is sent as raw UTF-8, not as `\u` escapes. Characters outside it, which are

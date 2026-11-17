@@ -285,12 +285,16 @@ public sealed class SessionService
             case "load.get" or "load.subscribe" or "load.unsubscribe" when LoadEnabled() && Load is not null && channel is SecureChannel:
                 return await Load.HandleAsync(channel, op);
             case Ops.SessionsList:
-                return source.List(String(data, "cursor"));
+                var page = source.List(String(data, "cursor"));
+                var sessions = Paging.Pages(page.Sessions.Select(WithRole)).FirstOrDefault() ?? [];
+                return page with { Sessions = sessions, Next = sessions.Count < page.Sessions.Count
+                    ? (int.Parse(String(data, "cursor") ?? "0", System.Globalization.CultureInfo.InvariantCulture) + sessions.Count)
+                        .ToString(System.Globalization.CultureInfo.InvariantCulture) : page.Next };
             case Ops.SessionGet:
                 {
                     var id = String(data, "id") ?? throw new ArgumentException("session.get needs an id");
                     if (String(data, "agent") is { } agent) { return (object?)await source.GetAgentAsync(id, agent) ?? new { missing = true }; }
-                    return (object?)source.Get(id) ?? new { missing = true };
+                    return source.Get(id) is { } session ? WithRole(session) : new { missing = true };
                 }
             case Ops.SessionsSubscribe:
                 return await SubscribeAsync(channel, data);
@@ -302,6 +306,11 @@ public sealed class SessionService
                 return null;
         }
     }
+
+    Session WithRole(Session session) => SessionBudget.Fit(session with
+    {
+        Role = SessionRoles.Known(launcher?.RoleOf(session.Id, source.ProcessOf(session.Id))),
+    });
 
     // session.history (docs/protocol/v1-history.md), read strictly as every request a client sends:
     // a request with a field missing, of the wrong type or out of range fails as a request.
