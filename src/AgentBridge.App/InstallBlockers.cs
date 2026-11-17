@@ -33,7 +33,8 @@ static class InstallBlockers
             if (VelopackLocator.Current.RootAppDir is not { Length: > 0 } root) { return InstallationFiles.Unknown; }
             var current = Path.Combine(root, "current");
             if (!Directory.Exists(current)) { return InstallationFiles.Unknown; }
-            var files = Directory.EnumerateFiles(current, "*", SearchOption.AllDirectories).ToList();
+            var files = InstallationFiles.LockedImages(current).ToList();
+            if (files.Count == 0) { return null; }
             var own = Path.GetFullPath(root).TrimEnd('\\') + "\\";
             var held = Held(files).Select(p => (p.Pid, p.Name, p.Service, Image: ImagePath(p.Pid))).ToList();
             var found = held.Where(p => InstallHolder.Blocks(p.Pid, Environment.ProcessId, p.Image, own, p.Service)).ToList();
@@ -42,7 +43,7 @@ static class InstallBlockers
                 return held.Any(p => p.Pid != Environment.ProcessId && string.IsNullOrWhiteSpace(p.Image) && string.IsNullOrWhiteSpace(p.Service))
                     ? InstallationFiles.Unknown : null;
             }
-            var names = found.Take(MostNamed).Select(p => p.Service.Length > 0 ? $"{p.Name} ({p.Service}, pid {p.Pid})" : $"{p.Name} (pid {p.Pid})");
+            var names = found.Take(MostNamed).Select(p => $"{p.Name} ({(p.Service.Length > 0 ? p.Service + ", " : "")}pid {p.Pid}, {p.Image ?? "image path unavailable"})");
             return string.Join(", ", names) + (found.Count > MostNamed ? $" and {found.Count - MostNamed} more" : "");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception

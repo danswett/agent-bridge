@@ -548,6 +548,8 @@ public sealed class HostManager
     // (#1092: a service holding a file made a retry loop that dropped the relay every 3 minutes).
     public async Task WaitForInstallationFilesAsync(Func<string?>? preflight, Action<string>? waiting = null, TimeProvider? time = null, InstallationFiles.Budget? fileBudget = null)
     {
+        fileBudget ??= new InstallationFiles.Budget(time ?? Time);
+        fileBudget.LockedFiles ??= () => InstallationFiles.LockedImages(layout.AppFolder);
         if (await InstallationFiles.AwaitReleaseAsync(preflight, time ?? Time, quit.Token, waiting, Log, fileBudget) is { } blockers)
         {
             throw new UpdateBlockedException(blockers);
@@ -613,6 +615,7 @@ public sealed class HostManager
 
     public async Task CheckInstallationFilesAsync(Func<string?>? preflight, InstallationFiles.Budget budget)
     {
+        budget.LockedFiles ??= () => InstallationFiles.LockedImages(layout.AppFolder);
         if (await budget.ProbeOnceAsync(preflight, quit.Token) is { } blockers) { throw new UpdateBlockedException(blockers); }
     }
 
