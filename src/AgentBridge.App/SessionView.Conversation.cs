@@ -20,7 +20,7 @@ namespace AgentBridge.App;
 // alone would keep the offset, not the block.
 public sealed partial class SessionView
 {
-    ConversationItems blocks = [];
+    readonly ConversationItems blocks = [];
     // What the list was last made from, so a card's every change doesn't parse its response again.
     SessionCardViewModel? blocksOf;
     string? blocksFrom;
@@ -61,11 +61,7 @@ public sealed partial class SessionView
         blocksOf = card;
         blocksFrom = from;
         IReadOnlyList<MdBlock> next = from is null ? [] : MarkdownModel.Parse(from);
-        if (reset || !ConversationBlocks.Update(blocks, next))
-        {
-            blocks = new ConversationItems(next.Select(b => new ConversationBlock(b)));
-            ConversationList.ItemsSource = blocks;
-        }
+        ConversationBlocks.Update(blocks, next);
         // Indexes have moved: the anchor taken again once the list has laid them out.
         anchor = null;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, TakeAnchor);

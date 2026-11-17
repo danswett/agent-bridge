@@ -1142,6 +1142,15 @@ separate, explicit step ([migration.md](migration.md)).
 
 ## The app
 
+**Live reply continuity** ([issue 2738](https://github.com/danswett/agent-bridge/issues/2738)):
+the conversation binds its block collection once. A first reply, an unrelated replacement,
+and the empty interval while a queued turn waits for its own answer update that collection
+with individual changes, never an `ItemsSource` replacement or collection reset. Matching
+blocks retain their identities; a wholly different nonempty reply does not temporarily
+empty the collection. The Windows self-test checks source identity and a visible Markdown
+container after these transitions. This fixes a reset trigger, not a confirmed diagnosis
+of the reported app/host version skew; paging and installed-app recovery remain separate.
+
 **Closed-question projection** (#1329, model slice): `HistoryDraw.Rows` can opt in to
 mixed response/question items with a per-session closed-record cache and the current
 question's id. It retains the latest 20 records in host order, including the latest

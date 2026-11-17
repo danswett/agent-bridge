@@ -62,12 +62,19 @@ public static class ConversationBlocks
     // top of the viewport in place (KeepItemsInView). A response that grew keeps its head; one that
     // lost its earliest blocks (cut at the start to fit, SessionBudget) keeps the rest, the cut
     // falling between two blocks alike or partway through what is now its first block included.
-    // The longest run of blocks kept wins, the first found of two as long. False, with nothing
-    // changed, when nothing can be kept: the caller replaces the items whole, in one reset rather
-    // than an add for each block. Otherwise one change for each block removed or added, the fewest
-    // the list takes short of a reset, which would lose its realised blocks and its place; over
-    // ConversationItems none of them moves another block, so a cut of any size is linear.
-    public static bool Update(Collection<ConversationBlock> shown, IReadOnlyList<MdBlock> next) => Update(shown, next, Same);
+    // The longest run of blocks kept wins, the first found of two as long. False means no block
+    // could be kept, not that the source should be replaced: even a wholly new reply updates the
+    // bound collection without a reset, which would discard the list's realised blocks and place.
+    // Over ConversationItems, changes at either end move no other blocks.
+    public static bool Update(Collection<ConversationBlock> shown, IReadOnlyList<MdBlock> next)
+    {
+        if (Update(shown, next, Same)) { return true; }
+        var common = Math.Min(shown.Count, next.Count);
+        for (var i = 0; i < common; i++) { shown[i] = new ConversationBlock(next[i]); }
+        for (var i = shown.Count - 1; i >= next.Count; i--) { shown.RemoveAt(i); }
+        for (var i = common; i < next.Count; i++) { shown.Add(new ConversationBlock(next[i])); }
+        return false;
+    }
 
     // Linear in the blocks, never quadratic on repeated text (4,096 paragraphs alike once made 16.8
     // million comparisons on the UI thread): how far each shown block runs alike with next, from

@@ -38,6 +38,7 @@ public sealed partial class SessionView : UserControl
     public SessionView()
     {
         InitializeComponent();
+        ConversationList.ItemsSource = blocks;
         ReplyBox.TextCompositionStarted += (_, _) => replyComposing = true;
         ReplyBox.TextCompositionEnded += (_, _) => replyComposing = false;
         HistoryRows.ItemsSource = historyShown;
