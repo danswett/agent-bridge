@@ -5,6 +5,20 @@ namespace AgentBridge.App.Tests;
 public sealed class ConversationEndPinTests
 {
     [Fact]
+    public void A_question_or_screen_reader_bring_request_keeps_its_destination_above_the_end()
+    {
+        var view = new SessionView();
+        view.Follow();
+        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Parent = view.Scroller });
+        view.Scroller.VerticalOffset = 50;
+        view.Scroller.ScrollableHeight = 300;
+        view.StopScrolling();
+        view.Follow();
+        Assert.False(view.Pinned);
+        Assert.Equal([200.0], view.Scroller.Targets);
+    }
+
+    [Fact]
     public void A_rejected_end_correction_can_retry_on_the_next_layout()
     {
         var view = new SessionView();

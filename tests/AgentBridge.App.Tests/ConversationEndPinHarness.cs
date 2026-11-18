@@ -11,6 +11,13 @@ namespace Microsoft.UI.Xaml
         public static readonly object PointerPressedEvent = new();
         public static readonly object PointerWheelChangedEvent = new();
         public bool IsLoaded { get; init; } = true;
+        public event Action<UIElement, BringIntoViewRequestedEventArgs>? BringIntoViewRequested;
+        public void Bring(UIElement target) => BringIntoViewRequested?.Invoke(this, new(target));
+    }
+
+    public sealed class BringIntoViewRequestedEventArgs(UIElement target) : EventArgs
+    {
+        public UIElement TargetElement => target;
     }
 }
 
