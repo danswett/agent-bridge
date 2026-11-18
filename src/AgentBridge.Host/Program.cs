@@ -942,7 +942,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // Only now: a host stopped while starting, whose pipe the app could not reach, must start no
     // usage probe it would cut short on its way out, past the app's probe hold (#238 review).
     usageMonitor?.Start();
-    await using var reaper = AgentBridge.Host.Reaping.SessionReaperHost.Create(identity.Folder, machine.Id, source, Log, stop.Token);
+    await using var reaper = AgentBridge.Host.Reaping.SessionReaperHost.Create(identity.Folder, machine.Id, source, Log, stop.Token, stops, ServeReadOnly);
     reaper.Start();
     var hostVersion = HostVersion();
     diagnosticsJournal.Record(JournalEvents.HostStarted(hostVersion));

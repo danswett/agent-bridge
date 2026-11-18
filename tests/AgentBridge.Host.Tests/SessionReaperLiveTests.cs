@@ -1,0 +1,126 @@
+using System.Security.Cryptography;
+using AgentBridge.Host.Core.Usage;
+using AgentBridge.Host.Reaping;
+using AgentBridge.Protocol;
+using Microsoft.Extensions.Time.Testing;
+using Xunit;
+
+public sealed class SessionReaperLiveTests : IAsyncLifetime
+{
+    readonly string folder = Path.Combine(Path.GetTempPath(), "ab-reaper-live-" + Guid.NewGuid().ToString("N"));
+    readonly FakeTimeProvider clock = new(DateTimeOffset.Parse("2026-11-18T05:00:00Z"));
+    readonly List<string> log = [];
+    public Task InitializeAsync() { Directory.CreateDirectory(folder); return Task.CompletedTask; }
+    public Task DisposeAsync() { Directory.Delete(folder, true); return Task.CompletedTask; }
+
+    [Theory]
+    [InlineData(StopOutcome.Ended)]
+    [InlineData(StopOutcome.Confirm)]
+    [InlineData(StopOutcome.Failed)]
+    [InlineData(StopOutcome.Busy)]
+    public async Task Approved_live_uses_one_existing_stop_and_permanent_local_intent_survives_restart(StopOutcome outcome)
+    {
+        var config = new SessionReaperSettings { Live = true, MachineId = "fixture-vm", IsVm = true, OwnerLaptop = false };
+        var calls = 0;
+        Task<ReaperSnapshot> Read(CancellationToken _) => Task.FromResult(SessionReaperPolicyTests.Snapshot(SessionReaperPolicyTests.Builder()));
+        SessionReaperService Make() => new(folder, "fixture-vm", Read, () => config, log.Add, clock)
+        {
+            CanEnd = () => true,
+            End = (_, request, _) => { Assert.Null(request.Confirm); calls++; return outcome == StopOutcome.Busy
+                ? throw new IOException("fixture uncertain stop") : Task.FromResult(new StopResult(outcome)); },
+        };
+        await using var first = Make();
+        var dry = Assert.IsType<SessionReaperReceipt>(await first.CycleAsync());
+        Assert.Equal(0, calls);
+        var path = Path.Combine(folder, "reaper", "receipts", dry.Id + ".json");
+        config = config with { ApprovedReceipt = dry.Id + ".json", ApprovedSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))) };
+        config = config with { Live = false };
+        Assert.Equal("dry-run", (await first.CycleAsync())!.Mode); Assert.Equal(0, calls);
+        config = config with { Live = true };
+        var live = Assert.IsType<SessionReaperReceipt>(await first.CycleAsync());
+        Assert.Equal(1, calls);
+        Assert.Equal(outcome == StopOutcome.Ended ? 1 : 0, live.Ended.Count);
+        await using var restarted = Make();
+        await restarted.CycleAsync();
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task Changed_evidence_and_unavailable_approval_never_reach_the_stop()
+    {
+        var config = new SessionReaperSettings { Live = true, MachineId = "fixture-vm", IsVm = true, OwnerLaptop = false };
+        var reads = 0;
+        await using var service = new SessionReaperService(folder, "fixture-vm", _ =>
+        {
+            var row = SessionReaperPolicyTests.Builder();
+            return Task.FromResult(SessionReaperPolicyTests.Snapshot(++reads >= 4 ? row with { AskingQuestion = true } : row));
+        }, () => config, log.Add, clock)
+        { CanEnd = () => true, End = (_, _, _) => throw new InvalidOperationException("must not stop") };
+        var dry = Assert.IsType<SessionReaperReceipt>(await service.CycleAsync());
+        var path = Path.Combine(folder, "reaper", "receipts", dry.Id + ".json");
+        config = config with { ApprovedReceipt = dry.Id + ".json", ApprovedSha256 = new('0', 64) };
+        Assert.Equal("dry-run", (await service.CycleAsync())!.Mode);
+        config = config with { ApprovedSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))) };
+        var result = (await service.CycleAsync())!;
+        Assert.Empty(result.Ended);
+        Assert.Contains(result.Kept, row => row.Reason.Contains("question"));
+    }
+
+    [Fact]
+    public async Task Git_proves_same_name_remote_ancestry_without_tracking_and_rechecks_do_not_fetch_again()
+    {
+        File.WriteAllText(Path.Combine(folder, ".git"), "fixture");
+        var runner = new FakeGit(folder);
+        var git = new SessionReaperGit(runner, log.Add);
+        Assert.True((await git.ReadAsync(folder, default))!.Contained);
+        Assert.True((await git.ReadAsync(folder, default))!.Contained);
+        Assert.Equal(1, runner.Fetches);
+        runner.Dirty = true;
+        Assert.Null(await git.ReadAsync(folder, default));
+    }
+
+    sealed class FakeGit(string folder) : ICommandRunner
+    {
+        public int Fetches; public bool Dirty; public string Mode = "";
+        public Task<CommandResult> RunAsync(string program, IReadOnlyList<string> args, TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            Assert.DoesNotContain("@{upstream}", args);
+            if (args.Contains("fetch")) { Fetches++; }
+            if (args.Contains("fetch") && Mode == "absent" || args.Contains("merge-base") && Mode == "diverged")
+                return Task.FromResult(new CommandResult(true, false, 1, ""));
+            var text = args.Contains("--absolute-git-dir") ? folder : args.Contains("symbolic-ref") ? "fixture"
+                : args.Contains("--porcelain=v1") ? Dirty ? "?? private" : "" : args.Contains("stash") && Mode == "stash" ? new('a', 40)
+                : args.Contains("stash") || args.Contains("fetch") || args.Contains("merge-base") ? ""
+                : args.Contains("refs/remotes/origin/fixture") ? new('b', 40) : new string('a', 40);
+            return Task.FromResult(new CommandResult(true, false, 0, text));
+        }
+    }
+
+    [Theory]
+    [InlineData("absent")]
+    [InlineData("diverged")]
+    [InlineData("stash")]
+    [InlineData("operation")]
+    [InlineData("index.lock")]
+    public async Task Missing_remote_unpublished_stash_and_mid_operation_proof_are_refused(string mode)
+    {
+        File.WriteAllText(Path.Combine(folder, ".git"), "fixture");
+        if (mode is "operation" or "index.lock") { File.WriteAllText(Path.Combine(folder, mode == "operation" ? "MERGE_HEAD" : mode), "fixture"); }
+        Assert.Null(await new SessionReaperGit(new FakeGit(folder) { Mode = mode }, log.Add).ReadAsync(folder, default));
+        Assert.NotEmpty(log);
+    }
+
+    [Fact]
+    public void Native_tools_are_not_inferred_from_idle_and_missing_custody_stays_unknown()
+    {
+        var session = new Session { Id = "fixture", Agent = AgentKind.Copilot, Title = "SG Reviewer fixture",
+            Status = SessionStatus.Idle, StatusSince = clock.GetUtcNow().AddHours(-1), UpdatedAt = clock.GetUtcNow(),
+            Activity = new() { Response = "VERDICT CLEAN", Background = new() { Shells = 1 } } };
+        var row = SessionReaperHost.Native(session, "fixture-vm", clock.GetUtcNow());
+        Assert.Equal(1, row.RunningTools);
+        Assert.Null(row.Held); Assert.Null(row.Private); Assert.Null(row.Keep);
+        Assert.Null(row.OpenOwnedPr); Assert.Null(row.WorkComplete);
+        Assert.Equal(ReaperVerdict.Clean, row.Verdict);
+        Assert.Null(SessionReaperHost.Native(session with { Activity = new() { Response = "VERDICT CLEAN\nVERDICT NOT CLEAN" } }, "fixture-vm", clock.GetUtcNow()).Verdict);
+    }
+}
