@@ -812,6 +812,9 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
 
 ## 5. Coverage, timing, flakes and reports
 
+`pwsh quality/main-queue.ps1 -Count 10` reads the last N main push CI runs (1-100), using only attempt one's run/job timestamps; the caller supplies the job's read-only `GH_TOKEN`.
+It prints run/plan starts in PT, queue wait and total minutes (`-Json` for ISO timestamps); missing plan/unfinished totals stay unknown. No schedule, network writes or gate is added.
+
 - **Coverage** (collected since #363, no gates yet): the `dotnet-coverage` tool (Cobertura,
   pinned in `.config/dotnet-tools.json`) around `dotnet test` for .NET, with no test project
   changed. Node's built-in coverage for the PWA's unit tests, later Playwright's V8 coverage,

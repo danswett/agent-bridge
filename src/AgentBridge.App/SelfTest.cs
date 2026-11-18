@@ -22,10 +22,13 @@ static partial class SelfTest
     public static async Task RunAsync(MainWindow window, MainViewModel main, LaunchViewModel launch, string outFile, DemoHost demo, DemoHost remote, Action<int> exit)
     {
         var result = new Dictionary<string, object?>();
+        var timings = new SelfTestTimings();
+        timings.Boundary("display and sessions");
         var checks = new List<string>();
         var failures = new List<string>();
         void Check(bool ok, string what)
         {
+            timings.Check(what);
             (ok ? checks : failures).Add(what);
             if (!ok) { AppLog.Write($"self-test: failed: {what}; {ForegroundOwner()}"); }
         }
@@ -97,9 +100,11 @@ static partial class SelfTest
             await CheckCodeBlocks(window, Check, outFile);
             await CheckUnparsableMarkdown(window, Check);
             // Written down first: without its fix, the next check ends the process (0xC000027B).
-            await Write(outFile, result, checks, failures, "a word too long for WinUI's text layout");
+            timings.Boundary("a word too long for WinUI's text layout");
+            await Write(outFile, result, checks, failures, "a word too long for WinUI's text layout", timings);
             await CheckLongWords(window, Check);
-            await Write(outFile, result, checks, failures, null);
+            timings.Boundary("feedback and navigation");
+            await Write(outFile, result, checks, failures, null, timings);
             await CheckFeedbackEntry(window, Check);
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
@@ -283,6 +288,7 @@ static partial class SelfTest
             Check(again is not null && ById<Button>(again, "Option:approve") is { IsEnabled: true }, "still shows a question's choices on a session chosen again after the tabs change");
             Check(settled && shown > hidden && hidden >= 0, $"a row's control listens while shown and lets go when hidden, however often the tabs change ({hidden} listeners hidden: {hiddenBy}; {shown} shown: {shownBy}; {Listeners(watched)} after five more changes: {ListenersBy(watched)})");
 
+            timings.Boundary("panes and history");
             await CheckPanes(window, main, Check, outFile);
             await CheckDividers(window, main, Check, outFile);
             await CheckMachineTabs(window, main, Check, outFile);
@@ -295,6 +301,7 @@ static partial class SelfTest
             await CheckHistoryScrollBudget(window, main, demo, Check, result);
 
             // Launch a session from the Launch page: it starts, its row appears, and Open goes to it.
+            timings.Boundary("launch and messages");
             window.ShowPage("launch");
             var ready = await Until(() => launch.ShowForm && launch.Machines.Count == 2 && ById<Button>(window.RootElement, "LaunchButton") is { IsEnabled: true }, TimeSpan.FromSeconds(10));
             Check(ready, "offers both machines on the Launch page");
@@ -374,6 +381,7 @@ static partial class SelfTest
             Resize(window, 1440, 1000);
             main.Selected = main.AllCards.First(c => c.Id == "demo-approval");
             await Task.Delay(700);
+            timings.Boundary("machines and themes");
             await CheckMachinesPage(window, main, Check, outFile);
             await CheckMachineHeld(window, main, remote, Check, outFile);
             await CheckResumeHeld(window, launch, remote, Check, outFile);
@@ -383,9 +391,11 @@ static partial class SelfTest
             await ShowADelegate(window, main, Check);
             await CheckPagesInEveryTheme(window, Check, outFile);
             AppLog.Write("self-test: sign-in");
+            timings.Boundary("sign-in");
             await CheckSignIn(window, main, remote, Check, outFile);
             await CaptureSignIn(window, main, remote, Check, outFile);
             AppLog.Write("self-test: update captures");
+            timings.Boundary("update captures and progress");
             await CaptureUpdate(window, main, Check, outFile);
             // The receipt's states (ui.md §6.5) in each theme and at the narrowest width; high
             // contrast's pass draws them too.
@@ -396,10 +406,12 @@ static partial class SelfTest
             await ShowADelegate(window, main, Check);
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
-            await Write(outFile, result, checks, failures, "high contrast");
+            timings.Boundary("high contrast");
+            await Write(outFile, result, checks, failures, "high contrast", timings);
             await CheckHighContrast(window, main, launch, demo, remote, Check, outFile, result);
             // Last, as it adds sessions every check above counts without (#765).
-            await Write(outFile, result, checks, failures, "live resize");
+            timings.Boundary("live resize");
+            await Write(outFile, result, checks, failures, "live resize", timings);
             await MeasureResize(window, main, demo, Check, outFile, result);
         }
         catch (Exception e)
@@ -407,13 +419,14 @@ static partial class SelfTest
             failures.Add($"crashed: {e}");
         }
         if (display is not null) { await display.EndAsync(); }
+        timings.Finish();
         // Written again if a failure arrived while it was written (a resource reference failing as
         // a theme settles), so the file always says why the run failed.
         int written;
         do
         {
             written = failures.Count;
-            await Write(outFile, result, checks, failures, null);
+            await Write(outFile, result, checks, failures, null, timings);
         }
         while (failures.Count != written);
         var code = failures.Count == 0 ? 0 : 1;
@@ -422,11 +435,12 @@ static partial class SelfTest
     }
 
     // The result file. unfinished: the check under way, when written part-way through.
-    static async Task Write(string outFile, Dictionary<string, object?> result, List<string> checks, List<string> failures, string? unfinished)
+    static async Task Write(string outFile, Dictionary<string, object?> result, List<string> checks, List<string> failures, string? unfinished, SelfTestTimings timings)
     {
         result["passed"] = checks;
         result["failed"] = failures;
         result["unfinished"] = unfinished;
+        timings.AddTo(result);
         Directory.CreateDirectory(Path.GetDirectoryName(outFile)!);
         await File.WriteAllTextAsync(outFile, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }

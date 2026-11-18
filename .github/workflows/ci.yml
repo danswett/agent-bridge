@@ -669,6 +669,11 @@ jobs:
         shell: pwsh
         # build/app-self-test.ps1 says how the app ended when it did not end with 0 (#240).
         run: ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest/result.json" -TimeoutSeconds 720
+      - name: Self-test timing summary
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: ./quality/self-test-summary.ps1 -Result "$env:RUNNER_TEMP/selftest/result.json"
       - name: The release would publish (dry run)
         # What the publish job would upload, publish and prune, against the repository's real
         # releases, with vpk reading the folder into a scratch feed. Read-only: nothing is uploaded.
@@ -833,6 +838,11 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: ./build/test-app-self-test-cause.ps1 -Evidence "$env:RUNNER_TEMP/selftest/installed/app-exit-cause.json"
+      - name: Installed self-test timing summary
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: ./quality/self-test-summary.ps1 -Result "$env:RUNNER_TEMP/selftest/installed/result.json"
       - name: Stage named installed self-test text, never WER dumps or archives
         if: always()
         id: installed-selftest-text
