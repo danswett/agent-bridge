@@ -1,10 +1,11 @@
 # Native APNs registration contract (#2438)
 
 This specifies `push.apns`, separately from browser `push`. See the accepted
-[native delivery design](../design/ios-push-path.md). A1 defines parsing only:
-no host advertises this capability yet, and no sender or delivery proof is added.
+[native delivery design](../design/ios-push-path.md). Hosts with notifications
+enabled advertise enrollment on secure relay channels. No native sender or
+delivery proof is added.
 
-| Operation | Request data | Result when implemented |
+| Operation | Request data | Result |
 |---|---|---|
 | `push.apns.subscribe` | `token`, `target`, `keyId`, `keys`; optional `device` | `PushSubscribeResult`, native subscription count |
 | `push.apns.unsubscribe` | `target` | `PushUnsubscribeResult`, this channel device/target only |
@@ -25,12 +26,20 @@ It selects deployment configuration, never a URL or caller-supplied APNs topic.
 P-256 point; `keys.auth` is 16 bytes. All three are canonical unpadded base64url.
 The app's background encryption material is distinct from identity/provider keys.
 
-Only `ApnsPushRequest.Read` constructs a validated command. Account membership,
-person grants, target authorization, persistence and revocation remain A2/A3;
-successful parsing is not enrollment. List entries reuse `PushDevice`, with
+Only `ApnsPushRequest.Read` constructs a validated command, including for list
+and unsubscribe. Enrollment requires the channel device to belong to the host's
+current account; with pinning enabled, its full authenticated key must have a
+current person grant. Caller identity fields never substitute for that key.
+Registrations replace by channel device/target, persist separately from browser
+subscriptions, and are cleared on account change or loss of the person grant.
+Native storage is independently bounded to 16 registrations, evicting the oldest
+other registration. Unsubscribe affects only the caller's device/target.
+List entries reuse `PushDevice`, with
 `service` = `apns:<target>`; no token, key ID or keys are returned.
 Unsupported hosts/clients refuse native operations, never downgrade to Web Push.
 Browser request/result shapes and their capability remain unchanged.
+Target-to-provider configuration and sending remain later slices; accepting
+registration is not evidence that a target can deliver.
 
 [Shared operation vectors](examples/push-apns.json) use markers for generated
 synthetic token/key material, never OS tokens or credentials. C# replays them in

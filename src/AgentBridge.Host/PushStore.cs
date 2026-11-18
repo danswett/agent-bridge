@@ -11,6 +11,12 @@ public sealed record PushSubscriber(string Device, string Name, string Endpoint,
     public PushSubscription Subscription => new(Endpoint, P256dh, Auth);
 }
 
+public sealed record ApnsRegistration(string Device, string Name, string Target, string Token, string KeyId, string P256dh, string Auth,
+    DateTimeOffset Since, TrustedPeerLease? Grant = null)
+{
+    public override string ToString() => $"ApnsRegistration {{ Device = {Device}, Target = {Target} }}";
+}
+
 // The push subscriptions this host holds, kept in the profile's own folder
 // (push-subscriptions.json beside the device key), never agent-ha-bridge's. They persist so
 // a host that restarts can still reach a phone whose app is closed: the phone has no reason
@@ -31,13 +37,15 @@ public sealed class PushStore
     readonly Action<string> log;
     readonly object gate = new();
     readonly Dictionary<string, PushSubscriber> byDevice = new(StringComparer.Ordinal);
+    readonly Dictionary<(string Device, string Target), ApnsRegistration> apns = [];
     // When each sign-in notice (PushNotice.SignInKey, which names no account) last went, so a host
     // that restarts while sessions still need sign-in keeps to the hourly repeat: a machine stopped
     // on a 401 reads idle, takes every update, and re-alerted every phone with each one.
     readonly Dictionary<string, DateTimeOffset> signIns = new(StringComparer.Ordinal);
     string? account;
 
-    sealed record Saved(string? Account, List<PushSubscriber>? Subscribers, Dictionary<string, DateTimeOffset>? SignIns = null);
+    sealed record Saved(string? Account, List<PushSubscriber>? Subscribers, Dictionary<string, DateTimeOffset>? SignIns = null,
+        List<ApnsRegistration>? Apns = null);
 
     PushStore(string? path, string? account, Action<string>? log)
     {
@@ -64,6 +72,13 @@ public sealed class PushStore
             {
                 if (s is { Device: { Length: > 0 }, Endpoint: { Length: > 0 } }) { store.byDevice[s.Device] = s; }
             }
+            foreach (var s in saved.Apns ?? [])
+            {
+                if (s is { Device: { Length: > 0 }, Target: { Length: > 0 }, Token: { Length: > 0 }, KeyId: { Length: > 0 } })
+                {
+                    store.apns[(s.Device, s.Target)] = s;
+                }
+            }
             foreach (var (key, at) in saved.SignIns ?? []) { store.signIns[key] = at; }
         }
         else if (saved is not null)
@@ -77,7 +92,11 @@ public sealed class PushStore
 
     public int Count { get { lock (gate) { return byDevice.Count; } } }
 
+    public int ApnsCount { get { lock (gate) { return apns.Count; } } }
+
     public IReadOnlyList<PushSubscriber> All { get { lock (gate) { return [.. byDevice.Values.OrderBy(s => s.Since)]; } } }
+
+    public IReadOnlyList<ApnsRegistration> AllApns { get { lock (gate) { return [.. apns.Values.OrderBy(s => s.Since)]; } } }
 
     public PushSubscriber? Get(string device) { lock (gate) { return byDevice.GetValueOrDefault(device); } }
 
@@ -101,8 +120,9 @@ public sealed class PushStore
         lock (gate)
         {
             if (account == accountId) { return 0; }
-            var dropped = byDevice.Count;
+            var dropped = byDevice.Count + apns.Count;
             byDevice.Clear();
+            apns.Clear();
             signIns.Clear();
             account = accountId;
             Save();
@@ -151,12 +171,49 @@ public sealed class PushStore
         }
     }
 
+    public void PutApns(ApnsRegistration registration)
+    {
+        lock (gate)
+        {
+            apns[(registration.Device, registration.Target)] = registration;
+            while (apns.Count > MaxSubscribers)
+            {
+                var oldest = apns.Values.Where(s => s != registration).MinBy(s => s.Since)!;
+                apns.Remove((oldest.Device, oldest.Target));
+            }
+            Save();
+        }
+    }
+
+    public bool RemoveApns(string device, string target)
+    {
+        lock (gate)
+        {
+            if (!apns.Remove((device, target))) { return false; }
+            Save();
+            return true;
+        }
+    }
+
+    public bool RemoveApns(ApnsRegistration registration)
+    {
+        lock (gate)
+        {
+            var key = (registration.Device, registration.Target);
+            if (apns.GetValueOrDefault(key) != registration) { return false; }
+            apns.Remove(key);
+            Save();
+            return true;
+        }
+    }
+
     void Save()
     {
         if (path is null) { return; }
         try
         {
-            var text = JsonSerializer.Serialize(new Saved(account, [.. byDevice.Values.OrderBy(s => s.Since)], signIns.Count > 0 ? new(signIns, StringComparer.Ordinal) : null), Json);
+            var text = JsonSerializer.Serialize(new Saved(account, [.. byDevice.Values.OrderBy(s => s.Since)],
+                signIns.Count > 0 ? new(signIns, StringComparer.Ordinal) : null, apns.Count > 0 ? [.. apns.Values.OrderBy(s => s.Since)] : null), Json);
             // Written whole and then moved into place, so a crash mid-write never leaves a
             // half file that would lose every subscription. Owner-only: an endpoint is a
             // capability to notify that phone.

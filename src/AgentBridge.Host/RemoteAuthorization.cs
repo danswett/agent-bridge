@@ -17,6 +17,7 @@ public sealed class RemoteAuthorization : IDisposable
         HistoryProtocol.Op,
         Ops.AttachmentStart, Ops.AttachmentChunk, Ops.AttachmentDiscard,
         Ops.PushSubscribe, Ops.PushUnsubscribe, Ops.PushList,
+        ApnsPushRequest.Subscribe, ApnsPushRequest.Unsubscribe, ApnsPushRequest.List,
         LaunchProtocol.Options, LaunchProtocol.Launch, TrustProtocol.Answer,
         UsageProtocol.Get, UsageProtocol.Subscribe,
         UpdateProtocol.Get, UpdateProtocol.Subscribe, UpdateProtocol.Check, UpdateProtocol.Install,

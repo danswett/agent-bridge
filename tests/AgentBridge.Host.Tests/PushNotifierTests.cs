@@ -1809,6 +1809,7 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(new PushSubscribeResult(true, 1), SubscribeApns(Phone, "prod", "01020304"));
         Assert.Equal(new PushSubscribeResult(true, 2), SubscribeApns(Phone, "dev", "11121314"));
         Assert.Equal(new PushSubscribeResult(true, 2), SubscribeApns(Phone, "prod", "aabbccdd", name: "iPhone"));
+        Assert.Equal(0, PushStore.Load(StorePath, "2").ApnsCount);
 
         var listed = Assert.IsType<PushListResult>(notifier.Handle(Peer(Phone), ApnsPushRequest.List, JsonSerializer.SerializeToElement(new { })));
         Assert.Equal([("apns:prod", true), ("apns:dev", true)], listed.Devices.Select(d => (d.Service, d.Current)));
@@ -1818,7 +1819,7 @@ public sealed class PushNotifierTests : IDisposable
 
         await notifier.DisposeAsync();
         store = PushStore.Load(StorePath, Account);
-        notifier = new PushNotifier(source, new MachineInfo(Machine, "DEV", "windows", "0.1.0"), store, null, logs.Add, time);
+        notifier = new PushNotifier(source, new MachineInfo(Machine, "Fixture", "windows", "0.1.0"), store, null, logs.Add, time);
         var afterRestart = Assert.IsType<PushListResult>(notifier.Handle(Peer(Phone), ApnsPushRequest.List, JsonSerializer.SerializeToElement(new { })));
         Assert.Equal(["apns:prod", "apns:dev"], afterRestart.Devices.Select(d => d.Service));
 
