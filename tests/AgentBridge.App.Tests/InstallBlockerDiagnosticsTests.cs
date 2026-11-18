@@ -31,15 +31,15 @@ public sealed class InstallBlockerDiagnosticsTests : IDisposable
         return file;
     }
 
-    List<InstallBlockers.Holder> Query(List<string> files, CancellationToken cancellation)
+    List<InstallBlockers.Holder> Query(List<string> files)
     {
-        cancellation.ThrowIfCancellationRequested();
         if (unreadable) { throw new UnauthorizedAccessException("private-probe-path"); }
         var generation = reusedPid && ++queries > 1 ? 2 : 1;
         return files.Where(holders.ContainsKey).Select(file => holders[file] with { Started = generation }).Distinct().ToList();
     }
 
-    string? Probe() => InstallBlockers.Find(default, new FakeTimeProvider(), Query);
+    string? Probe() => InstallBlockers.Find(root,
+        () => Directory.EnumerateFiles(Path.Combine(root, "current"), "*", SearchOption.AllDirectories).ToList(), Query);
 
     public void Dispose()
     {
@@ -69,7 +69,7 @@ public sealed class InstallBlockerDiagnosticsTests : IDisposable
         Assert.Contains("blocked-runtime.dll", Probe()!, StringComparison.Ordinal);
         holders.Clear();
         foreach (var handle in locks) { handle.Dispose(); }
-        var blockers = await InstallationFiles.AwaitReleaseAsync(_ => Probe(), new FakeTimeProvider(), default)
+        var blockers = await InstallationFiles.AwaitReleaseAsync(Probe, new FakeTimeProvider(), default)
             .WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Null(blockers);
         File.WriteAllText(file, "replacement");
