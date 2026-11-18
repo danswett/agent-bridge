@@ -58,6 +58,17 @@ public sealed class HostCliProcessTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task Cli_question_target_process_reports_a_missing_fixture_target_without_writes()
+    {
+        using var fixture = new Fixture();
+        var result = await RunCli(fixture, "question-target", Id, "question#selected");
+        Assert.Equal(1, result.ExitCode);
+        using var json = JsonDocument.Parse(result.Output);
+        Assert.Equal("missing", json.RootElement.GetProperty("outcome").GetString());
+        Assert.Contains("missing", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Cli_process_tests_start_the_product_host_executable_not_the_rehearsal_parser()
     {
         using var fixture = new Fixture();
