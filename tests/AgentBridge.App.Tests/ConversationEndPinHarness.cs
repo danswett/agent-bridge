@@ -52,8 +52,8 @@ namespace Microsoft.UI.Xaml.Controls
 
         public void Press(DependencyObject source, uint pointer = 1) => Raise(PointerPressedEvent, source, pointer, true);
         public void Wheel() => Raise(PointerWheelChangedEvent, this);
-        public void EndGesture(string end, uint pointer = 1) =>
-            Raise(end switch { "release" => PointerReleasedEvent, "cancel" => PointerCanceledEvent, _ => PointerCaptureLostEvent }, this, pointer);
+        public void EndGesture(string end, uint pointer = 1, bool contact = false) =>
+            Raise(end switch { "release" => PointerReleasedEvent, "cancel" => PointerCanceledEvent, _ => PointerCaptureLostEvent }, this, pointer, contact);
 
         void Raise(object routedEvent, DependencyObject source, uint pointer = 1, bool contact = false)
         {
@@ -88,6 +88,7 @@ namespace AgentBridge.App
 {
     public sealed partial class SessionView
     {
+        readonly Core.ConversationFollow follow = new();
         readonly Microsoft.UI.Xaml.UIElement ConversationList = new();
         Microsoft.UI.Xaml.Controls.ScrollViewer? ConversationScroll { get; } = new();
         bool pinEnd = true;
@@ -105,6 +106,7 @@ namespace AgentBridge.App
         public int Releases => pinReleases;
         public double AnchorAt => anchorAt;
         public bool HistoryEnd => HistoryAtEnd();
+        public Core.ConversationFollow FollowState => follow;
         public void ResetSessionForProbe() => ResetScrollbarGestures();
         public void Follow() => FollowPinnedEnd();
         public void Scrolling(double? correction = null) { scrolling = true; anchoring = correction; }
