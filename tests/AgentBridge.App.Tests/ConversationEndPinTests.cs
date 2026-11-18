@@ -4,6 +4,27 @@ namespace AgentBridge.App.Tests;
 
 public sealed class ConversationEndPinTests
 {
+    [Theory]
+    [InlineData("release")]
+    [InlineData("cancel")]
+    [InlineData("capture lost")]
+    public void History_cannot_repin_between_a_scrollbar_press_and_its_release_or_cancel(string end)
+    {
+        var view = new SessionView();
+        view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
+        var bar = new Microsoft.UI.Xaml.Controls.Primitives.ScrollBar { Parent = view.Scroller };
+        view.Scroller.Press(new Microsoft.UI.Xaml.UIElement { Parent = bar }, pointer: 7);
+        Assert.False(view.HistoryEnd);
+        view.Scrolling();
+        view.StopScrolling();
+        view.Scroller.EndGesture(end, pointer: 8);
+        Assert.False(view.HistoryEnd);
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+        view.Scroller.EndGesture(end, pointer: 7);
+        Assert.True(view.HistoryEnd);
+    }
+
     [Fact]
     public void A_question_or_screen_reader_bring_request_keeps_its_destination_above_the_end()
     {

@@ -10,6 +10,9 @@ namespace Microsoft.UI.Xaml
     {
         public static readonly object PointerPressedEvent = new();
         public static readonly object PointerWheelChangedEvent = new();
+        public static readonly object PointerReleasedEvent = new();
+        public static readonly object PointerCanceledEvent = new();
+        public static readonly object PointerCaptureLostEvent = new();
         public bool IsLoaded { get; init; } = true;
         public event Action<UIElement, BringIntoViewRequestedEventArgs>? BringIntoViewRequested;
         public void Bring(UIElement target) => BringIntoViewRequested?.Invoke(this, new(target));
@@ -23,9 +26,12 @@ namespace Microsoft.UI.Xaml
 
 namespace Microsoft.UI.Xaml.Input
 {
-    public sealed class PointerRoutedEventArgs(Xaml.DependencyObject source)
+    public sealed record Pointer(uint PointerId, bool IsInContact);
+
+    public sealed class PointerRoutedEventArgs(Xaml.DependencyObject source, uint pointer = 1, bool contact = false)
     {
         public object OriginalSource => source;
+        public Pointer Pointer { get; } = new(pointer, contact);
     }
 
     public delegate void PointerEventHandler(object sender, PointerRoutedEventArgs args);
@@ -44,14 +50,16 @@ namespace Microsoft.UI.Xaml.Controls
         public void AddHandler(object routedEvent, object handler, bool handledEventsToo) =>
             handlers.Add((routedEvent, (Input.PointerEventHandler)handler, handledEventsToo));
 
-        public void Press(DependencyObject source) => Raise(PointerPressedEvent, source);
+        public void Press(DependencyObject source, uint pointer = 1) => Raise(PointerPressedEvent, source, pointer, true);
         public void Wheel() => Raise(PointerWheelChangedEvent, this);
+        public void EndGesture(string end, uint pointer = 1) =>
+            Raise(end switch { "release" => PointerReleasedEvent, "cancel" => PointerCanceledEvent, _ => PointerCaptureLostEvent }, this, pointer);
 
-        void Raise(object routedEvent, DependencyObject source)
+        void Raise(object routedEvent, DependencyObject source, uint pointer = 1, bool contact = false)
         {
             foreach (var hook in handlers.Where(h => h.Event == routedEvent && h.HandledToo))
             {
-                hook.Handler(this, new(source));
+                hook.Handler(this, new(source, pointer, contact));
             }
         }
 
@@ -96,6 +104,7 @@ namespace AgentBridge.App
         public bool IsScrolling => scrolling;
         public int Releases => pinReleases;
         public double AnchorAt => anchorAt;
+        public bool HistoryEnd => HistoryAtEnd();
         public void Follow() => FollowPinnedEnd();
         public void Scrolling(double? correction = null) { scrolling = true; anchoring = correction; }
         public void StopScrolling() => scrolling = false;
