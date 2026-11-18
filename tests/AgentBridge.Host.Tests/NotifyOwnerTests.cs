@@ -135,19 +135,57 @@ public sealed class NotifyOwnerTests : IDisposable
     }
 
     [Theory]
-    [InlineData(OwnerNotifyOutcome.Delivered, 0, 2)]
-    [InlineData(OwnerNotifyOutcome.Queued, 0, 2)]
-    [InlineData(OwnerNotifyOutcome.Refused, 1, 2)]
-    [InlineData((OwnerNotifyOutcome)99, 1, 2)]
-    [InlineData(OwnerNotifyOutcome.Delivered, 1, 1)]
-    public async Task The_cli_requires_acknowledgment_for_both_client_kinds(OwnerNotifyOutcome outcome, int exit, int count)
+    [InlineData("\"delivered\"", true, "\"delivered\"")]
+    [InlineData("\"queued\"", true, "\"queued\"")]
+    [InlineData("\"refused\"", true, "\"refused\"")]
+    [InlineData("\"future\"", true, "\"refused\"")]
+    [InlineData("99", true, "\"refused\"")]
+    [InlineData("null", true, "\"refused\"")]
+    [InlineData("\"app\"", false, "\"app\"")]
+    [InlineData("\"pwa\"", false, "\"pwa\"")]
+    [InlineData("\"future\"", false, "\"unknown\"")]
+    [InlineData("99", false, "\"unknown\"")]
+    [InlineData("null", false, "\"unknown\"")]
+    public void Wire_ack_enums_roundtrip_without_inventing_delivery(string json, bool outcome, string expected)
+    {
+        var type = outcome ? typeof(OwnerNotifyOutcome) : typeof(OwnerClientKind);
+        Assert.Equal(expected, JsonSerializer.Serialize(JsonSerializer.Deserialize(json, type, ProtocolJson.Options), type, ProtocolJson.Options));
+    }
+
+    [Fact]
+    public void Absent_ack_fields_are_not_evidence_of_delivery()
+    {
+        var ack = JsonSerializer.Deserialize<OwnerClientAck>("{}", ProtocolJson.Options)!;
+        Assert.False(ack.Client is OwnerClientKind.App or OwnerClientKind.Pwa);
+        Assert.Equal(OwnerNotifyOutcome.Refused, ack.Outcome);
+    }
+
+    [Theory]
+    [InlineData(OwnerNotifyOutcome.Delivered, 0, 2, OwnerClientKind.App)]
+    [InlineData(OwnerNotifyOutcome.Queued, 0, 2, OwnerClientKind.App)]
+    [InlineData(OwnerNotifyOutcome.Refused, 1, 2, OwnerClientKind.App)]
+    [InlineData((OwnerNotifyOutcome)99, 1, 2, OwnerClientKind.App)]
+    [InlineData(OwnerNotifyOutcome.Delivered, 1, 1, OwnerClientKind.App)]
+    [InlineData(OwnerNotifyOutcome.Delivered, 1, 2, (OwnerClientKind)99)]
+    public async Task The_cli_requires_acknowledgment_for_both_client_kinds(OwnerNotifyOutcome outcome, int exit, int count, OwnerClientKind client)
     {
         var output = new StringWriter();
         var error = new StringWriter();
+        var pwa = new OwnerClientAck(OwnerClientKind.Pwa,
+            outcome == OwnerNotifyOutcome.Refused ? OwnerNotifyOutcome.Refused : OwnerNotifyOutcome.Queued, "pwa detail");
+        await using var server = LocalServer.Start(LocalEndpoint.For(fixture.Root), (_, _, data) => Task.FromResult<object?>(
+            new NotifyOwnerResult(data.GetProperty("request").GetGuid(), new OwnerClientAck[] { new(client, outcome, "app detail"),
+                pwa }.Take(count).ToArray())));
+        await using var local = await LocalClient.ConnectAsync(LocalEndpoint.For(fixture.Root));
         Assert.Equal(exit, await NotifyOwnerCommands.RunAsync(["notify-owner", "Attention", "private page"], fixture.Root, output, error,
-            request => Task.FromResult(new NotifyOwnerResult(request.Request, new OwnerClientAck[] { new(OwnerClientKind.App, outcome, ""),
-                new(OwnerClientKind.Pwa, OwnerNotifyOutcome.Queued, "") }.Take(count).ToArray()))));
-        Assert.Contains("clients", output.ToString());
+            request => local.CallAsync<NotifyOwnerResult>(NotifyOwnerProtocol.Op, request)));
+        var clients = JsonDocument.Parse(output.ToString()).RootElement.GetProperty("clients").EnumerateArray().ToArray();
+        Assert.Equal(count, clients.Length);
+        Assert.Equal(client == OwnerClientKind.App ? "app" : "unknown", clients[0].GetProperty("client").GetString());
+        Assert.Equal(outcome is OwnerNotifyOutcome.Delivered or OwnerNotifyOutcome.Queued ? outcome.ToString().ToLowerInvariant() : "refused",
+            clients[0].GetProperty("outcome").GetString());
+        Assert.Equal("app detail", clients[0].GetProperty("reason").GetString());
+        if (count == 2) { Assert.Equal(JsonSerializer.Serialize(pwa, ProtocolJson.Options), clients[1].GetRawText()); }
         Assert.DoesNotContain("private page", output.ToString() + error);
     }
 
