@@ -461,7 +461,10 @@ async Task<int> ServeAsync(HostHandover handover)
     }
     // Started at logon there is no console; the app shows the end of this file.
     HostLog.OpenFile(Path.Combine(identity.Folder, "logs", "host.log"));
-    var exitMarker = HostExitMarker.Begin(Path.Combine(identity.Folder, "logs", HostExitMarker.FileName), DateTimeOffset.UtcNow, Log);
+    var exitPath = Path.Combine(identity.Folder, "logs", HostExitMarker.FileName);
+    var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
+    HostExitMarker.ReportPrevious(exitPath, Log, diagnosticsJournal, DateTimeOffset.UtcNow);
+    var exitMarker = HostExitMarker.Begin(exitPath, DateTimeOffset.UtcNow, Log);
     AppDomain.CurrentDomain.UnhandledException += (_, e) => exitMarker.End(HostExitReason.UnhandledException, e.ExceptionObject);
     AppDomain.CurrentDomain.ProcessExit += (_, _) => exitMarker.End(HostExitReason.Unknown);
     var name = Option("--name") ?? HostConfigFile.ReadName(identity.Folder) ?? $"{Environment.MachineName}{(profile == "default" ? "" : $"/{profile}")}";
@@ -605,8 +608,6 @@ async Task<int> ServeAsync(HostHandover handover)
     // private folder, never a shared temporary one.
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
     var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive) : null;
-    // Made here, not beside RemoteDiagnostics, because launches record into it too (#737).
-    var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
     var agentAudit = new AgentAuditLog(identity.Folder, log: Log);
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit);
     launcher.SessionStarted += restore.Launched;
@@ -620,6 +621,7 @@ async Task<int> ServeAsync(HostHandover handover)
     if (!startGate.StartRestore(restore, launcher))
     {
         Log($"stopped from the {Product.App} while starting; not serving");
+        exitMarker.End(HostExitReason.CleanStop);
         return 0;
     }
     transfers.Launcher = launcher;

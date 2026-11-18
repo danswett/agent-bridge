@@ -4,7 +4,7 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Core.Diagnostics;
 
-public enum HostExitReason { Unknown, CleanStop, PlannedRestart, UnhandledException }
+public enum HostExitReason { Unknown, CleanStop, PlannedRestart, UnhandledException, NoRecord }
 public sealed record HostExitRecord(HostExitReason Reason, DateTimeOffset? At, bool Running = false);
 
 public sealed class HostExitMarker
@@ -37,7 +37,7 @@ public sealed class HostExitMarker
 
     public bool End(HostExitReason reason, object? thrown = null)
     {
-        if (!Enum.IsDefined(reason)) { reason = HostExitReason.Unknown; }
+        if (!Enum.IsDefined(reason) || reason == HostExitReason.NoRecord) { reason = HostExitReason.Unknown; }
         lock (gate)
         {
             // ProcessExit is only a fallback; a crash must also supersede a requested stop.
@@ -58,6 +58,18 @@ public sealed class HostExitMarker
         HostExitReason.UnhandledException => "unhandled-exception",
         _ => "unknown",
     };
+
+    public static HostExitRecord? ReadPrevious(string path) =>
+        Read(path) is { } previous ? previous.Running ? previous with { Reason = HostExitReason.NoRecord } : previous : null;
+
+    public static void ReportPrevious(string path, Action<string> log, IDiagnosticsJournal journal, DateTimeOffset now)
+    {
+        if (ReadPrevious(path) is not { } previous) { return; }
+        log(previous.Reason == HostExitReason.NoRecord
+            ? "previous run ended: no exit record (hard kill, crash or power loss)"
+            : $"previous run ended: {Name(previous.Reason)}");
+        journal.Record(JournalEvents.PreviousHostExit(previous, now));
+    }
 
     bool Write(string state, string? reason, DateTimeOffset? exitedAt, string? exceptionType)
     {

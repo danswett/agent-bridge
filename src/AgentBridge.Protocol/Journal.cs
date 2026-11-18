@@ -47,6 +47,7 @@ public enum JournalKind
     HostStarted,
     HostStopped,
     UnhandledException,
+    PreviousHostExit,
 }
 
 // What a record had to leave out, so a missing field never reads as a field that was empty.
@@ -86,7 +87,8 @@ public sealed record JournalEntry(
     long? DurationMs,
     IReadOnlyList<JournalStage> Stages,
     JournalException? Exception,
-    JournalOmissions Omitted);
+    JournalOmissions Omitted,
+    long? AgeSeconds = null);
 
 public static partial class JournalContract
 {
@@ -122,15 +124,15 @@ public static partial class JournalContract
             or JournalKind.HookIntakePaused or JournalKind.HookIntakeResumed => JournalFamily.HookIntake,
         JournalKind.LaunchRequested => JournalFamily.Launch,
         JournalKind.UpdateStep => JournalFamily.Update,
-        JournalKind.HostStarted or JournalKind.HostStopped => JournalFamily.HostLifecycle,
+        JournalKind.HostStarted or JournalKind.HostStopped or JournalKind.PreviousHostExit => JournalFamily.HostLifecycle,
         JournalKind.UnhandledException => JournalFamily.Crash,
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
 
     // A record for a producer to hand to the journal; the journal assigns its sequence and time.
     public static JournalEntry Draft(JournalKind kind, JournalOutcome outcome, int? code = null, string? version = null,
-        long? durationMs = null, IReadOnlyList<JournalStage>? stages = null, JournalException? exception = null) =>
-        new(Schema, 0, default, FamilyOf(kind), kind, outcome, code, version, durationMs, stages ?? [], exception, JournalOmissions.None);
+        long? durationMs = null, IReadOnlyList<JournalStage>? stages = null, JournalException? exception = null, long? ageSeconds = null) =>
+        new(Schema, 0, default, FamilyOf(kind), kind, outcome, code, version, durationMs, stages ?? [], exception, JournalOmissions.None, ageSeconds);
 
     // A release by its numbers only: major.minor[.patch[.revision]], optionally one of a closed
     // set of prerelease labels with numbers. No letters a person or a build could choose.
@@ -159,6 +161,8 @@ public static partial class JournalContract
         if (version is not null && !IsVersion(version)) { version = null; omitted |= JournalOmissions.VersionInvalid; }
         var duration = e.DurationMs;
         if (duration is { } d && (d < 0 || d > MaxDurationMs)) { duration = Math.Clamp(d, 0, MaxDurationMs); omitted |= JournalOmissions.DurationClamped; }
+        var ageSeconds = e.AgeSeconds;
+        if (ageSeconds is < 0) { ageSeconds = 0; omitted |= JournalOmissions.DurationClamped; }
         var stages = new List<JournalStage>();
         foreach (var s in e.Stages ?? [])
         {
@@ -186,7 +190,7 @@ public static partial class JournalContract
             }
             exception = new JournalException(type, frames);
         }
-        return new JournalEntry(Schema, e.Seq, e.AtUtc, FamilyOf(e.Kind), e.Kind, e.Outcome, code, version, duration, stages, exception, omitted);
+        return new JournalEntry(Schema, e.Seq, e.AtUtc, FamilyOf(e.Kind), e.Kind, e.Outcome, code, version, duration, stages, exception, omitted, ageSeconds);
     }
 
     // Whether a record is exactly as Fit would keep it: what a stored record must be to be read.
@@ -198,6 +202,7 @@ public static partial class JournalContract
         if (e.Code is < 0 or > MaxCode) { return false; }
         if (e.Version is not null && !IsVersion(e.Version)) { return false; }
         if (e.DurationMs is < 0 or > MaxDurationMs) { return false; }
+        if (e.AgeSeconds is < 0) { return false; }
         if (e.Stages is null || e.Stages.Count > MaxStages) { return false; }
         foreach (var s in e.Stages) { if (s is null || !Enum.IsDefined(s.Name) || s.Ms is < 0 or > MaxDurationMs) { return false; } }
         if (e.Exception is { } x)
@@ -388,6 +393,7 @@ public static class JournalCodec
             if (e.Code is { } code) { w.WriteNumber("code", code); }
             if (e.Version is { } version) { w.WriteString("version", version); }
             if (e.DurationMs is { } ms) { w.WriteNumber("ms", ms); }
+            if (e.AgeSeconds is { } ageSeconds) { w.WriteNumber("ageSeconds", ageSeconds); }
             if (e.Stages.Count > 0)
             {
                 w.WriteStartArray("stages");
@@ -450,7 +456,7 @@ public static class JournalCodec
         catch (InvalidOperationException) { return false; }
     }
 
-    static readonly string[] EntryFields = ["schema", "seq", "at", "family", "kind", "outcome", "code", "version", "ms", "stages", "exception", "omitted"];
+    static readonly string[] EntryFields = ["schema", "seq", "at", "family", "kind", "outcome", "code", "version", "ms", "ageSeconds", "stages", "exception", "omitted"];
     static readonly string[] Required = ["schema", "seq", "at", "family", "kind", "outcome"];
 
     static JournalEntry? Entry(JsonElement o)
@@ -464,6 +470,8 @@ public static class JournalCodec
         if (p.TryGetValue("version", out var ver)) { if (ver.ValueKind != JsonValueKind.String) { return null; } version = ver.GetString(); }
         long? ms = null;
         if (p.TryGetValue("ms", out var m)) { if (Long(m) is not { } v) { return null; } ms = v; }
+        long? ageSeconds = null;
+        if (p.TryGetValue("ageSeconds", out var age)) { if (Long(age) is not { } v) { return null; } ageSeconds = v; }
         var stages = new List<JournalStage>();
         if (p.TryGetValue("stages", out var st))
         {
@@ -494,7 +502,7 @@ public static class JournalCodec
             if (Int(om) is not { } bits || bits == 0) { return null; }
             omitted = (JournalOmissions)bits;
         }
-        return new JournalEntry(schema, seq, at, family, kind, outcome, code, version, ms, stages, exception, omitted);
+        return new JournalEntry(schema, seq, at, family, kind, outcome, code, version, ms, stages, exception, omitted, ageSeconds);
     }
 
     // The object's properties, if it has only known ones, each once.

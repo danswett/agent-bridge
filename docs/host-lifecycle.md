@@ -9,6 +9,13 @@ Exit atomically replaces it with `state: ended`, an exit instant and a reason:
 Unhandled exceptions keep only a recognized type, never messages, paths or ids.
 An exception supersedes a requested stop; ProcessExit cannot erase a known reason.
 Marker I/O failure is logged by type and does not change host lifecycle behavior.
+Before overwriting the marker, the next start logs `previous run ended: <reason>`.
+A running marker logs `previous run ended: no exit record (hard kill, crash or power loss)`;
+that is a cause class, not proof of a product crash. A missing file is first start:
+no previous-run line or journal event. Unreadable records report `unknown`.
+The matching `PreviousHostExit` journal event keeps only a reason class and age
+in whole seconds (since exit, or since start for a running marker); no instant means
+age is absent. Reads never change the previous file or session restore behavior.
 
 Implementation slice for #805/#580/#581, consumed by #819. The full design remains
 draft [#815](https://github.com/danswett/agent-bridge/pull/815).

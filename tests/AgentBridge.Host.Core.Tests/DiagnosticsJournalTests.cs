@@ -135,6 +135,54 @@ public sealed class DiagnosticsJournalTests : IDisposable
         AssertClean(System.IO.File.ReadAllBytes(File()));
     }
 
+    [Theory]
+    [InlineData(HostExitReason.CleanStop)]
+    [InlineData(HostExitReason.PlannedRestart)]
+    [InlineData(HostExitReason.UnhandledException)]
+    [InlineData(HostExitReason.Unknown)]
+    [InlineData(HostExitReason.NoRecord)]
+    public void The_previous_host_exit_journal_round_trips_only_a_reason_class_and_whole_second_age(HostExitReason reason)
+    {
+        var journal = new DiagnosticsJournal(time, File());
+        var previous = new HostExitRecord(reason, Now.AddSeconds(-31.9));
+
+        Assert.True(journal.Record(JournalEvents.PreviousHostExit(previous, Now)));
+
+        var loaded = new DiagnosticsJournal(time, File());
+        var entry = Assert.Single(loaded.Read(10, JournalContract.MaxTotalBytes).Entries);
+        Assert.Equal(JournalKind.PreviousHostExit, entry.Kind);
+        Assert.Equal(JournalFamily.HostLifecycle, entry.Family);
+        Assert.Equal((int)reason, entry.Code);
+        Assert.Equal(31, entry.AgeSeconds);
+        Assert.Null(entry.Exception);
+        Assert.Null(entry.Version);
+        Assert.Null(entry.DurationMs);
+        Assert.Empty(entry.Stages);
+        AssertClean(System.IO.File.ReadAllBytes(File()));
+    }
+
+    [Fact]
+    public void Previous_exit_age_is_unknown_without_an_instant_and_zero_for_a_future_instant()
+    {
+        Assert.Null(JournalEvents.PreviousHostExit(new(HostExitReason.Unknown, null), Now).AgeSeconds);
+        var future = JournalEvents.PreviousHostExit(new((HostExitReason)999, Now.AddDays(1)), Now);
+        Assert.Equal(0, future.AgeSeconds);
+        Assert.Equal((int)HostExitReason.Unknown, future.Code);
+    }
+
+    [Fact]
+    public void Invalid_age_seconds_are_clamped_when_produced_and_refused_when_read()
+    {
+        var journal = new DiagnosticsJournal(time);
+        var draft = JournalEvents.PreviousHostExit(new(HostExitReason.CleanStop, Now), Now);
+        Assert.True(journal.Record(draft with { AgeSeconds = -1 }));
+        var entry = Assert.Single(journal.Read(10, JournalContract.MaxTotalBytes).Entries);
+        Assert.Equal(0, entry.AgeSeconds);
+        Assert.True(entry.Omitted.HasFlag(JournalOmissions.DurationClamped));
+        Assert.False(JournalCodec.TryRead(Encoding.UTF8.GetBytes(Line(
+            "\"family\":\"HostLifecycle\",\"kind\":\"PreviousHostExit\",\"outcome\":\"Ok\",\"ageSeconds\":-1")), out _));
+    }
+
     // A type anyone can name System.Anything, in an assembly anyone can name AgentBridge.Anything.
     static Exception Impostor()
     {

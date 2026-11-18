@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Host.Core.Diagnostics;
+using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -84,5 +85,64 @@ public sealed class HostExitMarkerTests : IDisposable
         Assert.False(File.Exists(PathName + ".new"));
         Assert.Contains("IOException", Assert.Single(failures));
         Assert.DoesNotContain("private", failures[0]);
+    }
+
+    [Fact]
+    public void A_running_marker_reports_no_exit_record_once_without_changing_the_file()
+    {
+        HostExitMarker.Begin(PathName, Now);
+        var before = File.ReadAllBytes(PathName);
+        var lines = new List<string>();
+        var journal = new DiagnosticsJournal(time);
+
+        HostExitMarker.ReportPrevious(PathName, lines.Add, journal, Now);
+
+        Assert.Equal(HostExitReason.NoRecord, HostExitMarker.ReadPrevious(PathName)!.Reason);
+        Assert.Equal("previous run ended: no exit record (hard kill, crash or power loss)", Assert.Single(lines));
+        Assert.Single(journal.Read(10, JournalContract.MaxTotalBytes).Entries);
+        Assert.Equal(before, File.ReadAllBytes(PathName));
+    }
+
+    [Theory]
+    [InlineData(HostExitReason.CleanStop, "clean-stop")]
+    [InlineData(HostExitReason.PlannedRestart, "planned-restart")]
+    [InlineData(HostExitReason.UnhandledException, "unhandled-exception")]
+    [InlineData(HostExitReason.Unknown, "unknown")]
+    public void A_finished_marker_reports_its_reason_once_without_changing_the_file(HostExitReason reason, string name)
+    {
+        HostExitMarker.Begin(PathName, Now, time: time).End(reason, new IOException("private prompt"));
+        var before = File.ReadAllBytes(PathName);
+        var lines = new List<string>();
+
+        HostExitMarker.ReportPrevious(PathName, lines.Add, new DiagnosticsJournal(time), Now);
+
+        Assert.Equal(reason, HostExitMarker.ReadPrevious(PathName)!.Reason);
+        Assert.Equal($"previous run ended: {name}", Assert.Single(lines));
+        Assert.Equal(before, File.ReadAllBytes(PathName));
+    }
+
+    [Fact]
+    public void A_missing_file_is_first_start_and_never_claims_a_crash()
+    {
+        var lines = new List<string>();
+        var journal = new DiagnosticsJournal(time);
+
+        HostExitMarker.ReportPrevious(PathName, lines.Add, journal, Now);
+
+        Assert.Null(HostExitMarker.ReadPrevious(PathName));
+        Assert.Empty(lines);
+        Assert.Empty(journal.Read(10, JournalContract.MaxTotalBytes).Entries);
+        Assert.False(File.Exists(PathName));
+    }
+
+    [Fact]
+    public void The_previous_run_line_cannot_copy_paths_ids_or_exception_messages_from_a_record()
+    {
+        File.WriteAllText(PathName, """{"state":"ended","reason":"private path node-id session-id prompt","exceptionType":"private prompt","exitedAt":"2026-11-18T04:00:00Z"}""");
+        var lines = new List<string>();
+
+        HostExitMarker.ReportPrevious(PathName, lines.Add, new DiagnosticsJournal(time), Now);
+
+        Assert.Equal("previous run ended: unknown", Assert.Single(lines));
     }
 }
