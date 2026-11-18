@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json.Nodes;
 using AgentBridge.Relay;
 using AgentBridge.Roster;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,10 +13,10 @@ namespace AgentBridge.Transport.Tests;
 // entries that are valid against its own copy, and never decides who may connect.
 public class DeviceRosterTests
 {
-    static DeviceRoster Make(World w, IRosterStore? store = null)
+    static DeviceRoster Make(World w, IRosterStore? store = null, TimeProvider? clock = null)
     {
         store ??= new MemoryRosterStore();
-        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch + w.Now);
+        var time = clock ?? new FakeTimeProvider(DateTimeOffset.UnixEpoch + w.Now);
         var options = new RelayOptions { TokenKey = Convert.ToBase64String(new byte[32]), Roster = { Time = time } };
         using var meters = new ServiceCollection().AddMetrics().BuildServiceProvider();
         var metrics = new RelayMetrics(meters.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => 0);
@@ -23,9 +25,9 @@ public class DeviceRosterTests
 
     static string Wire(World w, string label) => w.Entry(label).Canonical();
 
-    static World Scenario()
+    static World Scenario(string account = RosterFixture.Account)
     {
-        var w = new World();
+        var w = new World { AccountId = account };
         w.Genesis();
         w.Add("addB", "G", "B", "G");
         return w;
@@ -125,6 +127,357 @@ public class DeviceRosterTests
         // Rebuilt from the store, the removal and its evidence are all still there.
         var r = await again.AppendAsync(RosterFixture.Account, [wire[^1], wire[^2]]);
         Assert.Equal(["duplicate", "duplicate"], r!.Select(x => x.Verdict));
+    }
+
+    static Entry Padded(Signed signed, int bytes, Entry? parent = null)
+    {
+        var body = JsonNode.Parse(signed.Body)!;
+        if (parent is not null)
+        {
+            body["prev"] = RosterFixture.Hashes([parent.Hash]);
+            body["seq"] = parent.Body.Seq + 1;
+        }
+        var raw = RosterFixture.Bytes(body);
+        // Whitespace is signed body content; leave room for the largest DER signature.
+        var padded = signed with { Body = [.. raw, .. Encoding.UTF8.GetBytes(new string(' ', bytes - 72 - raw.Length))] };
+        return Entry.Parse(Encoding.UTF8.GetBytes(padded.Wire));
+    }
+
+    static async Task<(World W, MemoryRosterStore Store, DeviceRoster Roster)> FullOrdinaryLog(string account = RosterFixture.Account)
+    {
+        var w = Scenario(account);
+        var store = new MemoryRosterStore();
+        var roster = Make(w, store);
+        await roster.AppendAsync(account, [Wire(w, "G"), Wire(w, "addB")]);
+        var ordinary = new List<string>();
+        var parent = w.Entry("addB");
+        for (var i = 0; i < 22; i++)
+        {
+            var label = $"fill{i}";
+            w.Add(label, "G", $"D{i}", "addB");
+            parent = Padded(w[label], 8 * 1024, parent);
+            ordinary.Add(parent.Canonical());
+        }
+        var filled = new List<DeviceRoster.Result>();
+        foreach (var batch in ordinary.Chunk(DeviceRoster.MaxPerAppend))
+        {
+            filled.AddRange((await roster.AppendAsync(account, batch))!);
+        }
+        Assert.Contains(filled, r => r is { Verdict: "refused", Reason: Invalid.Cap });
+        return (w, store, roster);
+    }
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(true, 1)]
+    [InlineData(true, 4)]
+    [InlineData(true, 5)]
+    public async Task Removal_is_accepted_when_ordinary_entries_are_refused_with_cap(bool mixed, int ancestorCount)
+    {
+        var (w, store, roster) = await FullOrdinaryLog();
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        var ancestors = new List<string>();
+        for (var i = 0; i < Math.Max(1, ancestorCount); i++)
+        {
+            var label = $"E{i}";
+            w.Rename(label, "B", "addB", "addB", "renamed");
+            var ancestor = Padded(w[label], Entry.MaxBytes, parent);
+            ancestors.Add(ancestor.Canonical());
+            if (ancestorCount > 0) { parent = ancestor; }
+        }
+        w.Remove("R", "G", "addB", "addB");
+        var removal = Padded(w["R"], Entry.MaxRemoveBytes, parent).Canonical();
+        if (!mixed)
+        {
+            var refused = await roster.AppendAsync(RosterFixture.Account, ancestors);
+            Assert.Equal(("refused", Invalid.Cap), (refused![0].Verdict, refused[0].Reason));
+        }
+        var result = await roster.AppendAsync(RosterFixture.Account, mixed ? [.. ancestors, removal] : [removal]);
+        if (ancestorCount > 4)
+        {
+            Assert.Equal(("refused", "removal-ancestry-cap"), (result![^1].Verdict, result[^1].Reason));
+            Assert.Equal(before.Entries, (await roster.GetAsync(RosterFixture.Account))!.Entries);
+            return;
+        }
+        Assert.Equal(ancestorCount > 0 ? "quarantined" : "accepted", result![^1].Verdict);
+        if (mixed)
+        {
+            Assert.All(result.Take(ancestors.Count), r =>
+                Assert.Equal(ancestorCount > 0 ? ("accepted", Invalid.Evidence) : ("refused", Invalid.Cap), (r.Verdict, r.Reason)));
+        }
+        var snapshot = (await Make(w, store).GetAsync(RosterFixture.Account))!;
+        Assert.Equal(removal, snapshot.Entries[^1]);
+        Assert.All(ancestors, a => Assert.Equal(ancestorCount > 0, snapshot.Entries.Any(s =>
+            Entry.Parse(Encoding.UTF8.GetBytes(s)).Hash.SequenceEqual(Entry.Parse(Encoding.UTF8.GetBytes(a)).Hash))));
+        var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
+        Assert.True(replay.Holds(Entry.Parse(Encoding.UTF8.GetBytes(removal)).Hash));
+        Assert.False(replay.State.Active.ContainsKey(w.Id("B")));
+        w.Remove("full", "G", "G", "G");
+        var over = await roster.AppendAsync(RosterFixture.Account, [Padded(w["full"], 46 * 1024).Canonical()]);
+        Assert.Equal(("refused", Invalid.Cap), (over![0].Verdict, over[0].Reason));
+        Assert.Equal(snapshot.Entries, (await roster.GetAsync(RosterFixture.Account))!.Entries);
+        Assert.True((await store.ReadAsync(store.Names.Single(), default))!.Body.Length <= DeviceRoster.MaxStoredBytes);
+    }
+
+    [Fact]
+    public async Task Retrying_persisted_evidence_does_not_refuse_an_unrelated_removal()
+    {
+        var (w, store, roster) = await FullOrdinaryLog();
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        w.Rename("A", "B", "addB", "addB", "ancestor");
+        var ancestor = Padded(w["A"], Entry.MaxBytes, parent);
+        w.Remove("first", "G", "addB", "addB");
+        var first = Padded(w["first"], Entry.MaxRemoveBytes, ancestor);
+        var carried = await roster.AppendAsync(RosterFixture.Account, [ancestor.Canonical(), first.Canonical()]);
+        Assert.Equal(("accepted", Invalid.Evidence), (carried![0].Verdict, carried[0].Reason));
+        w.Remove("second", "G", "fill0", "addB");
+        var body = JsonNode.Parse(w["second"].Body)!;
+        body["target"]!["add"] = Codec.Base64Url(Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[2])).Hash);
+        var second = Padded(w["second"] with { Body = RosterFixture.Bytes(body) }, 1024, parent);
+        var result = await Make(w, store).AppendAsync(RosterFixture.Account, [ancestor.Canonical(), second.Canonical()]);
+        Assert.Equal([("refused", Invalid.Cap), ("accepted", (string?)null)], result!.Select(r => (r.Verdict, r.Reason)));
+        var snapshot = (await roster.GetAsync(RosterFixture.Account))!;
+        Assert.Equal(before.Entries.Count + 3, snapshot.Entries.Count);
+        Assert.Equal(second.Canonical(), snapshot.Entries[^1]);
+        var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
+        Assert.True(replay.Graph[replay.Graph.Find(ancestor.Hash)!.Value].Evidence);
+        Assert.False(replay.State.Active.ContainsKey(w.Id("D0")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Same_node_upgrades_cannot_leak_unpersisted_state_into_an_unrelated_removal(bool full)
+    {
+        var w = Scenario();
+        var store = new MemoryRosterStore();
+        var roster = Make(w, store);
+        if (full) { (w, store, roster) = await FullOrdinaryLog(); }
+        else { await roster.AppendAsync(RosterFixture.Account, [Wire(w, "G"), Wire(w, "addB")]); }
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        w.Rename("E", "G", "G", "addB", "unrelated");
+        var rename = Padded(w["E"], Entry.MaxBytes, parent);
+        w.Remove("R", "G", "addB", "addB");
+        var removal = Padded(w["R"], 1024, parent);
+        var result = await roster.AppendAsync(RosterFixture.Account,
+            [rename.AsEvidence().Canonical(), rename.Canonical(), removal.Canonical()]);
+        var snapshot = (await roster.GetAsync(RosterFixture.Account))!;
+        w.Rename("after", "G", "G", "addB", "after replay");
+        Assert.NotNull(await Make(w, store).AppendAsync(RosterFixture.Account, [Wire(w, "after")]));
+        Assert.Equal(full ? ["refused", "refused", "accepted"] : ["refused", "accepted", "accepted"],
+            result!.Select(r => r.Verdict));
+        Assert.Equal(before.Entries.Count + (full ? 1 : 2), snapshot.Entries.Count);
+        Assert.Equal(!full, snapshot.Entries.Any(s => Entry.Parse(Encoding.UTF8.GetBytes(s)).Hash.SequenceEqual(rename.Hash)));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task A_plain_copy_can_upgrade_its_marked_candidate_below_the_storage_cap(bool persisted, bool unrelated)
+    {
+        var w = Scenario();
+        w.Add("addC", "B", "C", "addB");
+        w.Remove("E", "B", "addC", "addC");
+        w.Remove("outer", "G", "addB", "E", keep: ["addC"]);
+        w.Remove("other", "G", "G", "G");
+        var store = new MemoryRosterStore();
+        var roster = Make(w, store);
+        await roster.AppendAsync(RosterFixture.Account, [Wire(w, "G"), Wire(w, "addB"), Wire(w, "addC")]);
+        var entry = w.Entry("E");
+        if (persisted)
+        {
+            var carried = await roster.AppendAsync(RosterFixture.Account, [entry.AsEvidence().Canonical(), Wire(w, "outer")]);
+            Assert.Equal(["accepted", "quarantined"], carried!.Select(r => r.Verdict));
+        }
+        string[] retry = persisted ? [entry.Canonical()] : [entry.AsEvidence().Canonical(), entry.Canonical()];
+        var result = await Make(w, store).AppendAsync(RosterFixture.Account, unrelated ? [.. retry, Wire(w, "other")] : retry);
+        Assert.Equal(persisted ? ["accepted"] : ["refused", "accepted"], result!.Take(retry.Length).Select(r => r.Verdict));
+        if (unrelated) { Assert.Equal("accepted", result![^1].Verdict); }
+        var snapshot = (await Make(w, store).GetAsync(RosterFixture.Account))!;
+        var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
+        Assert.False(replay.Graph[replay.Graph.Find(entry.Hash)!.Value].Evidence);
+        Assert.False(replay.State.Active.ContainsKey(w.Id("C")));
+        Assert.Equal("duplicate", (await Make(w, store).AppendAsync(RosterFixture.Account, [entry.Canonical()]))![0].Verdict);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Maximum_removal_and_four_ancestors_reach_the_roster_over_websocket()
+    {
+        var (w, store, roster) = await FullOrdinaryLog("1");
+        var before = (await roster.GetAsync("1"))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        var entries = new List<string>();
+        for (var i = 0; i < 4; i++)
+        {
+            w.Rename($"E{i}", "B", "addB", "addB", "renamed");
+            parent = Padded(w[$"E{i}"], Entry.MaxBytes, parent);
+            entries.Add(parent.Canonical());
+        }
+        w.Remove("R", "G", "addB", "addB");
+        entries.Add(Padded(w["R"], Entry.MaxRemoveBytes, parent).Canonical());
+        await using var relay = await TestRelay.StartAsync(o =>
+        {
+            o.TokenKey = Convert.ToBase64String(new byte[32]);
+            o.Roster.DevicesStore = store;
+            o.Roster.Time = new FakeTimeProvider(DateTimeOffset.UnixEpoch + w.Now);
+        });
+        var client = await relay.ConnectAsync(relay.TokenFor(1, "fixture"), "roster");
+        var reply = new TaskCompletionSource<System.Text.Json.JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.Relay.Unhandled += m => { if (m.GetProperty("t").GetString() == "roster-append-result") { reply.TrySetResult(m.Clone()); } };
+        var frame = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { t = "roster-append", id = 1, entries });
+        Assert.True(frame.Length > AgentBridge.Transport.Wire.MaxFrame);
+        await client.Relay.SendRawAsync(frame, System.Net.WebSockets.WebSocketMessageType.Text);
+        Assert.Same(reply.Task, await Task.WhenAny(reply.Task, client.Relay.Completion).WaitAsync(TimeSpan.FromSeconds(20)));
+        var results = (await reply.Task).GetProperty("results").EnumerateArray().ToArray();
+        Assert.Equal("quarantined", results[^1].GetProperty("verdict").GetString());
+        Assert.All(results[..^1], r => Assert.Equal("evidence", r.GetProperty("reason").GetString()));
+        Assert.Equal(before.Entries.Count + 5, (await roster.GetAsync("1"))!.Entries.Count);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Ineligible_removals_cannot_promote_size_refused_ancestors_or_spend_the_reserve(bool self)
+    {
+        var (w, store, roster) = await FullOrdinaryLog();
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        w.Rename("ineligible", "G", "addB", "addB", "renamed");
+        var ancestor = Padded(w["ineligible"], Entry.MaxBytes, parent);
+        w.Remove("R", self ? "B" : "G", "addB", "addB");
+        var removal = Padded(w["R"], 32 * 1024, ancestor);
+        var result = await roster.AppendAsync(RosterFixture.Account, [ancestor.Canonical(), removal.Canonical()]);
+        Assert.Equal([("refused", Invalid.Cap), ("refused", Invalid.Evidence)], result!.Select(r => (r.Verdict, r.Reason)));
+        Assert.Equal(before.Entries, (await roster.GetAsync(RosterFixture.Account))!.Entries);
+        w.Remove("genuine", "G", "addB", "addB");
+        var genuine = await roster.AppendAsync(RosterFixture.Account, [Padded(w["genuine"], Entry.MaxRemoveBytes, parent).Canonical()]);
+        Assert.Equal("accepted", genuine![0].Verdict);
+    }
+
+    [Fact]
+    public async Task Two_removals_never_promote_an_unrelated_child_of_storage_refused_evidence()
+    {
+        var (w, store, roster) = await FullOrdinaryLog();
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        w.Rename("A", "B", "addB", "addB", "ancestor");
+        var ancestor = Padded(w["A"], Entry.MaxBytes, parent);
+        w.Rename("child", "G", "G", "addB", "unrelated");
+        var child = Padded(w["child"], Entry.MaxBytes, ancestor);
+        w.Remove("first", "G", "addB", "addB");
+        var first = Padded(w["first"], Entry.MaxRemoveBytes, ancestor);
+        w.Remove("second", "G", "fill0", "addB");
+        var body = JsonNode.Parse(w["second"].Body)!;
+        body["target"]!["add"] = Codec.Base64Url(Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[2])).Hash);
+        var second = Padded(w["second"] with { Body = RosterFixture.Bytes(body) }, 1024, parent);
+        var result = await roster.AppendAsync(RosterFixture.Account,
+            [ancestor.Canonical(), child.Canonical(), first.Canonical(), second.Canonical()]);
+        Assert.Equal(("accepted", Invalid.Evidence), (result![0].Verdict, result[0].Reason));
+        Assert.Equal(("refused", Invalid.Evidence), (result[1].Verdict, result[1].Reason));
+        Assert.Equal("quarantined", result[2].Verdict);
+        Assert.Equal("accepted", result[3].Verdict);
+        var snapshot = (await Make(w, store).GetAsync(RosterFixture.Account))!;
+        Assert.Equal(before.Entries.Count + 3, snapshot.Entries.Count);
+        var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
+        Assert.True(replay.Holds(first.Hash));
+        Assert.True(replay.Holds(second.Hash));
+        Assert.Null(replay.Graph.Find(child.Hash));
+    }
+
+    [Fact]
+    public async Task Storage_cap_merge_evidence_never_adopts_an_unrelated_branch_even_after_replay()
+    {
+        var (w, store, roster) = await FullOrdinaryLog();
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        w.Add("Q", "G", "Q", "G");
+        Assert.Equal("quarantined", (await roster.AppendAsync(RosterFixture.Account, [Wire(w, "Q")]))![0].Verdict);
+        w.Merge("M", "B", ["addB", "Q"], adopt: true);
+        var body = JsonNode.Parse(w["M"].Body)!;
+        body["prev"] = RosterFixture.Hashes([parent.Hash, w.Entry("Q").Hash]);
+        body["seq"] = parent.Body.Seq + 1;
+        var merge = Padded(w["M"] with { Body = RosterFixture.Bytes(body) }, Entry.MaxBytes);
+        w.Remove("R", "G", "addB", "addB");
+        var removal = Padded(w["R"], Entry.MaxRemoveBytes, merge);
+        var result = await roster.AppendAsync(RosterFixture.Account, [merge.Canonical(), removal.Canonical()]);
+        Assert.Equal([("accepted", Invalid.Evidence), ("quarantined", (string?)null)], result!.Select(r => (r.Verdict, r.Reason)));
+        var snapshot = (await Make(w, store).GetAsync(RosterFixture.Account))!;
+        var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
+        Assert.True(replay.Graph[replay.Graph.Find(merge.Hash)!.Value].Evidence);
+        Assert.True(replay.IsQuarantined(replay.Graph.Find(w.Entry("Q").Hash)!.Value));
+        Assert.False(replay.State.Active.ContainsKey(w.Id("Q")));
+        w.Rename("after", "G", "G", "G", "after replay");
+        Assert.NotNull(await Make(w, store).AppendAsync(RosterFixture.Account, [Wire(w, "after")]));
+    }
+
+    [Fact]
+    public void Legacy_wrappers_remain_identical_and_the_verifier_has_no_relay_storage_cap()
+    {
+        var w = Scenario();
+        var verifier = w.Verifier();
+        var parent = w.Entry("addB");
+        for (var i = 0; i < 16; i++)
+        {
+            w.Add($"legacy{i}", "G", $"L{i}", "addB");
+            parent = Padded(w[$"legacy{i}"], Entry.MaxBytes, parent);
+            Assert.Equal(parent.Canonical(), Entry.Parse(Encoding.UTF8.GetBytes(parent.Canonical())).Canonical());
+            Assert.Equal(Verdict.Accepted, verifier.Offer(parent)[0].Verdict);
+        }
+    }
+
+    [Theory]
+    [InlineData("false", Refusal.Value)]
+    [InlineData("\"true\"", Refusal.Type)]
+    public void Evidence_markers_are_strict_and_never_bypass_signature_checks(string marker, string code)
+    {
+        var w = Scenario();
+        var wire = Wire(w, "addB");
+        Assert.Equal(code, Assert.Throws<RosterFormatException>(() =>
+            Entry.Parse(Encoding.UTF8.GetBytes(wire[..^1] + ",\"evidence\":" + marker + "}"))).Code);
+        w.Rename("bad", "B", "addB", "addB", "bad", signAs: "Z");
+        var bad = Wire(w, "bad");
+        var entry = Entry.Parse(Encoding.UTF8.GetBytes(bad[..^1] + ",\"evidence\":true}"));
+        Assert.Equal(Invalid.Signature, w.Verifier("G", "addB").Offer(entry)[0].Reason);
+    }
+
+    [Fact]
+    public async Task Invalid_signatures_after_a_size_refusal_do_not_replay_unchanged_history()
+    {
+        var (w, store, roster) = await FullOrdinaryLog();
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        var entries = new List<string>();
+        w.Rename("aside", "B", "addB", "addB", "aside");
+        entries.Add(Padded(w["aside"], Entry.MaxBytes, parent).Canonical());
+        for (var i = 0; i < 15; i++)
+        {
+            w.Rename($"bad{i}", "B", "addB", "addB", $"bad{i}", signAs: "Z");
+            entries.Add(Padded(w[$"bad{i}"], Entry.MaxBytes, parent).Canonical());
+        }
+        var clock = new CountingTime(w.Now);
+        var result = await Make(w, store, clock).AppendAsync(RosterFixture.Account, entries);
+        Assert.Equal(("refused", Invalid.Cap), (result![0].Verdict, result[0].Reason));
+        Assert.All(result.Skip(1), r => Assert.Equal(("refused", Invalid.Signature), (r.Verdict, r.Reason)));
+        // Each replay reads the clock once per accepted add; allow the initial replay and one rollback.
+        Assert.InRange(clock.Reads, 1, 2 * before.Entries.Count);
+        Assert.Equal(before.Entries, (await roster.GetAsync(RosterFixture.Account))!.Entries);
+    }
+
+    sealed class CountingTime(TimeSpan now) : TimeProvider
+    {
+        public int Reads { get; private set; }
+        public override DateTimeOffset GetUtcNow() { Reads++; return DateTimeOffset.UnixEpoch + now; }
     }
 
     [Fact]

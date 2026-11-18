@@ -21,6 +21,12 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     public const int MaxPerAppend = 16;
     // The whole stored log: the library's own entry cap, in canonical form, bounded again by bytes.
     public const int MaxStoredBytes = 224 * 1024;
+    // Reserve serialized space for one maximum removal and four maximum 8 KiB ancestors,
+    // including optional proofs, JSON escaping, and one array comma per appended entry.
+    const int MaxRemovalAncestors = 4;
+    static readonly int MaxOrdinaryBytes = MaxStoredBytes - MaxSerializedEntryBytes(Entry.MaxRemoveBytes)
+        - MaxRemovalAncestors * MaxSerializedEntryBytes(Entry.MaxBytes) - (MaxRemovalAncestors + 1);
+    public static readonly int MaxAppendFrame = MaxStoredBytes - MaxOrdinaryBytes + 256;
     const int Retries = 5;
 
     // Appends waiting on one account's lock, beyond the one running, are refused rather than queued.
@@ -95,6 +101,14 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     };
 
     static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    static int MaxSerializedEntryBytes(int size)
+    {
+        var proof = new Assertion([], [], []);
+        var shape = Entry.Canonical([], [], [], proof, proof, evidenceOnly: true);
+        // n bytes split over k base64url components occupy at most floor((4*n + 2*k)/3).
+        return JsonSerializer.SerializeToUtf8Bytes(shape).Length + (4 * size + 2 * 9) / 3;
+    }
 
     // Offers the entries, in order, to the account's log; null when the store could not be reached
     // (the caller says so, and nothing was kept).
@@ -219,29 +233,81 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         var changed = false;
         // Entries set aside over a budget or cap: a later removal in this append may need them as
         // evidence, and then they are kept with it, ahead of it.
-        var aside = new List<(int Index, Entry Entry)>();
+        var aside = new List<(int Index, Entry Entry, bool Size)>();
+        var pendingAtVerifier = new List<Entry>();
+        var verifierDirty = false;
         foreach (var (index, entry) in parsed)
         {
+            var persisted = replay.Any(e => e.Hash.AsSpan().SequenceEqual(entry.Hash));
+            if (aside.Count > 0 || verifierDirty)
+            {
+                // Size-refused entries must not affect later entries unless they are ancestors.
+                var needed = new HashSet<string>(entry.Body.Prev.Select(h => Codec.Base64Url(h)));
+                foreach (var a in aside.AsEnumerable().Reverse())
+                {
+                    if (needed.Contains(Codec.Base64Url(a.Entry.Hash)))
+                    {
+                        needed.UnionWith(a.Entry.Body.Prev.Select(h => Codec.Base64Url(h)));
+                    }
+                }
+                var pending = aside.Where(a => !a.Size || needed.Contains(Codec.Base64Url(a.Entry.Hash))).Select(a => a.Entry).ToList();
+                // A refusal before Commit leaves the same validated state and pending ancestors.
+                if (verifierDirty || !pending.SequenceEqual(pendingAtVerifier))
+                {
+                    verifier = new RosterVerifier(accountId, generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
+                    verifier.Offer(replay);
+                    verifier.Offer(pending);
+                    pendingAtVerifier = pending;
+                    verifierDirty = false;
+                }
+            }
+            var beforeCount = verifier.Graph.Count;
             var offered = verifier.Offer(entry)[0];
+            verifierDirty = verifier.Graph.Count != beforeCount || offered.Verdict is Verdict.Accepted or Verdict.Quarantined;
             var verdict = offered.Verdict.ToString().ToLowerInvariant();
             results[index] = new Result(Codec.Base64Url(offered.Hash), verdict, offered.Reason);
             if (offered.Verdict is Verdict.Accepted or Verdict.Quarantined)
             {
-                if (entry.Body.Op == EntryOp.Remove)
+                var promoted = aside.Where(a => verifier.Holds(a.Entry.Hash)
+                    && !a.Entry.Hash.AsSpan().SequenceEqual(entry.Hash)
+                    && !replay.Any(e => e.Hash.AsSpan().SequenceEqual(a.Entry.Hash))).ToList();
+                var evidence = promoted.DistinctBy(a => Codec.Base64Url(a.Entry.Hash)).ToList();
+                if (entry.Body.Op == EntryOp.Remove
+                    && (evidence.Count > MaxRemovalAncestors || evidence.Any(a => a.Entry.Size > Entry.MaxBytes)))
                 {
-                    foreach (var (ai, ae) in aside.Where(a => verifier.Holds(a.Entry.Hash)).ToList())
-                    {
-                        kept.Add(ae.Canonical());
-                        results[ai] = new Result(Codec.Base64Url(ae.Hash), "accepted", Invalid.Evidence);
-                        aside.RemoveAll(a => a.Index == ai);
-                    }
+                    results[index] = results[index] with { Verdict = "refused", Reason = "removal-ancestry-cap" };
+                    continue;
                 }
-                kept.Add(entry.Canonical());
+                var candidate = new List<string>(kept);
+                candidate.AddRange(evidence.Select(a => a.Entry.Canonical()));
+                candidate.Add(entry.Canonical());
+                var limit = entry.Body.Op == EntryOp.Remove ? MaxStoredBytes : MaxOrdinaryBytes;
+                if (JsonSerializer.SerializeToUtf8Bytes(new Stored(1, generation, candidate), Json).Length > limit)
+                {
+                    results[index] = results[index] with { Verdict = "refused", Reason = Invalid.Cap };
+                    if (!persisted) { aside.Add((index, entry.AsEvidence(), true)); }
+                    continue;
+                }
+                if (evidence.Count > 0 && (entry.Body.Op != EntryOp.Remove
+                    || !verifier.CanCarryEvidence(entry, evidence.Where(a => a.Size).Select(a => a.Entry))))
+                {
+                    results[index] = results[index] with { Verdict = "refused", Reason = Invalid.Evidence };
+                    continue;
+                }
+                foreach (var (ai, ae, _) in promoted)
+                {
+                    results[ai] = new Result(Codec.Base64Url(ae.Hash), "accepted", Invalid.Evidence);
+                }
+                aside.RemoveAll(a => verifier.Holds(a.Entry.Hash));
+                kept = candidate;
+                replay.AddRange(evidence.Select(a => a.Entry));
+                replay.Add(entry);
                 changed = true;
+                verifierDirty = false;
             }
             else if (offered.Verdict == Verdict.Refused && verifier.Graph.Find(entry.Hash) is not null)
             {
-                aside.Add((index, entry));
+                if (!persisted) { aside.Add((index, entry.AsEvidence(), false)); }
             }
         }
         return (results, changed ? new Stored(1, generation, kept) : null);
