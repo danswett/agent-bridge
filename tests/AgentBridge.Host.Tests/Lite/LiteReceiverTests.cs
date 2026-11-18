@@ -73,6 +73,29 @@ public class LiteReceiverTests
     }
 
     [Fact]
+    public async Task Durable_recovery_reauthorizes_the_signed_Lite_request_instead_of_replaying_raw_text()
+    {
+        using var r = new Rig();
+        var folder = Directory.CreateTempSubdirectory("lite-inbox-").FullName;
+        try
+        {
+            var service = new AgentBridge.Host.SessionService(null!,
+                new AgentBridge.Protocol.MachineInfo("fixture", "fixture", "test", "test")) { LiteReceiver = r.Receiver };
+            service.ConfigureRelayInbox(Path.Combine(folder, "replies.json"), (_, _) => true, _ => true);
+            using var stopped = new CancellationTokenSource();
+            stopped.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                r.Receiver.ReceiveAsync(r.Channel, r.Request(), stopped.Token));
+            Assert.Equal(0, r.Deliver.Calls);
+            r.Mode.On = false;
+            await service.RelayInbox!.RecoverAsync(["agent-b2"]);
+            Assert.Equal(0, r.Deliver.Calls);
+            Assert.Contains("\"Outcome\":\"refused\"", File.ReadAllText(Path.Combine(folder, "replies.json")));
+        }
+        finally { Directory.Delete(folder, true); }
+    }
+
+    [Fact]
     public async Task A_good_request_is_delivered_and_acknowledged_with_its_id()
     {
         using var r = new Rig();
