@@ -158,4 +158,51 @@ public sealed class SessionReaperServiceTests : IAsyncLifetime
         await using var blocked = new SessionReaperService(root, "fixture-vm", Read, () => Settings, log.Add, clock);
         await Assert.ThrowsAnyAsync<IOException>(() => blocked.CycleAsync());
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Blocked_config_read_cannot_hold_the_deadline_or_shutdown(bool reachDeadline)
+    {
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        await using var service = new SessionReaperService(folder, "fixture-vm", Read, () =>
+        {
+            Interlocked.Increment(ref calls);
+            entered.TrySetResult();
+            try { release.Wait(); return Settings; }
+            finally { exited.TrySetResult(); }
+        }, log.Add, clock);
+        Task? shutdown = null;
+        Task<SessionReaperReceipt?>? cycle = null;
+        if (reachDeadline) { cycle = Task.Run(() => service.CycleAsync()); }
+        else { service.Start(); }
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            if (cycle is not null)
+            {
+                clock.Advance(TimeSpan.FromMinutes(2));
+                var failed = Assert.IsType<SessionReaperReceipt>(await cycle.WaitAsync(TimeSpan.FromSeconds(10)));
+                Assert.NotNull(failed.Problem);
+                Assert.Empty(failed.Kept);
+                Assert.Empty(failed.Ended);
+                var blocked = Assert.IsType<SessionReaperReceipt>(await service.CycleAsync().WaitAsync(TimeSpan.FromSeconds(10)));
+                Assert.NotNull(blocked.Problem);
+                Assert.Equal(1, calls);
+            }
+            shutdown = service.DisposeAsync().AsTask();
+            await shutdown.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            release.Set();
+            await exited.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            if (cycle is not null) { await cycle.WaitAsync(TimeSpan.FromSeconds(10)); }
+            shutdown ??= service.DisposeAsync().AsTask();
+            await shutdown.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
 }
