@@ -88,6 +88,8 @@ The optional final wrapper member `evidence` is only `true` (`type` for non-bool
 validated entry down the cap-candidate path: it never applies or adopts a branch.
 Only an eligible removal can retain it as evidence. Forwarders preserve it, including
 in stored logs and client replay; signed body bytes and hashes are unchanged.
+A later unmarked copy is revalidated and, if eligible, upgrades the same graph node
+to an ordinary entry; the unsigned hint cannot permanently suppress a signed removal.
 Wrappers without it and the verifier's 4,096-entry limit are unchanged. Older parsers
 refuse the new member rather than applying evidence as an ordinary entry.
 

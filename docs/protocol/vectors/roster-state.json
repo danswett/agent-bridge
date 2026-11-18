@@ -12492,6 +12492,155 @@
       }
     },
     {
+      "name": "evidence-only-adopting-merge",
+      "about": "a marked adopting merge adopts nothing when a removal promotes it from candidate to evidence",
+      "devices": {
+        "G": "425207365333a6bd3e6ba85b37981cee",
+        "W": "88bb6ecc56acc6103fe150ee4d14db1f",
+        "D0": "ea5e900abf4d228b49d679aaf8df7763",
+        "D1": "2c9adda44c83c0e24eb14827b3d2ed06",
+        "D2": "8c26a4125d300726be8bf2572fa71eff",
+        "P": "168f7ef90103063ef1d241f79294adf4"
+      },
+      "entries": [
+        {
+          "label": "G",
+          "hash": "h8R764RL38lL-BgC_2L3XwtFJaMhF_hrSWHv_2LOCtI",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImdlbmVzaXMiLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInNlcSI6MCwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowMFoiLCJkZXZpY2UiOnsiaWQiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImRoIjoiQkE4c0VkZ2JuYU52NDdqMUlRYkxCR2JUNXZnekhQMnFYT1l4OXl5Q040MFNuUVpjSXVyVE43Y1hMclFuZ2Nyc0J6VS1HRzFFa3pnUGRhdTltclVoTTFzIiwic2lnbiI6IkJJRW1Lb0REWk9zZHFqMVMxLTFrZ0d5b2k2ZHJnUVE1RExYaFd3LXJvdWdfck40SXBfT0VXaDNHYUhRTEpKUUJVM0lwWG9hZVZfNUsyZlJKYWtGM2lIcyIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IkcifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiZ2VuZXNpcyJ9fQ\",\"sig\":\"MEUCIQDwJYK2Bw7DzqfsYaTjisdFiC5BCAodf9r-8WDE0osTxgIgdKd19XOoaKbIr233x6H54hK_y_kXT3z-qaigvVMdlDg\"}"
+        },
+        {
+          "label": "+W",
+          "hash": "Fq4NzJ9D9CdmbhDjcQDdvQP970V0XjS2us2AH0dkypU",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjoxLCJwcmV2IjpbImg4Ujc2NFJMMzhsTC1CZ0NfMkwzWHd0RkphTWhGX2hyU1dIdl8yTE9DdEkiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowMVoiLCJkZXZpY2UiOnsiaWQiOiI4OGJiNmVjYzU2YWNjNjEwM2ZlMTUwZWU0ZDE0ZGIxZiIsImRoIjoiQk1UUEF6cXNkMEZkT1ExMUh5Vmh4ZUM0QjFCMWJ1SEtsLU10alF2TlZzMGtlenZ4c05kMi1wTm90Z3lLcmZMd25LZzZvelJEa0NDNXNDMDJMQ3dsUjVrIiwic2lnbiI6IkJBT0pKRFFaTUFJZ25sdk84NTNWUk9xNnpoUjhSaDFhWWVWSF93M2FlRlVmeU9ZaEREdzZOR3FJZUF3RmhSZUlBWm5GYUVUbG93UDNmWGFpcVJmcjRKYyIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IlcifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiY29kZSIsInRyYW5zY3JpcHQiOiJ6aG5tOTB4OWJRemZMSjFvWU9XUndwd0xJcHY1cGFsaUExYnp1Q3M2Q2NVIn19\",\"sig\":\"MEUCIQC2yjtF8GTRSDHjHVIqHwwTLshy2XUFg-IW6sp_j4YXiwIgUe9jsQ8ouMH8E8L8MDXzBQ0amUtREp61GrhSfieIM4s\"}"
+        },
+        {
+          "label": "+D0",
+          "hash": "IR2_nIokg3kYUmGjhWJmLq9vWnGg2STcIawZ0kjZFCQ",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjoxLCJwcmV2IjpbImg4Ujc2NFJMMzhsTC1CZ0NfMkwzWHd0RkphTWhGX2hyU1dIdl8yTE9DdEkiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowMloiLCJkZXZpY2UiOnsiaWQiOiJlYTVlOTAwYWJmNGQyMjhiNDlkNjc5YWFmOGRmNzc2MyIsImRoIjoiQkhTTTFRUnBQSFl4UEZncGMwWUxtbW5KWjlJeHp3VFJTVmtxN2RDNjIxTVJMX3MyWW5Vd3k1UFJyZ1lreks2NVk4OWYtZXNQSjVpYnRhb3FpQXZwa1RFIiwic2lnbiI6IkJKeVdTS0lYd1ROelI4TE5NQkVIM1ItZjVDNFkzZGxFOFZwY3R3dndMUTFGYWx2cmhnVHFwNTRIR19Xa3JCbEROd3pCZ2szLXB4TjA2ZFc1VWNCN0NzNCIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IkQwIn0sImFwcHJvdmFsIjp7Im1ldGhvZCI6ImNvZGUiLCJ0cmFuc2NyaXB0IjoiVUQwUXZOMVYzbnBsNXFVTmJnTmJyeDB2WG02V1ZNU1JGSW0xMW9OQmpiayJ9fQ\",\"sig\":\"MEQCIHkaxXULjmd9XgbxRf0Dl8MfcW6ybQxOArLS324Wjof7AiAOURS80gcHj4AaFTH5BxEl5L-jwsAdO-rXFuLZ7U7PHA\"}"
+        },
+        {
+          "label": "+D1",
+          "hash": "Q3w_v7UA_n3tUtxEzq01rI27XeTeXeqbW5EZwTnP-lQ",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjoxLCJwcmV2IjpbImg4Ujc2NFJMMzhsTC1CZ0NfMkwzWHd0RkphTWhGX2hyU1dIdl8yTE9DdEkiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowM1oiLCJkZXZpY2UiOnsiaWQiOiIyYzlhZGRhNDRjODNjMGUyNGViMTQ4MjdiM2QyZWQwNiIsImRoIjoiQkxYZHotZ0pid2dDOGdtLWU0WHhFbFdGZWVLQVNMS2wtVmJSdFdwOHhydUxzdmx5d3g4SzNINlk2NUhrQlZVa2J3ZDN1X0FyWjI3VnBzbXlUQm1IOTlnIiwic2lnbiI6IkJGSUZSUk1rVnluaWJrRkVzZ2d1SFVYR1QxSjU1TXhYVkRmUFF4QWEtNzNiRDJSZXNJZ1djOTRFeWRNclNYNm9wbXliTlhIa19nWkJHRnNiUFNQeHkyWSIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IkQxIn0sImFwcHJvdmFsIjp7Im1ldGhvZCI6ImNvZGUiLCJ0cmFuc2NyaXB0IjoiRDdYUE12Vk44cE44TERsWlN1TVpucXlMbmlsRlhIcGtyUVpQUzYzZ2VpOCJ9fQ\",\"sig\":\"MEUCIQCkpQSvPzlWVdtmTQXre9Rx7JcKOUViQwQ_SqAudG-QXQIgRqRJTMwvjUL5TbVhQtWMykzaHAZjsVjwWmuwg09XxeA\"}"
+        },
+        {
+          "label": "+D2",
+          "hash": "o9-lqPjPdsUGAzXmTaGC0j0DFMDqIxIipqU_ChHEeyc",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjoxLCJwcmV2IjpbImg4Ujc2NFJMMzhsTC1CZ0NfMkwzWHd0RkphTWhGX2hyU1dIdl8yTE9DdEkiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowNFoiLCJkZXZpY2UiOnsiaWQiOiI4YzI2YTQxMjVkMzAwNzI2YmU4YmYyNTcyZmE3MWVmZiIsImRoIjoiQk40QkFxUEFxOXB2N0lZT0x5eENKRlRmQVRyYXpEUzJMQkFDZEIxLUprcmpoRVBab3ZubGVZWl9aYlRBcHFjNE9ZNFZPRVpZY0JkeGhkbFNNdDVPSWZRIiwic2lnbiI6IkJLaXlKdWo5VkYxSndSdElxNFVpTTBBUm9YeXhCNFZ6Vy04QXJZbEdWeERLbzcxNEE3MEh6TElQRU1PeVE0bzhmOU44azNRT29TbE94RjJzdk1pTGhjbyIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IkQyIn0sImFwcHJvdmFsIjp7Im1ldGhvZCI6ImNvZGUiLCJ0cmFuc2NyaXB0IjoiX1N3VlJYSjZNbVlMMXNZMEFkMk1ObG1XRHgtR3dJR1dTeEdaNUdkNzFKNCJ9fQ\",\"sig\":\"MEUCIQDKYJJTEvKsKDsE4f1kIBYYqaqnTRxkIJ3un5C3uaxEJAIgGC1URUl2b9he9JYeDH2SnK0VLVW64SOkWgN98HpuR_M\"}"
+        },
+        {
+          "label": "+P",
+          "hash": "yebg4w-D7ZYe64HZYGKi3sXxxljZcTuMoazkSaLGpU0",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjoxLCJwcmV2IjpbImg4Ujc2NFJMMzhsTC1CZ0NfMkwzWHd0RkphTWhGX2hyU1dIdl8yTE9DdEkiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowNVoiLCJkZXZpY2UiOnsiaWQiOiIxNjhmN2VmOTAxMDMwNjNlZjFkMjQxZjc5Mjk0YWRmNCIsImRoIjoiQk05UG5vU21nQjBBUEpNbFZNdFRJNEJLOHYybk1ZNk92bnA2bEwtemhyMVhkWHg0RjM1RHpzWnBTN0R0UjlHZ1E4QjVZT0NFSGUtV2hxMFNNNWJPdDJFIiwic2lnbiI6IkJITThxekhIR01hVVN2M2lydVNtRzVIOWJqT2tJUEdfbVhJdkVJR28zbDRzUm9ESFpkRjJqSDc1SWljMTBvazZpbjkzVVp6eFNsTG5rMi1YNFJBVFM5byIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IlAifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiY29kZSIsInRyYW5zY3JpcHQiOiJaTkJMY3NZYk8wdkVBdHRDX2I5ZGt1ZGpZMEVra1k5ZUM5X0RXZUpCTzhNIn19\",\"sig\":\"MEUCIQC1n2DZPfkv96N-DPsyorvYZLy-74OOCVvCE3onQMoNVAIgJhNxVjCa8Z7SO8guiMD4Uow3uY5f-Kn8KadiH7iVr6E\"}"
+        },
+        {
+          "label": "adopt",
+          "hash": "RgyiIuPZ6hZY36w_Y772ABahnwa5oXT0PhFSOhndHvA",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6Im1lcmdlIiwiYWNjb3VudCI6Im93bmVyQGV4YW1wbGUiLCJnZW5lcmF0aW9uIjoiYWI0ZmIzY2MyNGEzY2M5OTI0OWFiMDY5NGMzNjFhODgiLCJzZXEiOjIsInByZXYiOlsiRnE0TnpKOUQ5Q2RtYmhEamNRRGR2UVA5NzBWMFhqUzJ1czJBSDBka3lwVSIsInllYmc0dy1EN1pZZTY0SFpZR0tpM3NYeHhsalpjVHVNb2F6a1NhTEdwVTAiXSwiYnkiOiI4OGJiNmVjYzU2YWNjNjEwM2ZlMTUwZWU0ZDE0ZGIxZiIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowNloiLCJhZG9wdCI6dHJ1ZX0\",\"sig\":\"MEQCIANd0_Sov-knoAW6WLD3AX7w49jQW5qb18sowpUNuSc0AiAFyDfmxZD3VIq7OVMfzes3mwvQY8Gewxj4uu6FMa4g5g\",\"evidence\":true}"
+        },
+        {
+          "label": "G-W",
+          "hash": "a2SMQ_EeNv4Nd3Nwwcfu4WLOYdqRsm8__WJPLeyox0E",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InJlbW92ZSIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjozLCJwcmV2IjpbIlJneWlJdVBaNmhaWTM2d19ZNzcyQUJhaG53YTVvWFQwUGhGU09obmRIdkEiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowN1oiLCJ0YXJnZXQiOnsiaWQiOiI4OGJiNmVjYzU2YWNjNjEwM2ZlMTUwZWU0ZDE0ZGIxZiIsImFkZCI6IkZxNE56SjlEOUNkbWJoRGpjUURkdlFQOTcwVjBYalMydXMyQUgwZGt5cFUifSwia2VlcCI6W119\",\"sig\":\"MEUCIQCCgdkrWh-XWm5x4FGw_RFn_lo-VOfRvKAPiRNcgOg9cAIgdm04xxTdir8E_zbsiJBQ6OogQHzHCHc4cP_g2En0O-o\"}"
+        }
+      ],
+      "steps": [
+        {
+          "offer": "G",
+          "verdict": "accepted"
+        },
+        {
+          "offer": "+W",
+          "verdict": "accepted"
+        },
+        {
+          "offer": "+D0",
+          "verdict": "accepted"
+        },
+        {
+          "offer": "+D1",
+          "verdict": "accepted"
+        },
+        {
+          "offer": "+D2",
+          "verdict": "accepted"
+        },
+        {
+          "offer": "+P",
+          "verdict": "quarantined"
+        },
+        {
+          "offer": "adopt",
+          "verdict": "refused",
+          "reason": "cap"
+        },
+        {
+          "serving": [
+            "D0",
+            "D1",
+            "D2",
+            "G",
+            "W"
+          ],
+          "names": {
+            "D0": "D0",
+            "D1": "D1",
+            "D2": "D2",
+            "G": "G",
+            "W": "W"
+          }
+        },
+        {
+          "offer": "G-W",
+          "verdict": "quarantined"
+        }
+      ],
+      "state": {
+        "active": {
+          "D0": {
+            "add": "+D0",
+            "confirmed": false,
+            "name": "D0"
+          },
+          "D1": {
+            "add": "+D1",
+            "confirmed": false,
+            "name": "D1"
+          },
+          "D2": {
+            "add": "+D2",
+            "confirmed": false,
+            "name": "D2"
+          },
+          "G": {
+            "add": "G",
+            "confirmed": true,
+            "name": "G"
+          }
+        },
+        "conflicted": [],
+        "heads": [
+          "+D0",
+          "+D1",
+          "G-W",
+          "+D2"
+        ],
+        "quarantined": [
+          "+P",
+          "G-W"
+        ],
+        "evidence": [
+          "adopt"
+        ],
+        "serving": [
+          "D0",
+          "D1",
+          "D2",
+          "G"
+        ]
+      }
+    },
+    {
       "name": "unrefreshed-removal",
       "about": "an add on a removal signed 30 entries back is as far outside the window as its parent",
       "devices": {

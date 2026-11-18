@@ -26,6 +26,33 @@ public sealed class RosterStateTests
         replay.Offer(Entry.Parse(System.Text.Encoding.UTF8.GetBytes(evidence.Canonical())), w.Entry("R"));
         Assert.True(replay.Graph[replay.Graph.Find(evidence.Hash)!.Value].Evidence);
         Assert.False(replay.State.Active.ContainsKey(w.Id("B")));
+        Assert.Equal(Verdict.Accepted, replay.Offer(w.Entry("E"))[0].Verdict);
+        Assert.False(replay.Graph[replay.Graph.Find(evidence.Hash)!.Value].Evidence);
+    }
+
+    [Theory]
+    [InlineData("G")]
+    [InlineData("+B")]
+    [InlineData("E")]
+    [InlineData("R")]
+    public void A_plain_copy_upgrades_a_marked_candidate_without_duplicating_it(string label)
+    {
+        var w = new World();
+        w.Genesis(); w.Add("+B", "G", "B", "G");
+        w.Rename("E", "B", "+B", "+B", "Desk"); w.Remove("R", "G", "+B", "E");
+        var v = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        foreach (var l in w.Labels.TakeWhile(l => l != label)) { w.Feed(v, l); }
+        var plain = w.Entry(label);
+        var wire = plain.Canonical();
+        Assert.Equal(Verdict.Refused, v.Offer(Entry.Parse(System.Text.Encoding.UTF8.GetBytes(wire[..^1] + ",\"evidence\":true}")))[0].Verdict);
+        var count = v.Graph.Count;
+        var bad = w.Entry(label); bad.Sig[^1] ^= 1;
+        Assert.Equal(Invalid.Signature, v.Offer(bad)[0].Reason);
+        Assert.Equal(Verdict.Accepted, v.Offer(plain)[0].Verdict);
+        Assert.Equal(count, v.Graph.Count);
+        Assert.False(v.Graph[v.Graph.Find(plain.Hash)!.Value].Entry.EvidenceOnly);
+        Assert.Equal(Verdict.Duplicate, v.Offer(plain)[0].Verdict);
+        if (label == "R") { Assert.Equal(["G"], w.Active(v)); }
     }
 
     // G, then A and B added by G in a line, both confirmed.

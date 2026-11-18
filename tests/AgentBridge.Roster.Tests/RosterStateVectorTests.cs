@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using AgentBridge.Roster;
 using static RosterFixture;
@@ -13,7 +14,7 @@ public sealed class RosterStateVectorTests
 
     sealed record Step(string? Offer = null, double? Hours = null, string? Adopt = null);
 
-    sealed record Scenario(string Name, string About, Func<World> Build, Func<World, Step[]>? Steps = null, int? AddCap = null, bool AcceptHostSign = false);
+    sealed record Scenario(string Name, string About, Func<World> Build, Func<World, Step[]>? Steps = null, int? AddCap = null, bool AcceptHostSign = false, string? EvidenceOnly = null);
 
     static Step[] All(World w) => [.. w.Labels.Select(l => new Step(l))];
 
@@ -39,6 +40,20 @@ public sealed class RosterStateVectorTests
                 w.Merge("tidy", "G", ["+D8", "nY"], adopt: true);
                 return w;
             });
+        yield return new("evidence-only-adopting-merge", "a marked adopting merge adopts nothing when a removal promotes it from candidate to evidence",
+            () =>
+            {
+                var w = new World();
+                w.Genesis();
+                w.Add("+W", "G", "W", "G");
+                for (var i = 0; i < 3; i++) { w.Add($"+D{i}", "G", $"D{i}", "G"); }
+                w.Add("+P", "G", "P", "G");
+                w.Merge("adopt", "W", ["+W", "+P"], adopt: true);
+                w.Remove("G-W", "G", "+W", "adopt");
+                return w;
+            },
+            w => [.. All(w).Where(s => s.Offer != "G-W"), new Step(), new Step("G-W")],
+            EvidenceOnly: "adopt");
         // Quarantine depends on what a verifier held when an entry arrived, so these are in one order:
         // the property tests leave them out.
         yield return new("unrefreshed-removal", "an add on a removal signed 30 entries back is as far outside the window as its parent", () => RosterWindowTests.Unrefreshed(removalFirst: true));
@@ -263,9 +278,10 @@ public sealed class RosterStateVectorTests
         var v = new RosterVerifier(Account, Generation, () => w.Now) { AddCap = scenario.AddCap ?? RosterVerifier.MaxAdds, AcceptHostSign = scenario.AcceptHostSign };
         var devices = new JsonObject();
         var entries = new JsonArray();
+        string Wire(string label) => label == scenario.EvidenceOnly ? w[label].Wire[..^1] + ",\"evidence\":true}" : w[label].Wire;
         foreach (var l in w.Labels)
         {
-            entries.Add(new JsonObject { ["label"] = l, ["hash"] = Hash(w, l), ["wrapper"] = w[l].Wire });
+            entries.Add(new JsonObject { ["label"] = l, ["hash"] = Hash(w, l), ["wrapper"] = Wire(l) });
         }
         var outSteps = new JsonArray();
         foreach (var step in steps)
@@ -278,7 +294,7 @@ public sealed class RosterStateVectorTests
             }
             if (step.Offer is { } label)
             {
-                var offered = w.Feed(v, label)[0];
+                var offered = v.Offer(Entry.Parse(Encoding.UTF8.GetBytes(Wire(label))))[0];
                 o["offer"] = label;
                 o["verdict"] = offered.Verdict.ToString().ToLowerInvariant();
                 if (offered.Reason is not null) { o["reason"] = offered.Reason; }
@@ -338,6 +354,15 @@ public sealed class RosterStateVectorTests
         Assert.Equal(["G", "R1", "R2"], Active("reciprocal"));
         Assert.Empty(Active("tie"));
         Assert.Equal(["Y"], byName["local-adoption"]["state"]!["active"]!.AsObject().Where(p => p.Key == "Y").Select(p => p.Key));
+        var evidenceMerge = byName["evidence-only-adopting-merge"];
+        var evidenceSteps = evidenceMerge["steps"]!.AsArray();
+        Assert.Equal("refused", evidenceSteps[^3]!["verdict"]!.GetValue<string>());
+        Assert.Equal("cap", evidenceSteps[^3]!["reason"]!.GetValue<string>());
+        Assert.Equal(["D0", "D1", "D2", "G", "W"], evidenceSteps[^2]!["names"]!.AsObject().Select(p => p.Key));
+        Assert.Equal("quarantined", evidenceSteps[^1]!["verdict"]!.GetValue<string>());
+        Assert.Equal(["adopt"], evidenceMerge["state"]!["evidence"]!.AsArray().Select(n => n!.GetValue<string>()));
+        Assert.Contains("+P", evidenceMerge["state"]!["quarantined"]!.AsArray().Select(n => n!.GetValue<string>()));
+        Assert.Equal(["D0", "D1", "D2", "G"], Active("evidence-only-adopting-merge"));
         var probation = byName["probation"]["steps"]!.AsArray();
         Assert.Equal(["A", "G"], probation[^3]!["serving"]!.AsArray().Select(n => n!.GetValue<string>()));
         Assert.Equal(["A", "C", "G"], probation[^2]!["serving"]!.AsArray().Select(n => n!.GetValue<string>()));
