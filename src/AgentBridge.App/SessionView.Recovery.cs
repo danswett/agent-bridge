@@ -21,7 +21,7 @@ public sealed partial class SessionView
             || Card?.Row?.Key is not { } key || shownHistory != key || Recovery?.Current?.Key != key) { return; }
         var turn = ReadingHistory();
         Recovery.Remember(new(key, new(scroll.VerticalOffset, pinEnd || scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack,
-            anchor, turn?.Id, turn?.Top ?? 0)));
+            anchor, turn?.Id, turn?.Top ?? 0, turn is null ? Card?.Session.Activity.ResponseTurn : null)));
     }
 
     // History arrives asynchronously and is drawn in small batches. Keep the saved anchor
@@ -30,6 +30,9 @@ public sealed partial class SessionView
     {
         if (restoreReading is not { } saved) { return false; }
         if (applyingReading || shownHistory != Card?.Row?.Key || ConversationScroll is not { ViewportHeight: > 0 } scroll || !ConversationList.IsLoaded) { return true; }
+        // A live block belongs to the protocol's reply turn, not the latest prompt or an unproven legacy offset.
+        if (!saved.AtEnd && saved.Turn is null && (string.IsNullOrEmpty(saved.ResponseTurn) || saved.ResponseTurn != Card?.Session.Activity.ResponseTurn))
+        { restoreReading = null; anchor = null; pinEnd = true; return false; }
         if (history is { State: HistoryLoad.Loading } or { State: HistoryLoad.Idle, HasOlder: false, Start: null }) { return true; }
         applyingReading = true;
         try
@@ -47,8 +50,9 @@ public sealed partial class SessionView
                 else if (historyShown.FirstOrDefault() is { } first && history?.Turns.TakeWhile(t => t.Id != first.Id).Any(t => t.Id == id) == true) { DrawEarlier(); return true; }
                 else if (history is { HasOlder: true, State: HistoryLoad.Idle }) { _ = history.LoadOlderAsync(); return true; }
             }
-            else if (!saved.AtEnd && saved.Block is { Index: >= 0 } block && block.Index < blocks.Count)
+            else if (!saved.AtEnd && saved.Block is { Index: >= 0 } block)
             {
+                if (block.Index >= blocks.Count) { return true; }
                 ConversationList.ScrollIntoView(blocks[block.Index]);
                 ConversationList.UpdateLayout();
                 if (ConversationList.ContainerFromIndex(block.Index) is not FrameworkElement container) { return true; }

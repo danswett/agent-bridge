@@ -12,7 +12,7 @@ public sealed class SessionRecoveryTests : IDisposable
     [Fact]
     public void The_latest_selection_and_scroll_anchor_survive_without_transcript_text()
     {
-        var saved = new SessionReading("local\nsecond", new SessionPosition(420, false, new ScrollAnchor(3, -12), "turn-1", -8));
+        var saved = new SessionReading("local\nsecond", new SessionPosition(420, false, new ScrollAnchor(3, -12), "turn-1", -8, "reply-1"));
         var store = new SessionRecovery(FilePath, log.Add);
         store.Remember(new("local\nfirst", null));
         store.Remember(saved);

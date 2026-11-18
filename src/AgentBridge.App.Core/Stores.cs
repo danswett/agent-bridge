@@ -4,7 +4,7 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
-public sealed record SessionPosition(double Offset, bool AtEnd, ScrollAnchor? Block = null, string? Turn = null, double TurnTop = 0);
+public sealed record SessionPosition(double Offset, bool AtEnd, ScrollAnchor? Block = null, string? Turn = null, double TurnTop = 0, string? ResponseTurn = null);
 public sealed record SessionReading(string Key, SessionPosition? Position);
 
 // Only opaque session/turn keys and geometry, never transcript content.
