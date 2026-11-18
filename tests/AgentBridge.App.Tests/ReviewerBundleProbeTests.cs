@@ -69,6 +69,52 @@ public sealed class ReviewerBundleProbeTests
         Verify(bytes);
     }
 
+    [Theory]
+    [InlineData("outside-image")]
+    [InlineData("overflow")]
+    [InlineData("negative-size")]
+    [InlineData("overlap")]
+    [InlineData("unaligned")]
+    [InlineData("zero-alignment")]
+    public void Invalid_mapped_section_extents_fail_closed(string damage)
+    {
+        var bytes = HostwBundleTests.Bundle();
+        switch (damage)
+        {
+            case "outside-image": BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x190), 0x1001); break;
+            case "overflow": BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x190), int.MaxValue); break;
+            case "negative-size": BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x190), -1); break;
+            case "zero-alignment": BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0xb8), 0); break;
+            default:
+                BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(0x86), 2);
+                BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x1b8), 512);
+                BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x1bc), damage == "overlap" ? 0x1000 : 0x1800);
+                break;
+        }
+        Assert.Throws<InvalidDataException>(() => Verify(bytes));
+    }
+
+    [Fact]
+    public void An_aligned_separate_zero_fill_section_can_supply_runtime_data()
+    {
+        var bytes = HostwBundleTests.Bundle();
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(0x86), 2);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0xd0), 0x3000);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x1b8), 512);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x1bc), 0x2000);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x274), 0x2000);
+        Verify(bytes);
+    }
+
+    [Fact]
+    public void Raw_file_padding_cannot_supply_a_runtime_export()
+    {
+        var bytes = HostwBundleTests.Bundle();
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x190), 511);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x274), 0x11ff);
+        Assert.Throws<InvalidDataException>(() => Verify(bytes));
+    }
+
     [Fact]
     public void A_deflate_stream_without_its_final_block_is_rejected()
     {

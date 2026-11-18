@@ -9,6 +9,9 @@ Sources: [manifest](https://github.com/dotnet/runtime/blob/v10.0.0/src/installer
 Fail closed on other formats/flags; limits are 10,000 entries, 512 MiB per file,
 1 GiB expanded total and 4 MiB per embedded JSON document.
 Exports require mapped, non-forwarded function targets and valid ordinal tables.
+Every mapped section extent is image-bounded, aligned and non-overlapping, computed
+without integer overflow; legitimate zero-fill data exports remain supported.
+Export targets must lie in declared virtual bytes, never raw file-alignment padding.
 Compressed input must terminate at BFINAL with no trailing bytes; dependency graphs
 must be acyclic and JSON property names unique recursively.
 The 16 MiB native-section limit remains fail-closed. Unknown entries are hash-bound
