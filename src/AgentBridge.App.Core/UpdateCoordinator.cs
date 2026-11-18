@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Runtime.ExceptionServices;
 
 namespace AgentBridge.App.Core;
 
@@ -49,7 +50,9 @@ public sealed class UpdateCoordinator(
                 ErrorCode = error is Win32Exception native ? native.NativeErrorCode : error.HResult
             };
 
-        UpdateApplyResult result;
+        UpdateApplyResult result = new(UpdateApplyEnd.Unknown, null, step, targetVersion,
+            null, null, clock.GetUtcNow(), TimeSpan.Zero);
+        ExceptionDispatchInfo? cancellation = null;
         Exception? releaseError = null;
         try
         {
@@ -92,6 +95,10 @@ public sealed class UpdateCoordinator(
                 result = result with { Step = step, At = clock.GetUtcNow(), Elapsed = clock.GetElapsedTime(began) };
             }
         }
+        catch (OperationCanceledException error)
+        {
+            cancellation = ExceptionDispatchInfo.Capture(error);
+        }
         finally
         {
             try { custody.Dispose(); }
@@ -100,7 +107,9 @@ public sealed class UpdateCoordinator(
                 releaseError = error;
             }
         }
-        return releaseError is null ? result : Failure(result, "package-unlock", releaseError);
+        if (releaseError is not null) return Failure(result, "package-unlock", releaseError);
+        cancellation?.Throw();
+        return result;
     }
 
     // A timed-out probe may still return from a synchronous lock acquisition. Never leak its lease.
