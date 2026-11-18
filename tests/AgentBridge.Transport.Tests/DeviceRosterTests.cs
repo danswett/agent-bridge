@@ -242,6 +242,48 @@ public class DeviceRosterTests
     }
 
     [Fact]
+    public async Task Storage_cap_merge_evidence_never_adopts_an_unrelated_branch_even_after_replay()
+    {
+        var (w, store, roster) = await FullOrdinaryLog();
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        w.Add("Q", "G", "Q", "G");
+        Assert.Equal("quarantined", (await roster.AppendAsync(RosterFixture.Account, [Wire(w, "Q")]))![0].Verdict);
+        w.Merge("M", "B", ["addB", "Q"], adopt: true);
+        var body = JsonNode.Parse(w["M"].Body)!;
+        body["prev"] = RosterFixture.Hashes([parent.Hash, w.Entry("Q").Hash]);
+        body["seq"] = parent.Body.Seq + 1;
+        var merge = Padded(w["M"] with { Body = RosterFixture.Bytes(body) }, Entry.MaxBytes);
+        w.Remove("R", "G", "addB", "addB");
+        var removal = Padded(w["R"], Entry.MaxRemoveBytes, merge);
+        var result = await roster.AppendAsync(RosterFixture.Account, [merge.Canonical(), removal.Canonical()]);
+        Assert.Equal([("accepted", Invalid.Evidence), ("accepted", (string?)null)], result!.Select(r => (r.Verdict, r.Reason)));
+        var snapshot = (await Make(w, store).GetAsync(RosterFixture.Account))!;
+        var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
+        Assert.True(replay.Graph[replay.Graph.Find(merge.Hash)!.Value].Evidence);
+        Assert.True(replay.IsQuarantined(replay.Graph.Find(w.Entry("Q").Hash)!.Value));
+        Assert.False(replay.State.Active.ContainsKey(w.Id("Q")));
+        w.Rename("after", "G", "G", "G", "after replay");
+        Assert.NotNull(await Make(w, store).AppendAsync(RosterFixture.Account, [Wire(w, "after")]));
+    }
+
+    [Fact]
+    public void Legacy_wrappers_remain_identical_and_the_verifier_has_no_relay_storage_cap()
+    {
+        var w = Scenario();
+        var verifier = w.Verifier();
+        var parent = w.Entry("addB");
+        for (var i = 0; i < 16; i++)
+        {
+            w.Add($"legacy{i}", "G", $"L{i}", "addB");
+            parent = Padded(w[$"legacy{i}"], Entry.MaxBytes, parent);
+            Assert.Equal(parent.Canonical(), Entry.Parse(Encoding.UTF8.GetBytes(parent.Canonical())).Canonical());
+            Assert.Equal(Verdict.Accepted, verifier.Offer(parent)[0].Verdict);
+        }
+    }
+
+    [Fact]
     public void A_stored_roster_needs_a_token_key_so_names_survive_a_restart()
     {
         var store = new AzureRosterStoreStub();
