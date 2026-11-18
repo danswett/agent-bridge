@@ -138,9 +138,10 @@ public class RelayTests
         await using var relay = await TestRelay.StartAsync();
         var client = await relay.ConnectAsync(relay.TokenFor(1, "fixture"), "oversized");
         var prefix = kind == "push" ? "push" : "roster-append";
-        var size = kind == "roster-append" ? 128 * 1024 : Wire.MaxFrame + 1;
+        var size = kind == "roster-append" ? AgentBridge.Relay.DeviceRoster.MaxAppendFrame + 1 : Wire.MaxFrame + 1;
         var suffix = kind == "duplicate" ? "\",\"t\":\"push\"}" : kind == "malformed" ? "" : "\"}";
-        var frame = System.Text.Encoding.UTF8.GetBytes("{\"t\":\"" + prefix + "\",\"padding\":\"" + new string('x', size) + suffix);
+        var start = "{\"t\":\"" + prefix + "\",\"padding\":\"";
+        var frame = System.Text.Encoding.UTF8.GetBytes(start + new string('x', size - start.Length - suffix.Length) + suffix);
         await client.Relay.SendRawAsync(frame, WebSocketMessageType.Text);
         await client.Relay.Completion.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(CloseCodes.TooLarge, (int?)client.Relay.CloseStatus);

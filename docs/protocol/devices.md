@@ -517,6 +517,10 @@ Both messages are text frames from an admitted device of any kind, counted again
   the removal `evidence` and leaves its ancestors refused without spending the reserve.
   Storage-cap ancestors retain `evidence:true`; their removal can be `quarantined`
   through those parents but still applies under the normal removal rule.
+  A canonical `{"t":"roster-append",...}` request may use **108,844 bytes**
+  (the reserved serialized budget plus 256 envelope bytes). The receiver checks the
+  complete message type before dispatch; other text and binary limits stay unchanged,
+  and an append over this bound closes with `frame-too-large`, never truncates.
   Unrelated ordinary entries cannot use the reserve.
   Removals and eligible evidence may use the full hard cap; an entry that exceeds remaining
   hard-cap space is still refused `cap`. This is a bounded N=4 guarantee, not an unlimited

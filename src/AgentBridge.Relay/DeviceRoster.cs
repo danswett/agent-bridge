@@ -26,6 +26,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     const int MaxRemovalAncestors = 4;
     static readonly int MaxOrdinaryBytes = MaxStoredBytes - MaxSerializedEntryBytes(Entry.MaxRemoveBytes)
         - MaxRemovalAncestors * MaxSerializedEntryBytes(Entry.MaxBytes) - (MaxRemovalAncestors + 1);
+    public static readonly int MaxAppendFrame = MaxStoredBytes - MaxOrdinaryBytes + 256;
     const int Retries = 5;
 
     // Appends waiting on one account's lock, beyond the one running, are refused rather than queued.

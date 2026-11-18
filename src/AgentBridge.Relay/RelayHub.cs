@@ -264,7 +264,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         while (ws.State == WebSocketState.Open)
         {
             (WebSocketMessageType Type, byte[] Data)? frame;
-            try { frame = await Wire.ReceiveAsync(ws, Wire.MaxFrame, aborted); }
+            try { frame = await Wire.ReceiveAsync(ws, Wire.MaxFrame, DeviceRoster.MaxAppendFrame, aborted, discardOversizeText: false, allowRosterAppend: true); }
             catch (FrameTooLargeException)
             {
                 await CloseAndDrainAsync(conn, CloseCodes.TooLarge, "frame-too-large");
@@ -283,7 +283,20 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                     return "rate limited";
                 }
                 JsonElement m;
-                try { m = JsonDocument.Parse(data).RootElement; } catch (JsonException) { continue; }
+                try { m = JsonDocument.Parse(data).RootElement; }
+                catch (JsonException)
+                {
+                    if (data.Length <= Wire.MaxFrame) { continue; }
+                    await CloseAndDrainAsync(conn, CloseCodes.TooLarge, "frame-too-large");
+                    return "frame too large";
+                }
+                if (data.Length > Wire.MaxFrame && (m.ValueKind != JsonValueKind.Object
+                    || !m.TryGetProperty("t", out var largeType) || largeType.ValueKind != JsonValueKind.String
+                    || largeType.GetString() != "roster-append"))
+                {
+                    await CloseAndDrainAsync(conn, CloseCodes.TooLarge, "frame-too-large");
+                    return "frame too large";
+                }
                 if (m.TryGetProperty("t", out var t) && t.GetString() == "push" && m.TryGetProperty("id", out var pid) && pid.TryGetInt64(out var id))
                 {
                     var c = conn;
