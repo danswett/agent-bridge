@@ -44,7 +44,12 @@ public static class SlotEntry
         if (RootForPayload(payload) is not { } root) { return null; }
         var helper = Path.Combine(root, "agent-bridge-hostw.exe");
         SlotPreparation.NoLinks(helper);
-        if (!File.Exists(helper)) { return null; }
+        if (!File.Exists(helper))
+        {
+            if (File.Exists(Path.Combine(root, "active-slot.json")))
+                throw new FileNotFoundException("Stable launcher is missing after slot activation.", helper);
+            return null;
+        }
         var executable = Path.Combine(root, entry);
         SlotPreparation.NoLinks(executable);
         return File.Exists(executable) ? executable : throw new FileNotFoundException("Stable entry is missing.", executable);
