@@ -180,7 +180,7 @@ public static class LocalApi
             if (op == LaunchProtocol.Options)
             { throw Refuse(op, callers.Classify(channel), "a live session read credential is required", log); }
         }
-        if (Acts.Contains(op) && callers.Classify(channel) is { Kind: CallerKind.Agent } agent)
+        if (Acts.Contains(op) && callers.Classify(channel, fresh: op == Ops.SessionReply) is { Kind: CallerKind.Agent } agent)
         {
             const string why = "answering, replying, ending and launching sessions are for the person, from the app or a phone";
             if (op is LaunchProtocol.Launch or Ops.SessionStop && credentials?.Of(channel) is { } credential)
@@ -202,6 +202,11 @@ public static class LocalApi
         {
             throw Refuse(op, reader, "reading a session's history is for the person, from the app or a phone", log);
         }
+        var replyCaller = op == Ops.SessionReply && channel is LocalChannel && credentials?.Of(channel) is null
+            ? callers.Classify(channel, fresh: true).Kind : CallerKind.Other;
+        ReplyIntent ReplyIntentNow() => replyCaller is (CallerKind.App or CallerKind.HostCli)
+            && !channel.Closed.IsCompleted && credentials?.Of(channel) is null
+            && callers.Classify(channel, fresh: true).Kind == replyCaller ? ReplyIntent.Steer : ReplyIntent.Unknown;
         // Shaped inside the service, so hello.changed compares what this caller is told (#651).
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
@@ -215,7 +220,8 @@ public static class LocalApi
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
         }, actionAudit: op is (LaunchProtocol.Launch or Ops.SessionAnswer or Ops.SessionStop)
-            && callers.Classify(channel).Kind is (CallerKind.App or CallerKind.HostCli) ? audit : null);
+            && callers.Classify(channel).Kind is (CallerKind.App or CallerKind.HostCli) ? audit : null,
+            replyIntent: op == Ops.SessionReply ? ReplyIntentNow : null);
     };
 
     internal sealed class RefusalAudits(TimeProvider time)

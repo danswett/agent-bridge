@@ -368,7 +368,7 @@
         {
           "name": "question",
           "json": {
-            "title": "DEV-VM1 · Protocol vectors",
+            "title": "node-a · Protocol vectors",
             "body": "Which spike next, and why?",
             "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
             "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
@@ -386,7 +386,7 @@
         {
           "name": "resolved",
           "json": {
-            "title": "DEV-VM1 · Protocol vectors",
+            "title": "node-a · Protocol vectors",
             "body": "Answered",
             "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
             "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
@@ -405,7 +405,7 @@
         {
           "name": "sign-in",
           "json": {
-            "title": "Copilot on DEV-VM1 needs sign-in",
+            "title": "Copilot on node-a needs sign-in",
             "body": "3 sessions affected",
             "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&signin=copilot",
             "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:signin:copilot:e3b0c442",
@@ -424,7 +424,7 @@
           "name": "group",
           "json": {
             "title": "Needs you",
-            "body": "DEV-VM1 · 3 sessions waiting on you",
+            "body": "node-a · 3 sessions waiting on you",
             "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&needsyou=1",
             "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:~needsyou",
             "lang": "en",
@@ -462,7 +462,7 @@
         {
           "name": "missing-body",
           "json": {
-            "title": "DEV-VM1 · Protocol vectors",
+            "title": "node-a · Protocol vectors",
             "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
             "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
             "lang": "en",
@@ -480,7 +480,7 @@
         {
           "name": "missing-navigate",
           "json": {
-            "title": "DEV-VM1 · Protocol vectors",
+            "title": "node-a · Protocol vectors",
             "body": "Which spike next, and why?",
             "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
             "lang": "en",
@@ -498,7 +498,7 @@
         {
           "name": "missing-tag",
           "json": {
-            "title": "DEV-VM1 · Protocol vectors",
+            "title": "node-a · Protocol vectors",
             "body": "Which spike next, and why?",
             "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
             "lang": "en",
@@ -516,7 +516,7 @@
         {
           "name": "missing-data",
           "json": {
-            "title": "DEV-VM1 · Protocol vectors",
+            "title": "node-a · Protocol vectors",
             "body": "Which spike next, and why?",
             "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
             "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
@@ -553,7 +553,7 @@
           "json": {
             "web_push": 8030,
             "notification": {
-              "title": "DEV-VM1 · Protocol vectors",
+              "title": "node-a · Protocol vectors",
               "body": "Which spike next, and why?",
               "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
               "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
@@ -583,7 +583,7 @@
           "json": {
             "web_push": "many",
             "notification": {
-              "title": "DEV-VM1 · Protocol vectors",
+              "title": "node-a · Protocol vectors",
               "body": "Which spike next, and why?",
               "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
               "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
