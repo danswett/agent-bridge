@@ -393,7 +393,9 @@ static class MergeRuleCommand
     static (PullRequestFacts Pr, MergeVerdict? Verdict) Assess(Session session, PullRequestFacts light)
     {
         var verdict = MergeRule.Evaluate(session.Config, session.Main, light);
-        if (verdict is null || (verdict.State is ("failure" or "error") && !ReceiptsHidden(session.Config, light)))
+        // A red main is lifted only by what the files show, so an exempt label needs the full read.
+        var needsFiles = session.Main.State != "success" && light.Labels.Any(l => session.Config.MainGreen.ExemptLabels.Contains(l, StringComparer.OrdinalIgnoreCase));
+        if (verdict is null || (verdict.State is ("failure" or "error") && !needsFiles && !ReceiptsHidden(session.Config, light)))
             return (light, verdict);
         try
         {
