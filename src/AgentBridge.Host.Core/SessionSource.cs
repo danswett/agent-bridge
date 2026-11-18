@@ -15,7 +15,6 @@ namespace AgentBridge.Host.Core;
 // locks, renames or deletes anything, and never lists agent-ha-bridge's hook spool.
 public sealed class SessionSource : ISessionSource, IRestoreMarks
 {
-    const int MaxSessions = 250;
     static readonly TimeSpan TranscriptSearchCache = TimeSpan.FromSeconds(30);
     static readonly TimeSpan WakeDebounce = TimeSpan.FromMilliseconds(50);
     static readonly TimeSpan IdleRecovery = TimeSpan.FromSeconds(15);
@@ -419,13 +418,12 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         List<DiscoveredSession> found;
         var release = false;
         DiscoveryHeld? held = null;
-        var overflow = new List<AgentKind>();
         if (discover)
         {
             lock (_gate) { _lastDiscovery = _time.GetTimestamp(); }
             // What the host listed when it last ran, read once, for the first discovery pass
             // (Discover's accounting and Restore).
-            if (_hostId is null && !_restored && _options.StateFile is { } state) { _remembered = Load(state); }
+            if (!_restored && _options.StateFile is { } state) { _remembered = Load(state); }
             var observed = Discover();
             found = [.. observed.SelectMany(o => o.Sessions)];
             var live = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
@@ -437,34 +435,18 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 _remembered = null;
             }
             List<string> gone;
-            bool Ended(Entry e) => observed.Any(o => o.Agent == e.Tracker.Discovered.Agent && o.Ended?.Contains(e.ListForm.Id) == true);
             lock (_gate)
             {
                 // An agent whose pass was incomplete keeps every session it had: one it could
-                // not see this time is not one that has ended. Positive ended evidence wins.
-                foreach (var e in _entries.Values.Where(e => !live.Contains(e.ListForm.Id) && holding.Contains(e.Tracker.Discovered.Agent) && !Ended(e)))
+                // not see this time is not one that has ended, and it keeps being read.
+                foreach (var e in _entries.Values.Where(e => !live.Contains(e.ListForm.Id) && holding.Contains(e.Tracker.Discovered.Agent)))
                 {
                     found.Add(e.Tracker.Discovered);
                 }
-                gone = [.. _entries.Keys.Where(id => Ended(_entries[id]) || (!live.Contains(id) && !holding.Contains(_entries[id].Tracker.Discovered.Agent)))];
-                // Reserve admissions before exposing row changes: readers and launch do not
-                // take _pass, so every omitted live session must already hold its agent.
-                var listed = _entries.Keys.Except(gone).ToHashSet(StringComparer.Ordinal);
-                var slots = MaxSessions - listed.Count;
-                var admitted = new List<DiscoveredSession>();
-                foreach (var candidate in found.DistinctBy(f => f.Id))
-                {
-                    if (!listed.Contains(candidate.Id))
-                    {
-                        if (slots == 0) { overflow.Add(candidate.Agent); continue; }
-                        slots--;
-                    }
-                    admitted.Add(candidate);
-                }
-                found = admitted;
+                gone = [.. _entries.Keys.Where(id => !live.Contains(id) && !holding.Contains(_entries[id].Tracker.Discovered.Agent))];
             }
+            foreach (var id in gone) { Remove(id); }
             held = HeldBy(observed);
-            if (overflow.Count > 0) { held = WithUnread(held, overflow, $"the {MaxSessions}-session roster limit was reached"); }
             // A hold that begins is said at once. One that ends, or lets an agent go, waits until
             // the sessions this pass found are listed: a session the hold kept unseen (its
             // registration unreadable until now) is otherwise neither listed nor held for a
@@ -474,7 +456,6 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             release = Releases(held);
             if (!release) { SetHeld(held); }
             else if (held is not null) { SetHeld(Widened(held)); }
-            foreach (var id in gone) { Remove(id); }
         }
         else
         {
@@ -485,10 +466,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         foreach (var discovered in found.DistinctBy(f => f.Id))
         {
             Entry? entry;
-            lock (_gate)
-            {
-                _entries.TryGetValue(discovered.Id, out entry);
-            }
+            lock (_gate) { _entries.TryGetValue(discovered.Id, out entry); }
             var tracker = entry?.Tracker ?? new SessionTracker(discovered, _options, _time, _hostId);
             // A restored session's boundary, before the transcript is read: what the interrupted run
             // left asking is set aside before the status and its times are worked out (#780).
@@ -519,9 +497,9 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         if (discover) { Save(); }
     }
 
-    static DiscoveryHeld WithUnread(DiscoveryHeld? held, List<AgentKind> unread, string? reason = null)
+    static DiscoveryHeld WithUnread(DiscoveryHeld? held, List<AgentKind> unread)
     {
-        var reasons = unread.Distinct().Select(a => reason ?? $"a {a.ToString().ToLowerInvariant()} session that could not be read").Distinct();
+        var reasons = unread.Distinct().Select(a => $"a {a.ToString().ToLowerInvariant()} session that could not be read");
         var text = Limits.KeepStart(string.Join(", ", held is null ? reasons : reasons.Prepend(held.Reason)), DiscoveryHeld.MaxReasonBytes)!;
         return new DiscoveryHeld(text, [.. (held?.Agents ?? []).Union(unread).Order()]);
     }
@@ -618,9 +596,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         if (claudeSessions)
         {
             // agent-ha-bridge's registration, where there is one, carries what its hooks saw
-            // (status, permission prompts) and wins, an ended one included. One CLI owns one session.
-            var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            ids.UnionWith(ended);
+            // (status, permission prompts) and wins. One CLI owns one session.
+            var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
             var pids = sessions.Select(s => s.ProcessId).ToHashSet();
             var own = ClaudeSessionDiscovery.Find(_options.ClaudeHome, observed.Processes, findTranscript, holds, accounted, observed.Unidentified, _options.UsageProbeRoots);
             sessions = [.. sessions, .. own.Where(s => !ids.Contains(s.Id) && !pids.Contains(s.ProcessId))];
@@ -782,7 +759,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     List<DiscoveredSession> Restore(List<AgentDiscovery> observed, List<DiscoveredSession> found)
     {
         var restored = new List<DiscoveredSession>();
-        if (_hostId is not null || _remembered is not { Count: > 0 } remembered || !observed.Any(o => o.Holds.Count > 0)) { return restored; }
+        if (_remembered is not { Count: > 0 } remembered || !observed.Any(o => o.Holds.Count > 0)) { return restored; }
         var ids = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
         var pids = found.Where(f => f.ProcessId is not null).Select(f => (f.Agent, f.ProcessId!.Value)).ToHashSet();
         foreach (var o in observed.Where(o => o.Holds.Count > 0))
@@ -851,7 +828,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // it always says what the next start would need to keep. Only on the pass.
     void Save()
     {
-        if (_hostId is not null || _options.StateFile is not { } path) { return; }
+        if (_options.StateFile is not { } path) { return; }
         List<DiscoveredSession> sessions;
         lock (_gate) { sessions = [.. _entries.Values.Select(e => e.Tracker.Discovered).OrderBy(d => d.Id, StringComparer.Ordinal)]; }
         var buffer = new ArrayBufferWriter<byte>();

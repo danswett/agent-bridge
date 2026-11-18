@@ -770,13 +770,13 @@ internal static class RegistrationDiscovery
         var live = new List<DiscoveredSession>();
         foreach (var r in best.Values)
         {
-            if (r.ProcessId <= 0) { if (r.Ended) { ended?.Add(r.SessionId); } continue; }
+            if (r.ProcessId <= 0) { continue; }
             if (!running.TryGetValue(r.ProcessId, out var process))
             {
-                // The current registration says it ended, and its runtime is gone or unreadable: it stays
+                // The current registration says it ended, and its runtime cannot be read: it stays
                 // ended, or a restart's first pass would bring back what it remembered of it (#147).
                 // Only the current one: an older ended copy in another root says nothing.
-                if (r.Ended && (!unread.TryGetValue(r.ProcessId, out var runtime) || OfGeneration(r, runtime))) { ended?.Add(r.SessionId); }
+                if (r.Ended && unread.TryGetValue(r.ProcessId, out var runtime) && OfGeneration(r, runtime)) { ended?.Add(r.SessionId); }
                 continue;
             }
             if (!OfGeneration(r, process)) { continue; }
