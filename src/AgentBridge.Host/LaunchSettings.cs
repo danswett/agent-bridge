@@ -35,8 +35,12 @@ internal static class LaunchSettings
         var paths = new List<string>();
         foreach (var requested in folders)
         {
+            if (requested?.Trim() is { } candidate && (candidate.StartsWith(@"\\", StringComparison.Ordinal) || candidate.StartsWith("//", StringComparison.Ordinal)))
+            { throw new ArgumentException("UNC paths cannot be approved for launching."); }
             if (string.IsNullOrWhiteSpace(requested) || Folders.Expand(requested) is not { } full)
             { throw new ArgumentException("Each launch folder must be an absolute path."); }
+            if (Registrations.FirstLink(full) is not null)
+            { throw new ArgumentException("A launch folder cannot contain a symbolic link or junction."); }
             if (paths.Any(p => Folders.Same(p, full))) { throw new ArgumentException("Duplicate launch folders are not allowed."); }
             paths.Add(full);
             var matches = current.Select((w, index) => (w, index)).Where(p => Folders.Same(p.w.Path, full)).ToArray();

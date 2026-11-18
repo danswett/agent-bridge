@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host;
@@ -107,6 +108,70 @@ public sealed class LaunchSettingsTests : IAsyncLifetime
         var folders = kind == "duplicate" ? new[] { requested, requested } : new[] { requested };
         await Assert.ThrowsAnyAsync<ArgumentException>(() => Call(channel, new { baseline, folders, confirmed = true }));
         Assert.Equal(before, File.ReadAllText(Config));
+    }
+
+    [FolderLinkTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task New_linked_folders_and_their_descendants_cannot_be_approved(bool descendant)
+    {
+        var target = Directory.CreateDirectory(Path.Combine(added, "target")).FullName;
+        Directory.CreateDirectory(Path.Combine(target, "child"));
+        var link = Path.Combine(added, "link");
+        CreateFolderLink(link, target);
+        try
+        {
+            Assert.True(File.GetAttributes(link).HasFlag(FileAttributes.ReparsePoint));
+            await using var channel = await Connect();
+            var baseline = Baseline(await Call(channel, new { }));
+            var before = File.ReadAllText(Config);
+            var requested = descendant ? Path.Combine(link, "child") : link;
+            await Assert.ThrowsAsync<ArgumentException>(() => Call(channel, new { baseline, folders = new[] { requested }, confirmed = true }));
+            Assert.Equal(before, File.ReadAllText(Config));
+        }
+        finally { Directory.Delete(link); }
+    }
+
+    [Fact]
+    public async Task New_UNC_folders_are_refused_before_any_filesystem_access()
+    {
+        await using var channel = await Connect();
+        var baseline = Baseline(await Call(channel, new { }));
+        var before = File.ReadAllText(Config);
+        foreach (var requested in new[] { @"\\launch-folder.invalid\share\folder", @"\\?\UNC\launch-folder.invalid\share\folder" })
+        {
+            var error = await Assert.ThrowsAsync<ArgumentException>(() => Call(channel, new { baseline, folders = new[] { requested }, confirmed = true }));
+            Assert.Contains("UNC", error.Message);
+            Assert.Equal(before, File.ReadAllText(Config));
+        }
+    }
+
+    static void CreateFolderLink(string link, string target)
+    {
+        if (!OperatingSystem.IsWindows()) { Directory.CreateSymbolicLink(link, target); return; }
+        using var process = Process.Start(new ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", link, target])
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+        })!;
+        process.WaitForExit();
+        if (process.ExitCode != 0) { throw new IOException("Junction creation is unavailable: " + process.StandardError.ReadToEnd()); }
+    }
+
+    public sealed class FolderLinkTheoryAttribute : TheoryAttribute
+    {
+        public FolderLinkTheoryAttribute()
+        {
+            var probe = Directory.CreateTempSubdirectory("ab-launch-link-probe-").FullName;
+            var link = Path.Combine(probe, "link");
+            try { CreateFolderLink(link, Directory.CreateDirectory(Path.Combine(probe, "target")).FullName); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
+            { Skip = "Directory link creation is unavailable: " + e.Message; }
+            finally
+            {
+                if (new DirectoryInfo(link).LinkTarget is not null) { Directory.Delete(link); }
+                Directory.Delete(probe, true);
+            }
+        }
     }
 
     [Theory]
