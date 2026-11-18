@@ -101,6 +101,8 @@ retry() {
     if [ "$rc" -eq 0 ] && ! grep -qE '^[EW]:' "$log"; then break; fi
     [ "$rc" -ne 0 ] || rc=100
     if [ "$rc" -ne 124 ] || grep -qE '^[EW]:' "$log"; then network_error "$log" "$phase" || break; fi
+    # A timeout cannot prove that the previously throttled feed recovered.
+    if [ "$phase" = update ] && [ "$rc" -ne 124 ]; then strict=false; fi
     if [ "$phase" = update ] && grep -qE '^[EW]: Failed to fetch (https://packages\.microsoft\.com/|.* 429([[:space:]]|$))' "$log"; then
       strict=true
     fi

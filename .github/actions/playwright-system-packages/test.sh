@@ -296,6 +296,42 @@ check "an unrecognized update host is not admitted for throttling retries" 100 u
 reset "$canonical"; export APT_ERROR='E: Failed to fetch https://packages.microsoft.com/ubuntu/pool/pkg.deb 429 Too Many Requests'
 check "update retry classification does not broaden download classification" \
   100 "$(printf 'update\n%s' "$download")" "$canonical"
+for transition in completed timeout completed-after-timeout timeout-with-diagnostics; do
+  if (
+    source <(sed -n '/^network_error()/,/^leave_azure()/p' "$here/download.sh" | sed '$d')
+    update_deadline=0; attempts=3; delay=0; left_azure=false; network_host=azure.archive.ubuntu.com
+    unset PLAYWRIGHT_APT_ATTEMPTS
+    export PLAYWRIGHT_APT_RETRY_DELAY=0
+    sleep() { :; }
+    : > "$work/transition-attempts"
+    fake_update() {
+      echo "$n" >> "$work/transition-attempts"
+      if [ "$n" -eq 1 ]; then
+        echo 'W: Failed to fetch https://packages.microsoft.com/repo 429 Too Many Requests'
+        return 100
+      fi
+      if [ "$transition" = timeout ] || { [ "$transition" = completed-after-timeout ] && [ "$n" -eq 2 ]; }; then
+        return 124
+      fi
+      echo 'W: Failed to fetch http://azure.archive.ubuntu.com/repo Could not resolve azure.archive.ubuntu.com'
+      [ "$transition" != timeout-with-diagnostics ] || return 124
+      return 100
+    }
+    rc=0; retry update fake_update > "$work/transition-out" 2>&1 || rc=$?
+    want_rc=100; want_fallback=true; want_attempt=2
+    case "$transition" in
+      completed-after-timeout) want_attempt=3 ;;
+      timeout*) want_rc=124; want_fallback=false; want_attempt=4 ;;
+    esac
+    [ "$rc" -eq "$want_rc" ] && [ "$network_failed" = "$want_fallback" ] &&
+      [ "$(tail -n 1 "$work/transition-attempts")" -eq "$want_attempt" ]
+  ); then
+    echo "ok: Microsoft throttling followed by $transition preserves the correct Azure fallback"
+  else
+    echo "FAIL: Microsoft throttling followed by $transition left the wrong retry or fallback state"
+    cat "$work/transition-out"; failures=$((failures + 1))
+  fi
+done
 reset "$canonical"; export APT_ERROR='E: Failed to fetch https://archive.ubuntu.com/ubuntu/pool/pkg.deb Connection failed' APT_FAIL_COUNT=2
 check "a new invocation on a Canonical-only list recovers on its third download attempt" \
   0 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$canonical"
