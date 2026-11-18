@@ -111,6 +111,23 @@ public sealed partial class SettingsView : UserControl
     async void OnRemoveAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: true);
     async void OnCancelAgentInstall(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CancelAgentInstallAsync(); } }
     async void OnLoadVerification(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.LoadVerificationChoicesAsync(); } }
+    async void OnLoadLaunchFolders(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.LoadLaunchFoldersAsync(); } }
+    void OnCancelLaunchFolders(object sender, RoutedEventArgs e) => viewModel?.CancelLaunchFolderDraft();
+    async void OnSaveLaunchFolders(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { CanSaveLaunchFolders: true } v) { return; }
+        await v.LoadLaunchFoldersAsync();
+        if (v.Error is not null || !v.CanSaveLaunchFolders) { return; }
+        var consent = v.CaptureLaunchFolderSave();
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot, Title = "Save approved launch folders?",
+            Content = new TextBlock { Text = consent.Consent, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true },
+            PrimaryButtonText = "Save folder approvals", CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.SaveLaunchFoldersAsync(consent); }
+    }
     async void OnRefreshVerification(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.RefreshVerificationAsync(); } }
     async void OnCancelVerification(object sender, RoutedEventArgs e)
     {

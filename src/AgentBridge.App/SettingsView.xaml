@@ -120,6 +120,18 @@
                     AutomationProperties.AutomationId="HostAtSignIn"
                     IsOn="{x:Bind ViewModel.StartAtSignIn, Mode=TwoWay}" />
 
+                <TextBlock Style="{StaticResource AbSectionTitle}" Text="Approved launch folders" AutomationProperties.HeadingLevel="Level2" />
+                <TextBlock Text="Draft adding or removing exact folders below. Nothing is approved until you confirm a save. No restart, trust or launch happens automatically." TextWrapping="Wrap" />
+                <TextBlock Text="{x:Bind ViewModel.LaunchFoldersState, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                <TextBox Header="Exact folders (one absolute path per line)" AutomationProperties.AutomationId="LaunchFoldersDraft"
+                         Text="{x:Bind ViewModel.LaunchFoldersDraft, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         AcceptsReturn="True" MinHeight="90" MaxHeight="220" IsEnabled="{x:Bind ViewModel.CanEditLaunchFolderDraft, Mode=OneWay}" />
+                <local:WrapRow Spacing="8">
+                    <Button Content="Check saved folders" Click="OnLoadLaunchFolders" IsEnabled="{x:Bind ViewModel.CanReadLaunchFolders, Mode=OneWay}" />
+                    <Button Content="Cancel draft" Click="OnCancelLaunchFolders" IsEnabled="{x:Bind ViewModel.CanCancelLaunchFolderDraft, Mode=OneWay}" />
+                    <Button Content="Review and save folders" Click="OnSaveLaunchFolders" IsEnabled="{x:Bind ViewModel.CanSaveLaunchFolders, Mode=OneWay}" />
+                </local:WrapRow>
+
                 <StackPanel Spacing="4" AutomationProperties.AutomationId="GetStarted" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowSetupSteps), Mode=OneWay}">
                     <TextBlock Style="{StaticResource AbSectionTitle}" Text="Get started" AutomationProperties.HeadingLevel="Level2" />
                     <ItemsControl ItemsSource="{x:Bind ViewModel.SetupSteps, Mode=OneWay}">

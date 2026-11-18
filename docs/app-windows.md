@@ -30,6 +30,14 @@ shows the window: a start at sign-in or a toast launch leaves it pending for the
 
 ## Decisions
 
+Settings' **Approved launch folders** editor loads the saved list, then drafts
+one exact absolute path per line. Adding/removing lines or cancelling never saves.
+**Review and save folders** shows the replacement list and requires confirmation.
+A changed configuration or host keeps the draft but blocks saving; **Check saved
+folders**, then **Cancel draft**, explicitly adopts the latest list. Host validation
+preserves retained metadata, including unavailable folders. Saving never restarts,
+trusts or launches; applying the saved folders requires an explicit later restart.
+
 Settings' **Reply box** group offers **Return key in replies**: **New line** (the
 unchanged default, Ctrl+Enter sends) or **Send** (Enter sends, Shift+Enter makes a
 new line, Ctrl+Enter still sends). The choice is local to this device/profile and
