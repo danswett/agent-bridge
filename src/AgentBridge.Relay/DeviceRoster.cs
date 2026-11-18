@@ -268,12 +268,14 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
             }
             var beforeCount = verifier.Graph.Count;
             var offered = verifier.Offer(entry)[0];
-            verifierDirty = verifier.Graph.Count != beforeCount;
+            verifierDirty = verifier.Graph.Count != beforeCount || offered.Verdict is Verdict.Accepted or Verdict.Quarantined;
             var verdict = offered.Verdict.ToString().ToLowerInvariant();
             results[index] = new Result(Codec.Base64Url(offered.Hash), verdict, offered.Reason);
             if (offered.Verdict is Verdict.Accepted or Verdict.Quarantined)
             {
-                var promoted = aside.Where(a => verifier.Holds(a.Entry.Hash)).ToList();
+                var promoted = aside.Where(a => verifier.Holds(a.Entry.Hash)
+                    && !a.Entry.Hash.AsSpan().SequenceEqual(entry.Hash)
+                    && !replay.Any(e => e.Hash.AsSpan().SequenceEqual(a.Entry.Hash))).ToList();
                 var evidence = promoted.DistinctBy(a => Codec.Base64Url(a.Entry.Hash)).ToList();
                 if (entry.Body.Op == EntryOp.Remove
                     && (evidence.Count > MaxRemovalAncestors || evidence.Any(a => a.Entry.Size > Entry.MaxBytes)))
