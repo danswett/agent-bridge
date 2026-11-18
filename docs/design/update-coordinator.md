@@ -106,3 +106,16 @@ intact until the stable launchers and pointer are validated; never delete or ren
 a live legacy directory. Rollback switches the pointer, not payload bytes. Velopack's
 legacy `current` contract must not silently remain authoritative after activation.
 These are prerequisites, not implemented guarantees or permission to wire activation.
+
+### D1: disabled pointer primitive
+
+`SlotPointer` is not wired to production. It revalidates the cached package and
+entire prepared payload while retaining read-only leases, then publishes a bounded
+pointer by same-directory rename (first publication) or Windows `ReplaceFileW`
+through `File.Replace`. Readers retain one pointer generation and payload leases;
+replacement does not invalidate their old slot. Rollback revalidates the previous
+slot and replaces only the pointer. Faults before publication leave the old pointer
+or absent-pointer legacy layout unchanged. Payload/legacy directories never move.
+Directory ancestry is checked, not handle-pinned; the existing same-user ancestor
+rename race remains. Power-loss directory durability is not claimed. D2/D3 must
+prove stable routing and migration before enabling production activation.

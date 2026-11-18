@@ -222,7 +222,7 @@ public static class SlotPreparation
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
-    static void NoLinks(string path)
+    internal static void NoLinks(string path)
     {
         for (string? current = path; current is not null; current = Path.GetDirectoryName(current))
         {
