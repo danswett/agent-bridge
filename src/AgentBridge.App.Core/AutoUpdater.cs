@@ -833,7 +833,7 @@ public sealed class AutoUpdater
             // rather than at the next check, without asking the feed again (#530).
             else if (updater.Found is { } found && updater.Ready != found && updater.RetryAt is { } retry && now >= retry)
             {
-                await DownloadAsync(Asked(UpdateAskKind.Check), Asked(UpdateAskKind.Install));
+                await DownloadAsync(Asked(UpdateAskKind.Check), Asked(UpdateAskKind.Install), found);
                 if (updater.Ready == found) { Downloaded(found); }
                 Changed();
             }
@@ -991,7 +991,7 @@ public sealed class AutoUpdater
                 (lastCheckAt, lastCheckFailed, lastCheckSource) = (now, null, from);
             }
             // An explicit Install retries once; Checks and background work keep the download hold.
-            if (found is not null && updater.Ready != found) { await DownloadAsync(check, install); }
+            if (found is not null && updater.Ready != found) { await DownloadAsync(check, install, found); }
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
@@ -1018,10 +1018,9 @@ public sealed class AutoUpdater
         Changed();
     }
 
-    async Task DownloadAsync(string? check, string? install)
+    async Task DownloadAsync(string? check, string? install, string to)
     {
-        var to = updater.Found;
-        try { await updater.DownloadAsync(_ => { }, retryNow: install is not null); }
+        try { await updater.DownloadAsync(_ => { }, retryRelease: install is not null ? to : null); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
             Finish(ref checkRequest, check, UpdateOutcome.Failed, e.Message, to, step: "downloading");
