@@ -28,6 +28,13 @@ public class PrConcurrencyTests
     }
 
     [Theory]
+    [InlineData("ci.yml", "pull_request")]
+    [InlineData("codeql.yml", "pull_request")]
+    [InlineData("dependencies.yml", "pull_request")]
+    [InlineData("workflow-lint.yml", "pull_request")]
+    [InlineData("apple.yml", "pull_request")]
+    [InlineData("ha-contract-drift.yml", "pull_request")]
+    [InlineData("iac-scan.yml", "pull_request")]
     [InlineData("weekly-report.yml", "pull_request")]
     [InlineData("merge-rule-review.yml", "pull_request_review")]
     [InlineData("merge-rule.yml", "pull_request_target")]
@@ -95,9 +102,17 @@ public class PrConcurrencyTests
     {
         var yaml = Document(file);
         var triggers = (YamlMappingNode)yaml["on"];
-        foreach (var name in new[] { "pull_request", "pull_request_target", "pull_request_review", "push", "release", "schedule", "workflow_dispatch", "workflow_run" })
+        foreach (var (name, reference) in new[]
+        {
+            ("pull_request", "refs/pull/42/merge"), ("pull_request_target", "refs/heads/main"),
+            ("pull_request_review", "refs/pull/42/merge"), ("push", "refs/heads/main"),
+            ("push", "refs/tags/v1.0.0"), ("release", "refs/tags/v1.0.0"),
+            ("schedule", "refs/heads/main"), ("workflow_dispatch", "refs/heads/main"),
+            ("workflow_dispatch", "refs/tags/v1.0.0"), ("workflow_run", "refs/heads/main"),
+        })
         {
             var context = Context(name, name.StartsWith("pull_request", StringComparison.Ordinal) ? "42" : "");
+            context["github.ref"] = reference;
             context["github.workflow"] = file;
             context["github.run_attempt"] = "1";
             context["github.event.action"] = "synchronize";
@@ -105,12 +120,45 @@ public class PrConcurrencyTests
             var concurrency = (YamlMappingNode)node;
             var canRun = triggers.Children.ContainsKey(name);
             var expected = canRun && name.StartsWith("pull_request", StringComparison.Ordinal);
-            Assert.Equal(expected, canRun && Cancels(concurrency, context));
+            Assert.Equal(expected, Cancels(concurrency, context));
             if (!expected) { continue; }
             var first = Group(concurrency, context);
             context["github.event.pull_request.number"] = "43";
             context["github.ref"] = "refs/pull/43/merge";
             Assert.NotEqual(first, Group(concurrency, context));
+        }
+    }
+
+    [Fact]
+    public void Main_CI_and_publishing_never_cancel_their_shared_locks()
+    {
+        var ci = Document("ci.yml");
+        var context = Context("push", "");
+        context["github.run_attempt"] = "1";
+        var concurrency = (YamlMappingNode)ci["concurrency"];
+        Assert.Equal("ci-main", Group(concurrency, context));
+        Assert.False(Cancels(concurrency, context));
+        var publish = (YamlMappingNode)((YamlMappingNode)((YamlMappingNode)ci["jobs"])["publish"])["concurrency"];
+        Assert.Equal("publish-prerelease", Group(publish, context));
+        Assert.False(Cancels(publish, context));
+        Assert.Equal("max", publish["queue"].ToString());
+    }
+
+    [Fact]
+    public void Relay_PR_deployments_keep_their_shared_rollout_locks_without_workflow_cancellation()
+    {
+        var relay = Document("relay.yml");
+        Assert.False(relay.Children.ContainsKey("concurrency"));
+        var jobs = (YamlMappingNode)relay["jobs"];
+        foreach (var (job, group) in new[]
+        {
+            ("staging", "relay-staging"), ("production", "relay-production"), ("rollback", "relay-production"),
+        })
+        {
+            var concurrency = (YamlMappingNode)((YamlMappingNode)jobs[job])["concurrency"];
+            var context = Context("pull_request", "42");
+            Assert.Equal(group, Group(concurrency, context));
+            Assert.False(Cancels(concurrency, context));
         }
     }
 
