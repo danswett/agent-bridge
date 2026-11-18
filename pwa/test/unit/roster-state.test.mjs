@@ -121,4 +121,7 @@ test('a plain copy upgrades marked candidates without duplicating them, includin
   const plain = await parseEntry(utf8(JSON.stringify({ ...JSON.parse(promotion.entries.find((e) => e.label === 'adopt').wrapper), evidence: undefined })));
   assert.equal((await v.offer([plain]))[0].verdict, 'accepted');
   assert.equal(v.graph.at(v.graph.find(plain.hash)).evidence, false);
+  const budget = vectors.scenarios.find((s) => s.name === 'evidence'), held = new RosterVerifier(vectors.account, vectors.generation, () => 0);
+  for (const item of budget.entries) await held.offer([await parseEntry(utf8(JSON.stringify({ ...JSON.parse(item.wrapper), ...(budget.state.evidence.includes(item.label) ? { evidence: true } : {}) })))]);
+  assert.deepEqual((await held.offer(await Promise.all(budget.entries.slice(-2).reverse().map((e) => parseEntry(utf8(e.wrapper)))))).map((r) => r.verdict), ['duplicate', 'duplicate']);
 });

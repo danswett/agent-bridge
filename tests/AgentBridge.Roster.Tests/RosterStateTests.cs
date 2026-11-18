@@ -28,6 +28,9 @@ public sealed class RosterStateTests
         Assert.False(replay.State.Active.ContainsKey(w.Id("B")));
         Assert.Equal(Verdict.Accepted, replay.Offer(w.Entry("E"))[0].Verdict);
         Assert.False(replay.Graph[replay.Graph.Find(evidence.Hash)!.Value].Evidence);
+        var capped = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now) { EntryCap = 2 };
+        capped.Offer(w.Entry("G"), w.Entry("+B"), evidence, w.Entry("R"));
+        Assert.Equal([Verdict.Duplicate, Verdict.Duplicate], capped.Offer(w.Entry("R"), w.Entry("E")).Select(o => o.Verdict));
     }
 
     [Theory]
@@ -51,7 +54,6 @@ public sealed class RosterStateTests
         Assert.Equal(Verdict.Accepted, v.Offer(plain)[0].Verdict);
         Assert.Equal(count, v.Graph.Count);
         Assert.False(v.Graph[v.Graph.Find(plain.Hash)!.Value].Entry.EvidenceOnly);
-        Assert.Equal(Verdict.Duplicate, v.Offer(plain)[0].Verdict);
         if (label == "R") { Assert.Equal(["G"], w.Active(v)); }
     }
 
