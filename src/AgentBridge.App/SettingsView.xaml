@@ -297,6 +297,16 @@
                         Text="{x:Bind ViewModel.MachineName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                     <Button Grid.Column="1" VerticalAlignment="Bottom" Content="Save name" Click="OnSaveName" IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}" />
                 </Grid>
+                <StackPanel Spacing="6" AutomationProperties.AutomationId="AgentFleetLaunchGrant">
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="Agent fleet-launch grant" />
+                    <TextBlock TextWrapping="Wrap" Text="{x:Bind ViewModel.FleetGrantText, Mode=OneWay}" />
+                    <TextBlock TextWrapping="Wrap" Text="Staged grant only. Launch enforcement, audit and limits must ship before native fleet launches are enabled. No answering, replying, trust or ending authority." />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="Show state" Click="OnReadFleetGrant" IsEnabled="{x:Bind ViewModel.CanManageFleetGrant, Mode=OneWay}" />
+                        <Button Content="Issue 1-hour grant..." Click="OnIssueFleetGrant" IsEnabled="{x:Bind ViewModel.CanManageFleetGrant, Mode=OneWay}" />
+                        <Button Content="Revoke" Click="OnRevokeFleetGrant" IsEnabled="{x:Bind ViewModel.CanRevokeFleetGrant, Mode=OneWay}" />
+                    </StackPanel>
+                </StackPanel>
                 <ToggleSwitch
                     Header="Allow fleet names for new sessions"
                     AutomationProperties.AutomationId="FleetLaunchNames"

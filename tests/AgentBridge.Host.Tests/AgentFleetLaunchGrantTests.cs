@@ -77,6 +77,16 @@ public sealed class AgentFleetLaunchGrantTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData("read")]
+    [InlineData("issue")]
+    [InlineData("revoke")]
+    public async Task Remote_devices_cannot_manage_the_grant_even_when_classified_as_the_app(string action)
+    {
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            handler(new Remote(), Op, JsonSerializer.SerializeToElement(new { action })));
+    }
+
+    [Theory]
     [InlineData(CallerKind.Agent, false)]
     [InlineData(CallerKind.Other, false)]
     [InlineData(CallerKind.HostCli, false)]
@@ -120,6 +130,9 @@ public sealed class AgentFleetLaunchGrantTests : IAsyncLifetime
         Assert.Equal("revoked", (await Call(new { action = "revoke", grant = id })).GetProperty("state").GetString());
         RestartControl();
         Assert.Equal("revoked", (await Call(new { action = "read" })).GetProperty("state").GetString());
+        var replacement = await Call(Issue());
+        Assert.NotEqual(id, replacement.GetProperty("grant").GetProperty("id").GetString());
+        await Assert.ThrowsAsync<HostErrorException>(() => Call(new { action = "revoke", grant = id }));
     }
 
     [Fact]
@@ -134,16 +147,18 @@ public sealed class AgentFleetLaunchGrantTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("read")]
-    [InlineData("issue")]
-    [InlineData("revoke")]
-    public async Task Unreadable_durable_state_is_refused_and_never_replaced(string action)
+    [InlineData("read", "{broken")]
+    [InlineData("issue", "{broken")]
+    [InlineData("revoke", "{broken")]
+    [InlineData("read", "{}")]
+    [InlineData("issue", """{"id":"first","id":"second"}""")]
+    public async Task Unreadable_durable_state_is_refused_and_never_replaced(string action, string saved)
     {
         var path = Path.Combine(folder, "agent-fleet-launch-grant.json");
-        File.WriteAllText(path, "{broken");
+        File.WriteAllText(path, saved);
         var error = await Assert.ThrowsAsync<HostErrorException>(() => Call(action == "issue" ? Issue() : new { action }));
         Assert.Contains("refused:", error.Message);
-        Assert.Equal("{broken", File.ReadAllText(path));
+        Assert.Equal(saved, File.ReadAllText(path));
     }
 
     sealed class Callers : ICallerGuard
@@ -151,5 +166,15 @@ public sealed class AgentFleetLaunchGrantTests : IAsyncLifetime
         public CallerKind Kind { get; set; } = CallerKind.App;
         public bool Fresh { get; private set; }
         public Caller Classify(IProtocolChannel channel, bool fresh = false) { Fresh = fresh; return new(Kind, "fixture"); }
+    }
+
+    sealed class Remote : IProtocolChannel
+    {
+        public string PeerId => "remote";
+        public string PeerName => "Remote app";
+        public string PeerKind => "app";
+        public bool IsOpen => true;
+        public Task Closed => Task.CompletedTask;
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => throw new NotSupportedException();
     }
 }

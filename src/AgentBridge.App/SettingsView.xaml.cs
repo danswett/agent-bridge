@@ -107,6 +107,19 @@ public sealed partial class SettingsView : UserControl
     async void OnSaveName(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.SaveNameAsync(); } }
     async void OnCheckUpdates(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CheckForUpdatesAsync(); } }
     async void OnCheckAgents(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CheckAgentsAsync(); } }
+    async void OnReadFleetGrant(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.FleetLaunchGrantAsync("read"); } }
+    async void OnRevokeFleetGrant(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.FleetLaunchGrantAsync("revoke"); } }
+    async void OnIssueFleetGrant(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { CanManageFleetGrant: true } v) { return; }
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot, Title = "Issue a 1-hour fleet-launch grant?",
+            Content = "Grant session.launch only to the fleet-launcher principal for fleet roles on this host. One active grant; revocable here. This staged record does not yet enable native launches or grant any other agent authority.",
+            PrimaryButtonText = "Issue grant", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.FleetLaunchGrantAsync("issue"); }
+    }
     async void OnSetUpAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: false);
     async void OnRemoveAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: true);
     async void OnCancelAgentInstall(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CancelAgentInstallAsync(); } }

@@ -640,7 +640,7 @@ public sealed partial class SettingsViewModel : Observable
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanChangeFleetLaunchRule)); Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(CanSignInAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); RaiseVerification(); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanManageFleetGrant)); Raise(nameof(CanRevokeFleetGrant)); Raise(nameof(CanChangeFleetLaunchRule)); Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(CanSignInAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); RaiseVerification(); } }
     }
     // The card's Set up follows what the row's would (CanManageAgents), so it is drawn again wherever the rows are.
     void RaiseOffers() { Raise(nameof(AgentOffers)); Raise(nameof(HasAgentOffers)); Raise(nameof(AgentsNavName)); }
