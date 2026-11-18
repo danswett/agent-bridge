@@ -20,25 +20,22 @@ public sealed class FleetProducerTests
         return Assert.Single(record.GetProperty("sessions").EnumerateArray());
     }
 
-    [Fact]
-    public async Task Transcript_facts_reach_publication_without_private_text_or_sender_inference()
+    [Theory, InlineData(false), InlineData(true)]
+    public async Task Transcript_facts_reach_publication_without_private_text_or_sender_inference(bool skim)
     {
-        using var f = new Fixture();
-        f.Processes.Run(AgentKind.Copilot, 101);
-        File.WriteAllLines(f.CopilotSession(Id, 101), [Copilot.User("private-question", 1), Copilot.Assistant("private-reply", 2)]);
-        await using var source = f.Source();
-        await source.RefreshAsync();
+        using var f = new Fixture(); f.Processes.Run(AgentKind.Copilot, 101);
+        File.WriteAllLines(f.CopilotSession(Id, 101), [Copilot.User("private-question", 1), Copilot.Assistant("private-reply", 2),
+            Copilot.Event("session.error", new { errorType = "session", message = "private-error" }, 3), Copilot.Assistant("\u26A0\uFE0F Turn error: private-error", 4), Copilot.TurnEnd(5)]);
+        await using var source = f.Source(tailBytes: skim ? Encoding.UTF8.GetByteCount(Copilot.TurnEnd(5)) + Environment.NewLine.Length : 4 * 1024 * 1024); await source.RefreshAsync();
         var row = await Publish(source, f.Time);
         Assert.Equal(0, row.GetProperty("openAsks").GetInt32());
-        Assert.Equal("none", row.GetProperty("attention").GetProperty("kind").GetString());
+        Assert.Equal("unknown", row.GetProperty("attention").GetProperty("kind").GetString());
         Assert.Equal(Fixture.T0.AddSeconds(2), row.GetProperty("lastReplyAt").GetDateTimeOffset());
         Assert.Equal(f.Time.GetUtcNow(), row.GetProperty("observedAt").GetDateTimeOffset());
         Assert.False(row.GetProperty("stale").GetBoolean());
         Assert.DoesNotContain("private-", row.GetRawText());
-        Assert.False(row.TryGetProperty("senderVerified", out _));
-        Assert.False(row.TryGetProperty("provenance", out _));
-        File.AppendAllLines(source.Files(Id)!.Transcript!, [
-            Copilot.Assistant("", 3, reasoning: "private-reasoning"), Copilot.Assistant("private-delegate", 4, agentId: "delegate")]);
+        Assert.False(row.TryGetProperty("senderVerified", out _) || row.TryGetProperty("provenance", out _));
+        Fixture.Append(source.Files(Id)!.Transcript!, Copilot.Assistant("", 6, reasoning: "private-reasoning"), Copilot.Assistant("private-delegate", 7, agentId: "delegate"));
         await source.RefreshAsync();
         Assert.Equal(Fixture.T0.AddSeconds(2), (await Publish(source, f.Time)).GetProperty("lastReplyAt").GetDateTimeOffset());
     }

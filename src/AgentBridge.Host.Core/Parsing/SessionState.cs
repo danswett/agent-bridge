@@ -183,11 +183,11 @@ internal sealed class SessionState
     public bool Answer(string? id) => id is not null && Pending.RemoveAll(q => q.Id == id) > 0;
 
     // What the main agent wrote: the latest text, and its own.
-    public void MainSaid(string? content, string? reasoning, DateTimeOffset? at)
+    public void MainSaid(string? content, string? reasoning, DateTimeOffset? at, bool modelReply = true)
     {
         if (reasoning is not null) { Reasoning = OwnReasoning = reasoning; ReasoningBy = null; OwnAt = at ?? OwnAt; }
         if (content is not null) { Response = OwnResponse = content; OwnResponseCut = false; ResponseBy = null; OwnAt = at ?? OwnAt; ResponseTurn = TurnId; }
-        if (content is not null) { LastReplyAt = at; }
+        if (content is not null && modelReply) { LastReplyAt = at; }
     }
 
     // What a sub-agent wrote: the latest text still, as on agent-ha-bridge's card, now
