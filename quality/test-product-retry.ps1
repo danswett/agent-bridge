@@ -8,6 +8,7 @@ function Assert([bool]$Ok, [string]$Name) {
 $helper = Join-Path $PSScriptRoot 'product-test-retry.ps1'
 if (-not (Test-Path $helper)) { throw 'Windows product failed-test retry helper is missing.' }
 . $helper
+. (Join-Path $PSScriptRoot 'fixtures\product-retry-trx.ps1')
 $scratch = Join-Path ([IO.Path]::GetTempPath()) "ab-product-retry-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory $scratch | Out-Null
 $originalSummary = $env:GITHUB_STEP_SUMMARY
@@ -62,13 +63,17 @@ function dotnet {
                 $path = Join-Path $script:first 'Other.Tests.trx'
                 (Get-Content $path -Raw).Replace('</ResultSummary>', '<RunInfos><RunInfo outcome="Error" /></RunInfos></ResultSummary>') | Set-Content $path
             }
+            { $_ -in 'adapter-failed', 'adapter-twice-red' } {
+                Remove-Item -LiteralPath (Join-Path $script:first 'Example.Tests.trx')
+                Write-AdapterTrx $script:first $script:cases[0].Name
+            }
         }
         $global:LASTEXITCODE = 1
         return
     }
     $directory = $args[[array]::IndexOf($args, '--results-directory') + 1]
     if ($script:scenario -eq 'retry-no-trx') { return }
-    $outcome = if ($script:scenario -eq 'twice-red') { 'Failed' } elseif ($script:scenario -eq 'retry-skipped') { 'NotExecuted' } else { 'Passed' }
+    $outcome = if ($script:scenario -in 'twice-red', 'adapter-twice-red') { 'Failed' } elseif ($script:scenario -eq 'retry-skipped') { 'NotExecuted' } else { 'Passed' }
     $assembly = [IO.Path]::GetFileNameWithoutExtension($args[1])
     Write-Trx $directory $assembly @($outcome) 'Completed'
     if ($script:scenario -eq 'broadened-retry') { Write-Trx $directory $assembly @('Passed', 'Passed') 'Completed' }
@@ -131,6 +136,41 @@ try {
     foreach ($name in 'twice-red', 'retry-no-trx', 'retry-crash', 'retry-skipped', 'wrong-case', 'broadened-retry') {
         $r = Run-Case $name
         Assert ($r.Code -ne 0 -and $r.Calls.Count -eq 2) "$name remains red without a third attempt"
+    }
+    $r = Run-Case 'adapter-failed'
+    Assert ($r.Code -eq 0 -and $r.Calls.Count -eq 2) 'a complete xUnit TRX with a failed-case Error diagnostic and skipped rows retries once'
+    $r = Run-Case 'adapter-twice-red'
+    Assert ($r.Code -ne 0 -and $r.Calls.Count -eq 2) 'a second failure after an adapter diagnostic stays red'
+    $fixtureDirectory = Join-Path $scratch 'adapter-fixture'
+    Write-AdapterTrx $fixtureDirectory $script:cases[0].Name
+    $fixturePath = Join-Path $fixtureDirectory 'runner_net10.0[2].trx'
+    $fixture = [xml](Get-Content -LiteralPath $fixturePath -Raw)
+    foreach ($mutation in 'unchanged', 'foreign-error', 'unbacked-fail', 'extra-error', 'truncated', 'aborted', 'missing-definition', 'duplicate-definition', 'missing-id') {
+        $document = $fixture.Clone()
+        $run = $document.TestRun
+        $diagnostic = $run.ResultSummary.RunInfos.RunInfo[0]
+        switch ($mutation) {
+            'foreign-error' { $diagnostic.Text = "Data collector 'Blame' error: test host crashed." }
+            'unbacked-fail' { $diagnostic.Text = '[xUnit.net 00:03:16.68]     Example.Tests.Other [FAIL]' }
+            'extra-error' {
+                $extra = $diagnostic.Clone()
+                $extra.Text = 'Coverage collection failed.'
+                [void]$diagnostic.ParentNode.AppendChild($extra)
+            }
+            'truncated' { $run.ResultSummary.Counters.total = '1343' }
+            'aborted' { $run.ResultSummary.outcome = 'Aborted' }
+            'missing-definition' { [void]$run.TestDefinitions.RemoveChild($run.TestDefinitions.UnitTest[0]) }
+            'duplicate-definition' { [void]$run.TestDefinitions.AppendChild($run.TestDefinitions.UnitTest[0].Clone()) }
+            'missing-id' { $run.Results.UnitTestResult[0].RemoveAttribute('testId') }
+        }
+        $document.Save($fixturePath)
+        $message = ''
+        try { $parsed = @(Read-ProductTrx $fixtureDirectory) } catch { $message = $_.Exception.Message }
+        if ($mutation -eq 'unchanged') {
+            Assert (-not $message -and $parsed.Count -eq 1342 -and @($parsed | Where-Object Outcome -EQ Failed).Count -eq 1) 'real-shaped TRX counters, warning, skipped rows and bracket-suffixed filename are accepted'
+        } else {
+            Assert ([bool]$message) "real-shaped $mutation evidence is refused"
+        }
     }
     $workflow = Get-Content -Raw (Join-Path $PSScriptRoot '..' '.github' 'workflows' 'ci.yml')
     Assert ($workflow.Contains("if: env.DOTNET_TARGET != '' && matrix.os == 'windows-latest'")) 'only windows-latest enters the retry step'
