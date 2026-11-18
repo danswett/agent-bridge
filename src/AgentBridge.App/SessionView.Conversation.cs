@@ -55,6 +55,7 @@ public sealed partial class SessionView
 
     void ShowResponse(bool reset)
     {
+        reset |= ConversationList.ItemsSource is null;
         var card = Card;
         var from = card is { HasVoice: true } ? card.Response : null;
         if (!reset && card == blocksOf && from == blocksFrom) { return; }
