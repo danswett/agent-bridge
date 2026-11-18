@@ -56,7 +56,19 @@
       "a": { "value": "\u00e9", "counter": 2, "deviceTag": "01" }, "b": { "value": "z", "counter": 2, "deviceTag": "01" },
       "expected": { "value": "\u00e9", "counter": 2, "deviceTag": "01" } },
     { "name": "invalid and absent registers stay absent",
-      "a": { "counter": "1", "deviceTag": "01" }, "b": null, "expected": null }
+      "a": { "counter": "1", "deviceTag": "01" }, "b": null, "expected": null },
+    { "name": "JSON number ties expand at the small decimal boundary",
+      "a": { "value": 1e-6, "counter": 2, "deviceTag": "01" }, "b": { "value": 9e-7, "counter": 2, "deviceTag": "01" },
+      "expected": { "value": 9e-7, "counter": 2, "deviceTag": "01" } },
+    { "name": "JSON number ties use exponent form at the large decimal boundary",
+      "a": { "value": 1e21, "counter": 2, "deviceTag": "01" }, "b": { "value": 1e20, "counter": 2, "deviceTag": "01" },
+      "expected": { "value": 1e21, "counter": 2, "deviceTag": "01" } },
+    { "name": "JSON object ties enumerate integer property keys first",
+      "a": { "value": { "10": "a", "2": "z" }, "counter": 2, "deviceTag": "01" }, "b": { "value": { "2": "a", "10": "z" }, "counter": 2, "deviceTag": "01" },
+      "expected": { "value": { "2": "z", "10": "a" }, "counter": 2, "deviceTag": "01" } },
+    { "name": "JSON string ties compare escaped control characters",
+      "a": { "value": "\n", "counter": 2, "deviceTag": "01" }, "b": { "value": "\f", "counter": 2, "deviceTag": "01" },
+      "expected": { "value": "\n", "counter": 2, "deviceTag": "01" } }
   ],
   "marker": [
     { "name": "two devices keep the highest turn per session",
