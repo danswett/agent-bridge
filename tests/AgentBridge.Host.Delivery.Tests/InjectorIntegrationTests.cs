@@ -195,10 +195,13 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     // A reply reads the screen first and refuses, typing nothing, when the worker's 10 s read
     // came back empty on a loaded runner, so the test then waited out its echo log for keys that
     // were never sent (#1492). A read types nothing, so it is safe to ask again until it answers.
-    sealed class PatientScreens(WorkerInjector inner) : IConsoleInjector
+    sealed class PatientScreens(IConsoleInjector inner, Action? beforeInject = null) : IConsoleInjector
     {
-        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default) =>
-            inner.InjectAsync(processId, plan, cancellationToken);
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
+        {
+            beforeInject?.Invoke();
+            return inner.InjectAsync(processId, plan, cancellationToken);
+        }
 
         public Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
             inner.WidenAsync(processId, createdAt, columns, cancellationToken);
@@ -605,8 +608,8 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     }
 
     static ReplyService AttachmentReplies(Fixture f, AgentBridge.Host.Core.SessionSource source, IConsoleInjector injector,
-        AgentBridge.Host.Delivery.Staging.AttachmentStore store) =>
-        new(source, f.Processes, new NoBridge(), new NoGuard(), injector,
+        AgentBridge.Host.Delivery.Staging.AttachmentStore store, Action? beforeInject = null) =>
+        new(source, f.Processes, new NoBridge(), new NoGuard(), new PatientScreens(injector, beforeInject),
             new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) },
             attachments: store);
 
@@ -633,10 +636,15 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
             var words = string.Concat(plan.Sends.Select(send => send.Text));
             staged = words.Split(' ')[0][1..];
             Assert.Equal($"@{staged} what is this?", words);
-            Assert.Single(plan.Sends.Where(send => send.Enter));
+            Assert.Single(plan.Sends, send => send.Enter);
             Fixture.Append(events, Copilot.Event("user.message", new { content = words, attachments = new[] { new { type = "file", path = staged, displayName = "@" + staged } }, delivery = "idle" }, 5));
         });
-        var replies = AttachmentReplies(f, source, injector, store);
+        var observers = 0;
+        var replies = AttachmentReplies(f, source, injector, store, () =>
+        {
+            Assert.Equal(3, injector.Reads);
+            observers++;
+        });
         var request = new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = "what is this?", Attachments = [new() { Id = file }] };
 
         var result = await replies.ReplyAsync(request, "phone");
@@ -646,6 +654,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Equal(result, repeated);
         Assert.Equal(3, injector.Reads);
         Assert.Equal(1, injector.Writes);
+        Assert.Equal(1, observers);
         Assert.NotNull(staged);
         Assert.Equal(png, File.ReadAllBytes(staged));
     }
@@ -682,22 +691,24 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
         await source.RefreshAsync();
         using var store = new AgentBridge.Host.Delivery.Staging.AttachmentStore(new() { StagingRoot = Path.Combine(f.Root, "attachments") }, sweep: false);
-        var replies = AttachmentReplies(f, source, new WorkerInjector(Worker), store);
         byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
         var file = Guid.NewGuid().ToString();
         store.Start("phone", new() { Attachment = file, Name = "shot.png", Size = png.Length, Sha256 = AgentBridge.Protocol.Attachments.Base64Url(System.Security.Cryptography.SHA256.HashData(png)) });
         store.Chunk("phone", new() { Attachment = file, Offset = 0, Data = Convert.ToBase64String(png) });
-        var cli = Task.Run(() =>
+        // Screen reads may be retried for 90 s; the echo's key deadline starts only at injection.
+        Task<(string Words, string Path)>? cli = null;
+        var replies = AttachmentReplies(f, source, new WorkerInjector(Worker), store, () => cli = Task.Run(() =>
         {
             var downs = WaitFor(echo.Log, lines => Keys(lines).Where(k => k.StartsWith("key 1 ", StringComparison.Ordinal)).ToList() is { Count: > 0 } d && d[^1] == "key 1 13 13" ? d : null, seconds: 60);
             var words = new string([.. downs.SkipLast(1).Select(k => (char)int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture))]);
             var path = words.Split(' ')[0][1..];
             Fixture.Append(events, Copilot.Event("user.message", new { content = words, attachments = new[] { new { type = "file", path, displayName = "@" + path } }, delivery = "idle" }, 5));
             return (words, path);
-        });
+        }));
 
         var result = await replies.ReplyAsync(new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = "what is this?", Attachments = [new() { Id = file }] }, "phone");
 
+        if (cli is null) { throw new Xunit.Sdk.XunitException($"the reply did not reach injection: {result.Outcome}: {result.Reason}"); }
         var (typedWords, staged) = await cli;
         Assert.Equal($"@{staged} what is this?", typedWords);
         Assert.Equal(png, File.ReadAllBytes(staged));
