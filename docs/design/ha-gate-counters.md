@@ -231,6 +231,31 @@ only under the writer lock; checkpoint replacement remains atomic and flushed.
 
 ## 5. Continuous run and reset
 
+Slice 5A registers a pending preparation through `gate.start` with only a request
+UUID, from a current host-pinned person on an authenticated relay channel.
+The host durably binds that request and person to a generated candidate run ID
+in the existing agents audit stream; a retry returns the same ID across restart.
+Retained-away preparation bindings are unavailable, never recreated under a new ID.
+`pending` is not a begin marker, a paused admission barrier or an active run:
+the reply says `prepare-barrier-unavailable`, no run context is assigned, and
+no qualifying credit is enabled. Local callers are refused regardless of OS
+identity; pinning disabled does not authorize control. Reset/seal remain
+unavailable. The subsequent barrier/enrollment cuts must obtain membership from
+the relay roster, install complete begin markers, and implement the bounded
+pause/reset contract below before any candidate can become a qualifying run.
+
+Slice 5B adds host-scoped `gate.pause` for a pinned relay person owning a pending candidate,
+with only request/run UUIDs. Its audit marker persists the original UTC deadline
+and timestamp; the monotonic timer cannot be renewed by retries. Shared delivery
+admission drains existing work and retains queued request identities for normal
+revalidation after release. Relay/pipe ingress also rechecks authorization after
+waiting. Timeout, lost control, shutdown or uncertain restart invalidates the
+candidate and releases admission. An unwritable invalidation poisons the existing
+audit head rather than creating another journal. A pause is local admission only,
+not an all-host prepare acknowledgment. Slice 5C still owns trusted roster and
+recorder enrollment, coverage attestations, matching begin markers and reset;
+`gate.start` remains pending, no active context or qualifying credit is enabled.
+
 The person-class control entry points are `start`, `pause`, `reset` and `seal`.
 Each requires an authenticated person-class channel and host-side person
 authorization, never the local pipe or shared OS-user identity.

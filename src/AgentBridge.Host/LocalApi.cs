@@ -23,6 +23,9 @@ public static class LocalApi
 
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
+        if (GateRunPreparation.IsControl(op))
+        { throw Refuse(op, callers.Classify(channel, fresh: true), GateRunPreparation.PersonRequired, log); }
+        if (audit is not null && Acts.Contains(op)) { await audit.RunPause.WaitAsync(); }
         if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
         {
             if (credentials.Of(channel)?.FleetLaunch != true) { credentials.CheckScriptOperation(channel, op, log); }

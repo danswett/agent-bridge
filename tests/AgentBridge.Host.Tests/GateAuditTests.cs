@@ -56,6 +56,20 @@ public sealed class GateAuditTests : IDisposable
     }
 
     [Fact]
+    public void Invalidating_a_run_removes_eligibility_without_invalidating_its_coherent_request_receipts()
+    {
+        var operation = Guid.NewGuid();
+        Append(operation);
+        Append(operation, "terminal", "started");
+        var control = new GateAuditMetadata(1, Guid.NewGuid(), run, 0, "control", "relay", "person-client", Guid.Empty, "pause-timeout");
+        Assert.True(new AgentAuditLog(Profile, clock).Append(new AgentAuditEntry("in", Guid.NewGuid().ToString(),
+            "person:fixture", [], "gate.pause", "profile", "invalidated", Gate: control)));
+        var (rows, complete) = GateAuditProjection.Load(Profile);
+        Assert.True(GateAuditProjection.Project(rows, complete, run).Invalidated);
+        Assert.False(GateAuditProjection.Project(rows, complete, run, operation).Invalidated);
+    }
+
+    [Fact]
     public void Gate_metadata_round_trips_through_the_writer_and_existing_owner_reader_without_text()
     {
         var operations = new[] { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() };

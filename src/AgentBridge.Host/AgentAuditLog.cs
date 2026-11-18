@@ -59,6 +59,26 @@ public sealed class AgentAuditLog
     readonly object gate = new();
     readonly string profile;
     internal string Profile => profile;
+    internal TimeProvider Clock => time;
+    internal AgentBridge.Host.Delivery.DeliveryGate Admission { get; }
+    readonly Lazy<GateRunPause> runPause;
+    internal GateRunPause RunPause => runPause.Value;
+    internal void ControlFault()
+    {
+        log("gate pause invalidated; its audit marker could not be written");
+        try
+        {
+            lock (gate)
+            {
+                var folder = Path.Combine(profile, FolderName);
+                using var held = Lock(folder);
+                if (ReadHead(folder, false) is { } head)
+                { WriteHead(folder, false, head, head.Sequence, "coverage-break"); }
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        { log("gate pause could not persist its coverage fault"); }
+    }
     GateRunContext? controlWriterRun;
     internal GateRunContext? ControlWriterRun
     {
@@ -72,20 +92,23 @@ public sealed class AgentAuditLog
     bool failing;
     bool retentionFailing;
 
-    public AgentAuditLog(string profileFolder, TimeProvider? time = null, Action<string>? log = null, long maxBytes = MaxBytes)
+    public AgentAuditLog(string profileFolder, TimeProvider? time = null, Action<string>? log = null, long maxBytes = MaxBytes,
+        AgentBridge.Host.Delivery.DeliveryGate? admission = null)
     {
         profile = profileFolder;
         this.time = time ?? TimeProvider.System;
         this.log = log ?? (_ => { });
         this.maxBytes = maxBytes;
+        Admission = admission ?? new();
+        runPause = new(() => new GateRunPause(this));
     }
 
     // text is only measured and hashed, never kept. Returns whether the line was written.
     public bool Append(AgentAuditEntry entry, string? text = null)
     {
-        var now = time.GetUtcNow();
         try
         {
+            var now = time.GetUtcNow();
             var bytes = text is null || entry.Gate is not null ? null : Encoding.UTF8.GetBytes(text);
             var chain = (entry.Chain ?? []).Take(MaxChain).Select(c => Cap(c, MaxField)).ToArray();
             var line = new Line(now, Cap(entry.Direction, MaxField), Cap(entry.Request, MaxField), Cap(entry.Principal, MaxField), chain,
@@ -101,6 +124,13 @@ public sealed class AgentAuditLog
                     metadata = metadata with { Sequence = checked(new[] { LastGateSequence(folder, false), LastGateSequence(folder, true),
                         ReadHead(folder, false)?.Sequence ?? 0, ReadHead(folder, true)?.Sequence ?? 0 }.Max() + 1) };
                     if (!metadata.Valid(entry.Action, entry.Target, entry.Outcome)) { throw new IOException("invalid gate audit metadata"); }
+                    if (entry.Action == "gate.start" && entry.Outcome == "pending")
+                    {
+                        long retained = 0;
+                        var prior = GateAuditProjection.Load(profile, alreadyLocked: true, boundary: (floor, _) => retained = floor);
+                        if (!prior.Complete || retained > 0 || prior.Rows.Any(r => r.Action == entry.Action && r.Request == entry.Request))
+                        { throw new IOException("the gate preparation request is already audited or its evidence is incomplete"); }
+                    }
                     if (entry.Action == "session.launch" && metadata is { Phase: "intent", LaunchBinding: not null })
                     {
                         var prior = GateAuditProjection.Load(profile, alreadyLocked: true);
