@@ -70,8 +70,13 @@ public sealed class LiteDeliver(
     {
         foreach (var gate in gates)
         {
-            try { if ((await gate.CheckAsync(envelope, target)).Allowed) { return true; } }
-            catch (Exception e) when (e is not OperationCanceledException) { log($"lite deliver: a gate failed: {e.GetType().Name}"); }
+            try
+            {
+                var decision = await gate.CheckAsync(envelope, target);
+                log($"lite deliver: to {Clean(target)} request {Clean(envelope.Body.Request)} gate {gate.GetType().Name}: {(decision.Allowed ? "allowed" : "refused")}{(decision.Reason is { } reason ? ": " + Clean(reason) : "")}");
+                if (decision.Allowed) { return true; }
+            }
+            catch (Exception e) when (e is not OperationCanceledException) { log($"lite deliver: to {Clean(target)} request {Clean(envelope.Body.Request)} gate {gate.GetType().Name}: failed: {e.GetType().Name}"); }
         }
         return false;
     }
