@@ -22,6 +22,9 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
     long order;
     Action? onNextWait;
     bool frozen;
+    readonly AsyncLocal<FirstLook?> firstLook = new();
+    int waitingForLook;
+    sealed class FirstLook { public bool Done; }
     // Once a frozen clock has been let run: its time moves, but a budget only after a quiet moment.
     bool afterFrozen;
     long lastActive = Stopwatch.GetTimestamp();
@@ -46,6 +49,24 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
     public void Run()
     {
         lock (gate) { afterFrozen = frozen; frozen = false; lastActive = Stopwatch.GetTimestamp(); }
+        armed.Release();
+    }
+
+    // The follower inherits this launch's marker through Task.Run; another follower cannot release it.
+    public void ExpectLook()
+    {
+        lock (gate) { firstLook.Value = new(); waitingForLook++; }
+    }
+
+    public void Looked()
+    {
+        lock (gate)
+        {
+            if (firstLook.Value is not { Done: false } look) { return; }
+            look.Done = true;
+            waitingForLook--;
+            lastActive = Stopwatch.GetTimestamp();
+        }
         armed.Release();
     }
 
@@ -77,7 +98,7 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
             bool still, settling, gated = false;
             lock (gate)
             {
-                (still, settling) = (frozen, afterFrozen);
+                (still, settling) = (frozen || waitingForLook != 0, afterFrozen);
                 due = waits.Count == 0 ? null : waits.MinBy(w => (w.DueAt, w.Order));
                 if ((still || settling) && due is not null && due.DueAt - now > SteadyTicks)
                 {

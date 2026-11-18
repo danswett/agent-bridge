@@ -42,7 +42,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     private protected string app = "", api = "", elsewhere = "";
     private protected string machineName = "Test host";
 
-    private protected LaunchFlowFixture() => starter = new FakeStarter(f);
+    private protected LaunchFlowFixture() => starter = new FakeStarter(f, clock);
 
     public async Task InitializeAsync()
     {
@@ -96,7 +96,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
-        return new(discovery ?? source, gate ?? probe, screens, starter,         locator, new AgencyCatalog(agency, log: logged.Enqueue), new LaunchServiceOptions
+        var launcher = new LaunchService(discovery ?? source, gate ?? probe, screens, starter,         locator, new AgencyCatalog(agency, log: logged.Enqueue), new LaunchServiceOptions
         {
             MachineName = machineName,
             Time = clock,
@@ -126,6 +126,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             AgentWorktreeCheck = agentWorktreeCheck,
             AgentWorktreeRefusalAudit = agentWorktreeRefusalAudit,
         }, log: logged.Enqueue, attachments: attachments, credentials: credentials, account: account);
+        launcher.SessionStarted += (_, _) => clock.Looked();
+        return launcher;
     }
 
     private protected void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
@@ -1731,7 +1733,7 @@ public abstract partial class LaunchFlowFixture
     // Plays the agent: on start, it writes the session an agent would register (a Copilot
     // session folder and its process; for Codex, a registration under a session id of its own),
     // unless told it does not register.
-    private protected sealed class FakeStarter(Fixture f) : IAgentStarter
+    private protected sealed class FakeStarter(Fixture f, PollClock? clock = null) : IAgentStarter
     {
         public readonly List<StartSpec> Specs = [];
         public string? Unavailable_;
@@ -1761,11 +1763,13 @@ public abstract partial class LaunchFlowFixture
             int pid;
             lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } if (HandsOn) { running.Add(pid + 3000); } }
             if (Registers) { Register(spec, HandsOn ? pid + 3000 : pid); }
+            clock?.ExpectLook();
             return new Started(pid, DateTimeOffset.UtcNow);
         }
 
         public bool Running(Started started)
         {
+            clock?.Looked();
             Looking?.Invoke();
             lock (Specs) { return running.Contains(started.ProcessId); }
         }
