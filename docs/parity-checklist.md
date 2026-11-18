@@ -628,11 +628,11 @@ These rows have no step. Each has its reason. A row moves into a step when its i
 | 14 Hooks never fail the agent | E12-02 |
 | 15 One target per action | E17-01, E18-01 |
 
-## Before the DEV-VM1 cutover
+## Before the first real-host cutover
 
 This checklist is the rehearsal half of parity.md's migration readiness. Two runs passing
 (G-01) satisfy "(a)". For "(b)", also run:
 
 * the shadow week (#40);
-* E13-02 (#43) and E15-01 (#44) on DEV-VM1 itself;
+* E13-02 (#43) and E15-01 (#44) on the selected host itself;
 * Phase F there once right after the cutover.

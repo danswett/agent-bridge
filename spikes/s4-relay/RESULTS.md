@@ -10,7 +10,7 @@ deploy**, so the product needs a cross-replica backplane (see finding 3).
 
 Run on 2026-10-27 with .NET 10.0.403 and Playwright 1.56.1 (Chromium and WebKit). The
 live relay ran in Azure Container Apps, West US 2, on 0.25 vCPU and 0.5 GiB with one
-replica. The test host was DSWETT-DEV-VM1 on the Microsoft corporate network.
+replica. The test host was a development machine on the Microsoft corporate network.
 
 ## Question
 
@@ -208,7 +208,7 @@ Review and a flaky check found two more things the product must carry:
 
 * **Real phone: passed.** On 2026-10-27, after Pages deployed, iPhone Safari loaded the
   published PWA, signed in with GitHub, proved its key, opened a channel to the host on
-  DSWETT-DEV-VM1 through the live relay, and passed Snapshot, Echo and Ping. Web Push and
+  the development machine through the live relay, and passed Snapshot, Echo and Ping. Web Push and
   the installed (Home Screen) mode are S5's subject.
 * **No device roster yet.** Any device that signs in to the account can see and reach
   every other device; pairing approval and the signed roster (§5.4) are P4. A host

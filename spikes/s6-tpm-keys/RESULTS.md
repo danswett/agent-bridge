@@ -51,7 +51,7 @@ non-exportable, and is it fast enough?
 
 `s6-check check` runs in CI on `windows-latest`. GitHub's runners have no TPM, so there
 the TPM checks report SKIP and only the DPAPI path and the fallback choice are checked;
-the TPM checks below ran on a machine with one. On DSWETT-DEV-VM1 (Hyper-V virtual TPM
+the TPM checks below ran on a machine with one. On the development host (Hyper-V virtual TPM
 2.0, `VendorID:'MSFT'`, revision 1.38):
 
 | Check | Result |
@@ -105,7 +105,7 @@ Live, against the relay on Azure (S4 host `--profile tpm --key tpm`, device
   Discrete and firmware TPMs are typically tens of milliseconds per ECDH, and slower to
   create a key. That is still well within budget: the static key is used once per
   channel handshake and once per relay connection, not per message. Physical-TPM numbers
-  should be added from a real PC (for example DSWETT-HOME or the ARM laptop's Pluton).
+  should be added from a physical PC with a TPM, selected from the relay roster.
 * **Any process running as the user can use the key; none can take it.** Malware
   running as the user could act as the device while it runs, but can't copy the key off
   the machine. That is the boundary design §5.1 assumes. A per-use PIN or UI policy

@@ -69,4 +69,4 @@ machine address, token or key in it: the repository is public (AGENTS.md "Secret
 | When (PT) | What | Where it's recorded |
 |---|---|---|
 | 2026-10-29 | The token key was exposed in a session's output, and rotated at the cutover; every device signed in again | docs/relay-deploy.md "History" |
-| 2026-11-02 | A host's HA connector was banned by IP after refused tokens, on DSWETT-ARM8 | docs/status.md "Machines" |
+| 2026-11-02 | An Arm64 host's HA connector was banned by IP after refused tokens | [Status decision log](../docs/status.md#9-decision-log-after-designmd-10), 11-02 |

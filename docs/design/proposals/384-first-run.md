@@ -21,7 +21,7 @@ The mock-ups are in [384-first-run/](384-first-run/), with every board on one
 [contact sheet](384-first-run/contact-sheet.png). They are drawn from boards in
 [`/design/canvas`](../../../design/canvas) (`Proposal-384-*.dc.html`) with
 [tools/design-mockups](../../../tools/design-mockups/README.md), from the same tokens, glyphs
-and icons as every other board. The demo machine is ULTRA, the Dev Box is DEV-VM1, and every
+and icons as every other board. Demo machine labels are fixtures, not a fleet inventory, and every
 time, version and path is made up.
 
 ## 1. The problem
@@ -271,7 +271,7 @@ pane (ui.md §7):
 - **Agents tabs** carry an amber dot when that agent needs the person, and the nav item the
   same badge. **Remove bridge integration** removes only Slipgates's registrations and
   blocks; uninstalling a CLI or its credentials is never on this page.
-- **Dev Box keep-awake** appears only on a Dev Box ("DEV-VM1 · Dev Box"), with its
+- **Dev Box keep-awake** appears only on a Dev Box ("machine-a · Dev Box", a neutral fixture), with its
   consequences on the row: "Signs in with az login · an awake Dev Box keeps billing", Off by
   default.
 - **Changes revalidate:** editing a folder, the permission mode or a hook re-runs the checks
@@ -282,10 +282,10 @@ pane (ui.md §7):
 
 The PWA (and later Apple) shows a machine's Settings and health **read only**
 ([phone, dark](384-first-run/proposal-384-phone.png),
-[light](384-first-run/proposal-384-phone-light.png)): "ULTRA · Online · checked 14:52 · read
-only", a note "Change these on ULTRA · Settings in the Windows app", then Agents, This machine
+[light](384-first-run/proposal-384-phone-light.png)): "machine-a · Online · checked 14:52 · read
+only", a note "Change these on machine-a · Settings in the Windows app", then Agents, This machine
 and Trust (Permission prompts: Standard prompts; Folder-trust answers: Off). A row that needs
-the person says "Needs you on ULTRA". No control is drawn that the device can't use. An action
+the person says "Needs you on machine-a". No control is drawn that the device can't use. An action
 appears remotely only where an existing explicit approval path already permits it (#67).
 
 ## 5. Readiness: one model, six states

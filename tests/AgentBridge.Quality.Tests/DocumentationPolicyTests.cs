@@ -3,6 +3,39 @@ namespace AgentBridge.Quality.Tests;
 public class DocumentationPolicyTests
 {
     [Fact]
+    public void Documentation_uses_roster_roles_or_neutral_examples_not_fleet_machine_names()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var paths = Directory.EnumerateFiles(Path.Combine(root, "docs"), "*.md", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(root, "spikes"), "RESULTS.md", SearchOption.AllDirectories))
+            .Concat(new[] { "ops/incidents.md", "ops/plan.md", "quality/README.md", "pwa/README.md",
+                "infra/cloudflare/release-feed/README.md" }
+                .Select(path => Path.Combine(root, path)));
+        var names = new System.Text.RegularExpressions.Regex("VM[1-9]|DSWETT-|ARM8",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var violations = paths
+            .Where(path => !Path.GetRelativePath(root, path).Replace('\\', '/')
+                .StartsWith("docs/protocol/vectors/", StringComparison.Ordinal))
+            .Where(path => !Path.GetRelativePath(root, path).Replace('\\', '/')
+                .StartsWith("docs/protocol/examples/", StringComparison.Ordinal))
+            .Where(path => names.IsMatch(File.ReadAllText(path)))
+            .Select(path => Path.GetRelativePath(root, path));
+
+        Assert.Empty(violations);
+    }
+
+    [Fact]
+    public void Status_links_to_the_relay_roster_instead_of_keeping_machine_rows()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var status = File.ReadAllText(Path.Combine(root, "docs", "status.md"));
+        var machines = status.Split("### Machines", 2)[1].Split("\n### ", 2)[0];
+
+        Assert.Contains("](protocol/roster.md)", machines, StringComparison.Ordinal);
+        Assert.DoesNotContain("|", machines, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Tester_guide_is_reachable_from_the_repository_docs_index()
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);

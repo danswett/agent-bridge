@@ -18,7 +18,7 @@ The boards are in [proposals/536-slipgates-brand/](proposals/536-slipgates-brand
 eleven on one [contact sheet](proposals/536-slipgates-brand/contact-sheet.png). They are drawn
 from `design/canvas/Proposal-536-*.dc.html` by
 [tools/design-mockups](../../tools/design-mockups/README.md), from the same generated tokens,
-glyphs and icons the clients use. The demo machines are ULTRA and DEV-VM1. Every session,
+glyphs and icons the clients use. Demo machine labels are fixtures, not a fleet inventory. Every session,
 time and path on them is made up.
 
 ## 1. What the name means
@@ -117,7 +117,7 @@ The owner chose option A in each. The other options are kept as a record of what
 - **N1. "Bridge Host".** It is the service on each machine that runs and watches its agents.
   - **A (decided): "the Slipgates host"** where it first appears in a screen or a page,
     then "the host". The Settings section is "Host on this machine". Errors say "The host isn't
-    running" and "Can't reach the host on ULTRA". It is a plain word people already understand,
+    running" and "Can't reach the host on this machine". It is a plain word people already understand,
     and the product name says whose host it is.
   - B: "the gate on this machine", or "this machine's gate", with "Gate on this machine" in
     Settings. It is the slipgate idea at its most literal, but "The gate isn't running" makes a
@@ -132,7 +132,7 @@ The owner chose option A in each. The other options are kept as a record of what
   - B: gates in the UI: a machine is a gate, and a link is "open" or "closed". It is evocative,
     but "closed" sounds deliberate where "offline" says what happened. It also collides with
     "open a session". Plain-language alternative: A.
-  - C: "Slipgate" as a proper noun for one machine's endpoint ("ULTRA's slipgate"), with the
+  - C: "Slipgate" as a proper noun for one machine's endpoint ("this machine's slipgate"), with the
     plain states kept. It costs a word people must learn, and doesn't explain anything a
     machine's name doesn't.
 - **N3. The bundled fonts.** The monospace was built and named "Agent Bridge Mono". A custom
@@ -162,7 +162,7 @@ The owner chose option A in each. The other options are kept as a record of what
   and the installer. "Slipgates for Windows" appears only in a listing or release note that
   names several platforms. B: "Slipgates for Windows" everywhere on Windows.
 - **N5. The device-name suffix.** **A (decided): "{device} · Slipgates"** on every client
-  ("iPhone · Slipgates", "ULTRA · Slipgates"). B: the bare device name, with the client shown
+  ("iPhone · Slipgates", "machine-a · Slipgates", neutral fixtures). B: the bare device name, with the client shown
   by its own icon. The protocol vectors that hold "iPhone · Agent Bridge" are test data and
   change only in one deliberate commit.
 

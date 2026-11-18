@@ -143,8 +143,8 @@ U10 spec (#302) ─────────────────► U10a PWA 
      Windows.
    - Visual: light, dark, and high contrast (`forced-colors` in the PWA). Check contrast
      against ui.md §9.
-6. **Live check** where the issue asks for one: on a disposable VM, or on ULTRA with the
-   owner's say-so (status.md §2, Machines), never anywhere else.
+6. **Live check** where the issue asks for one: on a disposable VM; any live-machine
+   exception needs the owner's explicit say-so and a target from the relay roster, never a cached list.
 7. **PR description:** what changed, which ui.md sections it implements, before-and-after
    screenshots in both themes, and exactly what was run.
 8. **Report** "#<n> ready at <sha>" to the coordinator. Only the coordinator merges.

@@ -25,7 +25,7 @@ own-agents-only.
 - Text only, at most 4096 characters. Delivery uses the same typing routine the Home Assistant reply path
   uses, and text goes only into an idle session with an empty input box. Delivered text starts with one fixed
   prefix line naming the sending machine and session.
-- Allow-all sessions: `agentMessaging.allowAllTargets` is on for the cut-over machines only (VM1, VM2, VM3 and VM4), by the owner's decision, and off everywhere else including the home and ultra machines. It is the per-machine switch: set to false, that machine refuses allow-all sessions as targets. Delivery into an allow-all session works as Home Assistant does today, only when it is idle.
+- Allow-all sessions: `agentMessaging.allowAllTargets` is on for owner-approved cut-over machines selected from the relay roster only, and off everywhere else. It is the per-machine switch: set to false, that machine refuses allow-all sessions as targets. Delivery into an allow-all session works as Home Assistant does today, only when it is idle.
 - Which sessions receive: the relay types only into sessions this host launched since its last restart, plus allow-all sessions while `allowAllTargets` is true. A session started by hand is refused as `notReplyTarget` and the messenger falls back to Home Assistant. After a host restart, sessions launched before it fall back to Home Assistant until they are relaunched.
 - Rate: the receiver allows at most 6 messages a minute and 60 an hour from one sending session to one
   receiving session. The sender side allows 6 a minute per sender-receiver pair, in the messenger script (fleet #56), covering both the relay and Home Assistant routes. Beyond that is refused as `rate`, which is final.
@@ -39,10 +39,10 @@ own-agents-only.
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
    could message his sessions, and any message from a pinned own machine is typed into a session there that is idle, has an empty input box, and is host-launched or allow-all (see the next limit).
 
-## Turn it on (a person at each machine, in this order: VM3, VM1, VM4, VM2)
+## Turn it on (a person at each owner-approved machine selected from the relay roster)
 
 1. Set `agentMessaging.remote` to `own-account` ([host-config](../host-config.md)); changes need no restart.
-   On VM1, VM2, VM3 and VM4 also set `agentMessaging.allowAllTargets` to `true`; leave it off on every other machine. Setting it back to `false` makes that machine refuse allow-all sessions as targets.
+   On owner-approved cut-over machines only, also set `agentMessaging.allowAllTargets` to `true`; leave it off on every other machine. Setting it back to `false` makes that machine refuse allow-all sessions as targets.
 2. Pin the other machines (L2b, #1383), typing these at the machine's own command line, never in an agent session or from a remote device. With `agentMessaging.remote` off, `show`, `list` and `pin` refuse.
    - On the OTHER machine run `agent-bridge-host peers show`. It prints that host's pin code, device id and fingerprint.
    - On this machine run `agent-bridge-host peers pin <pin-code> [--name <name>]`. It shows the peer's device id and fingerprint; compare both with what `peers show` printed on the other machine, then type `yes`. The name is at most 64 characters and may not contain `|` or control characters.
@@ -94,7 +94,7 @@ What the sender gets, and what the messenger does:
 
 ## Acceptance tests (tick before cut-over)
 
-Run on staging, then production, with VM3 and VM1 first and VM4 and VM2 joining after.
+Run on staging, then production, with the owner-approved initial cohort first and the remaining approved machines joining after.
 
 - [ ] 12 ordered pairs of the four machines, 50 messages each: all delivered once and acknowledged within 30 seconds; fallbacks counted, and more than about 2 percent on a healthy relay fails.
 - [ ] Relay duplicates: the same message id sent twice over the relay inside 2 minutes is delivered once; 20 races from two machines at once lose nothing and duplicate nothing on the relay route. Not tested for once-only across relay and Home Assistant (known limit above).
@@ -110,7 +110,7 @@ Run on staging, then production, with VM3 and VM1 first and VM4 and VM2 joining 
 
 - [ ] Every fleet coordinator machine runs this mode with a passing one-message check each way.
 - [ ] The fleet switch, the per-machine kill and the fallback have each been exercised once.
-- [ ] `allowAllTargets` is true on VM1, VM2, VM3 and VM4 only, and false on all other machines.
+- [ ] `allowAllTargets` is true on owner-approved cut-over machines only, and false on all other machines.
 - [ ] No sender still writes the Home Assistant reply payload.
 - [ ] A week has passed with no Home Assistant reply-path use.
 - [ ] Before any rollout beyond the owner: the roster, allow-all list, durable duplicate memory, full audit log and kill push are built.

@@ -179,7 +179,7 @@ Existing protected transport carries readbacks, never credentials.
 
 ## Why machines disagree (#1142)
 
-#1142 reports Opus on VM1/home but narrower Agency lists on VM2-VM4. The current
+#1142 reports Opus on some hosts but narrower Agency lists on others. The current
 configured-versus-built-in/live-observation code can explain differing lists
 without an entitlement difference. Accounts, versions and Agency profiles can also
 differ; no paired pin/account captures establish the cause on each named machine.

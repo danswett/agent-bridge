@@ -59,7 +59,7 @@ is **P2**: local app, local host, phone continuity through the HA connector.
 ## 0.1 Hard rule: protect the live bridge until authorized retirement
 
 The current bridge (PowerShell daemon 1.33.x, HA dashboard, phone notifications) is
-in daily use on DSWETT-HOME, DSWETT-DEV-VM1, the ARM laptop, the Dev Box and the Mac.
+in daily use on the machines in the [relay roster](protocol/roster.md).
 **Development must not degrade it.** The guardrails below remain requirements
 while compatibility is supported; recording the retirement decision does not
 disable them. Only the evidence-backed retirement process in §0.2 may remove the
@@ -77,7 +77,7 @@ HA path. A PR that violates one is not merged.
 | G8 | **Per-machine migration is explicit, reversible and verified**: *Migrate* keeps `~/.agent-ha-bridge` intact, disables (not deletes) the PS task, and *Roll back* restores the task and hook registrations byte for byte. The rollback is exercised in CI and on a VM before it is offered | A failed cutover must cost minutes, not a rebuild |
 | G9 | **Wire compatibility on the HA side for migrated machines** (§3.1, HA connector): a migrated machine's host keeps publishing the same per-machine and per-session MQTT entities (topics, ids, attributes, command inputs) that the existing dashboard renders, verified by contract tests recorded from the PS daemon | That way the existing HA dashboard and phone flow keep showing and answering sessions from migrated machines during the transition |
 | G10 | **Changes to `agent-ha-bridge` are limited** to (a) the opt-in trace recorder, default **off**, and (b) at P3, a migration hand-off hook. Each lands through the normal PR, full suite, analyzer and release process, one release at a time | Keeps the live bridge's release cadence and risk exactly as today |
-| G11 | **Testing on disposable machines first**: Hyperloop VMs or a separate Windows user profile until P2's exit criteria are met. The first real machine to migrate is DSWETT-DEV-VM1, never the publication writer | A bug in a spike should never reach a machine you depend on |
+| G11 | **Testing on disposable machines first**: Hyperloop VMs or a separate Windows user profile until P2's exit criteria are met. Select the first real machine to migrate from the relay roster, never the publication writer | A bug in a spike should never reach a machine you depend on |
 
 ---
 
@@ -779,7 +779,7 @@ table.
 Three independent measurements of one heavy user (Dan: up to 8 concurrent sessions
 across several machines), all read-only:
 
-1. **Transcript replay.** All 449 sessions on DSWETT-DEV-VM1 (448 Copilot, 1 Claude;
+1. **Transcript replay.** All 449 sessions on the sampled development host (448 Copilot, 1 Claude;
    March–October), replayed through Protocol v1's rules: full upserts, 250 ms
    coalescing, field limits.
 2. **HA history.** 7 days of the live sessions' activity and status sensors (6,828
@@ -1288,7 +1288,7 @@ current retirement, with no time-based wait or required optional HA client.
 | Phase | Content | Exit criteria |
 |---|---|---|
 | **P0 Spikes** | S1 console injection from a .NET `WinExe` (Copilot, Claude, Codex; Windows Terminal and conhost). S2 Noise-P256 interop between .NET and Safari/Chrome WebCrypto. S3 WinUI 3 unpackaged + Velopack + toast text box with cold activation. S4 relay prototype (ASP.NET Core) with GitHub device flow, two hosts and one PWA through a corporate network and a Dev Box. S5 iOS PWA Web Push with an RFC 8291 payload from a host. S6 TPM P-256 ECDH for the Noise static key. S7 macOS: .NET tmux delivery, a signed and notarized background `.app` host with its device key in the Secure Enclave (§5.7), and a SwiftUI shell talking to the host over its Unix socket with Velopack install/update and a notification answered by typing. **S8 corporate policy check** (§11, parked). **S9 relay at scale** (§5.8): the home/forward cluster on AKS with rendezvous hashing, a load generator (100k+ sockets per node, frames/s, p99 forward latency), scale-out and drain with no lost frames, a second region via the Bicep stamp and global load balancer, and a WebRTC upgrade-in-place between the PWA and a .NET host | A written result per spike. S1, S2 and S8 are go/no-go gates |
-| **P1 Protocol + host core (read-only)** | `Host.Protocol`, intake, discovery, activity, decisions parsing. Local pipe. App: Sessions page read-only. Trace recorder in PS 1.34.x, replay harness, shadow mode | Shadow diff clean for a week on DSWETT-HOME and DEV-VM1 |
+| **P1 Protocol + host core (read-only)** | `Host.Protocol`, intake, discovery, activity, decisions parsing. Local pipe. App: Sessions page read-only. Trace recorder in PS 1.34.x, replay harness, shadow mode | Shadow diff clean for a week on the participating hosts selected from the relay roster |
 | **P2 Local interactive parity** | Delivery (injection), replies and blobs, launch/stop/resume, worktrees, usage, toasts, the HA connector (status + phone notifications) | **One machine runs without the PS daemon**, and the phone still answers through the HA connector |
 | **P3 Install and manage** | Velopack packaging, first-run wizard, hook registration, migration from the PS install, uninstall, signing, attestations | A clean VM goes from download to a working session in under 5 minutes (Hyperloop-verified). An existing install migrates and rolls back |
 | **P4 Relay + fleet** | Relay service (accounts, roster, frames, rate limits, metrics), pairing, the transport ladder, multi-machine app view, transfers, signed commands, authorization engine, agent principals, MCP retarget, **observability (§5.10): `ops` API, Operator and Connection pages, synthetic probes** | Home PC, VM and Dev Box all visible and drivable from each other, with the relay demonstrably blind (inspected). The Operator page shows live relay health, and the label-allowlist and log-hygiene tests pass |
@@ -1304,8 +1304,8 @@ lines)**. On top of that come `install.ps1` (3,600 lines), the card (3,760 lines
 JS, mostly replaced rather than ported) and the MCP server (1,700 lines,
 re-targeted).
 
-**Historical machine migration order** (G7, G11): Hyperloop VM → DSWETT-DEV-VM1 → ARM laptop →
-Dev Box → Mac (after P5) → DSWETT-HOME (the publication writer) last, at P7. Each
+**Historical machine migration order** (G7, G11): disposable rehearsal first, then
+eligible hosts from the relay roster; the publication writer last, at P7. Each
 machine stays on the new host for a week, with rollback available, before the next
 one moves. This original schedule is not the current HA retirement gate (§0.2).
 
@@ -1322,11 +1322,11 @@ The first goal was parity with agent-ha-bridge, then migrating machines. New fea
 | **1b Full HA compatibility connector** (historical) | A migrated machine stays visible and drivable on the existing HA dashboard. Stages 1-7 preserve the per-machine entity contract while supported. The separate integration/card is optional later work (#1419), not required HA retention | Retain needed legacy contract fixtures and disposable HA tests; the former #319 migration gate is superseded. Current retirement follows #1396 (§0.2), not replacement integration delivery |
 | **2 WinUI slice 2** | Remote machines through the relay, Launch page, hook registration, migration from agent-ha-bridge and rollback, then signing | Hyperloop on the VM |
 | **3 VM rehearsal** | Install agent-ha-bridge on the VM, migrate to the app, run the scripted parity checklist, roll back and confirm the HA bridge is unchanged, restore a snapshot and repeat | A clean pass of the whole checklist in both directions |
-| **4 Real machines** | DEV-VM1 first: read-only shadow comparison with the PS daemon until a **coverage gate** passes (decided 2026-10-29, replacing a fixed week), then a cutover and a soak. Then the laptop, the Dev Box and the Mac. DSWETT-HOME (the writer) last | Coverage gate: at least 100 questions with the 95% upper bound on the mismatch rate ≤ 3% (rule of three), 30 sessions, 500 status transitions, 50 background starts and finishes, 5 compactions, 100 resume snapshots, 50 usage readings, one restart seen, at least 24 h of wall clock, no unexplained mismatch in the last 24 h. No missed answers, rollback available throughout |
+| **4 Real machines** | Select eligible hosts from the relay roster: read-only shadow comparison with the PS daemon until a **coverage gate** passes (decided 2026-10-29, replacing a fixed week), then a cutover and a soak. The publication writer moves last | Coverage gate: at least 100 questions with the 95% upper bound on the mismatch rate ≤ 3% (rule of three), 30 sessions, 500 status transitions, 50 background starts and finishes, 5 compactions, 100 resume snapshots, 50 usage readings, one restart seen, at least 24 h of wall clock, no unexplained mismatch in the last 24 h. No missed answers, rollback available throughout |
 
 **Stage 0 result (#57, 2026-10-29).** `docs/parity.md` has 146 rows: 45 Verified, 28 implemented but untested live, 3 Partial, 24 Missing, 17 Intentionally different, 12 N/A, 17 In flight. Of the 15 §6.3 invariants, 7 are Verified; 6 (discovery holds), 13 (sessions can't restart the bridge) and 14 (hooks never fail the agent) are Missing. It opened 20 `parity` issues (#37–#56).
 - **Blocks the VM rehearsal:** #37 (the host takes over hook handling), #38 (migrate and roll back), #39 (scripted parity checklist), the HA connector's status PR, and the Claude/Codex live tests.
-- **Blocks the DEV-VM1 cutover:** #43 (discovery holds), #44 (local-pipe stop/restart restricted), #40 (trace recorder and shadow diff), #41 (Claude/Codex replies), plus the blob store and the connector's commands.
+- **Blocks the first real-host cutover:** #43 (discovery holds), #44 (local-pipe stop/restart restricted), #40 (trace recorder and shadow diff), #41 (Claude/Codex replies), plus the blob store and the connector's commands.
 
 ### Progress (2026-10-28)
 
@@ -1386,7 +1386,7 @@ the desktop app, so a person can drive real sessions from a phone early.
   - "finished" arrived after the turn;
   - the question notification was cleared rather than left stale.
 
-On DSWETT-DEV-VM1 the host runs read-only: G5 sees agent-ha-bridge there and refuses to type. That is the guard working as intended.
+On a host still running agent-ha-bridge the new host runs read-only: G5 sees the daemon there and refuses to type. That is the guard working as intended.
 
 **Subagent rule (from live testing).** A card's `reasoning` and `response` can come from a
 subagent, and the last writer wins, which is what the HA card does. `status`, `userMessage`
@@ -1499,7 +1499,7 @@ localization-ready strings.
 1. ~~**S1 console injection from a console-less .NET process.**~~ Resolved: GO, through an
    injector worker (§6.2).
 2. **Corporate policy (S8), parked 2026-10-27 at the user's direction.** Not a gate
-   for building P1–P3. Transcripts from corporate machines (Dev Box, DEV-VM1)
+   for building P1–P3. Transcripts from corporate development machines
    would travel, encrypted, through a personally operated relay to personal devices.
    Today they already reach a home HA. Confirm this is acceptable under SFI and
    corporate device policy before P4. LAN-only or self-hosted relay modes are the
