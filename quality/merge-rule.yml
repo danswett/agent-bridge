@@ -92,6 +92,7 @@ infra_nonblocking:
 main_green:
   workflow: ci.yml
   exempt_labels: [fixes-main]
+  exempt_paths: [tests/AgentBridge.*.Tests/**, pwa/test/**]
   jobs:
     - product
     - ha-integration

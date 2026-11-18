@@ -44,6 +44,7 @@ sealed class MergeRuleConfig
         config.Codeql ??= new();
         config.MainGreen ??= new();
         config.MainGreen.ExemptLabels ??= [];
+        config.MainGreen.ExemptPaths ??= [];
         config.MainGreen.Jobs ??= [];
         config.MainGreen.LegFamilies ??= [];
         config.CopilotWaiver ??= new();
@@ -112,6 +113,8 @@ sealed class MainGreenConfig
     /// <summary>The workflow whose latest push run on the base commit supplies the named jobs.</summary>
     public string Workflow { get; set; } = "";
     public List<string> ExemptLabels { get; set; } = [];
+    /// <summary>The exempt label lifts a red main only when every changed file matches one of these.</summary>
+    public List<string> ExemptPaths { get; set; } = [];
     public List<string> Jobs { get; set; } = [];
     public List<List<string>> LegFamilies { get; set; } = [];
 }
@@ -310,6 +313,10 @@ static class MergeRule
         // request with an exempt label, which only someone with triage rights can add. It skips
         // this check alone.
         var exemptBy = pr.Labels.FirstOrDefault(l => config.MainGreen.ExemptLabels.Contains(l, StringComparer.OrdinalIgnoreCase));
+        // Tests-only: an unread or cut-short file list fails closed, since it could hide a source change.
+        var exemptGlobs = config.MainGreen.ExemptPaths.Select(p => new Glob(p, ignoreCase: true)).ToList();
+        if (exemptBy is not null && !(pr.FullyRead && pr.FilesComplete && pr.Files.Count > 0 && pr.Files.All(f => exemptGlobs.Any(g => g.IsMatch(f)))))
+            exemptBy = null;
         var mainBlocks = main.State != "success" && exemptBy is null;
         if (mainBlocks)
             failures.Add(main.Reason);
@@ -421,7 +428,7 @@ static class MergeRule
         var reasons = failures.Concat(pending).ToList();
         var state = failures.Count > 0 ? (mainBlocks && main.State == "error" ? "error" : "failure") : pending.Count > 0 ? "pending" : "success";
         var description = state == "success"
-            ? $"{(copilot ? $"Copilot reviewed {sha}" : needsSecond ? "Two model families' reviews on file" : "Independent review on file")}; every check passed{(copilot ? "; independent review on file" : "")}{(main.State != "success" ? $"; main isn't green, but it's labelled {exemptBy}" : "")}"
+            ? $"{(copilot ? $"Copilot reviewed {sha}" : needsSecond ? "Two model families' reviews on file" : "Independent review on file")}; every check passed{(copilot ? "; independent review on file" : "")}{(main.State != "success" ? $"; fixes-main tests-only bypass used" : "")}"
             : Capitalize(string.Join("; ", reasons));
         return new MergeVerdict(state, Truncate(Printable(description)), reasons, sensitive);
     }
