@@ -69,6 +69,8 @@ An initialization marker outside the ledger directory prevents deletion of that 
 directory from becoming first use. UUID request keys are canonical. Charged requests,
 including completed ones, retain debit identities cross-checked against both hourly
 ledgers; unattributable legacy completed debits fail closed rather than reset capacity.
+Expired debits remain explicitly expired across clock rollback and restart without
+releasing their live reservations or resurrecting hourly charges.
 Restarts and elapsed time never free a live slot; production evidence consumers remain L2.
 Proven prestart refusals and busy outcomes release only their own hourly and live
 reservation; request memory and the separate attempt budget are retained.
