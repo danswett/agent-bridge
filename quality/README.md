@@ -803,7 +803,7 @@ request is otherwise reviewed.
 Receipts count only from `independent_review.posters` in `quality/merge-rule.yml`: `danswett`
 and the receipts GitHub App `agent-bridge-receipts`, written as GraphQL names it, without REST's
 `[bot]`. The App holds Commit statuses (write), Pull requests (read) and Metadata (read), and
-nothing else; its key stays on VM4. It has its own rate pool, so danswett's quota running out
+nothing else; its key stays in approved signing custody. It has its own rate pool, so danswett's quota running out
 doesn't stop receipts. danswett stays a poster as the fallback for when the App's machine is down.
 To roll back, revoke the App's key or suspend it in GitHub settings; nothing else depends on it.
 
@@ -1018,8 +1018,8 @@ the PR gate can stop a regression. The rings only protect users if releases pass
 | Channel | Gets | Promoted when | Who runs it |
 |---|---|---|---|
 | `dev` | Every merge to `main` (today's behaviour) | Ring 2 green | Lab VMs, and any machine opted in |
-| `beta` | The newest `dev` build with a green ring 3 | Nightly, automatically | The owner's migrated machines (ULTRA, DEV-VM1, ARM8) |
-| `stable` | A `beta` build with ring 4 signed off | By the owner | Everyone else, and HOME once migrated |
+| `beta` | The newest `dev` build with a green ring 3 | Nightly, automatically | The owner's migrated machines selected from the relay roster |
+| `stable` | A `beta` build with ring 4 signed off | By the owner | Everyone else, including the publication writer once migrated |
 
 Velopack channels already exist per architecture (`build/app-channels.ps1`). Promotion
 re-publishes the same bytes into the next channel's feed, with the same digest; it never

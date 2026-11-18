@@ -8,7 +8,8 @@ public class DocumentationPolicyTests
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var paths = Directory.EnumerateFiles(Path.Combine(root, "docs"), "*.md", SearchOption.AllDirectories)
             .Concat(Directory.EnumerateFiles(Path.Combine(root, "spikes"), "RESULTS.md", SearchOption.AllDirectories))
-            .Concat(new[] { "quality/README.md", "pwa/README.md", "infra/cloudflare/release-feed/README.md" }
+            .Concat(new[] { "ops/incidents.md", "ops/plan.md", "quality/README.md", "pwa/README.md",
+                "infra/cloudflare/release-feed/README.md" }
                 .Select(path => Path.Combine(root, path)));
         var names = new System.Text.RegularExpressions.Regex("VM[1-9]|DSWETT-|ARM8",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
