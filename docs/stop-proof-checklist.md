@@ -146,9 +146,10 @@ latest successful receipt. No inheritance between clients, caller routes,
 agents, builds or stages; identify any unrun combination explicitly.
 
 Separately number at least **20 distinct, successful correct-target stops across
-all four Windows machines**. Each ledger entry links the run cell, case, request
+all active hosts in the approved fleet roster, pinned at run start**.
+Each ledger entry links the run cell, case, request
 correlation, target PID/start time, witness-survival receipt, result and evidence
-folder. Use disposable aliases M1-M4, not fleet node ids. List each machine's
+folder. Use neutral per-run aliases, not fleet node ids. List each host's
 subtotal and reconcile them with the distinct-stop total.
 First presses, refusals, stale results, retries/replays of one operation and
 fixture-only tests do not inflate that total. A valid stop may contribute to
