@@ -21,16 +21,23 @@ public sealed partial class HaConnector
             inbox = store.Read();
             queuedInbox = store;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
         {
             log($"Home Assistant connector inbox unavailable: {Describe(e)}; queued replies are disabled");
         }
     }
 
-    async Task QueueAtQuestionAsync(string sessionId, Published p, IReadOnlyList<(long Seq, HaTrigger Hit)> seen, CancellationToken ct)
+    async Task QueueAtQuestionAsync(string sessionId, Published p, IReadOnlyList<(long Seq, HaTrigger Hit)> seen, CancellationToken ct, Observation? current = null)
     {
         if (!ServesReplies) { return; }
-        var current = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
+        current ??= await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
+        if (current.Snapshot is { } sent && Str(sent.Attributes, "driver") == "agent"
+            && string.IsNullOrEmpty(Str(sent.Attributes, "decision_id")))
+        {
+            var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
+            // reply-session's companion press sends this payload, not the owner's form.
+            if (DriverOf(submit.Snapshot?.UserId) == "agent") { p.Armed!.SpentPress = submit.Value; }
+        }
         var states = seen.Where(h => h.Seq > p.Armed!.Boundary && h.Hit.EntityId == SessionEntities.ReplyPayload(p.Node)).Select(h => h.Hit.State);
         if (Changed(p.Armed!.PayloadBaseline, current)) { states = states.Append(current.Snapshot!); }
         foreach (var state in states)
@@ -57,7 +64,7 @@ public sealed partial class HaConnector
                         inbox = saved;
                     }
                     catch (InvalidOperationException) { error = "queue full"; }
-                    catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
                     {
                         log($"Home Assistant connector could not persist its inbox: {Describe(e)}");
                         error = "durable reply queue unavailable";

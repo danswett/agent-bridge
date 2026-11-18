@@ -308,6 +308,10 @@ public sealed partial class HaConnector
         var payload = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
         var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
         if (payload.Kind == "unknown" || submit.Kind == "unknown") { return false; }
+        if (p.Armed is not null)
+        {
+            await QueueAtQuestionAsync(p.SessionId, p, hits.ToArray().Where(h => h.Seq <= boundary).ToArray(), ct, payload);
+        }
         if (payload.Present) { p.Reply.Handle(payload.Value); }
         p.Reply.HandledPress = submit.Present ? submit.Value : null;
         p.Reply.PendingPress = null;

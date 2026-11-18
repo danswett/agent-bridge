@@ -704,6 +704,12 @@ public sealed partial class HaConnector : IAsyncDisposable
             allDirty = false;
         }
         var live = source.Snapshot().ToDictionary(s => s.Id, StringComparer.Ordinal);
+        // A complete discovery pass confirms ended lifetimes, even after restart and while
+        // their dashboard cards still await removal. Held discovery proves no such absence.
+        if (!RetirementHeld() && inbox.Any(i => !live.ContainsKey(i.Node)))
+        {
+            inbox = queuedInbox!.RetainNodes(live.Keys.ToHashSet(StringComparer.Ordinal));
+        }
         List<string> work;
         List<(string Id, string Node)> gone;
         lock (gate)

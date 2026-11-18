@@ -932,7 +932,7 @@ public sealed partial class HaConnector
         var node = p.Node;
         // A press of Send (or of the box) the watch reported after the last failure: what lets
         // words that failed be given again.
-        var fresh = since.Any(h => h.EntityId == SessionEntities.Submit(node) || h.EntityId == SessionEntities.Reply(node))
+        var fresh = since.Any(h => (h.EntityId == SessionEntities.Submit(node) || h.EntityId == SessionEntities.Reply(node)) && h.State.State != armed.SpentPress)
             || await PressedSinceFailureAsync(node, armed, ct);
         var decision = await ha.GetStateAsync(SessionEntities.Decision(node), ct);
         if (!armed.WindowChecked && decision?.State == HaDecision.Awaiting && DecisionIdOf(decision) == armed.Question.Id)
@@ -1269,7 +1269,7 @@ public sealed partial class HaConnector
     {
         if (armed.Attempts == 0 || armed.SubmitAtFailure is not { } before || before.Kind == "unknown") { return false; }
         var now = await ObserveAsync(SessionEntities.Submit(node), ct);
-        return now.Present && (!before.Present || !string.Equals(now.Value, before.Value, StringComparison.Ordinal));
+        return now.Present && now.Value != armed.SpentPress && (!before.Present || !string.Equals(now.Value, before.Value, StringComparison.Ordinal));
     }
 
     // Get-BridgeDriverFromState: "agent" when the account behind a press is one of the agents'

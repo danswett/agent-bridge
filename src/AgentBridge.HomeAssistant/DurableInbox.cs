@@ -59,6 +59,14 @@ internal sealed class DurableInbox
         return Load();
     }
 
+    public IReadOnlyList<InboxMessage> RetainNodes(IReadOnlySet<string> live)
+    {
+        using var held = Lock();
+        var messages = Load();
+        if (messages.RemoveAll(m => !live.Contains(m.Node)) > 0) { Save(messages); }
+        return messages;
+    }
+
     public InboxMessage Deliver(string node, string rid, DateTimeOffset at, string outcome = "delivered")
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(node);

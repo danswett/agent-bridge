@@ -579,6 +579,10 @@ and take priority: nothing drains until the question disappears from the host's 
 Then accepted messages go through the existing reply delivery, FIFO, one at a time.
 Human replies and agent publishes without a valid `rid` retain the existing question refusal.
 Question-tagged publishes are never queued.
+An agent's companion Submit press does not confirm the owner's form; the owner can still
+submit independently. Outstanding payloads are captured before a question-clear baseline.
+Confirmed absence from a complete discovery pass durably drops both pending messages and
+receipts, including after restart; discovery holds preserve them until absence is confirmed.
 
 The host reuses `DurableInbox` at `<StateFile>.inbox`, alongside its existing connector state,
 without protocol or relay changes. Pending messages survive a host restart; payloads are cleared
