@@ -59,9 +59,11 @@ public class PrConcurrencyTests
 
     static Dictionary<string, string?> Context(string name, string number) => new()
     {
-        ["github.event_name"] = name, ["github.event.pull_request.number"] = number,
+        ["github.event_name"] = name,
+        ["github.event.pull_request.number"] = number,
         ["github.event.pull_request.head.sha"] = number.Length > 0 ? "old-head" : null,
-        ["github.run_id"] = "old-run", ["github.ref"] = name == "pull_request" ? "refs/pull/42/merge" : "refs/heads/main",
+        ["github.run_id"] = "old-run",
+        ["github.ref"] = name == "pull_request" ? "refs/pull/42/merge" : "refs/heads/main",
     };
 
     static string Group(YamlMappingNode node, Dictionary<string, string?> context) =>
