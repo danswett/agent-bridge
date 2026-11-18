@@ -364,13 +364,14 @@ are checked (types, 16 KiB text) before any pipe call. This machine only: `machi
 are ignored.
 
 
-Local only: a relay channel answers each of these with `unknown op`. All but `host.status`
-and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
+Local only: a relay channel answers each of these with `unknown op`. All but `host.status`,
+`host.subscribe`, and the person-only settings readback are the app's alone ([above](#who-may-manage-the-host)).
 
 | Op | Data | Result |
 |---|---|---|
 | `host.status` | none | `HostStatus` |
 | `host.subscribe` | none | `HostStatus`, then a `host.status` event with the whole status whenever it changes |
+| `host.agentSettings.status` | none | Fresh, read-only `agents.launch` and `agents.limits` values, defaults and allowed ranges. `state` is `ok`, `refused` for invalid agent policy, or `unreadable` for a file problem; the latter two include `reason` and null values, not fallback values. Only the local app or host CLI with a fresh person classification may call it; credentialed, agent and other callers are refused. |
 | `host.agents.refresh` | none | `AgentReadinessReport` (below). Advertised as `host.agents` in the app's local hello only. Requests a fresh, read-only scan; overlapping requests share a scan. App-only despite not saving settings: version checks can start CLI processes |
 | `host.agents.setup` | `{ "agent": "copilot" \| "agency" \| "claude" \| "codex", "action": "install" \| "remove" }` | `{ "completed": bool, "detail": string, "restartRequired": bool }`. Advertised as `host.agents.setup` only to the local App on Windows when available. `install` also repairs; Agency shares Copilot hooks. Uses the owned standalone backend, refuses read-only/legacy/migrated/foreign configuration, and serializes operations with a three-minute deadline and host-shutdown cancellation. Unknown agents/actions are rejected without writes. Expected setup failures return `completed: false` with explicit incomplete-work details, not readiness. Cancellation and unexpected failures are protocol errors. Never restarts, accepts trust, installs a CLI, or signs in |
 | `host.agents.install` | `{ "agent": "copilot" \| "claude" \| "codex", "acceptAgreements": true }` | `AgentInstallResult`: `{ "completed": bool, "detail": string, "executable"?: string }`. Windows local App only, advertised as `host.agents.install`; fresh caller classification is required. Uses fixed WinGet package IDs/sources, explicit source/package/runtime consent, a ten-minute deadline and host-shutdown cancellation. Reuses existing executables without upgrades; missing configured paths and read-only/ownership/legacy conflicts are refused. Checks fresh executable discovery before success, never implies sign-in or readiness, never returns installer output. Settings allows eleven minutes for the operation plus a separate one-minute readiness refresh |
