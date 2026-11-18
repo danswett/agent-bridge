@@ -72,6 +72,82 @@ public sealed class SessionReaperServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Synchronous_read_runs_on_background_pool_and_deadline_does_not_wait_for_it()
+    {
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource<Thread>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var caller = 0;
+        await using var service = Service(ct =>
+        {
+            Interlocked.Increment(ref calls);
+            entered.SetResult(Thread.CurrentThread);
+            release.Wait();
+            return Read(ct);
+        });
+        var cycle = Task.Run(() => { caller = Environment.CurrentManagedThreadId; return service.CycleAsync(); });
+        try
+        {
+            var reader = await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            clock.Advance(TimeSpan.FromMinutes(2));
+            var failed = Assert.IsType<SessionReaperReceipt>(await cycle.WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.NotNull(failed.Problem);
+            Assert.Empty(failed.Kept);
+            Assert.True(reader.IsThreadPoolThread);
+            Assert.True(reader.IsBackground);
+            Assert.NotEqual(caller, reader.ManagedThreadId);
+            Assert.NotNull(Assert.IsType<SessionReaperReceipt>(await service.CycleAsync()).Problem);
+            Assert.Equal(1, calls);
+        }
+        finally
+        {
+            release.Set();
+            await cycle.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    [Fact]
+    public async Task Read_completing_after_deadline_is_never_planned_or_surfaced()
+    {
+        await using var service = Service(ct =>
+        {
+            clock.Advance(TimeSpan.FromMinutes(2) + TimeSpan.FromTicks(1));
+            return Task.FromResult(SessionReaperPolicyTests.Snapshot(SessionReaperPolicyTests.Builder("late-evidence")));
+        });
+        var receipts = new List<SessionReaperReceipt>();
+        service.Completed += receipts.Add;
+        var failed = Assert.IsType<SessionReaperReceipt>(await service.CycleAsync());
+        Assert.NotNull(failed.Problem);
+        Assert.Empty(failed.Kept);
+        Assert.Empty(failed.Ended);
+        Assert.Same(failed, Assert.Single(receipts));
+        var file = Assert.Single(Directory.GetFiles(Path.Combine(folder, "reaper", "receipts"), "*.json"));
+        Assert.DoesNotContain("late-evidence", File.ReadAllText(file));
+    }
+
+    [Fact]
+    public async Task Shutdown_does_not_wait_for_a_synchronous_read_to_return()
+    {
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var service = Service(ct =>
+        {
+            entered.SetResult();
+            release.Wait();
+            return Read(ct);
+        });
+        service.Start();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var shutdown = service.DisposeAsync().AsTask();
+        try { await shutdown.WaitAsync(TimeSpan.FromSeconds(10)); }
+        finally
+        {
+            release.Set();
+            await shutdown.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    [Fact]
     public async Task Unreadable_registry_is_not_an_empty_success_and_receipt_IO_failure_is_reported()
     {
         await using var service = Service(_ => throw new IOException("fixture-private"));
