@@ -20,6 +20,8 @@ function hasPinnedMachineName(text) {
       return value <= 0x10ffff ? String.fromCodePoint(value) : escape;
     });
   const normalized = decoded.replace(/\p{Cf}/gu, '').normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '');
+  // Owner-prefix fragments may join across identifier separators, never prose boundaries.
+  if (normalized.replace(/[-_.]/g, '').includes('dswett')) { return true; }
   const tokens = normalized.match(/[a-z0-9]+/g) ?? [];
   return tokens.some((token, start) => {
     // Keep joined VM substrings without manufacturing one from an unrelated word and number.
@@ -28,8 +30,8 @@ function hasPinnedMachineName(text) {
     // Six tokens cover the longest family prefix even with a separator between every letter.
     for (const token of tokens.slice(start, start + 6)) {
       candidate += token;
-      if (candidate.includes('dswett') || /devvm[0-9]/.test(candidate)
-        || /^(?:arm8|vm[0-9])/.test(candidate) || /^ultra[0-9]*$/.test(candidate)) { return true; }
+      if (/devvm[0-9]/.test(candidate) || /^(?:arm8|vm[0-9])/.test(candidate)
+        || /^ultra[0-9]*$/.test(candidate)) { return true; }
     }
     return false;
   });
@@ -54,6 +56,7 @@ const probes = [
   ['mixed-case owner-prefixed host', [prefix.toUpperCase(), 'machine-a'].join('.')],
   ['owner-prefixed domain name', [prefix, 'machine-a.example.test'].join('.')],
   ['joined owner-prefixed host', [prefix, 'machine-a'].join('')],
+  ['identifier-separated embedded owner prefix', 'my' + prefix.split('').join('_') + '-machine-a'],
   ['Unicode-escaped VM digit', vm[1] + String.raw`\u0031`],
   ['braced Unicode-escaped VM digit', vm[1] + String.raw`\u{31}`],
   ['zero-padded braced Unicode-escaped VM digit', vm[1] + String.raw`\u{00000031}`],
@@ -100,6 +103,12 @@ test('the machine-name scan permits neutral fixtures and repository references',
     assert.equal(hasPinnedMachineName(text), false);
   }
 });
+
+for (const source of ['// adds wet texture', '// Methods: wet tissue analysis']) {
+  test(`the scoped source scan permits prose: ${source}`, () => {
+    assert.deepEqual(pinnedFiles((file) => file === 'pwa/js/demo.js' ? source : ''), []);
+  });
+}
 
 test('S6 exporters, self-tests, demos and comments never pin fleet machine names', () => {
   assert.deepEqual(pinnedFiles(), []);
