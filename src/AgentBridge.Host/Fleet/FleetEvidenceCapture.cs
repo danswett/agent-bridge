@@ -12,7 +12,7 @@ namespace AgentBridge.Host.Fleet;
 // One private random key per serving host run, shared by its sessions and reconnects.
 public sealed class FleetEvidenceCapture(IConsoleInjector screens, Func<SessionProcess, bool>? current = null, TimeProvider? time = null) : IDisposable
 {
-    readonly byte[] key = RandomNumberGenerator.GetBytes(32);
+    readonly byte[] key = CreateKey();
     readonly Lock gate = new();
     readonly TimeProvider clock = time ?? TimeProvider.System;
     bool disposed;
@@ -42,10 +42,11 @@ public sealed class FleetEvidenceCapture(IConsoleInjector screens, Func<SessionP
         var screen = await screens.ReadScreenAsync(binding!.Id, ct);
         ct.ThrowIfCancellationRequested();
         if (!Bound() || screen.Rows is null) { return Evidence(fields); }
-        fields["observedAt"] = clock.GetUtcNow();
         var read = CopilotInputBoxReader.Read(screen.Rows);
+        var hiddenMode = read.State is { } box && CopilotInputBoxReader.Narrow(new(box.Rows, box.Content)) &&
+            !new ScreenRowCheck(box.Rows[^1].Row + 1, ScreenCheck.WithNone, CopilotInputBoxReader.TurnSigns).Passes(screen.Rows);
         if (StartupQuestions.Read(screen.Rows) == StartupQuestion.Trust) { fields["attention"] = new { kind = "trust" }; }
-        else if (!read.Seen || read.State is not { Main: true, Complete: true, Shell: false, Vim: not CopilotVimMode.Normal })
+        else if (!read.Seen || read.State is not { Main: true, Complete: true, Shell: false, Vim: not CopilotVimMode.Normal } || hiddenMode)
         {
             fields["attention"] = new { kind = snapshot.Attention is "question" or "approval" or "permission" ? snapshot.Attention : "unknown" };
         }
@@ -71,6 +72,12 @@ public sealed class FleetEvidenceCapture(IConsoleInjector screens, Func<SessionP
             fields["provenance"] = proof;
         }
         return Evidence(fields);
+    }
+
+    static byte[] CreateKey()
+    {
+        var bytes = GC.AllocateArray<byte>(32, pinned: true);
+        RandomNumberGenerator.Fill(bytes); return bytes;
     }
 
     public void Dispose()

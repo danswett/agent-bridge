@@ -46,7 +46,7 @@ public class TailTests
     }
 
     [Fact]
-    public void A_transcript_unchanged_since_well_before_it_was_last_read_is_not_opened_again()
+    public void A_recently_read_unchanged_transcript_is_cached_but_periodically_reopened()
     {
         using var f = new Fixture();
         var path = Path.Combine(f.Root, "t.jsonl");
@@ -59,9 +59,11 @@ public class TailTests
         Assert.Equal(TailOutcome.Unchanged, tail.Read(sink));
         Assert.Equal(1, tail.Opens);
 
+        tail.UtcNow = () => DateTime.UtcNow.AddMinutes(2);
+        Assert.Equal((TailOutcome.Unchanged, 2), (tail.Read(sink), tail.Opens));
         Fixture.Append(path, "two");
         Assert.Equal(TailOutcome.Appended, tail.Read(sink));
-        Assert.Equal(2, tail.Opens);
+        Assert.Equal(3, tail.Opens);
         Assert.Equal(["one", "two"], sink.Parsed);
     }
 

@@ -62,9 +62,11 @@ internal sealed class SessionTracker
     // Tests: the transcript being followed.
     internal TranscriptTail? Tail => _tail;
     internal SessionState State => _state;
+    internal bool ReadSucceeded { get; private set; }
 
     public Session Update(DiscoveredSession discovered)
     {
+        ReadSucceeded = false;
         // What Build reads: the parsed transcript, its nested agents, discovery's view and the
         // workspace, and for a working session the clock and its delegates' transcripts. Every pass
         // rebuilt and re-serialised every session, changed or not: about 35 MB/min of the host's
@@ -97,6 +99,7 @@ internal sealed class SessionTracker
             // unreadable is rebuilt each pass, which is rare and costs no revision (the JSON is
             // the same).
             changed |= _tail.Read(_parser) is TailOutcome.Appended or TailOutcome.Restarted or TailOutcome.Unreadable;
+            ReadSucceeded = _tail.ReadSucceeded;
             // A nested Claude delegate's start and parent are written only beside the session's
             // transcript; one can exist only once a delegate of the session's does.
             if (_parser is ClaudeParser claude && _state.Background.HasAgents)

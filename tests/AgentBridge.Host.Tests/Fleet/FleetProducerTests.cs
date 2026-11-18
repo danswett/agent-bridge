@@ -72,7 +72,10 @@ public sealed class FleetProducerTests
         var screens = new Screens { Rows = Box("private-composer") };
         using var capture = new FleetEvidenceCapture(screens, _ => true, f.Time);
         var snapshot = Assert.Single(await source.FleetSnapshotAsync());
+        f.Time.Advance(TimeSpan.FromMinutes(10));
         var first = (await capture.ReadAsync(snapshot))!.Copy();
+        Assert.Equal(snapshot.ObservedAt, first["observedAt"].GetDateTimeOffset());
+        Assert.True(first["stale"].GetBoolean());
         var hash = first["unsentHash"].GetString();
         Assert.Matches("^[0-9a-f]{64}$", hash!);
         Assert.NotEqual(Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("private-composer"))), hash);
@@ -100,12 +103,14 @@ public sealed class FleetProducerTests
     [InlineData("partial")]
     [InlineData("shell")]
     [InlineData("recycled")]
+    [InlineData("narrow")]
     public async Task Unobservable_or_unbound_composer_never_gets_a_hash_or_provenance(string mode)
     {
         var screens = new Screens
         {
             Rows = mode == "missing" ? null : mode == "partial"
-            ? ["\u2503 private-partial", "\u2579\u2580\u2580", "Interactive"] : Box(mode == "shell" ? "Execute shell command" : "private-composer")
+            ? ["\u2503 private-partial", "\u2579\u2580\u2580", "Interactive"] : mode == "narrow"
+            ? [.. Box("private-composer")[..^1], " Working esc interrupt"] : Box(mode == "shell" ? "Execute shell command" : "private-composer")
         };
         var calls = 0;
         using var capture = new FleetEvidenceCapture(screens, _ => mode != "recycled" || ++calls == 1);
@@ -123,6 +128,8 @@ public sealed class FleetProducerTests
         using var capture = new FleetEvidenceCapture(screens, _ => true);
         var snapshot = new FleetSessionSnapshot(FleetPublisherTests.NewSession(1), new(101, Fixture.T0));
         var fields = (await capture.ReadAsync(snapshot))!.Copy();
+        Assert.False(fields.ContainsKey("observedAt"));
+        Assert.False(fields.ContainsKey("stale"));
         Assert.Equal(0, fields["unsentLength"].GetInt32());
         Assert.False(fields.ContainsKey("unsentHash"));
         screens.Rows = ["unrecognized screen"];
@@ -148,6 +155,26 @@ public sealed class FleetProducerTests
         using var capture = new FleetEvidenceCapture(screens, _ => true);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             capture.ReadAsync(new(source.Sessions[0], binding), stop.Token));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Missing_or_locked_transcripts_do_not_renew_source_freshness(bool locked)
+    {
+        using var f = new Fixture(); f.Processes.Run(AgentKind.Copilot, 101);
+        var path = f.CopilotSession(Id, 101);
+        File.WriteAllText(path, Copilot.Permission("first", "tool-1", Copilot.Prompts["commands"], 1));
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(-10));
+        await using var source = f.Source(); await source.RefreshAsync();
+        var before = Assert.Single(await source.FleetSnapshotAsync());
+        using var held = locked ? new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None) : null;
+        if (!locked) { File.Delete(path); }
+        f.Time.Advance(TimeSpan.FromMinutes(10));
+        await source.RefreshAsync();
+        var after = Assert.Single(await source.FleetSnapshotAsync());
+        Assert.Equal(before.ObservedAt, after.ObservedAt);
+        Assert.True((bool)FleetEvidenceCapture.Facts(after, f.Time.GetUtcNow())["stale"]);
     }
 
     static string[] Box(string content) => ["\u257B\u2584\u2584\u2584", "\u2503 " + content, "\u2579\u2580\u2580\u2580", " Interactive \u00B7 / commands \u00B7 @ files"];

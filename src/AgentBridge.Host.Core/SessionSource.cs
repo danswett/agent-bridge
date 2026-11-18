@@ -507,6 +507,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             }
             entry ??= new Entry(tracker);
             Commit(entry, full);
+            if (!tracker.ReadSucceeded) { continue; }
             var state = tracker.State;
             var question = entry.ListForm.Question;
             var kind = !state.Seen ? null : entry.ListForm.Attention is not null ? "unknown" : question is null ? "none"
