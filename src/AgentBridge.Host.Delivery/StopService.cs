@@ -30,6 +30,7 @@ public interface IHeldProcess : IDisposable
     int Id { get; }
     // Read through the held handle, not a later lookup of its potentially reused id.
     DateTimeOffset? StartedAt => null;
+    string? ExitProblem => null;
 
     // True once the process has exited; false if it is still running after timeout.
     Task<bool> WaitForExitAsync(TimeSpan timeout);
