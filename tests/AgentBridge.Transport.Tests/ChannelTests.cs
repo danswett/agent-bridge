@@ -81,6 +81,13 @@ public class ChannelTests
         return (flights + 1) / 2;
     }
 
+    static KnownResponders ExpectIk(ChannelHub hub)
+    {
+        // These tests require IK, not the production five-second fallback deadline.
+        hub.IkPatience = TimeSpan.FromSeconds(30);
+        return hub.KnownPeers = new KnownResponders();
+    }
+
     // #603: a client reconnecting (the PWA reopened, the app after sleep) opened every channel
     // with XX, then asked hello: two round trips before anything. To a host it has opened a
     // channel with before, IK carries the hello and its answer in one.
@@ -95,7 +102,7 @@ public class ChannelTests
         });
         await using var _ = relay;
         host.Hub.EarlyOps = ["ping"];
-        app.Hub.KnownPeers = new KnownResponders();
+        ExpectIk(app.Hub);
 
         async Task<(int RoundTrips, SecureChannel Channel)> FirstAnswerAsync()
         {
@@ -120,6 +127,28 @@ public class ChannelTests
         Assert.Equal(1, warm.RoundTrips);
         Assert.Equal(host.Id, Wire.DeviceId(warm.Channel.PeerStatic!));
         Assert.Equal(("host-a", "host"), (warm.Channel.PeerName, warm.Channel.PeerKind));
+    }
+
+    [Fact]
+    public async Task An_IK_only_test_waits_for_a_slow_early_answer_instead_of_falling_back_to_XX()
+    {
+        var (relay, host, app) = await PairAsync();
+        await using var _ = relay;
+        host.Hub.EarlyOps = ["ping"];
+        ExpectIk(app.Hub);
+        await app.Hub.CloseAsync(await app.Hub.OpenAsync(host.Id));
+        host.Hub.Handler = async (ch, op, data) =>
+        {
+            if (!ch.IsOpen) { await Task.Delay(TimeSpan.FromSeconds(6)); }
+            return await TestRelay.Demo(op, data);
+        };
+
+        var ch = await app.Hub.OpenAsync(host.Id, early: new EarlyRequest("ping"));
+        var reply = await ch.RequestAsync("ping");
+
+        Assert.IsType<IKHandshake>(ch.Handshake);
+        Assert.True(reply.GetProperty("ok").GetBoolean(), reply.GetRawText());
+        Assert.True(reply.GetProperty("result").GetProperty("at").GetInt64() > 0);
     }
 
     [Fact]
@@ -155,9 +184,9 @@ public class ChannelTests
             if (op == "echo") { echoed.Enqueue(ch.IsOpen); }
             return TestRelay.Demo(op, data);
         };
-        app.Hub.KnownPeers = new KnownResponders();
+        var known = ExpectIk(app.Hub);
         await app.Hub.CloseAsync(await app.Hub.OpenAsync(host.Id));
-        app.Hub.KnownPeers.Learn(host.Id, host.Key.Public, ["echo"]);
+        known.Learn(host.Id, host.Key.Public, ["echo"]);
 
         var ch = await app.Hub.OpenAsync(host.Id, early: new EarlyRequest("echo", new { text = "once" }));
         var reply = await ch.RequestAsync("echo", new { text = "once" });
