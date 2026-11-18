@@ -22,8 +22,9 @@ public static partial class HaContract
     public const string NoAgents = "(no agents installed)";
     // The note a launch leaves is cleared after this long (NoteExpirySeconds).
     public static readonly TimeSpan LaunchNoteExpiry = TimeSpan.FromSeconds(600);
-    // How many outcomes an agent can read back (Set-DaemonLaunchOutcome keeps five).
+    // Always retain the latest five, and every outcome within the retention window.
     public const int LaunchOutcomesKept = 5;
+    public static readonly TimeSpan LaunchOutcomeRetention = TimeSpan.FromMinutes(15);
 
     // The tuning axes, in display order, with their selector's name and icon (BridgeTuningAxes).
     public static readonly IReadOnlyList<(string Axis, string Label, string Icon)> TuningAxes =
