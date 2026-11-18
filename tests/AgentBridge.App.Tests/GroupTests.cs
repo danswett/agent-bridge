@@ -112,6 +112,42 @@ public sealed class GroupTests : IDisposable
     }
 
     [Fact]
+    public void Live_members_keep_their_group_and_refresh_retention_after_30_days()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var order = new SessionOrder(FilePath, clock);
+        var id = order.Groups.Create("Work");
+        order.Groups.SetGroup(K("a"), id);
+        clock.Advance(TimeSpan.FromDays(31));
+        order.Arrange([E("a")]);
+        Assert.Equal(id, order.Groups.GroupOf(K("a")));
+        clock.Advance(TimeSpan.FromDays(29));
+        order = new SessionOrder(FilePath, clock);
+        order.Arrange([]);
+        Assert.Equal(id, order.Groups.GroupOf(K("a")));
+    }
+
+    [Fact]
+    public void Listing_stamps_save_at_most_once_per_day_rather_than_on_every_arrangement()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var order = new SessionOrder(FilePath, clock);
+        var id = order.Groups.Create("Work");
+        order.Arrange([E("a")]);
+        order.Groups.SetGroup(K("a"), id);
+        var before = System.IO.File.ReadAllText(FilePath);
+        order.MarkSeen(K("a"), "reply");
+        clock.Advance(TimeSpan.FromHours(1));
+        order.Arrange([E("a")]);
+        Assert.Equal(before, System.IO.File.ReadAllText(FilePath));
+        Assert.True(new SessionOrder(FilePath).Unread(K("a"), "reply"));
+        clock.Advance(TimeSpan.FromDays(1));
+        order.Arrange([E("a")]);
+        Assert.NotEqual(before, System.IO.File.ReadAllText(FilePath));
+        Assert.False(new SessionOrder(FilePath).Unread(K("a"), "reply"));
+    }
+
+    [Fact]
     public void Counts_include_only_current_unpinned_live_members()
     {
         var order = new SessionOrder(null);
