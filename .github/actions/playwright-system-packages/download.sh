@@ -178,6 +178,7 @@ if [ "$cache_hit" = true ]; then
   plan=$(mktemp -d)
   trap 'sudo rm -rf -- "$plan"' EXIT
   cache_valid=true
+  verified=()
   # Live apt update authenticated the indexes. An empty planning directory prevents apt from
   # omitting size-matched archives; --no-download alone does not explicitly check their hashes.
   sudo apt-get -o Dir::Cache::archives="$plan/" -o Acquire::ForceHash=sha256 --print-uris --download-only install -y --no-install-recommends "${pkgs[@]}" > "$plan/uris" || cache_valid=false
@@ -191,11 +192,14 @@ if [ "$cache_hit" = true ]; then
     [ "$(wc -c < "$cache_debs/$file")" -eq "$size" ] &&
       printf '%s  %s\n' "${hash#SHA256:}" "$cache_debs/$file" | sha256sum --check --status ||
       { cache_valid=false; break; }
+    verified+=("$cache_debs/$file")
   done < "$plan/uris"
   sudo rm -rf -- "$plan"
   trap - EXIT
   if [ "$cache_valid" = true ]; then
-    sudo cp "$cache_debs"/*.deb "$apt_archives/"
+    # Copy only what was just verified, and only once every planned archive passed: apt treats
+    # any size-matching file here as complete without hashing it, also for a later invocation.
+    [ "${#verified[@]}" -eq 0 ] || sudo cp -- "${verified[@]}" "$apt_archives/"
     install_offline
     exit 0
   fi

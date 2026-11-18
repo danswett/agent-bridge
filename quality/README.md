@@ -428,9 +428,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      signature-to-index chain to apt instead of trusting cache-controlled metadata.
      For non-forced hits, apt's `--print-uris` with SHA256 and an empty planning archive
      directory supplies every required archive's authenticated size/hash. Every required deb
-     must match before copying to apt's archives and `apt-get install --no-download`.
+     must match before only those debs are copied to apt's archives for `apt-get install --no-download`.
      Missing archives, weak hashes, size/hash mismatches or planning failures discard the
      cache and take the normal authenticated download path; failed updates never install.
+     GitHub never overwrites a discarded exact-key entry, so delete it (`gh cache delete <key>`).
      Installation failure is fatal. The versioned archives-only key includes runner OS,
      architecture, image version, the exact dry-run package-list hash and ref hash. Restore keys
      allow other refs' accessible entries only for that same image and package list. Only successful
@@ -467,14 +468,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
      timeout, on any run, is the one above (#817 first proposed failing
      that one on an Azure fetch too, and dropped it). A run by hand runs every
-     job (the whole ring), but is never a release; only the paired apt cache above may be saved.
+     job (the whole ring), but is never a release; only the archives-only apt cache above may be saved.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
      tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
      `pwa-e2e`, keyed by Playwright's version. Only `main` saves these caches; a pull request
-     restores main's, and the nearest older NuGet key when its projects differ. The paired
+     restores main's, and the nearest older NuGet key when its projects differ. The archives-only
      apt cache above is the exception, and a PR's entry cannot seed what main restores.
      `app` and `publish` restore nothing:
      the package main publishes is built from what the feeds serve.
