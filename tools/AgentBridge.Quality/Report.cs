@@ -317,7 +317,9 @@ static class WeeklyReport
             "" => "merge-rule gave no reason",
             _ when first.StartsWith("draft", StringComparison.Ordinal) => "draft",
             _ when first.StartsWith("held by", StringComparison.Ordinal) || first.StartsWith("it has more labels", StringComparison.Ordinal) => "held",
-            _ when first.Contains("independent review", StringComparison.Ordinal) => "independent review",
+            _ when first.Contains("independent review", StringComparison.Ordinal)
+                || first.Contains("second review's receipt", StringComparison.Ordinal)
+                || first.StartsWith("the two receipts on ", StringComparison.Ordinal) => "independent review",
             _ when first.StartsWith("waiting for a copilot review", StringComparison.Ordinal) => "Copilot review",
             _ when first.Contains("codeql", StringComparison.Ordinal) || first.StartsWith("code scanning", StringComparison.Ordinal) => "CodeQL",
             _ when first.StartsWith("check ", StringComparison.Ordinal) && first.Contains(" ended ", StringComparison.Ordinal) => "a red check",
