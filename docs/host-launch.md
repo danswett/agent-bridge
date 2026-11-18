@@ -225,7 +225,7 @@ For a workspace with `isolate: true`, each new session (never a resume):
    The workspace's subfolder in the repository is kept, so a workspace at `repo\src\svc`
    launches in `<worktree>\src\svc`.
 2. A per-repository mutex across processes, by the repository's common git folder; a second
-   operation at once is refused, not queued.
+   operation queues for up to two minutes, then refuses if the turn is still unavailable.
 3. Finished worktrees are reclaimed ([below](#reclaiming-finished-worktrees)).
 4. `git fetch origin --quiet` (a failure is logged and the local base used); the base is
    origin's default branch, else `origin/main`, `origin/master`, else `HEAD`.
@@ -234,8 +234,8 @@ For a workspace with `isolate: true`, each new session (never a resume):
 6. `<root>\<repo>-<yyyyMMdd-HHmmss>` (local time), `-1`, `-2`… for a name in use, then `git
    worktree add --detach <target> <base>`, and the marker written into the worktree's git
    administration folder with the time.
-7. `git worktree lock --reason agent-bridge-host-launch:<random>`, lifted only if the lock
-   still has that reason once the session registers.
+7. `git worktree lock --reason agent-bridge-host-launch:<random>` before releasing the
+   repository mutex, lifted only if the lock still has that reason once the session registers.
 
 Worktrees are under `launch.worktrees.root`, by default `~/repos/wt`, the same root
 agent-ha-bridge uses: shared with other sessions and other repositories. This host never
@@ -244,8 +244,8 @@ sweeps it, and never touches a worktree it did not create.
 ### Agent-created worktree check (#2285, #1447 W2)
 
 For a host-supplied `agent:` principal, the launcher checks only the result of this
-launch's `Worktrees.Create`, immediately after creation and before reservation, credentials
-or process start. Existing trees, resumes and transfers cannot take this path. W1's check
+launch's `Worktrees.Create`, after creation and reservation but before credentials or
+process start. Existing trees, resumes and transfers cannot take this path. W1's check
 requires isolation, host provenance, the approved repository/subdirectory, detached HEAD
 and clean state, and refuses Claude project configuration or links. Only Claude's list is
 confirmed; other agents fail closed. A missing or thrown check also refuses.
@@ -263,10 +263,21 @@ force-deleted. The refusal writes one agent audit
 record; an unavailable audit is reported explicitly. Repeating the request returns its
 remembered result without another tree or audit, and a removed tree spends no worktree slot.
 The start turn is released on refusal. Hourly caps and pipe activation remain separate work:
-the local pipe still refuses agent launches. Person launches and folder-trust handling are
-unchanged; user-profile agent settings still apply.
+the local pipe still refuses agent launches. Isolated person launches share creation
+ownership validation and atomic reservation, but not the agent-only project-configuration
+check or refusal cleanup. Folder-trust handling is unchanged; user-profile agent settings
+still apply.
 
 ## Reclaiming finished worktrees
+
+For an isolated launch, creation and its launch reservation share the same repository
+mutation turn: the new tree is locked before that turn ends, even with `idleHours: 0`.
+The reservation is handed to launch following and released on registration; an
+unstarted refusal releases only its own reservation before safe cleanup. Contending
+mutations wait up to two minutes rather than refusing immediately. The mutex is keyed
+by the physical common git folder, not the host or shared worktree root, so a different
+repository does not wait behind it. The entire mutex-owned turn is synchronous: no
+`await` crosses ownership of the thread-affine mutex.
 
 agent-ha-bridge's `Remove-BridgeFinishedWorktree`, protection for protection. It runs where
 agent-ha-bridge runs it, before each isolated launch (not a resume) and before the cap is

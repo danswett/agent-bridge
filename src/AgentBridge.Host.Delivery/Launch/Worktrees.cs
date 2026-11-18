@@ -57,7 +57,10 @@ public static class Git
 
 // A new worktree, or why there is none. Detail says anything worth logging (a fetch that failed,
 // the base used); Problem is the refusal.
-public sealed record WorktreeResult(string? Path, string? Worktree, string? Problem, string Detail);
+public sealed record WorktreeResult(string? Path, string? Worktree, string? Problem, string Detail)
+{
+    public string? Reservation { get; init; }
+}
 
 // Worktree isolation for launched sessions, as agent-ha-bridge does it
 // (hooks/session-launch.ps1, New-BridgeSessionWorktree and its helpers), with this host's own
@@ -99,7 +102,7 @@ public static class Worktrees
         var root = Folders.Expand(config.WorktreeRoot);
         if (root is null) { return Refused("The configured worktree root is empty or invalid; correct launch.worktrees.root."); }
 
-        using var operation = Enter(repository, out var busy);
+        using var operation = Enter(repository, out var busy, log);
         if (operation is null) { return Refused(busy!); }
 
         var detail = new List<string>();
@@ -137,6 +140,7 @@ public static class Worktrees
         try { Directory.CreateDirectory(root); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Refused($"The worktree root cannot be created: {e.Message}"); }
         string? createdBase = null, expectedTarget = null, adminRoot = null;
+        string? reservation = null;
         string[]? priorAdmins = null;
         Creation? creation = null;
         if (launchRequest is not null)
@@ -210,11 +214,17 @@ public static class Worktrees
         {
             return Result(null, "The approved subdirectory is a link out of the isolated worktree in its base; launch was refused.");
         }
+        if (launchRequest is not null)
+        {
+            var (token, problem) = Reserve(target);
+            if (token is null) { return Result(null, problem ?? "The new worktree could not be reserved; it was retained without launching."); }
+            reservation = token;
+        }
         return Result(launchIn, null);
 
         WorktreeResult Result(string? path, string? problem)
         {
-            var result = new WorktreeResult(path, target, problem, string.Join("; ", detail));
+            var result = new WorktreeResult(path, target, problem, string.Join("; ", detail)) { Reservation = reservation };
             if (creation is not null) { creations.Add(result, creation); }
             return result;
         }
@@ -233,6 +243,12 @@ public static class Worktrees
             || AdminFolder(tree) is not { } admin || !Folders.Same(admin, receipt.Admin))
         {
             return "The new worktree's ownership cannot be verified; it was retained.";
+        }
+        using var operation = Enter(tree, out var busy);
+        if (operation is null) { return busy; }
+        if (created.Reservation is { } token && !Release(tree, token))
+        {
+            return "The new worktree's reservation changed; it was retained.";
         }
         return Remove(tree, receipt.Commit, 0, new UnstartedWorktree(), () => DateTimeOffset.Now, fresh: true);
     }
@@ -654,7 +670,7 @@ public static class Worktrees
 
     // One worktree operation per repository at a time, across every process of this user. The
     // repository is named by its common git folder, so a worktree and its main checkout agree.
-    static IDisposable? Enter(string repository, out string? problem)
+    static IDisposable? Enter(string repository, out string? problem, Action<string>? log = null)
     {
         problem = null;
         var common = CommonDir(repository);
@@ -663,12 +679,20 @@ public static class Worktrees
         var name = $"Local\\AgentBridgeHostWorktree_{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)))}";
         var mutex = new Mutex(false, OperatingSystem.IsWindows() ? name : name.Replace('\\', '_'));
         bool taken;
-        try { taken = mutex.WaitOne(0); }
+        try
+        {
+            taken = mutex.WaitOne(0);
+            if (!taken)
+            {
+                log?.Invoke("worktree mutation queued behind another operation for this repository");
+                taken = mutex.WaitOne(TimeSpan.FromMinutes(2));
+            }
+        }
         catch (AbandonedMutexException) { taken = true; }
         if (!taken)
         {
             mutex.Dispose();
-            problem = "Another worktree operation is in progress; retry the launch after it finishes.";
+            problem = "The repository's worktree mutation queue did not become available within two minutes; nothing was created.";
             return null;
         }
         return new HeldMutex(mutex);

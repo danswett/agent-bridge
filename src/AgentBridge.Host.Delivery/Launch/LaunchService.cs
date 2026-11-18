@@ -1173,7 +1173,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             string? worktree = null;
             if (plan.Isolated is { } isolated)
             {
-                var made = await Task.Run(() => Worktrees.Create(directory, Config, options.LocalNow, new HeldWorktreeUsage(source, options.WorktreeUsage), m => log($"launch {Short(key)}: worktree: {m}"), launchRequest: agentPrincipal is null ? null : key));
+                var made = await Task.Run(() => Worktrees.Create(directory, Config, options.LocalNow, new HeldWorktreeUsage(source, options.WorktreeUsage), m => log($"launch {Short(key)}: worktree: {m}"), launchRequest: key));
+                (reservation, reserved) = (made.Reservation, made.Worktree);
                 created = agentPrincipal is not null ? made : null;
                 if (agentPrincipal is not null)
                 {
@@ -1205,7 +1206,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             {
                 worktree = (await Task.Run(() => Worktrees.Managed(Config.Workspaces, directory)))?.Worktree;
             }
-            if (worktree is not null)
+            if (worktree is not null && reservation is null)
             {
                 var (token, problem) = await Task.Run(() => Worktrees.Reserve(worktree));
                 if (problem is not null) { return Refused($"Launch refused: {problem}"); }
@@ -1334,9 +1335,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
         finally
         {
-            if (reservation is not null && reserved is not null) { Worktrees.Release(reserved, reservation); }
             if (created is not null && await DiscardWorktreeAsync(created, key) is { } retained)
             { log($"launch {Short(key)}: the unstarted worktree was retained: {retained}"); }
+            if (reservation is not null && reserved is not null) { Worktrees.Release(reserved, reservation); }
             starting.Release();
         }
 
