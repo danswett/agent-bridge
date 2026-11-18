@@ -101,8 +101,8 @@ public sealed partial class SessionView : UserControl
     {
         if (releases is not null || XamlRoot?.Content is not UIElement root) { return; }
         releases = root;
-        onRelease ??= (_, e) => { if (!Touch(e)) { follow.Released(e.Pointer.PointerId); } };
-        onMove ??= (_, e) => { if (!Touch(e) && !e.Pointer.IsInContact) { follow.Released(e.Pointer.PointerId); } };
+        onRelease ??= (_, e) => { EndScrollbarGesture(e.Pointer.PointerId); if (!Touch(e)) { follow.Released(e.Pointer.PointerId); } };
+        onMove ??= (_, e) => { if (!e.Pointer.IsInContact) { EndScrollbarGesture(e.Pointer.PointerId); if (!Touch(e)) { follow.Released(e.Pointer.PointerId); } } };
         root.AddHandler(PointerReleasedEvent, onRelease, true);
         root.AddHandler(PointerCanceledEvent, onRelease, true);
         root.AddHandler(PointerCaptureLostEvent, onMove, true);

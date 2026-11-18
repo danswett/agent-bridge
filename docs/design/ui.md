@@ -1717,6 +1717,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   scrolls; once they scroll, a new reply never moves the view (#1635, #1646).
   A question brought into view or a block requested by a screen reader releases the Windows
   end pin too: later layout must not scroll that destination away.
+  A held scrollbar owns the view from its press until release or cancellation, before its
+  first movement as well as during the drag; history arriving meanwhile cannot restore the pin.
   Reasoning, tool lines, delegate events and questions are still to come. The Windows app loads earlier turns a page
   at a time through "Load earlier messages" or scrolling upward within a screen of the top
   (#1593 W2b-1). Both use the history client's cursor and deduplication; the first visible

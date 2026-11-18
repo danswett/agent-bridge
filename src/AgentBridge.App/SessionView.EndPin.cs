@@ -9,6 +9,8 @@ namespace AgentBridge.App;
 
 public sealed partial class SessionView
 {
+    readonly HashSet<uint> scrollbarPointers = [];
+
     void HookConversationInput(ScrollViewer scroll)
     {
         // Question navigation and UIA ScrollIntoView own their destination, even without focus.
@@ -22,25 +24,33 @@ public sealed partial class SessionView
             {
                 if (node is ScrollViewer owner)
                 {
-                    if (owner == scroll && fromBar) { ReleasePin(); }
+                    if (owner == scroll && fromBar) { scrollbarPointers.Add(e.Pointer.PointerId); ReleasePin(); }
                     return;
                 }
                 if (node is ScrollBar) { fromBar = true; }
             }
         }), true);
+        scroll.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler((_, e) => EndScrollbarGesture(e.Pointer.PointerId)), true);
+        scroll.AddHandler(UIElement.PointerCanceledEvent, new PointerEventHandler((_, e) => EndScrollbarGesture(e.Pointer.PointerId)), true);
+        scroll.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler((_, e) =>
+        {
+            if (!e.Pointer.IsInContact) { EndScrollbarGesture(e.Pointer.PointerId); }
+        }), true);
     }
+
+    void EndScrollbarGesture(uint pointer) => scrollbarPointers.Remove(pointer);
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
     internal void ReleasePin() { pinEnd = false; anchoring = null; pinReleases++; }
 
-    bool HistoryAtEnd() => pinEnd || !panning && !scrolling && keyTarget is null
-        && ConversationScroll is { ScrollableHeight: > 0 } scroll && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
+    bool HistoryAtEnd() => scrollbarPointers.Count == 0 && (pinEnd || !panning && !scrolling && keyTarget is null
+        && ConversationScroll is { ScrollableHeight: > 0 } scroll && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack);
 
     // Older turns can finish measuring after KeepPlace restored an earlier end. Follow the
     // measured end on layout and final view changes, including while an older target is pending.
     void FollowPinnedEnd()
     {
-        if (panning || scrolling && anchoring is null || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
+        if (scrollbarPointers.Count > 0 || panning || scrolling && anchoring is null || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
         if (ConversationEndPin.Correction(pinEnd, scroll.VerticalOffset, scroll.ScrollableHeight, anchoring) is { } to) { Anchoring(scroll, to); }
     }
 

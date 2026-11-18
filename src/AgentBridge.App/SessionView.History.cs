@@ -127,7 +127,7 @@ public sealed partial class SessionView
 
     void DrawEarlier()
     {
-        if (!IsLoaded || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
+        if (!IsLoaded || scrollbarPointers.Count > 0 || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
         var turns = history?.Turns ?? [];
         var first = historyShown.FirstOrDefault();
         var end = first is null ? turns.Count - 1 : 0;
@@ -136,7 +136,7 @@ public sealed partial class SessionView
         var from = Math.Max(0, end - 2);
         var rows = HistoryDraw.Rows(turns.Skip(from).Take(end - from).ToArray(), null, openPrompts);
         var scroll = ConversationScroll;
-        var atEnd = pinEnd || scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
+        var atEnd = HistoryAtEnd();
         var offset = scroll?.VerticalOffset ?? 0;
         var extent = scroll?.ScrollableHeight ?? 0;
         var reading = atEnd ? null : ReadingHistory();
@@ -188,7 +188,7 @@ public sealed partial class SessionView
         var (session, releases) = (shownHistory, pinReleases);
         void Restore()
         {
-            if (session != shownHistory || releases != pinReleases || ConversationScroll is not { } scroll) { return; }
+            if (session != shownHistory || releases != pinReleases || scrollbarPointers.Count > 0 || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset + (earlierExtent is { } extent ? scroll.ScrollableHeight - extent : 0), scroll.ScrollableHeight);
             if (!atEnd && !pinEnd && reading is { } kept)
