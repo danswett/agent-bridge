@@ -32,6 +32,16 @@ public sealed class NativeWheelInputTests
         Assert.Equal((nint)0x20, port.PostedTarget);
     }
 
+    [Fact]
+    public void A_view_no_longer_at_the_end_after_focus_refuses_the_wheel()
+    {
+        var port = new WheelPort { AtEnd = false };
+        using var wheel = new NativeWheelInput(port);
+        Assert.Throws<InvalidOperationException>(() => wheel.Post());
+        Assert.DoesNotContain("post", port.Calls);
+        Assert.Equal(0, port.PostedTarget);
+    }
+
     [Theory]
     [InlineData(false, false, true, true)]
     [InlineData(true, true, true, true)]
@@ -89,8 +99,9 @@ public sealed class NativeWheelInputTests
     {
         public readonly List<string> Calls = [], Logs = [];
         public bool FocusSucceeds = true, LosesFocus, Verified = true, Foreground = true;
-        public bool Focused, FocusedWhenPosted;
+        public bool Focused, FocusedWhenPosted, AtEnd = true;
         public bool ListIsTabStop { get; set; }
+        public bool ListAtEnd => AtEnd;
         public nint PostedTarget;
         public int ChainReads;
         public string Description = "window: 0xA; target: 0x20; foreground: 0xA";

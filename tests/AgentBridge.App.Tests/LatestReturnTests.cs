@@ -128,6 +128,23 @@ public sealed class LatestReturnTests
             "CheckLatestNativeReceipt(away, wheelReceipt, check);");
     }
 
+    [Fact]
+    public void The_native_wheel_holds_focus_below_the_scroller_until_the_view_settles()
+    {
+        var source = HistoryBudgetSource();
+        var focus = source[source.IndexOf("sealed class WheelInputPort", StringComparison.Ordinal)..];
+        AssertOrdered(focus,
+            "scroll.Content is not DependencyObject content",
+            "FocusManager.FindLastFocusableElement(content)",
+            "NativeInputSetup.RestoreFocus(restoreAt,",
+            "element.BringIntoViewRequested += held;",
+            "element.BringIntoViewRequested -= held;",
+            "await FocusManager.TryFocusAsync(focused, FocusState.Programmatic)",
+            "await CaptureFrame(window.RootElement);",
+            "await Still(scroll);");
+        Assert.DoesNotContain("window.RootElement.BringIntoViewRequested", focus, StringComparison.Ordinal);
+    }
+
     static string HistoryBudgetSource()
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
