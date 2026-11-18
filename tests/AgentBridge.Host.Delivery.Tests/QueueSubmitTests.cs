@@ -38,17 +38,19 @@ public sealed class QueueSubmitTests : IAsyncLifetime
     Task<ReplyResult> Send(string text = "first", string? rid = null) =>
         service.ReplyAsync(new ReplyRequest { Id = Id, Request = rid ?? Guid.NewGuid().ToString(), Text = text, IntentSource = () => intent });
 
-    [Fact]
-    public async Task Busy_qualified_deliveries_submit_once_per_rid_in_order_and_leave_the_composer_empty()
+    [Theory]
+    [InlineData(false)][InlineData(true)]
+    public async Task Busy_qualified_deliveries_submit_once_per_rid_in_order_and_leave_the_composer_empty(bool plain)
     {
-        Assert.Equal(SessionStatus.Working, source.Get(Id)!.Status);
+        console.Plain = plain; Assert.Equal(SessionStatus.Working, source.Get(Id)!.Status);
         var rid = Guid.NewGuid().ToString();
         Assert.Equal(AnswerOutcome.Delivered, (await Send(rid: rid)).Outcome);
         Assert.Equal(AnswerOutcome.Delivered, (await Send(rid: rid)).Outcome);
+        Assert.Equal(1, console.TextWrites); Assert.Equal(new[] { "q" }, console.Actions); Assert.Equal(new[] { "first" }, console.Submitted);
         Assert.Equal(AnswerOutcome.Delivered, (await Send("second")).Outcome);
         Assert.Equal(new[] { "first", "second" }, console.Submitted);
         Assert.Equal(new[] { "q", "q" }, console.Actions);
-        Assert.Equal("", console.Draft);
+        Assert.Equal("", console.Draft); Assert.Equal(2, console.TextWrites);
     }
 
     [Theory]
@@ -70,16 +72,20 @@ public sealed class QueueSubmitTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(false)][InlineData(true)]
-    public async Task A_failed_queue_key_cleans_exact_owned_text_but_preserves_internal_space_edits(bool edited)
+    [InlineData(false, "one two", false)][InlineData(false, "one two", true)]
+    [InlineData(true, "one two", false)][InlineData(true, "one two", true)]
+    [InlineData(false, " one two ", false)][InlineData(false, " one two ", true)]
+    public async Task A_failed_queue_key_cleans_exact_owned_text_but_preserves_internal_space_edits(bool edited, string words, bool plain)
     {
-        console.AcceptQueue = false;
+        console.AcceptQueue = false; console.Plain = plain;
         console.AfterQueue = () => { if (edited) { console.Draft = "one  two"; } };
         var rid = Guid.NewGuid().ToString();
-        Assert.Equal(AnswerOutcome.Unconfirmed, (await Send("one two", rid)).Outcome);
-        await Send("one two", rid);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Send(words, rid)).Outcome);
+        Assert.Equal(edited ? "one  two" : "", console.Draft);
         Assert.Equal(edited ? new[] { "q" } : ["q", "u"], console.Actions);
-        Assert.Equal(edited ? "one  two" : "", console.Draft); Assert.Empty(console.Submitted);
+        await Send(words, rid);
+        Assert.Equal(edited ? new[] { "q" } : ["q", "u"], console.Actions);
+        Assert.Equal(edited ? "one  two" : "", console.Draft); Assert.Empty(console.Submitted); Assert.Equal(1, console.TextWrites);
     }
 
     [Theory]
@@ -163,15 +169,16 @@ public sealed class QueueSubmitTests : IAsyncLifetime
     sealed class ConsoleFake : IConsoleInjector
     {
         public string Draft = "";
-        public bool AcceptQueue = true;
+        public bool AcceptQueue = true, Plain;
         public int TextWrites;
         public Action? AfterText;
         public Action? BeforeKeys;
         public Action? AfterQueue;
         public Action<string>? Record;
         public readonly List<string> Submitted = [], Actions = [];
-        IReadOnlyList<string> Rows() => ["\u257B" + new string('\u2584', 99), "\u2503 " + Draft,
-            "\u2579" + new string('\u2580', 99), " Working esc interrupt \u00B7 ctrl+q enqueue"];
+        IReadOnlyList<string> Rows() => Plain
+            ? [new string('\u2500', 100), "\u276F " + Draft, new string('\u2500', 100), " Working esc interrupt \u00B7 ctrl+q enqueue"]
+            : ["\u257B" + new string('\u2584', 99), "\u2503 " + Draft, "\u2579" + new string('\u2580', 99), " Working esc interrupt \u00B7 ctrl+q enqueue"];
         public Task<ConsoleScreen> ReadScreenAsync(int pid, CancellationToken ct = default) => Task.FromResult(new ConsoleScreen(Rows(), null));
         public async Task<InjectionResult> InjectAsync(int pid, KeyPlan plan, CancellationToken ct = default)
         {
