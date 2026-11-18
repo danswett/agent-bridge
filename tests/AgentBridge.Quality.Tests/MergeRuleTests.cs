@@ -1627,7 +1627,7 @@ public class MergeRuleTests
             var output = new StringWriter();
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            if (scenario is "running" or "plan-failed" or "cancelled" or "rerun-running")
+            if (scenario is "running" or "plan-failed" or "rerun-running")
                 Assert.Contains("no completed non-cancelled product evidence", output.ToString(), StringComparison.Ordinal);
             else if (scenario is not ("missing-run" or "invalid-attempt"))
                 Assert.Contains("app-installer (win-arm64)", output.ToString(), StringComparison.Ordinal);
@@ -1663,7 +1663,7 @@ public class MergeRuleTests
     }
 
     [Fact]
-    public void Main_uses_the_latest_completed_non_cancelled_run_instead_of_a_newer_unfinished_head()
+    public void Main_skips_an_unfinished_head_but_cancelled_jobs_without_steps_fail_closed()
     {
         var github = new FakeGitHub(GraphQLPullRequest(Head),
             mainRuns: MainRuns((9, "in_progress", null, 1), (8, "completed", "cancelled", 1), (5, "completed", "success", 1)));
@@ -1671,8 +1671,8 @@ public class MergeRuleTests
         try
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
-            Assert.Contains(" success merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            Assert.Contains(github.RestPaths, p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal));
+            Assert.Contains(" failure merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.Contains(github.RestPaths, p => p.Contains("/actions/runs/8/jobs?", StringComparison.Ordinal));
         }
         finally { File.Delete(config); }
     }
@@ -1699,9 +1699,9 @@ public class MergeRuleTests
     }
 
     [Theory]
-    [InlineData("success", "success")]
+    [InlineData("success", "failure")]
     [InlineData("failure", "failure")]
-    public void A_cancelled_latest_run_never_replaces_completed_green_or_red_evidence(string conclusion, string state)
+    public void Cancelled_jobs_without_step_evidence_hold_even_after_an_older_green_run(string conclusion, string state)
     {
         var github = new FakeGitHub(GraphQLPullRequest(Head),
             mainRuns: MainRuns((6, "completed", "cancelled", 1), (5, "completed", conclusion, 1)));
@@ -1710,7 +1710,7 @@ public class MergeRuleTests
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/actions/runs/6/jobs?", StringComparison.Ordinal));
+            Assert.Contains(github.RestPaths, p => p.Contains("/actions/runs/6/jobs?", StringComparison.Ordinal));
         }
         finally { File.Delete(config); }
     }
@@ -1742,7 +1742,7 @@ public class MergeRuleTests
     public void History_is_paged_and_an_unreadable_later_page_never_grants_green(bool unreadable, string state)
     {
         var first = JsonSerializer.Serialize(new { total_count = 21, workflow_runs = Enumerable.Range(6, 20)
-            .Select(id => new { id, head_sha = $"c{id}".PadRight(40, '0'), status = "completed", conclusion = "cancelled", run_attempt = 1 }) });
+            .Select(id => new { id, head_sha = $"c{id}".PadRight(40, '0'), status = "in_progress", conclusion = (string?)null, run_attempt = 1 }) });
         var older = MainRuns((5, "completed", "failure", 1));
         var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: older,
             mainRunPages: unreadable ? [first] : [first, older]);
@@ -2108,6 +2108,72 @@ public class MergeRuleTests
                 File.ReadAllText(config).Replace("jobs: [light", "leg_familiez: [], jobs: [light")));
         }
         finally { File.Delete(config); }
+    }
+
+    [Theory]
+    [InlineData("infra-only", "success")]
+    [InlineData("mixed", "failure")]
+    [InlineData("unknown", "failure")]
+    [InlineData("cancelled-before-tests", "success")]
+    [InlineData("cancelled-run", "success")]
+    [InlineData("cancelled-after-tests", "failure")]
+    [InlineData("runner-never-started", "success")]
+    [InlineData("no-step-data", "failure")]
+    [InlineData("empty-step-data", "failure")]
+    [InlineData("rerun-used", "success")]
+    [InlineData("product-infra", "success")]
+    [InlineData("build-failure", "failure")]
+    [InlineData("wrong-job", "failure")]
+    public void Main_classifies_infra_per_job_and_flags_only_one_rerun(string scenario, string state)
+    {
+        var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
+        var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
+        var target = scenario is "product-infra" or "build-failure" ? "product (ubuntu-latest)"
+            : scenario == "wrong-job" ? "light" : "pwa-ui (webkit 3/3)";
+        var attempt = scenario == "rerun-used" ? 2 : 1;
+        object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
+        var setup = target.StartsWith("product", StringComparison.Ordinal)
+            ? "Run actions/setup-dotnet@v6" : "Download Playwright's system packages";
+        var steps = new List<object>
+        {
+            Step(scenario == "unknown" ? "Unknown step" : setup, "failure"),
+            Step("Run tests", scenario == "mixed" ? "failure" : "skipped"),
+        };
+        var conclusion = "failure";
+        if (scenario.StartsWith("cancelled", StringComparison.Ordinal) || scenario == "runner-never-started")
+        {
+            conclusion = "cancelled";
+            steps = [Step("Set up job", "success"),
+                Step("Run tests", scenario == "cancelled-after-tests" ? "success" : "skipped")];
+            if (scenario == "runner-never-started")
+                steps = [Step("Set up job", "skipped"), Step("Run tests", "skipped")];
+        }
+        if (scenario == "build-failure") steps = [Step("Build", "failure")];
+        var jobs = required.Select(n => n == "product" ? "product (ubuntu-latest)" : n).Append("plan")
+            .Select((name, id) => new Dictionary<string, object?>
+            {
+                ["id"] = id, ["name"] = name, ["status"] = "completed",
+                ["conclusion"] = name == target ? conclusion : "success",
+                ["run_attempt"] = name == target ? attempt : 1,
+                ["runner_id"] = scenario == "runner-never-started" && name == target ? 0 : 1,
+            }).ToArray();
+        if (scenario != "no-step-data")
+            jobs.Single(j => (string)j["name"]! == target)["steps"] = scenario == "empty-step-data" ? [] : steps;
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((5, "completed", scenario == "cancelled-run" ? "cancelled" : "failure", attempt)),
+            mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
+        var output = new StringWriter();
+        MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
+        var posted = Assert.Single(github.Posted);
+        Assert.Contains($" {state} merge-rule ", posted, StringComparison.Ordinal);
+        if (state == "success")
+        {
+            Assert.Contains("ALERT infra-only", posted, StringComparison.Ordinal);
+            Assert.Contains(scenario == "rerun-used" ? "rerun already used" : "rerun needed", posted, StringComparison.Ordinal);
+            Assert.Contains(target, output.ToString(), StringComparison.Ordinal);
+        }
+        else
+            Assert.DoesNotContain("ALERT infra-only", posted, StringComparison.Ordinal);
     }
 
     static string WriteConfig(bool arm64Waiver = false)
