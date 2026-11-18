@@ -32,27 +32,28 @@ private func questionFixture(_ source: String) throws -> BridgeQuestion {
         }
     }
 
-    @Test(arguments: InvisibleFixtures.blanks)
-    func answersRefuseInvisibleOnlyPlainTextAndOtherChoices(_ text: String) throws {
-        let plain = try questionFixture(#"{"id":"q","fields":[]}"#)
-        #expect(throws: BridgeOperationError.self) {
-            try plain.answer(sessionID: "s", currentQuestionID: "q", text: text, capabilities: ["sessions.answer"], sessionAgent: "copilot")
-        }
-        for kind in ["choice", "multi"] {
-            let form = try questionFixture("{\"id\":\"q\",\"fields\":[{\"name\":\"choice\",\"type\":\"\(kind)\",\"allowOther\":true,\"options\":[]}]}")
-            let other = JSONValue.object(["other": .string(text)])
-            let value = kind == "multi" ? JSONValue.array([other]) : other
-            #expect(throws: BridgeOperationError.self) {
-                try form.answer(sessionID: "s", currentQuestionID: "q", values: ["choice": value], capabilities: ["sessions.answer"], sessionAgent: "copilot")
-            }
-        }
-        let visible = "\u{034F}\u{4F60}\u{597D}"
-        let answer = try plain.answer(sessionID: "s", currentQuestionID: "q", text: visible, capabilities: ["sessions.answer"], sessionAgent: "copilot")
-        #expect(answer.data["text"] == .string(visible))
-    }
     #expect(throws: BridgeOperationError.self) {
         try question.answer(sessionID: "s", currentQuestionID: "q", values: ["choice": .array([])], capabilities: ["sessions.answer"], sessionAgent: "claude")
     }
+}
+
+@Test(arguments: InvisibleFixtures.blanks)
+func answersRefuseInvisibleOnlyPlainTextAndOtherChoices(_ text: String) throws {
+    let plain = try questionFixture(#"{"id":"q","fields":[]}"#)
+    #expect(throws: BridgeOperationError.self) {
+        try plain.answer(sessionID: "s", currentQuestionID: "q", text: text, capabilities: ["sessions.answer"], sessionAgent: "copilot")
+    }
+    for kind in ["choice", "multi"] {
+        let form = try questionFixture("{\"id\":\"q\",\"fields\":[{\"name\":\"choice\",\"type\":\"\(kind)\",\"allowOther\":true,\"options\":[]}]}")
+        let other = JSONValue.object(["other": .string(text)])
+        let value = kind == "multi" ? JSONValue.array([other]) : other
+        #expect(throws: BridgeOperationError.self) {
+            try form.answer(sessionID: "s", currentQuestionID: "q", values: ["choice": value], capabilities: ["sessions.answer"], sessionAgent: "copilot")
+        }
+    }
+    let visible = "\u{034F}\u{4F60}\u{597D}"
+    let answer = try plain.answer(sessionID: "s", currentQuestionID: "q", text: visible, capabilities: ["sessions.answer"], sessionAgent: "copilot")
+    #expect(answer.data["text"] == .string(visible))
 }
 
 @Test func answerLimitsCountUTF8AndTheWholeEncodedPayload() throws {

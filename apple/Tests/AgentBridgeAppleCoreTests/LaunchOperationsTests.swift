@@ -65,7 +65,8 @@ private func launchOptionsFixture() throws -> BridgeLaunchOptions {
         #expect(throws: BridgeOperationError.self) { try draft.operation(options: options, capabilities: ["sessions.launch"]) }
     }
     let vector = try invisibleVectorText("launch", record: "LaunchRequest", named: "a-prompt-led-by-an-invisible-operator", field: "prompt")
-    for resume in [nil, "old-session"] {
+    let resumes: [String?] = [nil, "old-session"]
+    for resume in resumes {
         draft.resume = resume
         for text in ["\u{FEFF}/clear", "\u{3164}/", "\u{2800}!dir", "\u{0903}/clear", vector] {
             draft.prompt = text
