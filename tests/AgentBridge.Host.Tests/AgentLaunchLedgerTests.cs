@@ -87,6 +87,10 @@ public sealed class AgentLaunchLedgerTests : IDisposable
     {
         const string id = "12345678-9abc-4def-8abc-0123456789ab";
         Assert.True(Gate().CheckLaunch("a", uppercaseFirst ? id.ToUpperInvariant() : id, "hash").Allowed);
+        var legacy = JsonNode.Parse(File.ReadAllText(State))!;
+        legacy["requests"]![0]!["request"] = id.ToUpperInvariant();
+        legacy["requests"]![0]!.AsObject().Remove("charge");
+        File.WriteAllText(State, legacy.ToJsonString());
         Assert.True(Gate().CheckLaunch("a", uppercaseFirst ? id : id.ToUpperInvariant(), "hash").Duplicate);
         Gate().LaunchStarted("a", id.ToUpperInvariant(), "session");
         Assert.True(Gate().LaunchFinished("a", id));
@@ -101,6 +105,7 @@ public sealed class AgentLaunchLedgerTests : IDisposable
     [InlineData("machine")]
     [InlineData("requests")]
     [InlineData("duplicate-hit")]
+    [InlineData("legacy-completed")]
     public void Restored_hourly_debits_must_match_the_admitted_requests_even_after_live_closure(string fault)
     {
         if (fault == "origins")
@@ -114,6 +119,12 @@ public sealed class AgentLaunchLedgerTests : IDisposable
         Assert.True(Gate().LaunchFinished("a", "second"));
         var state = JsonNode.Parse(File.ReadAllText(State))!;
         if (fault == "duplicate-hit") { state["machine"]!.AsArray().Add(state["machine"]![0]!.DeepClone()); }
+        else if (fault == "legacy-completed")
+        {
+            foreach (var request in state["requests"]!.AsArray()) { request!.AsObject().Remove("charge"); }
+            foreach (var hit in state["machine"]!.AsArray().Concat(state["origins"]!.AsArray().SelectMany(w => w!["hits"]!.AsArray())))
+            { hit!["charge"] = null; }
+        }
         else { state[fault]!.AsArray().Clear(); }
         var damaged = state.ToJsonString();
         File.WriteAllText(State, damaged);
