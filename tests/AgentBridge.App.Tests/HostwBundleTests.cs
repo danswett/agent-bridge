@@ -14,7 +14,7 @@ public sealed class HostwBundleTests
     internal static PackageDigest Digest(byte[] bytes) => new(PackageDigest.Sha256, Convert.ToHexString(SHA256.HashData(bytes)));
 
     // Synthetic PE/bundle bytes following .NET 10's published v6 manifest format; never executable.
-    internal static byte[] Bundle(string? omit = null, bool compressed = false, string? extra = null, string? config = null, string? deps = null)
+    internal static byte[] Bundle(string? omit = null, bool compressed = false, string? extra = null, string? config = null, string? deps = null, bool trailingCompressed = false)
     {
         var files = new Dictionary<string, (byte Type, byte[] Bytes)>
         {
@@ -41,8 +41,13 @@ public sealed class HostwBundleTests
         image.Position = 0x218;
         writer.Write(Convert.FromHexString("8B1202B96A612038727B930214D7A03213F5B9E6EFAE3318EE3B2DCE24B36AAE"));
         string[] exports = ["g_CLREngineMetrics", "CLRJitAttachState", "DotNetRuntimeInfo", "g_dacTable", "MetaDataGetDispenser", "DotNetRuntimeContractDescriptor"];
-        image.Position = 0x258; writer.Write(exports.Length); writer.Write(0); writer.Write(0x1080);
-        image.Position = 0x280; var nameAt = 0x2a0;
+        image.Position = 0x254; writer.Write(exports.Length); writer.Write(exports.Length);
+        writer.Write(0x1070); writer.Write(0x1090); writer.Write(0x10b0);
+        image.Position = 0x270;
+        foreach (var _ in exports) { writer.Write(0x1000); }
+        image.Position = 0x2b0;
+        for (ushort i = 0; i < exports.Length; i++) { writer.Write(i); }
+        image.Position = 0x290; var nameAt = 0x2c0;
         foreach (var name in exports)
         {
             writer.Write(4096 + nameAt - 512); var next = image.Position; image.Position = nameAt;
@@ -58,6 +63,7 @@ public sealed class HostwBundleTests
             var compress = compressed && name == "dependency.dll";
             if (compress) { using var deflate = new DeflateStream(image, CompressionLevel.Optimal, leaveOpen: true); deflate.Write(file.Bytes); }
             else { writer.Write(file.Bytes); }
+            if (compress && trailingCompressed) { writer.Write((byte)0); }
             entries.Add((name, file.Type, start, file.Bytes.Length, compress ? image.Position - start : 0));
         }
         var header = image.Position;
@@ -123,7 +129,7 @@ public sealed class HostwBundleTests
             case "json-location": BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(header + 25), 1024); break;
             case "oversized": BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(header + 73), long.MaxValue); break;
             case "exports": BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x10c), 0); break;
-            case "static-runtime": bytes[0x2a0] = (byte)'X'; break;
+            case "static-runtime": bytes[0x2c0] = (byte)'X'; break;
         }
         Assert.Throws<InvalidDataException>(() => Verify(bytes));
     }
