@@ -30,6 +30,54 @@ public sealed class ReplyClearTests
     }
 
     [Theory]
+    [InlineData("peer")]
+    [InlineData("target")]
+    [InlineData("authority")]
+    [InlineData("confirmation")]
+    [InlineData("generation")]
+    public async Task A_clear_replay_never_discloses_escrow_to_another_sender_target_or_authority(string change)
+    {
+        await using var h = await Harness.Create();
+        var authorized = true;
+        var request = h.Request() with { IntentSource = () => authorized ? ReplyIntent.Steer : ReplyIntent.Unknown };
+        Assert.Equal(AnswerOutcome.Delivered, (await h.Replier.ReplyAsync(request, "person-a")).Outcome);
+        var peer = "person-a";
+        switch (change)
+        {
+            case "peer": peer = "person-b"; break;
+            case "target": request = request with { Id = Guid.NewGuid().ToString() }; break;
+            case "authority": authorized = false; break;
+            case "confirmation": request = request with { ClearConfirmation = null, IntentSource = null }; break;
+            case "generation": request = request with { IntentSource = () => ReplyIntent.Steer }; break;
+        }
+        var result = await h.Replier.ReplyAsync(request, peer);
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Null(result.Cleared);
+        Assert.Equal(1, h.Clears);
+        Assert.Equal(1, h.Replies);
+    }
+
+    [Theory]
+    [InlineData("  ", "", false)]
+    [InlineData("", "  ", false)]
+    [InlineData("  ", "", true)]
+    [InlineData("", "  ", true)]
+    public async Task Ambiguous_draft_spaces_are_refused_before_any_clear_key(string before, string after, bool atKeys)
+    {
+        await using var h = await Harness.Create();
+        var request = h.Request();
+        var changed = before + h.Draft + after;
+        if (atKeys) h.BeforeKeys = () => h.Draft = changed;
+        else h.Draft = changed;
+        var result = await h.Replier.ReplyAsync(request);
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Null(result.Cleared);
+        Assert.Equal(changed, h.Draft);
+        Assert.Equal(0, h.Clears);
+        Assert.Equal(0, h.Replies);
+    }
+
+    [Theory]
     [InlineData("unknown")]
     [InlineData("agent")]
     [InlineData("changed")]
