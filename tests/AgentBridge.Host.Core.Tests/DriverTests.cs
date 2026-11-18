@@ -55,6 +55,24 @@ public class DriverTests
     }
 
     [Fact]
+    public void A_prompt_keeps_the_send_time_label_when_its_driver_changes_before_its_text_arrives()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.Observe(At(1, SessionStatus.Idle, "first"), Fixture.T0, drivers.Arm);
+        d.ArmDriver(SessionDrivers.Agent, Fixture.T0, "Original sender");
+        d.Observe(At(1, SessionStatus.Working, "first"), Fixture.T0, drivers.Arm);
+
+        d.Answered(SessionDrivers.Agent, "Later driver");
+        d.Observe(At(1, SessionStatus.Working, "the agent's prompt"), Fixture.T0, drivers.Arm);
+
+        Assert.Equal((true, "Original sender"), d.PromptSender);
+        Assert.Equal((DriverKind.Agent, "Later driver"), d.Shown);
+        d.Answered(SessionDrivers.Human);
+        Assert.Equal((true, "Original sender"), d.PromptSender);
+    }
+
+    [Fact]
     public void A_launch_whose_opening_turn_a_listening_source_already_has_spends_its_arm_on_it()
     {
         var drivers = new SessionDrivers();
