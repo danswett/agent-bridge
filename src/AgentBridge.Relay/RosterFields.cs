@@ -75,6 +75,10 @@ public static class RosterFields
             || !node.StartsWith("agent_bridge_", StringComparison.Ordinal) || !IsHex16(node["agent_bridge_".Length..])) { return false; }
         if (!Is(s.GetProperty("state"), JsonValueKind.String) || !States.Contains(s.GetProperty("state").GetString()!)) { return false; }
         if (!TryTime(s.GetProperty("since"), out _)) { return false; }
+        if (seen.Contains("startedAt") && (s.GetProperty("startedAt").ValueKind != JsonValueKind.String
+            || s.GetProperty("startedAt").GetString() is not { Length: 20 } started
+            || !DateTimeOffset.TryParseExact(started, "yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out _))) { return false; }
         try { _ = SessionEvidence.Read(s); }
         catch (InvalidDataException) { return false; }
         catch (InvalidOperationException) { return false; }

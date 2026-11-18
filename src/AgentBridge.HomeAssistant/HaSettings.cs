@@ -27,6 +27,8 @@ public sealed record HaSettings
     public const string DefaultDashboard = "agent-decisions";
 
     public bool Enabled { get; init; }
+    // Validation can disable the connector without making an explicitly HA-enabled launch safe.
+    public bool EnabledRequested { get; private init; }
     public Uri? BaseUrl { get; init; }
     // The dashboard agent-ha-bridge's publication writer generates, read (never written) to
     // know when an ended session's card has gone (dashboard.urlPath there).
@@ -87,6 +89,7 @@ public sealed record HaSettings
             MachineName = Text("machineName"),
             Notify = HaNotifySettings.Read(s, problems),
         };
+        settings = settings with { EnabledRequested = settings.Enabled };
         if (s.TryGetProperty("updates", out var u) && u.ValueKind != JsonValueKind.Null)
         {
             if (u.ValueKind != JsonValueKind.Object) { problems.Add("homeAssistant.updates is not an object"); }
