@@ -19,12 +19,26 @@ function hasPinnedMachineName(text) {
       const value = Number.parseInt(point ?? unit ?? byte, 16);
       return value <= 0x10ffff ? String.fromCodePoint(value) : escape;
     });
-  const normalized = decoded.replace(/\p{Cf}/gu, '').normalize('NFKD').toLowerCase().replace(/[^a-z0-9]/g, '');
-  return normalized.includes('dswett') || normalized.includes('arm8') || /vm[0-9]/.test(normalized);
+  const normalized = decoded.replace(/\p{Cf}/gu, '').normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '');
+  const tokens = normalized.match(/[a-z0-9]+/g) ?? [];
+  return tokens.some((_, start) => {
+    let candidate = '';
+    // Six tokens cover the longest family prefix even with a separator between every letter.
+    for (const token of tokens.slice(start, start + 6)) {
+      candidate += token;
+      if (candidate.startsWith('dswett') || /^(?:arm8|vm[0-9]+|ultra[0-9]*)$/.test(candidate)) { return true; }
+    }
+    return false;
+  });
+}
+
+function pinnedFiles(readSource = (file) => readFileSync(new URL(file, root), 'utf8')) {
+  return files.filter((file) => hasPinnedMachineName(readSource(file)));
 }
 
 const vm = ['DEV', 'VM', '1'];
 const prefix = 'dswett';
+const ultra = ['UL', 'TRA'].join('');
 const probes = [
   ['space before the VM number', `${vm[0]}-${vm[1]} ${vm[2]}`],
   ['space-separated VM name', vm.join(' ')],
@@ -47,11 +61,26 @@ const probes = [
   ['literal zero-width VM separator', vm.slice(1).join('\u200b')],
   ['literal format-character VM separator', vm.slice(1).join('\u2060')],
   ['hex-escaped owner-prefix letter', prefix.replace('s', String.raw`\x73`) + '-machine-a'],
+  ['underscored Ultra-family host', [ultra, 'machine-a'].join('_')],
+  ['numbered Ultra-family host', ultra + '2'],
 ];
 
 for (const [description, probe] of probes) {
   test(`the machine-name scan rejects a ${description}`, () => {
     assert.equal(hasPinnedMachineName(probe), true);
+  });
+}
+
+for (const [description, value, rejected] of [
+  ['standalone Ultra host', ultra, true],
+  ['lowercase Ultra host', ultra.toLowerCase(), true],
+  ['compiler version', 'LLVM 19', false],
+  ['ordinary numbered word', 'alarm 8', false],
+]) {
+  test(`the scoped source scan classifies a ${description} correctly`, () => {
+    const file = 'pwa/js/demo.js';
+    const source = `const machineName = ${JSON.stringify(value)};`;
+    assert.deepEqual(pinnedFiles((path) => path === file ? source : ''), rejected ? [file] : []);
   });
 }
 
@@ -62,6 +91,5 @@ test('the machine-name scan permits neutral fixtures and repository references',
 });
 
 test('S6 exporters, self-tests, demos and comments never pin fleet machine names', () => {
-  const pinned = files.filter((file) => hasPinnedMachineName(readFileSync(new URL(file, root), 'utf8')));
-  assert.deepEqual(pinned, []);
+  assert.deepEqual(pinnedFiles(), []);
 });
