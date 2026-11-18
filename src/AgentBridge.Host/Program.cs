@@ -24,6 +24,8 @@ using AgentBridge.Transport;
 //
 //   agent-bridge-host sessions [--compact]      one scan, the SessionList as JSON
 //   agent-bridge-host get <id>                  one session with its tool history
+//   agent-bridge-host question-target <session-id> <question-id>
+//                                               validate an exact local question, read-only
 //   agent-bridge-host approve <session> <question> <request-uuid> <approve|deny> [--profile <name>]
 //                                               answer one ordinary person approval
 //   agent-bridge-host stop <id> [--confirm <token>] [--profile <name>]
@@ -208,6 +210,8 @@ switch (command)
             if (session is null) { Console.Error.WriteLine("agent-bridge-host get: session not found."); }
             return session is null ? 1 : 0;
         }
+    case "question-target":
+        return await QuestionTargetCommands.RunAsync(arguments, () => new SessionSource(options), Console.Out, Console.Error);
     case "rename":
         {
             if (Refused("set a session's fleet name")) { return 4; }
@@ -397,7 +401,7 @@ switch (command)
                 FindDevBox, AgentHaBridgeKeepAwakeOwner, () => NewKeepAwake(devCenter), Console.Out, Console.Error, stop.Token);
         }
     default:
-        Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
+        Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | question-target <session-id> <question-id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host approve <session> <question> <request-uuid> <approve|deny> [--profile <name>]");
         Console.Error.WriteLine("       agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>] (empty name clears)");
         Console.Error.WriteLine("       agent-bridge-host host-sign init [--profile <name>]");

@@ -23,15 +23,8 @@ public sealed class CliQuestionTargetTests
     readonly Source source = new();
     readonly StringWriter output = new(), error = new();
 
-    Task<int> Run(params string[] args)
-    {
-        var type = typeof(HostSettings).Assembly.GetType("AgentBridge.Host.QuestionTargetCommands");
-        Assert.NotNull(type);
-        var method = type.GetMethod("RunAsync");
-        Assert.NotNull(method);
-        return method.CreateDelegate<Func<IReadOnlyList<string>, Func<ISessionSource>, TextWriter, TextWriter, Task<int>>>()
-            (args.Length == 0 ? ["question-target", Id, QuestionId] : args, () => source, output, error);
-    }
+    Task<int> Run(params string[] args) => QuestionTargetCommands.RunAsync(
+        args.Length == 0 ? ["question-target", Id, QuestionId] : args, () => source, output, error);
 
     string Outcome()
     {
@@ -62,6 +55,8 @@ public sealed class CliQuestionTargetTests
     [InlineData("absent", "no-longer-pending")]
     [InlineData("answered", "answered")]
     [InlineData("approved", "answered")]
+    [InlineData("other-answer", "no-longer-pending")]
+    [InlineData("unreadable-answer", "no-longer-pending")]
     [InlineData("cancelled", "no-longer-pending")]
     [InlineData("missing", "missing")]
     [InlineData("held-missing", "unknown")]
@@ -69,6 +64,7 @@ public sealed class CliQuestionTargetTests
     [InlineData("not-waiting", "unknown")]
     [InlineData("history-replaced", "stale")]
     [InlineData("history-missing", "missing")]
+    [InlineData("history-held", "unknown")]
     public async Task Cli_question_target_refuses_a_replaced_answered_or_missing_question(string scenario, string expected)
     {
         source.Current = scenario switch
@@ -84,14 +80,19 @@ public sealed class CliQuestionTargetTests
         if (scenario.StartsWith("held", StringComparison.Ordinal)) { source.Held = new("fixture discovery incomplete", [AgentKind.Copilot]); }
         source.History = new()
         {
-            Turns = [new() { Id = "turn-selected", At = DateTimeOffset.UnixEpoch, Parts =
-                [new() { Id = "part", Kind = HistoryPartKind.Question, At = DateTimeOffset.UnixEpoch, Question = Question,
+            Turns = [new() { Id = "turn-selected", At = DateTimeOffset.UnixEpoch, Unreadable = scenario == "unreadable-answer", Parts =
+                [new() { Id = "part", Kind = HistoryPartKind.Question, At = DateTimeOffset.UnixEpoch,
+                    Question = scenario == "other-answer" ? Question with { Id = "other-question" } : Question,
                     Outcome = scenario == "approved" ? QuestionOutcome.Approved : scenario == "cancelled" ? QuestionOutcome.Cancelled
-                        : scenario == "answered" ? QuestionOutcome.Answered : QuestionOutcome.Unknown }] }],
+                        : scenario is "answered" or "other-answer" or "unreadable-answer" ? QuestionOutcome.Answered : QuestionOutcome.Unknown }] }],
         };
         if (scenario.StartsWith("history-", StringComparison.Ordinal))
         {
-            source.AfterHistory = () => source.Current = scenario == "history-missing" ? null : Pending with { Question = Question with { Id = "replacement" } };
+            source.AfterHistory = () =>
+            {
+                if (scenario == "history-held") { source.Held = new("fixture discovery incomplete", [AgentKind.Copilot]); }
+                else { source.Current = scenario == "history-missing" ? null : Pending with { Question = Question with { Id = "replacement" } }; }
+            };
         }
         Assert.Equal(1, await Run());
         Assert.Equal(expected, Outcome());
@@ -119,17 +120,34 @@ public sealed class CliQuestionTargetTests
         Assert.Contains("usage:", error.ToString());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cli_question_target_reports_read_failure_without_claiming_missing(bool denied)
+    {
+        source.ReadFailure = denied ? new UnauthorizedAccessException() : new IOException();
+        Assert.Equal(1, await Run());
+        Assert.Equal("unavailable", Outcome());
+        Assert.Contains("unavailable", error.ToString());
+    }
+
     sealed class Source : ISessionSource
     {
         public Session? Current { get; set; } = Pending;
         public HistoryResult History { get; set; } = HistoryResult.NotAvailable("fixture");
         public Action? AfterHistory { get; set; }
+        public Exception? ReadFailure { get; set; }
         public List<string> Calls { get; } = [];
         public DiscoveryHeld? Held { get; set; }
         public long Revision => 0;
         public event EventHandler<SessionChange>? Changed { add => throw new NotSupportedException(); remove { } }
         public Session? Get(string id) { Calls.Add("get"); Assert.Equal(Id, id); return Current; }
-        public Task RefreshAsync(CancellationToken cancellationToken = default) { Calls.Add("refresh"); return Task.CompletedTask; }
+        public Task RefreshAsync(CancellationToken cancellationToken = default)
+        {
+            Calls.Add("refresh");
+            if (ReadFailure is not null) { throw ReadFailure; }
+            return Task.CompletedTask;
+        }
         public Task<HistoryResult> HistoryAsync(string id, string? before, int limit, CancellationToken cancellationToken = default)
         {
             Calls.Add("history"); Assert.Equal(Id, id); Assert.Null(before); Assert.InRange(limit, 1, HistoryLimits.MaxTurns);

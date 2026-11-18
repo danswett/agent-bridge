@@ -58,14 +58,18 @@ public sealed class HostCliProcessTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task Cli_question_target_process_reports_a_missing_fixture_target_without_writes()
+    public async Task Cli_question_target_process_refuses_an_unavailable_fixture_target_without_writes()
     {
         using var fixture = new Fixture();
         var result = await RunCli(fixture, "question-target", Id, "question#selected");
         Assert.Equal(1, result.ExitCode);
         using var json = JsonDocument.Parse(result.Output);
-        Assert.Equal("missing", json.RootElement.GetProperty("outcome").GetString());
-        Assert.Contains("missing", result.Error, StringComparison.Ordinal);
+        var outcome = json.RootElement.GetProperty("outcome").GetString();
+        // Isolated roots cannot account for agents outside the fixture: discovery may be held.
+        Assert.Contains(outcome, new[] { "missing", "unknown" });
+        Assert.Equal(Id, json.RootElement.GetProperty("id").GetString());
+        Assert.Equal("question#selected", json.RootElement.GetProperty("question").GetString());
+        Assert.Contains(outcome!, result.Error, StringComparison.Ordinal);
     }
 
     [Fact]
