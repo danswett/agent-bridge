@@ -21,8 +21,8 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     // from the machine's shared copy, the other's fresh fetch time (Copilot on #709, r4487867309).
     readonly SemaphoreSlim checking = new(1, 1);
     // Which release's download last failed, when, and how many times in a row: not tried again
-    // until RetryAt, whoever asks (Settings, the automatic updates, a device's press, or one
-    // waiting above).
+    // until RetryAt, except for one explicit Install retry. Checks and background work keep
+    // the hold, including a download waiting above.
     (string? Release, DateTimeOffset At, int Times)? failed;
     int checks;
     int downloads;
@@ -105,7 +105,9 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         }
     }
 
-    public async Task DownloadAsync(Action<int> progress)
+    public Task DownloadAsync(Action<int> progress) => DownloadAsync(progress, retryNow: false);
+
+    internal async Task DownloadAsync(Action<int> progress, bool retryNow)
     {
         Interlocked.Increment(ref downloads);
         Progress ??= 0;
@@ -124,7 +126,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
             var release = Found;
             (Bytes, Total) = (null, null);
             var now = time.GetUtcNow();
-            if (failed is { } f && f.Release == release && now - f.At < HoldAfter(f.Times))
+            if (!retryNow && failed is { } f && f.Release == release && now - f.At < HoldAfter(f.Times))
             {
                 throw new DownloadHeldException($"downloading {release} failed {Words.Ago(f.At, now)}; trying again soon");
             }
