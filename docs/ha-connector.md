@@ -724,6 +724,13 @@ The graceful budget covers typing admission and `/exit`; an occupied slot skips 
 and proceeds to termination. A failed injector must prove exit before its typing fence
 and PID handle are released.
 
+On Windows, the host captures descendants before `/exit`, holding each by PID and creation
+time, with the same owner/elevation checks as the root. Unreadable ancestry refuses the
+tree before termination; an older process under a reused parent PID is not a descendant.
+The host reports ended only once every held process has exited and a fresh snapshot adds
+no descendants. New descendants are revalidated, with bounded rescans; unknown or surviving
+descendants yield failure, never an ended result based only on the root's exit.
+
 Pre-Ending hypotheses for [2910](https://github.com/danswett/agent-bridge/issues/2910),
 not established incident causes:
 * HA: disabled/read-only connector, baselined/busy press, confirmation timing or dispatch failure.

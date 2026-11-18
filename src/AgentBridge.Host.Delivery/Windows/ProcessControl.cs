@@ -17,7 +17,11 @@ namespace AgentBridge.Host.Delivery.Windows;
 [SupportedOSPlatform("windows")]
 public sealed class WindowsProcessControl : IProcessControl
 {
-    public HeldOpen Open(int processId, DateTimeOffset startedAt)
+    public HeldOpen Open(int processId, DateTimeOffset startedAt) =>
+        new ProcessTreeControl(OpenSingle, Launch.WindowsAgentStarter.Parents, Launch.WindowsAgentStarter.CreatedAt)
+            .Open(processId, startedAt);
+
+    HeldOpen OpenSingle(int processId, DateTimeOffset startedAt)
     {
         if (processId <= 0) { return HeldOpen.Refused("the session's process is not known; end it at the machine"); }
         if (processId == Environment.ProcessId) { return HeldOpen.Refused("the session's process is this host; end it at the machine"); }
