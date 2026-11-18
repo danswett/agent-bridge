@@ -21,9 +21,12 @@ public static class HaReplies
         if (replies is null or UnsupportedPlatformReplier) { return null; }
         return async (reply, ct) =>
         {
+            // HA payloads carry no authenticated delivery intent. Both adapters retain Unknown;
+            // neither card attribution nor the adapter's peer label establishes person authority.
+            var request = new ReplyRequest { Id = reply.SessionId, Request = reply.Request, Text = reply.Text };
             if (reply.Files.Count == 0)
             {
-                return await replies.ReplyAsync(new ReplyRequest { Id = reply.SessionId, Request = reply.Request, Text = reply.Text }, Peer, ct);
+                return await replies.ReplyAsync(request, Peer, ct);
             }
             if (attachments is null || !replies.TakesAttachments) { return Refused("this host does not take attachments"); }
             if (reply.Files.Count > AttachmentLimits.PerReply) { return Refused($"a reply carries at most {AttachmentLimits.PerReply} attachments"); }
@@ -38,13 +41,7 @@ public static class HaReplies
                 {
                     return Refused($"an attachment could not be taken: {e.Message}");
                 }
-                return await replies.ReplyAsync(new ReplyRequest
-                {
-                    Id = reply.SessionId,
-                    Request = reply.Request,
-                    Text = reply.Text,
-                    Attachments = refs,
-                }, Peer, ct);
+                return await replies.ReplyAsync(request with { Attachments = refs }, Peer, ct);
             }
             finally
             {

@@ -978,7 +978,7 @@ public class DiscoveryTests
     [Fact]
     public void VS_Codes_copilot_shim_is_left_out_when_the_real_cli_it_started_is_listed()
     {
-        // DEV-VM2's processes (#615): Agency runs Copilot through VS Code's shim, which starts the
+        // node-b's processes (#615): Agency runs Copilot through VS Code's shim, which starts the
         // real CLI with the same arguments. The CLI holds the session's lock; the shim held
         // discovery for two minutes on every launch and every restart.
         var t = DateTimeOffset.Parse("2026-11-03T21:08:13.123Z", System.Globalization.CultureInfo.InvariantCulture);
