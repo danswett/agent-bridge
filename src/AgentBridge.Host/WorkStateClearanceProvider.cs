@@ -11,7 +11,7 @@ public sealed class WorkStateClearanceProvider(ISessionSource source, HttpClient
 {
     public const string HeldMarker = "agent-bridge-host-held";
     public const string PrivateMarker = "agent-bridge-host-private";
-    static readonly HttpClient publicGithub = new() { Timeout = TimeSpan.FromSeconds(4) };
+    static readonly HttpClient publicGithub = new() { Timeout = TimeSpan.FromSeconds(4), MaxResponseContentBufferSize = 1024 * 1024 };
     readonly HttpClient client = github ?? publicGithub;
     readonly TimeProvider clock = time ?? TimeProvider.System;
 
@@ -39,7 +39,7 @@ public sealed class WorkStateClearanceProvider(ISessionSource source, HttpClient
         var liveBranch = Git.Run(cwd, ["branch", "--show-current"]);
         var head = Git.Run(cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
         var remote = Git.Run(cwd, ["remote", "get-url", "origin"]);
-        var status = Git.Run(cwd, ["--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"]);
+        var status = Git.Run(cwd, ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"]);
         var physicalTop = top.Ok ? Folders.Physical(top.Output.Trim()) : null;
         var physicalCwd = Folders.Physical(cwd);
         if (!top.Ok || !gitDirectory.Ok || !liveBranch.Ok || !head.Ok || !remote.Ok || !status.Ok
@@ -59,14 +59,20 @@ public sealed class WorkStateClearanceProvider(ISessionSource source, HttpClient
         var unpushed = status.Output.Length == 0
             ? CheckUnpushed(owner, repo, branch, head.Output.Trim(), openPullRequest.State != WorkState.Unknown)
             : new WorkClearance(WorkState.Refused, "the session worktree has uncommitted or untracked changes");
-        return new(session, process, clock.GetUtcNow(), openPullRequest, unpushed, held, privateWork);
+        return new(session, process, checkedAt, openPullRequest, unpushed, held, privateWork);
     }
 
     WorkClearance CheckPullRequests(string owner, string repository, string branch)
     {
         try
         {
-            var response = GetJson($"/repos/{owner}/{repository}/pulls?state=open&head={Uri.EscapeDataString(owner + ":" + branch)}&per_page=100");
+            var repositoryResponse = GetJson($"/repos/{owner}/{repository}");
+            using var metadata = repositoryResponse.Body;
+            if (repositoryResponse.Status != HttpStatusCode.OK || metadata?.RootElement.ValueKind != JsonValueKind.Object
+                || !metadata.RootElement.TryGetProperty("fork", out var fork) || fork.ValueKind != JsonValueKind.False
+                || !metadata.RootElement.TryGetProperty("private", out var privateRepo) || privateRepo.ValueKind != JsonValueKind.False)
+            { return new(WorkState.Unknown, "public non-fork pull-request targets could not be proved"); }
+            var response = GetJson($"/repos/{owner}/{repository}/pulls?state=open&head={Uri.EscapeDataString(owner + ":" + branch)}&per_page=1");
             using var body = response.Body;
             if (response.Status != HttpStatusCode.OK || body is null || body.RootElement.ValueKind != JsonValueKind.Array)
             { return new(WorkState.Unknown, "open pull requests could not be checked"); }
@@ -123,7 +129,7 @@ public sealed class WorkStateClearanceProvider(ISessionSource source, HttpClient
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com" + path);
         request.Headers.UserAgent.ParseAdd("AgentBridgeHost/1.0");
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
-        using var response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+        using var response = client.SendAsync(request).GetAwaiter().GetResult();
         if (!response.IsSuccessStatusCode) { return (response.StatusCode, null); }
         using var stream = response.Content.ReadAsStream();
         return (response.StatusCode, JsonDocument.Parse(stream));
