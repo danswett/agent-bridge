@@ -138,6 +138,28 @@ public sealed class RunMarkerTests : IDisposable
         finally { RunMarker.WriteFileOverride = null; }
     }
 
+    [Fact]
+    public void Read_only_recovered_record_does_not_disable_the_new_marker_or_release_its_lease()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Start("abandoned").Dispose();
+        var old = Assert.Single(Directory.GetFiles(folder, "*.json"));
+        File.SetAttributes(old, FileAttributes.ReadOnly);
+        try
+        {
+            var recovered = Start("recovering");
+            Assert.Equal("abandoned", recovered.Previous.Version);
+            var file = Assert.Single(Directory.GetFiles(folder, "*.json").Where(file => file != old));
+            using var competingOwner = UserLock.TryTake(file + ".lock");
+            Assert.Null(competingOwner);
+            recovered.Complete();
+            Assert.False(File.Exists(file));
+            recovered.RecordCrash(new InvalidOperationException());
+            Assert.Contains(nameof(InvalidOperationException), File.ReadAllText(file));
+        }
+        finally { File.SetAttributes(old, FileAttributes.Normal); }
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("{broken")]
