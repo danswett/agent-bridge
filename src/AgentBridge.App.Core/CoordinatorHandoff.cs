@@ -1,6 +1,8 @@
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using AgentBridge.Host.Delivery.Staging;
+using Microsoft.Win32.SafeHandles;
 
 namespace AgentBridge.App.Core;
 
@@ -32,10 +34,13 @@ public sealed class CoordinatorHandoff
         var packagePath = Full(request.Package);
         var sourcePath = Full(sourceImage);
         var parent = Full(folder);
+        using var installPin = PinDirectory(root, out var actualRoot);
+        using var stagePin = PinDirectory(parent, out var actualParent);
         if (!Within(packages, root) || !Within(packagePath, packages) || !Within(sourcePath, root)
-            || Within(parent, root) || Within(root, parent)
+            || File.Exists(actualParent) || Within(actualParent, actualRoot) || Within(actualRoot, actualParent)
             || !string.Equals(Path.GetFileName(sourcePath), "agent-bridge-hostw.exe", StringComparison.OrdinalIgnoreCase))
             throw Bad("handoff-path-refused: helper, package or destination is outside its allowed layout.");
+        parent = actualParent;
         var stage = Full(Path.Combine(parent, Guid.NewGuid().ToString("N")));
         var extract = Full(Path.Combine(stage, "extract"));
         var imagePath = Full(Path.Combine(stage, "agent-bridge-hostw.exe"));
@@ -106,6 +111,8 @@ public sealed class CoordinatorHandoff
 
     internal static string Full(string path)
     {
+        if (path is null) throw Bad("handoff-path-refused: paths must be fully qualified.");
+        path = Plain(path);
         if (!Path.IsPathFullyQualified(path)) throw Bad("handoff-path-refused: paths must be fully qualified.");
         var full = Path.GetFullPath(path);
         for (var part = full; !string.IsNullOrEmpty(part); part = Path.GetDirectoryName(part))
@@ -118,8 +125,39 @@ public sealed class CoordinatorHandoff
                 || (part != full && !attributes.HasFlag(FileAttributes.Directory)))
                 throw Bad("handoff-path-refused: reparse point or non-directory ancestor.");
         }
-        return full;
+        using var pin = PinDirectory(full, out var canonical);
+        return canonical;
     }
+
+    static string Plain(string path) =>
+        path.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase) || path.StartsWith(@"\\.\UNC\", StringComparison.OrdinalIgnoreCase)
+            ? @"\\" + path[8..] : path.StartsWith(@"\\?\", StringComparison.Ordinal) || path.StartsWith(@"\\.\", StringComparison.Ordinal)
+                ? path[4..] : path;
+
+    static SafeFileHandle? PinDirectory(string path, out string canonical)
+    {
+        canonical = path;
+        if (!OperatingSystem.IsWindows()) return null;
+        var ancestor = path;
+        while (!Directory.Exists(ancestor))
+            ancestor = Path.GetDirectoryName(ancestor) ?? throw Bad("handoff-path-unresolved.");
+        var handle = OpenDirectory(ancestor, 0, (uint)FileShare.ReadWrite, 0, 3, 0x02000000, 0);
+        try
+        {
+            if (handle.IsInvalid) throw Bad("handoff-path-unresolved.");
+            var buffer = new char[32768];
+            var length = GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Length, 0);
+            if (length == 0 || length >= buffer.Length) throw Bad("handoff-path-unresolved.");
+            canonical = Path.GetFullPath(Path.Combine(Plain(new string(buffer, 0, (int)length)), Path.GetRelativePath(ancestor, path)));
+            return handle;
+        }
+        catch { handle.Dispose(); throw; }
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern SafeFileHandle OpenDirectory(string path, uint access, uint share, nint security, uint creation, uint flags, nint template);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, [Out] char[] path, uint length, uint flags);
 
     static InvalidDataException Bad(string reason) => new(reason);
 
