@@ -1631,6 +1631,31 @@ public class MergeRuleTests
     }
 
     [Theory]
+    [InlineData("in_progress", null, "failure", "waiting for one")]
+    [InlineData("completed", "success", "success", "")]
+    public void A_newest_run_mid_rerun_waits_instead_of_falling_back_to_an_older_run(string armStatus, string? armConclusion, string state, string text)
+    {
+        object Job(int id, string name, string status = "completed", string? conclusion = "success", int attempt = 1) =>
+            new { id, name, status, conclusion, run_attempt = attempt };
+        var jobs = new[] { Job(0, "plan"), Job(1, "product (ubuntu-latest)"), Job(2, "light"), Job(3, "app (win-x64)"),
+            Job(4, "app (win-arm64)", conclusion: "failure"), Job(5, "app (win-arm64)", armStatus, armConclusion, attempt: 2) };
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, armStatus, armConclusion, 2), (5, "completed", "failure", 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }) });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            var posted = Assert.Single(github.Posted);
+            Assert.Contains($" {state} merge-rule ", posted, StringComparison.Ordinal);
+            Assert.Contains(text, posted, StringComparison.OrdinalIgnoreCase);
+            if (armStatus != "completed")
+                Assert.DoesNotContain(github.RestPaths, p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
     [InlineData("queued", "success", "success")]
     [InlineData("queued", "failure", "failure")]
     [InlineData("pending", "failure", "failure")]
