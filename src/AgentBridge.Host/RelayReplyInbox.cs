@@ -109,5 +109,5 @@ internal sealed class RelayReplyInbox(string path, Func<RelayReplyInbox.Entry, C
     }
 
     string Key(string node) => key?.Invoke(node) ?? node;
-    static bool StorageFailure(Exception e) => e is IOException or UnauthorizedAccessException or JsonException;
+    static bool StorageFailure(Exception e) => e is IOException or InvalidDataException or UnauthorizedAccessException or JsonException;
 }
