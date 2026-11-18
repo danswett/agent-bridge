@@ -1760,6 +1760,71 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Empty(sender.Sent);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Subscriptions_in_flight_are_discarded_after_an_account_switch(bool native, bool switchBack)
+    {
+        using var host = P256KeyPair.Generate();
+        using var person = P256KeyPair.Generate();
+        Action? duringRegistration = null;
+        Enforce(host, person, () =>
+        {
+            duringRegistration?.Invoke();
+            return Account;
+        });
+        Start();
+        var peer = PinnedPeer(person);
+        duringRegistration = () =>
+        {
+            duringRegistration = null;
+            // Switch after the request's account check, while its person grant is being read.
+            notifier.Attach(new FakeSender("2"));
+            if (switchBack) { notifier.Attach(sender); }
+        };
+
+        var error = Assert.Throws<InvalidOperationException>(() => native
+            ? SubscribeApns(peer.Device, "prod", "01020304", peer)
+            : Subscribe(peer.Device, peer: peer));
+
+        Assert.Contains("account changed", error.Message);
+        Assert.Empty(store.All);
+        Assert.Empty(store.AllApns);
+        var persisted = PushStore.Load(StorePath, switchBack ? Account : "2");
+        Assert.Empty(persisted.All);
+        Assert.Empty(persisted.AllApns);
+    }
+
+    [Fact]
+    public void Reviewer_probe_account_switch_does_not_rehome_a_native_registration()
+    {
+        Start();
+        var gate = typeof(PushNotifier).GetField("gate", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(notifier)!;
+        using var started = new ManualResetEventSlim();
+        Exception? error = null;
+        var worker = new Thread(() =>
+        {
+            started.Set();
+            try { SubscribeApns(Phone, "prod", "0102"); }
+            catch (Exception e) { error = e; }
+        }) { IsBackground = true };
+        lock (gate)
+        {
+            worker.Start();
+            Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+            Assert.False(worker.Join(250));
+            Assert.True((worker.ThreadState & ThreadState.WaitSleepJoin) != 0);
+            notifier.Attach(new FakeSender("2"));
+        }
+        Assert.True(worker.Join(TimeSpan.FromSeconds(5)));
+        Assert.Equal("2", store.Account);
+        Assert.IsType<InvalidOperationException>(error);
+        Assert.Empty(store.AllApns);
+        Assert.Empty(PushStore.Load(StorePath, "2").AllApns);
+    }
+
     [Fact]
     public void A_subscription_is_checked_when_it_arrives()
     {
@@ -1921,9 +1986,9 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal((Phone, before.Endpoint, before.P256dh, "iPhone · Slipgates"), (after.Device, after.Endpoint, after.P256dh, after.Name));
     }
 
-    RemoteAuthorization Enforce(P256KeyPair host, P256KeyPair person)
+    RemoteAuthorization Enforce(P256KeyPair host, P256KeyPair person, Func<string?>? account = null)
     {
-        var pins = new TrustedPeerStore(folder, host.Public, () => Account, time);
+        var pins = new TrustedPeerStore(folder, host.Public, account ?? (() => Account), time);
         pins.Reset();
         pins.Put(person.Public, TrustedPeerStore.Person, time.GetUtcNow().AddHours(1));
         return trust = new RemoteAuthorization(true, pins, time);
