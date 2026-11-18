@@ -14,16 +14,16 @@
   },
   "slugs": [
     {
-      "machineName": "DSWETT-DEV-VM1",
-      "slug": "dswett_dev_vm1"
+      "machineName": "machine-a",
+      "slug": "machine_a"
     },
     {
-      "machineName": "DSWETT-HOME",
-      "slug": "dswett_home"
+      "machineName": "machine-b",
+      "slug": "machine_b"
     },
     {
-      "machineName": "dswett-arm8.redmond.corp.microsoft.com",
-      "slug": "dswett_arm8_redmond_corp"
+      "machineName": "machine-c.subdomain.example.test",
+      "slug": "machine_c_subdomain_exam"
     },
     {
       "machineName": "A--B__C",
@@ -77,140 +77,140 @@
     }
   ],
   "machine": {
-    "machineName": "DSWETT-DEV-VM1",
-    "slug": "dswett_dev_vm1",
-    "node": "agent_bridge_dswett_dev_vm1",
-    "topicRoot": "copilot/cli/machine/dswett_dev_vm1",
+    "machineName": "machine-a",
+    "slug": "machine_a",
+    "node": "agent_bridge_machine_a",
+    "topicRoot": "copilot/cli/machine/machine_a",
     "device": {
       "identifiers": [
-        "agent_bridge_dswett_dev_vm1"
+        "agent_bridge_machine_a"
       ],
       "manufacturer": "AI CLI bridge",
-      "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+      "name": "AI Agent Bridge (machine-a)"
     },
     "entityIds": {
-      "online": "binary_sensor.agent_bridge_dswett_dev_vm1_online",
-      "sessions": "sensor.agent_bridge_dswett_dev_vm1_sessions",
-      "update": "update.agent_bridge_dswett_dev_vm1_update",
-      "installUpdate": "button.agent_bridge_dswett_dev_vm1_install_update",
-      "detailedActivity": "input_boolean.agent_bridge_dswett_dev_vm1_detailed_activity",
-      "usageCopilot": "sensor.agent_bridge_dswett_dev_vm1_usage_copilot"
+      "online": "binary_sensor.agent_bridge_machine_a_online",
+      "sessions": "sensor.agent_bridge_machine_a_sessions",
+      "update": "update.agent_bridge_machine_a_update",
+      "installUpdate": "button.agent_bridge_machine_a_install_update",
+      "detailedActivity": "input_boolean.agent_bridge_machine_a_detailed_activity",
+      "usageCopilot": "sensor.agent_bridge_machine_a_usage_copilot"
     },
     "topics": [
-      "homeassistant/update/agent_bridge_dswett_dev_vm1/update/config",
-      "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
-      "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
-      "homeassistant/text/agent_bridge_dswett_dev_vm1/new_prompt/config",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/new_prompt_payload/config",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/transfer_request/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_workspace/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_profile/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_agent/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_model/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_effort/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_context/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_resume/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_permissions/config",
-      "homeassistant/button/agent_bridge_dswett_dev_vm1/new_session/config",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/new_session_result/config",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/sessions/config",
-      "homeassistant/binary_sensor/agent_bridge_dswett_dev_vm1/online/config",
-      "copilot/cli/machine/dswett_dev_vm1/update/state",
-      "copilot/cli/machine/dswett_dev_vm1/update/attributes",
-      "copilot/cli/machine/dswett_dev_vm1/newsession/result",
-      "copilot/cli/machine/dswett_dev_vm1/newsession/outcome",
-      "copilot/cli/machine/dswett_dev_vm1/newsession/promptpayload",
-      "copilot/cli/machine/dswett_dev_vm1/transfer/request",
-      "copilot/cli/machine/dswett_dev_vm1/online/state",
-      "copilot/cli/machine/dswett_dev_vm1/online/attr",
-      "copilot/cli/machine/dswett_dev_vm1/global/state",
-      "copilot/cli/machine/dswett_dev_vm1/global/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_claude/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/claude/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/claude/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_codex/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/codex/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/codex/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_2/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_3/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_4/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/attr"
+      "homeassistant/update/agent_bridge_machine_a/update/config",
+      "homeassistant/button/agent_bridge_machine_a/install_update/config",
+      "homeassistant/button/agent_bridge_machine_a/check_updates/config",
+      "homeassistant/text/agent_bridge_machine_a/new_prompt/config",
+      "homeassistant/sensor/agent_bridge_machine_a/new_prompt_payload/config",
+      "homeassistant/sensor/agent_bridge_machine_a/transfer_request/config",
+      "homeassistant/select/agent_bridge_machine_a/new_workspace/config",
+      "homeassistant/select/agent_bridge_machine_a/new_profile/config",
+      "homeassistant/select/agent_bridge_machine_a/new_agent/config",
+      "homeassistant/select/agent_bridge_machine_a/new_model/config",
+      "homeassistant/select/agent_bridge_machine_a/new_effort/config",
+      "homeassistant/select/agent_bridge_machine_a/new_context/config",
+      "homeassistant/select/agent_bridge_machine_a/new_resume/config",
+      "homeassistant/select/agent_bridge_machine_a/new_permissions/config",
+      "homeassistant/button/agent_bridge_machine_a/new_session/config",
+      "homeassistant/sensor/agent_bridge_machine_a/new_session_result/config",
+      "homeassistant/sensor/agent_bridge_machine_a/sessions/config",
+      "homeassistant/binary_sensor/agent_bridge_machine_a/online/config",
+      "copilot/cli/machine/machine_a/update/state",
+      "copilot/cli/machine/machine_a/update/attributes",
+      "copilot/cli/machine/machine_a/newsession/result",
+      "copilot/cli/machine/machine_a/newsession/outcome",
+      "copilot/cli/machine/machine_a/newsession/promptpayload",
+      "copilot/cli/machine/machine_a/transfer/request",
+      "copilot/cli/machine/machine_a/online/state",
+      "copilot/cli/machine/machine_a/online/attr",
+      "copilot/cli/machine/machine_a/global/state",
+      "copilot/cli/machine/machine_a/global/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_copilot/config",
+      "copilot/cli/machine/machine_a/usage/copilot/state",
+      "copilot/cli/machine/machine_a/usage/copilot/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_claude/config",
+      "copilot/cli/machine/machine_a/usage/claude/state",
+      "copilot/cli/machine/machine_a/usage/claude/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_codex/config",
+      "copilot/cli/machine/machine_a/usage/codex/state",
+      "copilot/cli/machine/machine_a/usage/codex/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_2/config",
+      "copilot/cli/machine/machine_a/usage/copilot_2/state",
+      "copilot/cli/machine/machine_a/usage/copilot_2/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_3/config",
+      "copilot/cli/machine/machine_a/usage/copilot_3/state",
+      "copilot/cli/machine/machine_a/usage/copilot_3/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_4/config",
+      "copilot/cli/machine/machine_a/usage/copilot_4/state",
+      "copilot/cli/machine/machine_a/usage/copilot_4/attr"
     ],
     "usageTopics": [
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_claude/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/claude/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/claude/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_codex/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/codex/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/codex/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_2/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_3/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_4/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/attr"
+      "homeassistant/sensor/agent_bridge_machine_a/usage_copilot/config",
+      "copilot/cli/machine/machine_a/usage/copilot/state",
+      "copilot/cli/machine/machine_a/usage/copilot/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_claude/config",
+      "copilot/cli/machine/machine_a/usage/claude/state",
+      "copilot/cli/machine/machine_a/usage/claude/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_codex/config",
+      "copilot/cli/machine/machine_a/usage/codex/state",
+      "copilot/cli/machine/machine_a/usage/codex/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_2/config",
+      "copilot/cli/machine/machine_a/usage/copilot_2/state",
+      "copilot/cli/machine/machine_a/usage/copilot_2/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_3/config",
+      "copilot/cli/machine/machine_a/usage/copilot_3/state",
+      "copilot/cli/machine/machine_a/usage/copilot_3/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_4/config",
+      "copilot/cli/machine/machine_a/usage/copilot_4/state",
+      "copilot/cli/machine/machine_a/usage/copilot_4/attr"
     ],
     "forgetTopics": [
-      "homeassistant/update/agent_bridge_dswett_dev_vm1/update/config",
-      "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
-      "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
-      "homeassistant/text/agent_bridge_dswett_dev_vm1/new_prompt/config",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/new_prompt_payload/config",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/transfer_request/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_workspace/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_profile/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_agent/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_model/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_effort/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_context/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_resume/config",
-      "homeassistant/select/agent_bridge_dswett_dev_vm1/new_permissions/config",
-      "homeassistant/button/agent_bridge_dswett_dev_vm1/new_session/config",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/new_session_result/config",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/sessions/config",
-      "homeassistant/binary_sensor/agent_bridge_dswett_dev_vm1/online/config",
-      "copilot/cli/machine/dswett_dev_vm1/update/state",
-      "copilot/cli/machine/dswett_dev_vm1/update/attributes",
-      "copilot/cli/machine/dswett_dev_vm1/newsession/result",
-      "copilot/cli/machine/dswett_dev_vm1/newsession/outcome",
-      "copilot/cli/machine/dswett_dev_vm1/newsession/promptpayload",
-      "copilot/cli/machine/dswett_dev_vm1/transfer/request",
-      "copilot/cli/machine/dswett_dev_vm1/online/state",
-      "copilot/cli/machine/dswett_dev_vm1/online/attr",
-      "copilot/cli/machine/dswett_dev_vm1/global/state",
-      "copilot/cli/machine/dswett_dev_vm1/global/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_claude/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/claude/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/claude/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_codex/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/codex/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/codex/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_2/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_3/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/attr",
-      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_4/config",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/attr",
+      "homeassistant/update/agent_bridge_machine_a/update/config",
+      "homeassistant/button/agent_bridge_machine_a/install_update/config",
+      "homeassistant/button/agent_bridge_machine_a/check_updates/config",
+      "homeassistant/text/agent_bridge_machine_a/new_prompt/config",
+      "homeassistant/sensor/agent_bridge_machine_a/new_prompt_payload/config",
+      "homeassistant/sensor/agent_bridge_machine_a/transfer_request/config",
+      "homeassistant/select/agent_bridge_machine_a/new_workspace/config",
+      "homeassistant/select/agent_bridge_machine_a/new_profile/config",
+      "homeassistant/select/agent_bridge_machine_a/new_agent/config",
+      "homeassistant/select/agent_bridge_machine_a/new_model/config",
+      "homeassistant/select/agent_bridge_machine_a/new_effort/config",
+      "homeassistant/select/agent_bridge_machine_a/new_context/config",
+      "homeassistant/select/agent_bridge_machine_a/new_resume/config",
+      "homeassistant/select/agent_bridge_machine_a/new_permissions/config",
+      "homeassistant/button/agent_bridge_machine_a/new_session/config",
+      "homeassistant/sensor/agent_bridge_machine_a/new_session_result/config",
+      "homeassistant/sensor/agent_bridge_machine_a/sessions/config",
+      "homeassistant/binary_sensor/agent_bridge_machine_a/online/config",
+      "copilot/cli/machine/machine_a/update/state",
+      "copilot/cli/machine/machine_a/update/attributes",
+      "copilot/cli/machine/machine_a/newsession/result",
+      "copilot/cli/machine/machine_a/newsession/outcome",
+      "copilot/cli/machine/machine_a/newsession/promptpayload",
+      "copilot/cli/machine/machine_a/transfer/request",
+      "copilot/cli/machine/machine_a/online/state",
+      "copilot/cli/machine/machine_a/online/attr",
+      "copilot/cli/machine/machine_a/global/state",
+      "copilot/cli/machine/machine_a/global/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_copilot/config",
+      "copilot/cli/machine/machine_a/usage/copilot/state",
+      "copilot/cli/machine/machine_a/usage/copilot/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_claude/config",
+      "copilot/cli/machine/machine_a/usage/claude/state",
+      "copilot/cli/machine/machine_a/usage/claude/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_codex/config",
+      "copilot/cli/machine/machine_a/usage/codex/state",
+      "copilot/cli/machine/machine_a/usage/codex/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_2/config",
+      "copilot/cli/machine/machine_a/usage/copilot_2/state",
+      "copilot/cli/machine/machine_a/usage/copilot_2/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_3/config",
+      "copilot/cli/machine/machine_a/usage/copilot_3/state",
+      "copilot/cli/machine/machine_a/usage/copilot_3/attr",
+      "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_4/config",
+      "copilot/cli/machine/machine_a/usage/copilot_4/state",
+      "copilot/cli/machine/machine_a/usage/copilot_4/attr",
       "homeassistant/select/agent_bridge_6fcbab0c1d2e4f50/decision/config",
       "homeassistant/text/agent_bridge_6fcbab0c1d2e4f50/reply/config",
       "homeassistant/sensor/agent_bridge_6fcbab0c1d2e4f50/replypayload/config",
@@ -387,14 +387,14 @@
     "tuned": {
       "background_agents": 2,
       "compactions": 2,
-      "machine": "DSWETT-DEV-VM1",
+      "machine": "machine-a",
       "model": "gpt-6.1-sol",
       "process_id": 4242,
       "session": "Copilot: Fixture session",
       "updated": "<now>"
     },
     "bare": {
-      "machine": "DSWETT-DEV-VM1",
+      "machine": "machine-a",
       "process_id": 4242,
       "session": "Copilot: Fixture session",
       "updated": "<now>"
@@ -402,7 +402,7 @@
     "shell": {
       "background_shells": 1,
       "compactions": 1,
-      "machine": "DSWETT-DEV-VM1",
+      "machine": "machine-a",
       "model": "opus",
       "process_id": 4242,
       "session": "Copilot: Fixture session",
@@ -424,7 +424,7 @@
           "Running: view",
           "Done."
         ],
-        "machine": "DSWETT-DEV-VM1",
+        "machine": "machine-a",
         "response": "Done.",
         "response_kind": "text",
         "session": "Copilot: Fixture session",
@@ -446,7 +446,7 @@
           "Running: view",
           "Done."
         ],
-        "machine": "DSWETT-DEV-VM1",
+        "machine": "machine-a",
         "response": "Thinking hard",
         "response_kind": "reasoning",
         "session": "Copilot: Fixture session",
@@ -468,7 +468,7 @@
           "Running: view",
           "Done."
         ],
-        "machine": "DSWETT-DEV-VM1",
+        "machine": "machine-a",
         "response": "Done.",
         "response_kind": "text",
         "session": "Copilot: Fixture session",
@@ -490,7 +490,7 @@
           "Running: view",
           "Done."
         ],
-        "machine": "DSWETT-DEV-VM1",
+        "machine": "machine-a",
         "reasoning": "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR…",
         "response": "Done.",
         "response_kind": "text",
@@ -513,7 +513,7 @@
           "Running: view",
           "Done."
         ],
-        "machine": "DSWETT-DEV-VM1",
+        "machine": "machine-a",
         "response": "Done.",
         "response_kind": "text",
         "session": "Copilot: Fixture session",
@@ -535,7 +535,7 @@
           "Running: view",
           "Done."
         ],
-        "machine": "DSWETT-DEV-VM1",
+        "machine": "machine-a",
         "response": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\n_(truncated - see terminal)_",
         "response_kind": "text",
         "session": "Copilot: Fixture session",
@@ -557,7 +557,7 @@
           "Running: view",
           "Done."
         ],
-        "machine": "DSWETT-DEV-VM1",
+        "machine": "machine-a",
         "session": "Copilot: Fixture session",
         "updated": "<now>",
         "verbose": false
@@ -605,7 +605,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "enabled_by_default": true,
@@ -637,7 +637,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:reply",
@@ -665,7 +665,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:reply-all",
@@ -694,7 +694,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:robot",
@@ -722,7 +722,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:pulse",
@@ -751,7 +751,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -781,7 +781,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -811,7 +811,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -841,7 +841,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -871,7 +871,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -901,7 +901,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -931,7 +931,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -961,7 +961,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -991,7 +991,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -1021,7 +1021,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -1051,7 +1051,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -1081,7 +1081,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -1111,7 +1111,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:send-check",
@@ -1138,7 +1138,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:stop-circle-outline",
