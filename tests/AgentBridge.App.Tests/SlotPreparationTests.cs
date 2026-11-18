@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using AgentBridge.App.Core;
 using Xunit;
 
-public sealed class SlotPreparationTests : IDisposable
+public sealed partial class SlotPreparationTests : IDisposable
 {
     readonly string temp = Directory.CreateTempSubdirectory("ab-slots-").FullName;
     const string Version = "0.2.0";
