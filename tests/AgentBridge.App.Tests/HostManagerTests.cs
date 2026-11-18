@@ -68,6 +68,24 @@ public sealed class HostManagerTests : IAsyncLifetime
         Assert.Equal(["hooks", "cleanup", "--profile", manager.Layout.Profile], commands.Arguments);
     }
 
+    [Fact]
+    public async Task Non_default_uninstall_cleanup_leaves_the_default_profiles_logon_task_alone()
+    {
+        var primary = new HostManager(new InstallLayout(app, host.Folder, "default"), tasks, processes,
+            userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001");
+        primary.SetStartAtSignIn(true);
+        manager.SetStartAtSignIn(true);
+        var commands = new CleanupCommands(new CommandResult(true, false, 0, "Owned hook cleanup finished.\n"));
+
+        await manager.RemoveOwnedHooksAsync(commands);
+        manager.SetStartAtSignIn(false);
+
+        Assert.Equal(["hooks", "cleanup", "--profile", "test"], commands.Arguments);
+        Assert.True(primary.StartsAtSignIn);
+        Assert.False(manager.StartsAtSignIn);
+        Assert.Equal(primary.TaskName, Assert.Single(tasks.Registered).Key);
+    }
+
     [Theory]
     [InlineData(false, false, -1)]
     [InlineData(true, true, -1)]
