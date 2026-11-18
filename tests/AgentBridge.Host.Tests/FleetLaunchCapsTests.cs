@@ -30,7 +30,7 @@ public sealed class FleetLaunchCapsTests : IDisposable
             ?.GetMethod("Create", BindingFlags.Static | BindingFlags.NonPublic);
         Assert.NotNull(factory);
         Func<ProcessLoadReport?> load = () => new(sampledAt ?? time.GetUtcNow(), new(1, null, null, RunQueue: queue),
-            new Dictionary<string, SessionLoad>());
+            new Dictionary<string, AgentBridge.Host.Core.Load.SessionLoad>());
         Func<string, bool?> live = _ => alive;
         return Assert.IsType<Admission>(factory.Invoke(null, [folder, Audit, load, live, time]));
     }
