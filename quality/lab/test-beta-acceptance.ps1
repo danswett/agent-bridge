@@ -71,4 +71,62 @@ Check 'the workflow is dispatch-only, has no cron, secrets or environment, and o
     Assert ($y -notmatch 'uses: [^\n]+@(?![0-9a-f]{40}\b)') 'an action is not pinned to a SHA'
 }
 
+function Invoke-PairFixture([string]$Failure = '', [switch]$MissingInstall) {
+    $scratch = Join-Path ([IO.Path]::GetTempPath()) "accept-pair-$([guid]::NewGuid().ToString('N'))"
+    $tokens = $null; $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'beta-acceptance.ps1'), [ref]$tokens, [ref]$errors)
+    foreach ($name in 'Step', 'Invoke-PairAndDrive') {
+        $definition = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
+        if (-not $definition) { throw "the harness has no $name implementation" }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    $steps = [ordered]@{}
+    foreach ($name in '2-install-first-run', '3-simulated-agent', '4-pair', '5-drive-from-pwa') {
+        $steps[$name] = @{ result = 'PASS'; detail = '' }
+    }
+    if ($MissingInstall) { $steps['2-install-first-run'].result = 'FAIL' }
+    $Arch = 'fake'
+    $context = @{ Calls = [Collections.Generic.List[string]]::new(); Failure = $Failure; Identity = $scratch }
+    try {
+        Invoke-PairAndDrive $context {
+            param($operation, $c)
+            $c.Calls.Add($operation)
+            if ($operation -eq 'cleanup') {
+                if (Test-Path -LiteralPath $c.Identity) { Remove-Item -LiteralPath $c.Identity -Recurse -Force }
+            }
+            elseif ($operation -eq 'start-relay') { New-Item -ItemType Directory -Path $c.Identity | Out-Null }
+            if ($operation -eq $c.Failure) { throw "fake $operation failure" }
+        }
+        [pscustomobject]@{ Steps = $steps; Calls = $context.Calls.ToArray(); Leftover = Test-Path -LiteralPath $scratch }
+    }
+    finally { if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Recurse -Force } }
+}
+
+Check 'pairing and driving the PWA both pass only after their driver operations and always clean up' {
+    $r = Invoke-PairFixture
+    Assert ($r.Steps['4-pair'].result -eq 'PASS' -and $r.Steps['5-drive-from-pwa'].result -eq 'PASS') 'steps 4/5 did not pass'
+    Assert (($r.Calls -join ',') -eq 'start-relay,sign-in,start-host,presence,drive,cleanup') 'driver order or cleanup'
+    Assert (-not $r.Leftover) 'isolated identity survived success'
+}
+
+Check 'relay, sign-in, host, presence and PWA failures report FAIL rather than NOT RUN and clean up' {
+    foreach ($failure in 'start-relay', 'sign-in', 'start-host', 'presence', 'drive') {
+        $r = Invoke-PairFixture $failure
+        $failed = if ($failure -eq 'drive') { '5-drive-from-pwa' } else { '4-pair' }
+        Assert ($r.Steps[$failed].result -eq 'FAIL') "$failure was not failed"
+        Assert ($r.Steps[$failed].detail -eq "fake $failure failure") "$failure reason was lost"
+        Assert ($r.Steps['5-drive-from-pwa'].result -ne 'NOT RUN') 'step 5 was left NOT RUN'
+        Assert ($r.Calls[-1] -eq 'cleanup' -and -not $r.Leftover) "$failure did not clean up"
+        if ($failure -ne 'drive') { Assert ($r.Calls -notcontains 'drive') 'PWA ran without pairing' }
+    }
+}
+
+Check 'unmet install prerequisites and cleanup failures cannot look like successful acceptance' {
+    $r = Invoke-PairFixture -MissingInstall
+    Assert ($r.Steps['4-pair'].result -eq 'FAIL' -and $r.Steps['5-drive-from-pwa'].result -eq 'FAIL') 'unmet prerequisites were not failed'
+    Assert (($r.Calls -join ',') -eq 'cleanup') 'a product operation ran without an install'
+    $r = Invoke-PairFixture 'cleanup'
+    Assert ($r.Steps['4-pair'].result -eq 'FAIL' -and $r.Steps['4-pair'].detail -match 'cleanup') 'cleanup failure was hidden'
+}
+
 exit ($failures ? 1 : 0)
