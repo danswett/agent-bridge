@@ -411,8 +411,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      100 kB/s, and main run 41952998347 `pwa-e2e`). Before updating apt, a five-second Azure
      DNS probe switches immediately if lookup fails; an Azure DNS error during update or
      download also switches without backoff. An update timeout now switches rather than
-     repeating the same mirror. Classified connection/5xx failures and Canonical timeouts get three attempts,
-     waiting 5 then 20 seconds, before switching. Canonical gets the same bounded network
+     repeating the same mirror. Downloads get three attempts with 5/20-second backoff.
+     Updates get an initial attempt plus three retries with 15/30/60-second backoff for
+     classified network errors and HTTP 429; this also admits transient errors from the
+     runner's existing `https://packages.microsoft.com/` feed, only during updates.
+     Exhausted throttling or Microsoft-feed errors fail closed, even with cached debs,
+     without switching Ubuntu mirrors. Mixed signature, hash, lock or other fatal errors
+     still fail immediately. Canonical gets the same bounded network
      retries, then fails loudly with the attempt log; it never switches back to Azure.
      A non-forced debs cache hit uses 20-second update attempts within a two-minute whole-update
      budget. Only classified network exhaustion or a timeout without other errors warns

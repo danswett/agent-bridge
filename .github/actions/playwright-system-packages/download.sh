@@ -10,11 +10,13 @@
 # actions/runner-images) puts that mirror first and Canonical's HTTPS archive after it, but apt
 # moves down the list only when a fetch fails, never when it is slow. Network attempts get
 # 60 seconds for updates and 180 seconds for downloads; an Azure timeout (124) or DNS failure
-# immediately leaves Azure. The
-# Azure mirror is taken off the list and apt fetches the rest from https://archive.ubuntu.com,
+# immediately leaves Azure. The Azure mirror is taken off the list and apt fetches the rest
+# from https://archive.ubuntu.com,
 # keeping what it has. Nothing else changes: no source, key or trust setting is added, apt checks
 # every package against the signed index either way. Azure DNS failures leave immediately;
-# connection/5xx errors get three attempts (5 s, then 20 s apart), including on Canonical.
+# Downloads get three attempts (5/20 s backoff). Updates get an initial attempt plus three
+# retries (15/30/60 s) for known-host network errors, including Microsoft's feed and HTTP 429.
+# Exhausted throttling or Microsoft-feed errors are fatal even on a cache hit.
 # A non-forced cache hit uses 20-second update attempts within a two-minute update budget; only
 # classified network exhaustion may warn and continue to the mandatory offline install. If
 # the mirror list isn't the Azure-then-Canonical one this expects, or Azure is still named after the
@@ -66,7 +68,7 @@ network_failed=false
 
 # Apt uses the same exit code for network and package errors; mixed errors must fail closed.
 network_error() {
-  local errors
+  local errors hosts status='5[0-9]{2}'
   errors=$(grep -E '^[EW]:' "$1" | grep -vE '^[EW]: (Unable to fetch some archives|Some index files failed to download)' || true)
   [ -n "$errors" ] || return 1
   if grep -qF 'mirror+file:/etc/apt/apt-mirrors.txt/' <<< "$errors"; then
@@ -74,12 +76,19 @@ network_error() {
     [ "$left_azure" = true ] || grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors" || return 1
   fi
   if [ "$left_azure" = true ] && grep -qF azure.archive.ubuntu.com <<< "$errors"; then return 1; fi
-  ! grep -qviE "(^|[^[:alnum:].-])${network_host//./\\.}([^[:alnum:].-]|$)|^[EW]: Failed to fetch mirror\\+file:/etc/apt/apt-mirrors\\.txt/" <<< "$errors" &&
-    ! grep -qviE '^[EW]: Failed to fetch .* (Temporary failure resolving|Could not resolve|Could not connect|Unable to connect|Connection (failed|timed out|refused|reset)|Network is unreachable|5[0-9]{2}([[:space:]]|$))' <<< "$errors"
+  hosts="(^|[^[:alnum:].-])${network_host//./\\.}([^[:alnum:].-]|$)|^[EW]: Failed to fetch mirror\\+file:/etc/apt/apt-mirrors\\.txt/"
+  if [ "$2" = update ]; then
+    hosts+='|^[EW]: Failed to fetch https://packages\.microsoft\.com/'
+    status='429|5[0-9]{2}'
+  fi
+  ! grep -qviE "$hosts" <<< "$errors" &&
+    ! grep -qviE "^[EW]: Failed to fetch .* (Temporary failure resolving|Could not resolve|Could not connect|Unable to connect|Connection (failed|timed out|refused|reset)|Network is unreachable|($status)([[:space:]]|$))" <<< "$errors"
 }
 
 retry() {
-  local n=1 rc=0 log wait
+  local phase="$1" n=1 rc=0 log wait max="$attempts" strict=false
+  shift
+  [ "$phase" != update ] || max=${PLAYWRIGHT_APT_ATTEMPTS:-4}
   network_failed=false
   log=$(mktemp)
   while true; do
@@ -87,23 +96,32 @@ retry() {
       echo "::warning::apt update budget exhausted"
       rc=124; network_failed=true; break
     fi
-    echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::apt attempt $n of $attempts: $*"
+    echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::apt attempt $n of $max: $*"
     rc=0; LC_ALL=C "$@" 2>&1 | tee "$log" || rc=$?
     if [ "$rc" -eq 0 ] && ! grep -qE '^[EW]:' "$log"; then break; fi
     [ "$rc" -ne 0 ] || rc=100
-    if [ "$rc" -ne 124 ] || grep -qE '^[EW]:' "$log"; then network_error "$log" || break; fi
-    if { [ "$left_azure" = false ] && { [ "$rc" -eq 124 ] || grep -qiE 'Temporary failure resolving|Could not resolve' "$log"; }; } || [ "$n" -ge "$attempts" ]; then
+    if [ "$rc" -ne 124 ] || grep -qE '^[EW]:' "$log"; then network_error "$log" "$phase" || break; fi
+    if [ "$phase" = update ] && grep -qE '^[EW]: Failed to fetch (https://packages\.microsoft\.com/|.* 429([[:space:]]|$))' "$log"; then
+      strict=true
+    fi
+    if { [ "$strict" = false ] && [ "$left_azure" = false ] && { [ "$rc" -eq 124 ] || grep -qiE 'Temporary failure resolving|Could not resolve' "$log"; }; } || [ "$n" -ge "$max" ]; then
       network_failed=true; break
     fi
     wait=$((delay * 4 ** (n - 1)))
+    if [ "$phase" = update ]; then
+      wait=$((${PLAYWRIGHT_APT_RETRY_DELAY:-15} * 2 ** (n - 1)))
+      [ "$wait" -le 60 ] || wait=60
+    fi
     if [ "$update_deadline" -gt 0 ] && [ "$((SECONDS + wait))" -ge "$update_deadline" ]; then
       echo "::warning::apt update budget has no time for another backoff"
       rc=124; network_failed=true; break
     fi
-    echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt network failure (exit $rc, attempt $n of $attempts); retrying"
+    echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt network failure (exit $rc, attempt $n of $max); retrying"
     sleep "$wait"; n=$((n + 1))
   done
   rm -f "$log"
+  # A different Ubuntu mirror or cached debs cannot heal a throttled Microsoft index.
+  if [ "$strict" = true ] && [ "$rc" -ne 0 ]; then network_failed=false; fi
   return "$rc"
 }
 
@@ -150,12 +168,12 @@ if grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors"; then
   fi
 fi
 rc=0
-retry bounded apt-get update || rc=$?
+retry update bounded apt-get update || rc=$?
 if [ "$rc" -ne 0 ]; then
   if [ "$left_azure" = false ] && [ "$network_failed" = true ]; then
     echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::Azure apt-get update failed or exceeded $limit; switching to https://archive.ubuntu.com"
     leave_azure
-    rc=0; retry bounded apt-get update || rc=$?
+    rc=0; retry update bounded apt-get update || rc=$?
   fi
   if [ "$rc" -ne 0 ]; then
     if [ "$cache_hit" = true ] && [ "$network_failed" = true ]; then
@@ -177,7 +195,7 @@ rc=0
 if [ "$force" = true ]; then
   echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: taking the Azure mirror off apt's list before downloading anything; nothing timed out"
 else
-  retry bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
+  retry download bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
 fi
 if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = true ]; }; then
   if [ "$rc" -eq 124 ]; then
@@ -188,7 +206,7 @@ if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = t
   leave_azure
   if [ "$force" = true ]; then
     got=$(mktemp)
-    retry bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" | tee "$got"
+    retry download bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" | tee "$got"
     if grep -q '^Get:.*azure\.archive\.ubuntu\.com' "$got"; then
       echo "::error::apt still fetched packages from azure.archive.ubuntu.com after it was taken off $mirrors"; exit 1
     fi
@@ -201,7 +219,7 @@ if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = t
       echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: nothing was downloaded from https://archive.ubuntu.com, so this leg proves nothing about the fallback"
     fi
   else
-    retry bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || fail download "$?"
+    retry download bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || fail download "$?"
   fi
 elif [ "$rc" -ne 0 ]; then
   fail download "$rc"
