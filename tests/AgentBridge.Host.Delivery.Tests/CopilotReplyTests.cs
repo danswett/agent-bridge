@@ -82,6 +82,92 @@ public sealed class CopilotReplyTests : IDisposable
         Assert.False(input.Read().Asking);
     }
 
+    [Theory]
+    [InlineData(false, false, 0)]
+    [InlineData(false, true, 0)]
+    [InlineData(true, false, 0)]
+    [InlineData(true, true, 0)]
+    [InlineData(false, false, 32)]
+    [InlineData(false, true, 32)]
+    [InlineData(true, false, 32)]
+    [InlineData(true, true, 32)]
+    public void A_replaced_input_transcript_drops_cached_questions_permissions_and_resumed_prompts(bool resumed, bool permission, int extra)
+    {
+        Fixture.Append(events, permission
+            ? Copilot.Event("permission.requested", new { requestId = "r1" }, 1)
+            : Ask("q1", 1));
+        if (resumed) { Fixture.Append(events, Copilot.Event("session.resume", new { }, 2)); }
+        var input = new CopilotInput(events);
+        var before = input.Read();
+        Assert.Equal((true, true, resumed), (before.Readable, before.Asking, before.Resumed));
+
+        var idle = Copilot.Event("session.start", new { }, 3);
+        File.WriteAllText(events, idle.PadRight(checked((int)before.ScannedTo) + extra - 1) + "\n");
+        Assert.Equal(before.ScannedTo + extra, new FileInfo(events).Length);
+
+        var again = input.Read();
+        Assert.Equal((true, false, false, new FileInfo(events).Length),
+            (again.Readable, again.Asking, again.Resumed, again.ScannedTo));
+        Assert.Equal(before.ScannedTo + again.ScannedTo, input.BytesRead);
+        Assert.Equal(again, input.Read());
+        Assert.Equal(before.ScannedTo + again.ScannedTo, input.BytesRead);
+    }
+
+    [Fact]
+    public void An_equal_length_input_transcript_replacement_is_rescanned_for_new_questions()
+    {
+        var question = Ask("q1", 1);
+        File.WriteAllText(events, Copilot.Event("session.start", new { }, 1).PadRight(question.Length) + "\n");
+        var input = new CopilotInput(events);
+        Assert.False(input.Read().Asking);
+        var length = new FileInfo(events).Length;
+
+        File.WriteAllText(events, question + "\n");
+        Assert.Equal(length, new FileInfo(events).Length);
+
+        var again = input.Read();
+        Assert.Equal((true, true, length), (again.Readable, again.Asking, again.ScannedTo));
+        Assert.Equal(2 * length, input.BytesRead);
+    }
+
+    [Fact]
+    public void A_byte_identical_input_transcript_moved_into_place_is_rescanned_and_keeps_working()
+    {
+        Fixture.Append(events, Ask("q1", 1));
+        var input = new CopilotInput(events);
+        var before = input.Read();
+        Assert.True(before.Asking);
+
+        File.Copy(events, events + ".new");
+        File.Move(events + ".new", events, overwrite: true);
+
+        Assert.Equal(before, input.Read());
+        Assert.Equal(2 * before.ScannedTo, input.BytesRead);
+        Fixture.Append(events, Copilot.ToolDone("q1", 2));
+        var completed = input.Read();
+        Assert.Equal((true, false, new FileInfo(events).Length),
+            (completed.Readable, completed.Asking, completed.ScannedTo));
+        Assert.Equal(before.ScannedTo + completed.ScannedTo, input.BytesRead);
+    }
+
+    [Fact]
+    public void An_append_to_an_input_transcript_keeps_pending_prompts_without_rescanning()
+    {
+        Fixture.Append(events, Ask("q1", 1));
+        var input = new CopilotInput(events);
+        Assert.True(input.Read().Asking);
+
+        Fixture.Append(events, Copilot.Assistant("still working", 2));
+        Assert.True(input.Read().Asking);
+        Assert.Equal(new FileInfo(events).Length, input.BytesRead);
+
+        Fixture.Append(events, Copilot.ToolDone("q1", 3));
+        var completed = input.Read();
+        Assert.Equal((true, false, new FileInfo(events).Length),
+            (completed.Readable, completed.Asking, completed.ScannedTo));
+        Assert.Equal(completed.ScannedTo, input.BytesRead);
+    }
+
     [Fact]
     public void What_a_killed_cli_left_asking_keeps_a_reply_out_after_a_new_cli_resumes_until_something_settles_it_but_is_no_longer_answerable()
     {
