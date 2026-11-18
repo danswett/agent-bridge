@@ -64,11 +64,34 @@ namespace AgentBridge.App
             Assert.False(pinEnd);
         }
 
+        [Theory]
+        [InlineData(true, false, false, 0)]
+        [InlineData(false, true, false, 1)]
+        [InlineData(false, true, false, 4)]
+        [InlineData(false, false, true, 4)]
+        public void Changed_or_truncated_live_context_cancels_geometry_instead_of_waiting_or_using_shifted_indices(bool advanced, bool truncated, bool wasTruncated, int count)
+        {
+            Card.Session = Card.Session with { Activity = Card.Session.Activity with { ResponseTruncated = wasTruncated } };
+            SaveReading();
+            Card.Session = Card.Session with { Activity = Card.Session.Activity with { Turn = advanced ? "new-prompt" : Card.LiveTurn, ResponseTruncated = truncated } };
+            blocks.Clear();
+            blocks.AddRange(Enumerable.Range(0, count).Select(_ => new object()));
+            RecoverReading();
+            RestoreReading();
+            Assert.Null(restoreReading);
+            Assert.Null(anchor);
+            Assert.True(pinEnd);
+            Assert.Equal(420, ConversationScroll.VerticalOffset);
+            SaveReading();
+            Assert.Null(Recovery!.Current!.Position!.Block);
+        }
+
         sealed class CardFixture
         {
             public RowFixture Row { get; } = new("local\nsession");
             public Session Session = Make.Session("session") with { Activity = new() { Turn = "turn-before-crash", ResponseTurn = "turn-before-crash" } };
             public string? LiveTurn => Session.Activity.Turn;
+            public bool ResponseTruncated => Session.Activity.ResponseTruncated == true;
         }
         sealed record RowFixture(string Key);
         sealed class HistoryFixture

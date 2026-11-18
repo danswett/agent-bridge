@@ -91,6 +91,31 @@ public sealed class SessionRecoveryTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Remote_recovery_waits_for_its_snapshot_unless_a_person_reopens_the_local_card(bool reopen, bool reading)
+    {
+        var saved = new SessionReading("peer-id\nremote", new(90, false));
+        var store = new SessionRecovery(null, log.Add);
+        store.Remember(saved);
+        await using var local = Connection();
+        await using var remote = Connection();
+        var main = CreateMain(local, store);
+        if (reopen) { Snapshot(local, "local"); if (reading) { store.Remember(new("local\nlocal", new(123, false))); } main.Open("local"); }
+        main.Add(new Machine("peer-id", remote, Context(remote)));
+        remote.Sessions.BeginSnapshot();
+        remote.Sessions.Upsert(Make.Session("remote"));
+        local.Sessions.BeginSnapshot();
+        if (reopen) { local.Sessions.Upsert(Make.Session("local")); }
+        local.Sessions.EndSnapshot();
+        if (!reopen) { Assert.Null(main.Selected); Assert.Equal(saved, store.Current); }
+        remote.Sessions.EndSnapshot();
+        Assert.Equal(reopen ? "local" : "remote", main.Selected?.Id);
+        Assert.Equal(reopen ? new SessionReading("local\nlocal", reading ? new(123, false) : null) : saved, store.Current);
+    }
+
+    [Theory]
     [InlineData("{")]
     [InlineData("{}")]
     [InlineData("{\"Key\":null}")]
