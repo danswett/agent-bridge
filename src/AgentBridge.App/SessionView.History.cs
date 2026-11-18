@@ -34,7 +34,7 @@ public sealed partial class SessionView
     {
         UnwatchHistory();
         history = Card?.Stored;
-        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; openPrompts.Clear(); historyVisible = 1; }
+        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; navigationPending = false; openPrompts.Clear(); historyVisible = 1; }
         if (history is null) { ShowHistory(); return; }
         history.Changed += OnHistoryChanged;
         ShowHistory();
@@ -127,7 +127,7 @@ public sealed partial class SessionView
 
     void DrawEarlier()
     {
-        if (!IsLoaded || scrollbarPointers.Count > 0 || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
+        if (!IsLoaded || navigationPending || scrollbarPointers.Count > 0 || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
         var turns = history?.Turns ?? [];
         var first = historyShown.FirstOrDefault();
         var end = first is null ? turns.Count - 1 : 0;
@@ -185,10 +185,11 @@ public sealed partial class SessionView
     // Skipped if another session was opened, or the person took the view, meanwhile.
     void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null, double? earlierExtent = null)
     {
+        if (navigationPending || scrollbarPointers.Count > 0) { return; }
         var (session, releases) = (shownHistory, pinReleases);
         void Restore()
         {
-            if (session != shownHistory || releases != pinReleases || scrollbarPointers.Count > 0 || ConversationScroll is not { } scroll) { return; }
+            if (session != shownHistory || releases != pinReleases || scrollbarPointers.Count > 0 || follow.Held && (atEnd || pinEnd) || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset + (earlierExtent is { } extent ? scroll.ScrollableHeight - extent : 0), scroll.ScrollableHeight);
             if (!atEnd && !pinEnd && reading is { } kept)

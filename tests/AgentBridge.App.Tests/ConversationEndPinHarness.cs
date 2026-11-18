@@ -123,6 +123,6 @@ namespace AgentBridge.App
         public Core.ConversationFollow FollowState => follow;
         public void Follow() => FollowPinnedEnd();
         public void Scrolling(double? correction = null) { scrolling = true; anchoring = correction; }
-        public void StopScrolling() => scrolling = false;
+        public void StopScrolling() { scrolling = false; navigationPending = false; }
     }
 }

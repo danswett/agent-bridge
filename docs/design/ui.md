@@ -1715,12 +1715,15 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   implemented or declared complete by C1; these rules supersede the older H3 wording for C2.
   It opens at the end, on the latest reply, and stays there as replies arrive until the person
   scrolls; once they scroll, a new reply never moves the view (#1635, #1646).
-  A question brought into view or a block requested by a screen reader releases the Windows
-  end pin too: later layout must not scroll that destination away.
+  An out-of-view question or block requested by a screen reader releases the Windows end pin
+  too: later layout must not scroll that destination away, even before navigation first moves.
   A held scrollbar owns the view from its press until release or cancellation, before its
   first movement as well as during the drag; history arriving meanwhile cannot restore the pin.
-  Reasoning, tool lines, delegate events and questions are still to come. The Windows app loads earlier turns a page
-  at a time through "Load earlier messages" or scrolling upward within a screen of the top
+  End-following also waits while a finger is down or the pointer is over or pressed in the
+  conversation, then follows the latest measured end when the last hold ends, if still pinned.
+  Reasoning, tool lines, delegate events and questions are still to come. The Windows app loads
+  earlier turns a page at a time through "Load earlier messages" or scrolling upward within
+  a screen of the top
   (#1593 W2b-1). Both use the history client's cursor and deduplication; the first visible
   stored turn keeps its screen position as a page is inserted above it. With history, a
   session's whole conversation is the one
