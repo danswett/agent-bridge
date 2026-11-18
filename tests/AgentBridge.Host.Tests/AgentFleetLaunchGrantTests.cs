@@ -6,6 +6,7 @@ using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
+using Admission = System.Func<AgentBridge.Protocol.LaunchRequest, string, System.Func<System.Func<string?>, System.Threading.Tasks.Task<AgentBridge.Protocol.LaunchResult>>, System.Threading.Tasks.Task<AgentBridge.Protocol.LaunchResult>>;
 
 public sealed class AgentFleetLaunchGrantTests : IAsyncLifetime
 {
@@ -19,6 +20,7 @@ public sealed class AgentFleetLaunchGrantTests : IAsyncLifetime
     readonly LaunchProbe launcher = new();
     bool agentConnection;
     bool scriptConnection;
+    Admission? caps;
     LocalServer server = null!;
     Func<IProtocolChannel, string, JsonElement, Task<object?>> handler = null!;
 
@@ -52,7 +54,7 @@ public sealed class AgentFleetLaunchGrantTests : IAsyncLifetime
             Restart = () => throw new NotSupportedException(),
         });
         handler = LocalApi.Handler(new SessionService(null!, new("machine", "Fixture", "windows", "0.1.0"),
-            launcher: launcher), control, callers, credentials: credentials, audit: new AgentAuditLog(folder, time));
+            launcher: launcher) { FleetLaunchAdmission = caps }, control, callers, credentials: credentials, audit: new AgentAuditLog(folder, time));
     }
 
     public async Task DisposeAsync()
@@ -310,15 +312,48 @@ public sealed class AgentFleetLaunchGrantTests : IAsyncLifetime
         Assert.Equal(0, launcher.Reads);
     }
 
+    [Fact]
+    public async Task Granted_launches_reach_the_hourly_cap_through_the_real_pipe_and_audit()
+    {
+        await Call(Issue());
+        ConfigureFleet();
+        caps = FleetLaunchCaps.Create(folder, new AgentAuditLog(folder, time),
+            () => new(time.GetUtcNow(), new(1, null, null, RunQueue: 7),
+                new Dictionary<string, AgentBridge.Host.Core.Load.SessionLoad>()), _ => false, time);
+        RestartControl();
+        for (var i = 0; i < 8; i++)
+        { Assert.Equal("started", (await Call(Launch(), LaunchProtocol.Launch)).GetProperty("outcome").GetString()); }
+        RestartControl();
+        var refused = await Call(Launch(), LaunchProtocol.Launch);
+        Assert.Contains("hourly-limit", refused.GetProperty("reason").GetString());
+        Assert.Equal(8, launcher.Starts);
+        var config = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(folder, HostSettings.FileName)))!;
+        config["agents"]!["enabled"] = false;
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), config.ToJsonString());
+        var disabled = await Assert.ThrowsAsync<HostErrorException>(() => Call(Launch(), LaunchProtocol.Launch));
+        Assert.Contains("agents.enabled", disabled.Message);
+        Assert.Contains(Attempts(), row => row.GetProperty("reason").GetString()!.Contains("agents.enabled", StringComparison.Ordinal));
+    }
+
     sealed class LaunchProbe : ISessionLauncher
     {
         public int Reads { get; private set; }
+        public int Starts { get; private set; }
         public Action? BeforeConfig { get; set; }
         public LaunchConfig Config { get; set; } = new();
         public bool Available => true;
         public LaunchConfig FleetConfig { get { Reads++; BeforeConfig?.Invoke(); return Config; } }
         public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
+            CancellationToken cancellationToken = default)
+        {
+            if (prepare(Guid.NewGuid()) is not { } registered) { return Task.FromResult(new LaunchResult(LaunchOutcome.Refused)); }
+            var session = Guid.NewGuid().ToString("D");
+            registered(session);
+            Starts++;
+            return Task.FromResult(new LaunchResult(LaunchOutcome.Started) { Session = session });
+        }
     }
 
     sealed class Callers : ICallerGuard

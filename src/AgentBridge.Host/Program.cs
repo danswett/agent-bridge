@@ -739,8 +739,13 @@ async Task<int> ServeAsync(HostHandover handover)
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
         name: fleetNames.Get, log: Log, sign: fleetTrust.Sign);
     var loadService = new LoadService(source, () => load.Current, () => settings.LoadEnabled, Log);
+    var fleetAdmission = FleetLaunchCaps.Create(identity.Folder, agentAudit, () => load.Current,
+        session => source.Held is not null ? null : source.Get(session) is null ? false
+            : source.ProcessOf(session) is { } process && launcher.IsFleetWorker(session, process) ? true : null,
+        TimeProvider.System);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
+        FleetLaunchAdmission = fleetAdmission,
         LoadEnabled = () => settings.LoadEnabled,
         Load = loadService,
         Drivers = drivers,

@@ -65,13 +65,54 @@ public sealed class FleetLaunchCapsTests : IDisposable
     public async Task Six_live_fleet_sessions_refuse_the_next_and_unknown_pending_never_expires()
     {
         for (var i = 0; i < 6; i++) { Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome); }
+        alive = null;
+        time.Advance(TimeSpan.FromHours(1));
         Assert.Contains("live-limit", (await Launch()).Reason);
         Audited("live-limit");
         alive = false;
-        await Launch(dispatch: _ => Task.FromResult(new LaunchResult(LaunchOutcome.Unconfirmed)));
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await Launch(dispatch: _ => Task.FromResult(new LaunchResult(LaunchOutcome.Unconfirmed)))).Outcome);
         Configure(limits: "\"liveSessions\":1");
         time.Advance(TimeSpan.FromHours(2));
         Assert.Contains("live-limit", (await Launch()).Reason);
+    }
+
+    [Fact]
+    public async Task Owner_caps_and_a_queue_increase_are_checked_again_before_start()
+    {
+        Configure(limits: "\"launchesPerHour\":2");
+        alive = false;
+        Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
+        Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
+        Assert.Contains("hourly-limit", (await Launch()).Reason);
+        time.Advance(TimeSpan.FromHours(1));
+        var result = await Launch(dispatch: check =>
+        {
+            queue = 8;
+            return Task.FromResult(new LaunchResult(LaunchOutcome.Refused, check()));
+        });
+        Assert.Contains("run-queue", result.Reason);
+        Assert.Equal(2, starts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_crash_or_refusal_after_prestart_never_refunds_an_unknown_process(bool refused)
+    {
+        Configure(limits: "\"liveSessions\":1");
+        if (refused)
+        {
+            await Launch(dispatch: check =>
+            {
+                Assert.Null(check());
+                return Task.FromResult(new LaunchResult(LaunchOutcome.Refused));
+            });
+        }
+        else { await Assert.ThrowsAsync<InvalidOperationException>(() => Launch(dispatch: _ => throw new InvalidOperationException("fixture crash"))); }
+        time.Advance(TimeSpan.FromHours(2));
+        alive = false;
+        Assert.Contains("live-limit", (await Launch()).Reason);
+        Assert.Equal(0, starts);
     }
 
     [Theory]
