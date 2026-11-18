@@ -1659,6 +1659,31 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Single(injector.Plans);
     }
 
+    [Theory]
+    [InlineData("space")]
+    [InlineData("plain-space")]
+    [InlineData("shell")]
+    [InlineData("normal")]
+    [InlineData("non-main")]
+    public async Task SliceA_edited_raw_rows_or_unsafe_screens_permanently_end_cleanup(string state)
+    {
+        var reads = 0;
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write");
+        injector.Partial = (5, false);
+        injector.Sent = _ => injector.Screen = _ => ++reads > 1 && state is not ("space" or "plain-space") ? CopilotBox("agent") : state switch
+        {
+            "space" => CopilotBox(" agent"),
+            "plain-space" => ["\u2500\u2500\u2500\u2500", "\u276F  agent", "\u2500\u2500\u2500\u2500", " Interactive \u00B7 @ files"],
+            "shell" => CopilotBox("ls", shell: true),
+            "normal" => [.. CopilotBox("agent").Take(5), " -- NORMAL -- \u00B7 Interactive \u00B7 @ files"],
+            _ => [.. CopilotBox("agent"), "dialog"],
+        };
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Replier().ReplyAsync(new()
+            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        Assert.Single(injector.Plans);
+        Assert.Contains((await injector.ReadScreenAsync(100)).Rows!, row => row.Contains("agent", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task SliceA_expired_cleanup_never_leaves_authority_for_a_later_reply_to_erase_a_draft()
     {
