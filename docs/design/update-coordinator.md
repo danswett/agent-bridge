@@ -93,6 +93,18 @@ The SDK native icon directory is 1,358,076 bytes: the bounded resource envelope 
 16 MiB, matching C2's section ceiling; version nesting/block limits remain unchanged.
 Legacy `current` remains authoritative until D proves activation/migration.
 
+### F: owned updater observation, not blocking-holder discovery
+
+The early mode always wires a private persistent observation, capped at 64 KiB.
+The existing ten-minute apply-observation deadline publishes Unknown before the
+separate real-ownership drain; it never kills the updater or authorizes retry.
+Snapshots are flushed then atomically renamed, and late ownership errors replace
+the prior timeout with their step, typed error and timing. Oversized evidence
+becomes an explicit observation failure, not an unbounded record or success.
+Every record labels `ApplyProcessId` and `ApplyPath` as the **updater process**,
+never a blocking holder. Failed/Unknown diagnostics include those values and
+timing; only Completed can respawn. The Restart Manager blocker scan is unchanged.
+
 ## C/D: approved design basis, not activation proof
 
 Use immutable `root\slots\<release-identity>-<package-digest>` payloads. One validated

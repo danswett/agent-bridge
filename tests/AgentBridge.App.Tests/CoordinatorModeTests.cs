@@ -45,7 +45,7 @@ public sealed class CoordinatorModeTests : IDisposable
 
     Task<int> Run(string[]? args = null, Action<UpdateApplyResult>? report = null) =>
         CoordinatorMode.RunAsync(args ?? ["--coordinator-v1", stage.ManifestPath], stage.ImagePath,
-            HostwBundleTests.Target, Adapter, _ => Supported, report);
+            HostwBundleTests.Target, Adapter, _ => Supported, report, time);
 
     [Fact]
     public async Task Valid_mode_uses_real_custody_and_adapter_once_and_the_handoff_is_single_use()
@@ -114,8 +114,10 @@ public sealed class CoordinatorModeTests : IDisposable
         Assert.DoesNotContain("holder", diagnostic, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public async Task A_late_owned_updater_wait_error_replaces_the_durable_timeout_without_respawn()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_late_owned_updater_wait_error_replaces_the_durable_timeout_without_respawn(bool cancelled)
     {
         var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -128,12 +130,17 @@ public sealed class CoordinatorModeTests : IDisposable
             await observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(run.IsCompleted);
         }
-        finally { exited.TrySetException(new IOException("private wait detail")); }
+        finally
+        {
+            if (cancelled) exited.TrySetCanceled();
+            else exited.TrySetException(new IOException("private wait detail"));
+        }
         Assert.Equal(4, await run.WaitAsync(TimeSpan.FromSeconds(5)));
         using var snapshot = Observation();
         var result = snapshot.RootElement;
         Assert.Equal("ownership-drain", result.GetProperty("Step").GetString());
-        Assert.Equal(nameof(IOException), result.GetProperty("ErrorType").GetString());
+        Assert.Equal(cancelled ? nameof(TaskCanceledException) : nameof(IOException),
+            result.GetProperty("ErrorType").GetString());
         Assert.Equal(22, result.GetProperty("ApplyProcessId").GetInt32());
         Assert.DoesNotContain("private wait detail", result.GetRawText());
         Assert.Single(starts);
@@ -152,6 +159,16 @@ public sealed class CoordinatorModeTests : IDisposable
         Assert.Equal(nameof(InvalidDataException), snapshot.RootElement.GetProperty("ErrorType").GetString());
         Assert.InRange(new FileInfo(Path.Combine(stage.Directory, "coordinator-result.json")).Length, 1, 64 * 1024);
         Assert.Single(starts);
+    }
+
+    [Fact]
+    public async Task Observation_publication_does_not_replace_a_preexisting_foreign_result()
+    {
+        var path = Path.Combine(stage.Directory, "coordinator-result.json");
+        File.WriteAllText(path, "not this run's record");
+        Assert.Equal(4, await Run());
+        Assert.Equal("not this run's record", File.ReadAllText(path));
+        Assert.Empty(Directory.GetFiles(stage.Directory, "*.partial"));
     }
 
     [Theory]

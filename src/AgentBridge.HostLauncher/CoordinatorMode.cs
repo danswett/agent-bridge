@@ -19,7 +19,7 @@ internal static class CoordinatorMode
 
     internal static async Task<int> RunAsync(string[] args, string imagePath, string runtimeTarget,
         Func<UpdateCoordinatorRequest, UpdateCoordinatorAdapter> factory,
-        Func<Stream, string?>? metadata = null, Action<UpdateApplyResult>? report = null)
+        Func<Stream, string?>? metadata = null, Action<UpdateApplyResult>? report = null, TimeProvider? time = null)
     {
         var began = Stopwatch.GetTimestamp();
         var step = "arguments";
@@ -66,22 +66,9 @@ internal static class CoordinatorMode
             var resultPath = CoordinatorHandoff.Full(Path.Combine(directory, "coordinator-result.json"));
             using var claim = PrivateFolder.CreateNew(CoordinatorHandoff.Full(Path.Combine(directory, "coordinator.lock")));
             var adapter = factory(request);
-            UpdateApplyResult result;
-            try
-            {
-                step = "coordinator-run";
-                result = await adapter.RunAsync().ConfigureAwait(false);
-                var payload = JsonSerializer.SerializeToNode(result)!.AsObject();
-                payload["ApplyProcessId"] = adapter.ApplyProcessId;
-                payload["ApplyPath"] = Path.Combine(root, "Update.exe");
-                PrivateFolder.WriteNew(resultPath, JsonSerializer.SerializeToUtf8Bytes(payload));
-                report?.Invoke(result);
-            }
-            finally
-            {
-                step = "ownership-drain";
-                await adapter.Ownership.ConfigureAwait(false);
-            }
+            step = "coordinator-observation";
+            var result = await new CoordinatorObservation(resultPath, Path.Combine(root, "Update.exe"),
+                request.TargetVersion, time).RunAsync(adapter, report).ConfigureAwait(false);
             return result.End == UpdateApplyEnd.Completed ? 0 : 4;
         }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException
