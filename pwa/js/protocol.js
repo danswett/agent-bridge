@@ -8,7 +8,7 @@
 
 import { readAttention, readMachineSignIn } from './auth-state.js';
 import { marksExact } from './escaped.js';
-import { fieldAnswerReason, resultAnswerReason } from './answers.js';
+import { fieldAnswerReason, resultAnswerReason, INVISIBLE } from './answers.js';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -74,6 +74,8 @@ export const readStopOutcome = tolerant(StopOutcomes, 'failed');
 
 // Absent and null mean the same thing, so anything of the wrong type is treated as absent.
 const str = (v) => (typeof v === 'string' ? v : null);
+const displayTitle = (v) => (typeof v === 'string' && [...v].length <= 120 && [...v].some((c) => !INVISIBLE.test(c))
+  && [...v].every((c) => c === ' ' || !INVISIBLE.test(c)) ? v : null);
 const optionId = (v) => (typeof v === 'string' && v.length > 0 && v.length <= 64 ? v : null);
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const obj = (v) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? v : null);
@@ -296,6 +298,7 @@ export function readSession(raw) {
     id: s.id,
     agent: readAgent(s.agent),
     title: str(s.title),
+    displayTitle: displayTitle(s.displayTitle),
     cwd: str(s.cwd),
     repository: str(s.repository),
     branch: str(s.branch),

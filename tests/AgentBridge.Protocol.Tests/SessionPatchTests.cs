@@ -32,6 +32,52 @@ public class SessionPatchTests
     // As a client receives it: the patch on the wire, read as a host record is.
     static SessionPatch Wire(SessionPatch patch) => Received.Read<SessionPatch>(JsonSerializer.SerializeToElement(patch, ProtocolJson.Options));
 
+    [Theory]
+    [InlineData("\"A title\"", "A title")]
+    [InlineData("\"\\u65e5\\u672c\\u8a9e\"", "\u65e5\u672c\u8a9e")]
+    [InlineData("null", null)]
+    [InlineData("7", null)]
+    [InlineData("\"bad\\nname\"", null)]
+    [InlineData("\"bad\\u200bname\"", null)]
+    public void Display_titles_are_optional_plain_text_not_the_agents_title(string json, string? expected)
+    {
+        var wire = SessionPatches.Json(Base());
+        wire["displayTitle"] = JsonNode.Parse(json);
+        var read = JsonSerializer.SerializeToElement(Received.Read<Session>(JsonSerializer.SerializeToElement(wire)), ProtocolJson.Options);
+        Assert.Equal(expected, read.TryGetProperty("displayTitle", out var title) ? title.GetString() : null);
+        Assert.Equal("Patches", read.GetProperty("title").GetString());
+    }
+
+    [Theory]
+    [InlineData(120)]
+    [InlineData(121)]
+    public void Display_title_reading_enforces_the_length_without_dropping_the_session(int length)
+    {
+        var wire = SessionPatches.Json(Base());
+        wire["displayTitle"] = new string('x', length);
+        var read = JsonSerializer.SerializeToElement(Received.Read<Session>(JsonSerializer.SerializeToElement(wire)), ProtocolJson.Options);
+        Assert.Equal(length == 120 ? new string('x', length) : null,
+            read.TryGetProperty("displayTitle", out var title) ? title.GetString() : null);
+        Assert.Equal(Base().Id, read.GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public void A_patch_sets_and_clears_the_display_title_without_changing_the_agents_title()
+    {
+        var original = SessionPatches.Json(Base());
+        var named = (JsonObject)original.DeepClone();
+        named["displayTitle"] = "Shared title";
+        var set = SessionPatches.Diff(original, 41, named)!;
+        var applied = SessionPatches.Apply(original, 41, Wire(set));
+        var read = JsonSerializer.SerializeToElement(Received.Read<Session>(JsonSerializer.SerializeToElement(applied)), ProtocolJson.Options);
+        Assert.Equal("Shared title", read.GetProperty("displayTitle").GetString());
+        var clear = SessionPatches.Diff(named, 42, original)!;
+        Assert.Equal(JsonValueKind.Null, clear.Set!.Value.GetProperty("displayTitle").ValueKind);
+        var cleared = SessionPatches.Apply(applied, 42, Wire(clear));
+        Assert.Equal(Read(original), Read(cleared));
+        Assert.Equal("Patches", cleared["title"]!.GetValue<string>());
+    }
+
     [Fact]
     public void A_patch_to_a_subscriber_that_asked_for_handles_names_the_session_by_its_handle_and_carries_no_id()
     {
