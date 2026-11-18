@@ -53,7 +53,8 @@ for (const width of [390, 900, 1440]) {
     await expect(header.getByRole('button', { name: 'Details', exact: true })).toHaveCount(width === 900 ? 1 : 0);
     await expect(header.getByRole('button', { name: /^(Hide|Show) inspector$/ })).toHaveCount(width === 1440 ? 1 : 0);
     if (width === 1440) {
-      const toggle = header.getByRole('button', { name: 'Hide inspector', exact: true });
+      const toggle = header.locator('.inspector-button');
+      await expect(toggle).toHaveAccessibleName('Hide inspector');
       await toggle.click();
       await expect(toggle).toHaveAccessibleName('Show inspector');
       await expect(v.locator('.inspector')).toBeHidden();
@@ -75,7 +76,7 @@ for (const width of [390, 900, 1440]) {
 
 for (const state of ['shown', 'hidden']) {
   test(`pane controls: focus follows the replacement across 1280 without changing the ${state} preference`, async ({ page }) => {
-    await page.addInitScript((value) => localStorage.setItem('agent-bridge.app.inspector', value), state);
+    await page.addInitScript((value) => localStorage.setItem('demo:agent-bridge.app.inspector', value), state);
     await page.setViewportSize({ width: 900, height: 900 });
     await openDemo(page);
     const v = await open(page, CLAUDE);
@@ -87,7 +88,7 @@ for (const state of ['shown', 'hidden']) {
       await expect(width >= 1280 ? inspector : details).toBeFocused();
       await expect(width >= 1280 ? details : inspector).toBeHidden();
       if (width >= 1280) { await expect(inspector).toHaveAccessibleName(state === 'shown' ? 'Hide inspector' : 'Show inspector'); }
-      expect(await page.evaluate(() => localStorage.getItem('agent-bridge.app.inspector'))).toBe(state);
+      expect(await page.evaluate(() => localStorage.getItem('demo:agent-bridge.app.inspector'))).toBe(state);
       await expect(v.locator('.inspector')).toBeVisible({ visible: width >= 1280 && state === 'shown' });
     }
     await details.focus();
@@ -95,6 +96,10 @@ for (const state of ['shown', 'hidden']) {
     await expect(details).not.toBeFocused();
     await resize(page, 1440, 900);
     await expect(inspector).not.toBeFocused();
+    await inspector.focus();
+    await resize(page, 390, 900);
+    await resize(page, 900, 900);
+    await expect(details).not.toBeFocused();
   });
 }
 
@@ -977,7 +982,7 @@ test.describe('the session pane after #221\'s review', () => {
     await expect(row(page, 'demo-delegates').locator('.row-age')).toHaveText('just now');
   });
 
-  for (const [width, how] of [[1440, 'the inspector'], [900, 'the Details button'], [390, 'the More menu']]) {
+  for (const [width, how] of [[900, 'the Details button'], [390, 'the More menu']]) {
     test(`Details opened from ${how} at ${width} px puts focus on its heading, never in the question`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await openDemo(page);

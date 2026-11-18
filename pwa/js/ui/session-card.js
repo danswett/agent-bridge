@@ -495,6 +495,7 @@ export class SessionCard {
   #delegate = null;
   // Whether the inspector was a pane of its own at the last layout.
   #wasInspector = false;
+  #paneControlFocus = null;
   // A prompt the person didn't type (#489): remember a schedule's repeats and the disclosure state.
   #prompts = new PromptMemory();
   #promptOpen = false;
@@ -562,6 +563,13 @@ export class SessionCard {
     e.pin = h('button', { type: 'button', class: 'icon-button pin', 'aria-pressed': 'false', 'aria-label': 'Pin', title: 'Pin', onclick: () => this.onPin(this, !this.#pinned) }, designIcon('pin', { cls: 'ab-icon-20' }));
     e.detailsButton = h('button', { type: 'button', class: 'icon-button details-button', 'aria-pressed': 'false', 'aria-controls': this.ids.details, 'aria-label': 'Details', title: 'Details', onclick: () => this.showDetails() }, designIcon('inspector', { cls: 'ab-icon-20' }));
     e.inspectorButton = h('button', { type: 'button', class: 'icon-button inspector-button', 'aria-label': 'Hide inspector', title: 'Hide inspector', onclick: () => this.onInspector?.() }, designIcon('sidebar', { cls: 'ab-icon-20' }));
+    for (const button of [e.detailsButton, e.inspectorButton]) {
+      button.addEventListener('focus', () => { this.#paneControlFocus = button; });
+      button.addEventListener('blur', (event) => {
+        // Chromium clears activeElement before the media change when CSS hides a control.
+        if (event.relatedTarget || button.getClientRects().length) { this.#paneControlFocus = null; }
+      });
+    }
     e.more = h('button', { type: 'button', class: 'icon-button more', 'aria-haspopup': 'menu', 'aria-label': 'More', title: 'More', onclick: () => this.#openMore() }, designIcon('more', { cls: 'ab-icon-20' }));
     e.actions = h('div', { class: 'header-actions' }, e.pin, e.detailsButton, e.inspectorButton);
     e.header = h('header', { class: 'session-header' }, h('div', { class: 'header-main' }, e.titleText, e.statusLine), e.actions);
@@ -1396,7 +1404,12 @@ export class SessionCard {
 
   // The inspector became a pane of its own, or stopped being one.
   layoutChanged() {
-    const { inspector } = this.layout();
+    const { inspector, wide } = this.layout();
+    const { detailsButton, inspectorButton } = this.els;
+    const outgoing = wide ? detailsButton : inspectorButton;
+    const incoming = wide ? inspectorButton : detailsButton;
+    const doc = outgoing.ownerDocument;
+    const focused = doc.activeElement === outgoing || (this.#paneControlFocus === outgoing && doc.activeElement === doc.body);
     // A delegate shown in the inspector stays shown as the window narrows: pushed in the Delegates
     // tab. Only then: a tab chosen at a narrower width is left as it was.
     if (this.#delegate && this.#wasInspector && !inspector && !this.layout().wide && this.#tab !== 'delegates') { this.setTab('delegates'); }
@@ -1404,6 +1417,10 @@ export class SessionCard {
     this.#linkDelegatesTab();
     this.els.inspectorButton.setAttribute('aria-label', inspector ? 'Hide inspector' : 'Show inspector');
     this.els.inspectorButton.title = this.els.inspectorButton.getAttribute('aria-label');
+    if (focused) {
+      this.#paneControlFocus = null;
+      if (incoming.getClientRects().length) { incoming.focus({ preventScroll: true }); }
+    }
     this.#revealTools();
     this.detail.shown();
   }

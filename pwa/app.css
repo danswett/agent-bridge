@@ -351,6 +351,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   .session-header .inspector-button { display: none; }
 }
 @media (min-width: 1280px) {
+  .session-header .details-button { display: none; }
   .session-header .inspector-button { display: inline-grid; }
   body[data-inspector="shown"] .view-tabs { display: none; }
   body[data-inspector="shown"] .view-body { grid-template-columns: minmax(0, 1fr) var(--inspector-w); }

@@ -19,6 +19,10 @@ The Sessions header's New session action is a filled plus-only button at every w
 pointer. Its accessible name and tooltip remain "New session"; removing the visible
 label leaves room for the sort menu in the iPad's wide layout.
 
+Each session header shows only its width's pane control: Details at 760-1279 px,
+Hide inspector / Show inspector from 1280 px, and Details in More below 760 px.
+Focus follows the replacement at 1280 px; the saved inspector preference is unchanged.
+
 It shows sessions, their activity and their pending questions, answers those questions
 (`session.answer`), replies to sessions (`session.reply`) with files and images
 (`attachment.*`), ends them (`session.stop`), starts and resumes them (`session.launch`),

@@ -1046,9 +1046,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Title:** the session name.
 - **One meta line:** glyph · status text (rule set §2.2) · machine · repo. A phone's is
   shorter (below).
-- **Actions:** icon buttons with tooltips: Pin, Details (everything removed from rows),
-  and toggle inspector. End session lives in Details on desktop, and in the overflow menu
-  on phones.
+- **Actions:** icon buttons with tooltips: Pin and one pane control. In the PWA, from
+  1280 px only the inspector toggle ("Hide inspector" or "Show inspector") shows; from
+  760 through 1279 px only Details shows. Focus follows the replacing control across
+  1280 px without changing the saved inspector preference. End session lives in Details
+  on desktop, and in the overflow menu on phones.
 - **Phone:** Back (to the list) leads the header, and Pin, Details and End session are in its
   overflow menu.
 - **Phone: at rest (#620; the owner, 2026-11-05).** The title, one meta line and the tabs: 152

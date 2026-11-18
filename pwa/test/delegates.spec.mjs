@@ -925,16 +925,20 @@ test.describe('at three panes', () => {
     await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-suite');
   });
 
-  test('Details from the header at three panes lets the open delegate go, and shows the session\'s Details, focused', async ({ page }) => {
+  test('Details from the header after narrowing shows the session\'s Details, and the delegate stays in its tab', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
     await c.locator('.strip-item[data-id="demo-agent-suite"]').click();
     await expect(pane(page)).toBeVisible();
+    await page.setViewportSize({ width: 900, height: 900 });
+    await expect(c.getByRole('tab', { name: 'Delegates' })).toBeVisible();
     await c.locator('.session-header .details-button').click();
-    await expect(pane(page)).toHaveCount(0);
+    await expect(pane(page)).toBeHidden();
     await expect(c.locator('.details .section-head')).toBeVisible();
     await expect(c.locator('.details .section-head')).toBeFocused();
-    await expect(c.locator('.strip-item[data-id="demo-agent-suite"]')).toHaveAttribute('aria-pressed', 'false');
+    await c.getByRole('tab', { name: 'Delegates' }).click();
+    await expect(pane(page)).toBeVisible();
+    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-suite');
   });
 
   test('a delegate that names itself its parent, from a broken host, is under nobody in its inspector', async ({ page }) => {

@@ -100,8 +100,10 @@ for (const width of [1440, 1920]) {
     expect(tools.right - tools.left).toBeCloseTo(column.right - column.left, 1);
     await sameEdges(view.locator('.session-header'), tools, true);
     await sameEdges(view.locator('.view-tabs'), tools, true);
+    await page.setViewportSize({ width: 900, height: 900 });
     await view.locator('.details-button').click();
     await expect(view.locator('.details')).toBeVisible();
+    await page.setViewportSize({ width, height: 900 });
     await motionsDone(page);
     const details = await edges(view.locator('.details'));
     expect(details.right - details.left).toBeCloseTo(column.right - column.left, 1);
