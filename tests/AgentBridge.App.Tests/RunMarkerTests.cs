@@ -233,6 +233,28 @@ public sealed class RunMarkerTests : IDisposable
     static void Crash() => throw new InvalidOperationException("private conversation");
 
     [Fact]
+    public void Crash_descriptions_include_nested_and_aggregate_inner_types_and_frames_without_private_text()
+    {
+        var inner = Assert.Throws<ArgumentException>((Action)InnerCrash);
+        var error = new System.Reflection.TargetInvocationException("private wrapper",
+            new AggregateException("private aggregate", inner, new IOException("private IO message")));
+        var marker = Start("1");
+        marker.RecordCrash(error);
+        marker.Dispose();
+        var description = Assert.IsType<string>(RunMarker.ReadPrevious(folder).Crash);
+        Assert.Contains(nameof(System.Reflection.TargetInvocationException), description);
+        Assert.Contains(nameof(AggregateException), description);
+        Assert.Contains(nameof(ArgumentException), description);
+        Assert.Contains(nameof(IOException), description);
+        Assert.Contains("RunMarkerTests.InnerCrash", description);
+        Assert.DoesNotContain("private", description);
+        Assert.DoesNotContain("RunMarkerTests.cs", description);
+        Assert.Equal(RunMarker.DescribeCrash(error), description);
+    }
+
+    static void InnerCrash() => throw new ArgumentException("private inner conversation");
+
+    [Fact]
     public void A_late_watchdog_callback_does_not_recreate_a_completed_marker()
     {
         var marker = Start("1");
