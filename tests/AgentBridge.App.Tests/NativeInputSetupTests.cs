@@ -4,6 +4,82 @@ namespace AgentBridge.App.Tests;
 
 public sealed class NativeInputSetupTests
 {
+    [Fact]
+    public async Task Focus_restoration_holds_bring_into_view_below_the_scroller_only()
+    {
+        var root = new BringIntoViewNode(null);
+        var scroller = new BringIntoViewNode(root, isScroller: true);
+        var focused = new BringIntoViewNode(scroller);
+        var restored = await NativeInputSetup.RestoreFocus(focused,
+            (element, hold) => element.Held = hold,
+            async () =>
+            {
+                await Task.Yield();
+                Assert.False(root.Request());
+                Assert.True(focused.Request());
+                return true;
+            });
+        Assert.True(restored);
+        Assert.Equal(0, scroller.Scrolls);
+        Assert.False(focused.Held);
+        Assert.False(focused.Request());
+        Assert.Equal(1, scroller.Scrolls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Focus_restoration_releases_its_handler_after_refusal_or_failure(bool throws)
+    {
+        var focused = new BringIntoViewNode(null);
+        var error = await Record.ExceptionAsync(async () =>
+        {
+            Assert.False(await NativeInputSetup.RestoreFocus(focused,
+                (element, hold) => element.Held = hold,
+                async () =>
+                {
+                    await Task.Yield();
+                    Assert.True(focused.Held);
+                    if (throws) { throw new InvalidOperationException("focus failed"); }
+                    return false;
+                }));
+        });
+        Assert.False(focused.Held);
+        if (throws) { Assert.IsType<InvalidOperationException>(error); }
+        else { Assert.Null(error); }
+    }
+
+    [Theory]
+    [InlineData("SendInput")]
+    [InlineData("PostMessage")]
+    public void Key_press_diagnostics_keep_the_target_sampled_before_the_press(string method)
+    {
+        var before = new object();
+        var after = new object();
+        var target = before;
+        var sent = NativeInputSetup.PressWithTarget(() => target, () =>
+        {
+            target = after;
+            return method;
+        });
+        Assert.Same(before, sent.Target);
+        Assert.Same(after, target);
+        Assert.Equal(method, sent.Method);
+    }
+
+    sealed class BringIntoViewNode(BringIntoViewNode? parent, bool isScroller = false)
+    {
+        public bool Held { get; set; }
+        public int Scrolls { get; private set; }
+
+        public bool Request()
+        {
+            if (Held) { return true; }
+            if (isScroller) { Scrolls++; }
+            return parent?.Request() ?? false;
+        }
+    }
+
     [Theory]
     [InlineData(true, false, "2026-11-20T07:59:59Z", true)]
     [InlineData(true, true, "2026-11-20T07:59:59Z", false)]
