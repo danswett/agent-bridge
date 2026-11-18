@@ -158,7 +158,16 @@ public sealed class RelayReplyAckTests
                     using var saved = JsonDocument.Parse(File.ReadAllText(path));
                     var entries = saved.RootElement.GetProperty("Messages").EnumerateArray().Where(m => m.GetProperty("Rid").GetString() == Guid.Parse(rid).ToString("N")).ToArray();
                     if (refusal == "retired") { Assert.Empty(entries); }
-                    else { Assert.True(Assert.Single(entries).GetProperty("CapacityRefused").GetBoolean()); Assert.Equal("", entries[0].GetProperty("Payload").GetString()); }
+                    else
+                    {
+                        Assert.True(Assert.Single(entries).GetProperty("CapacityRefused").GetBoolean());
+                        Assert.Equal("", entries[0].GetProperty("Payload").GetString());
+                        var available = JsonNode.Parse(File.ReadAllText(path))!;
+                        available["Messages"]![0]!["Outcome"] = "delivered";
+                        File.WriteAllText(path, available.ToJsonString());
+                        Receipt((await channel.RequestAsync(lite ? LiteReceiver.Op : Ops.SessionReply, request)).GetProperty("result"), "present");
+                        Assert.Equal(1, terminal.Calls);
+                    }
                 }
             }
             Assert.False(channel.Events.TryRead(out _));

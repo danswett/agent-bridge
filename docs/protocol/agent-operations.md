@@ -28,8 +28,15 @@ The receipt contains only the request ID, never reply text. Repeating a retained
 request ID returns its receipt without dispatching the reply a second time.
 An append failure emits no receipt. Setting the switch to `false` preserves the
 legacy direct path and omits the field. Older readers ignore this additive field.
+Capacity refusals and retired nodes emit no receipt: neither admitted the reply.
+A capacity refusal is retryable (`busy` for Lite), but a busy response **with**
+the receipt means the work is already queued. Accepted work that is later refused
+still returns its receipt, including on duplicate-rid retries.
+Capacity-refused rids may retry admission when space returns; current
+authorization and rate limits still apply. An occupied session returns `Busy`
+(`refused`, code `busy` for Lite) promptly with its durable queued receipt.
 There is no separate `reply_ack` event. The shared `reply-ack.json` vectors cover
-present, absent and duplicate receipts on both routes.
+present, absent, capacity-refused, retired and duplicate receipts on both routes.
 
 ## `fleet.list`
 

@@ -67,11 +67,11 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
         if (body.Principal.Machine != channel.PeerId) { return Refuse(Sender, body.Request); }
         if (body.Principal.Add != Codec.Base64Url(SHA256.HashData(staticKey))) { return Refuse(AddMismatch, body.Request); }
         if (body.Target.Machine != channel.Self || string.IsNullOrWhiteSpace(body.Target.Session)) { return Refuse(Target, body.Request); }
-        string? Admit()
+        string? Admit(bool capacityRetry = false)
         {
             switch (Replays.Add(channel.PeerId + "/" + body.Request))
             {
-                case ReplayStore.Result.Seen: return Replay;
+                case ReplayStore.Result.Seen when !capacityRetry: return Replay;
                 case ReplayStore.Result.Full: return Busy;
             }
             return Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session) ? null : Rate;
@@ -80,7 +80,7 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
         {
             var queued = await Inbox.ReceiveAsync(body.Target.Session!, body.Request,
                 new(null, channel.PeerId, channel.Account, channel, data.Clone()), ct,
-                () => Admit() is { } code ? new(AgentBridge.Protocol.AnswerOutcome.Refused, code) : null);
+                retry => Admit(retry) is { } code ? new(AgentBridge.Protocol.AnswerOutcome.Refused, code) : null);
             return (queued.Outcome == AgentBridge.Protocol.AnswerOutcome.Delivered
                 ? new LiteAck("delivered", null, body.Request, mode.KillEpoch)
                 : Refuse(queued.Outcome == AgentBridge.Protocol.AnswerOutcome.Busy ? Busy : queued.Reason ?? DeliveryFailed, body.Request)) with { ReplyAck = queued.ReplyAck };

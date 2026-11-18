@@ -17,7 +17,7 @@ internal sealed class RelayReplyInbox(string path, Func<RelayReplyInbox.Entry, C
     internal event Action? Pending;
 
     public async Task<ReplyResult> ReceiveAsync(string node, string rid, Entry entry, CancellationToken ct = default,
-        Func<ReplyResult?>? admit = null)
+        Func<bool, ReplyResult?>? admit = null)
     {
         if (string.IsNullOrWhiteSpace(node) || !Guid.TryParse(rid, out var request))
         { return new(AnswerOutcome.Refused, "a session and reply request UUID are required"); }
@@ -30,8 +30,13 @@ internal sealed class RelayReplyInbox(string path, Func<RelayReplyInbox.Entry, C
             {
                 var prior = inbox.Find(node, rid);
                 if (prior is not null && prior.Sender != entry.Peer) { return new(AnswerOutcome.Refused, "request belongs to another peer"); }
-                if (prior is null && admit?.Invoke() is { } refusal) { return refusal; }
-                inbox.Enqueue(node, rid, entry.Peer, JsonSerializer.Serialize(entry), DateTimeOffset.UtcNow);
+                if ((prior is null || prior.CapacityRefused) && admit?.Invoke(prior is not null) is { } refusal) { return refusal; }
+                // A pre-admission tombstone may retry; accepted outcomes remain deduped.
+                if (prior?.CapacityRefused == true) { inbox.Forget(node, rid); }
+                var accepted = inbox.Enqueue(node, rid, entry.Peer, JsonSerializer.Serialize(entry), DateTimeOffset.UtcNow, out var duplicate);
+                if (accepted.Sender != entry.Peer) { return new(AnswerOutcome.Refused, "request belongs to another peer"); }
+                if (accepted.CapacityRefused || !duplicate && accepted.DeliveredAt is not null)
+                { return new(AnswerOutcome.Refused, accepted.CapacityRefused ? LiteReceiver.Busy : LiteReceiver.DeliveryFailed); }
             }
             try { return (await DrainAsync(node, rid, ct)) with { ReplyAck = ack }; }
             finally { Pending?.Invoke(); }
