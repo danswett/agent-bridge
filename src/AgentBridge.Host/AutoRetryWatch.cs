@@ -5,12 +5,13 @@ using AgentBridge.Protocol;
 namespace AgentBridge.Host;
 
 internal sealed class AutoRetryWatch(ISessionSource source, ISessionReplier replier, Func<bool> enabled, TimeProvider time, Action<string> log,
-    Func<string, bool>? launchHeld = null) : IAsyncDisposable
+    Func<string, bool>? launchHeld = null, Func<bool>? serving = null) : IAsyncDisposable
 {
     sealed class Entry(Session expected)
     {
         public Session Expected = expected;
         public readonly Activity Before = expected.Activity;
+        public DateTimeOffset? SentError;
         public RetryEpisode Episode = null!;
     }
     readonly Dictionary<string, Entry> episodes = new(StringComparer.Ordinal);
@@ -52,6 +53,7 @@ internal sealed class AutoRetryWatch(ISessionSource source, ISessionReplier repl
 
     internal async Task TickAsync(CancellationToken cancellation = default)
     {
+        if (serving?.Invoke() == false) return;
         if (!await tick.WaitAsync(0, cancellation)) return;
         try
         {
@@ -70,7 +72,7 @@ internal sealed class AutoRetryWatch(ISessionSource source, ISessionReplier repl
                 var reason = Reason(s);
                 // An acknowledged continue briefly clears attention; that alone is not healing.
                 if (reason is null && s.Status == SessionStatus.Idle && entry is not null
-                    && s.Activity.Response is { } response && (response != entry.Before.Response || s.Activity.ResponseTurn != entry.Before.ResponseTurn)
+                    && MainResponse(s.Activity) is { } response && (response != MainResponse(entry.Before) || s.Activity.ResponseTurn != entry.Before.ResponseTurn)
                     && !response.StartsWith("\u26a0\ufe0f Turn error:", StringComparison.Ordinal))
                 {
                     entry.Episode.Cancel();
@@ -100,7 +102,12 @@ internal sealed class AutoRetryWatch(ISessionSource source, ISessionReplier repl
     {
         if (entry is not null && reason == "no-response")
         {
-            try { await entry.Episode.TryAsync(entry.Episode.NextAttempt, Guid.NewGuid(), RetryReason.Auto, cancellation); }
+            try
+            {
+                if (await entry.Episode.TryAsync(entry.Episode.NextAttempt, Guid.NewGuid(), RetryReason.Auto, cancellation,
+                    ready: s.Attention is { } failure && (entry.SentError is null || failure.Since > entry.SentError.Value)))
+                    entry.SentError = s.Attention?.Since;
+            }
             catch (Exception e) when (e is not OperationCanceledException and not OutOfMemoryException)
             { log($"auto-retry {s.Id}: failed ({e.GetType().Name})"); }
         }
@@ -117,11 +124,13 @@ internal sealed class AutoRetryWatch(ISessionSource source, ISessionReplier repl
         if (s is null || source.ProcessOf(s.Id) is not { } process || s.Attention is not { } error) return null;
         return new(default, error.Since, process,
             s.Attention.Since == entry.Expected.Attention?.Since && s.Activity == entry.Expected.Activity ? 0 : 1,
-            enabled() && Reason(s) == "no-response" && s.Status == SessionStatus.Idle && s.Question is null
+            enabled() && serving?.Invoke() != false && Reason(s) == "no-response" && s.Status == SessionStatus.Idle && s.Question is null
                 && s.Activity.CurrentTool is not { Status: ToolStatus.Running } && s.Activity.Background is null
                 && s.Subagents?.Any(a => !a.Finished) != true,
             error.AutoRetryable);
     }
+
+    static string? MainResponse(Activity a) => a.Source?.Response is null ? a.Response ?? a.Own?.Response : a.Own?.Response;
 
     string? Reason(Session s) => launchHeld?.Invoke(s.Id) == true ? "permission"
         : s.Question is { } q ? q.Kind == QuestionKind.Form ? "question" : "permission"

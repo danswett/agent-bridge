@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Local;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -62,12 +63,13 @@ public sealed class AutoRetryTests
     [InlineData("form")]
     [InlineData("permission")]
     [InlineData("trust")]
+    [InlineData("abort")]
     public async Task The_final_effect_fence_rechecks_the_switch_and_questions(string change)
     {
         await using var h = new Harness();
         await h.Error(Empty);
         await h.Watch.TickAsync();
-        h.BeforeKeys = async () => { if (change == "off") h.Enabled = false; else await h.Error(change); };
+        h.BeforeKeys = async () => { if (change == "off") h.Enabled = false; else if (change == "abort") await h.Abort(); else await h.Error(change); };
         h.F.Time.Advance(TimeSpan.FromSeconds(30));
         await h.Watch.TickAsync();
         Assert.Single(h.Requests);
@@ -120,6 +122,105 @@ public sealed class AutoRetryTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_acknowledged_continue_requires_a_new_failure_before_another_attempt(bool realReply)
+    {
+        await using var h = new Harness(realReply);
+        await h.Error(Empty);
+        await h.Watch.TickAsync();
+        h.F.Time.Advance(TimeSpan.FromSeconds(30));
+        await h.Watch.TickAsync();
+        Assert.Equal(1, h.Keys);
+        h.F.Time.Advance(TimeSpan.FromSeconds(60));
+        await h.Watch.TickAsync();
+        Assert.Equal(1, h.Keys);
+        Assert.Single(h.Requests);
+        await h.Error(Empty);
+        await h.Watch.TickAsync();
+        Assert.Equal(2, h.Keys);
+        h.F.Time.Advance(TimeSpan.FromSeconds(210));
+        await h.Watch.TickAsync();
+        Assert.Equal(new AutoRetryStatus("needs-person", "no-response", 2), h.Source.Get(Id)!.AutoRetry);
+    }
+
+    [Fact]
+    public async Task A_delegate_response_cannot_refill_the_exhausted_main_budget()
+    {
+        await using var h = new Harness();
+        await h.Error(Empty);
+        await h.Watch.TickAsync();
+        foreach (var seconds in new[] { 30, 60, 90 })
+        {
+            h.F.Time.Advance(TimeSpan.FromSeconds(seconds));
+            await h.Watch.TickAsync();
+            await h.Error(Empty);
+        }
+        await h.DelegateHeal();
+        await h.Watch.TickAsync();
+        await h.Error(Empty);
+        await h.Watch.TickAsync();
+        h.F.Time.Advance(TimeSpan.FromSeconds(30));
+        await h.Watch.TickAsync();
+        Assert.Equal(3, h.Keys);
+    }
+
+    [Fact]
+    public async Task A_main_abort_withdraws_a_scheduled_continue()
+    {
+        await using var h = new Harness();
+        await h.Error(Empty);
+        await h.Watch.TickAsync();
+        await h.Abort();
+        h.F.Time.Advance(TimeSpan.FromSeconds(30));
+        await h.Watch.TickAsync();
+        Assert.Empty(h.Requests);
+    }
+
+    [Fact]
+    public void Auto_retry_starts_only_after_the_second_startup_Stop_check_and_Serving()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (!File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx")))
+            root = root.Parent ?? throw new IOException("repository root not found");
+        var program = File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "Program.cs"));
+        var start = program.IndexOf("autoRetry.Start(stop.Token)", StringComparison.Ordinal);
+        Assert.True(start > program.LastIndexOf("handover.StoppedFromTheApp(identity.Folder)", StringComparison.Ordinal));
+        Assert.True(start > program.IndexOf("startGate.Serving()", StringComparison.Ordinal));
+        Assert.Contains("() => startGate.IsServing", program);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Stop_in_the_startup_window_prevents_a_continue(bool stopped)
+    {
+        HostStartGate? gate = null;
+        await using var h = new Harness(serving: () => gate?.IsServing == true);
+        await HostHandover.RunAsync(async handover =>
+        {
+            gate = new HostStartGate(handover, h.F.Root);
+            Assert.False(handover.StoppedFromTheApp(h.F.Root));
+            await h.Error(Empty);
+            await h.Watch.TickAsync();
+            if (stopped) File.WriteAllText(Path.Combine(h.F.Root, HostLauncherContract.StopMarker), "");
+            h.F.Time.Advance(TimeSpan.FromSeconds(30));
+            await h.Watch.TickAsync();
+            Assert.Equal(stopped, handover.StoppedFromTheApp(h.F.Root));
+            Assert.Empty(h.Requests);
+            if (!stopped)
+            {
+                gate.Serving();
+                await h.Watch.TickAsync();
+                h.F.Time.Advance(TimeSpan.FromSeconds(30));
+                await h.Watch.TickAsync();
+                Assert.Single(h.Requests);
+            }
+            return 0;
+        }, _ => { }, supervised: true, checkStop: false);
+    }
+
+    [Theory]
     [InlineData("{}", true, false)]
     [InlineData("""{"sessions":{"autoRetry":false}}""", false, false)]
     [InlineData("""{"sessions":{"autoRetry":null}}""", false, true)]
@@ -131,7 +232,7 @@ public sealed class AutoRetryTests
         Assert.Equal(problem, parsed.Problem is not null);
     }
 
-    sealed class Harness : ISessionReplier, IAsyncDisposable
+    sealed class Harness : ISessionReplier, IConsoleInjector, IAgentHaBridgeProbe, ITargetGuard, IAsyncDisposable
     {
         public readonly Fixture F = new();
         public readonly SessionSource Source;
@@ -143,14 +244,17 @@ public sealed class AutoRetryTests
         public AnswerOutcome Outcome = AnswerOutcome.Delivered;
         public int Keys;
         public Func<Task>? BeforeKeys;
+        readonly ReplyService? real;
         readonly string events;
         int at = 3598;
-        public Harness()
+        public Harness(bool realReply = false, Func<bool>? serving = null)
         {
             events = F.CopilotSession(Id, 100);
             F.Processes.Run(AgentKind.Copilot, 100);
             Source = F.Source();
-            Watch = new(Source, this, () => Enabled, F.Time, Log.Add, _ => Held);
+            if (realReply) real = new ReplyService(new DeliveryGate(F.Time), Source, F.Processes, this, this, this,
+                new ReplyOptions { CopilotHome = F.CopilotHome, PlatformSupported = true, PreRead = false, Time = F.Time });
+            Watch = new(Source, this, () => Enabled, F.Time, Log.Add, _ => Held, serving);
         }
         public async Task Error(string error)
         {
@@ -170,14 +274,39 @@ public sealed class AutoRetryTests
             Fixture.Append(events, Copilot.User("go", at++), Copilot.TurnStart(at++), Copilot.Assistant("done", at++), Copilot.TurnEnd(at++));
             await Source.RefreshAsync();
         }
+        public async Task DelegateHeal()
+        {
+            Fixture.Append(events, Copilot.User("continue", at++), Copilot.TurnStart(at++),
+                Copilot.Event("assistant.message", new { content = "delegate reply" }, at++, agentId: "helper"), Copilot.TurnEnd(at++));
+            await Source.RefreshAsync();
+        }
+        public async Task Abort()
+        {
+            Fixture.Append(events, Copilot.Event("abort", new { reason = "user_initiated" }, at++));
+            await Source.RefreshAsync();
+        }
         public async Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
         {
             Requests.Add(request);
+            if (real is not null) return await real.ReplyAsync(request, peer, cancellationToken, watch);
             if (BeforeKeys is { } before) await before();
             if (request.StillCurrent?.Invoke() != true) return new(AnswerOutcome.Stale);
             Keys++;
             return new(Outcome);
         }
+        public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default)
+        {
+            if (BeforeKeys is { } before) await before();
+            if (plan.Proceed?.Invoke() is { } reason) return new(InjectionStatus.NothingTyped, reason);
+            Keys++;
+            Fixture.Append(events, Copilot.User(plan.Sends[0].Text, at++));
+            return new(InjectionStatus.Typed, "");
+        }
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken ct = default) => Task.FromResult(new ConsoleScreen(
+            ["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580",
+             " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab"], null));
+        public string? Active() => null;
+        public string? Refuse(int processId) => null;
         public async ValueTask DisposeAsync() { await Watch.DisposeAsync(); await Source.DisposeAsync(); F.Dispose(); }
     }
 }

@@ -66,9 +66,14 @@ Each running host owns a disposable, fake-clock-testable scheduler for its local
 discovered Copilot sessions; no host map or remote-session selection is added.
 It sends only the captured retryable error above through the guarded replier.
 Repeated transient failures retain one three-attempt budget at 30/90/180 seconds
-from the original error, expiring at five minutes; successful response text clears
-the episode. Uncertain delivery never retries. Host shutdown cancels and awaits
-the scheduler; its process-local state does not migrate to another host.
+from the original error, expiring at five minutes. After an acknowledged continue,
+another slot requires a newly observed, later failure, never the same error still
+showing in a stale projection. Only a completed main-agent response clears the
+episode; delegate text/turns cannot refill it. A main abort withdraws eligibility.
+The scheduler starts only after the second startup Stop check and Serving, with
+serving readiness checked again at the final effect. Uncertain delivery never
+retries. Host shutdown cancels and awaits the scheduler; its process-local state
+does not migrate to another host.
 `sessions.autoRetry` defaults on and is read fresh, including at the final-effect
 fence. False, malformed config, read-only delivery, G5, questions, permission/trust
 prompts, auth, quota (including 402), and unrecognized failures never auto-send.
