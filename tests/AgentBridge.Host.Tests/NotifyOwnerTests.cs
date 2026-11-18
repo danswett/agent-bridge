@@ -32,13 +32,16 @@ public sealed class NotifyOwnerTests : IDisposable
     {
         var result = JsonSerializer.SerializeToElement(AgentBridge.Host.Cli.ScriptCredentialCommands.Handle(
             new Channel(), "scripts.add", JsonSerializer.SerializeToElement(new { name = "desk", notifyOwner = enabled }),
-            new FixedCallerGuard(new(CallerKind.HostCli, "fixture")), credentials, new AgentAuditLog(fixture.Root)), ProtocolJson.Options);
+            new FixedCallerGuard(new(CallerKind.HostCli, "fixture")), credentials, new AgentAuditLog(fixture.Root, fixture.Time)), ProtocolJson.Options);
         var bytes = File.ReadAllBytes(result.GetProperty("path").GetString()!);
         var clear = OperatingSystem.IsWindows() ? ProtectedData.Unprotect(bytes, null, DataProtectionScope.CurrentUser) : bytes;
         try
         {
-            var accepted = credentials.Check(Encoding.ASCII.GetString(clear),
-                new ProcessAncestry([new PeerProcess(100, fixture.Time.GetUtcNow(), "scheduler.exe")], true)).Accepted!;
+            var token = Encoding.ASCII.GetString(clear);
+            var ancestry = new ProcessAncestry([new PeerProcess(100, fixture.Time.GetUtcNow(), "scheduler.exe")], true);
+            var accepted = credentials.Check(token, ancestry).Accepted!;
+            Assert.Equal(enabled, JsonSerializer.SerializeToElement(new AgentCredentials(fixture.Root, "machine1", fixture.Time)
+                .Check(token, ancestry).Accepted, ProtocolJson.Options).GetProperty("notifyOwner").GetBoolean());
             credentials.Accept(channel, accepted);
         }
         finally { CryptographicOperations.ZeroMemory(clear); }
@@ -128,6 +131,30 @@ public sealed class NotifyOwnerTests : IDisposable
         Refused(await Handler(null)(channel, "notify-owner", Body()), "auditUnwritable");
         fixture.Time.Advance(TimeSpan.FromDays(31));
         Refused(await handle(channel, "notify-owner", Body()), "callerNotAuthorized");
+    }
+
+    [Theory]
+    [InlineData(OwnerNotifyOutcome.Delivered, 0, 2)]
+    [InlineData(OwnerNotifyOutcome.Queued, 0, 2)]
+    [InlineData(OwnerNotifyOutcome.Refused, 1, 2)]
+    [InlineData((OwnerNotifyOutcome)99, 1, 2)]
+    [InlineData(OwnerNotifyOutcome.Delivered, 1, 1)]
+    public async Task The_cli_requires_acknowledgment_for_both_client_kinds(OwnerNotifyOutcome outcome, int exit, int count)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        Assert.Equal(exit, await NotifyOwnerCommands.RunAsync(["notify-owner", "Attention", "private page"], fixture.Root, output, error,
+            request => Task.FromResult(new NotifyOwnerResult(request.Request, new OwnerClientAck[] { new(OwnerClientKind.App, outcome, ""),
+                new(OwnerClientKind.Pwa, OwnerNotifyOutcome.Queued, "") }.Take(count).ToArray()))));
+        Assert.Contains("clients", output.ToString());
+        Assert.DoesNotContain("private page", output.ToString() + error);
+    }
+
+    [Fact]
+    public async Task An_invalid_cli_profile_is_refused_before_any_connection()
+    {
+        Assert.Equal(2, await NotifyOwnerCommands.RunAsync(["notify-owner", "title", "body", "--profile", ".."],
+            fixture.Root, new StringWriter(), new StringWriter(), _ => throw new InvalidOperationException("must not connect")));
     }
 
     sealed class Channel : IProtocolChannel

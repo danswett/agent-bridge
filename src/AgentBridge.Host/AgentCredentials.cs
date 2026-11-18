@@ -16,6 +16,7 @@ public sealed record AgentCredential(string Id, string Session, string LaunchId,
     string Kind = "session", string? Principal = null)
 {
     public bool FleetLaunch { get; init; }
+    public bool NotifyOwner { get; init; }
     // Record construction only; minting and persisting a script token are separate operations.
     public static AgentCredential Script(string id, string machine, string name, DateTimeOffset issuedAt, TimeSpan? lifetime = null)
     {
@@ -225,10 +226,10 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     // Called only by the person-authorized management path, never a remote/agent operation.
     // No token is returned. Both hashes stand until a successful fleet read retires the old one.
-    public (AgentCredential Credential, string Path) MintScript(string name, TimeSpan? lifetime = null)
+    public (AgentCredential Credential, string Path) MintScript(string name, TimeSpan? lifetime = null, bool notifyOwner = false)
     {
         var now = time.GetUtcNow();
-        var credential = AgentCredential.Script(BlobFormat.Base64Url(RandomNumberGenerator.GetBytes(16)), machine, name, now, lifetime);
+        var credential = AgentCredential.Script(BlobFormat.Base64Url(RandomNumberGenerator.GetBytes(16)), machine, name, now, lifetime) with { NotifyOwner = notifyOwner };
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
@@ -536,7 +537,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             {
                 if (r?.Credential is not { } c || r.Hash is not { Length: 64 } || !IsHex(r.Hash) || c.Id is not { Length: > 0 } || !ids.Add(c.Id)
                     || !AgentProtocol.Scopes.Contains(c.Scope, StringComparer.Ordinal) || c.Chain is null
-                    || !(c.Kind == "session" ? !c.FleetLaunch && ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
+                    || !(c.Kind == "session" ? !c.FleetLaunch && !c.NotifyOwner && ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
                 {
                     throw new JsonException("invalid credential record");
                 }
