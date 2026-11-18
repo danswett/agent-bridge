@@ -76,7 +76,32 @@ public sealed class InstallationScanTimeoutTests
         finally { release.TrySetResult(); }
     }
 
-    [Theory]
+    [Fact]
+    public async Task A_changed_lock_footprint_invalidates_a_cached_clear_scan_on_every_platform()
+    {
+        IReadOnlyList<string> locked = [];
+        var clock = new FakeTimeProvider();
+        var budget = new InstallationFiles.Budget(clock) { LockedFiles = () => locked };
+        var scans = 0;
+        string? Scan() => Interlocked.Increment(ref scans) == 1 ? null : "fixture (pid 42)";
+
+        Assert.Null(await budget.ProbeOnceAsync(Scan, default));
+        Assert.Null(await budget.ProbeOnceAsync(Scan, default));
+        Assert.Equal(1, scans);
+        locked = ["fixture.DLL"];
+        Assert.Equal("fixture (pid 42)", await budget.ProbeOnceAsync(Scan, default));
+        Assert.Equal(2, scans);
+    }
+
+    public sealed class WindowsFileSharingTheoryAttribute : TheoryAttribute
+    {
+        public WindowsFileSharingTheoryAttribute()
+        {
+            if (!OperatingSystem.IsWindows()) { Skip = "requires Windows file-sharing violation codes"; }
+        }
+    }
+
+    [WindowsFileSharingTheory]
     [InlineData(FileShare.Read)]
     [InlineData(FileShare.ReadWrite)]
     public async Task A_newly_locked_image_invalidates_a_cached_clear_scan_before_the_final_check(FileShare sharing)
