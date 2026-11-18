@@ -1,9 +1,30 @@
 using System.Diagnostics;
+using YamlDotNet.RepresentationModel;
 
 namespace AgentBridge.Quality.Tests;
 
 public class StallAlarmTests
 {
+    [Fact]
+    public void The_alarm_workflow_uses_operational_nodes_without_a_recursive_merge_trigger()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var yaml = new YamlStream();
+        yaml.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "stall-alarm.yml"))));
+        var workflow = (YamlMappingNode)yaml.Documents[0].RootNode;
+        var on = (YamlMappingNode)workflow.Children[new YamlScalarNode("on")];
+        Assert.False(on.Children.ContainsKey(new YamlScalarNode("workflow_run")));
+        Assert.True(on.Children.ContainsKey(new YamlScalarNode("schedule")));
+        var jobs = (YamlMappingNode)workflow.Children[new YamlScalarNode("jobs")];
+        var alarm = (YamlMappingNode)jobs.Children[new YamlScalarNode("alarm")];
+        var steps = (YamlSequenceNode)alarm.Children[new YamlScalarNode("steps")];
+        var command = steps.Children.OfType<YamlMappingNode>().Single(s => s.Children.ContainsKey(new YamlScalarNode("run")))
+            .Children[new YamlScalarNode("run")].ToString();
+        Assert.Contains("-MainGreenNode", command);
+        Assert.Contains("-ChiefNode", command);
+        Assert.DoesNotContain("-Mentions", command);
+    }
+
     [Theory]
     [Trait("Category", "Process")]
     [InlineData(1)]

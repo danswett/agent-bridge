@@ -312,7 +312,7 @@ suites:
     project: tests/AgentBridge.Quality.Tests
     triggers: [tools/measure-ci-waste.ps1, tests/fixtures/ci-waste/runs.json]
     command: dotnet test tests/AgentBridge.Quality.Tests -c Release
-    where: ci.yml product
+    where: ci.yml product; stall-alarm.yml alarm
     status: exists
 
   - id: product-crash-diagnostics
