@@ -210,6 +210,7 @@ public sealed class UpdateNowTests : IAsyncLifetime
     [InlineData(false, true)]
     [InlineData(true, false)]
     [InlineData(true, true)]
+    [Trait("Category", "Process")]
     public async Task Own_profile_replacement_is_not_another_profiles_host(bool oldStillExiting, bool explicitProfile)
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -226,6 +227,7 @@ public sealed class UpdateNowTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public async Task Another_profiles_host_in_the_same_installation_still_blocks()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -233,6 +235,34 @@ public sealed class UpdateNowTests : IAsyncLifetime
         var other = await installation.StartAsync("work");
 
         Assert.Equal($"another profile's host (pid {other.Id}) runs from this installation", HostUpdateGate.OtherHosts());
+    }
+
+    [Theory]
+    [InlineData("work")]
+    [InlineData("WORK")]
+    [Trait("Category", "Process")]
+    public async Task Own_nondefault_profile_is_recognized_from_its_selected_profile(string profile)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        await using var installation = new FakeHostInstallation();
+        await installation.StartAsync("work");
+
+        Assert.Null(HostUpdateGate.OtherHosts(profile));
+        Assert.Contains("another profile's host", HostUpdateGate.OtherHosts("personal"), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("\"C:\\Program Files\\Slipgates\\agent-bridge-host.exe\" serve", true)]
+    [InlineData("host.exe serve --profile default", true)]
+    [InlineData("host.exe serve --profile work", false)]
+    [InlineData("host.exe serve --profile", false)]
+    [InlineData("host.exe serve --profile ../default", false)]
+    [InlineData("host.exe serve --name \"--profile work\"", true)]
+    public void Own_profile_requires_readable_valid_profile_arguments(string? commandLine, bool own)
+    {
+        Assert.Equal(own, HostUpdateGate.SameProfile("default", commandLine));
     }
 
     sealed class FakeHostInstallation : IAsyncDisposable

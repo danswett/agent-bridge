@@ -650,7 +650,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // (delivery.readOnly), which acts on nothing from another device: the buttons are withdrawn.
     var hostUpdates = VelopackHostUpdates.For(ReadOnlyReason(), OperatingSystem.IsWindows(),
         () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile, () => stop.Cancel(), Log,
-            ready: ct => HostUpdateGate.ReadyAsync(HostUpdateGate.OtherHosts, usageMonitor is null ? null : usageMonitor.SettleProbesAsync, ct),
+            ready: ct => HostUpdateGate.ReadyAsync(() => HostUpdateGate.OtherHosts(profile), usageMonitor is null ? null : usageMonitor.SettleProbesAsync, ct),
             prepareStop: PrepareStop));
     // Home Assistant's refusals of this machine, counted with every other process of this user so a
     // rejected token is never repeated into a ban (#227); the app shows what it says.
@@ -702,7 +702,7 @@ async Task<int> ServeAsync(HostHandover handover)
             Log("restarting: asked by a person's device through the relay");
             RestartHost();
         },
-        push, name, Log, watchdog: departureWatchdog, otherHosts: OperatingSystem.IsWindows() ? HostUpdateGate.OtherHosts : null);
+        push, name, Log, watchdog: departureWatchdog, otherHosts: OperatingSystem.IsWindows() ? () => HostUpdateGate.OtherHosts(profile) : null);
     var (manage, lifecycle) = (composed.Manage, composed.Lifecycle);
     handingOver = manage.HandingOver;
     manage.Start();

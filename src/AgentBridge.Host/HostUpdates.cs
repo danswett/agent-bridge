@@ -1,6 +1,12 @@
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Security.Principal;
 using System.Text.Json;
+using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Core.Updates;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
+using Microsoft.Win32.SafeHandles;
 using Velopack;
 using Velopack.Locators;
 using Velopack.Sources;
@@ -215,7 +221,7 @@ static class HostUpdateGate
 
     // Another profile's host running from this installation, or one that cannot be looked at
     // (not knowing is not permission), as the app's PackageProcesses sees them.
-    public static string? OtherHosts()
+    public static string? OtherHosts(string profile = "default")
     {
         var root = Path.GetFullPath(AppContext.BaseDirectory);
         foreach (var p in System.Diagnostics.Process.GetProcessesByName("agent-bridge-host"))
@@ -232,10 +238,54 @@ static class HostUpdateGate
                 }
                 if (path is not null && path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                 {
+                    // A replacement can overlap the old process while it exits. Profile names
+                    // alone are not enough: another Windows user has a separate default profile.
+                    if (OperatingSystem.IsWindows() && OwnProfile(p.Id, profile)) { continue; }
                     return $"another profile's host (pid {p.Id}) runs from this installation";
                 }
             }
         }
         return null;
     }
+
+    internal static bool SameProfile(string profile, string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
+        var args = CommandLine.Split(commandLine).Skip(1).ToList();
+        var at = args.IndexOf("--profile");
+        var other = at < 0 ? "default" : args.ElementAtOrDefault(at + 1);
+        return Identity.IsValidProfile(other) && string.Equals(profile, other, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [SupportedOSPlatform("windows")]
+    static bool OwnProfile(int pid, string profile)
+    {
+        // Keep the process open across both reads, so a recycled pid cannot join two identities.
+        using var process = OpenProcess(ProcessQueryLimitedInformation, false, pid);
+        if (process.IsInvalid || !SameProfile(profile, SystemProcessInspector.ReadCommandLine(pid))) { return false; }
+        if (!OpenProcessToken(process, TokenQuery, out var token)) { return false; }
+        using (token)
+        {
+            try
+            {
+                using var peer = new WindowsIdentity(token.DangerousGetHandle());
+                using var self = WindowsIdentity.GetCurrent();
+                return self.User is { } user && user == peer.User;
+            }
+            catch (Exception e) when (e is System.Security.SecurityException or UnauthorizedAccessException or ArgumentException)
+            {
+                return false;
+            }
+        }
+    }
+
+    const int ProcessQueryLimitedInformation = 0x1000;
+    const int TokenQuery = 0x0008;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern SafeProcessHandle OpenProcess(int access, bool inherit, int processId);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool OpenProcessToken(SafeProcessHandle process, int access, out SafeAccessTokenHandle token);
 }
