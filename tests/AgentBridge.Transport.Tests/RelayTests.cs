@@ -127,6 +127,25 @@ public class RelayTests
         Assert.Equal(CloseCodes.TooLarge, (int?)c.Relay.CloseStatus);
     }
 
+    [Theory]
+    [InlineData("push")]
+    [InlineData("roster-append")]
+    [InlineData("duplicate")]
+    [InlineData("malformed")]
+    [Trait("Category", "Network")]
+    public async Task The_roster_append_allowance_never_relaxes_other_or_unbounded_frames(string kind)
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var client = await relay.ConnectAsync(relay.TokenFor(1, "fixture"), "oversized");
+        var prefix = kind == "push" ? "push" : "roster-append";
+        var size = kind == "roster-append" ? 128 * 1024 : Wire.MaxFrame + 1;
+        var suffix = kind == "duplicate" ? "\",\"t\":\"push\"}" : kind == "malformed" ? "" : "\"}";
+        var frame = System.Text.Encoding.UTF8.GetBytes("{\"t\":\"" + prefix + "\",\"padding\":\"" + new string('x', size) + suffix);
+        await client.Relay.SendRawAsync(frame, WebSocketMessageType.Text);
+        await client.Relay.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(CloseCodes.TooLarge, (int?)client.Relay.CloseStatus);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_socket_that_aborts_itself_ends_the_connection_without_faulting_it_or_throwing_on_dispose()

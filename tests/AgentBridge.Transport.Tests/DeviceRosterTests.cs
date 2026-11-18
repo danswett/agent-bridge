@@ -25,9 +25,9 @@ public class DeviceRosterTests
 
     static string Wire(World w, string label) => w.Entry(label).Canonical();
 
-    static World Scenario()
+    static World Scenario(string account = RosterFixture.Account)
     {
-        var w = new World();
+        var w = new World { AccountId = account };
         w.Genesis();
         w.Add("addB", "G", "B", "G");
         return w;
@@ -143,12 +143,12 @@ public class DeviceRosterTests
         return Entry.Parse(Encoding.UTF8.GetBytes(padded.Wire));
     }
 
-    static async Task<(World W, MemoryRosterStore Store, DeviceRoster Roster)> FullOrdinaryLog()
+    static async Task<(World W, MemoryRosterStore Store, DeviceRoster Roster)> FullOrdinaryLog(string account = RosterFixture.Account)
     {
-        var w = Scenario();
+        var w = Scenario(account);
         var store = new MemoryRosterStore();
         var roster = Make(w, store);
-        await roster.AppendAsync(RosterFixture.Account, [Wire(w, "G"), Wire(w, "addB")]);
+        await roster.AppendAsync(account, [Wire(w, "G"), Wire(w, "addB")]);
         var ordinary = new List<string>();
         var parent = w.Entry("addB");
         for (var i = 0; i < 22; i++)
@@ -161,7 +161,7 @@ public class DeviceRosterTests
         var filled = new List<DeviceRoster.Result>();
         foreach (var batch in ordinary.Chunk(DeviceRoster.MaxPerAppend))
         {
-            filled.AddRange((await roster.AppendAsync(RosterFixture.Account, batch))!);
+            filled.AddRange((await roster.AppendAsync(account, batch))!);
         }
         Assert.Contains(filled, r => r is { Verdict: "refused", Reason: Invalid.Cap });
         return (w, store, roster);
@@ -220,6 +220,41 @@ public class DeviceRosterTests
         Assert.Equal(("refused", Invalid.Cap), (over![0].Verdict, over[0].Reason));
         Assert.Equal(snapshot.Entries, (await roster.GetAsync(RosterFixture.Account))!.Entries);
         Assert.True((await store.ReadAsync(store.Names.Single(), default))!.Body.Length <= DeviceRoster.MaxStoredBytes);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Maximum_removal_and_four_ancestors_reach_the_roster_over_websocket()
+    {
+        var (w, store, roster) = await FullOrdinaryLog("1");
+        var before = (await roster.GetAsync("1"))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        var entries = new List<string>();
+        for (var i = 0; i < 4; i++)
+        {
+            w.Rename($"E{i}", "B", "addB", "addB", "renamed");
+            parent = Padded(w[$"E{i}"], Entry.MaxBytes, parent);
+            entries.Add(parent.Canonical());
+        }
+        w.Remove("R", "G", "addB", "addB");
+        entries.Add(Padded(w["R"], Entry.MaxRemoveBytes, parent).Canonical());
+        await using var relay = await TestRelay.StartAsync(o =>
+        {
+            o.TokenKey = Convert.ToBase64String(new byte[32]);
+            o.Roster.DevicesStore = store;
+            o.Roster.Time = new FakeTimeProvider(DateTimeOffset.UnixEpoch + w.Now);
+        });
+        var client = await relay.ConnectAsync(relay.TokenFor(1, "fixture"), "roster");
+        var reply = new TaskCompletionSource<System.Text.Json.JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.Relay.Unhandled += m => { if (m.GetProperty("t").GetString() == "roster-append-result") { reply.TrySetResult(m.Clone()); } };
+        var frame = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { t = "roster-append", id = 1, entries });
+        Assert.True(frame.Length > AgentBridge.Transport.Wire.MaxFrame);
+        await client.Relay.SendRawAsync(frame, System.Net.WebSockets.WebSocketMessageType.Text);
+        Assert.Same(reply.Task, await Task.WhenAny(reply.Task, client.Relay.Completion).WaitAsync(TimeSpan.FromSeconds(20)));
+        var results = (await reply.Task).GetProperty("results").EnumerateArray().ToArray();
+        Assert.Equal("quarantined", results[^1].GetProperty("verdict").GetString());
+        Assert.All(results[..^1], r => Assert.Equal("evidence", r.GetProperty("reason").GetString()));
+        Assert.Equal(before.Entries.Count + 5, (await roster.GetAsync("1"))!.Entries.Count);
     }
 
     [Theory]
