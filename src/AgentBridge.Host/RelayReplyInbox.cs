@@ -21,6 +21,7 @@ internal sealed class RelayReplyInbox(string path, Func<RelayReplyInbox.Entry, C
     {
         if (string.IsNullOrWhiteSpace(node) || !Guid.TryParse(rid, out var request))
         { return new(AnswerOutcome.Refused, "a session and reply request UUID are required"); }
+        var ack = new ReplyAck(rid);
         rid = request.ToString("N");
         node = Key(node);
         try
@@ -32,7 +33,7 @@ internal sealed class RelayReplyInbox(string path, Func<RelayReplyInbox.Entry, C
                 if (prior is null && admit?.Invoke() is { } refusal) { return refusal; }
                 inbox.Enqueue(node, rid, entry.Peer, JsonSerializer.Serialize(entry), DateTimeOffset.UtcNow);
             }
-            try { return await DrainAsync(node, rid, ct); }
+            try { return (await DrainAsync(node, rid, ct)) with { ReplyAck = ack }; }
             finally { Pending?.Invoke(); }
         }
         catch (Exception e) when (StorageFailure(e))

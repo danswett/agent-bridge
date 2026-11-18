@@ -14,7 +14,11 @@ public sealed record LiteAck(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("code"), JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Code,
     [property: JsonPropertyName("request")] string Request,
-    [property: JsonPropertyName("killEpoch")] long KillEpoch);
+    [property: JsonPropertyName("killEpoch")] long KillEpoch)
+{
+    [JsonPropertyName("reply_ack"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AgentBridge.Protocol.ReplyAck? ReplyAck { get; init; }
+}
 
 // What the receiver needs to know about the channel a request came in on (read from the SecureChannel and the relay).
 public sealed record LiteChannel(string PeerId, string PeerKind, byte[]? PeerStatic, string Self, string Account, bool InPresence);
@@ -77,9 +81,9 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
             var queued = await Inbox.ReceiveAsync(body.Target.Session!, body.Request,
                 new(null, channel.PeerId, channel.Account, channel, data.Clone()), ct,
                 () => Admit() is { } code ? new(AgentBridge.Protocol.AnswerOutcome.Refused, code) : null);
-            return queued.Outcome == AgentBridge.Protocol.AnswerOutcome.Delivered
+            return (queued.Outcome == AgentBridge.Protocol.AnswerOutcome.Delivered
                 ? new LiteAck("delivered", null, body.Request, mode.KillEpoch)
-                : Refuse(queued.Outcome == AgentBridge.Protocol.AnswerOutcome.Busy ? Busy : queued.Reason ?? DeliveryFailed, body.Request);
+                : Refuse(queued.Outcome == AgentBridge.Protocol.AnswerOutcome.Busy ? Busy : queued.Reason ?? DeliveryFailed, body.Request)) with { ReplyAck = queued.ReplyAck };
         }
         if (!fromInbox && Admit() is { } refused) { return Refuse(refused, body.Request); }
         LiteDelivery result; try { result = await deliver.DeliverAsync(verified, text, ct); }
