@@ -5,6 +5,8 @@
     }
   },
   "absent": {},
+  "capacityRefused": {},
+  "retired": {},
   "duplicate": {
     "reply_ack": {
       "rid": "22222222-2222-4222-8222-222222222222"

@@ -92,4 +92,31 @@ public sealed class RelayReplyInboxTests : IDisposable
         Assert.Equal(0, typed);
         Assert.Equal(AnswerOutcome.Refused, (await restarted.ReceiveAsync("session", First, Entry(First))).Outcome);
     }
+
+    [Fact]
+    public async Task An_occupied_dispatch_returns_a_durable_receipt_without_starting_the_next_reply()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var seen = new List<string?>();
+        var inbox = new RelayReplyInbox(PathName, async (entry, ct) =>
+        {
+            seen.Add(entry.Reply!.Request);
+            entered.TrySetResult();
+            await release.Task.WaitAsync(ct);
+            return new(AnswerOutcome.Delivered);
+        });
+        var first = inbox.ReceiveAsync("session", First, Entry(First));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var queued = await inbox.ReceiveAsync("session", Second, Entry(Second)).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(AnswerOutcome.Busy, queued.Outcome);
+            Assert.Equal(Second, queued.ReplyAck?.Rid);
+            Assert.Single(seen);
+        }
+        finally { release.TrySetResult(); await first; }
+        await inbox.RecoverAsync(["session"]);
+        Assert.Equal([First, Second], seen);
+    }
 }
