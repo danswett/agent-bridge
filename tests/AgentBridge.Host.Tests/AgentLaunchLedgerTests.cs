@@ -1,5 +1,6 @@
 using AgentBridge.Host;
 using Microsoft.Extensions.Time.Testing;
+using System.Text.Json.Nodes;
 using Xunit;
 
 public sealed class AgentLaunchLedgerTests : IDisposable
@@ -68,6 +69,87 @@ public sealed class AgentLaunchLedgerTests : IDisposable
         if (!missing) { Assert.Equal("{", File.ReadAllText(State)); }
     }
 
+    [Fact]
+    public void Removing_the_whole_initialized_ledger_cannot_reset_request_or_hourly_admission()
+    {
+        Assert.True(Gate().CheckLaunch("a", "first", "hash").Allowed);
+        Directory.Delete(Path.GetDirectoryName(State)!, true);
+        var refusal = Gate().CheckLaunch("a", "first", "hash");
+        Assert.False(refusal.Allowed);
+        Assert.StartsWith("capRebuilding:", refusal.Reason);
+        Assert.False(File.Exists(State));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UUID_aliases_share_one_durable_request_charge_and_lifecycle_binding(bool uppercaseFirst)
+    {
+        const string id = "12345678-9abc-4def-8abc-0123456789ab";
+        Assert.True(Gate().CheckLaunch("a", uppercaseFirst ? id.ToUpperInvariant() : id, "hash").Allowed);
+        var legacy = JsonNode.Parse(File.ReadAllText(State))!;
+        legacy["requests"]![0]!["request"] = id.ToUpperInvariant();
+        legacy["requests"]![0]!.AsObject().Remove("charge");
+        File.WriteAllText(State, legacy.ToJsonString());
+        Assert.True(Gate().CheckLaunch("a", uppercaseFirst ? id : id.ToUpperInvariant(), "hash").Duplicate);
+        Gate().LaunchStarted("a", id.ToUpperInvariant(), "session");
+        Assert.True(Gate().LaunchFinished("a", id));
+        Assert.True(Gate().CheckLaunch("a", "second", "hash").Allowed);
+        Assert.True(Gate().LaunchFinished("a", "second"));
+        Assert.Equal("rate-limited", Gate().CheckLaunch("b", "third", "hash").Reason);
+        Assert.Equal(id, JsonNode.Parse(File.ReadAllText(State))!["requests"]![0]!["request"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("origins")]
+    [InlineData("machine")]
+    [InlineData("requests")]
+    [InlineData("duplicate-hit")]
+    [InlineData("legacy-completed")]
+    public void Restored_hourly_debits_must_match_the_admitted_requests_even_after_live_closure(string fault)
+    {
+        if (fault == "origins")
+        {
+            var policy = Path.Combine(folder, HostSettings.FileName);
+            File.WriteAllText(policy, File.ReadAllText(policy).Replace("\"launchesPerMachinePerHour\":2", "\"launchesPerMachinePerHour\":10"));
+        }
+        Assert.True(Gate().CheckLaunch("a", "first", "hash").Allowed);
+        Assert.True(Gate().LaunchFinished("a", "first"));
+        Assert.True(Gate().CheckLaunch("a", "second", "hash").Allowed);
+        Assert.True(Gate().LaunchFinished("a", "second"));
+        var state = JsonNode.Parse(File.ReadAllText(State))!;
+        if (fault == "duplicate-hit") { state["machine"]!.AsArray().Add(state["machine"]![0]!.DeepClone()); }
+        else if (fault == "legacy-completed")
+        {
+            foreach (var request in state["requests"]!.AsArray()) { request!.AsObject().Remove("charge"); }
+            foreach (var hit in state["machine"]!.AsArray().Concat(state["origins"]!.AsArray().SelectMany(w => w!["hits"]!.AsArray())))
+            { hit!["charge"] = null; }
+        }
+        else { state[fault]!.AsArray().Clear(); }
+        var damaged = state.ToJsonString();
+        File.WriteAllText(State, damaged);
+        var refusal = Gate().CheckLaunch(fault == "origins" ? "a" : "b", "third", "hash");
+        Assert.False(refusal.Allowed);
+        Assert.StartsWith("capRebuilding:", refusal.Reason);
+        Assert.Equal(damaged, File.ReadAllText(State));
+    }
+
+    [Theory]
+    [InlineData("version")]
+    [InlineData("null-state")]
+    [InlineData("null-requests")]
+    public void Unsupported_or_null_restored_state_is_a_cap_rebuilding_refusal(string fault)
+    {
+        Assert.True(Gate().CheckLaunch("a", "first", "hash").Allowed);
+        var state = JsonNode.Parse(File.ReadAllText(State))!;
+        if (fault == "version") { state["v"] = 2; }
+        if (fault == "null-requests") { state["requests"] = null; }
+        File.WriteAllText(State, fault == "null-state" ? "null" : state.ToJsonString());
+        var refusal = Gate().CheckLaunch("b", "second", "hash");
+        Assert.False(refusal.Allowed);
+        Assert.StartsWith("capRebuilding:", refusal.Reason);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -75,8 +157,9 @@ public sealed class AgentLaunchLedgerTests : IDisposable
     {
         var a = Gate();
         var b = Gate();
-        var results = await Task.WhenAll(Task.Run(() => a.CheckLaunch("a", "request", "hash")),
-            Task.Run(() => b.CheckLaunch("a", sameRequest ? "request" : "another", "hash")));
+        var request = Guid.NewGuid().ToString("D");
+        var results = await Task.WhenAll(Task.Run(() => a.CheckLaunch("a", request.ToUpperInvariant(), "hash")),
+            Task.Run(() => b.CheckLaunch("a", sameRequest ? request : "another", "hash")));
         Assert.Single(results, r => r.Allowed);
         Assert.Single(results, r => sameRequest ? r.Duplicate : r.Reason?.StartsWith("live-limit:") == true);
     }

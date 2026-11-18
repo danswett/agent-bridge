@@ -19,7 +19,7 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
         if (!policy.Allowed || policy.Limits is null) { return policy; }
         AgentLimitVerdict result;
         try { result = limits.Use(l => l.ReserveLaunch(origin, request, requestSha256, policy.Limits)); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or JsonException)
         { return policy with { Allowed = false, Reason = "capRebuilding: needs-person; the durable launch admission ledger is unavailable" }; }
         var reason = result.Reason == AgentLimitVerdict.LiveLimited
             ? $"live-limit: this machine has reached its limit of {policy.Limits.LiveAgentLaunched} live agent-started sessions; wait for one to end"

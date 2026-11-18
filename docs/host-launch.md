@@ -65,6 +65,10 @@ The L1 ledger now atomically persists request bindings, attempts, live reservati
 hourly charges under the private profile, with one cross-process admission lock.
 Missing or damaged committed state, or legacy agent-launch evidence without a ledger,
 fails closed as `capRebuilding: needs-person`.
+An initialization marker outside the ledger directory prevents deletion of that whole
+directory from becoming first use. UUID request keys are canonical. Charged requests,
+including completed ones, retain debit identities cross-checked against both hourly
+ledgers; unattributable legacy completed debits fail closed rather than reset capacity.
 The L2 pipe composition observes registered/failed requests and session removals, reconciling
 durable terminal proof and process identity (PID plus start time). Proven no-start/exit closure
 releases live capacity once without refunding Failed/Unconfirmed hourly charges.
