@@ -12,6 +12,7 @@ Limits: 4096 UTF-8 request bytes, 120 title bytes, 1024 body bytes, six valid at
 per script principal per minute. Unknown/duplicate fields, controls and malformed Unicode refuse.
 
 Reply: `{request, clients: [{client: "app"|"pwa", outcome: "delivered"|"queued"|"refused", reason}]}`.
+Unknown or absent client kinds/outcomes never acknowledge delivery.
 Both client kinds are always represented. Stable refusals: `callerNotAuthorized`,
 `badRequest`, `payloadTooLarge`, `audienceRefused`, `targetRefused`, `rateLimited`,
 `auditUnwritable`, `deliveryUnavailable`; delivery's `noSubscribedClient` is reserved.
