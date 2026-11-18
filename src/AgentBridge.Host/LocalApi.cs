@@ -18,11 +18,15 @@ public static partial class LocalApi
     // What an agent's hello offers: reading only.
     static readonly HashSet<string> AgentCapabilities = [Capabilities.SessionsRead, UsageProtocol.Capability];
 
-    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null, AgentAuditLog? audit = null, TimeProvider? auditTime = null) =>
-        Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System));
-
-    static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
+    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService? sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null, AgentAuditLog? audit = null, TimeProvider? auditTime = null)
     {
+        if (credentials is not null && audit is not null) { sessions?.ObserveAgentLaunches(credentials.LaunchGate, audit); }
+        return Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System));
+    }
+
+    static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService? sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
+    {
+        SessionService Service() => sessions ?? throw Refuse(op, callers.Classify(channel), "the session service is unavailable", log);
         if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
         {
             if (credentials.Of(channel)?.FleetLaunch != true) { credentials.CheckScriptOperation(channel, op, log); }
@@ -37,7 +41,7 @@ public static partial class LocalApi
                 : credentials.FleetGrant.CheckLaunch(script, (channel as LocalChannel)?.Peer?.Ancestry ?? ProcessAncestry.Unknown, request);
             if (Refusal() is { } reason) { throw Refuse(op, callers.Classify(channel), reason, log); }
             var live = credentials.Of(channel) ?? throw Refuse(op, callers.Classify(channel), "the script credential is no longer live", log);
-            return await sessions.LaunchFleetAsync(request, credentials.PrincipalOf(live), audit, Refusal,
+            return await Service().LaunchFleetAsync(request, credentials.PrincipalOf(live), audit, Refusal,
                 actual => credentials.FleetGrant.CheckDispatch(actual, request));
         }
         credentials?.CheckScriptOperation(channel, op, log);
@@ -82,7 +86,7 @@ public static partial class LocalApi
                 }
                 var adopt = data.Deserialize<AgentAdoptRequest>(ProtocolJson.Options);
                 if (string.IsNullOrEmpty(adopt?.Session)) { throw new ArgumentException("agent.adopt needs a session"); }
-                if (sessions.ProcessForAdoption(adopt.Session) is not { Id: > 0, StartedAt: { } started } process)
+                if (sessions?.ProcessForAdoption(adopt.Session) is not { Id: > 0, StartedAt: { } started } process)
                 {
                     throw new InvalidOperationException("refused: the host has no running process for that session to adopt");
                 }
@@ -100,7 +104,7 @@ public static partial class LocalApi
             {
                 throw Refuse(op, caller, "only the app or host command line may set a fleet name", log);
             }
-            return await sessions.RenameFleetSessionAsync(data, fleet?.WarningRoster, channel.Closed);
+            return await Service().RenameFleetSessionAsync(data, fleet?.WarningRoster, channel.Closed);
         }
             if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data, appendAttempt: audit is null ? null : audit.Append); }
             if (op == AgentBridge.Host.Fleet.FleetList.Op) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).HandleAsync(channel, data, auditLog: audit); }
@@ -163,7 +167,7 @@ public static partial class LocalApi
                 && launchReader.Scope != AgentPolicy.ScopeNone)
             {
                 if (op == LaunchProtocol.Launch
-                    && sessions.ReplayAgentLaunch(data, store.PrincipalOf(launchReader)) is { } replay)
+                    && sessions?.ReplayAgentLaunch(data, store.PrincipalOf(launchReader)) is { } replay)
                 {
                     var result = await replay;
                     if (store.IsLive(launchReader)) { return result; }
@@ -171,7 +175,7 @@ public static partial class LocalApi
                 }
                 if (op == LaunchProtocol.Options)
                 {
-                    var offered = await sessions.HandleAsync(channel, op, data);
+                    var offered = await Service().HandleAsync(channel, op, data);
                     if (!store.IsLive(launchReader)) { throw Refuse(op, callers.Classify(channel), "the credential is no longer live", log); }
                     if (offered is not LaunchOptions choices) { throw Refuse(op, callers.Classify(channel), "launch options are unavailable", log); }
                     return store.LaunchGate.ProjectOptions(choices);
@@ -207,7 +211,7 @@ public static partial class LocalApi
             throw Refuse(op, reader, "reading a session's history is for the person, from the app or a phone", log);
         }
         // Shaped inside the service, so hello.changed compares what this caller is told (#651).
-        return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
+        return await Service().HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
             CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
                 .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability } : [],

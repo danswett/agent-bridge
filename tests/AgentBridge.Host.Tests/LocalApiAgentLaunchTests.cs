@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Host;
+using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -11,6 +12,8 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
     readonly string root = Directory.CreateTempSubdirectory("ab-agent-launch-").FullName;
     readonly AgentCredentials credentials;
     readonly Launcher launcher = new();
+    readonly Changes source = new();
+    readonly List<string> messages = [];
     readonly Channel channel = new();
     readonly Func<IProtocolChannel, string, JsonElement, Task<object?>> handle;
     const string Principal = "agent:machine/parent";
@@ -20,7 +23,7 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
         Policy();
         credentials = new(root, "machine");
         Authenticate();
-        handle = LocalApi.Handler(new SessionService(null!, new("machine", "Test", "windows", "0.1.0"), launcher: launcher),
+        handle = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher, log: messages.Add),
             null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: credentials, audit: new(root));
     }
 
@@ -63,6 +66,30 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
         Assert.DoesNotContain("private prompt", string.Join("\n", Rows().Select(row => row.GetRawText())));
         Assert.Equal(LaunchOutcome.Refused, (await Launch(Body(body.GetProperty("request").GetString(), prompt: "changed"))).Outcome);
         Assert.Equal(1, launcher.Starts);
+    }
+
+    [Theory]
+    [InlineData(AgentProtocol.ScopeRead)]
+    [InlineData(AgentProtocol.ScopeReadReplyLaunch)]
+    public async Task A_null_session_service_never_bypasses_the_agent_launch_refusal_or_reserves_capacity(string scope)
+    {
+        Authenticate(scope);
+        var noService = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")),
+            credentials: credentials, audit: new(root));
+        if (scope == AgentProtocol.ScopeRead)
+        {
+            var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => noService(channel, LaunchProtocol.Launch, Body()));
+            Assert.Contains("for the person", refusal.Message);
+        }
+        else
+        {
+            var refusal = Assert.IsType<LaunchResult>(await noService(channel, LaunchProtocol.Launch, Body()));
+            Assert.Equal(LaunchOutcome.Refused, refusal.Outcome);
+            Assert.Contains("unavailable", refusal.Reason);
+        }
+        Assert.Equal(0, launcher.Starts);
+        Assert.Empty(credentials.LaunchGate.Reservations());
+        Assert.Equal("refused", Assert.Single(Rows()).GetProperty("outcome").GetString());
     }
 
     [Theory]
@@ -210,6 +237,104 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task Authoritative_exit_closes_an_unconfirmed_launch_once_without_refunding_its_hourly_debit()
+    {
+        Policy(live: 1, machine: 2);
+        var first = Body();
+        launcher.BeforeStartOutcome = LaunchOutcome.Unconfirmed;
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await Launch(first)).Outcome);
+        launcher.Exited = true;
+        launcher.Fail(Guid.Parse(first.GetProperty("request").GetString()!));
+        launcher.Fail(Guid.Parse(first.GetProperty("request").GetString()!));
+        launcher.Exited = null;
+        launcher.BeforeStartOutcome = null;
+        var second = Body();
+        Assert.Equal(LaunchOutcome.Started, (await Launch(second)).Outcome);
+        launcher.Exited = true;
+        launcher.Fail(Guid.Parse(second.GetProperty("request").GetString()!));
+        launcher.Exited = null;
+        Assert.Contains("rate-limited", (await Launch(Body())).Reason);
+    }
+
+    [Fact]
+    public async Task A_failed_signal_with_unknown_process_evidence_does_not_free_live_capacity()
+    {
+        Policy(live: 1);
+        var first = Body();
+        launcher.BeforeStartOutcome = LaunchOutcome.Unconfirmed;
+        await Launch(first);
+        launcher.Fail(Guid.Parse(first.GetProperty("request").GetString()!));
+        launcher.BeforeStartOutcome = null;
+        Assert.Contains("live-limit", (await Launch(Body())).Reason);
+    }
+
+    [Fact]
+    public async Task Session_removal_needs_exit_proof_and_closes_the_bound_session_without_refund()
+    {
+        Policy(live: 1, machine: 2);
+        var first = await Launch(Body());
+        source.Remove(first.Session!);
+        Assert.Contains("live-limit", (await Launch(Body())).Reason);
+        launcher.Exited = true;
+        source.Remove(first.Session!);
+        launcher.Exited = null;
+        var second = await Launch(Body());
+        Assert.Equal(LaunchOutcome.Started, second.Outcome);
+        launcher.Exited = true;
+        source.Remove(second.Session!);
+        launcher.Exited = null;
+        Assert.Contains("rate-limited", (await Launch(Body())).Reason);
+    }
+
+    [Fact]
+    public async Task An_unknown_bound_process_stays_held_and_surfaces_needs_person()
+    {
+        Policy(live: 1);
+        var first = await Launch(Body());
+        messages.Clear();
+        source.Remove(first.Session!);
+        Assert.Contains(messages, message => message.Contains("needs-person", StringComparison.Ordinal));
+        Assert.Contains("live-limit", (await Launch(Body())).Reason);
+    }
+
+    [Fact]
+    public void Invalid_durable_state_holds_lifecycle_capacity_without_crashing_the_observer()
+    {
+        Assert.True(credentials.LaunchGate.CheckLaunch(Principal, "pending", "hash").Allowed);
+        var state = Path.Combine(root, "launch-admissions", "state.json");
+        File.WriteAllText(state, "null");
+        messages.Clear();
+        Assert.Null(Record.Exception(() =>
+        { _ = new AgentLaunchLifecycle(credentials.LaunchGate, launcher, source, new(root), messages.Add); }));
+        Assert.Contains(messages, message => message.Contains("needs-person", StringComparison.Ordinal));
+        Assert.Equal("null", File.ReadAllText(state));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Restart_uses_durable_no_start_proof_but_never_a_failed_outcome_alone(bool proven)
+    {
+        Policy(live: 1, machine: 1);
+        var body = Body();
+        launcher.BeforeStartOutcome = LaunchOutcome.Unconfirmed;
+        await Launch(body);
+        var request = body.Deserialize<LaunchRequest>(ProtocolJson.Options)!;
+        var operation = Guid.NewGuid();
+        var gate = new GateAuditMetadata(1, operation, Guid.Empty, 0, "intent", "local", "agent", operation, "none",
+            LaunchBinding: LaunchService.RequestBinding(request));
+        var audit = new AgentAuditLog(root);
+        var intent = new AgentAuditEntry("local", request.Request, Principal, [], "session.launch", request.Request, "reserved", Gate: gate);
+        Assert.True(audit.Append(intent));
+        Assert.True(audit.Append(intent with { Outcome = "failed", Grant = proven ? "agent-closed" : null,
+            Gate = gate with { Phase = "terminal", ReasonCode = "failed" } }));
+        var restarted = new AgentCredentials(root, "machine");
+        _ = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher),
+            null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: restarted, audit: audit);
+        Assert.Contains(proven ? "rate-limited" : "live-limit", restarted.LaunchGate.CheckLaunch("other", "next", "hash").Reason);
+    }
+
+    [Fact]
     public async Task The_hourly_cap_refuses_the_fourth_launch_and_records_the_reason()
     {
         for (var i = 0; i < 3; i++) { Assert.Equal(LaunchOutcome.Started, (await Launch(Body())).Outcome); }
@@ -228,6 +353,20 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
         Assert.Equal(0, launcher.Starts);
     }
 
+    sealed class Changes : ISessionSource
+    {
+        public long Revision => 0;
+        public event EventHandler<SessionChange>? Changed;
+        public void Remove(string id) => Changed?.Invoke(this, new(SessionChangeKind.Removed, id, null, 0));
+        public IReadOnlyList<Session> Snapshot() => [];
+        public Session? Get(string id) => null;
+        public SessionList List(string? cursor = null) => new([], 0);
+        public SessionSubscription Subscribe() => throw new NotSupportedException();
+        public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     sealed class Launcher : ISessionLauncher
     {
         public const string Session = "22222222-2222-4222-8222-222222222222";
@@ -236,6 +375,10 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
         public string? Principal;
         public LaunchOutcome? BeforeStartOutcome;
         public string[] Extras = [];
+        public bool? Exited;
+        public bool? RequestExited(Guid request) => Exited;
+        public event Action<Guid>? RequestFailed;
+        public void Fail(Guid request) => RequestFailed?.Invoke(request);
         public Action? BeforePrepare;
         readonly Dictionary<string, LaunchResult> results = [];
         public LaunchDispatchSnapshot CaptureDispatch(string agent, string? principal) => new(Extras, principal);
@@ -342,6 +485,66 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
         var row = Assert.Single(rows);
         Assert.Equal(body.GetProperty("request").GetString(), row.GetProperty("request").GetString());
         Assert.Equal("agent:machine/parent", row.GetProperty("principal").GetString());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public async Task Only_a_proven_CreateProcess_failure_frees_live_capacity_and_neither_outcome_refunds_the_hour(int state)
+    {
+        var proven = state is 0 or 3 or 4;
+        File.WriteAllText(Path.Combine(f.Root, HostSettings.FileName), """
+            {"agents":{"enabled":true,"launch":{"enabled":true},
+              "inbound":{"local":{"launch":{"workspaces":["App"],"agents":["claude"],"permissions":"ask"}}},
+              "limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":1,"liveAgentLaunched":1,"agentLaunchedIdleHours":2}}}
+            """);
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture");
+        Git(app, "add", "README.md");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        var credentials = new AgentCredentials(f.Root, "machine");
+        var channel = new LocalApiAgentLaunchTests.Channel();
+        var at = DateTimeOffset.UtcNow;
+        var token = credentials.Mint("parent", "launch", 100, at, AgentProtocol.ScopeReadReplyLaunch);
+        credentials.Accept(channel, credentials.Check(token, new ProcessAncestry([new PeerProcess(100, at, "agent.exe")], true)).Accepted!);
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }),
+            credentials: credentials, agentWorktreeCheck: AgentLaunchWorktreeCheck.Check);
+        var handle = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher),
+            null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: credentials, audit: new(f.Root));
+        async Task<LaunchResult> Launch()
+        {
+            var id = Guid.NewGuid().ToString("D");
+            return Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch,
+                JsonSerializer.SerializeToElement(new { request = state >= 3 ? "ABCDEFAB" + id[8..].ToUpperInvariant() : id, agent = "claude", workspace = "App", permissions = "ask" })));
+        }
+        if (state == 2)
+        {
+            Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
+            starter.Exit(Assert.Single(starter.Pids));
+            var restarted = new AgentCredentials(f.Root, "machine");
+            _ = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"),
+                launcher: Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }), credentials: restarted)),
+                null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: restarted, audit: new(f.Root));
+            Assert.Empty(restarted.LaunchGate.Reservations());
+            Assert.Contains("rate-limited", (await Launch()).Reason);
+            return;
+        }
+        starter.Throws = proven ? new System.ComponentModel.Win32Exception(2) : new IOException("start result unknown");
+        Assert.Equal(proven ? LaunchOutcome.Failed : LaunchOutcome.Unconfirmed, (await Launch()).Outcome);
+        starter.Throws = null;
+        if (state == 4)
+        {
+            var restarted = new AgentCredentials(f.Root, "machine");
+            _ = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"),
+                launcher: Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }), credentials: restarted)),
+                null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: restarted, audit: new(f.Root));
+            Assert.Empty(restarted.LaunchGate.Reservations());
+        }
+        Assert.Contains(proven ? "rate-limited" : "live-limit", (await Launch()).Reason);
     }
 
     [Fact]

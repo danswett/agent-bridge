@@ -24,6 +24,9 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
         var reason = result.Reason == AgentLimitVerdict.LiveLimited
             ? $"live-limit: this machine has reached its limit of {policy.Limits.LiveAgentLaunched} live agent-started sessions; wait for one to end"
             : result.Reason;
+        if (result.Reason == AgentLimitVerdict.LiveLimited && Reservations().Any(r => r.Live?.Session is null
+            && (clock?.Invoke() ?? DateTimeOffset.UtcNow) - r.At >= TimeSpan.FromMinutes(10)))
+        { reason += "; needs-person: an unresolved launch has no authoritative closure evidence"; }
         if (result.Reason is AgentLimitVerdict.RateLimited or AgentLimitVerdict.LiveLimited)
         {
             try
@@ -45,6 +48,14 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
     public bool LaunchFinished(string origin, string request) => limits.Use(l => l.LaunchFinished(origin, request));
     internal bool LaunchRefused(string origin, string request) => limits.Use(l => l.LaunchRefused(origin, request));
     public bool SessionEnded(string session) => limits.Use(l => l.SessionEnded(session));
+    internal AgentLimits.SavedRequest[] Reservations() =>
+        limits.Use(l => l.SnapshotLaunches().Requests.Where(r => r.Live is not null).ToArray());
+    internal bool BindIfReserved(string origin, string request, string session) => limits.Use(l =>
+    {
+        if (!l.SnapshotLaunches().Requests.Any(r => r.Origin == origin && r.Request == request && r.Live is not null)) { return false; }
+        l.LaunchStarted(origin, request, session);
+        return true;
+    });
     public bool ObserveSession(string session, DateTimeOffset? idleSince, bool personTyped) =>
         limits.Use(l => l.ObserveSession(session, idleSince, personTyped));
 

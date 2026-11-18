@@ -22,6 +22,9 @@ public interface ISessionLauncher
     Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot write durable launch evidence."));
+    Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
+        Action<string> terminal, CancellationToken cancellationToken = default) => LaunchAuditedAsync(request, peer, prepare, cancellationToken);
+    bool? RequestExited(Guid request) => null;
 
     Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
     LaunchDispatchSnapshot? CaptureDispatch(string launcherId, string? authenticatedPrincipal) => null;
@@ -773,11 +776,17 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return LaunchOnceAsync(request, peer, prepare);
     }
 
-    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false)
+    public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
+        Action<string> terminal, CancellationToken cancellationToken = default) => LaunchOnceAsync(request, peer, prepare, terminal: terminal);
+    public bool? RequestExited(Guid request) => provenance.ProcessFor(request) is { StartedAt: { } at } process
+        ? starter.Exited(new(process.Id, at)) : null;
+
+    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false,
+        Action<string>? terminal = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet)
-            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, fleet: fleet))
+        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet, terminal: terminal)
+            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, fleet: fleet, terminal: terminal))
             : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
             Settled(request, result, $"launch {Short(key)}"),
             owner: prepare is null ? Owner(request, peer) : new LaunchOwner(peer, RequestBinding(request)),
@@ -849,8 +858,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
     async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false, Action<string>? terminal = null)
     {
+        var consumed = new StrongBox<bool>();
         try
         {
             if (!options.PlatformSupported) { return Refused("launching sessions is not supported on this platform yet; start it at the machine"); }
@@ -914,8 +924,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                         return Refused($"'{fetched.About.Title}' is a {theirs} session, so it resumes in {theirs}, not {plan.Launcher.Label}");
                     }
                 }
-                return await StartAsync(plan, claim, key, handed, fetched, ct, restoring,
-                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet);
+                return await StartAsync(plan, claim, key, handed, fetched, consumed, ct, restoring,
+                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet, terminal: terminal);
             }
             finally
             {
@@ -930,6 +940,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
         catch (Exception e)
         {
+            if (terminal is not null && consumed.Value)
+            {
+                log($"launch {Short(key)}: start or settlement is unknown: {e.GetType().Name}");
+                return new(LaunchOutcome.Unconfirmed, "needs-person: the request may have been consumed");
+            }
             log($"launch {Short(key)}: failed before the agent was started: {e.Message}");
             return Refused("the machine couldn't start the session");
         }
@@ -1095,14 +1110,15 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
     }
 
-    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, StrongBox<bool> consumed, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false, Action<string>? terminal = null)
     {
         Pending follow;
         LaunchedWith launched;
         await starting.WaitAsync(ct);
         string? reservation = null, reserved = null;
         WorktreeResult? created = null;
+        bool neverStarted = false;
         try
         {
             // Checked again: agent-ha-bridge may have started while this one waited its turn.
@@ -1307,9 +1323,18 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             if (fleet && !credentialIssued) { provenance.Abandon(key); return Refused("a read+reply fleet worker credential could not be issued"); }
             Started started;
+            consumed.Value = true;
             try { started = starter.Start(spec); created = null; }
             catch (Exception e)
             {
+                if (terminal is not null && e is not System.ComponentModel.Win32Exception)
+                {
+                    created = null;
+                    log($"launch {Short(key)}: process start is unknown: {e.GetType().Name}");
+                    return new(LaunchOutcome.Unconfirmed, "needs-person: process start could not be established");
+                }
+                consumed.Value = false;
+                neverStarted = true;
                 if (credentialIssued) { credentials!.Abandon(launchId); }
                 provenance.Abandon(key);
                 log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
@@ -1328,7 +1353,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
         finally
         {
-            if (reservation is not null && reserved is not null) { Worktrees.Release(reserved, reservation); }
+            if (neverStarted && terminal is not null) { terminal("failed"); }
+            if (reservation is not null && reserved is not null && (terminal is null || !consumed.Value)) { Worktrees.Release(reserved, reservation); }
             if (created is not null && await DiscardWorktreeAsync(created, key) is { } retained)
             { log($"launch {Short(key)}: the unstarted worktree was retained: {retained}"); }
             starting.Release();

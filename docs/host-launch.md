@@ -48,8 +48,8 @@ attempts per agent; they may be lowered, never made unlimited. The gate reads ch
 on its next check and records `rate-limited` refusals with the retry delay and caps in
 force. Watch refusal counts and retry delays in the launch audit before and after a
 change. Refusal audit records share the pipe's per-principal windowing: 60 per hour,
-then counted summaries at most once a minute. Production live-capacity settlement remains L2;
-idle ending and temporary raises are separate work.
+then counted summaries at most once a minute. Production live-capacity settlement uses
+the evidence described below; idle ending and temporary raises are separate work.
 
 ## Credentialed local agent launches (#2774)
 
@@ -71,7 +71,11 @@ including completed ones, retain debit identities cross-checked against both hou
 ledgers; unattributable legacy completed debits fail closed rather than reset capacity.
 Expired debits remain explicitly expired across clock rollback and restart without
 releasing their live reservations or resurrecting hourly charges.
-Restarts and elapsed time never free a live slot; production evidence consumers remain L2.
+The L2 pipe composition observes registered/failed requests and session removals, reconciling
+durable terminal proof and process identity (PID plus start time). Proven no-start/exit closure
+releases live capacity once without refunding Failed/Unconfirmed hourly charges.
+Unknown process state stays held; after ten minutes the live-cap refusal says `needs-person`,
+not expired. No timeout alone releases capacity, and launch remains disabled by default.
 Proven prestart refusals and busy outcomes release only their own hourly and live
 reservation; request memory and the separate attempt budget are retained.
 Prestart busy outcomes record a refusal even before a launch intent exists. A successful

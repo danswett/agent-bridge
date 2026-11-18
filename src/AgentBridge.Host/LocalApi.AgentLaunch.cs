@@ -7,7 +7,7 @@ namespace AgentBridge.Host;
 
 public static partial class LocalApi
 {
-    static async Task<LaunchResult> LaunchAgentAsync(SessionService sessions, AgentCredentials credentials,
+    static async Task<LaunchResult> LaunchAgentAsync(SessionService? sessions, AgentCredentials credentials,
         AgentCredential caller, IProtocolChannel channel, JsonElement data, AgentAuditLog? audit,
         RefusalAudits refusals, Action<string>? log)
     {
@@ -37,7 +37,7 @@ public static partial class LocalApi
         var request = data.Deserialize<LaunchRequest>(ProtocolJson.Options)!;
         if (!Guid.TryParseExact(request.Request, "D", out _)) { return Denied("request must be a UUID"); }
         if (request.Agent is null) { return Denied("an agent launch requires an explicit agent"); }
-        if (sessions.AgentLauncher is not { } launcher) { return Denied("the agent launch service is unavailable"); }
+        if (sessions?.AgentLauncher is not { } launcher) { return Denied("the agent launch service is unavailable"); }
         var options = await launcher.OptionsAsync();
         var gate = credentials.LaunchGate;
         var callerCheck = new AgentLaunchCallerCheck(audit, refusals);
@@ -61,6 +61,7 @@ public static partial class LocalApi
             return verdict.Reason;
         }
         if (Check() is { } denied) { return Denied(denied); }
+        sessions.ReconcileAgentLaunches();
         var admission = gate.CheckLaunch(principal, request.Request, LaunchService.RequestBinding(request));
         if (!admission.Allowed)
         {
@@ -70,11 +71,11 @@ public static partial class LocalApi
                     || admission.Reason?.StartsWith("auditUnwritable:", StringComparison.Ordinal) == true);
         }
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
-            refusal: () => lastRefusal = Check());
+            refusal: () => lastRefusal = Check(), settled: _ => sessions.ReconcileAgentLaunches());
+        sessions.ReconcileAgentLaunches();
         if (result.Outcome == LaunchOutcome.Busy)
         { RecordRefusal("busy: the launch could not start because another startup is waiting", result.RefusalAudited); }
         if (result.Outcome is LaunchOutcome.Refused or LaunchOutcome.Busy) { gate.LaunchRefused(principal, request.Request); }
-        if (result.Outcome == LaunchOutcome.Started && result.Session is { } session) { gate.LaunchStarted(principal, request.Request, session); }
         if (result.Outcome == LaunchOutcome.Refused)
         { return Denied(lastRefusal ?? "the launch could not be completed; check details at the machine", result.RefusalAudited, result.WorktreeRefusalReason); }
         return result with

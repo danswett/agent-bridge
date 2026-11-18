@@ -10,7 +10,8 @@ internal sealed record GateLaunchIngress(string Path, string ActorKind, string P
 internal static class GateLaunchAudit
 {
     internal static async Task<LaunchResult> LaunchAsync(ISessionLauncher launcher, LaunchRequest request, string peer,
-        AgentAuditLog audit, GateLaunchIngress ingress, CancellationToken ct = default, bool fleet = false, Func<string?>? refusal = null)
+        AgentAuditLog audit, GateLaunchIngress ingress, CancellationToken ct = default, bool fleet = false, Func<string?>? refusal = null,
+        Action<string>? settled = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var id)) { return Refused("request must be a UUID"); }
         if (!audit.Bootstrap()) { return Refused("the launch audit could not establish its existing evidence"); }
@@ -32,7 +33,7 @@ internal static class GateLaunchAudit
                 || matching.Any(r => r.Principal != first.Principal || r.Gate is not { } other
                     || other.Operation != gate.Operation || other.LaunchBinding != binding))
             { return Refused("the request conflicts with its durable launch binding"); }
-            var terminal = matching.FirstOrDefault(r => r.Gate?.Phase == "terminal" && r.Outcome == "started");
+            var terminal = matching.FirstOrDefault(r => r.Gate?.Phase == "terminal");
             if (launcher.ReplayAuditedAsync(request, peer) is { } remembered)
             {
                 var result = await remembered;
@@ -40,10 +41,20 @@ internal static class GateLaunchAudit
             }
             return terminal is null
                 ? new(LaunchOutcome.Unconfirmed, "the launch was already admitted; its registration is not proven")
-                : new(LaunchOutcome.Started) { Session = terminal.Target };
+                : new(terminal.Outcome == "started" ? LaunchOutcome.Started : LaunchOutcome.Failed) { Session = terminal.Outcome == "started" ? terminal.Target : null };
         }
 
         string? denied = null;
+        AgentAuditEntry? admitted = null;
+        bool terminalWritten = false;
+        void Terminal(string outcome)
+        {
+            if (admitted?.Gate is not { } gate || terminalWritten) { return; }
+            if (!audit.Append(admitted with { Outcome = outcome, Grant = "agent-closed",
+                Gate = gate with { Phase = "terminal", ReasonCode = outcome } })) { return; }
+            terminalWritten = true;
+            settled?.Invoke(outcome);
+        }
         Action<string>? Prepare(Guid operation)
         {
             if ((denied = refusal?.Invoke()) is not null) { return null; }
@@ -52,10 +63,12 @@ internal static class GateLaunchAudit
             var intent = new AgentAuditEntry(ingress.Path == "relay" ? "in" : "local", id.ToString(),
                 ingress.Principal, [], "session.launch", id.ToString(), "reserved", Gate: gate) { Grant = fleet ? "fleet" : null };
             if (!audit.Append(intent)) { return null; }
-            return session => { audit.Append(intent with { Target = session, Outcome = "started", Gate = gate with { Phase = "terminal" } }); };
+            admitted = intent;
+            return session => { terminalWritten = audit.Append(intent with { Target = session, Outcome = "started", Gate = gate with { Phase = "terminal" } }); };
         }
         var outcome = fleet ? await launcher.LaunchFleetAsync(request, peer, Prepare, ct)
-            : await launcher.LaunchAuditedAsync(request, peer, Prepare, ct);
+            : settled is null ? await launcher.LaunchAuditedAsync(request, peer, Prepare, ct)
+            : await launcher.LaunchAuditedAsync(request, peer, Prepare, Terminal, ct);
         return denied is null ? outcome : Refused(denied);
     }
 
