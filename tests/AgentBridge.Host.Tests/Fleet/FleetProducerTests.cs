@@ -192,7 +192,7 @@ public sealed class FleetProducerTests
         Assert.Equal(source.ProcessOf(Id), snapshot.Process);
         Assert.Null(snapshot.ObservedAt); Assert.Null(snapshot.OpenAsks); Assert.Null(snapshot.Attention); Assert.Null(snapshot.LastReplyAt);
         Assert.True(await new FleetPublisher(source, "fixture", observe: (_, _) => Task.FromResult<SessionEvidence?>(null))
-            .PublishAsync((r, _) => { Assert.Null(RosterFields.Check(r, "fixture", out _, out _, out _)); return Task.CompletedTask; }));
+            .PublishAsync((r, ct) => { Assert.Null(RosterFields.Check(r, "fixture", out _, out _, out _)); return Task.CompletedTask; }));
     }
 
     [Theory, InlineData(false), InlineData(true)]
