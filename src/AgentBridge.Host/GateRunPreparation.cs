@@ -50,6 +50,10 @@ internal static class GateRunPreparation
         return rows;
     }
 
+    internal static bool HasPreparedRun(List<AuditCommands.Row> rows) =>
+        rows.Any(r => r.Action == "gate.start" && r.Outcome == "prepared"
+            && !rows.Any(v => v.Gate?.Run == r.Gate?.Run && v.Outcome == "invalidated"));
+
     internal static object Prepare(AgentAuditLog audit, string principal, JsonElement data, IGateRunEnrollmentProvider provider)
     {
         var request = Request(data, "gate.start");
@@ -64,8 +68,7 @@ internal static class GateRunPreparation
                 { throw new InvalidOperationException("gate control refused: conflicting request binding"); }
                 return Reply(previous.Run);
             }
-            if (rows.Any(r => r.Action == "gate.start" && r.Outcome == "prepared"
-                && !rows.Any(v => v.Gate?.Run == r.Gate?.Run && v.Outcome == "invalidated")))
+            if (HasPreparedRun(rows))
             { throw new InvalidOperationException("gate control refused: a run is already prepared"); }
             var enrollment = provider.Read();
             if (enrollment?.Valid() != true) { throw new InvalidOperationException("gate control held: trusted enrollment unavailable"); }
