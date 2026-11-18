@@ -590,7 +590,7 @@ suites:
     runner: local
     triggers: [quality/main-red.ps1, quality/test-main-red.ps1, quality/rerun-known-flakes.ps1, .github/workflows/main-red.yml]
     command: pwsh -NoProfile -File quality/test-main-red.ps1
-    where: ci.yml light; main-red.yml
+    where: ci.yml light; main-red.yml detect
     status: exists
 
   - id: beta-acceptance

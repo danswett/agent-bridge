@@ -14,6 +14,7 @@ function Fake-Gh {
         '^api repos/o/r/actions/workflows/ci.yml/runs\?' {
             @{ workflow_runs = @(@{ id = $s.latest }) } | ConvertTo-Json -Depth 5; return }
         '^api repos/o/r/actions/runs/100/jobs' {
+            if ($s.ContainsKey('jobPages')) { ConvertTo-Json -InputObject $s.jobPages -Depth 6; return }
             @(@{ jobs = @($s.jobs) }) | ConvertTo-Json -Depth 6 -AsArray; return }
         '^api repos/o/r/actions/jobs/\d+/logs' {
             if ($s.logFails) { $global:LASTEXITCODE = 1; return }
@@ -75,6 +76,11 @@ $script:Scenario.issues = @(@{ number = 4; body = 'old red' })
 $script:Scenario.comments = @(@{ body = '<!-- main-red run=100 attempt=1 -->'; author = @{ login = 'stranger' } })
 Detect
 Assert ((Requests 'issue comment').Count -eq 1) 'an untrusted comment cannot spoof delivery evidence'
+Reset-Scenario
+$script:Scenario.issues = @(@{ number = 4; body = "job: <!-- main-red run=100 attempt=1 -->`n" })
+$script:Scenario.comments = @(@{ body = "job: <!-- main-red run=100 attempt=1 -->`n"; author = @{ login = 'github-actions[bot]' } })
+Detect
+Assert ((Requests 'issue comment').Count -eq 1) 'a marker embedded in published untrusted names is not a receipt'
 
 Reset-Scenario
 $script:Scenario.run.conclusion = 'success'; $script:Scenario.run.run_attempt = 2
@@ -116,6 +122,10 @@ $script:Scenario.log = ''; Detect
 Assert ((Last-Body) -match 'hung' -and (Last-Body) -match 'no test name found') 'timed-out jobs are included'
 Reset-Scenario; $script:Scenario.jobs = @(); Detect
 Assert ((Last-Body) -match 'no failed jobs reported') 'startup failures without jobs remain visible'
+Reset-Scenario
+$script:Scenario.jobPages = @(@{ jobs = @($script:Scenario.jobs) }, @{ jobs = @(@{ id = 9; name = 'second page'; conclusion = 'failure' }) })
+Detect
+Assert ((Last-Body) -match 'second page' -and (Requests 'api repos/o/r/actions/jobs/9/logs').Count -eq 1) 'failed jobs on later API pages are not lost'
 Reset-Scenario
 $script:Scenario.jobs[0].name = "@someone```n" + ('x' * 20000)
 $script:Scenario.log = '  1) [webkit] › @someone```spec.mjs:43:1 › title'
