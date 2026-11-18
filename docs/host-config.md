@@ -45,8 +45,16 @@ Missing tool, custody, completion or PR evidence means KEEP, not a safe default.
 Builders require clean, unstashed, non-operation git state and HEAD contained in
 the fresh same-name origin branch; no tracking upstream is required. Reviewers
 need explicit CLEAN, or NOT CLEAN at least 60 minutes old, and 60 idle minutes.
-The host lifetime/receipts and existing `session.stop` adapter are subsequent
-stack cuts; this policy cut installs no timer, task or live action.
+The host starts one non-overlapping cycle when serving, then every 15 minutes;
+shutdown cancels it. It ships and updates with the ordinary Slipgates host,
+without a separate installation or scheduled task. Cycles have a two-minute
+evidence deadline. An unfinished timed-out read blocks further reads.
+Each run atomically writes `<profile>/reaper/receipts/<run-id>.json` with schema 1,
+run ID, machine, UTC time, mode, `ended` and `kept` (each with a reason), and a
+`problem` for unavailable evidence. I/O failures are logged and permit no ending.
+SRE approves a specific first dry-run file and SHA256, not a generic live flag.
+The existing `session.stop` adapter follows in the next stack cut; this cut
+always writes dry-run receipts even when live is requested.
 
 
 ```jsonc
