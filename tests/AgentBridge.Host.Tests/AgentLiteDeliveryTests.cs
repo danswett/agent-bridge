@@ -136,6 +136,38 @@ public sealed class AgentLiteDeliveryTests
         else { Assert.Empty(f.Typed); }
     }
 
+    [Fact]
+    public async Task A_live_script_send_with_a_detached_relay_is_audited_as_undeliverable_without_signing()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        using var home = new global::Fixture();
+        byte[] ownStatic = [.. Enumerable.Range(1, 32).Select(i => (byte)i)];
+        var credentials = new AgentCredentials(home.Root, Wire.DeviceId(ownStatic));
+        var script = credentials.MintScript("collector").Credential;
+        var channel = new ScriptChannel();
+        credentials.Accept(channel, script);
+        var audit = new AgentAuditLog(home.Root);
+        var signed = 0;
+        var sender = new AgentLiteSender(new ScriptMode(),
+            new ScriptPeers(new("33333333333333333333333333333333", [], "receiver")), new RelayLiteLink(),
+            credentials.IsLive, () => { signed++; throw new InvalidOperationException("detached sends must not sign"); }, ownStatic);
+        var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.Other, "fixture")),
+            credentials: credentials, lite: sender, audit: audit);
+
+        var result = Assert.IsType<LiteSendReply>(await handler(channel, LiteAgentSend.Op, JsonSerializer.SerializeToElement(new
+        {
+            machine = "receiver", session = HaContract.NodeId(Target), text = "hello",
+        })));
+
+        Assert.Equal(("undeliverable", AgentLiteSender.OfflineText), (result.Outcome, result.Code));
+        Assert.Equal(0, signed);
+        var entries = Directory.GetFiles(Path.Combine(home.Root, AgentAuditLog.FolderName), "*.jsonl")
+            .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line))
+            .Where(row => row.TryGetProperty("action", out _)).ToArray();
+        Assert.Equal(new[] { "attempted", "undeliverable" }, entries.Select(row => row.GetProperty("outcome").GetString()));
+        Assert.All(entries, row => Assert.Equal(script.Principal, row.GetProperty("principal").GetString()));
+    }
+
     sealed class ScriptMode : ILiteMode
     {
         public bool On => true;
