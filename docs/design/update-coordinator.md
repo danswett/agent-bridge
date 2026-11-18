@@ -59,6 +59,15 @@ late native respawn completion/errors. Respawn observation uses the same deadlin
 and releases the package lock on timeout/cancellation. An entered native start
 cannot be revoked: its late outcome stays unknown, never retry authority.
 
+### B3a: compatibility metadata only
+
+Read native VERSIONINFO/FileDescription from the retained image stream, with
+bounded PE resource/block traversal. The fixed `[coordinator-v1]` suffix gates
+CLI compatibility only, never trust; missing support refuses with
+`coordinator-protocol-unavailable`. Shared bundle verification and digest custody
+remain mandatory at staging. No hostw is stamped with that suffix here: it must
+ship in the same build as the real early coordinator mode, not a metadata-only slice.
+
 ## C/D: approved design basis, not activation proof
 
 Use immutable `root\slots\<release-identity>-<package-digest>` payloads. One validated
