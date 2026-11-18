@@ -349,10 +349,13 @@ export class HostClient {
   async usage({ shared = false } = {}) { return readUsage(await this.request(USAGE.get, shared ? { shared: true } : {})); }
 
   // usage.subscribe: the current report, then a 'usage' event with each new one.
-  async subscribeUsage({ shared = false } = {}) {
+  // onSnapshot applies the report in wire order, before a later event in the same task.
+  async subscribeUsage({ shared = false, onSnapshot = null } = {}) {
     this.#usageSubscribed = true;
     this.#usageShared = shared;
-    return readUsage(await this.request(USAGE.subscribe, shared ? { shared: true } : {}));
+    return readUsage(await this.request(USAGE.subscribe, shared ? { shared: true } : {}, {
+      onResponse: onSnapshot ? (report) => onSnapshot(readUsage(report)) : null,
+    }));
   }
 
   // update.get: what the machine's updater is doing (docs/protocol/v1-update.md).
@@ -585,7 +588,7 @@ export class HostClient {
   #resubscribe(seq) {
     if (this.#subscribing !== null || this.closed) { return; }
     // An update lost in the gap is replaced by the current report.
-    if (this.#usageSubscribed) { this.subscribeUsage({ shared: this.#usageShared }).then((r) => this.#emit('usage', r), (e) => this.#emit('error', e)); }
+    if (this.#usageSubscribed) { this.subscribeUsage({ shared: this.#usageShared, onSnapshot: (r) => this.#emit('usage', r) }).catch((e) => this.#emit('error', e)); }
     if (this.#updateSubscribed) { this.subscribeUpdate((r) => this.#emit('update', r)).catch((e) => this.#emit('error', e)); }
     const resync = this.subscribe().then(() => true, (e) => { this.#emit('error', e); return false; });
     this.#emit('gap', { seq, resync });

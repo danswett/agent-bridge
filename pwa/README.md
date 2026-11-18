@@ -700,6 +700,11 @@ later wire events; a promise continuation must not restore the older state.
 The update fixture also waits for that initial snapshot before changing the demo
 host: the demo-ready marker covers sessions, not update subscriptions.
 
+Usage snapshots follow the same wire-order rule (#2184), including gap recovery:
+`subscribeUsage({ shared, onSnapshot })` applies the parsed snapshot synchronously
+and still resolves with that snapshot. The fleet and host-client unit tests cover
+both frame orders without a promise continuation restoring an older reading.
+
 On a ready PR, `pwa-ui` then repeats only added or modified specs since the PR's
 merge base five times, with zero retries, in the same Chromium and WebKit shards.
 Deleted and renamed-away paths and `test/e2e` are excluded; no changed spec skips
