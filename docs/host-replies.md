@@ -170,7 +170,8 @@ production producer. The confirmation digest and returned escrow include every s
 
 This first cut permits only complete, single-row, non-shell Copilot drafts that can be
 returned whole within 500 escaped characters. Everything else is refused before keys.
-The clear (Ctrl+End, Ctrl+U) is held to the original rows and safe footer in the worker.
+The clear (Ctrl+End, Ctrl+U) is held to the original rows, safe footer and request freshness.
+A request stale before the clear deletes nothing and returns `Stale`, without escrow.
 Within the same typing slot, two consecutive empty reads must arrive within two seconds,
 then the normal guarded reply path runs. Any attempted deletion returns `cleared`
 (`text`, host escape `marks`, `truncated: false`), even if later guards refuse the reply.

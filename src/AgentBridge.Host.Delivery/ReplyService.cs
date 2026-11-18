@@ -428,9 +428,15 @@ public sealed partial class ReplyService : ISessionReplier
         bool working;
         const string retryChangedReason = "the retry is no longer current, so nothing was typed";
         var retryChanged = false;
+        string? Freshness()
+        {
+            if (stillCurrent?.Invoke() != false) return null;
+            retryChanged = true;
+            return retryChangedReason;
+        }
         try
         {
-            if (stillCurrent is not null && !stillCurrent()) { return Done(Stale(retryChangedReason)); }
+            if (Freshness() is { } stale) { return Done(Stale(stale)); }
             if (probe.Active() is { } active) { return Done(Refused(active)); }
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
@@ -479,8 +485,8 @@ public sealed partial class ReplyService : ISessionReplier
             if (box is null)
             {
                 if (request.ClearConfirmation is null) { return Done(Unverified(problem!)); }
-                (box, problem, clearFence) = await ClearComposerAsync(session, pid, process, input, request, state, rememberClear);
-                if (box is null) { return Done(Unverified(problem!)); }
+                (box, problem, clearFence) = await ClearComposerAsync(session, pid, process, input, request, state, rememberClear, Freshness);
+                if (box is null) { return Done(retryChanged ? Stale(retryChangedReason) : Unverified(problem!)); }
             }
             // Both are held to the footer's mode too, in the same read: the box's rows read the same
             // empty, in vim's normal mode, or in shell mode holding only a space ('!' then a space),
@@ -521,7 +527,7 @@ public sealed partial class ReplyService : ISessionReplier
                         return Changed();
                     var latest = input.Read();
                     if (!latest.Readable || latest.Asking || latest.Resumed) return Changed();
-                    return stillCurrent() ? null : Changed();
+                    return Freshness();
                     string Changed() { retryChanged = true; return retryChangedReason; }
                 }
                 keys = keys with { Proceed = FinalEffect };

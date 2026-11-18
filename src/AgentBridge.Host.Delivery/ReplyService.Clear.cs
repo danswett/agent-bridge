@@ -8,7 +8,7 @@ public sealed partial class ReplyService
 {
     async Task<(CopilotInputBox? Box, string? Problem, Func<string?>? Fence)> ClearComposerAsync(
         Session session, int pid, SessionProcess? process, CopilotInput input, ReplyRequest request,
-        CopilotInputBoxState? state, Action<ClearedComposer> remember)
+        CopilotInputBoxState? state, Action<ClearedComposer> remember, Func<string?> freshness)
     {
         const string Unsafe = "the composer cannot be cleared safely; nothing was sent";
         const string Changed = "the session or person confirmation changed; nothing more was typed";
@@ -36,7 +36,7 @@ public sealed partial class ReplyService
                 || !processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid && p.StartedAt == process.StartedAt))
                 return Changed;
             var latest = input.Read();
-            return !latest.Readable || latest.Asking || latest.Resumed ? Changed : request.ClearConfirmation(digest);
+            return !latest.Readable || latest.Asking || latest.Resumed ? Changed : request.ClearConfirmation(digest) ?? freshness();
         }
         if (Fence() is { } refused) return (null, refused, null);
         var footer = state.Rows[^1].Row + 1;
