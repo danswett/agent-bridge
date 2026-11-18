@@ -9,6 +9,8 @@ using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
+using Process = System.Diagnostics.Process;
+using ProcessStartInfo = System.Diagnostics.ProcessStartInfo;
 
 // Update now (#1159 slice 1, docs/protocol/v1-update.md): a person's device signs an update.install
 // that skips the app's wait for a quiet machine. The press passes remote management's signed-command
@@ -202,6 +204,82 @@ public sealed class UpdateNowTests : IAsyncLifetime
 
     static IReadOnlyList<Session> Many(int count, SessionStatus status = SessionStatus.Working, QuestionKind? question = null, int from = 0) =>
         [.. Enumerable.Range(from, count).Select(i => S(Id(i), status, question))];
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Own_profile_replacement_is_not_another_profiles_host(bool oldStillExiting, bool explicitProfile)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        await using var installation = new FakeHostInstallation();
+        var old = await installation.StartAsync(explicitProfile ? "default" : null);
+        if (!oldStillExiting)
+        {
+            await old.StandardInput.WriteLineAsync("stop");
+            await old.WaitForExitAsync().WaitAsync(Bound);
+        }
+        await installation.StartAsync(explicitProfile ? "default" : null);
+
+        Assert.Null(HostUpdateGate.OtherHosts());
+    }
+
+    [Fact]
+    public async Task Another_profiles_host_in_the_same_installation_still_blocks()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        await using var installation = new FakeHostInstallation();
+        var other = await installation.StartAsync("work");
+
+        Assert.Equal($"another profile's host (pid {other.Id}) runs from this installation", HostUpdateGate.OtherHosts());
+    }
+
+    sealed class FakeHostInstallation : IAsyncDisposable
+    {
+        readonly string root = Path.Combine(AppContext.BaseDirectory, "fake-profile-host-" + Guid.NewGuid().ToString("N"));
+        readonly List<Process> processes = [];
+
+        public FakeHostInstallation()
+        {
+            Directory.CreateDirectory(root);
+            File.Copy(Path.Combine(Environment.SystemDirectory, "cmd.exe"), Path.Combine(root, "agent-bridge-host.exe"));
+        }
+
+        public async Task<Process> StartAsync(string? profile)
+        {
+            // A native shell waits on this test's stdin; no product host or agent is started.
+            var start = new ProcessStartInfo(Path.Combine(root, "agent-bridge-host.exe"))
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                Arguments = "/d /q /c \"echo fake-host-ready&set /p fixture=&rem\""
+                    + (profile is null ? "" : " --profile " + profile),
+            };
+            var process = Process.Start(start)!;
+            processes.Add(process);
+            Assert.Equal("fake-host-ready", await process.StandardOutput.ReadLineAsync().WaitAsync(Bound));
+            return process;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            foreach (var process in processes)
+            {
+                if (!process.HasExited) { process.Kill(); }
+                await process.WaitForExitAsync().WaitAsync(Bound);
+                process.Dispose();
+            }
+            for (var attempt = 0; ; attempt++)
+            {
+                try { Directory.Delete(root, recursive: true); break; }
+                catch (Exception e) when (attempt < 20 && e is IOException or UnauthorizedAccessException)
+                {
+                    await Task.Delay(100);
+                }
+            }
+        }
+    }
 
     [Theory]
     [InlineData(true, false)]
