@@ -4,6 +4,89 @@ namespace AgentBridge.App.Tests;
 
 public sealed class ConversationEndPinTests
 {
+    [Fact]
+    public void A_held_pinned_prepend_waits_without_moving_or_inserting_rows()
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.FollowState.PointerOver(7);
+        view.DrawEarlierForProbe();
+        view.DrainForProbe();
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+        Assert.Equal(1, view.ShownCount);
+        view.FollowState.PointerLeft(7);
+        view.DrawEarlierForProbe();
+        Assert.Equal(2, view.ShownCount);
+        Assert.Contains(view.Scroller.ScrollableHeight, view.Scroller.Targets);
+    }
+
+    [Theory]
+    [InlineData("held")]
+    [InlineData("unheld")]
+    [InlineData("ended")]
+    public void Opening_another_session_places_its_end_even_with_an_inherited_hold(string hold)
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        if (hold != "unheld") { view.FollowState.PointerOver(7); }
+        view.SwitchForProbe();
+        if (hold == "ended") { view.FollowState.PointerLeft(7); }
+        view.DrainForProbe();
+        view.Follow();
+        Assert.Contains(view.Scroller.ScrollableHeight, view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void A_bring_target_spanning_the_viewport_does_not_latch_navigation_that_will_not_scroll()
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Top = -50, Height = 200 });
+        view.DrawEarlierForProbe();
+        Assert.Equal(2, view.ShownCount);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(double.NaN, 10)]
+    public void An_explicit_alignment_or_offset_still_owns_a_bring_target_spanning_the_viewport(double alignment, double offset)
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Top = -50, Height = 200 }, alignment, offset);
+        view.DrawEarlierForProbe();
+        Assert.False(view.Pinned);
+        Assert.Equal(1, view.ShownCount);
+    }
+
+    [Fact]
+    public void A_navigation_after_opening_cancels_the_queued_opening_end_placement()
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.FollowState.PointerOver(7);
+        view.SwitchForProbe();
+        view.Scroller.Wheel();
+        view.DrainForProbe();
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void An_unloaded_or_replaced_session_drops_scrollbar_custody_without_a_release(bool switchSession)
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.Scroller.Press(new Microsoft.UI.Xaml.Controls.Primitives.ScrollBar { Parent = view.Scroller }, 7);
+        if (switchSession) { view.SwitchForProbe(); }
+        else { view.DetachForProbe(); }
+        view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
+        Assert.True(view.HistoryEnd);
+    }
+
     [Theory]
     [InlineData("pointer")]
     [InlineData("touch")]
