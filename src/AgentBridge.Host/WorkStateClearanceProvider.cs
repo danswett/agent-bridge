@@ -69,6 +69,8 @@ public sealed class WorkStateClearanceProvider(ISessionSource source, HttpClient
             var repositoryResponse = GetJson($"/repos/{owner}/{repository}");
             using var metadata = repositoryResponse.Body;
             if (repositoryResponse.Status != HttpStatusCode.OK || metadata?.RootElement.ValueKind != JsonValueKind.Object
+                || !metadata.RootElement.TryGetProperty("full_name", out var canonical) || canonical.ValueKind != JsonValueKind.String
+                || !string.Equals(canonical.GetString(), owner + "/" + repository, StringComparison.OrdinalIgnoreCase)
                 || !metadata.RootElement.TryGetProperty("fork", out var fork) || fork.ValueKind != JsonValueKind.False
                 || !metadata.RootElement.TryGetProperty("private", out var privateRepo) || privateRepo.ValueKind != JsonValueKind.False)
             { return new(WorkState.Unknown, "public non-fork pull-request targets could not be proved"); }
@@ -85,6 +87,7 @@ public sealed class WorkStateClearanceProvider(ISessionSource source, HttpClient
     }
     WorkClearance CheckUnpushed(string owner, string repository, string branch, string head, bool repositoryProven)
     {
+        if (!repositoryProven) { return new(WorkState.Unknown, "the repository identity could not be proved"); }
         try
         {
             var branchResponse = GetJson($"/repos/{owner}/{repository}/branches/{Uri.EscapeDataString(branch)}");
@@ -93,7 +96,8 @@ public sealed class WorkStateClearanceProvider(ISessionSource source, HttpClient
             { return new(WorkState.Refused, "the session's recorded branch is not present on GitHub"); }
             if (branchResponse.Status != HttpStatusCode.OK || branchBody is null || branchBody.RootElement.ValueKind != JsonValueKind.Object
                 || !branchBody.RootElement.TryGetProperty("commit", out var commit) || commit.ValueKind != JsonValueKind.Object
-                || !commit.TryGetProperty("sha", out var shaValue) || shaValue.GetString() is not { Length: > 0 } remoteHead)
+                || !commit.TryGetProperty("sha", out var shaValue) || shaValue.ValueKind != JsonValueKind.String
+                || shaValue.GetString() is not { Length: > 0 } remoteHead)
             { return new(WorkState.Unknown, "the pushed branch head could not be checked"); }
             if (string.Equals(head, remoteHead, StringComparison.OrdinalIgnoreCase))
             { return new(WorkState.Cleared, "the session worktree head matches its pushed branch"); }
@@ -101,7 +105,8 @@ public sealed class WorkStateClearanceProvider(ISessionSource source, HttpClient
             var comparison = GetJson($"/repos/{owner}/{repository}/compare/{Uri.EscapeDataString(remoteHead)}...{Uri.EscapeDataString(head)}");
             using var compareBody = comparison.Body;
             if (comparison.Status != HttpStatusCode.OK || compareBody is null || compareBody.RootElement.ValueKind != JsonValueKind.Object
-                || !compareBody.RootElement.TryGetProperty("ahead_by", out var ahead) || !ahead.TryGetInt32(out var count) || count < 0)
+                || !compareBody.RootElement.TryGetProperty("ahead_by", out var ahead) || ahead.ValueKind != JsonValueKind.Number
+                || !ahead.TryGetInt32(out var count) || count < 0)
             { return new(WorkState.Unknown, "unpushed commits could not be checked"); }
             return count == 0
                 ? new(WorkState.Cleared, "all session worktree commits are on its pushed branch")
