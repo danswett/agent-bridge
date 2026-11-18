@@ -122,7 +122,8 @@ public sealed class LatestReturnTests
         Assert.Contains("wheelReceipt ??= away.StampLatestNativeInput(input, scroll);", source, StringComparison.Ordinal);
         AssertOrdered(source,
             "wheelInput = away.BeginLatestNativeInput();",
-            "Wheel(window, list);",
+            "await wheel.Post();",
+            "wheel.RecordReceipt(wheelReceivedCount is not null);",
             "var quarantined = wheelReceivedCount is null",
             "if (!quarantined)",
             "CheckLatestNativeReceipt(away, wheelReceipt, check);");

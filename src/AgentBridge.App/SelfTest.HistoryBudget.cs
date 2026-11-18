@@ -391,9 +391,9 @@ static partial class SelfTest
                     return WheelHistoryCount() > 0 && !wheelMoving && scroll.ScrollableHeight > 0
                         && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
                 }, TimeSpan.FromSeconds(10));
-                using var wheel = new NativeWheelInput(new WheelInputPort(window, list));
+                using var wheel = new NativeWheelInput(new WheelInputPort(window, list, scroll));
                 wheelInput = away.BeginLatestNativeInput();
-                wheel.Post();
+                await wheel.Post();
                 var wheelTarget = wheel.Target;
                 var wheeled = await Until(() => wheelReceivedCount is not null
                     && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
@@ -932,18 +932,32 @@ static partial class SelfTest
         }, result);
     }
 
-    sealed class WheelInputPort(MainWindow window, ListView list) : INativeWheelInputPort
+    sealed class WheelInputPort(MainWindow window, ListView list, ScrollViewer scroll) : INativeWheelInputPort
     {
         WheelPoint mouse;
         public bool ListIsTabStop { get => list.IsTabStop; set => list.IsTabStop = value; }
-        public bool FocusList()
+        public async Task<bool> FocusList()
         {
-            // Focus establishes routing; only the wheel should take the view away from the end.
+            // The list itself is above its scroller; focus a stop inside its content instead.
+            if (scroll.Content is not DependencyObject content
+                || FocusManager.FindLastFocusableElement(content) is not { } focused) { return false; }
             var held = new Windows.Foundation.TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
-            window.RootElement.BringIntoViewRequested += held;
-            try { return list.Focus(FocusState.Programmatic); }
-            finally { window.RootElement.BringIntoViewRequested -= held; }
+            var restoreAt = focused as UIElement ?? (focused as Microsoft.UI.Xaml.Documents.TextElement)?.ContentStart?.VisualParent;
+            return restoreAt is not null && await NativeInputSetup.RestoreFocus(restoreAt,
+                (element, hold) =>
+                {
+                    if (hold) { element.BringIntoViewRequested += held; }
+                    else { element.BringIntoViewRequested -= held; }
+                },
+                async () =>
+                {
+                    var succeeded = (await FocusManager.TryFocusAsync(focused, FocusState.Programmatic)).Succeeded;
+                    await CaptureFrame(window.RootElement);
+                    await Still(scroll);
+                    return succeeded && ListHasFocus;
+                });
         }
+        public bool ListAtEnd => scroll.ScrollableHeight > 0 && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
         public bool ListHasFocus => ReferenceEquals(FindAncestor<ListView>(
             FocusManager.GetFocusedElement(list.XamlRoot) as DependencyObject), list);
         public bool WindowIsForeground => GetForegroundWindow() == window.Handle;

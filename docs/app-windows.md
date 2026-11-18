@@ -1371,6 +1371,8 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   normal `--self-test` includes it on both Windows CI architectures.
   The queued-wheel check temporarily makes the conversation list focusable through receipt
   and older drawing, restoring its original Tab-stop setting even if setup refuses the wheel.
+  Async focus stays inside the scroller with bring-into-view held on the focused stop
+  through frame capture and settling. Posting refuses if focus has moved the view off the end.
   Posting still requires verified list focus, native target and foreground; no focus or
   scroll retry substitutes for a received wheel.
   The regular `--self-test` also records the existing Latest history-scroll checks in

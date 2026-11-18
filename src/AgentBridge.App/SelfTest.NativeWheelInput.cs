@@ -3,8 +3,9 @@ namespace AgentBridge.App;
 interface INativeWheelInputPort
 {
     bool ListIsTabStop { get; set; }
-    bool FocusList();
+    Task<bool> FocusList();
     bool ListHasFocus { get; }
+    bool ListAtEnd { get; }
     nint PrepareTarget();
     bool TargetIsVerified(nint target);
     bool WindowIsForeground { get; }
@@ -21,11 +22,11 @@ sealed class NativeWheelInput(INativeWheelInputPort port) : IDisposable
 
     public void Dispose() => port.ListIsTabStop = wasTabStop;
 
-    public void Post()
+    public async Task Post()
     {
-        // The conversation is normally not a Tab stop, so WinUI otherwise refuses Focus().
         port.ListIsTabStop = true;
-        if (!port.FocusList()) { throw new InvalidOperationException($"setup: native wheel list focus failed ({port.DescribeTarget()})"); }
+        if (!await port.FocusList()) { throw new InvalidOperationException($"setup: native wheel list focus failed ({port.DescribeTarget()})"); }
+        if (!port.ListAtEnd) { throw new InvalidOperationException("setup: native wheel focus moved the view away from the latest."); }
         var target = port.PrepareTarget();
         if (!port.ListHasFocus || !port.TargetIsVerified(target) || !port.WindowIsForeground)
         {

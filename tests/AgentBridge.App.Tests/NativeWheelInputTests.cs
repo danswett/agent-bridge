@@ -7,12 +7,12 @@ public sealed class NativeWheelInputTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void The_wheel_keeps_the_list_focusable_until_receipt_and_restores_its_tab_behavior(bool wasTabStop)
+    public async Task The_wheel_keeps_the_list_focusable_until_receipt_and_restores_its_tab_behavior(bool wasTabStop)
     {
         var port = new WheelPort { ListIsTabStop = wasTabStop };
         using (var wheel = new NativeWheelInput(port))
         {
-            wheel.Post();
+            await wheel.Post();
             Assert.True(port.ListIsTabStop);
             Assert.True(port.FocusedWhenPosted);
             wheel.RecordReceipt(true);
@@ -22,22 +22,22 @@ public sealed class NativeWheelInputTests
     }
 
     [Fact]
-    public void Native_wheel_is_posted_only_after_the_list_has_focus_and_the_window_is_foreground()
+    public async Task Native_wheel_is_posted_only_after_the_list_has_focus_and_the_window_is_foreground()
     {
         var port = new WheelPort();
         using var wheel = new NativeWheelInput(port);
-        wheel.Post();
+        await wheel.Post();
         Assert.True(port.FocusedWhenPosted);
         Assert.Equal(new[] { "focus", "prepare", "list-focus", "target", "foreground", "post" }, port.Calls);
         Assert.Equal((nint)0x20, port.PostedTarget);
     }
 
     [Fact]
-    public void A_view_no_longer_at_the_end_after_focus_refuses_the_wheel()
+    public async Task A_view_no_longer_at_the_end_after_focus_refuses_the_wheel()
     {
         var port = new WheelPort { AtEnd = false };
         using var wheel = new NativeWheelInput(port);
-        Assert.Throws<InvalidOperationException>(() => wheel.Post());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => wheel.Post());
         Assert.DoesNotContain("post", port.Calls);
         Assert.Equal(0, port.PostedTarget);
     }
@@ -47,7 +47,7 @@ public sealed class NativeWheelInputTests
     [InlineData(true, true, true, true)]
     [InlineData(true, false, false, true)]
     [InlineData(true, false, true, false)]
-    public void Unverified_list_focus_target_or_foreground_refuses_the_wheel(
+    public async Task Unverified_list_focus_target_or_foreground_refuses_the_wheel(
         bool focusSucceeds, bool losesFocus, bool targetVerified, bool foreground)
     {
         var port = new WheelPort
@@ -57,7 +57,7 @@ public sealed class NativeWheelInputTests
         };
         using (var wheel = new NativeWheelInput(port))
         {
-            Assert.Throws<InvalidOperationException>(() => wheel.Post());
+            await Assert.ThrowsAsync<InvalidOperationException>(() => wheel.Post());
             Assert.Single(port.Calls, call => call == "focus");
             Assert.DoesNotContain("post", port.Calls);
             Assert.Equal(0, port.PostedTarget);
@@ -66,11 +66,11 @@ public sealed class NativeWheelInputTests
     }
 
     [Fact]
-    public void Missed_wheel_receipt_logs_the_HWND_chain()
+    public async Task Missed_wheel_receipt_logs_the_HWND_chain()
     {
         var port = new WheelPort();
         using var wheel = new NativeWheelInput(port);
-        wheel.Post();
+        await wheel.Post();
         port.Description = "window: 0xA; target: 0x22; foreground: 0xB";
         port.Chain = [0x22, 0x21, 0xA];
         wheel.RecordReceipt(false);
@@ -84,15 +84,30 @@ public sealed class NativeWheelInputTests
     }
 
     [Fact]
-    public void A_received_wheel_does_not_read_or_log_a_missed_receipt_chain()
+    public async Task A_received_wheel_does_not_read_or_log_a_missed_receipt_chain()
     {
         var port = new WheelPort();
         using var wheel = new NativeWheelInput(port);
-        wheel.Post();
+        await wheel.Post();
         wheel.RecordReceipt(true);
         Assert.Empty(port.Logs);
         Assert.Equal(0, port.ChainReads);
         Assert.Equal(port.Description, wheel.Target);
+    }
+
+    [Fact]
+    public async Task The_wheel_waits_for_focus_to_settle_before_checking_the_end_and_posting()
+    {
+        var focus = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var port = new WheelPort { FocusCompletion = focus.Task };
+        using var wheel = new NativeWheelInput(port);
+        var posting = wheel.Post();
+        Assert.False(posting.IsCompleted);
+        Assert.DoesNotContain("prepare", port.Calls);
+        port.AtEnd = false;
+        focus.SetResult();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => posting);
+        Assert.DoesNotContain("post", port.Calls);
     }
 
     sealed class WheelPort : INativeWheelInputPort
@@ -102,11 +117,17 @@ public sealed class NativeWheelInputTests
         public bool Focused, FocusedWhenPosted, AtEnd = true;
         public bool ListIsTabStop { get; set; }
         public bool ListAtEnd => AtEnd;
+        public Task FocusCompletion = Task.CompletedTask;
         public nint PostedTarget;
         public int ChainReads;
         public string Description = "window: 0xA; target: 0x20; foreground: 0xA";
         public IReadOnlyList<nint> Chain = [0x20, 0xA];
-        public bool FocusList() { Calls.Add("focus"); return Focused = FocusSucceeds && ListIsTabStop; }
+        public async Task<bool> FocusList()
+        {
+            Calls.Add("focus");
+            await FocusCompletion;
+            return Focused = FocusSucceeds && ListIsTabStop;
+        }
         public bool ListHasFocus { get { Calls.Add("list-focus"); return Focused; } }
         public bool WindowIsForeground { get { Calls.Add("foreground"); return Foreground; } }
         public nint PrepareTarget()
