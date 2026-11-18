@@ -177,6 +177,11 @@ public sealed class LocalApiTests : IAsyncLifetime
         var wire = JsonSerializer.SerializeToElement(recorded, ProtocolJson.Options);
         Assert.False(wire.TryGetProperty("intent", out _));
         Assert.False(wire.TryGetProperty("intentSource", out _));
+        if (expected == "Unknown")
+        {
+            callers.Current = new FixedCallerGuard(new Caller(CallerKind.App, "later caller"));
+            Assert.Equal("Unknown", ReplyFlowTests.IntentRecorder.IntentOf(recorded));
+        }
         callers.Current = new FixedCallerGuard(new Caller(CallerKind.Other, "untraceable caller"));
         Assert.Equal("Unknown", ReplyFlowTests.IntentRecorder.IntentOf(recorded));
     }

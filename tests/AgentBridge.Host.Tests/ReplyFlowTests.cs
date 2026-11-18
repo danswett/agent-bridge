@@ -101,9 +101,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
             return Task.FromResult(new ReplyResult(AnswerOutcome.Refused, "recorded without typing"));
         }
 
-        // Keep the tests-only RED compilable before the carrier exists.
-        internal static string? IntentOf(ReplyRequest request) =>
-            request.GetType().GetProperty("Intent")?.GetValue(request)?.ToString();
+        internal static string IntentOf(ReplyRequest request) => request.Intent.ToString();
     }
 
     [Theory]
