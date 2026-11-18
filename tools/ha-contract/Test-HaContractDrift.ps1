@@ -56,7 +56,10 @@ $upstream = (& git -C $Source rev-parse HEAD).Trim()
 Set-Content -LiteralPath (Join-Path $OutDir 'upstream.txt') -Value $upstream -NoNewline
 
 $exporter = Join-Path $PSScriptRoot 'Export-HaContract.ps1'
-$arguments = @('-NoProfile', '-File', $exporter, '-Source', $Source)
+$contract = Get-Content -LiteralPath (Join-Path $Fixtures 'ha-contract.json') -Raw | ConvertFrom-Json
+$slugMachineNamesJson = ConvertTo-Json -InputObject @($contract.slugs.machineName) -Compress
+$arguments = @('-NoProfile', '-NonInteractive', '-File', $exporter, '-Source', $Source,
+    '-Machine', $contract.machine.machineName, '-SlugMachineNamesJson', $slugMachineNamesJson)
 foreach ($key in $names.Keys) { $arguments += @("-$key", (Join-Path $OutDir "recorded\$($names[$key])")) }
 $log = & pwsh @arguments 2>&1 | ForEach-Object { "$_" }
 $exported = $LASTEXITCODE

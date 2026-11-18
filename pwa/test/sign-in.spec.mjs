@@ -1,5 +1,5 @@
 // An agent that needs sign-in, in demo mode (#800, ui.md §6.1, §6.13 and §9.1), as Connection's
-// producer contract has it: four Copilot sessions on DEV-VM1 stopped because its sign-in expired,
+// producer contract has it: four Copilot sessions on host-a stopped because its sign-in expired,
 // rolled up into one banner; Sign in, and the sheet with the device code from signin.code and
 // github.com, Copy and Open; then signed in and waiting for the sessions to confirm, recovered once
 // the host clears them, recovered by itself, or why not. And
@@ -30,14 +30,14 @@ async function openDemo(page, extra = '') {
       return true;
     };
   });
-  await page.goto(`?demo=1&static=1&signin=1&name=DEV-VM1${extra}#/sessions`);
+  await page.goto(`?demo=1&static=1&signin=1&name=host-a${extra}#/sessions`);
   await page.waitForSelector('html[data-demo-ready]');
 }
 
 const banner = (page) => page.locator('#sign-in-banners .sign-in-banner');
 const sheet = (page) => page.locator('dialog.sign-in-sheet');
 const row = (page, id) => page.locator(`#session-list > .session[data-id="${id}"]`);
-const signIn = (page) => banner(page).getByRole('button', { name: 'Sign in to Copilot on DEV-VM1' });
+const signIn = (page) => banner(page).getByRole('button', { name: 'Sign in to Copilot on host-a' });
 
 const visibility = (page, visible) => page.evaluate((visible) => {
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: visible ? 'visible' : 'hidden' });
@@ -130,7 +130,7 @@ test.afterEach(async ({ page }) => {
 test('sessions that need sign-in say so on their rows, rolled up into one banner for the machine that names them, and are not in Needs you', async ({ page }) => {
   await openDemo(page);
   await expect(banner(page)).toHaveCount(1);
-  await expect(banner(page).locator('.sign-in-head')).toHaveText('Copilot on DEV-VM1 needs sign-in \u00b7 @demo-user');
+  await expect(banner(page).locator('.sign-in-head')).toHaveText('Copilot on host-a needs sign-in \u00b7 @demo-user');
   await expect(banner(page).locator('.sign-in-line')).toHaveText(AFFECTED);
   // Each title in that line is a link to its session, with no line of titles of its own.
   await expect(banner(page).locator('.sign-in-line .sign-in-session .sign-in-title')).toHaveText(['Coordinate the Shiproom', 'Fix the relay reconnect', 'Review the usage panel', 'Draft the release notes']);
@@ -156,7 +156,7 @@ test('sessions that need sign-in say so on their rows, rolled up into one banner
   await expect(page.locator('#session-views .session-view[data-id="error-quota"] .fact-attention dt')).toHaveText('Message');
   await expect(page.locator('#session-views .session-view[data-id="error-quota"] .fact-attention dd')).toHaveText('Claude stopped with an error.');
   // Said once, politely, without the code.
-  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Copilot on DEV-VM1 needs sign-in');
+  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Copilot on host-a needs sign-in');
   // A session in the banner opens on a press.
   await banner(page).getByRole('button', { name: 'Draft the release notes' }).click();
   await expect(page.locator('#session-views .session-view[data-id="signin-4"]')).toBeVisible();
@@ -172,7 +172,7 @@ test('Sign in asks the machine once, and its sheet shows the code from signin.co
   await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
   await expect(sheet(page).locator('.sign-in-where')).toHaveText('Open this page and enter the code.');
   await expect(sheet(page).locator('.sign-in-uri')).toHaveText('github.com/login/device');
-  await expect(sheet(page).locator('.sign-in-sheet-title')).toHaveText('Sign in to Copilot on DEV-VM1');
+  await expect(sheet(page).locator('.sign-in-sheet-title')).toHaveText('Sign in to Copilot on host-a');
   await expect(banner(page).locator('.sign-in-line')).toHaveText(/^Waiting for sign-in \u00b7 code expires \d{1,2}:\d{2}/);
   await expect(sheet(page).locator('.sign-in-expiry')).toHaveText(/^Expires \d{1,2}:\d{2}/);
   const log = await page.evaluate(() => window.agentBridgeDemo.signInLog);
@@ -180,8 +180,8 @@ test('Sign in asks the machine once, and its sheet shows the code from signin.co
   expect(log[0]).toMatchObject({ op: 'signin.start', agent: 'copilot', account: 'demo-user' });
   expect(log[0].request).toMatch(UUID);
   // The sheet starts on Cancel.
-  await expect(sheet(page).getByRole('button', { name: 'Cancel sign-in for Copilot on DEV-VM1' })).toBeFocused();
-  const open = sheet(page).getByRole('link', { name: 'Open github.com to sign in to Copilot on DEV-VM1' });
+  await expect(sheet(page).getByRole('button', { name: 'Cancel sign-in for Copilot on host-a' })).toBeFocused();
+  const open = sheet(page).getByRole('link', { name: 'Open github.com to sign in to Copilot on host-a' });
   await expect(open).toHaveAttribute('href', 'https://github.com/login/device');
   await expect(open).toHaveAttribute('target', '_blank');
   await expect(open).toHaveAttribute('rel', 'noopener noreferrer');
@@ -189,7 +189,7 @@ test('Sign in asks the machine once, and its sheet shows the code from signin.co
   // The code can be selected and copied as shown, and is read a character at a time.
   expect(await sheet(page).locator('.sign-in-code').evaluate((e) => { const c = getComputedStyle(e); return c.userSelect || c.webkitUserSelect; })).toBe('all');
   await expect(sheet(page).locator('.sign-in-code-spelled')).toHaveText('Code: W D J B, M J H T');
-  await sheet(page).getByRole('button', { name: 'Copy code for Copilot on DEV-VM1' }).click();
+  await sheet(page).getByRole('button', { name: 'Copy code for Copilot on host-a' }).click();
   expect(await page.evaluate(() => window.__copied)).toEqual(['WDJB-MJHT']);
   await expect(sheet(page).locator('.sign-in-copied')).toHaveText('Code copied');
   // The code was never in a session or a snapshot, and the live region never said it.
@@ -266,7 +266,7 @@ test('a held code that runs out before its start\'s result comes leaves only tha
   await page.evaluate(() => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get('error-quota') }); });
   await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
   await expect(sheet(page).locator('.sign-in-expired')).toHaveText('Code expired', { timeout: 6000 });
-  await expect(sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' })).toBeVisible();
+  await expect(sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on host-a' })).toBeVisible();
   expect(await page.evaluate(() => document.body.outerHTML)).not.toContain('WDJB');
 });
 
@@ -282,7 +282,7 @@ test('a late code from a cancelled machine is never held while another machine s
   const cancelled = () => page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].signInLog.find((l) => l.op === 'signin.cancel')?.flow ?? null);
   await expect.poll(cancelled).not.toBeNull();
   const flow = await cancelled();
-  // DEV-VM1 starts, its result slow: its own code is held for it.
+  // host-a starts, its result slow: its own code is held for it.
   await page.evaluate(() => window.agentBridgeDemo.delaySignIns(4000));
   await signIn(page).click();
   await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(1);
@@ -350,7 +350,7 @@ test('a machine no longer shown takes its resolved banner with it at once', asyn
   await expect(laptop).toHaveCount(1);
   await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].recoverSignIn());
   await expect(laptop.locator('.sign-in-line')).toHaveText('Recovered by itself');
-  // Only DEV-VM1 picked: Laptop's link goes, and nothing of it stays on screen.
+  // Only host-a picked: Laptop's link goes, and nothing of it stays on screen.
   await page.evaluate(() => window.agentBridgeDemo.hosts.select('demo'));
   await expect(laptop).toHaveCount(0, { timeout: 3000 });
 });
@@ -359,7 +359,7 @@ test('Try again goes, live, once the host no longer offers this device sign-in',
   await openDemo(page);
   await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com.evil.example/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() }; });
   await signIn(page).click();
-  const retry = sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' });
+  const retry = sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on host-a' });
   await expect(retry).toBeVisible();
   // The newest session stops claiming phone sign-in: no claim (#696).
   await page.evaluate(() => {
@@ -376,7 +376,7 @@ test('Try again waits for the cancel before it starts again', async ({ page }) =
   await openDemo(page);
   await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com.evil.example/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() }; });
   await signIn(page).click();
-  const retry = sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' });
+  const retry = sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on host-a' });
   await expect(retry).toBeVisible();
   await page.evaluate(() => window.agentBridgeDemo.delayCancels(1000));
   await retry.click();
@@ -425,7 +425,7 @@ for (const attempt of ['retry', 'start']) {
     await openDemo(page);
     await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com.evil.example/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() }; });
     await signIn(page).click();
-    const retry = sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' });
+    const retry = sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on host-a' });
     await expect(retry).toBeVisible();
     // Hold the real cancel response until the capability change has reached the client.
     await page.evaluate(() => {
@@ -484,21 +484,21 @@ test('every way an attempt ends is said aloud, never in the machine\'s words', a
   await page.evaluate(() => window.agentBridgeDemo.scriptSignIns({ outcome: 'refused', reason: 'secret machine words' }));
   await signIn(page).click();
   await expect(sheet(page)).toBeHidden();
-  await expect(said).toHaveText('Sign-in refused for Copilot on DEV-VM1');
+  await expect(said).toHaveText('Sign-in refused for Copilot on host-a');
   // Not one of the host's reasons: the machine's words are never on the banner (ui.md §6.13).
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Sign-in refused');
   await expect(banner(page)).not.toContainText('secret');
   // A code that couldn't be shown.
   await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com.evil.example/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() }; });
-  await banner(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' }).click();
-  await expect(said).toHaveText('The sign-in code for Copilot on DEV-VM1 couldn\u2019t be shown');
+  await banner(page).getByRole('button', { name: 'Try again to sign in to Copilot on host-a' }).click();
+  await expect(said).toHaveText('The sign-in code for Copilot on host-a couldn\u2019t be shown');
   await page.keyboard.press('Escape');
   await expect(sheet(page)).toBeHidden();
   // A code that runs out.
   await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 1500).toISOString() }; });
   await signIn(page).click();
   await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
-  await expect(said).toHaveText('Sign-in code expired for Copilot on DEV-VM1', { timeout: 8000 });
+  await expect(said).toHaveText('Sign-in code expired for Copilot on host-a', { timeout: 8000 });
   expect(await page.locator('#sign-in-said').textContent()).not.toMatch(/secret|evil/);
 });
 
@@ -507,7 +507,7 @@ test('the live region reads only the lines added, never again those already said
   const region = page.locator('#sign-in-said');
   await expect(region).toHaveAttribute('aria-atomic', 'false');
   await expect(region).toHaveAttribute('aria-relevant', 'additions');
-  await expect(region.locator('.sign-in-said-line')).toHaveText(['Copilot on DEV-VM1 needs sign-in']);
+  await expect(region.locator('.sign-in-said-line')).toHaveText(['Copilot on host-a needs sign-in']);
   await region.locator('.sign-in-said-line').first().evaluate((p) => { p.dataset.mark = 'first'; });
   // Seven more banners, one per account, drawn in one render: every one is said, none dropped by a cap.
   await page.evaluate(() => {
@@ -550,7 +550,7 @@ test('two machines\' changes in one update are both said, not the second over th
   await page.evaluate(() => { const d = window.agentBridgeDemo; d.recoverSignIn(); d.machines['demo-laptop'].recoverSignIn(); });
   // Each is its own line added to the region; neither replaced the other.
   await expect.poll(() => page.locator('#sign-in-said .sign-in-said-line').allTextContents().then((l) => l.slice(-2)), { timeout: 5000 })
-    .toEqual(['Copilot on DEV-VM1 recovered by itself', 'Copilot on Laptop recovered by itself']);
+    .toEqual(['Copilot on host-a recovered by itself', 'Copilot on Laptop recovered by itself']);
 });
 
 test('a start result the protocol doesn\'t define is refused: never "Sign in at the machine"', async ({ page }) => {
@@ -560,7 +560,7 @@ test('a start result the protocol doesn\'t define is refused: never "Sign in at 
   await expect(sheet(page)).toBeHidden();
   // Read as refused, it has no words of its own: the machine's reason isn't shown.
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Sign-in refused');
-  await banner(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' }).click();
+  await banner(page).getByRole('button', { name: 'Try again to sign in to Copilot on host-a' }).click();
   await expect(sheet(page)).toBeHidden();
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Sign-in refused');
   await expect(page.locator('#sign-in-banners')).not.toContainText('at the machine');
@@ -594,7 +594,7 @@ test('sign-in is said where a phone hears it with a session open, outside the li
   await expect(page.locator('#list-pane')).toBeHidden();
   await page.evaluate(() => window.agentBridgeDemo.recoverSignIn());
   const said = page.locator('#sign-in-said .sign-in-said-line').last();
-  await expect(said).toHaveText('Copilot on DEV-VM1 recovered by itself');
+  await expect(said).toHaveText('Copilot on host-a recovered by itself');
   expect(await said.evaluate((el) => el.checkVisibility() && !el.closest('#list-pane'))).toBe(true);
 });
 
@@ -603,7 +603,7 @@ test('a start that fails is said politely once, never as an alert redrawn with e
   await page.evaluate(() => window.agentBridgeDemo.failSignIns('internal: stack trace'));
   await signIn(page).click();
   await expect(sheet(page)).toBeHidden();
-  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Couldn\u2019t start sign-in for Copilot on DEV-VM1. Try again.');
+  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Couldn\u2019t start sign-in for Copilot on host-a. Try again.');
   const problem = banner(page).locator('.sign-in-problem');
   await expect(problem).toHaveText('Couldn\u2019t start sign-in. Try again.');
   expect(await problem.getAttribute('role')).toBeNull();
@@ -708,7 +708,7 @@ test('no code outlives a cancel, its expiry or its machine going away, and a mac
   await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
   await expect(sheet(page).locator('.sign-in-expired')).toHaveText('Code expired', { timeout: 10000 });
   await expect(sheet(page).locator('.sign-in-code')).toHaveCount(0);
-  await expect(sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' })).toBeVisible();
+  await expect(sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on host-a' })).toBeVisible();
   expect(await held()).toBe(0);
   await page.keyboard.press('Escape');
   await expect(sheet(page)).toBeHidden();
@@ -853,7 +853,7 @@ test('signed in before the host says pending, focus a person moves elsewhere bef
 
 test('signed out, nothing said about the account\'s machines stays in the live region (#878)', async ({ page }) => {
   await openDemo(page);
-  await expect(page.locator('#sign-in-said .sign-in-said-line')).toHaveText(['Copilot on DEV-VM1 needs sign-in']);
+  await expect(page.locator('#sign-in-said .sign-in-said-line')).toHaveText(['Copilot on host-a needs sign-in']);
   await page.evaluate(() => window.agentBridgeDemo.page.signIns.stop());
   await expect(page.locator('#sign-in-said')).toBeEmpty();
 });
@@ -869,7 +869,7 @@ test('once the person signs in, the sessions wait to confirm, never recovered un
   await expect(sheet(page)).toBeHidden();
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
   await expect(banner(page).locator('.sign-in-line')).toBeFocused();
-  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Copilot on DEV-VM1: Signed in \u00b7 waiting for 4 sessions to confirm');
+  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Copilot on host-a: Signed in \u00b7 waiting for 4 sessions to confirm');
   await expect(banner(page).locator('.sign-in-start')).toHaveCount(0);
   for (const id of SESSIONS) { await expect(row(page, id).locator('.row-status')).toHaveText('Signed in \u00b7 waiting for the session to confirm'); }
   await expect(banner(page)).not.toContainText('recovered');
@@ -877,7 +877,7 @@ test('once the person signs in, the sessions wait to confirm, never recovered un
   // The model answered: the host clears them, and only now is it recovered.
   await page.evaluate(() => window.agentBridgeDemo.confirmSignIn());
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 4 sessions recovered');
-  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Copilot on DEV-VM1: Signed in \u00b7 4 sessions recovered');
+  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Copilot on host-a: Signed in \u00b7 4 sessions recovered');
   for (const id of SESSIONS) { await expect(row(page, id).locator('.row-status')).toHaveText('Idle'); }
   // A minute on, with nothing from the machine, it has gone.
   await page.evaluate(() => { const real = Date.now; Date.now = () => real() + 61000; window.agentBridgeDemo.page.signIns.render(); });
@@ -891,7 +891,7 @@ test('a session that fails sign-in again while confirming goes straight back to 
   await page.evaluate(() => window.agentBridgeDemo.finishSignIn('signedIn'));
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
   await page.evaluate(() => window.agentBridgeDemo.failSignInAgain());
-  await expect(banner(page).locator('.sign-in-head')).toHaveText('Copilot on DEV-VM1 needs sign-in \u00b7 @demo-user');
+  await expect(banner(page).locator('.sign-in-head')).toHaveText('Copilot on host-a needs sign-in \u00b7 @demo-user');
   await expect(banner(page).locator('.sign-in-line')).toHaveText(AFFECTED_AGAIN);
   await expect(signIn(page)).toBeVisible();
   for (const id of SESSIONS) { await expect(row(page, id).locator('.row-status')).toHaveText('Needs sign-in'); }
@@ -901,7 +901,7 @@ test('a stored sign-in that still worked reads "recovered by itself", with nobod
   await openDemo(page);
   await page.evaluate(() => window.agentBridgeDemo.recoverSignIn());
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Recovered by itself');
-  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Copilot on DEV-VM1 recovered by itself');
+  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Copilot on host-a recovered by itself');
   expect(await page.evaluate(() => window.agentBridgeDemo.signInLog)).toEqual([]);
 });
 
@@ -929,8 +929,8 @@ test('a sign-in that fails says so, never why in the machine\'s words, and offer
   await expect(sheet(page)).toBeHidden();
   // signin.done carries no reason in the protocol: the host's words are never shown.
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Sign-in failed');
-  await expect(banner(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' })).toBeVisible();
-  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Sign-in failed for Copilot on DEV-VM1');
+  await expect(banner(page).getByRole('button', { name: 'Try again to sign in to Copilot on host-a' })).toBeVisible();
+  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Sign-in failed for Copilot on host-a');
 });
 
 test('only the host saying signIn: machine makes it "sign in at the machine"', async ({ page }) => {
@@ -970,7 +970,7 @@ for (const [what, code] of [
     await page.evaluate((c) => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 600000).toISOString(), ...c }; }, code);
     await signIn(page).click();
     await expect(sheet(page).locator('.sign-in-refused')).toHaveText('This sign-in code couldn\u2019t be shown.');
-    await expect(sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' })).toBeVisible();
+    await expect(sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on host-a' })).toBeVisible();
     await expect(page.locator('.sign-in-code, .sign-in-open, .sign-in-copy')).toHaveCount(0);
     const html = await page.evaluate(() => document.body.outerHTML);
     expect(html).not.toContain('evil.example');
@@ -1007,7 +1007,7 @@ test('the banner\'s and the sheet\'s names are the words shown, and a tap draws 
   const rules = ['label-content-name-mismatch', 'button-name', 'link-name', 'region'];
   expect((await new AxeBuilder({ page }).include('#sign-in-banners').withRules(rules).analyze()).violations).toEqual([]);
   await signIn(page).tap();
-  const cancel = sheet(page).getByRole('button', { name: 'Cancel sign-in for Copilot on DEV-VM1' });
+  const cancel = sheet(page).getByRole('button', { name: 'Cancel sign-in for Copilot on host-a' });
   await expect(cancel).toBeFocused();
   // Focused by script with focusVisible: false. WebKit's :focus-visible for a dialog's script focus
   // is the engine's own guess (keyboard.spec.mjs), so it is held to this only elsewhere.
@@ -1093,7 +1093,7 @@ for (const look of [
 
     // A sign-in another device runs: Show code, the sheet closed here.
     await setAttention(page, { recovery: 'signingIn' });
-    await expect(banner(page).getByRole('button', { name: 'Show code for Copilot on DEV-VM1' })).toBeVisible();
+    await expect(banner(page).getByRole('button', { name: 'Show code for Copilot on host-a' })).toBeVisible();
     await expect(banner(page).locator('.sign-in-line')).toHaveText('Waiting for sign-in');
     await expect(sheet(page)).toBeHidden();
     await capture(banner(page), name('show-code'), testInfo);
@@ -1109,7 +1109,7 @@ for (const look of [
     await page.evaluate(() => window.agentBridgeDemo.finishSignIn('failed'));
     await expect(sheet(page)).toBeHidden();
     await expect(banner(page).locator('.sign-in-line')).toHaveText('Sign-in failed');
-    const again = banner(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' });
+    const again = banner(page).getByRole('button', { name: 'Try again to sign in to Copilot on host-a' });
     await expect(again).toBeVisible();
     await capture(banner(page), name('failed'), testInfo);
 

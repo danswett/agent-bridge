@@ -210,21 +210,24 @@ public class ClientTests
     [Fact]
     public async Task The_switchs_commands_are_the_daemons_and_a_create_reads_back_the_id_Home_Assistant_chose()
     {
-        var upkeep = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-upkeep.json")))!["helperCases"]!;
+        var fixture = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-upkeep.json")))!;
+        var upkeep = fixture["helperCases"]!;
+        var machine = fixture["machine"]!.GetValue<string>();
+        var slug = HaContract.MachineSlug(machine);
         JsonObject Recorded(string helperCase, string type)
         {
             var command = upkeep[helperCase]!["commands"]!.AsArray().Single(c => c!["type"]!.GetValue<string>() == type)!.DeepClone().AsObject();
             command["id"] = 1;
             return command;
         }
-        var helper = HaContract.DetailedHelperId("dswett_dev_vm1");
+        var helper = HaContract.DetailedHelperId(slug);
 
         var (lister, listed, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonArray(new JsonObject { ["id"] = helper, ["name"] = "x" }, new JsonObject { ["name"] = "no id" }) });
         Assert.Equal([helper], await lister.ListInputBooleansAsync());
         Contract.AssertJson(Recorded("present", "input_boolean/list"), listed[1]);
 
         var (creator, created, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonObject { ["id"] = helper + "_2", ["name"] = "x" } });
-        Assert.Equal(helper + "_2", await creator.CreateInputBooleanAsync(HaContract.DetailedHelperName("dswett_dev_vm1"), HaContract.DetailedHelperIcon));
+        Assert.Equal(helper + "_2", await creator.CreateInputBooleanAsync(HaContract.DetailedHelperName(slug), HaContract.DetailedHelperIcon));
         Contract.AssertJson(Recorded("absent", "input_boolean/create"), created[1]);
 
         var (deleter, deleted, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = null });
@@ -232,7 +235,7 @@ public class ClientTests
         Contract.AssertJson(Recorded("deduplicated", "input_boolean/delete"), deleted[1]);
 
         var (namer, named, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonObject() });
-        await namer.SetEntityNameAsync("input_boolean." + helper, HaContract.DetailedHelperDisplayName("DSWETT-DEV-VM1"));
+        await namer.SetEntityNameAsync("input_boolean." + helper, HaContract.DetailedHelperDisplayName(machine));
         Contract.AssertJson(Recorded("absent", "config/entity_registry/update"), named[1]);
 
         var (registry, _, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonArray(new JsonObject { ["entity_id"] = "input_boolean." + helper, ["unique_id"] = helper, ["name"] = "Detailed activity" }) });

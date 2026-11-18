@@ -85,7 +85,7 @@ test('with more than one machine, every machine is shown at first: one list, new
   expect(updated).toEqual([...updated].sort().reverse());
 
   await expect(card(page, LAPTOP, 'laptop-ask-1').locator('.row-facts .machine-label')).toHaveText('Laptop');
-  await expect(card(page, SHADOW, 'shadow-ask-1').locator('.row-facts .machine-label')).toHaveText('DEV-VM1 (shadow)');
+  await expect(card(page, SHADOW, 'shadow-ask-1').locator('.row-facts .machine-label')).toHaveText('machine-c (shadow)');
   await expect(card(page, 'demo', '6f1c2b7e-claude-example').locator('.row-facts .machine-label')).toHaveText('Demo machine');
   // In text colour, not Bridge: a machine's name is not a link (#214).
   expect(await card(page, LAPTOP, 'laptop-ask-1').locator('.machine-label').evaluate((e) => getComputedStyle(e).color))
@@ -1140,7 +1140,7 @@ test('picking one machine shows only its sessions, unlabelled, and the choice is
   // Picked on the Machines page, as well: it goes back to the sessions.
   await go(page, 'machines');
   await row(page, SHADOW).click();
-  await expect(page.locator('#sessions-h')).toHaveText('Sessions on DEV-VM1 (shadow)');
+  await expect(page.locator('#sessions-h')).toHaveText('Sessions on machine-c (shadow)');
   await expect(page.locator('#session-list')).toBeVisible();
   await page.reload();
   await page.waitForSelector('html[data-demo-ready]');

@@ -723,7 +723,7 @@ test.describe('a folder-trust question', () => {
     await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
     await go(page, 'launch');
     await field(page, 'machine').selectOption('demo-shadow');
-    await expect(panel(page).locator('.launch-title')).toHaveText('Waiting on DEV-VM1 (shadow)');
+    await expect(panel(page).locator('.launch-title')).toHaveText('Waiting on machine-c (shadow)');
     await expect(card(page).locator('.trust-folder')).toHaveText('C:\\Users\\demo\\untrusted\\web');
   });
   test('with every machine shown and none taking launches, a question on a machine not picked lights the Launch way', async ({ page }) => {
@@ -745,7 +745,7 @@ test.describe('a folder-trust question', () => {
   test('an older reading of a machine not picked, arriving after it was picked and left, does not take its dot away', async ({ page }) => {
     await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
     await page.waitForSelector('html[data-demo-ready]');
-    // The first reading of DEV-VM1 (shadow) as a machine not picked is held, with what it said then.
+    // The first reading of the shadow machine as a machine not picked is held, with what it said then.
     await page.evaluate(() => {
       const p = window.agentBridgeDemo.page;
       const was = p.launchTarget.bind(p);
@@ -767,7 +767,7 @@ test.describe('a folder-trust question', () => {
     await page.evaluate(() => window.agentBridgeDemo.machines['demo-shadow'].askTrust({ id: '6e1d0a4f-3c2b-4d9e-8f7a-5b4c3d2e1f0a', agent: 'claude', kind: 'claude', label: 'Claude Code', workspace: 'web', folder: 'C:\\Users\\demo\\untrusted\\web', warning: 'Do you trust the files in this folder?', answerable: false, atMachine: 'Answer at the machine.' }));
     await go(page, 'launch');
     await field(page, 'machine').selectOption('demo-shadow');
-    await expect(panel(page).locator('.launch-title')).toHaveText('Waiting on DEV-VM1 (shadow)');
+    await expect(panel(page).locator('.launch-title')).toHaveText('Waiting on machine-c (shadow)');
     await field(page, 'machine').selectOption('demo-laptop');
     await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
     const way = page.locator('#nav [data-nav="launch"]');
@@ -780,7 +780,7 @@ test.describe('a folder-trust question', () => {
   test('a reading of a machine not picked, arriving after the machines shown leave it out, lights nothing', async ({ page }) => {
     await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
     await page.waitForSelector('html[data-demo-ready]');
-    // DEV-VM1 (shadow) has a question; its first reading as a machine not picked is held.
+    // The shadow machine has a question; its first reading as a machine not picked is held.
     await page.evaluate(() => {
       const p = window.agentBridgeDemo.page;
       const was = p.launchTarget.bind(p);
@@ -799,7 +799,7 @@ test.describe('a folder-trust question', () => {
       laptop.disconnect();
     });
     await expect.poll(() => page.evaluate(() => window.__held.length)).toBe(1);
-    // Only Laptop shown now: DEV-VM1's question can't be reached from this Launch page.
+    // Only Laptop shown now: the shadow machine's question can't be reached from this Launch page.
     await page.locator('#machine-tabs [data-device-id="demo-laptop"]').click();
     await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
     await page.evaluate(() => { for (const go of window.__held.splice(0)) { go(); } });
@@ -820,7 +820,7 @@ test.describe('a folder-trust question', () => {
     const way = page.locator('#nav [data-nav="launch"]');
     await page.waitForTimeout(600);
     await expect(way).not.toHaveClass(/attention/);
-    // Only DEV-VM1 (shadow)'s own list changes: no update reaches this page.
+    // Only the shadow machine's own list changes: no update reaches this page.
     await page.evaluate(() => window.agentBridgeDemo.machines['demo-shadow'].askTrust({ id: '6e1d0a4f-3c2b-4d9e-8f7a-5b4c3d2e1f0a', agent: 'claude', kind: 'claude', label: 'Claude Code', workspace: 'web', folder: 'C:\\Users\\demo\\untrusted\\web', warning: 'Do you trust the files in this folder?', answerable: false, atMachine: 'Answer at the machine.' }));
     await expect(way).toHaveClass(/attention/, { timeout: 5000 });
     await page.evaluate(() => { const m = window.agentBridgeDemo.machines['demo-shadow']; m.launchOptions = { ...m.launchOptions, trust: [] }; });
@@ -832,7 +832,7 @@ test.describe('a folder-trust question', () => {
     await page.evaluate(() => {
       const d = window.agentBridgeDemo;
       d.launchPanel.constructor.recheckMs = 300;
-      // Every reading of DEV-VM1 (shadow) as a machine not picked, counted.
+      // Every reading of the shadow machine as a machine not picked, counted.
       const was = d.page.launchTarget.bind(d.page);
       window.__reads = 0;
       d.page.launchTarget = (id) => {
@@ -869,7 +869,7 @@ test.describe('a folder-trust question', () => {
     });
     await go(page, 'launch');
     await field(page, 'machine').selectOption('demo-shadow');
-    await expect(panel(page).locator('.launch-title')).toHaveText('Waiting on DEV-VM1 (shadow)');
+    await expect(panel(page).locator('.launch-title')).toHaveText('Waiting on machine-c (shadow)');
     const way = page.locator('#nav [data-nav="launch"]');
     await expect(way).toHaveClass(/attention/);
     await field(page, 'machine').selectOption('demo-laptop');

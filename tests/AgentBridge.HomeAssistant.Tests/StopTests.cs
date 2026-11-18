@@ -11,7 +11,7 @@ using Xunit;
 // what reaches the host.
 public sealed class StopTests : IDisposable
 {
-    const string Machine = "DSWETT-DEV-VM1";
+    const string Machine = "machine-a";
     const string A = "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20";
     static readonly string Node = HaContract.NodeId(A);
     static readonly string[] TransientKeys = ["error", "hint", "waiting_on", "sent", "unsent", "recorded", "answer", "at"];
