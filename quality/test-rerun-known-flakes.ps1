@@ -167,6 +167,7 @@ $x = Run-Scenario @{ jobConclusion = 'timed_out'; extraJobs = @(@{ id = 9; name 
 Assert (-not $x.Result.Rerun -and $x.Reran -eq 0) 'a cancellation beside a Windows timeout refuses'
 $workflow = Get-Content (Join-Path $PSScriptRoot '..\.github\workflows\rerun-known-flakes.yml') -Raw
 Assert ($workflow -match "workflow_run.conclusion == 'timed_out'") 'the workflow also admits a timed-out CI conclusion'
+Assert ($workflow -match 'group: main-red-rerun-\$\{\{ github.event.workflow_run.id \}\}-\$\{\{ github.event.workflow_run.run_attempt \}\}') 'rerun handlers isolate each run and attempt from S1 and unrelated completions'
 
 foreach ($failureLog in '  Failed New.Real.Failure [1 s]', 'error CS1002: ; expected') {
     $x = Run-Scenario @{ log = $failureLog } -AutoRerun
@@ -206,6 +207,14 @@ Assert (@($x.Calls | Where-Object { $_ -like 'issue edit 40 *--add-label flaky*'
 Assert (@($x.Calls | Where-Object { $_ -like 'issue edit 1 *--add-label flaky*' }).Count -eq 1) 'green attempt two labels the matched flake issue'
 Assert (@($x.Calls | Where-Object { $_ -like 'issue comment 40 *rerun-flake: run=100 attempt=2 passed; failed test(s)=A.B.C.Method*' }).Count -eq 1) 'green evidence uses original failed tests, even after S1 closes the incident'
 Assert (@($x.Calls | Where-Object { $_ -like 'issue list*--state all*' }).Count -gt 0) 'attempt two can find the closed S1 incident'
+foreach ($originalLog in '  Failed New.Real.Failure [1 s]', 'error CS1002: ; expected', '') {
+    try {
+        $x = Run-Scenario @{ attempt = 2; conclusion = 'success'; jobConclusion = 'success'; log = ''; extraLog = $originalLog } -AutoRerun -Replay
+        $expectedTests = if ($originalLog -like '*New.Real.Failure*') { 'New.Real.Failure' } else { 'none' }
+        Assert ($x.Reran -eq 0 -and @($x.Calls | Where-Object { $_ -like 'issue edit 40 *--add-label flaky*' }).Count -eq 1) "green attempt two labels only the incident without matched flakes: $originalLog"
+        Assert (@($x.Calls | Where-Object { $_ -like "issue comment 40 *rerun-flake: run=100 attempt=2 passed; failed test(s)=$expectedTests*" }).Count -eq 1 -and @($x.Calls | Where-Object { $_ -like 'issue edit *' }).Count -eq 1) 'unfiled failures and nameless failures retain one accurate receipt without flake-issue writes'
+    } catch { Assert $false "green attempt two without matches must complete: $originalLog ($($_.Exception.Message))" }
+}
 $x = Run-Scenario @{ attempt = 2 } -AutoRerun -Replay
 Assert ($x.Reran -eq 0 -and @($x.Calls | Where-Object { $_ -like 'issue comment 40 *rerun-failed: run=100 attempt=2 same test(s)=A.B.C.Method*' }).Count -eq 1) 'a repeated failure records its intersection once for mitigation, never attempt three'
 $x = Run-Scenario @{ attempt = 2; log = '  Failed Different.Test.Failure [1 s]' } -AutoRerun
