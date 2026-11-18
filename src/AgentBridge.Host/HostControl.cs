@@ -87,6 +87,11 @@ public sealed class HostControl
     }
 
     readonly Action<string> log;
+    internal LaunchFolderSnapshot LaunchFolders(JsonElement data)
+    {
+        lock (settingsGate) { return LaunchSettings.Handle(options.Folder, Read<LaunchFolderRequest>(data) ?? new(), log); }
+    }
+
     readonly object gate = new();
     readonly DateTimeOffset startedAt;
     // What the host runs with: options.Running, and a setting applied since without a restart.

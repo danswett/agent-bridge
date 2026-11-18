@@ -41,12 +41,12 @@ public static class LocalApi
                 actual => credentials.FleetGrant.CheckDispatch(actual, request));
         }
         credentials?.CheckScriptOperation(channel, op, log);
-        if (op == FleetWorkerSettings.Op)
+        if (op is FleetWorkerSettings.Op or HostOps.LaunchFolders)
         {
             var caller = callers.Classify(channel, fresh: true);
             if (channel is not LocalChannel || caller.Kind != CallerKind.App || credentials?.Of(channel) is not null)
-            { throw Refuse(op, caller, "only the local app may read or change workspace fleet workers", log); }
-            return control.WorkspaceFleetWorkers(data);
+            { throw Refuse(op, caller, "only the local app may read or change workspace settings", log); }
+            return op == HostOps.LaunchFolders ? control.LaunchFolders(data) : control.WorkspaceFleetWorkers(data);
         }
         if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet")
         { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
@@ -205,7 +205,7 @@ public static class LocalApi
         // Shaped inside the service, so hello.changed compares what this caller is told (#651).
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
-            CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
+            CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability, HostOps.LaunchFolders,
                 .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability } : [],
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],

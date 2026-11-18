@@ -90,6 +90,14 @@ the connection closes:
 
 ## Who may manage the host
 
+`host.launchFolders` is also its local-app-only capability. An empty request reads
+`{ baseline, folders }`: the saved exact absolute folders and an opaque config baseline.
+Saving requires `{ baseline, folders, confirmed: true }`; stale drafts are refused.
+New folders must physically exist outside system directories. Retained entries,
+including unavailable folders, keep their labels, isolation and other metadata.
+The host atomically replaces only the workspace list, preserving unrelated config.
+Nothing restarts, accepts trust or launches; the running launch configuration is unchanged.
+
 `host.workspace.fleetWorkers` reads or changes the stored fleet-worker tick for one
 approved workspace. Its data is `{ "workspace": "<approved absolute path>" }`, with
 optional `"fleetWorkers": true` or `false` to set it. No other keys are accepted.

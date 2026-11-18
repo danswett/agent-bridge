@@ -28,6 +28,7 @@ public static class HostOps
     public const string SignIn = "host.signIn";
     public const string SignInCancel = "host.signIn.cancel";
     public const string Settings = "host.settings";
+    public const string LaunchFolders = "host.launchFolders";
     public const string Restart = "host.restart";
     public const string Stop = "host.stop";
     // The account this host signed in to, token included, so the app can reach the account's
