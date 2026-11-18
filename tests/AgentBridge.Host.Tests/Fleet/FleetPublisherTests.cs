@@ -129,6 +129,38 @@ public sealed class FleetPublisherTests
     }
 
     [Fact]
+    public async Task Local_refusal_text_never_becomes_a_relay_reason_or_leaks_into_the_log()
+    {
+        var logs = new List<string>();
+        var publication = new FleetPublication(source, "machine", share: true, time: time, log: logs.Add);
+        Assert.False(await publication.PollAsync((_, _) =>
+            throw new InvalidOperationException("registry publication refused: bad-record; private prompt token")));
+        Assert.EndsWith("; refused", Assert.Single(logs));
+        Assert.DoesNotContain("private", logs[0]);
+    }
+
+    [Theory]
+    [InlineData("bad-record", "bad-record")]
+    [InlineData("stale", "stale")]
+    [InlineData("too-large", "too-large")]
+    [InlineData("not-allowed", "not-allowed")]
+    [InlineData("future-code", "unknown")]
+    [InlineData("BAD-RECORD", "unknown")]
+    [InlineData("bad-record\r\nprivate prompt token", "unknown")]
+    [InlineData("", "unknown")]
+    public async Task Relay_refusal_messages_and_logs_keep_only_exact_allow_listed_codes(string raw, string code)
+    {
+        var refusal = new RegistryPublicationRefusedException(raw);
+        var logs = new List<string>();
+        var publication = new FleetPublication(source, "machine", share: true, time: time, log: logs.Add);
+        Assert.False(await publication.PollAsync((_, _) => throw refusal));
+        Assert.Equal("refused", publication.Status.Failure);
+        Assert.Equal("registry publication refused: " + code, refusal.Message);
+        Assert.EndsWith("; refused; reason " + code, Assert.Single(logs));
+        Assert.DoesNotContain("private", logs[0]);
+    }
+
+    [Fact]
     public async Task A_bad_id_is_skipped_counted_in_host_status_and_does_not_refuse_healthy_sessions()
     {
         using var fixture = new Fixture();
