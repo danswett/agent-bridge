@@ -7,6 +7,10 @@ preventing relay attachment. Unstarted replies expire after two minutes; an
 expired or ordinary refused entry can age out of the bounded dedupe history.
 Unconfirmed attempts remain pinned and are never automatically retyped.
 Different sessions dispatch independently; one session's replies remain serial.
+Recovery starts in the background after relay attachment and wakes on source or
+presence changes. A missing sender presence defers rather than rejects queued
+Lite work. Dispatch requires Idle with no question and rechecks the original
+signed envelope and current authorization. Rate/replay refusals precede admission.
 
 | Operation | Scope | What it does |
 | --- | --- | --- |

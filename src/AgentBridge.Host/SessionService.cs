@@ -712,12 +712,12 @@ public sealed partial class SessionService
         return await ReplyCoreAsync(request, channel.PeerId);
     }
 
-    async Task<ReplyResult> ReplyCoreAsync(ReplyRequest request, string peer)
+    async Task<ReplyResult> ReplyCoreAsync(ReplyRequest request, string peer, CancellationToken ct = default)
     {
         var (watch, progress) = Watch(request.Progress);
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);
-        var result = await replies.ReplyAsync(request, peer, watch: watch);
+        var result = await replies.ReplyAsync(request, peer, ct, watch: watch);
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
             push?.Replied(peer, request.Id);

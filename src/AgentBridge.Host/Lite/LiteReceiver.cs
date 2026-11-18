@@ -62,21 +62,26 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
         var body = verified.Body; // trusted now: must name this channel's peer and this machine
         if (body.Principal.Machine != channel.PeerId) { return Refuse(Sender, body.Request); }
         if (body.Principal.Add != Codec.Base64Url(SHA256.HashData(staticKey))) { return Refuse(AddMismatch, body.Request); }
-        if (body.Target.Machine != channel.Self) { return Refuse(Target, body.Request); }
+        if (body.Target.Machine != channel.Self || string.IsNullOrWhiteSpace(body.Target.Session)) { return Refuse(Target, body.Request); }
+        string? Admit()
+        {
+            switch (Replays.Add(channel.PeerId + "/" + body.Request))
+            {
+                case ReplayStore.Result.Seen: return Replay;
+                case ReplayStore.Result.Full: return Busy;
+            }
+            return Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session) ? null : Rate;
+        }
         if (!fromInbox && Inbox is not null)
         {
             var queued = await Inbox.ReceiveAsync(body.Target.Session!, body.Request,
-                new(null, channel.PeerId, channel.Account, channel, data.Clone()), ct);
+                new(null, channel.PeerId, channel.Account, channel, data.Clone()), ct,
+                () => Admit() is { } code ? new(AgentBridge.Protocol.AnswerOutcome.Refused, code) : null);
             return queued.Outcome == AgentBridge.Protocol.AnswerOutcome.Delivered
                 ? new LiteAck("delivered", null, body.Request, mode.KillEpoch)
-                : Refuse(queued.Reason ?? DeliveryFailed, body.Request);
+                : Refuse(queued.Outcome == AgentBridge.Protocol.AnswerOutcome.Busy ? Busy : queued.Reason ?? DeliveryFailed, body.Request);
         }
-        switch (Replays.Add(channel.PeerId + "/" + body.Request))
-        {
-            case ReplayStore.Result.Seen: return Refuse(Replay, body.Request);
-            case ReplayStore.Result.Full: return Refuse(Busy, body.Request);
-        }
-        if (!Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session)) { return Refuse(Rate, body.Request); }
+        if (!fromInbox && Admit() is { } refused) { return Refuse(refused, body.Request); }
         LiteDelivery result; try { result = await deliver.DeliverAsync(verified, text, ct); }
         catch (Exception x) when (x is not OperationCanceledException || !ct.IsCancellationRequested) { return Refuse(DeliveryFailed, body.Request); }
         return result.Typed

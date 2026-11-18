@@ -51,11 +51,11 @@ public class LiteReceiverTests
         }
 
         public void Dispose() => Key.Dispose();
-        public JsonElement Request(string text = "hello", string? id = null, string? machine = null, string? add = null, string? target = null, string? signedText = null, string? session = "agent-b2")
+        public JsonElement Request(string text = "hello", string? id = null, string? machine = null, string? add = null, string? target = null, string? signedText = null, string session = "agent-b2")
         {
             var sender = new LiteSender(Account, machine ?? Peer, add ?? Codec.Base64Url(SHA256.HashData(PeerStatic)), "agent-a1",
                 Codec.Base64Url(new byte[12]), Codec.Base64Url(new byte[16]), "copilot", "agent-bridge");
-            var sealedBytes = LiteProfile.Seal(sender, new LiteTarget(target ?? Self, session!, Codec.Base64Url(new byte[12])), id ?? Id("1"),
+            var sealedBytes = LiteProfile.Seal(sender, new LiteTarget(target ?? Self, session, Codec.Base64Url(new byte[12])), id ?? Id("1"),
                 Encoding.UTF8.GetBytes(signedText ?? text), Time.GetUtcNow().ToUnixTimeSeconds(), new EcdsaEnvelopeSigner(Key));
             return JsonSerializer.SerializeToElement(new { envelope = Codec.Base64Url(sealedBytes), text, killEpoch = 0 });
         }
@@ -108,10 +108,14 @@ public class LiteReceiverTests
     }
 
     [Fact]
-    public async Task A_missing_target_session_is_refused_before_durable_admission()
+    public async Task A_missing_target_session_is_refused_before_any_delivery()
     {
         using var r = new Rig();
-        Assert.Equal("refused", (await r.Send(r.Request(session: null))).Status);
+        Assert.True(Codec.TryBase64Url(r.Request().GetProperty("envelope").GetString()!, out var bytes));
+        var envelope = Envelope.Parse(bytes);
+        var body = envelope.Body with { Target = envelope.Body.Target with { Session = null } };
+        var malformed = Envelope.Encode(body.Encode(), envelope.Signature);
+        Assert.Equal("refused", (await r.Send(JsonSerializer.SerializeToElement(new { envelope = Codec.Base64Url(malformed), text = "hello" }))).Status);
         Assert.Equal(0, r.Deliver.Calls);
     }
 
@@ -129,7 +133,7 @@ public class LiteReceiverTests
         var folder = Directory.CreateTempSubdirectory("lite-inbox-").FullName;
         try
         {
-            var service = new AgentBridge.Host.SessionService(null!,
+            var service = new AgentBridge.Host.SessionService(new FleetPublisherTests.Source(),
                 new AgentBridge.Protocol.MachineInfo("fixture", "fixture", "test", "test")) { LiteReceiver = r.Receiver };
             service.ConfigureRelayInbox(Path.Combine(folder, "replies.json"), (_, _) => true, _ => true);
             using var stopped = new CancellationTokenSource();

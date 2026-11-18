@@ -45,7 +45,8 @@ public sealed class LiteDeliver(
         try { safe = Escape(text); }
         catch (ArgumentException) { return Refused(LiteCodes.NotReplyTarget); } // not valid Unicode
         if (string.IsNullOrEmpty(text) || text.Length > MaxChars || !body.BindsData(Encoding.UTF8.GetBytes(text)) || target.Length == 0 || !Guid.TryParseExact(body.Request, "D", out _)) { return Refused(LiteCodes.NotReplyTarget); }
-        if (source.Get(target) is not { } session) { return Refused(LiteCodes.NoSuchSession); }
+        if (RelayReplyTargets.Resolve(source, target) is not { } session) { return Refused(LiteCodes.NoSuchSession); }
+        target = session.Id;
         if (!await AllowedAsync(envelope, target)) { return Refused(LiteCodes.NotReplyTarget); }
         if (session.Agent != AgentKind.Copilot || session.ProcessId is not { } pid) { return Refused(LiteCodes.NotReplyTarget); }
         if (!Idle(session)) { return Refused(LiteCodes.Busy); }
