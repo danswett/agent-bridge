@@ -546,7 +546,7 @@ public sealed class HostManager
     // preflight: names what already keeps the update from replacing the installation, or null; asked
     // before anything is recorded or stopped, so an update that cannot finish costs no host stop
     // (#1092: a service holding a file made a retry loop that dropped the relay every 3 minutes).
-    public async Task WaitForInstallationFilesAsync(Func<string?>? preflight, Action<string>? waiting = null, TimeProvider? time = null, InstallationFiles.Budget? fileBudget = null)
+    public async Task WaitForInstallationFilesAsync(Func<CancellationToken, string?>? preflight, Action<string>? waiting = null, TimeProvider? time = null, InstallationFiles.Budget? fileBudget = null)
     {
         fileBudget ??= new InstallationFiles.Budget(time ?? Time);
         fileBudget.LockedFiles ??= () => InstallationFiles.LockedImages(layout.AppFolder);
@@ -556,7 +556,7 @@ public sealed class HostManager
         }
     }
 
-    public async Task StopAndApplyAsync(Action begin, Action apply, Func<string?>? preflight = null, bool waitForFiles = true, InstallationFiles.Budget? fileBudget = null)
+    public async Task StopAndApplyAsync(Action begin, Action apply, Func<CancellationToken, string?>? preflight = null, bool waitForFiles = true, InstallationFiles.Budget? fileBudget = null)
     {
         fileBudget ??= new InstallationFiles.Budget(Time);
         if (waitForFiles) { await WaitForInstallationFilesAsync(preflight, fileBudget: fileBudget); }
@@ -613,7 +613,7 @@ public sealed class HostManager
         finally { lock (updating) { installing = false; } }
     }
 
-    public async Task CheckInstallationFilesAsync(Func<string?>? preflight, InstallationFiles.Budget budget)
+    public async Task CheckInstallationFilesAsync(Func<CancellationToken, string?>? preflight, InstallationFiles.Budget budget)
     {
         budget.LockedFiles ??= () => InstallationFiles.LockedImages(layout.AppFolder);
         if (await budget.ProbeOnceAsync(preflight, quit.Token) is { } blockers) { throw new UpdateBlockedException(blockers); }

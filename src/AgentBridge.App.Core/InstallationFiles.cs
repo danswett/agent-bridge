@@ -29,9 +29,9 @@ public static class InstallationFiles
         public TimeSpan Remaining => ReleaseWait - Elapsed;
         public void ExcludeSince(long timestamp) => excluded += Time.GetElapsedTime(timestamp);
         internal Func<IReadOnlyList<string>>? LockedFiles { get; set; }
-        Func<string?>? clearProbe;
+        Func<CancellationToken, string?>? clearProbe;
         HashSet<string>? clearFiles;
-        public async Task<string?> ProbeOnceAsync(Func<string?>? probe, CancellationToken cancellation)
+        public async Task<string?> ProbeOnceAsync(Func<CancellationToken, string?>? probe, CancellationToken cancellation)
         {
             if (probe is null) { return null; }
             // A successful scan is shared by the duplicate preflight gates, not a deadline.
@@ -45,18 +45,18 @@ public static class InstallationFiles
                 {
                     var files = LockedFiles?.Invoke();
                     if (clearProbe == probe && (files is null || clearFiles?.SetEquals(files) == true)) { return null; }
-                    var held = probe();
+                    var held = probe(token);
                     token.ThrowIfCancellationRequested();
                     clearProbe = held is null ? probe : null;
                     clearFiles = held is null && files is not null ? new(files, StringComparer.OrdinalIgnoreCase) : null;
                     return held;
-                }, token).WaitAsync(token);
+                }, token).WaitAsync(token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellation.IsCancellationRequested) { return TimedOut; }
         }
     }
 
-    public static async Task<string?> AwaitReleaseAsync(Func<string?>? probe, TimeProvider time,
+    public static async Task<string?> AwaitReleaseAsync(Func<CancellationToken, string?>? probe, TimeProvider time,
         CancellationToken cancellation, Action<string>? waiting = null, Action<string>? log = null, Budget? budget = null)
     {
         if (probe is null) { return null; }

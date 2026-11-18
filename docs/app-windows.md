@@ -705,11 +705,14 @@ controls consume that same contract; this extraction does not disable or remove 
     Each scan has its own two-minute deadline, independent of the two-minute release wait
     (checks back off to ten seconds). A scan started within that wait may finish afterwards.
     An unreadable/changing holder list is unknown, never permission to install. A SYSTEM service
-    is named even when its image is unreadable; known holders include PID and image path when
-    readable. For a confirmed external holder, verify its association with one installation file
+    is named even when its image is unreadable; refusals include process/service name and PID,
+    never the absolute image path. Verify a confirmed external holder's association with one installation file
     before naming that relative path ([holder diagnostics](https://github.com/danswett/agent-bridge/issues/2858));
     the aggregate registered-file list is not proof of which file a process holds. A holder that
-    releases between queries has an explicitly unconfirmed path, never a guessed filename.
+    releases between queries or changes creation time is unknown, never a guessed filename.
+    Match PID plus creation time throughout. Quit and the scan deadline stop further bisection;
+    a native call already in flight is quarantined until it returns, without holding the scan
+    monitor or permitting overlapping native scans. Startup diagnostics use the same outer budget.
     A scan timeout names Restart Manager and 120 s, never claiming a confirmed holder.
     Waiting carries no Installing credit; timeout
     keeps the old install intact with recovery text and the existing 10/20/40/60-minute backoff.

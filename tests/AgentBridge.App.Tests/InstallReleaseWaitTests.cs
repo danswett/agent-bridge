@@ -57,7 +57,7 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         var applied = false;
         var probes = 0;
         var update = Manager(clock).StopAndApplyAsync(() => begun = true, () => applied = true,
-            () => { Interlocked.Increment(ref probes); return holder; });
+            _ => { Interlocked.Increment(ref probes); return holder; });
 
         var failed = await Assert.ThrowsAsync<UpdateBlockedException>(() => FinishAsync(update, () => true, clock));
 
@@ -77,7 +77,7 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         var clock = new FakeTimeProvider(Make.T0);
         var begun = false;
         var update = Manager(clock).StopAndApplyAsync(() => begun = true, () => begun = true,
-            () => throw new UnauthorizedAccessException("private-path must stay out of recovery text"));
+            _ => throw new UnauthorizedAccessException("private-path must stay out of recovery text"));
 
         var failed = await Assert.ThrowsAsync<UpdateBlockedException>(() => FinishAsync(update, () => true, clock));
 
@@ -96,13 +96,13 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         var clock = new FakeTimeProvider(Make.T0);
         var manager = Manager(clock);
         var budget = new InstallationFiles.Budget(clock);
-        await manager.WaitForInstallationFilesAsync(() => null, fileBudget: budget);
+        await manager.WaitForInstallationFilesAsync(_ => null, fileBudget: budget);
         clock.Advance(TimeSpan.FromSeconds(90));
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var begun = false;
         var update = manager.StopAndApplyAsync(() => begun = true, () => begun = true,
-            () => { entered.TrySetResult(); release.Task.GetAwaiter().GetResult(); return null; }, waitForFiles: false, fileBudget: budget);
+            _ => { entered.TrySetResult(); release.Task.GetAwaiter().GetResult(); return null; }, waitForFiles: false, fileBudget: budget);
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -138,7 +138,7 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         host.Start();
         var begun = false;
         var applied = false;
-        var update = Manager(clock).StopAndApplyAsync(() => begun = true, () => applied = true, Probe);
+        var update = Manager(clock).StopAndApplyAsync(() => begun = true, () => applied = true, _ => Probe());
         await Wait.UntilAsync(() => Volatile.Read(ref probes) > 0, "the held file being checked");
         Assert.Empty(host.Sent(HostOps.Stop));
         holder.Dispose();

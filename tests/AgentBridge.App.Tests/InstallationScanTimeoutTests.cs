@@ -10,7 +10,7 @@ public sealed class InstallationScanTimeoutTests
         var clock = new FakeTimeProvider();
         var budget = new InstallationFiles.Budget(clock);
         var scans = 0;
-        string? Scan()
+        string? Scan(CancellationToken _)
         {
             Interlocked.Increment(ref scans);
             clock.Advance(TimeSpan.FromSeconds(59));
@@ -31,7 +31,7 @@ public sealed class InstallationScanTimeoutTests
         var clock = new FakeTimeProvider();
         var budget = new InstallationFiles.Budget(clock);
         var scans = 0;
-        string? Scan()
+        string? Scan(CancellationToken _)
         {
             clock.Advance(TimeSpan.FromSeconds(59));
             return Interlocked.Increment(ref scans) == 1 ? "fixture (pid 42)" : null;
@@ -50,10 +50,10 @@ public sealed class InstallationScanTimeoutTests
     {
         var clock = new FakeTimeProvider();
         var budget = new InstallationFiles.Budget(clock);
-        if (earlierHolder) { Assert.NotNull(await budget.ProbeOnceAsync(() => "earlier holder (pid 42)", default)); }
+        if (earlierHolder) { Assert.NotNull(await budget.ProbeOnceAsync(_ => "earlier holder (pid 42)", default)); }
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var scan = budget.ProbeOnceAsync(() =>
+        var scan = budget.ProbeOnceAsync(_ =>
         {
             entered.SetResult();
             release.Task.GetAwaiter().GetResult();
@@ -88,7 +88,7 @@ public sealed class InstallationScanTimeoutTests
         var clock = new FakeTimeProvider();
         var budget = new InstallationFiles.Budget(clock) { LockedFiles = () => InstallationFiles.LockedImages(folder) };
         var scans = 0;
-        string? Scan() => Interlocked.Increment(ref scans) == 1 ? null : "fixture (pid 42)";
+        string? Scan(CancellationToken _) => Interlocked.Increment(ref scans) == 1 ? null : "fixture (pid 42)";
         try
         {
             Assert.Null(await budget.ProbeOnceAsync(Scan, default));
@@ -107,7 +107,7 @@ public sealed class InstallationScanTimeoutTests
         var clock = new FakeTimeProvider();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var scans = 0;
-        var wait = InstallationFiles.AwaitReleaseAsync(() =>
+        var wait = InstallationFiles.AwaitReleaseAsync(_ =>
         {
             if (Interlocked.Increment(ref scans) == 1) { return "earlier holder (pid 42)"; }
             release.Task.GetAwaiter().GetResult();
