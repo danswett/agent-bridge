@@ -137,7 +137,9 @@ check() {
   fi
 }
 
-check_warm_download() {
+check_warm_download() (
+  local failures=0
+  export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
   reset "$canonical"; export DEBS_CACHE_HIT=true APT_NEW_VERSION=2 APT_DOWNLOAD_SECONDS=21
   unset PLAYWRIGHT_APT_LIMIT
   check "a warm index refresh gives missing packages the full download window before the mandatory offline install" \
@@ -145,8 +147,8 @@ check_warm_download() {
   reset "$canonical"; export DEBS_CACHE_HIT=true APT_NEW_VERSION=2 APT_DOWNLOAD_SECONDS=21 PLAYWRIGHT_APT_LIMIT=20s
   check "an explicit download deadline still fails without an incomplete offline install" \
     124 "$(printf 'update\n%s' "$download")" "$canonical"
-  export PLAYWRIGHT_APT_LIMIT=1s
-}
+  [ "$failures" -eq 0 ]
+)
 if [ "${1:-}" = --warm-download-only ]; then
   check_warm_download
   [ "$failures" -eq 0 ]; exit
