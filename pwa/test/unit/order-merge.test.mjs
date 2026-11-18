@@ -2,6 +2,7 @@
 // docs/design/session-order-roaming.md). Every required vector, each checked in both orders.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   emptyOrder, groupOf, mergeMarkers, mergeOrder, mergeRegisters, nextCounter, orderedRows,
 } from '../../js/order-merge.js';
@@ -10,6 +11,31 @@ const reg = (value, counter, deviceTag) => ({ value, counter, deviceTag });
 const tomb = (counter, deviceTag) => ({ tombstone: true, counter, deviceTag });
 const order = (parts) => ({ ...emptyOrder(), ...parts });
 const plain = (o) => JSON.parse(JSON.stringify(o));
+const vectors = JSON.parse(readFileSync(new URL('../../../tests/fixtures/order-merge.json', import.meta.url), 'utf8'));
+
+for (const [kind, cases] of Object.entries(vectors)) {
+  for (const vector of cases) {
+    test(`shared ${kind}: ${vector.name}`, () => {
+      const merge = { order: mergeOrder, register: mergeRegisters, marker: mergeMarkers }[kind];
+      const before = JSON.stringify(vector);
+      const actual = merge(vector.a, vector.b);
+      assert.deepEqual(plain(actual), vector.expected);
+      assert.deepEqual(plain(merge(vector.b, vector.a)), plain(actual));
+      assert.deepEqual(plain(merge(actual, vector.a)), plain(actual));
+      assert.deepEqual(plain(merge(actual, actual)), plain(actual));
+      if (kind === 'order') {
+        const rows = orderedRows(actual);
+        assert.deepEqual(rows.map((r) => r.row), vector.rows);
+        assert.equal(nextCounter(actual), vector.next);
+        if (vector.view) { assert.deepEqual(rows, vector.view); }
+        for (const [row, group] of Object.entries(vector.groups ?? {})) {
+          assert.equal(groupOf(actual, row), group);
+        }
+      }
+      assert.equal(JSON.stringify(vector), before);
+    });
+  }
+}
 
 // Merges both ways, requires one answer, and that merging again changes nothing.
 function merged(a, b) {
