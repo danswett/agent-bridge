@@ -16,9 +16,9 @@
 # every package against the signed index either way. Azure DNS failures leave immediately;
 # Downloads get three attempts (5/20 s backoff). Updates get an initial attempt plus three
 # retries (15/30/60 s) for known-host network errors, including Microsoft's feed and HTTP 429.
-# Exhausted throttling or Microsoft-feed errors are fatal whenever the cold path runs.
-# A non-forced cache hit restores its signed indexes, checks deb SHA256 hashes using apt's
-# expected URIs, and installs with --no-download, without DNS, update or download requests. If
+# Exhausted throttling or Microsoft-feed errors are fatal even on a cache hit.
+# Cache only debs: every run authenticates live indexes with apt-get update. A non-forced hit
+# checks archive hashes/sizes against those indexes before installing with --no-download. If
 # the mirror list isn't the Azure-then-Canonical one this expects, or Azure is still named after the
 # edit, it fails rather than go on waiting on the same mirror.
 #
@@ -49,12 +49,13 @@ fi
 if [ "$key_only" = true ]; then
   hash=$(printf '%s\n' "${pkgs[@]}" | sha256sum)
   echo "packages-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
+  hash=$(printf '%s' "${GITHUB_REF:-}" | sha256sum)
+  echo "ref-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
   exit 0
 fi
 apt_etc=${PLAYWRIGHT_APT_ETC:-/etc/apt}
-apt_lists=${PLAYWRIGHT_APT_LISTS:-/var/lib/apt/lists}
 apt_archives=${PLAYWRIGHT_APT_ARCHIVES:-/var/cache/apt/archives}
-cache_lists="$HOME/.cache/playwright-apt-lists"; cache_debs="$HOME/.cache/playwright-apt-debs"
+cache_debs="$HOME/.cache/playwright-apt-debs"
 limit=${PLAYWRIGHT_APT_LIMIT:-60s}
 mirrors="$apt_etc/apt-mirrors.txt"
 force=false
@@ -62,9 +63,9 @@ force=false
 cache_hit=false
 cache_available=false
 if [ "${DEBS_CACHE_HIT:-}" = true ]; then
-  if compgen -G "$cache_lists/*_Packages*" > /dev/null && compgen -G "$cache_debs/*.deb" > /dev/null; then
+  if compgen -G "$cache_debs/*.deb" > /dev/null; then
     cache_available=true
-  else echo "::warning::apt cache lacks matching lists or debs; treating it as a miss"; fi
+  else echo "::warning::apt cache lacks debs; treating it as a miss"; fi
 fi
 if [ "$cache_available" = true ] && [ "$force" = false ]; then cache_hit=true; fi
 attempts=${PLAYWRIGHT_APT_ATTEMPTS:-3}
@@ -152,32 +153,6 @@ bounded() {
 install_offline() {
   sudo apt-get install -y --no-install-recommends --no-download "${pkgs[@]}" || fail install "$?"
 }
-if [ "$cache_hit" = true ]; then
-  sudo find "$apt_lists" -maxdepth 1 -type f ! -name lock -delete
-  sudo install -m 644 "$cache_lists"/* "$apt_lists/"
-  sudo cp "$cache_debs"/*.deb "$apt_archives/"
-  # --print-uris does not fetch anything. Require SHA256 from the cached apt indexes;
-  # --no-download alone is not an explicit integrity check of already present archives.
-  plan=$(mktemp -d)
-  trap 'rm -f "$plan/uris"; rmdir "$plan"' EXIT
-  # An empty archive directory prevents apt from omitting size-matched cached files.
-  sudo apt-get -o Dir::Cache::archives="$plan/" -o Acquire::ForceHash=sha256 --print-uris --download-only install -y --no-install-recommends "${pkgs[@]}" > "$plan/uris" || fail verification "$?"
-  while read -r uri file size hash extra; do
-    [[ "$uri" == \'* ]] || continue
-    if [[ ! "$file" =~ ^[[:alnum:]][[:alnum:].+%_~:-]*\.deb$ ]] ||
-      [[ ! "$size" =~ ^[0-9]+$ ]] || [[ ! "$hash" =~ ^SHA256:[[:xdigit:]]{64}$ ]] ||
-      [ -n "${extra:-}" ] || [ ! -f "$apt_archives/$file" ]; then
-      echo "::error::invalid or missing cached apt archive: $file"; exit 1
-    fi
-    [ "$(wc -c < "$apt_archives/$file")" -eq "$size" ] &&
-      printf '%s  %s\n' "${hash#SHA256:}" "$apt_archives/$file" | sha256sum --check --status ||
-      { echo "::error::cached apt archive integrity check failed: $file"; exit 1; }
-  done < "$plan/uris"
-  rm -f "$plan/uris"; rmdir "$plan"
-  trap - EXIT
-  install_offline
-  exit 0
-fi
 if grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors"; then
   probe_rc=0
   probe_output=$(timeout --kill-after=2s 5s getent hosts azure.archive.ubuntu.com 2>&1) || probe_rc=$?
@@ -198,6 +173,35 @@ if [ "$rc" -ne 0 ]; then
   if [ "$rc" -ne 0 ]; then
     fail update "$rc"
   fi
+fi
+if [ "$cache_hit" = true ]; then
+  plan=$(mktemp -d)
+  trap 'sudo rm -rf -- "$plan"' EXIT
+  cache_valid=true
+  # Live apt update authenticated the indexes. An empty planning directory prevents apt from
+  # omitting size-matched archives; --no-download alone does not explicitly check their hashes.
+  sudo apt-get -o Dir::Cache::archives="$plan/" -o Acquire::ForceHash=sha256 --print-uris --download-only install -y --no-install-recommends "${pkgs[@]}" > "$plan/uris" || cache_valid=false
+  while read -r uri file size hash extra; do
+    [[ "$uri" == \'* ]] || continue
+    if [[ ! "$file" =~ ^[[:alnum:]][[:alnum:].+%_~:-]*\.deb$ ]] ||
+      [[ ! "$size" =~ ^[0-9]+$ ]] || [[ ! "$hash" =~ ^SHA256:[[:xdigit:]]{64}$ ]] ||
+      [ -n "${extra:-}" ] || [ ! -f "$cache_debs/$file" ]; then
+      cache_valid=false; break
+    fi
+    [ "$(wc -c < "$cache_debs/$file")" -eq "$size" ] &&
+      printf '%s  %s\n' "${hash#SHA256:}" "$cache_debs/$file" | sha256sum --check --status ||
+      { cache_valid=false; break; }
+  done < "$plan/uris"
+  sudo rm -rf -- "$plan"
+  trap - EXIT
+  if [ "$cache_valid" = true ]; then
+    sudo cp "$cache_debs"/*.deb "$apt_archives/"
+    install_offline
+    exit 0
+  fi
+  echo "::warning::cached archives failed verification; discarding cache and using authenticated network downloads"
+  find "$cache_debs" -maxdepth 1 -type f -name '*.deb' -delete
+  cache_available=false
 fi
 # Downloads have their own bound, independent of the update limit.
 limit=${PLAYWRIGHT_APT_LIMIT:-180s}
@@ -236,11 +240,7 @@ elif [ "$rc" -ne 0 ]; then
 fi
 install_offline
 if [ "$cache_available" = false ] && compgen -G "$apt_archives/*.deb" > /dev/null; then
-  mkdir -p "$cache_lists" "$cache_debs"
-  find "$cache_lists" -maxdepth 1 -type f -delete
+  mkdir -p "$cache_debs"
   cp "$apt_archives"/*.deb "$cache_debs/"
-  sudo find "$apt_lists" -maxdepth 1 -type f ! -name lock -exec cp -t "$cache_lists" -- {} +
-  sudo chown -R "$(id -u):$(id -g)" "$cache_lists"
-  compgen -G "$cache_lists/*_Packages*" > /dev/null || { echo "::error::successful apt update left no package lists to cache"; exit 1; }
   [ -z "${GITHUB_OUTPUT:-}" ] || echo 'cache-ready=true' >> "$GITHUB_OUTPUT"
 fi
