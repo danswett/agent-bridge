@@ -43,6 +43,51 @@ public sealed class CoordinatorImageTests
     }
 
     [Theory]
+    [InlineData(16 * 1024 * 1024)]
+    [InlineData(32 * 1024 * 1024)]
+    public void The_containing_raw_section_is_bounded_before_it_is_materialized(int sectionSize)
+    {
+        var bytes = Image(Supported);
+        Array.Resize(ref bytes, 0x200 + sectionSize);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x190), sectionSize);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x198), sectionSize);
+        using var image = new CountedStream(bytes);
+        image.Position = 7;
+        var error = Record.Exception(() => CoordinatorImage.RequireV1(image));
+        if (sectionSize <= 16 * 1024 * 1024) { Assert.Null(error); }
+        else
+        {
+            Assert.InRange(image.BytesRead, 0, 4096);
+            Assert.IsType<InvalidDataException>(error);
+        }
+        Assert.Equal(7, image.Position);
+        Assert.True(image.CanRead);
+    }
+
+    sealed class CountedStream(byte[] bytes) : Stream
+    {
+        readonly MemoryStream inner = new(bytes, writable: false);
+        internal long BytesRead { get; private set; }
+        public override bool CanRead => inner.CanRead;
+        public override bool CanSeek => true;
+        public override bool CanWrite => false;
+        public override long Length => inner.Length;
+        public override long Position { get => inner.Position; set => inner.Position = value; }
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+        public override int Read(Span<byte> buffer)
+        {
+            var count = inner.Read(buffer);
+            BytesRead += count;
+            return count;
+        }
+        public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+        public override void Flush() => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing) { if (disposing) { inner.Dispose(); } base.Dispose(disposing); }
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("fixture host launcher")]
     [InlineData("fixture host launcher [coordinator-v2]")]
