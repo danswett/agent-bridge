@@ -1609,6 +1609,57 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SliceA_an_empty_box_permanently_ends_cleanup_before_the_same_prefix_is_retyped()
+    {
+        var reads = 0;
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write");
+        injector.Partial = (2, false);
+        injector.Sent = _ => injector.Screen = _ => ++reads == 1 ? CopilotIdle : CopilotBox("ag");
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Replier().ReplyAsync(new()
+            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        Assert.Single(injector.Plans);
+        Assert.Contains("ag", (await injector.ReadScreenAsync(100)).Rows![3]);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task SliceA_a_prompt_or_turn_permanently_ends_cleanup_even_after_the_worker_wait(bool turn, bool worker)
+    {
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write");
+        injector.Partial = (2, false);
+        void Intervene() => Fixture.Append(events, turn ? Copilot.TurnStart(second++) : Prompt("ag"));
+        injector.Sent = _ =>
+        {
+            injector.Screen = _ => CopilotBox("ag");
+            if (worker) injector.Holding = Intervene;
+            else Intervene();
+        };
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Replier().ReplyAsync(new()
+            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        Assert.Single(injector.Plans);
+        Assert.Contains("ag", (await injector.ReadScreenAsync(100)).Rows![3]);
+        if (worker) Assert.Single(injector.Refused);
+    }
+
+    [Theory]
+    [InlineData("ag\nent report")]
+    [InlineData("agent\n\nreport")]
+    public async Task SliceA_newline_edits_never_authorize_cleanup(string draft)
+    {
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write");
+        injector.Partial = (12, false);
+        injector.Sent = _ => injector.Screen = _ =>
+            [.. CopilotIdle.Take(3), .. draft.Split('\n').Select(line => "\u2503 " + line),
+                CopilotIdle[4], " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues"];
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Replier().ReplyAsync(new()
+            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
     public async Task SliceA_expired_cleanup_never_leaves_authority_for_a_later_reply_to_erase_a_draft()
     {
         injector.Result = new(InjectionStatus.Interrupted, "partial native write");
