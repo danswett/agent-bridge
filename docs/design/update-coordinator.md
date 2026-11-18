@@ -79,6 +79,19 @@ applied by the current coordinator, not an old target helper. A missing v1 marke
 refuses without fallback or staging. Directory checks do not pin ancestor handles;
 the documented ancestry TOCTOU limit remains. No title marker or launch is wired here.
 
+### B3c: early mode and app cutover
+
+The native v1 title marker co-ships with the real early-mode branch, before normal
+host/profile/job setup. The app launches only its staged current helper, with private
+working/extraction paths and the verified cached target, then exits. The single-use
+mode revalidates the bounded strict JSON, layout, image bundle/marker and target
+checksum, retains their leases, and drains B2 `Ownership` before exiting even after
+observation times out. Its result includes step, elapsed time and apply PID/path.
+No native execution is used as local proof; the closed build is checked statically.
+The SDK native icon directory is 1,358,076 bytes: the bounded resource envelope is
+16 MiB, matching C2's section ceiling; version nesting/block limits remain unchanged.
+Legacy `current` remains authoritative until D proves activation/migration.
+
 ## C/D: approved design basis, not activation proof
 
 Use immutable `root\slots\<release-identity>-<package-digest>` payloads. One validated
