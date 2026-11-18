@@ -12,7 +12,8 @@ static class NativeWheelRouting
         {
             throw new InvalidOperationException("The native wheel focus is not owned by the app.");
         }
-        if (hit.Class is not ("Microsoft.UI.Input.InputSite.WindowClass" or "DesktopChildSiteBridge")
+        if (hit.Class is not ("Microsoft.UI.Input.InputSite.WindowClass" or "DesktopChildSiteBridge"
+                or "Microsoft.UI.Content.DesktopChildSiteBridge")
             || !NativeInputSetup.TargetReady(window, hit.Handle, hit.Root, window,
                 thread, process, hit.Thread, hit.Process))
         {

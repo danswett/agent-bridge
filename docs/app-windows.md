@@ -1372,7 +1372,9 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   The native wheel check (#2508, #2476) posts to the verified XAML input-site HWND
   under the conversation's screen point, not the keyboard-focused child. Both
   targets must belong to this window, thread and process; changed or unverified
-  targets fail before posting. The log captures the candidate and actual post,
+  targets fail before posting. Hosted WinUI's exact
+  `Microsoft.UI.Content.DesktopChildSiteBridge` class is accepted only with those
+  same ownership checks. The log captures the candidate and actual post,
   with bounded HWND class/parent/root chains, and records the post-receipt sample
   in `historyWheelInput` on both hits and misses. Wheel receipt and movement remain
   required; the independent F24 canary and its quarantine conditions are unchanged.
