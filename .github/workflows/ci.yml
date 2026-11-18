@@ -1839,12 +1839,12 @@ jobs:
   # GitHub starts no check_run, check_suite or workflow_run for checks Actions itself creates, but
   # a workflow_dispatch made with GITHUB_TOKEN always starts a run. Main's copy of merge-rule.yml
   # is dispatched (--ref main), so the pull request's code never judges itself. It's a delivery
-  # job: it needs no installer or publish job, and quality-gate doesn't wait on it.
+  # job: it needs no installer or publish job, and quality-gate doesn't wait on it. Main only: on a
+  # pull request the evaluator counts every CI job, so a queued or timed-out nudge would hold the gate.
   nudge-merge-rule:
     needs: [product, ha-integration, spikes, spikes-linux, light, pwa-ui, pwa-e2e, app]
     if: >-
-      always() && (github.event_name == 'push'
-      || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+      always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

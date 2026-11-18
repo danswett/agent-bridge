@@ -1331,9 +1331,11 @@ public class MergeRuleTests
             github["github.event.check_suite.head_sha"] = eventName == "check_suite" ? head : null;
             github["github.event.check_suite.head_branch"] = branch;
             github["github.event.workflow_run.head_sha"] = eventName == "workflow_run" ? head : null;
+            github["github.event.check_run.check_suite.head_branch"] = eventName == "check_run" ? branch : null;
+            github["github.event.check_run.head_sha"] = eventName == "check_run" ? head : null;
             var sweep = eventName == "schedule" ? "backstop" : eventName == "workflow_dispatch" ? "dispatch"
                 : eventName == "workflow_run" && branch == "main" ? "sweep"
-                : eventName == "check_run" || eventName == "check_suite" && branch == "main" ? "sweep" : null;
+                : (eventName == "check_run" || eventName == "check_suite") && branch == "main" ? "sweep" : null;
             Assert.Equal(!runs ? "run-" + head : sweep ?? head,
                 IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
             var name = Scalar(job, "name");
@@ -1369,7 +1371,7 @@ public class MergeRuleTests
         Assert.Equal("read", permissions["contents"].ToString());
         var condition = job["if"].ToString();
         Assert.StartsWith("always()", condition, StringComparison.Ordinal);
-        Assert.Contains("github.event.pull_request.head.repo.full_name == github.repository", condition, StringComparison.Ordinal);
+        Assert.Equal("always() && github.event_name == 'push' && github.ref == 'refs/heads/main'", condition);
         var step = (YamlMappingNode)((YamlSequenceNode)job["steps"]).Single();
         Assert.Equal("true", step["continue-on-error"].ToString());
         Assert.Equal("gh workflow run merge-rule.yml --repo \"$GITHUB_REPOSITORY\" --ref main", step["run"].ToString());
@@ -1421,6 +1423,8 @@ public class MergeRuleTests
             var steps = (YamlSequenceNode)((YamlMappingNode)jobs["evaluate"])["steps"];
             Assert.Contains(steps.Cast<YamlMappingNode>(), step => step.Children.TryGetValue("run", out var run) &&
                 run.ToString().Contains("pull_request_target) [ -n \"$PR_NUMBER\" ] && scope=(--pr \"$PR_NUMBER\")", StringComparison.Ordinal));
+            Assert.Contains(steps.Cast<YamlMappingNode>(), step => step.Children.TryGetValue("run", out var run) &&
+                run.ToString().Contains("check_run) [ -n \"$CHECK_SHA\" ] && [ \"$CHECK_BRANCH\" != main ] && scope=(--sha \"$CHECK_SHA\")", StringComparison.Ordinal));
             MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github, OnMain);
             if (state is null) { Assert.Empty(github.Posted); }
             else { Assert.StartsWith($"{Older} {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal); }

@@ -27,8 +27,8 @@ name: Merge rule
 #  - check_suite and check_run: a check from an app other than GitHub Actions finished (code
 #    scanning's CodeQL). Actions' own suites and runs start neither, hence workflow_run. A suite
 #    or run on main is admitted and sweeps every open pull request into main (--all), like main's
-#    CI finishing; one on another branch judges only its head (a suite) or sweeps (a run, whose
-#    payload names no head the workflow trusts).
+#    CI finishing; one on another branch judges only its head (--sha), or sweeps when the payload
+#    names no head.
 #  - schedule and workflow_dispatch: a backstop for anything the events missed. That includes
 #    Dependabot's: runs it triggers may get a read-only token, so their posts can fail (allowed
 #    below), and the next scheduled run posts instead.
@@ -79,6 +79,7 @@ concurrency:
       || github.event.pull_request.head.sha || github.event.sha
       || github.event.check_suite.head_branch != 'main' && github.event.check_suite.head_sha
       || github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_sha
+      || github.event.check_run.check_suite.head_branch != 'main' && github.event.check_run.head_sha
       || 'sweep') || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' && vars.FLEET_MERGERULE != 'off' }}
 
@@ -114,7 +115,8 @@ jobs:
       ${{ vars.FLEET_MERGERULE != 'off'
       && (github.event.pull_request.head.sha || github.event.sha
       || github.event.check_suite.head_branch != 'main' && github.event.check_suite.head_sha
-      || github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_sha)
+      || github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_sha
+      || github.event.check_run.check_suite.head_branch != 'main' && github.event.check_run.head_sha)
       && 'merge-rule-scoped-v1' || 'merge-rule-sweep-v1' }}
     # Main's own workflow runs (pushes, the weekly CodeQL, a dispatch on main) start no
     # evaluation: no pull request's head is on main. Its check suites and check runs do, as a
@@ -208,6 +210,8 @@ jobs:
           SUITE_BRANCH: ${{ github.event.check_suite.head_branch }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
           RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          CHECK_SHA: ${{ github.event.check_run.head_sha }}
+          CHECK_BRANCH: ${{ github.event.check_run.check_suite.head_branch }}
         run: |
           # Fast path: an event about one pull request or head judges only that (the evaluator
           # reads every open pull request on the head, so a shared head is still judged whole);
@@ -218,7 +222,7 @@ jobs:
               pull_request_target) [ -n "$PR_NUMBER" ] && scope=(--pr "$PR_NUMBER") ;;
               status) [ -n "$STATUS_SHA" ] && scope=(--sha "$STATUS_SHA") ;;
               check_suite) [ -n "$SUITE_SHA" ] && [ "$SUITE_BRANCH" != main ] && scope=(--sha "$SUITE_SHA") ;;
-              check_run) scope=(--all) ;;
+              check_run) [ -n "$CHECK_SHA" ] && [ "$CHECK_BRANCH" != main ] && scope=(--sha "$CHECK_SHA") ;;
               workflow_run) [ -n "$RUN_SHA" ] && [ "$RUN_BRANCH" != main ] && scope=(--sha "$RUN_SHA") ;;
             esac
           fi

@@ -67,6 +67,7 @@ Check 'an empty queue proceeds' $true @()
 Check 'a queued scoped evaluation suppresses cron' $false @((Run 1)) @{ 1 = @((Job)) }
 Check 'a pending scoped evaluation suppresses cron' $false @((Run 1 'status' 'pending')) @{ 1 = @((Job 'merge-rule-scoped-v1' 'pending')) }
 Check 'a waiting scoped evaluation suppresses cron' $false @((Run 1 'workflow_run' 'waiting')) @{ 1 = @((Job 'merge-rule-scoped-v1' 'waiting')) }
+Check 'a queued check_run evaluation suppresses cron' $false @((Run 1 'check_run' 'queued')) @{ 1 = @((Job)) }
 Check 'the current run does not suppress itself' $true @((Run 99))
 Check 'another cron or dispatch does not suppress cron' $true @((Run 1 'schedule'), (Run 2 'workflow_dispatch'))
 Check 'skipped or cancelled runs do not suppress cron' $true @((Run 1 'status' 'completed'), (Run 2 'status' 'cancelled'))
