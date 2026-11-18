@@ -10,7 +10,6 @@ using AgentBridge.Transport.Tests;
 using Microsoft.Extensions.Time.Testing;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using Xunit;
 
@@ -1473,14 +1472,12 @@ public sealed class ReplyFlowTests : IAsyncLifetime
             if (Result.Status == InjectionStatus.Typed && plan.Sends.Any(s => s.Enter)) { OnInject?.Invoke(plan); }
             return Evidence(Result, written, entered);
 
-            InjectionResult Evidence(InjectionResult result, int count, bool? enter) => JsonSerializer.Deserialize<InjectionResult>(JsonSerializer.Serialize(new
+            InjectionResult Evidence(InjectionResult result, int count, bool? enter) => result with
             {
-                result.Status, result.Detail,
                 TextWritten = count,
                 EnterWritten = enter,
-                TextFingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.UTF8.GetBytes(string.Concat(plan.Sends.Select(s => s.Text))[..count]))),
-            }))!;
+                TextFingerprint = InjectionResult.Fingerprint(string.Concat(plan.Sends.Select(s => s.Text))[..count]),
+            };
         }
 
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
@@ -1575,6 +1572,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Equal("refused", result.GetProperty("outcome").GetString());
         Assert.True(result.TryGetProperty("refusal", out var refusal), result.GetRawText());
         Assert.Equal("occupied", refusal.GetString());
+        Assert.Equal("Occupied", AgentBridge.Protocol.Received.Read<ReplyResult>(result).Refusal.ToString());
         Assert.Empty(injector.Plans);
         Assert.Contains("a person's draft", (await injector.ReadScreenAsync(100)).Rows![3]);
     }

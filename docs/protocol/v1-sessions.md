@@ -1041,6 +1041,9 @@ those characters, with no attachments, is `refused` as empty.
 
 Result: `{ "outcome", "reason", "mode", "stage"? }`, the outcomes of `session.answer`,
 with `timings` for a request that asked for progress, and optional `attachments`.
+Optional `refusal` distinguishes `occupied` (a pre-existing Copilot draft), `asking`,
+`composerUnverified`, or `busy`. Absent or unknown means `other`; older clients ignore
+the field and still show `reason`. It never authorizes retrying the same request.
 `mode` is `queue` or `steer` (absent or unknown reads as `steer`).
 Hosts emit `stage` only on `unconfirmed`: `typed`, `recorded`, or `queued` below;
 unknown reads as `typed`, never as delivery. Tolerant records may retain a stage on

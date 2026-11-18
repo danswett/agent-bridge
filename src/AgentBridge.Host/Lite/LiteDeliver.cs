@@ -61,7 +61,7 @@ public sealed class LiteDeliver(
             AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed => new LiteDelivery(true, null),
             AnswerOutcome.Busy => Refused(LiteCodes.Busy),
             AnswerOutcome.Stale => Refused(LiteCodes.NoSuchSession),
-            _ => Refused(result.Refusal switch { ReplyRefusal.Asking or ReplyRefusal.Busy => LiteCodes.Busy, ReplyRefusal.ComposerUnverified => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
+            _ => Refused(result.Refusal switch { ReplyRefusal.Asking or ReplyRefusal.Busy => LiteCodes.Busy, ReplyRefusal.ComposerUnverified or ReplyRefusal.Occupied => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
         };
     }
 
