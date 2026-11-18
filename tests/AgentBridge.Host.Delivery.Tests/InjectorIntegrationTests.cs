@@ -604,6 +604,70 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
     }
 
+    static ReplyService AttachmentReplies(Fixture f, AgentBridge.Host.Core.SessionSource source, IConsoleInjector injector,
+        AgentBridge.Host.Delivery.Staging.AttachmentStore store) =>
+        new(source, f.Processes, new NoBridge(), new NoGuard(), injector,
+            new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) },
+            attachments: store);
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task The_attachment_reply_fixture_recovers_a_read_only_screen_miss_without_retyping(int missingRead)
+    {
+        using var f = new Fixture();
+        const string Id = "44444444-4444-4444-8444-444444444444";
+        var events = f.CopilotSession(Id, 100);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+        f.Processes.Run(AgentBridge.Protocol.AgentKind.Copilot, 100);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        using var store = new AgentBridge.Host.Delivery.Staging.AttachmentStore(new() { StagingRoot = Path.Combine(f.Root, "attachments") }, sweep: false);
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+        var file = Guid.NewGuid().ToString();
+        store.Start("phone", new() { Attachment = file, Name = "shot.png", Size = png.Length, Sha256 = AgentBridge.Protocol.Attachments.Base64Url(System.Security.Cryptography.SHA256.HashData(png)) });
+        store.Chunk("phone", new() { Attachment = file, Offset = 0, Data = Convert.ToBase64String(png) });
+        string? staged = null;
+        var injector = new AttachmentConsole(missingRead, plan =>
+        {
+            var words = string.Concat(plan.Sends.Select(send => send.Text));
+            staged = words.Split(' ')[0][1..];
+            Assert.Equal($"@{staged} what is this?", words);
+            Assert.Single(plan.Sends.Where(send => send.Enter));
+            Fixture.Append(events, Copilot.Event("user.message", new { content = words, attachments = new[] { new { type = "file", path = staged, displayName = "@" + staged } }, delivery = "idle" }, 5));
+        });
+        var replies = AttachmentReplies(f, source, injector, store);
+        var request = new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = "what is this?", Attachments = [new() { Id = file }] };
+
+        var result = await replies.ReplyAsync(request, "phone");
+        var repeated = await replies.ReplyAsync(request, "phone");
+
+        Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Delivered, (string?)null), (result.Outcome, result.Reason));
+        Assert.Equal(result, repeated);
+        Assert.Equal(3, injector.Reads);
+        Assert.Equal(1, injector.Writes);
+        Assert.NotNull(staged);
+        Assert.Equal(png, File.ReadAllBytes(staged));
+    }
+
+    sealed class AttachmentConsole(int missingRead, Action<KeyPlan> typed) : IConsoleInjector
+    {
+        public int Reads { get; private set; }
+        public int Writes { get; private set; }
+
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(++Reads == missingRead
+                ? new ConsoleScreen(null, "the injector stopped responding while reading the screen")
+                : new ConsoleScreen(CopilotIdle, null));
+
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
+        {
+            Writes++;
+            typed(plan);
+            return Task.FromResult(new InjectionResult(InjectionStatus.Typed, "ok"));
+        }
+    }
+
     // A reply with a file: staged privately, its path typed as an @ mention ahead of the words
     // by the real worker, and delivered once the "CLI" records the prompt with it attached.
     [WindowsFact]
@@ -618,9 +682,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
         await source.RefreshAsync();
         using var store = new AgentBridge.Host.Delivery.Staging.AttachmentStore(new() { StagingRoot = Path.Combine(f.Root, "attachments") }, sweep: false);
-                var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
-            new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) },
-            attachments: store);
+        var replies = AttachmentReplies(f, source, new WorkerInjector(Worker), store);
         byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
         var file = Guid.NewGuid().ToString();
         store.Start("phone", new() { Attachment = file, Name = "shot.png", Size = png.Length, Sha256 = AgentBridge.Protocol.Attachments.Base64Url(System.Security.Cryptography.SHA256.HashData(png)) });
