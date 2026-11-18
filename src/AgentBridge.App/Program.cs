@@ -11,6 +11,12 @@ public static class Program
 {
     internal static RunMarker? Marker { get; private set; }
 
+    internal static void CompleteRun()
+    {
+        try { Marker?.Complete(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { AppLog.Write($"run marker not cleared: {error.GetType().Name}"); }
+    }
+
     [STAThread]
     static int Main(string[] args)
     {
