@@ -334,11 +334,13 @@ public sealed class LaunchTests : IDisposable
     [Theory]
     [InlineData(AgentUser, false, null, false)]
     [InlineData("person", true, null, false)]
-    [InlineData(AgentUser, true, "true", true)]
+    [InlineData(AgentUser, true, "true", false)]
+    [InlineData("person", true, "true", false)]
+    [InlineData(null, true, "true", false)]
     [InlineData(AgentUser, true, "false", false)]
     [InlineData("person", false, null, null)]
     public async Task The_launch_origin_sets_the_question_default_without_a_required_payload_setting(
-        string user, bool requested, string? askUser, bool? expected)
+        string? user, bool requested, string? askUser, bool? expected)
     {
         await using var c = await Ready();
         if (requested)

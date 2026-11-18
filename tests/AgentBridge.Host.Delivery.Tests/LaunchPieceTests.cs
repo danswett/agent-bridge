@@ -82,6 +82,31 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Equal(Nasty, RunAndRead(line!.Value, "exe.json"));
     }
 
+    [WindowsTheory]
+    [Trait("Category", "Process")]
+    [InlineData("copilot", false)]
+    [InlineData("copilot", true)]
+    [InlineData("agency", false)]
+    [InlineData("agency", true)]
+    public void The_effective_Copilot_child_argv_keeps_noask_before_any_option_separator(string agent, bool batch)
+    {
+        var args = Launchers.Arguments(L(agent), "S", false, "", "", "", false,
+            ["--", "extra text"], "", "a \"quoted\" prompt & literal --no-ask-user", noAskUser: true);
+        var file = Echo;
+        if (batch)
+        {
+            file = Out("noask.cmd");
+            File.WriteAllText(file, $"@\"{Echo}\" --args \"{Out("noask.json")}\" %*\r\n");
+        }
+        var line = WindowsCommandLine.For(file, batch ? args : ["--args", Out("noask.json"), .. args], out var problem);
+        Assert.Null(problem);
+        var actual = RunAndRead(line!.Value, "noask.json");
+        Assert.Equal(args, actual);
+        Assert.Single(actual, a => a == "--no-ask-user");
+        Assert.True(Array.IndexOf(actual, "--no-ask-user") < Array.IndexOf(actual, "--"));
+        Assert.DoesNotContain("--allow-all", actual);
+    }
+
     [WindowsFact]
     [Trait("Category", "Process")]
     public void A_batch_shim_passes_every_argument_on_through_cmd_exe_without_running_or_expanding_any_of_it()
