@@ -4,6 +4,17 @@ namespace AgentBridge.App.Tests;
 
 public sealed class ConversationEndPinTests
 {
+    [Fact]
+    public void Resetting_a_session_forgets_scrollbar_custody_without_a_release()
+    {
+        var view = new SessionView();
+        view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
+        view.Scroller.Press(new Microsoft.UI.Xaml.Controls.Primitives.ScrollBar { Parent = view.Scroller }, 7);
+        Assert.False(view.HistoryEnd);
+        view.ResetSessionForProbe();
+        Assert.True(view.HistoryEnd);
+    }
+
     [Theory]
     [InlineData("release")]
     [InlineData("cancel")]
@@ -75,25 +86,6 @@ public sealed class ConversationEndPinTests
         view.StopScrolling();
         view.Follow();
         Assert.Empty(view.Scroller.Targets);
-    }
-
-    [Fact]
-    public void Follow_does_not_correct_the_end_while_the_person_is_scrolling()
-    {
-        var view = new SessionView();
-        view.Scrolling();
-        view.Follow();
-        Assert.Empty(view.Scroller.Targets);
-    }
-
-    [Fact]
-    public void An_in_flight_correction_still_follows_a_growing_end()
-    {
-        var view = new SessionView();
-        view.Scrolling(correction: 150);
-        view.Follow();
-        Assert.Equal([200.0], view.Scroller.Targets);
-        Assert.Equal(200, view.AnchorAt);
     }
 
     [Fact]

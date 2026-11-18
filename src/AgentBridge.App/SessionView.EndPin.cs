@@ -39,6 +39,7 @@ public sealed partial class SessionView
     }
 
     void EndScrollbarGesture(uint pointer) => scrollbarPointers.Remove(pointer);
+    void ResetScrollbarGestures() => scrollbarPointers.Clear();
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
     internal void ReleasePin() { pinEnd = false; anchoring = null; pinReleases++; }

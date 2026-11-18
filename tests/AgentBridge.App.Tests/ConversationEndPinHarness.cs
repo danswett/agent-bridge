@@ -105,6 +105,7 @@ namespace AgentBridge.App
         public int Releases => pinReleases;
         public double AnchorAt => anchorAt;
         public bool HistoryEnd => HistoryAtEnd();
+        public void ResetSessionForProbe() => ResetScrollbarGestures();
         public void Follow() => FollowPinnedEnd();
         public void Scrolling(double? correction = null) { scrolling = true; anchoring = correction; }
         public void StopScrolling() => scrolling = false;

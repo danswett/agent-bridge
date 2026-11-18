@@ -49,6 +49,7 @@ public sealed partial class SessionView
 
     void UnwatchHistory()
     {
+        ResetScrollbarGestures();
         historyDraw?.Stop();
         if (historyFirstFrame is not null) { CompositionTarget.Rendering -= historyFirstFrame; historyFirstFrame = null; }
         if (history is not null) { history.Changed -= OnHistoryChanged; }
