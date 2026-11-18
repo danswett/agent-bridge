@@ -483,6 +483,18 @@ A person at the machine may run `agent-bridge-host scripts grant-fleet <name>` o
 The separate `launch:fleet` grant is off for each newly minted credential.
 Activation remains closed until atomic, durable fleet hourly/live admission is wired (#2770);
 enabling a credential's grant does not yet enable dispatch.
+The staged admission primitive reads owner-set `agents.limits.fleetPerHour`
+(default and ceiling 8) and `agents.limits.liveFleetWorkers` (default and ceiling 6).
+Only positive whole numbers up to those ceilings are accepted; invalid policy refuses
+admission. Change them only with the owner-run config command, never from an agent session.
+Its separate fleet ledger reserves hourly and live capacity together under an exclusive
+file lock and flushes before admitting; reopening cannot reset either bucket.
+Missing, corrupt or locked ledger evidence refuses admission, never resets the counters.
+Only trusted proof of worker exit releases a live reservation, never an hourly charge.
+Unknown starts remain live even after an hour; retries bind to the original principal
+and request content. Coordinator admission uses its existing separate bucket.
+This primitive is not wired to dispatch or lifecycle observation yet: the activation
+hold above remains, and no production fleet launch is enabled by these settings.
 Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
 (empty by default). Fleet launches require an explicitly named agent, permissions and
 an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,

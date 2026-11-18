@@ -37,6 +37,7 @@ public static class ConfigCommands
         "usage.publish", "usage.intervalSeconds", "usage.idleIntervalSeconds", "usage.copilotAccounts",
         "devBox.keepAwake", "devBox.intervalMinutes",
         "agentMessaging.remote", "agentMessaging.allowAllTargets", "security.roster",
+        "agents.limits.fleetPerHour", "agents.limits.liveFleetWorkers",
     ];
 
     static readonly string[] AgentKeys = ["path", "model", "effort", "context", "models", "efforts", "contexts", "extraArgs"];

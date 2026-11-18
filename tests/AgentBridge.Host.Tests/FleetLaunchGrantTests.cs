@@ -108,6 +108,7 @@ public sealed class FleetLaunchGrantTests : IDisposable
         foreach (var request in requests) { Assert.True(Reopen().Reserve(principal, request).Allowed); }
         Assert.Contains("live", Reopen().Reserve(principal, Request).Reason);
         Assert.True(Reopen().Reserve(principal, requests[0]).Duplicate);
+        Assert.Equal("requestReused", Reopen().Reserve(principal, requests[0] with { Prompt = "changed" }).Reason);
         Assert.Equal("requestReused", Reopen().Reserve("script:fixture/other", requests[0]).Reason);
         foreach (var request in requests) { Assert.Null(Reopen().Release(principal, request.Request)); }
         for (var i = 0; i < 2; i++)
@@ -129,24 +130,47 @@ public sealed class FleetLaunchGrantTests : IDisposable
         File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
             """{"agents":{"enabled":true,"launch":{"enabled":true},"limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":10,"liveAgentLaunched":6,"agentLaunchedIdleHours":2}}}""");
         var fleet = new FleetLaunchAdmission(folder, () => Now);
-        foreach (var _ in Enumerable.Range(0, 6)) { Assert.True(fleet.Reserve("script:fixture/dispatcher", Request).Allowed); }
-        Assert.False(fleet.Reserve("script:fixture/dispatcher", Request).Allowed);
-        Assert.True(new AgentLaunchGate(folder).CheckLaunch("agent:coordinator", Request.Request, "fixture").Allowed);
+        const string principal = "script:fixture/dispatcher";
+        var requests = Enumerable.Range(0, 6).Select(_ => Request).ToArray();
+        foreach (var request in requests) { Assert.True(fleet.Reserve(principal, request).Allowed); }
+        Assert.False(fleet.Reserve(principal, Request).Allowed);
+        var coordinator = new AgentLaunchGate(folder);
+        Assert.True(coordinator.CheckLaunch("agent:coordinator", Request.Request, "fixture").Allowed);
+        foreach (var request in requests) { Assert.Null(fleet.Release(principal, request.Request)); }
+        for (var i = 0; i < 2; i++)
+        {
+            var request = Request;
+            Assert.True(fleet.Reserve(principal, request).Allowed);
+            Assert.Null(fleet.Release(principal, request.Request));
+        }
+        Assert.Contains("hour", fleet.Reserve(principal, Request).Reason);
+        Assert.True(coordinator.CheckLaunch("agent:coordinator", Request.Request, "fixture").Allowed);
     }
 
-    [Fact]
-    public async Task The_last_live_slot_is_atomic_and_unknown_starts_survive_hourly_expiry()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_last_fleet_slot_is_reserved_atomically(bool hourly)
     {
         Config();
         var now = Now;
         var fleet = new FleetLaunchAdmission(folder, () => now);
         const string principal = "script:fixture/dispatcher";
-        foreach (var _ in Enumerable.Range(0, 5)) { Assert.True(fleet.Reserve(principal, Request).Allowed); }
+        foreach (var _ in Enumerable.Range(0, hourly ? 7 : 5))
+        {
+            var request = Request;
+            Assert.True(fleet.Reserve(principal, request).Allowed);
+            if (hourly) { Assert.Null(fleet.Release(principal, request.Request)); }
+        }
         var results = await Task.WhenAll(Task.Run(() => new FleetLaunchAdmission(folder, () => now).Reserve(principal, Request)),
             Task.Run(() => new FleetLaunchAdmission(folder, () => now).Reserve(principal, Request)));
-        Assert.Single(results.Where(r => r.Allowed));
-        now += TimeSpan.FromHours(2);
-        Assert.Contains("live", new FleetLaunchAdmission(folder, () => now).Reserve(principal, Request).Reason);
+        Assert.Single(results, r => r.Allowed);
+        Assert.Contains(hourly ? "hour" : "live", fleet.Reserve(principal, Request).Reason);
+        if (!hourly)
+        {
+            now += TimeSpan.FromHours(2);
+            Assert.Contains("live", new FleetLaunchAdmission(folder, () => now).Reserve(principal, Request).Reason);
+        }
     }
 
     [Theory]
@@ -180,6 +204,39 @@ public sealed class FleetLaunchGrantTests : IDisposable
         File.WriteAllText(Path.Combine(folder, FleetLaunchAdmission.FileName), "");
         Assert.False(new FleetLaunchAdmission(folder).Reserve(principal, Request).Allowed);
         Assert.NotNull(fleet.Release(principal, request.Request));
+    }
+
+    [Fact]
+    public void Owner_config_commands_can_lower_fleet_limits_but_never_remove_their_bounds()
+    {
+        Config();
+        using var errors = new StringWriter();
+        Assert.Equal(0, ConfigCommands.Run(["config", "set", "agents.limits.fleetPerHour", "2"], folder, TextWriter.Null, errors));
+        Assert.Equal(0, ConfigCommands.Run(["config", "set", "agents.limits.liveFleetWorkers", "1"], folder, TextWriter.Null, errors));
+        Assert.Equal(1, ConfigCommands.Run(["config", "set", "agents.limits.fleetPerHour", "0"], folder, TextWriter.Null, errors));
+        Assert.Equal(2, HostSettings.Load(folder).Settings.Agents.Limits.Launch.FleetPerHour);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("""{"version":2,"lastSeen":"2026-11-17T00:00:00Z","entries":[]}""")]
+    public void Missing_corrupt_or_locked_admission_evidence_refuses_instead_of_resetting_the_caps(string? replacement)
+    {
+        Config();
+        const string principal = "script:fixture/dispatcher";
+        var fleet = new FleetLaunchAdmission(folder);
+        var request = Request;
+        Assert.True(fleet.Reserve(principal, request).Allowed);
+        var path = Path.Combine(folder, FleetLaunchAdmission.FileName);
+        using (var held = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.False(fleet.Reserve(principal, Request).Allowed);
+            Assert.NotNull(fleet.Release(principal, request.Request));
+        }
+        if (replacement is null) { File.Delete(path); }
+        else { File.WriteAllText(path, replacement); }
+        Assert.False(new FleetLaunchAdmission(folder).Reserve(principal, Request).Allowed);
     }
 
     [Theory]
