@@ -73,6 +73,24 @@ public static class RosterSigningKeys
         return LoadOrCreateLocked(folder, prefer);
     }
 
+    [SupportedOSPlatform("windows")]
+    public static RosterSigningKey OpenExisting(string folder) => OpenExisting(folder, File.ReadAllBytes);
+
+    // A custody owner can validate access and size while reading; use those exact bytes.
+    [SupportedOSPlatform("windows")]
+    public static RosterSigningKey OpenExisting(string folder, Func<string, byte[]> read)
+    {
+        using var snapshot = new MemoryStream(read(Path.Combine(folder, RefFile)), writable: false);
+        using var text = new StreamReader(snapshot);
+        var r = JsonSerializer.Deserialize<KeyRef>(text.ReadToEnd()) ?? throw new InvalidDataException(RefFile);
+        return r.Storage switch
+        {
+            "tpm" => new(new ECDsaCng(CngKey.Open(r.Name!, TpmP256Signing.Provider)), KeyStorage.Tpm, r.Name),
+            "dpapi" => new(LoadDpapi(read(Path.Combine(folder, DpapiFile))), KeyStorage.Dpapi, null),
+            _ => throw new PlatformNotSupportedException($"a {r.Storage} signing key cannot be opened here"),
+        };
+    }
+
     static FileStream Lock(string path)
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);
@@ -90,13 +108,7 @@ public static class RosterSigningKeys
         var refPath = Path.Combine(folder, RefFile);
         if (File.Exists(refPath))
         {
-            var r = JsonSerializer.Deserialize<KeyRef>(File.ReadAllText(refPath)) ?? throw new InvalidDataException(RefFile);
-            return r.Storage switch
-            {
-                "tpm" => new(new ECDsaCng(CngKey.Open(r.Name!, TpmP256Signing.Provider)), KeyStorage.Tpm, r.Name),
-                "dpapi" => new(LoadDpapi(folder), KeyStorage.Dpapi, null),
-                _ => throw new PlatformNotSupportedException($"a {r.Storage} signing key cannot be opened here"),
-            };
+            return OpenExisting(folder);
         }
 
         var storage = prefer ?? (TpmP256.IsAvailable(out _, TpmP256Signing.Algorithm) ? KeyStorage.Tpm : KeyStorage.Dpapi);
@@ -142,9 +154,12 @@ public static class RosterSigningKeys
     }
 
     [SupportedOSPlatform("windows")]
-    static ECDsa LoadDpapi(string folder)
+    static ECDsa LoadDpapi(string folder) => LoadDpapi(File.ReadAllBytes(Path.Combine(folder, DpapiFile)));
+
+    [SupportedOSPlatform("windows")]
+    static ECDsa LoadDpapi(byte[] protectedKey)
     {
-        var pkcs8 = ProtectedData.Unprotect(File.ReadAllBytes(Path.Combine(folder, DpapiFile)), DpapiEntropy, DataProtectionScope.CurrentUser);
+        var pkcs8 = ProtectedData.Unprotect(protectedKey, DpapiEntropy, DataProtectionScope.CurrentUser);
         try
         {
             var e = ECDsa.Create();

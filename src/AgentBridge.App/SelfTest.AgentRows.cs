@@ -47,7 +47,7 @@ static partial class SelfTest
         // Codex is set up and the host can't test it yet (#705 review): nothing to do, so no verb, and
         // "Not tested yet" where a result would be.
         var untested = view.AgentStatusOf("codex");
-        check(verbs.SequenceEqual(["SetUpAgent_copilot: Set up", "SetUpAgent_claude: Repair"]) && codexVerb is null or { Visibility: Visibility.Collapsed }
+        check(verbs.SequenceEqual(new[] { "SetUpAgent_copilot: Set up", "SetUpAgent_claude: Repair" }) && codexVerb is null or { Visibility: Visibility.Collapsed }
             && untested is { Text: "Not tested yet", Visibility: Visibility.Visible },
             $"shows one verb for each agent's hooks, and none for one set up and not tested yet ({string.Join(", ", verbs)}; Codex's {(codexVerb is null ? "absent" : codexVerb.Visibility.ToString())}, \"{untested?.Text}\")");
 
@@ -66,7 +66,7 @@ static partial class SelfTest
         await Task.Delay(400);
         var heard = view.Announced.Select(a => $"{a.Id}: {a.Text}").ToList();
         result["agentRowAnnouncements"] = heard;
-        check(heard.SequenceEqual(["copilot: Copilot CLI: Setting up…", $"copilot: {settings.Agents.Single(a => a.Id == "copilot").StatusName}", "claude: Claude Code: Repairing…", $"claude: {settings.Agents.Single(a => a.Id == "claude").StatusName}"]),
+        check(heard.SequenceEqual(new[] { "copilot: Copilot CLI: Setting up…", $"copilot: {settings.Agents.Single(a => a.Id == "copilot").StatusName}", "claude: Claude Code: Repairing…", $"claude: {settings.Agents.Single(a => a.Id == "claude").StatusName}" }),
             $"confirms each setup by name and raises its row's progress and result for Narrator, named for its agent ({string.Join(" | ", asked)}; {string.Join(" | ", heard)})");
         // A raise queued for a status the row has since moved on from, or one already said, is not
         // heard: a setup that ends before its progress is drawn is heard once (#705 review).
@@ -217,7 +217,7 @@ static partial class SelfTest
                     && !words.Any(w => w.Contains("Access to the path", StringComparison.Ordinal) || w.Contains("0x8A15000F", StringComparison.Ordinal) || w.Contains("agent-ha-bridge", StringComparison.Ordinal))
                     // Each reason once, on the status line: the checks beneath say only the fact (Creative, 6675472997).
                     && words.Count(w => w.Contains("Read-only ·", StringComparison.Ordinal)) == 1 && words.Count(w => w.Contains("· access denied", StringComparison.Ordinal)) == 1
-                    && shown.SequenceEqual(["InstallAgent_claude"])
+                    && shown.SequenceEqual(new[] { "InstallAgent_claude" })
                     && Status("copilot") is { } readOnly && ReferenceEquals(readOnly.Style, window.SettingsPage.Resources["AgentStatusAbText2"]),
                     $"says why of each row the app can't act on, in its words and the neutral tone, with nothing on it that can't work ({string.Join(" / ", said)}; shown: {string.Join(", ", shown)}; {(Status("copilot") is { } s ? Colour(s)?.ToString() : "no status")})");
             }

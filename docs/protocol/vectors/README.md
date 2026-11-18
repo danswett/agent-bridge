@@ -7,6 +7,13 @@ a limit moved in one of them fails in the others. The specs ([v1-sessions.md](..
 and the other `v1-*.md` files) stay the contract. These files are its worked examples, and they
 are generated.
 
+**#2468 coverage gap:** `sessions.json` still has the legacy reply vectors. The
+new request/result `mode`, reply `stage` and interim `queued` progress are covered
+by C# `ReplyModeTests`, not new shared vectors or PWA replay coverage. Adding their
+shared cases requires changing `ProtocolVectors.cs`, regenerating and replaying both
+implementations; it remains a #2468 follow-up, outside the doc-only correction.
+Do not hand-edit `sessions.json`: the generator-equality test would reject it.
+
 | File | Records |
 |---|---|
 | `sessions.json` | `hello`, sessions and their parts, `sessions.list`, `sessions.subscribe` and its events (`session.patch` included), answers, replies, `session.stop` |
@@ -17,11 +24,12 @@ are generated.
 | `manage.json` | `manage.get`, `manage.state`, `manage.restart` and `manage.hooks.repair` (#801), and the held `manage.config.set` and `manage.haToken.set` |
 | `update.json` | `update.get`, `update.state`, `update.check` and `update.install`, Update now's press, `busy` and codes (#1159) included |
 | `usage.json` | `usage.get`, `usage.update` and shared readings |
-| `machine-load.json` | Numerical `MachineLoad`, `SessionLoad`, CPU, memory and unattributed readings (C# replay; PWA reader follows in #1872) |
+| `machine-load.json` | Numerical `MachineLoad`, `SessionLoad`, CPU, memory and unattributed readings, replayed by C# and the PWA's complete `load-feed.js` readers (#2158) |
 | `history.json` | `session.history`: its request, pages, turns, prompts and their senders, each part (responses, reasoning, tools, delegate events, questions and approvals with their outcomes), and the `missing`, `stale` and `unavailable` results ([v1-history.md](../v1-history.md)) |
 | `diagnostics.json` | `diagnostics.get`'s snapshot and its sections, and the content-free journal entries it carries (#802, #737) |
 | `signed-command.json` | Fixed keys, the commands they sign with the MAC each gives, and commands the machine must refuse; among them Update now's press at its longest, the one body past 2048 characters any action takes (up to 4096, for `update.install.now` only) |
 | `agent-envelope.json` | The signed agent-command envelope (#722, [agent-principals §4.3](../../design/agent-principals.md)): a `hostSign` public key, one valid envelope per action, and envelopes a verifier must refuse, each with its refusal code (a case may carry its own `hostSign`). Only the C# library replays this file so far; the PWA and other implementations do not. ECDSA signatures are not deterministic, so `EnvelopeTests.cs` in `tests/AgentBridge.AgentEnvelope.Tests` replays the committed file and rewrites it only with `UPDATE_PROTOCOL_VECTORS=1` |
+| `fleet-registry-signing.json` | Fixed canonical/framed bytes and public-only hostSign signatures, signed-field mutations and refusal cases (#2370). `FleetRecordSigningTests.cs` replays it in C#; host reader #2371 and PWA #2379 consume the same oracle. The old-sequence signature is authentic but stale, not a cryptographic failure |
 | `noise-ik-p256.json` | Not records: the channel's Noise IK handshake (#603) with fixed keys (spike S2's), each message and the transport messages after it, byte for byte. `NoiseTests.cs` in `tests/AgentBridge.Transport.Tests` writes it, and `pwa/test/unit/channels.test.mjs` replays it with WebCrypto |
 | `session-patches.json` | The recorded sessions in `tests/fixtures` as a subscriber that asked for patches is sent them: the snapshot's upsert, then each `session.patch` with the session the client must then hold |
 | `roster.json` | Not records: the signed device roster's encoding ([devices.md](../devices.md), #55): framing, keys, ids, entries and the code each refused one gets, presence assertions and enrollment values. `RosterVectorTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-vectors.test.mjs` replays it |
@@ -105,6 +113,20 @@ replay until its entry goes.
   checks it mirrors. The signed commands are signed again with the fixed keys. A disagreement is
   then added as a known difference with `"differs": "swift"` and an issue, in
   `tests/AgentBridge.Protocol.Tests/KnownDifferences.cs`.
+
+## Payload size report
+
+Run `pwsh docs/protocol/vectors/report-payload-sizes.ps1` from the repository root.
+The read-only report prints each record type's minimum and maximum serialized UTF-8
+bytes and vector count as tab-separated columns, sorted by ordinal record name.
+It measures the compact `json` payloads in both `valid` and `refused`, not the
+fixture wrappers, contexts or normalized `reads`. Serialization uses the protocol's
+relaxed JSON escaping. Non-record fixtures (such as Noise and roster vectors) are
+not message types and are excluded. Invalid JSON or malformed record vectors fail
+with the file name, before any report is printed.
+
+Use `-VectorPath <folder>` to measure another vector folder. This is measurement
+only: there is no byte budget or CI gate.
 
 ## Regenerating
 

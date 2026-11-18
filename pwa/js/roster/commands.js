@@ -137,6 +137,7 @@ export const ACTION = Object.freeze({
   update: 'update',
   forget: 'forget',
   attest: 'attest',
+  acceptHostSign: 'accept-host-sign',
 });
 
 // The members each action has besides the common ones, in the body and in its target; every one
@@ -147,6 +148,7 @@ const ACTION_MEMBERS = {
   update: [['nonce'], []],
   forget: [[], []],
   attest: [['nonce'], []],
+  'accept-host-sign': [['nonce'], []],
 };
 
 export const needsNonce = (action) => Object.hasOwn(ACTION_MEMBERS, action) && ACTION_MEMBERS[action][0].includes('nonce');

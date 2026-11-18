@@ -131,6 +131,8 @@ let page = null;
 let linked = null;
 // Set once signed in: goes to a link's machine.
 let followLink = null;
+// A worker can hand off a tap while device identity is still loading.
+let earlyLink = null;
 // While a shown link's answers wait to take focus: stops watching for focus moved meanwhile.
 let unwatchFocus = () => {};
 
@@ -275,7 +277,11 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
   try { p = new URL(e.data.url).searchParams; } catch { return; }
   const host = param(p, 'host');
   if (!host || !ID.test(host)) { return; }
-  followLink?.({ host, session: param(p, 'session'), question: param(p, 'question'), signin: signInAgent(p), needsyou: p.get('needsyou') === '1' });
+  const link = { host, session: param(p, 'session'), question: param(p, 'question'), signin: signInAgent(p), needsyou: p.get('needsyou') === '1' };
+  if (followLink) { followLink(link); } else {
+    const token = accountStore.load()?.token;
+    earlyLink = token ? { link, token } : null;
+  }
 });
 navigator.serviceWorker?.startMessages?.();
 
@@ -637,6 +643,8 @@ async function startDemo() {
 let identity;
 
 function showSignIn(error) {
+  earlyLink = null;
+  followLink = null;
   shell.setSignedIn(false);
   $('signin').hidden = false;
   $('sessions').hidden = true;
@@ -658,7 +666,7 @@ $('signin-button').onclick = async () => {
     $('verify').textContent = flow.verificationUri.replace(/^https?:\/\//, '');
     $('code-box').hidden = false;
     const account = await flow.wait();
-    accountStore.save(account);
+    await accountStore.save(account);
     $('code-box').hidden = true;
     $('signin').hidden = true;
     begin(account);
@@ -815,7 +823,10 @@ function begin(account) {
     }
   };
   drawFeedbackAvailability();
-  const link = takeLink();
+  const addressLink = takeLink();
+  const pending = earlyLink;
+  earlyLink = null;
+  const link = pending && pending.token === account.token ? pending.link : addressLink;
   // A session's link wins over a sign-in's: a push carries one or the other.
   const wanted = (l) => (l?.host && l.session ? { host: l.host, session: l.session, question: l.question } : l?.host && l.signin ? { host: l.host, signin: l.signin } : l?.host && l.needsyou ? { host: l.host, needsyou: true } : null);
   setLinked(wanted(link));
@@ -1063,7 +1074,7 @@ function begin(account) {
     // A session's address names this account's machine: the next sign-in, perhaps another
     // account, would otherwise start on it. A link that arrives after this is kept.
     if (shell.route === 'sessions' && shell.rest.length) { shell.go('sessions', { replace: true }); }
-    accountStore.clear();
+    void Promise.resolve(accountStore.clear()).catch((error) => console.error(error));
     dropKeptUsage();
     connection.stop();
     // This account's machines must not go on notifying this device.
@@ -1079,6 +1090,8 @@ function begin(account) {
 
   $('signout').onclick = async () => {
     await sentImages.clear();
+    earlyLink = null;
+    followLink = null;
     setLinked(null);
     hosts.forget();
     fleet.clear();
@@ -1086,7 +1099,7 @@ function begin(account) {
     reading.stop();
     $('feedback').hidden = true;
     if (feedbackDialog.open) { feedbackDialog.close(); }
-    accountStore.clear();
+    await accountStore.clear();
     connection.stop();
     // Not for long: signing out must not wait on a service worker that isn't running.
     await Promise.race([Promise.all([notices.forget().catch(() => {}), dropKeptUsage()]), new Promise((r) => { setTimeout(r, 2000); })]);

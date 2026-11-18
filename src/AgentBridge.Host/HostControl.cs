@@ -81,6 +81,11 @@ public sealed class HostControl
     // Deliberately not in HostStatus: that is the app's local-pipe contract.
     public DepartureStatus Departure => options.Lifecycle?.Departure ?? DepartureStatus.None;
     readonly HostControlOptions options;
+    internal object WorkspaceFleetWorkers(JsonElement data)
+    {
+        lock (settingsGate) { return FleetWorkerSettings.Handle(options.Folder, data, log); }
+    }
+
     readonly Action<string> log;
     readonly object gate = new();
     readonly DateTimeOffset startedAt;
@@ -165,6 +170,7 @@ public sealed class HostControl
             Account = options.Account(),
             Relay = relay,
             FleetPublication = options.FleetPublication(),
+            HostSigning = HostSignCustody.Read(options.Folder),
             SignIn = signIn,
             AgentHaBridge = options.AgentHaBridge(),
             HomeAssistant = options.HomeAssistant(),

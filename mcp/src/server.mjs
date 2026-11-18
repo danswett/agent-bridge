@@ -5,7 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { pathToFileURL } from 'node:url';
 import { openHost, resolveEndpoint, PipeError } from './pipe.mjs';
-import { LaunchLedger, getLaunchOptions, launchSession, listSessions, readSession, replyToSession } from './tools.mjs';
+import { LaunchLedger, getLaunchOptions, launchSession, listSessions, readSession, readUsage, replyToSession } from './tools.mjs';
 
 export const INSTRUCTIONS =
   'Slipgates messaging is connected on this machine. When you need to message, read or start another ' +
@@ -43,11 +43,12 @@ const SCHEMAS = {
       effort: str('Effort.'),
       context: str('Context.'),
       permissions: { type: 'string', enum: ['Ask permission', 'Allow all'] },
-      role: str('Coordinators only: the job this worker is for (letters, digits, hyphens). A worker with a role gets only the MCP servers the host lists for that role; leave it out for a person\'s own session.'),
+      role: str('Worker role (letters, digits, hyphens). Omitted: default, which keeps no MCP servers unless launch.workerMcp.default lists them. For more, pass an explicit listed role. Cost/context control, not a security boundary: the host narrows direct copilot only; Claude and Codex are not narrowed, Agency uses its profile. Null or blank roles are rejected.'),
     },
   },
   read_launch_result: { type: 'object', required: ['request'], properties: { machine: str('Ignored.'), request: str('The "request" launch_agent_session returned.') } },
   get_launch_options: { type: 'object', properties: { machine: str('Ignored.') } },
+  read_agent_usage: { type: 'object', properties: {}, additionalProperties: false },
 };
 
 const NEEDS = {
@@ -57,6 +58,7 @@ const NEEDS = {
   launch_agent_session: 'sessions.launch',
   read_launch_result: 'sessions.launch',
   get_launch_options: 'sessions.launch',
+  read_agent_usage: 'usage',
 };
 
 const DESCRIPTIONS = {
@@ -66,6 +68,7 @@ const DESCRIPTIONS = {
   launch_agent_session: 'Start (or resume) an agent session on this machine.',
   read_launch_result: 'What a launch made through this server came to.',
   get_launch_options: 'What launch_agent_session can name on this machine.',
+  read_agent_usage: 'Read this host\'s last usage report, including allowance windows, sources, reading times and errors. Requires an accepted agent principal and the usage capability; no shared or remote reads.',
 };
 
 const MAX_TEXT = 16 * 1024;
@@ -105,9 +108,13 @@ function validate(name, args) {
       requireString('prompt', { max: MAX_TEXT, optional: true });
       requireRequestKey({ optional: true });
       for (const key of ['agent', 'workspace', 'profile', 'resume', 'model', 'effort', 'context', 'permissions', 'role']) requireString(key, { optional: true });
+      if (args.role !== undefined && !args.role.trim()) throw new PipeError('role must not be blank; omit it to use the default worker role.');
       break;
     case 'read_launch_result':
       requireRequestKey();
+      break;
+    case 'read_agent_usage':
+      if (Object.keys(args).length) throw new PipeError('read_agent_usage takes no arguments.');
       break;
     default:
   }
@@ -139,7 +146,8 @@ export function createServer(connection) {
     if (!conn) return { tools: [] }; // no host: stay quiet so the agent falls back
     const tools = Object.keys(SCHEMAS)
       .filter((name) => allowed(conn, name))
-      .map((name) => ({ name, description: DESCRIPTIONS[name], inputSchema: SCHEMAS[name] }));
+      .map((name) => ({ name, description: DESCRIPTIONS[name], inputSchema: SCHEMAS[name],
+        ...(name === 'read_agent_usage' ? { annotations: { readOnlyHint: true } } : {}) }));
     return { tools };
   });
 
@@ -160,6 +168,7 @@ export function createServer(connection) {
         case 'reply_to_agent_session': return json(await replyToSession(host, args.session_id, args.text));
         case 'launch_agent_session': return json(await launchSession(host, ledger, args));
         case 'read_launch_result': return json(ledger.read(args.request));
+        case 'read_agent_usage': return json(await readUsage(host));
         default: return json(await getLaunchOptions(host));
       }
     } catch (error) {

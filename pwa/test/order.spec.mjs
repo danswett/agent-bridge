@@ -205,7 +205,10 @@ for (const { state, sort, filter, needsOnly, only } of [
       for (const id of ids) { window.agentBridgeDemo.remove(id); }
     }, only ? FIRST : []);
     const pending = 'demo-pending-snapshot';
-    await upsert(page, pending, { agent: 'copilot', title: 'Loading session', status: needsOnly ? 'waiting' : 'idle', startedAt: later(), updatedAt: later() });
+    const question = needsOnly ? await page.evaluate((id) => ({
+      ...window.agentBridgeDemo.host.get(id).question, id: 'pending-snapshot-question',
+    }), COPILOT) : null;
+    await upsert(page, pending, { agent: 'copilot', title: 'Loading session', status: needsOnly ? 'waiting' : 'idle', question, startedAt: later(), updatedAt: later() });
     await expect.poll(() => order(page)).toEqual([pending, ...(only ? [] : FIRST)]);
     if (sort) { await selectSort(page, sort); }
     if (filter) { await page.locator('#search').fill(filter); }
@@ -615,6 +618,15 @@ for (const width of [900, 1440]) {
       await card(page, CLAUDE).hover();
       const grip = card(page, CLAUDE).locator('.drag-handle');
       expect(await grip.evaluate((e) => getComputedStyle(e).forcedColorAdjust)).toBe('none');
+      const ink = await page.evaluate(() => {
+        const probe = document.createElement('i');
+        probe.style.color = 'CanvasText';
+        document.body.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      });
+      await expect(grip).toHaveCSS('color', ink);
       await card(page, CLAUDE).evaluate((e) => e.classList.add('drop-before'));
       expect(await card(page, CLAUDE).evaluate((e) => getComputedStyle(e, '::before').forcedColorAdjust)).toBe('none');
     });

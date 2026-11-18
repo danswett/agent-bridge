@@ -160,13 +160,24 @@ public static class ProtocolVectors
             .Valid("stale", full with { State = MachineLoadState.Stale, AgeMs = 16000 })
             .Valid("first-sample-no-cpu", full with { Cpu = null, Sessions = [session with { CpuPercent = null }] })
             .Valid("unavailable", new MachineLoad())
+            .Reads("over-200-sessions", Broken(full, j => j["sessions"] = JsonSerializer.SerializeToNode(
+                Enumerable.Range(0, 201).Select(i => new SessionLoad { Session = $"s-{i}", WorkingSetBytes = i }),
+                ProtocolJson.Options)))
+            .Reads("mixed-case-names", """
+                {"STATE":"stale","sTaTe":"fresh","sampledAT":"2025-01-02T03:04:05.000Z","AGEMs":100,"sTaleAfterMS":15000,
+                 "CPU":{"PERCENT":1,"pErCeNt":25,"CORES":8},
+                 "MEMORY":{"TOTALBYTES":17179869184,"availableBYTES":8589934592,"COMMITTEDPERCENT":50},
+                 "SESSIONS":[{"SESSION":"s-1","AGENT":"AGENCY","PROCESSES":3,"CPUPERCENT":12.5,"WORKINGSETBYTES":104857600,"wor\u212AingSetBytes":7,"HANDLES":42,"HANDLEKIND":"FDS","stAte":"partial"}],
+                 "UNATTRIBUTED":{"PROCESSES":1,"WORKINGSETBYTES":1048576}}
+                """)
+            .Reads("offset-submillisecond-sampled-at", """{"state":"fresh","sampledAt":"2025-01-02T03:04:05.1234567+02:30","sessions":[]}""")
             .Reads("unknown-state", """{"state":"future","sessions":[]}""")
             .Reads("no-figure", """{"state":"partial","cpu":{},"memory":{},"sessions":[]}""");
     }
 
     // ---- sessions ----
 
-    static readonly MachineInfo Machine = new(MachineId, "DEV-VM1", "windows", "0.1.200", Dev: true, Sessions: 3, ReadOnly: "agent-ha-bridge is running for this user", Instance: "9a8b7c6d5e4f30211203f4e5d6c7b8a9");
+    static readonly MachineInfo Machine = new(MachineId, "node-a", "windows", "0.1.200", Dev: true, Sessions: 3, ReadOnly: "agent-ha-bridge is running for this user", Instance: "9a8b7c6d5e4f30211203f4e5d6c7b8a9");
 
     static readonly RestoreSession RestoredMidTurn = new() { Id = SessionId, Agent = AgentKind.Copilot, Title = "Fix the login page", MidTurn = true };
     static readonly RestoreSession RestoredAsking = new() { Id = "7a21c3d4-5e6f-4a1b-9c2d-3e4f5a6b7c8d", Agent = AgentKind.Claude, QuestionLost = true };
@@ -240,7 +251,7 @@ public static class ProtocolVectors
         Model = "claude-opus-5.5", Effort = "high", Context = "1M", Status = SessionStatus.Waiting, StatusSince = T1, StartedAt = T0, UpdatedAt = T1, ProcessId = 4120, Activity = FullActivity,
         Question = Form, Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c", Subagents = [Delegate, Nested], SubagentsMore = 2, WaitingOn = null,
     };
-    // #800: VM1's sign-in failure as a host shows it, with the sentence the host composes (#841).
+    // #800: node-a's sign-in failure as a host shows it, with the sentence the host composes (#841).
     static readonly Attention SignInNeeded = new() { Kind = AttentionKind.SignInNeeded, Since = T0, Agent = AgentKind.Copilot, Provider = "github", Account = "mona", Message = "Copilot needs you to sign in again (401).", SignIn = SignInWhere.Phone, Recovery = RecoveryState.Checking };
     static readonly Session MinimalSession = new() { Id = "b7e1c2d3-0000-4000-8000-000000000001", Agent = AgentKind.Claude, Status = SessionStatus.Idle, StatusSince = T0, UpdatedAt = T0, Activity = new Activity() };
 
@@ -292,7 +303,8 @@ public static class ProtocolVectors
             .Refused("a-delegate-ordered-twice", turn with { Subagents = turn.Subagents! with { Order = ["agent-3", "agent-3"] } }, "held-at-41")
             .Refused("a-delegate-without-an-id", turn with { Subagents = turn.Subagents! with { Set = [JsonSerializer.SerializeToElement(new { status = "ended" })] } }, "held-at-41")
             // Read with its base left out, a patch would be applied to nothing as if it were the whole session.
-            .Refused("a-base-that-is-not-a-number", Broken(turn, j => j["base"] = "41"));
+            .Refused("a-base-that-is-not-a-number", Broken(turn, j => j["base"] = "41"))
+            .Refused("missing-id", Broken(turn, j => j.Remove("id")));
         f.Record<SubagentsPatch>(Host)
             .Valid("by-id", turn.Subagents!)
             .Valid("one-entry", new SubagentsPatch { Set = [JsonSerializer.SerializeToElement(new { id = "agent-3", status = "ended" })] });
@@ -302,11 +314,12 @@ public static class ProtocolVectors
     {
         f.Record<MachineInfo>(Host)
             .Valid("full", Machine)
+            .Valid("role", Machine with { Role = "builder" })
             .Valid("minimal", new MachineInfo(MachineId, "DEV-MAC", "macos", "0.1.200"));
         f.Record<HelloResult>(Host)
             .Valid("full", new HelloResult(1, Machine, [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsReply, Capabilities.SessionsStop, Capabilities.Push, Capabilities.SessionsAttach, Capabilities.SessionsAttachBlob, Capabilities.SessionsApprove, LaunchProtocol.Capability, UsageProtocol.Capability, UpdateProtocol.Capability]))
             .Valid("read-only", new HelloResult(1, new MachineInfo(MachineId, "DEV-LINUX", "linux", "0.1.200"), [Capabilities.SessionsRead]))
-            .Reads("a-capability-from-a-newer-host", $$"""{"protocol":1,"machine":{"id":"{{MachineId}}","name":"DEV-VM1","os":"windows","hostVersion":"0.2.0"},"capabilities":["sessions.read","sessions.teleport"],"region":"eu"}""");
+            .Reads("a-capability-from-a-newer-host", $$"""{"protocol":1,"machine":{"id":"{{MachineId}}","name":"node-a","os":"windows","hostVersion":"0.2.0"},"capabilities":["sessions.read","sessions.teleport"],"region":"eu"}""");
         f.Record<ToolCall>(Host)
             .Valid("done", Finished)
             .Valid("running", Running with { Summary = null })
@@ -371,7 +384,7 @@ public static class ProtocolVectors
             .Valid("full", FullActivity)
             .Valid("empty", new Activity())
             // Who wrote the latest prompt when it was not the person (#489).
-            .Valid("a-scheduled-prompt", new Activity { UserMessage = "[Scheduled prompt #4] Check CI and report.", UserMessageFrom = UserMessageFrom.Schedule, UserMessageLabel = "4", TurnCount = 3 })
+            .Valid("a-scheduled-prompt", new Activity { Kind = TurnKind.Scheduled, UserMessage = "[Scheduled prompt #4] Check CI and report.", UserMessageFrom = UserMessageFrom.Schedule, UserMessageLabel = "4", TurnCount = 3 })
             .Valid("a-prompt-an-agent-sent", new Activity { UserMessage = "Carry on with the next step.", UserMessageFrom = UserMessageFrom.Agent })
             .Reads("an-unknown-sender-reads-as-other-never-the-person", """{"userMessage":"Carry on.","userMessageFrom":"robot"}""")
             .Refused("a-sender-that-is-not-text", """{"userMessage":"Carry on.","userMessageFrom":4}""");
@@ -396,9 +409,13 @@ public static class ProtocolVectors
             .Valid("listed", new SignInDevices(SignInDeviceStates.Ready, [new("iPhone", "phone", "iOS", true), new("Work laptop", "app", "Windows")]))
             .Valid("no-roster-yet", new SignInDevices(SignInDeviceStates.None, []))
             .Valid("unreadable", new SignInDevices(SignInDeviceStates.Unreadable, []));
+        var transcriptObservation = new TranscriptObservation(T1, "file-size", MachineId);
+        f.Record<TranscriptObservation>(Host).Valid("file-metadata", transcriptObservation);
         f.Record<Session>(Host)
             .Valid("full", FullSession)
             .Valid("minimal", MinimalSession)
+            .Valid("transcript-file-size", MinimalSession with { TranscriptBytes = 52_428_801, TranscriptObservation = transcriptObservation })
+            .Valid("transcript-unavailable", MinimalSession with { TranscriptBytesUnavailable = "not-found", TranscriptObservation = transcriptObservation })
             .Valid("waiting-on-a-delegate", MinimalSession with { Agent = AgentKind.Copilot, Status = SessionStatus.Waiting, Question = Plain with { Agent = "agent-1", AnswerAtMachine = true }, Subagents = [Delegate with { Status = SubagentStatus.Waiting }], WaitingOn = "agent-1" })
             .Valid("ending", MinimalSession with { Agent = AgentKind.Codex, Status = SessionStatus.Ending })
             // Idle, as its turn ended, with why beside it (#800): an older client reads only that.
@@ -734,7 +751,7 @@ public static class ProtocolVectors
             .Reads("an-unknown-kind-reads-as-a-question", $$"""{"v":1,"kind":"celebrate","machine":"{{MachineId}}","session":"{{SessionId}}","at":"2026-10-28T04:22:43.182Z"}""");
         var notification = new PushNotification
         {
-            Title = "DEV-VM1 · Protocol vectors", Body = "Which spike next, and why?", Tag = PushNotice.Tag(MachineId, SessionId), Data = data,
+            Title = "node-a · Protocol vectors", Body = "Which spike next, and why?", Tag = PushNotice.Tag(MachineId, SessionId), Data = data,
             Navigate = PushNotice.Navigate("https://danswett.github.io/agent-bridge/", MachineId, SessionId, "call_q1"),
         };
         f.Record<PushNotification>(Host)
@@ -742,12 +759,12 @@ public static class ProtocolVectors
             .Valid("resolved", notification with { Silent = true, Body = "Answered", Data = data with { Kind = NoticeKind.Resolved } })
             .Valid("sign-in", new PushNotification
             {
-                Title = "Copilot on DEV-VM1 needs sign-in", Body = "3 sessions affected", Tag = PushNotice.Tag(MachineId, PushNotice.SignInKey(AgentKind.Copilot, null)), Data = SignInData,
+                Title = "Copilot on node-a needs sign-in", Body = "3 sessions affected", Tag = PushNotice.Tag(MachineId, PushNotice.SignInKey(AgentKind.Copilot, null)), Data = SignInData,
                 Navigate = PushNotice.SignInNavigate("https://danswett.github.io/agent-bridge/", MachineId, AgentKind.Copilot),
             })
             .Valid("group", new PushNotification
             {
-                Title = "Needs you", Body = "DEV-VM1 · 3 sessions waiting on you", Tag = PushNotice.Tag(MachineId, "~needsyou"), Data = GroupData,
+                Title = "Needs you", Body = "node-a · 3 sessions waiting on you", Tag = PushNotice.Tag(MachineId, "~needsyou"), Data = GroupData,
                 Navigate = PushNotice.NavigateNeedsYou("https://danswett.github.io/agent-bridge/", MachineId),
             });
         f.Record<PushMessage>(Host).Valid("question", new PushMessage { Notification = notification });
@@ -799,7 +816,7 @@ public static class ProtocolVectors
             .Refused("an-empty-resume", new LaunchRequest { Request = Request, Resume = "" })
             .Refused("a-transfer-and-a-resume", new LaunchRequest { Request = Request, Resume = SessionId, Transfer = Bring })
             .Refused("a-transfer-without-a-workspace", new LaunchRequest { Request = Request, Transfer = Bring })
-            .Refused("a-transfer-from-something-not-a-device-id", New() with { Transfer = Bring with { From = "DEV-VM2" } })
+            .Refused("a-transfer-from-something-not-a-device-id", New() with { Transfer = Bring with { From = "node-b" } })
             .Refused("a-transfer-of-something-not-a-uuid", New() with { Transfer = Bring with { Session = "latest" } })
             .Refused("a-transfer-without-a-command", New() with { Transfer = Bring with { Command = null } })
             .Refused("a-transfer-with-a-malformed-command", New() with { Transfer = Bring with { Command = Signed with { Mac = "not a mac!" } } })
@@ -877,7 +894,7 @@ public static class ProtocolVectors
             .Refused("a-mac-over-64-characters", Signed with { Mac = Repeat('m', TransferProtocol.MaxMac + 1) });
         f.Record<LaunchTransfer>(Client, VectorChecks.Transfer)
             .Valid("signed", Bring)
-            .Refused("from-a-name", Bring with { From = "DEV-VM2" })
+            .Refused("from-a-name", Bring with { From = "node-b" })
             .Refused("from-an-upper-case-device-id", Bring with { From = OtherMachine.ToUpperInvariant() })
             .Refused("a-session-that-is-not-a-uuid", Bring with { Session = "latest" })
             .Refused("no-command", Bring with { Command = null });
@@ -913,9 +930,15 @@ public static class ProtocolVectors
 
     static void Update(VectorFileBuilder f)
     {
+        f.Context("release-hints", new
+        {
+            now = T0, hello = new { releaseHint = true },
+            frame = new { t = "release.hint", tag = "v0.1.201", channel = "win", seenAt = T0 },
+        });
         var last = new UpdateResult { Outcome = UpdateOutcome.Updated, From = "0.1.199", To = "0.1.200", Request = Request, At = T0 };
         f.Record<UpdateResult>(Host)
             .Valid("updated", last)
+            .Valid("last-step", last with { Step = "installing" })
             .Valid("refused", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "a session is busy", At = T0 })
             // Update now (#1159): how it ended as a code, which a client words itself.
             .Valid("an-update-now-refused-with-a-code", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "Update now has used its restarts", Request = Request, Code = UpdateCode.RestartCap, At = T0 })
@@ -945,8 +968,19 @@ public static class ProtocolVectors
             Request = Request, Automatic = true, Last = last,
         };
         var offered = state with { Phase = UpdatePhase.Idle, Progress = null, Request = null, CanUpdateNow = true, Busy = busy };
+        var leaving = new UpdateLeaving("0.1.201", T0, T0.AddMinutes(3));
+        var back = new UpdateBack("0.1.200", "0.1.201", Request, T0.AddMinutes(1));
+        var policy = new UpdatePolicy(UpdatePolicyState.Ok, T0);
+        f.Record<UpdateLeaving>(Host).Valid("leaving", leaving);
+        f.Record<UpdateBack>(Host).Valid("back", back);
+        f.Record<UpdatePolicy>(Host).Valid("checked", policy);
         f.Record<UpdateState>(Host)
             .Valid("downloading", state)
+            .Valid("fleet-facts", new UpdateState
+            {
+                Bytes = 12, Total = 100, Downloaded = false, Installing = T0, Leaving = leaving, Back = back,
+                Mode = UpdateMode.RestartToUpdate, ChecksHeldUntil = T0.AddHours(1), Policy = policy,
+            })
             .Valid("waiting", state with { Phase = UpdatePhase.Waiting, Progress = null, Waiting = "a session is busy" })
             .Valid("no-app", new UpdateState { Unavailable = "the Windows app is not running" })
             .Valid("update-now-offered", offered)
@@ -958,6 +992,7 @@ public static class ProtocolVectors
             .Valid("an-update-now", new UpdateCommand { Now = Signed });
         f.Record<UpdateCommandResult>(Host)
             .Valid("accepted", new UpdateCommandResult(UpdateAck.Accepted) { State = state with { Phase = UpdatePhase.Checking, Progress = null } })
+            .Valid("retry-at", new UpdateCommandResult(UpdateAck.Refused) { Code = "rate-limited", RetryAt = T0.AddMinutes(10) })
             .Valid("refused", new UpdateCommandResult(UpdateAck.Refused, "the machine is read-only"))
             .Valid("an-update-now-refused-with-a-code", new UpdateCommandResult(UpdateAck.Refused, "the release offered here is no longer the one the person was shown") { Code = UpdateCode.ReleaseChanged })
             .Valid("confirm", new UpdateCommandResult(UpdateAck.Confirm, "more is busy here than the confirmation covered") { State = offered })
@@ -1102,7 +1137,7 @@ public static class ProtocolVectors
         f.Record<UsageWindow>(Host)
             .Valid("full", window)
             .Valid("percent-only", new UsageWindow { Key = "5h", Label = "5-hour", Percent = 3 });
-        var reader = new UsageReader(OtherMachine, "DEV-VM2");
+        var reader = new UsageReader(OtherMachine, "node-b");
         f.Record<UsageReader>(Host).Valid("another-machine", reader);
         var reading = new AgentUsage { Agent = AgentKind.Copilot, Label = "Copilot", Account = "octocat", Plan = "Pro+", Source = UsageSource.Api, Windows = [window], MeasuredAt = T0 };
         f.Record<AgentUsage>(Host)

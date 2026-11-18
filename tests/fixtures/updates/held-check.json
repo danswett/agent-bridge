@@ -1,0 +1,13 @@
+{
+  "current": "0.1.0",
+  "installer": true,
+  "available": "0.2.0",
+  "checkedAt": "2026-11-02T17:40:00Z",
+  "phase": "idle",
+  "canUpdateNow": true,
+  "last": {
+    "outcome": "failed",
+    "at": "2026-11-02T17:59:00Z",
+    "reason": "the release feed's rate limit refused the check; checking again soon"
+  }
+}

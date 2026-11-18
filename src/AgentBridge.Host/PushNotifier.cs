@@ -25,6 +25,10 @@ public sealed class RelayPushSender(RelayClient relay) : IPushSender
         relay.PushAsync(endpoint, body, ttl, urgency, topic);
 }
 
+// How one question notice went to one device (#2649): who, which question, and the push service's answer as
+// "delivered", "gone", "not-allowed", "retrying" or "refused". Never the endpoint, keys or the notice's words.
+public sealed record PushNoticeOutcome(string Device, string Session, string? Question, NoticeKind Kind, string Outcome);
+
 // Who asked to be notified: the channel's peer, the account its relay connection is signed
 // in to, and whether that relay lists the peer among the account's devices.
 public sealed record PushPeer(string Device, string Name, string AccountId, bool InAccount, byte[]? PublicKey = null)
@@ -233,6 +237,8 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     public Func<string, bool>? Watching { get; set; }
     // What the account's devices say they show (SessionService.Presences), for InUse.
     public Func<IReadOnlyList<DevicePresence>>? Presences { get; set; }
+    // Told how each question notice went to each device, under the notifier's lock: it must not block.
+    public Action<PushNoticeOutcome>? NoticeOutcome { get; set; }
 
     public PushNotifier(ISessionSource source, MachineInfo machine, PushStore store, PushOptions? options = null, Action<string>? log = null, TimeProvider? time = null,
         RemoteAuthorization? trust = null)
@@ -759,6 +765,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         // The push service's status only: its error text stays on the lines below, as before.
         var answered = time.GetUtcNow();
         log($"{Timeline(o)} sent={Ms((o.SentAt ?? answered) - QueuedAt(o))} response={Ms(answered - QueuedAt(o))} status={r.Status} attempt={o.Attempts + 1} outcome={outcome}");
+        if (o.Kind == NoticeKind.Question) { NoticeOutcome?.Invoke(new PushNoticeOutcome(o.Device, o.Session, o.Question, o.Kind, outcome)); }
         // Settled unless it is tried again below.
         if (!transient || o.Attempts + 1 >= options.MaxAttempts || !MayNotify(sub) || store.Get(sub.Device)?.Grant != sub.Grant) { o.Settled?.TrySetResult(); }
         if (!MayNotify(sub) || store.Get(sub.Device)?.Grant != sub.Grant) { return; }

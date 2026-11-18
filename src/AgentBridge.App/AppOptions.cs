@@ -19,6 +19,7 @@ sealed record AppOptions
     // Draw the demo's cards, write what was drawn to this file and exit (CI's smoke test).
     public string? SelfTest { get; init; }
     public bool HistoryScrollBudget { get; init; }
+    public bool LiveListReplay { get; init; }
 
     public static AppOptions Parse(string[] args)
     {
@@ -33,6 +34,7 @@ sealed record AppOptions
                 case "--demo": o = o with { Demo = true }; break;
                 case "--self-test" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true }; break;
                 case "--self-test-history-scroll" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, HistoryScrollBudget = true }; break;
+                case "--self-test-live-list" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, LiveListReplay = true }; break;
             }
         }
         return o;
@@ -45,8 +47,9 @@ sealed record AppOptions
 
 static class Paths
 {
+    public static string? DiagnosticRoot { get; set; }
     public static string DataRoot => Identity.DefaultRoot;
-    public static string AppData => Path.Combine(DataRoot, "app");
+    public static string AppData => DiagnosticRoot ?? Path.Combine(DataRoot, "app");
     public static string Exe => Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "AgentBridge.exe");
 }
 

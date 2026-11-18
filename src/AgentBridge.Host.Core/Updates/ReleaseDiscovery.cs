@@ -41,7 +41,7 @@ namespace AgentBridge.Host.Core.Updates;
 // The relay controls Age, so GitHub revalidation is due every GithubRevalidateEvery regardless.
 // On rate-limit refusals, validated relay lists are allowed for GithubRelayAtMost from GitHubAnsweredAt,
 // or one persisted bootstrap if missing. Relay replies never renew it; invalid anchors require GitHub success.
-public sealed class ReleaseDiscovery : IDisposable
+public sealed partial class ReleaseDiscovery : IDisposable
 {
     // The switch, on now the relay is live (SRE's Worker, #927): flipped by a release, never by a setting.
     public const bool ReadCdnFirst = true;
@@ -485,8 +485,11 @@ public sealed class ReleaseDiscovery : IDisposable
         Quota? quota = null;
         try
         {
-            using var response = await http.SendAsync(request, cancellationToken);
-            if (url == GitHubList && int.TryParse(Header(response, "X-RateLimit-Remaining"), NumberStyles.None, CultureInfo.InvariantCulture, out var remaining))
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(http.Timeout);
+            using var response = await http.SendAsync(request, url == HaltPolicyList
+                ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead, timeout.Token);
+            if (url is GitHubList or HaltPolicyList && int.TryParse(Header(response, "X-RateLimit-Remaining"), NumberStyles.None, CultureInfo.InvariantCulture, out var remaining))
             {
                 quota = new(remaining, time.GetUtcNow());
             }
@@ -495,7 +498,8 @@ public sealed class ReleaseDiscovery : IDisposable
             if (status == HttpStatusCode.NotModified) { return new Answer(status, ETag: tag, Quota: quota); }
             if (status == HttpStatusCode.OK)
             {
-                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (url == HaltPolicyList) { await response.Content.LoadIntoBufferAsync(PolicyLargest, timeout.Token); }
+                var body = await response.Content.ReadAsStringAsync(timeout.Token);
                 // Only a list is kept: anything else would be served as the answer for an interval.
                 return IsList(body) ? new Answer(status, body, tag, Quota: quota) : new Answer(status, Problem: Problems.Unexpected, Quota: quota);
             }
@@ -616,7 +620,11 @@ public sealed class ReleaseDiscovery : IDisposable
         {
             if (!File.Exists(StatePath)) { return memory; }
             var disk = JsonSerializer.Deserialize(File.ReadAllText(StatePath), ReleaseDiscoveryJson.Default.State) ?? new State();
-            if (unsaved && disk.Saved == underneath) { return memory; }
+            var now = time.GetUtcNow();
+            var backoff = Sane(memory, now).NotBefore is { } wait && wait > now && wait > (Sane(disk, now).NotBefore ?? DateTimeOffset.MinValue) ? memory : disk;
+            disk = disk with { HaltPolicy = MergePolicy(memory.HaltPolicy, disk.HaltPolicy),
+                NotBefore = backoff.NotBefore, Failures = backoff.Failures, Problem = backoff.Problem };
+            if (unsaved && disk.Saved == underneath) { return memory = memory with { HaltPolicy = disk.HaltPolicy, NotBefore = disk.NotBefore, Failures = disk.Failures, Problem = disk.Problem }; }
             (unsaved, underneath) = (false, disk.Saved);
             return memory = disk;
         }
@@ -681,6 +689,7 @@ public sealed class ReleaseDiscovery : IDisposable
         public bool RelayExpired { get; init; }
         // What GitHub's last list offered each channel (ChannelNewest), never a relay's.
         public Dictionary<string, string>? Floors { get; init; }
+        public HaltPolicyCache? HaltPolicy { get; init; }
     }
 }
 

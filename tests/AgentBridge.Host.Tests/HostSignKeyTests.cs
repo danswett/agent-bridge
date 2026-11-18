@@ -82,12 +82,46 @@ public sealed class HostSignKeyTests : IDisposable
         { Assert.True(bytes.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Store, name!))), "refused state was rewritten"); }
     }
 
+    [WindowsHostSignTheory]
+    [InlineData("missing")]
+    [InlineData("unreadable")]
+    [InlineData("wrong-tier")]
+    public void OpenExisting_never_creates_or_repairs_and_uses_one_content_free_refusal(string damage)
+    {
+        if (damage != "missing") { using var made = HostSignKey.LoadOrCreate(profile, KeyStorage.Dpapi); }
+        if (damage == "wrong-tier") { File.WriteAllText(Path.Combine(Store, "signing-key.json"), "{\"Storage\":\"untrusted-tier\",\"Name\":null}"); }
+        var contents = Directory.GetFiles(profile, "*", SearchOption.AllDirectories)
+            .ToDictionary(path => path, path => SHA256.HashData(File.ReadAllBytes(path)));
+        using var locked = damage == "unreadable"
+            ? new FileStream(Path.Combine(Store, "host-sign.public"), FileMode.Open, FileAccess.Read, FileShare.None) : null;
+        var before = Directory.GetFileSystemEntries(profile, "*", SearchOption.AllDirectories).Order().ToArray();
+        var failure = Assert.Throws<InvalidDataException>(() => HostSignKey.OpenExisting(profile));
+        Assert.Equal("missing-key", failure.Message);
+        Assert.Null(failure.InnerException);
+        Assert.Equal(before, Directory.GetFileSystemEntries(profile, "*", SearchOption.AllDirectories).Order().ToArray());
+        locked?.Dispose();
+        Assert.True(contents.All(p => p.Value.AsSpan().SequenceEqual(SHA256.HashData(File.ReadAllBytes(p.Key)))), "refused custody was modified");
+    }
+
     public sealed class WindowsHostSignTheoryAttribute : TheoryAttribute
     {
         public WindowsHostSignTheoryAttribute()
         {
             if (!OperatingSystem.IsWindows()) { Skip = "hostSign custody uses Windows TPM or DPAPI"; }
         }
+    }
+
+    [WindowsHostSignTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Existing_reference_text_encodings_still_open_the_committed_key(bool utf16)
+    {
+        using var made = HostSignKey.LoadOrCreate(profile, KeyStorage.Dpapi);
+        var path = Path.Combine(Store, "signing-key.json");
+        var json = File.ReadAllText(path);
+        File.WriteAllText(path, json, utf16 ? Encoding.Unicode : new UTF8Encoding(true));
+        using var opened = HostSignKey.OpenExisting(profile);
+        Assert.Equal(made.PublicPoint, opened.PublicPoint);
     }
 
     [WindowsFact("hostSign custody uses Windows TPM or DPAPI")]

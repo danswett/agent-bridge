@@ -5,14 +5,7 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-// What the local pipe serves: the sessions ops exactly as the relay's channels get them, and
-// the host's management ops, which only the pipe reaches. Who may do what (CallerGuard):
-//   * the Agent Bridge app: everything, the management ops included;
-//   * anything inside an agent session: reading sessions and usage, nothing else. Not managing
-//     the host, and not answering, replying, ending or launching sessions as if it were the
-//     person, until agents have a principal of their own (design §5.5);
-//   * anything else of the user's: the sessions ops as before, and the host's status, but not
-//     managing it.
+// CallerGuard and scoped credentials govern pipe ops; script management is host-CLI-only (docs/protocol/local-pipe.md).
 public static class LocalApi
 {
     // Management ops that only read.
@@ -30,6 +23,76 @@ public static class LocalApi
 
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
+        if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
+        {
+            if (credentials.Of(channel)?.FleetLaunch != true) { credentials.CheckScriptOperation(channel, op, log); }
+            if (data.ValueKind != JsonValueKind.Object || System.Text.Encoding.UTF8.GetByteCount(data.GetRawText()) > LaunchProtocol.MaxRequest
+                || data.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() != 1)
+                || data.EnumerateObject().Any(p => p.Name is not ("request" or "agent" or "workspace" or "permissions"
+                    or "model" or "effort" or "context" or "prompt" or "role" or "fleetName")))
+            { throw Refuse(op, callers.Classify(channel), "fleet launch contains unsupported fields or exceeds its size limit", log); }
+            var request = data.Deserialize<LaunchRequest>(ProtocolJson.Options) ?? throw new ArgumentException("fleet launch needs a request");
+            string? Refusal() => credentials.Of(channel) is not { } script ? "the script credential is no longer live"
+                : callers.Classify(channel, fresh: true).Kind == CallerKind.Agent ? "fleet launch is refused inside an agent session"
+                : credentials.FleetGrant.CheckLaunch(script, (channel as LocalChannel)?.Peer?.Ancestry ?? ProcessAncestry.Unknown, request);
+            if (Refusal() is { } reason) { throw Refuse(op, callers.Classify(channel), reason, log); }
+            var live = credentials.Of(channel) ?? throw Refuse(op, callers.Classify(channel), "the script credential is no longer live", log);
+            return await sessions.LaunchFleetAsync(request, credentials.PrincipalOf(live), audit, Refusal,
+                actual => credentials.FleetGrant.CheckDispatch(actual, request));
+        }
+        credentials?.CheckScriptOperation(channel, op, log);
+        if (op == FleetWorkerSettings.Op)
+        {
+            var caller = callers.Classify(channel, fresh: true);
+            if (channel is not LocalChannel || caller.Kind != CallerKind.App || credentials?.Of(channel) is not null)
+            { throw Refuse(op, caller, "only the local app may read or change workspace fleet workers", log); }
+            return control.WorkspaceFleetWorkers(data);
+        }
+        if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet")
+        { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
+        if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
+        {
+            if (credentials is null || !OperatingSystem.IsWindows() || channel is not LocalChannel local)
+            {
+                throw new InvalidOperationException($"refused: {op} isn't available on this host");
+            }
+            if (op == AgentProtocol.Credential)
+            {
+                if (credentials.Of(channel) is not null) { throw new InvalidOperationException("refused: this connection already has an agent credential"); }
+                var claim = credentials.Claim(local.Peer?.Ancestry ?? ProcessAncestry.Unknown);
+                if (claim is not { Token: { } token, Credential: { } issued }) { throw new InvalidOperationException($"refused: {claim.Refusal}"); }
+                return new AgentCredentialResult(token, credentials.PrincipalOf(issued), issued.Scope, issued.ExpiresAt);
+            }
+            var person = callers.Classify(channel, fresh: true);
+            if (person.Kind is not (CallerKind.App or CallerKind.HostCli))
+            {
+                throw Refuse(op, person, "adopting a session, or ending its adoption, is for the person at this machine, from the app or the host's own command line", log);
+            }
+            try
+            {
+                if (credentials.Problem is not null) { throw new InvalidOperationException("refused: the credential store is unavailable"); }
+                if (op == AgentProtocol.Revoke)
+                {
+                    var revoke = data.Deserialize<AgentRevokeRequest>(ProtocolJson.Options);
+                    if (string.IsNullOrEmpty(revoke?.Session) || !AgentCredentials.ValidSession(revoke.Session))
+                    { throw new ArgumentException("agent.revoke needs a valid session"); }
+                    var revoked = credentials.Revoke(revoke.Session, $"revoked by a person ({person.Description})");
+                    if (credentials.Problem is not null) { throw new InvalidOperationException("refused: the credential store is unavailable"); }
+                    return new AgentRevokeResult(revoke.Session, revoked);
+                }
+                var adopt = data.Deserialize<AgentAdoptRequest>(ProtocolJson.Options);
+                if (string.IsNullOrEmpty(adopt?.Session)) { throw new ArgumentException("agent.adopt needs a session"); }
+                if (sessions.ProcessForAdoption(adopt.Session) is not { Id: > 0, StartedAt: { } started } process)
+                {
+                    throw new InvalidOperationException("refused: the host has no running process for that session to adopt");
+                }
+                var adoption = credentials.Adopt(adopt.Session, process.Id, started, adopt.Scope ?? AgentProtocol.ScopeRead);
+                if (credentials.Problem is not null) { throw new InvalidOperationException("refused: the credential store is unavailable"); }
+                return new AgentAdoptResult(adoption.Session, adoption.Scope, adoption.ExpiresAt);
+            }
+            catch (JsonException) { throw new ArgumentException($"{op} needs a session"); }
+            catch (ArgumentException e) { throw new InvalidOperationException($"refused: {e.Message}"); }
+        }
         if (op == Fleet.FleetNames.Op)
         {
             var caller = callers.Classify(channel, fresh: true);
@@ -37,7 +100,7 @@ public static class LocalApi
             {
                 throw Refuse(op, caller, "only the app or host command line may set a fleet name", log);
             }
-            return sessions.RenameFleetSession(data);
+            return await sessions.RenameFleetSessionAsync(data, fleet?.WarningRoster, channel.Closed);
         }
             if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data, appendAttempt: audit is null ? null : audit.Append); }
             if (op == AgentBridge.Host.Fleet.FleetList.Op) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).HandleAsync(channel, data, auditLog: audit); }
@@ -50,7 +113,7 @@ public static class LocalApi
                 try { request = data.Deserialize<AgentHelloRequest>(ProtocolJson.Options) ?? throw new ArgumentException("agent.hello needs a token"); }
                 catch (JsonException) { throw new ArgumentException("agent.hello needs a token"); }
                 var ancestry = (channel as LocalChannel)?.Peer?.Ancestry ?? ProcessAncestry.Unknown;
-                var decision = credentials.Check(request.Token, ancestry);
+                var decision = credentials.Check(request.Token, ancestry, agentCaller: callers.Classify(channel, fresh: true).Kind == CallerKind.Agent);
                 if (decision.Accepted is not { } credential)
                 {
                     log?.Invoke($"local pipe: refused agent.hello: {decision.Refusal}");
@@ -79,14 +142,45 @@ public static class LocalApi
             if (authorization is not null && op.StartsWith("host.peers.", StringComparison.Ordinal)) { return authorization.Manage(op, data); }
             return await control.HandleAsync(channel, op, data);
         }
+        if (op == LaunchProtocol.Launch && callers.Classify(channel, fresh: true) is { Kind: CallerKind.Other } untraced)
+        {
+            const string why = "untraceableCaller: launching sessions requires the app or the host's own command line";
+            AuditRefusal("unknown:local", [], op, data, audit, why, refusals);
+            throw Refuse(op, untraced, why, log);
+        }
         if (op == Ops.SessionAnswer && credentials?.Of(channel) is { } answering)
         {
             // Refusals must not copy arbitrary answer fields into the audit trail.
-            AuditAgentAction(credentials, answering, op, AnswerAuditTarget(data), "refused", audit);
+            var target = AnswerAuditTarget(data);
+            AuditAgentAction(credentials, answering, op, target, "refused", audit, sessions?.RefusedAnswerGate(target, data));
             throw Refuse(op, new Caller(CallerKind.Agent, credentials.PrincipalOf(answering)),
                 "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
         }
-        if (Acts.Contains(op) && callers.Classify(channel) is { Kind: CallerKind.Agent } agent)
+        if (op is LaunchProtocol.Launch or LaunchProtocol.Options
+            && callers.Classify(channel).Kind == CallerKind.Agent)
+        {
+            if (credentials is { } store && store.Of(channel) is { Kind: "session" } launchReader
+                && launchReader.Scope != AgentPolicy.ScopeNone)
+            {
+                if (op == LaunchProtocol.Launch
+                    && sessions.ReplayAgentLaunch(data, store.PrincipalOf(launchReader)) is { } replay)
+                {
+                    var result = await replay;
+                    if (store.IsLive(launchReader)) { return result; }
+                    throw Refuse(op, callers.Classify(channel), "the credential is no longer live", log);
+                }
+                if (op == LaunchProtocol.Options)
+                {
+                    var offered = await sessions.HandleAsync(channel, op, data);
+                    if (!store.IsLive(launchReader)) { throw Refuse(op, callers.Classify(channel), "the credential is no longer live", log); }
+                    if (offered is not LaunchOptions choices) { throw Refuse(op, callers.Classify(channel), "launch options are unavailable", log); }
+                    return store.LaunchGate.ProjectOptions(choices);
+                }
+            }
+            if (op == LaunchProtocol.Options)
+            { throw Refuse(op, callers.Classify(channel), "a live session read credential is required", log); }
+        }
+        if (Acts.Contains(op) && callers.Classify(channel, fresh: op == Ops.SessionReply) is { Kind: CallerKind.Agent } agent)
         {
             const string why = "answering, replying, ending and launching sessions are for the person, from the app or a phone";
             if (op is LaunchProtocol.Launch or Ops.SessionStop && credentials?.Of(channel) is { } credential)
@@ -108,10 +202,16 @@ public static class LocalApi
         {
             throw Refuse(op, reader, "reading a session's history is for the person, from the app or a phone", log);
         }
+        var replyCaller = op == Ops.SessionReply && channel is LocalChannel && credentials?.Of(channel) is null
+            ? callers.Classify(channel, fresh: true).Kind : CallerKind.Other;
+        ReplyIntent ReplyIntentNow() => replyCaller is (CallerKind.App or CallerKind.HostCli)
+            && !channel.Closed.IsCompleted && credentials?.Of(channel) is null
+            && callers.Classify(channel, fresh: true).Kind == replyCaller ? ReplyIntent.Steer : ReplyIntent.Unknown;
         // Shaped inside the service, so hello.changed compares what this caller is told (#651).
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
             CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
+                .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability } : [],
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
                 .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : [],
@@ -119,18 +219,22 @@ public static class LocalApi
                 .. control.HasAgentSignIn ? new[] { HostOps.AgentSignInCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
-        });
+        }, actionAudit: op is (LaunchProtocol.Launch or Ops.SessionAnswer or Ops.SessionStop)
+            && callers.Classify(channel).Kind is (CallerKind.App or CallerKind.HostCli) ? audit : null,
+            replyIntent: op == Ops.SessionReply ? ReplyIntentNow : null);
     };
 
-    sealed class RefusalAudits(TimeProvider time)
+    internal sealed class RefusalAudits(TimeProvider time)
     {
         public TimeProvider Time { get; } = time;
         public Dictionary<string, (long At, int Written, int Suppressed, long Last)> Windows { get; } = new(StringComparer.Ordinal);
     }
 
     static void AuditRefusal(AgentCredentials credentials, AgentCredential caller, string op, JsonElement data, AgentAuditLog? audit, string why, RefusalAudits refusals)
+        => AuditRefusal(credentials.PrincipalOf(caller), caller.Chain, op, data, audit, why, refusals);
+
+    internal static void AuditRefusal(string principal, string[] chain, string op, JsonElement data, AgentAuditLog? audit, string why, RefusalAudits refusals)
     {
-        var principal = credentials.PrincipalOf(caller);
         lock (refusals.Windows)
         {
             var now = refusals.Time.GetTimestamp();
@@ -155,7 +259,7 @@ public static class LocalApi
             var request = Guid.TryParse(Field("request"), out var r) ? r.ToString("D") : Guid.NewGuid().ToString("D");
             var target = op == LaunchProtocol.Launch ? "local" : Guid.TryParse(Field("id"), out var id) ? id.ToString("D") : "unknown";
             var reason = summary ? $"{state.Suppressed} additional launch or stop attempts were refused" : why;
-            var entry = new AgentAuditEntry("local", request, principal, caller.Chain, op, target, "refused", reason);
+            var entry = new AgentAuditEntry("local", request, principal, chain, op, target, "refused", reason);
             bool written;
             try { written = audit?.Append(entry, !summary && op == LaunchProtocol.Launch ? Field("prompt") : null) == true; }
             catch (Exception) { throw AuditUnavailable(); }
@@ -177,9 +281,9 @@ public static class LocalApi
         catch (InvalidOperationException) { return "unknown"; }
     }
 
-    internal static void AuditAgentAction(AgentCredentials credentials, AgentCredential caller, string op, string target, string outcome, AgentAuditLog? audit)
+    internal static void AuditAgentAction(AgentCredentials credentials, AgentCredential caller, string op, string target, string outcome, AgentAuditLog? audit, GateAuditMetadata? gate = null)
     {
-        var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), credentials.PrincipalOf(caller), caller.Chain, op, target, outcome);
+        var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), credentials.PrincipalOf(caller), caller.Chain, op, target, outcome, Gate: gate);
         bool written;
         try { written = audit?.Append(entry) == true; }
         catch (Exception) { throw AgentActionAuditUnavailable(); }

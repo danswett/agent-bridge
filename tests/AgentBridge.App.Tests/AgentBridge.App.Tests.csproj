@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\src\AgentBridge.App\SelfTest.NativeInputSetup.cs" Link="SelfTest.NativeInputSetup.cs" />
     <Compile Include="..\TestTimeoutDiagnostics.cs" Link="TestTimeoutDiagnostics.cs" />
     <!-- The generated motion resources the app loads, read by MotionTests as the app reads them. -->
     <None Include="..\..\src\AgentBridge.App\Design\DesignResources.xaml" Link="DesignResources.xaml" CopyToOutputDirectory="PreserveNewest" />
@@ -34,6 +35,7 @@
     <!-- What a host sends for adversarial permission prompts, drawn as a card draws it (CopilotPermission, #212). -->
     <ProjectReference Include="..\..\src\AgentBridge.Host.Core\AgentBridge.Host.Core.csproj" />
     <None Include="..\fixtures\approvals\*" Link="fixtures\approvals\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\fixtures\updates\*" Link="fixtures\updates\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -30,7 +30,7 @@ export function promptFact(text, max = LABEL_MAX_BYTES) {
 }
 
 // A schedule's label as drawn: "#4" for a number, and anything else in quotes, so no label of an
-// agent's reads as words of the line's own ("Scheduled prompt · “Main agent”"), whatever letters
+// agent's reads as words of the line's own ("Scheduled · “Main agent”"), whatever letters
 // it draws them with.
 function scheduleName(raw) {
   const label = promptFact(raw);
@@ -50,31 +50,34 @@ function scheduleName(raw) {
 // is drawn as nothing, and no label can read as the person's or the main agent's.
 export function promptOrigin(session, { repeat = false } = {}) {
   const a = session?.activity ?? {};
-  const from = a.userMessageFrom ?? 'person';
+  const from = a.kind === 'notification' ? 'notification' : a.kind === 'scheduled' ? 'schedule' : a.userMessageFrom ?? 'person';
   if (from === 'person' || !a.userMessage) { return null; }
   const text = reveal(a.userMessage);
   const preview = text.replace(/\s+/gu, ' ').trim();
   if (from === 'schedule') {
     const name = scheduleName(a.userMessageLabel);
+    const label = 'Scheduled';
     return {
       from, icon: 'clock', by: null, repeat, text, preview,
-      facts: ['Scheduled prompt', name, repeat ? 'same as last time' : null].filter(Boolean),
-      spoken: aloud(name ? `Scheduled prompt ${name.replace(/^#/, '')}` : 'Scheduled prompt'),
+      facts: [label, name, repeat ? 'same as last time' : null].filter(Boolean),
+      spoken: aloud(name ? `${label} ${name.replace(/^#/, '')}` : label),
     };
   }
+  if (from === 'notification') { return { from, icon: 'driven', by: null, repeat: false, text, preview, facts: ['Notification'], spoken: 'Notification' }; }
   const by = from === 'agent' && session.driver === 'agent' && session.driverPrincipal ? promptFact(session.driverPrincipal, 128) || null : null;
+  const label = from === 'agent' ? promptFact(a.userMessageLabel) : '';
   return from === 'agent'
-    ? { from, icon: 'driven', by, repeat: false, text, preview, facts: ['Sent by an agent'], spoken: 'Prompt sent by an agent' }
+    ? { from, icon: 'driven', by, repeat: false, text, preview, facts: [label ? `From: ${label}` : 'Sent by an agent'], spoken: label ? aloud(`From: ${label}`) : 'Prompt sent by an agent' }
     : { from: 'other', icon: 'driven', by: null, repeat: false, text, preview, facts: ['Automatic prompt'], spoken: 'Automatic prompt' };
 }
 
 // The same, for the prompt of a turn in the stored conversation ({ text, from, label }, as
 // session.history sends it): an earlier prompt from an agent reads as the live one does.
-export const historyPromptOrigin = (prompt) => (prompt?.text
-  ? promptOrigin({ activity: { userMessage: prompt.text, userMessageFrom: prompt.from, userMessageLabel: prompt.label } })
+export const historyPromptOrigin = (prompt, kind = null) => (prompt?.text
+  ? promptOrigin({ activity: { kind, userMessage: prompt.text, userMessageFrom: prompt.from, userMessageLabel: prompt.label } })
   : null);
 
-// The disclosure's name (ui.md §9): whose prompt, then the words on it, "Scheduled prompt 4, Show
+// The disclosure's name (ui.md §9): whose prompt, then the words on it, "Scheduled 4, Show
 // prompt", and aria-expanded says collapsed or expanded after it. The words shown stay in the name
 // (WCAG 2.5.3, label in name), so speech input can say "Show prompt", and the state is said once.
 export const disclosureName = (origin, open) => `${origin.spoken}, ${open ? 'Hide prompt' : 'Show prompt'}`;

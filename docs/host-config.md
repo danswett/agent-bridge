@@ -11,6 +11,26 @@ Until the app has a settings screen, it is edited with the host's own commands, 
 machine (below), or by hand. The app will edit the same file; this page is the schema both
 follow.
 
+## Host enrollment descriptor (dormant)
+
+`agent-bridge-host devices descriptor` is reserved for a person at the machine.
+It currently exits 3 with only `no-switch` on stderr, before opening identity or
+hostSign custody. There is no config setting, environment override, automatic
+enrollment, scheduled task or deployment. #2367 and verified-reader host wiring
+are follow-ups; enabling the switch alone will not activate this verb.
+HostSign key provisioning is separate:
+
+## Explicit hostSign key initialization
+
+On Windows, a person at the machine runs `agent-bridge-host host-sign init [--profile <name>]`.
+This creates protected hostSign custody once. Repeating it reports `existing` with the same
+`keyId`, without rotating or rewriting the key. Output contains only `state` (`created`,
+`existing` or `missing-key`) and `keyId` when available. Agent/script credentials and
+non-person callers are refused. Damaged or incomplete custody is not repaired: it stays
+`missing-key` and unsigned. Creating the key does **not** enable signing or acceptance
+of hostSign; enabling remains gated by #2366/#2367. Status, enrollment and publishing
+never create the key.
+
 ## Schema, version 1
 
 
@@ -118,7 +138,7 @@ and `fleetNames` or `fleetNames.launchRule` set to `null` disables named launche
 | `launch.transfer.maxBytes` | `26214400` (25 MiB) | The largest session bundle, compressed, this machine sends or takes: 1 MiB to 200 MiB. A transfer needs it on both machines |
 | `launch.transfer.maxSourceBytes` | 10 × `maxBytes` | The most read from disk to pack one, and unpacked to install one: from `maxBytes` to 20 GiB |
 | `launch.remoteFolderTrust` | `false` | A person may answer a launched agent's folder-trust question (Trust or Quit) from their phone, browser or Windows app, with a command that device signs ([v1-launch.md](protocol/v1-launch.md#folder-trust)). Off: the question is shown on those devices read-only, to answer at the machine. Set it here, with `agent-bridge-host config set launch.remoteFolderTrust true` (applies when the host restarts), or in the Windows app's Settings (applies at once, so a question already waiting can then be answered); never from another device. Trusting a folder lets the agent run what is in it |
-| `launch.workerMcp` | `{}` | For each `role` a coordinator may pass on a launch, the MCP servers (by name, as in the owner's `<Copilot home>/mcp-config.json`) a worker started for that role keeps, e.g. `{"review":[],"github":["github-mcp-server"],"workiq":["workiq"]}`. A role not listed keeps none. Applies only to a direct `copilot` launch that carries a role, never to a launch without one (the owner's own) and not to Agency, which `--profile-only` already narrows. The host reads the server names from the owner's file at every launch (never cached) and passes `--disable-mcp-server <name>` for each one not listed, and `--disable-builtin-mcps` unless `github-mcp-server` or `githubiq` is listed. The log says counts only, never a name. A file that cannot be read refuses the launch. A server added between the host's read and Copilot's own read of the file (milliseconds) would load. Role names are letters, digits and hyphens, matched exactly |
+| `launch.workerMcp` | `{}` | For each `role` a coordinator may pass on a launch, the MCP servers (by name, as in the owner's `<Copilot home>/mcp-config.json`) a worker started for that role keeps, e.g. `{"default":[],"review":[],"github":["github-mcp-server"],"workiq":["workiq"]}`. A role not listed keeps none. The coordinator MCP tool supplies `default` for an omitted role; configure `launch.workerMcp.default` to list what it keeps. Coordinators needing more must pass an explicit listed role. Null or blank roles are rejected by the tool. Applies only to a direct `copilot` launch that carries a role, never to a person-started launch without one, Claude or Codex; Agency still uses `--profile-only` when a profile is set. This is a cost/context control, not a security boundary or grant to launch. The host reads the server names from the owner's file at every launch (never cached) and passes `--disable-mcp-server <name>` for each one not listed, and `--disable-builtin-mcps` unless `github-mcp-server` or `githubiq` is listed. The log says counts only, never a name. A file that cannot be read refuses the launch. A server added between the host's read and Copilot's own read of the file (milliseconds) would load. Role names are letters, digits and hyphens, matched exactly |
 | `launch.copilotAccount` | absent | The GitHub login a Copilot or Agency launch must run as. Every such launch (new, resume, restore) gets `COPILOT_GITHUB_TOKEN`, read from the user-level environment when the launch starts, and the host checks it first with its own two calls (`/user`, then `/copilot_internal/user`) before any worktree or process exists. Absent: any valid token with premium quota passes; set: the token's login must match (case-insensitive). Refused with a plain reason when the token is unset or invalid, the login differs, premium interactions are zero, or the check cannot complete ("could not check the account"). Quota not reported is accepted and logged. A stored login (`danswett`) is never used instead. `GH_TOKEN` and `GITHUB_TOKEN` in the session are left alone |
 | `launch.remoteFolderTrustDevices` | `[]` | The devices, by device id (32 hex), a person approved here to answer folder-trust questions from. The relay's kind for a device is self-declared, so this list is what lets one answer: with `launch.remoteFolderTrust` on and none approved, nobody can answer from a device. Approve a device in the Windows app's Settings (applies at once), or with `agent-bridge-host config set launch.remoteFolderTrustDevices '["<id>"]'`; a device that may not answer is told its short id. At most 64; invalid ids are ignored with a problem |
 | `homeAssistant.enabled` | `false` | The Home Assistant connector ([ha-connector.md](ha-connector.md)): this machine's sessions on the existing agent-ha-bridge dashboard. Runs only while agent-ha-bridge does not, and only with a token (`agent-bridge-host ha token set`, kept protected beside the device key, never in this file) |
@@ -150,13 +170,14 @@ and `fleetNames` or `fleetNames.launchRule` set to `null` disables named launche
 | `agents.enabled` | `false` | The agents policy (#720, [design](design/agent-principals.md), "The per-machine policy"): master switch for agent-to-agent commands on this machine, both directions. **Changed only at the machine**, in this file or with `agent-bridge-host config` (refused inside agent sessions); no request from another device or an agent reads or changes it. Absent section: agents are off, every grant below is off, and the limits are the defaults. This slice only parses and validates it; nothing consumes it yet |
 | `agents.credentialDays` | `7` | How long an agent's credential lives, from 1 to 7 |
 | `agents.issue.launched`, `agents.issue.adopted` | `none` | The scope a credential gets at issue: `none`, `read`, `read+reply` or `read+reply+launch` |
-| `agents.launch.enabled` | `false` | Default-off agent launch policy switch, read afresh with `agents.enabled` on every policy check. B1 (#2062) adds policy validation only; the pipe still refuses agent launches until the later enforcement slices land |
+| `agents.launch.enabled` | `false` | Default-off agent launch policy switch, read afresh with `agents.enabled` on every gate check. B2 (#2172) adds in-process hourly caps and request memory; the pipe still refuses agent launches until the later enforcement slices land |
 | `agents.outbound.remote` | `false` | Whether this machine's agents may reach other machines |
 | `agents.outbound.allowAgentLaunchedToLaunch` | `false` | Whether a session an agent launched may itself launch |
 | `agents.inbound.local.*`, `agents.inbound.remote.*` | all off | Agents on this machine, and on the account's other machines. `read`: `any`, `agent-launched` or `none` (`none`). `reply`: `forced-ask`, `agent-launched` or `none` (`none`). `gate`: `off`, `quiet` or `push` (`off`). `allowAllTargets`: `false` or `{ "workspaces": "same" or "any" }` (`false`). `coordinationGroups`: `false` or `{ "maxHours": 4 to 24, "perMemberPerDay", "perGroupPerMinute" }` (`false`). `launch`: `false` or `{ "workspaces": "approved" or [labels], "permissions": "ask", "agents": [ids], "profiles": [names] }`, with `permissions` stated (`false`). `inbound.remote.fromMachines`: `"any"` or a list; none by default |
 | `agents.inbound.exclude` | `{ "sessions": [], "workspaces": [] }` | Session ids and workspace labels no agent may reach |
 | `agents.limits.*` | `maxDepth` 3, `conversationMessages` 20, `conversationMinutes` 60, `perPairPerMinute` 6, `perTargetPerMinute` 12 | Each can only be lowered: the default is also the ceiling, and zero, a negative, or a larger number is read as the default and said |
-| `agents.limits.launchesPerOriginPerHour`, `launchesPerMachinePerHour`, `liveAgentLaunched`, `agentLaunchedIdleHours` | `3`, `10`, `6`, `2` | Whole numbers from 1 to their respective default ceilings. All four must be stated when `agents.launch.enabled` is true. Invalid, null or missing required values are reported at load and refuse launch; never unlimited. The policy gate returns no usable limits on refusal. Changes apply on the next policy check without restarting the agent. Caps and idle enforcement are later slices; time-boxed overrides are not implemented here |
+| `agents.limits.launchesPerOriginPerHour`, `launchesPerMachinePerHour`, `liveAgentLaunched`, `agentLaunchedIdleHours` | `3`, `10`, `6`, `2` | Whole numbers from 1 to their respective default ceilings. All four must be stated when `agents.launch.enabled` is true. Invalid, null or missing required values are reported at load and refuse launch; never unlimited. Changes apply on the next gate check without restarting the agent or clearing existing hits. B2 enforces the hourly launch caps in memory, with `rate-limited` and retry seconds; refusals spend no launch slot. Live/idle enforcement, durable caps and time-boxed overrides are later slices |
+| `agents.limits.launchAttemptsPerOriginPerHour` | `20` | Optional: absent means 20, never unlimited. Whole numbers from 1 to 20; malformed, null, non-integer or out-of-range values fail closed at load. Read afresh each gate check. Distinct requests and mismatched hashes for a remembered request spend this separate hourly attempt budget; mismatches return `requestReused` and never spend launch caps. For one hour, the same principal, request id and hash returns `Duplicate` without launch permission or either counter hit. Request memory and counters are in process only and reset on restart |
 | `agents.label` | `prefix` | `prefix` or `none` |
 | `agents.links` | `[]` | Must be empty in this version |
 
@@ -190,6 +211,22 @@ someone may have meant as off is never read as on.
 An unreadable, invalid or newer-schema file also turns relay load sharing off. A `load` that
 is not an object, or `load.enabled` that is neither boolean nor null, reports a configuration
 problem and turns sharing off, never defaulting it on.
+
+## Script credentials at the machine
+
+`agent-bridge-host scripts add|revoke <name> [--profile <name>]` is for a person at a Windows terminal.
+The host must already serve that profile at the same elevation. Agent sessions, credentialed
+connections, the relay and other local programs cannot manage script credentials. This is a
+same-user safety rail, not a security boundary ([local pipe](protocol/local-pipe.md#who-may-manage-the-host)).
+Names are 1 to 64 ASCII letters, digits, `.`, `_` or `-`, excluding `.` and `..`.
+
+Add grants `read+reply` for 30 days, at most two live rotations per name, with an owner-only DPAPI-protected file.
+Its stdout JSON contains only id, principal, scope, expiry and file path, never a token.
+Revoke removes both rotations from the running store and persisted hashes and prints
+`{ "name": "...", "revoked": true }`; the protected file may remain but no longer authenticates.
+Unknown names fail revoke. Each admitted add/revoke audits `attempted` before mutation; an unwritable audit refuses it.
+Exit codes: 0 success, 1 host/store refusal or I/O/timeout, 2 invalid arguments/unsupported platform,
+4 agent-session refusal. JSON/cancellation errors are not mapped to exit 1; script ops keep their allow-list.
 
 ## Trusted peers: disposable-host foundation
 
@@ -314,6 +351,13 @@ enough. While nobody is pinned no session's `signInNeeded` attention says `signI
 either, so no device shows a Sign in that would be refused. A roster that can't be read, or is
 stale, pins nobody; a device removed from it loses a sign-in under way at once.
 
+The sign-in scheduler (#2297) is disarmed when there are no live flows or retained
+request receipts. Retained receipts use a one-shot expiry, not an idle polling loop.
+Live flows keep the existing 250 ms safety check for predicates without change events
+(including G5), alongside immediate roster and session-change checks. Flow limits,
+reattachment grace and receipt retention use elapsed time, so UTC changes cannot
+extend them. Codes still expire against their advertised UTC deadline.
+
 The app's Settings lists, under the switch and only while the running host has it on (a change
 applies at the next start, and until then the devices listed can still sign in), **Devices that can sign
 Copilot in**: each by name, with its kind and platform, read-only. It reads "No devices can sign
@@ -342,7 +386,11 @@ Devices cannot change it yet; that waits for #801's settings path.
 ## Machine and session load in the log
 
 So a saturated machine is visible (#1150), the host takes one shared snapshot of the machine's
-processes every 5 seconds and writes a line to `logs\host.log` at most once a minute:
+processes every 5 seconds while sessions, relay load sharing or the HA connector need it, and
+writes a line to `logs\host.log` at most once a minute. With no sessions or feeds it samples
+every 60 seconds for that log alone. `load.enabled=false` disables relay sharing, not HA or local
+session collection. A newly active consumer gets a fresh baseline immediately; CPU stays
+unknown until the next sample, rather than reusing the idle interval as a fresh load window:
 
 ```
 load: machine cpu 92% of 8 cores, 310 MiB memory available; sessions: 3f2a9c1d cpu 41% working set 880 MiB 6 procs; 9be0aa12 cpu 7% working set 420 MiB 3 procs
@@ -351,7 +399,7 @@ load: machine cpu 92% of 8 cores, 310 MiB memory available; sessions: 3f2a9c1d c
 - Each session's figure covers its process and everything below it, found through the process
   the host already records for the session (id plus start time, so a reused id is not counted).
 - `cpu` is the processor time used between two snapshots, as a share of the whole machine, so
-  it is a rate over the last 5 seconds, not a point reading. The first snapshot has no earlier
+  it is a rate over the sampling interval (5 seconds active, 60 seconds idle), not a point reading. The first snapshot has no earlier
   one, so it reads `unknown`.
 - `working set` is the memory resident in RAM. Pages shared between processes count once per
   process, so the sum can overstate.
@@ -430,16 +478,50 @@ whole id.
 
 ## The agent audit log
 
+Read the retained audit metadata locally with `agent-bridge-host audit [--profile <name>]`
+and optional `--action <action>`, `--outcome <outcome>` and
+`--since <ISO timestamp with explicit offset or Z>`, for example
+`audit --action session.launch --outcome started --since 2026-11-10T16:00:00-08:00`.
+Filters combine and include both streams across UTC day boundaries. Output is JSON lines
+with Pacific timestamps and only known audit fields; unknown fields are never echoed.
+The command does not create profiles or load identity, configuration or session data.
+It is a metadata read, **not a chain-integrity verdict**. A malformed complete record,
+unsupported major version or read failure returns nonzero with a content-free error;
+earlier output may be partial. An incomplete final JSON prefix is ignored with a warning.
+Archive, durable chain heads and pruning changes remain separate #1401 A6 slices.
+Optional `gate` metadata is versioned and allow-listed by the same reader. Its host-only
+ids, sequence, route, actor kind and bounded reason code contain no action text or hashes.
+The internal per-run projection reports observed totals and incomplete evidence, never
+a qualifying run or retirement verdict; it creates no profile, writer or lock.
+An unterminated final record also warns on stderr. A malformed record stops the read:
+later evidence is not projected, and control rows do not yet apply run lifecycle state.
+Any append that supplies a missing LF retains `previousTailIncomplete` in the audit metadata.
+Detected gaps or parse faults give INCOMPLETE. Pruning the newest sequence-bearing agents
+files can reuse numbers and escape detection; tail-derived allocation permits new writes,
+not recovery proof or a new run. Durable high-water protection remains deferred to A6.
+Recovered-tail flags keep every profile projection INCOMPLETE until A6's control-aware replay.
+Gate-free streams may be rescanned under lock on each append (up to 64 MiB for agents).
+Retrying a terminal refusal uses a fresh host operation; successful logical identities
+receive credit once. Conflicting terminals, or a successful claim by a second operation
+for an already-successful identity, invalidate the run.
+Durable high-water anchors/cache and the broader cross-run, missing-approval-question and
+writer-refusal regression matrix are deferred to #1401 A6; no qualifying run before that work.
+
 What agents did on this machine is written one JSON line per event to
 `<profile>\audit\agents-YYYY-MM-DD.jsonl` (#1296, design/agent-principals.md §5.6). The folder
 and files are readable by this user alone, like `agent-credentials.json`. Each line has `at`,
-`direction` (`out`, `in` or `local`), `request`, `principal` (`agent:<machine>/<session>`, never
+`direction` (`out`, `in` or `local`), `request`, `principal` (for agent rows: `agent:<machine>/<session>`, never
 the owner), `chain`, `action`, `target`, `outcome`, `reason`, and, when the event carried text,
 `dataSha256` and `textLength`. The text itself is never written; a reason is cut at 200
 characters, every other field at 256, and the chain at 16 entries.
+Person host-CLI management actions use `person:local` with direction `local` in this same stream.
 
-The host keeps at most 30 days and 64 MiB, deleting the oldest day's file first and never the
-file being written. That file is bounded too: once a line would take it past 64 MiB the write
+The host normally targets 30 days and 64 MiB, deleting the oldest day's file first and never
+the file being written. Sticky `audit-incomplete` does not stop retention; coverage breaks
+or unverifiable roots/chains do, with a host-log warning. While pruning is blocked, total
+history can exceed the target. Sticky `audit-incomplete` still refuses launches until
+evidence health is repaired; 9A provides no repair command. The current day's file is
+bounded too: once a line would take it past 64 MiB the write
 returns false and the audited action is refused until the next day. A future-dated file (a clock
 stepped back) does not count toward the size. Age pruning never trusts a clock that has jumped ahead of the newest earlier
 file, and size pruning stops at a file it cannot delete. A line torn by a crash is not joined to
@@ -460,16 +542,23 @@ evidence; launch pruning and launch-handler wiring remain in later #1401 slices.
 `agent.send` now writes one outbound `agent.send` attempt after caller and input validation,
 before invoking the sender (#1985, #1401 A1). Its principal and chain come from the credential,
 not the request. The outcome is `attempted`, never proof of delivery, and `request` is a local
-attempt id, not the relay request id returned by the sender. Sender refusals or failures leave
-that one attempt record. An absent log, a false append or a thrown append refuses the send with
-`auditUnwritable`; nothing is sent or queued. Early caller/input refusals write no record in A1.
+attempt id, not the relay request id returned by the sender. A second record persists the terminal
+`delivered`, `refused`, `undeliverable`, `unconfirmed` or `off` outcome with the same attempt id,
+credential attribution, target and text hash/byte length, never plaintext or free-form sender codes.
+Sender exceptions and cancellation append `unconfirmed` without exception text, then rethrow.
+An absent log, a false append or a thrown append before dispatch refuses the send with
+`auditUnwritable`; nothing is sent or queued. A failed terminal append also raises `auditUnwritable`
+(taking precedence over a sender error), but the message may have been sent; the host never resends.
+Early caller/input refusals write no record in A1.
 Authenticated agent `session.answer` calls write one local `refused` record and still cannot
 answer (#2011, #1401 A5). The target is a normalized session UUID, or `unknown` for malformed
 input. `fleet.find` and `fleet.list` write one local `attempted` record before reading the
 roster, with target `fleet`; lookup names and answer fields are never logged or hashed.
 These records use the credential's principal and chain and a fresh local attempt UUID.
 An absent log, false append or thrown append returns `auditUnwritable`, with no answer
-dispatch or roster read. Unauthenticated refusals write no record; person paths are unchanged.
+dispatch or roster read. Unauthenticated refusals write no record. Person app/host-CLI
+`session.answer` calls now write an intent before typing and a terminal on confirmed
+delivery in `agents-*.jsonl` (#2522); an unwritable audit log refuses before typing.
 Other action wiring remains in later #1401 slices.
 
 ## Approving a workspace at the machine
@@ -483,8 +572,9 @@ agent-bridge-host workspace remove Bridge
 `add` refuses a folder that does not exist, a system folder, one already approved, a label in
 use, and `--isolate` outside a git repository. Every command takes `--profile <name>`.
 
-`workspace add` and `remove`, `config set` and `unset`, `ha token set` and `clear`, and
-`sign-in` are for a person. They refuse to run (exit code 4) inside an agent session: when
+`workspace add` and `remove`, `config set` and `unset`, `ha token set` and `clear`,
+`sign-in`, `scripts add|revoke` and `host-sign init` are for a person. They refuse to run
+(exit code 4) inside an agent session: when
 anything they run inside is an agent CLI (`copilot`, `claude`, `codex`, `agency`, or Node or Bun
 running one), or when `AGENT_BRIDGE_SESSION` is set, as it is in every session the host
 launches. They refuse too when the process tree they run in cannot be read in full (an
@@ -542,7 +632,11 @@ instead of as a task of its own:
   have a stop already pending), then every `devBox.intervalMinutes`. The occurrence exists only from
   the last session leaving until one grace period later, and the grace is never under 60 minutes,
   so a pass every 15 minutes sees it four times; 30 is the most that still sees it twice. Turned on
-  from the app, a pass runs at once.
+  from the app, a pass runs at once. No scheduler or timer runs while keep-awake is off or on a
+  machine without the Dev Box agent. Turning it off releases the pending wait; turning it back
+  on starts a pass immediately. Unusable settings on an installed Dev Box still get scheduled
+  retries. The scheduler awaits its timer, re-checks the due time after it fires, and cancels
+  promptly at host shutdown; normal clock movement never recreates timers.
 * **One at a time.** A pass takes `%LOCALAPPDATA%\AgentBridge\devbox-keepawake.lock` without
   waiting, so two profiles' hosts never move the schedule together, and holds the mutex each of
   agent-ha-bridge's keep-awake passes takes (`Local\<its task name>`) for every such task registered

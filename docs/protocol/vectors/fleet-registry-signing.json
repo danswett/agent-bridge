@@ -1,0 +1,35 @@
+{
+  "description": "C# #2370 oracle for #2371 and PWA #2379. Mutations replace one dotted path in record without re-signing. Signature verification alone does not establish schema, trust, freshness or ordering. oldSig signs seq=1: authentic but stale after seq=2.",
+  "context": "agent-bridge fleet registry v1",
+  "hostSign": "BLxY6M3IlcmG2u0lAc6FCajB6EUxc4epzr--mumSH6vU5BWuVrcEWNGyKpNmh5ljvI0I2QjNC5MAA_3pSqLYQ-o",
+  "wrongKey": "BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+  "record": {"v":1,"machine":"host-test","epoch":"0123456789abcdef","seq":2,"at":"2026-11-12T18:00:00Z","truncated":true,"total":65,"sessions":[{"id":"0000000000000001","node":"agent_bridge_0000000000000001","name":"Build + \"one\" \\ <test>","state":"working","since":"2026-11-12T18:00:00Z"}],"sig":"MEUCIQCToF4WQc2xQDIYMcIPA2BRTEbVy0hRi1qpN5wqKbb2RgIgL3t-5elKZMBlWYnhw3VMDtxViy_w_W-7egNBlVxjI_8"},
+  "equivalent": {"sessions":[{"state":"working","since":"2026-11-12T18:00:00Z","name":"Build \u002b \u0022one\u0022 \\ <test>","node":"agent_bridge_0000000000000001","id":"0000000000000001"}],"v":1,"truncated":true,"total":65,"at":"2026-11-12T18:00:00Z","seq":2,"machine":"host-test","epoch":"0123456789abcdef"},
+  "canonical": "{\"at\":\"2026-11-12T18:00:00Z\",\"epoch\":\"0123456789abcdef\",\"machine\":\"host-test\",\"seq\":2,\"sessions\":[{\"id\":\"0000000000000001\",\"name\":\"Build + \\\"one\\\" \\\\ <test>\",\"node\":\"agent_bridge_0000000000000001\",\"since\":\"2026-11-12T18:00:00Z\",\"state\":\"working\"}],\"total\":65,\"truncated\":true,\"v\":1}",
+  "signedHex": "0000001e6167656e742d62726964676520666c6565742072656769737472792076310000011a7b226174223a22323032362d31312d31325431383a30303a30305a222c2265706f6368223a2230313233343536373839616263646566222c226d616368696e65223a22686f73742d74657374222c22736571223a322c2273657373696f6e73223a5b7b226964223a2230303030303030303030303030303031222c226e616d65223a224275696c64202b205c226f6e655c22205c5c203c746573743e222c226e6f6465223a226167656e745f6272696467655f30303030303030303030303030303031222c2273696e6365223a22323032362d31312d31325431383a30303a30305a222c227374617465223a22776f726b696e67227d5d2c22746f74616c223a36352c227472756e6361746564223a747275652c2276223a317d",
+  "oldSig": "MEUCIQDWg3uxCYS3nDOA_hrROQahx9zRPZ20Gdr7C8a7fXyh0wIgGz3lafABofjRzBvTN8ndTCBHmLOistr91HeOsUJG7RE",
+  "refusedSignatures": [
+    "MEUCIQCSoF4WQc2xQDIYMcIPA2BRTEbVy0hRi1qpN5wqKbb2RgIgL3t-5elKZMBlWYnhw3VMDtxViy_w_W-7egNBlVxjI_8",
+    "MEUCIQCNpbVg8OBKMG12DxwZjjwRZf95U5QlRlNIx-2oFQlbPAIgQ1wuJm9ZueVzeIK48go--Ggx-nsacFymCk-HW3Cga8c",
+    "MEYCIQCToF4WQc2xQDIYMcIPA2BRTEbVy0hRi1qpN5wqKbb2RgIhANCEgRkWtZtAmqZ2HjyKs_DgkW99thouyXm2iS2gAAFS",
+    "MEYCIgAAk6BeFkHNsUAyGDHCDwNgUUxG1ctIUYtaqTecKim29kYCIC97fuXpSmTAZVmJ4cN1TA7cVYsv8P1vu3oDQZVcYyP_",
+    "!",
+    "MAA"
+  ],
+  "otherContexts": ["agent-bridge roster entry v1","agent-bridge roster cosign v1","agent-bridge person command v1","agent-bridge reset veto v1","agent-bridge host key binding v1","agent-bridge agent command v1","agent-bridge link-attest v1","agent-bridge verifier support v1"],
+  "mutations": [
+    {"name":"version","path":"v","value":2},
+    {"name":"machine","path":"machine","value":"other-host"},
+    {"name":"epoch","path":"epoch","value":"fedcba9876543210"},
+    {"name":"sequence","path":"seq","value":3},
+    {"name":"timestamp","path":"at","value":"2026-11-12T18:00:01Z"},
+    {"name":"truncation","path":"truncated","value":false},
+    {"name":"total","path":"total","value":66},
+    {"name":"session-list","path":"sessions","value":[]},
+    {"name":"session-id","path":"sessions.0.id","value":"0000000000000002"},
+    {"name":"relay-rewritten-node","path":"sessions.0.node","value":"agent_bridge_0000000000000002"},
+    {"name":"session-name","path":"sessions.0.name","value":"Other build"},
+    {"name":"session-state","path":"sessions.0.state","value":"idle"},
+    {"name":"session-since","path":"sessions.0.since","value":"2026-11-12T18:00:01Z"}
+  ]
+}

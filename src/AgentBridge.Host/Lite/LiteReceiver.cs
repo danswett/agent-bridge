@@ -67,7 +67,7 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
             case ReplayStore.Result.Seen: return Refuse(Replay, body.Request);
             case ReplayStore.Result.Full: return Refuse(Busy, body.Request);
         }
-        if (!Rates.Allow(channel.PeerId, body.Principal.Session + ">" + body.Target.Session)) { return Refuse(Rate, body.Request); }
+        if (!Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session)) { return Refuse(Rate, body.Request); }
         LiteDelivery result; try { result = await deliver.DeliverAsync(verified, text, ct); }
         catch (Exception x) when (x is not OperationCanceledException || !ct.IsCancellationRequested) { return Refuse(DeliveryFailed, body.Request); }
         return result.Typed

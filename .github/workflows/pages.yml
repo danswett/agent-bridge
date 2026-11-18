@@ -1,15 +1,17 @@
 name: Pages
+run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref != '' && 'Pages rollback' || 'Pages resume') || 'Pages' }}
 
 # Publishes the spikes' browser self-tests, so they can be run on real devices (an
 # iPhone's Safari in particular) without any server: https://danswett.github.io/agent-bridge/
 # From the move to https://app.slipgates.com/ (#393) the PWA is the site's root and the spikes stay
 # under /s2/ and /s4/.
-# Deploys only the commit a green main CI run tested (#1313, #582): workflow_run of ci.yml,
-# whatever the push touched, so a rebase race that breaks main ships nothing. Rollback is a manual
+# Deploys only commits whose named PWA jobs passed on main (#2143). Rollback is a manual
 # run with ref=<last good sha> (ops/runbooks/pwa.md).
 on:
-  # Accepted: the build runs only a commit proven to be an ancestor of origin/main after a green
-  # CI run on main, never checks out an event-supplied ref, and holds no publish token.
+  schedule:
+    - cron: '*/5 * * * *'
+  # Accepted: the build runs only a commit proven to be an ancestor of origin/main after successful
+  # named PWA checks on main, never checks out an event-supplied ref, and holds no publish token.
   workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [CI]
     types: [completed]
@@ -17,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Commit to build and deploy (a rollback); empty builds the ref the run was started on
+        description: Commit to roll back to; empty deploys the current ref and resumes automatic deployment
         required: false
         type: string
 
@@ -55,8 +57,10 @@ jobs:
     permissions:
       contents: read
       pages: read
+      actions: read
     outputs:
       deploy: ${{ steps.decide.outputs.deploy }}
+      sha: ${{ steps.decide.outputs.sha }}
     steps:
       # The default branch's copy of the gate script, never the commit being judged.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,20 +70,51 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           APP_AT_ROOT: ${{ vars.PAGES_APP_AT_ROOT }}
         run: |
-          $live = ''; $status = ''
-          if ($env:HEAD_SHA) {
+          function Read-Api($path) {
+            $json = gh api $path 2>$null
+            if ($LASTEXITCODE) { throw 'pages-api-unavailable' }
+            $json | ConvertFrom-Json
+          }
+          if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') {
+            $runs = @((Read-Api "repos/$env:GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20").workflow_runs)
+            foreach ($r in $runs) { $r | Add-Member -NotePropertyName jobs -NotePropertyValue @((Read-Api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($r.id)/jobs?filter=latest&per_page=100").jobs) }
+            $candidate = & quality/pages-candidate.ps1 -Runs $runs
+            if (-not $candidate.sha) {
+              Write-Host $candidate.reason; 'deploy=false' >> $env:GITHUB_OUTPUT; exit 0
+            }
+            $head = $candidate.sha; $live = ''; $status = ''; $files = @()
+            $mainStatus = (Read-Api "repos/$env:GITHUB_REPOSITORY/compare/$head...main").status
             try {
-              $site = (gh api "repos/$env:GITHUB_REPOSITORY/pages" --jq .html_url).Trim().TrimEnd('/')
+              $history = Read-Api "repos/$env:GITHUB_REPOSITORY/actions/workflows/pages.yml/runs?branch=main&event=workflow_dispatch&per_page=100"
+              if ($null -eq $history.workflow_runs -or $null -eq $history.total_count) { throw 'rollback-history-unavailable' }
+              $rollback = & quality/pages-rollback.ps1 -Runs @($history.workflow_runs) -TotalCount $history.total_count
+            } catch {
+              Write-Warning 'rollback-history-unavailable'
+              $rollback = & quality/pages-rollback.ps1 -Unreadable
+            }
+            Write-Host $rollback.reason
+            $rollbackStatus = if ($rollback.held) { '' } else { 'ahead' }
+            if ($rollback.fence) {
+              try { $rollbackStatus = (Read-Api "repos/$env:GITHUB_REPOSITORY/compare/$($rollback.fence)...$head").status }
+              catch { Write-Warning 'rollback-ancestry-unavailable' }
+            }
+            try {
+              $site = (Read-Api "repos/$env:GITHUB_REPOSITORY/pages").html_url.TrimEnd('/')
               $prefix = if ($env:APP_AT_ROOT -eq 'true') { '' } else { '/app' }
               $config = Invoke-RestMethod -Uri "$site$prefix/config.js?gate=$env:GITHUB_RUN_ID" -Headers @{ 'Cache-Control' = 'no-cache' }
               if ($config -match 'APP_VERSION = "([0-9a-f]{40})"') { $live = $Matches[1] }
-              if ($live) { $status = (gh api "repos/$env:GITHUB_REPOSITORY/compare/$live...$env:HEAD_SHA" --jq .status 2>$null) }
-            } catch { Write-Host "Live version unreadable: $($_.Exception.Message)" }
-            $verdict = & quality/pages-gate.ps1 -Head $env:HEAD_SHA -Live $live -Status "$status"
+              if ($live) {
+                $compare = Read-Api "repos/$env:GITHUB_REPOSITORY/compare/$live...$head"
+                $status = $compare.status; $files = @($compare.files.filename)
+              }
+            } catch { Write-Warning 'live-version-unreadable' }
+            $verdict = & quality/pages-gate.ps1 -Head $head -Live $live -Status "$status" -MainStatus $mainStatus -Files $files -RollbackStatus $rollbackStatus
             Write-Host $verdict[1]
+            "sha=$head" >> $env:GITHUB_OUTPUT
+            "### Pages candidate $head ($($verdict[1]))" >> $env:GITHUB_STEP_SUMMARY
+            $candidate.jobs | ForEach-Object { "$($_.name): $($_.conclusion)" >> $env:GITHUB_STEP_SUMMARY }
             "deploy=$($verdict[0] -eq 'deploy')".ToLower() >> $env:GITHUB_OUTPUT
           } else {
             'deploy=true' >> $env:GITHUB_OUTPUT
@@ -87,13 +122,13 @@ jobs:
 
   build:
     needs: gate
-    # A CI run that did not succeed, or was not a push to main, deploys nothing.
-    if: needs.gate.outputs.deploy == 'true' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'))
+    if: needs.gate.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
       app-path: ${{ steps.hashes.outputs.app-path }}
+      sha: ${{ steps.hashes.outputs.sha }}
       config-sha256: ${{ steps.hashes.outputs.config-sha256 }}
       sw-sha256: ${{ steps.hashes.outputs.sw-sha256 }}
     steps:
@@ -105,7 +140,7 @@ jobs:
           persist-credentials: false
       - name: Move to the verified commit
         env:
-          TARGET_SHA: ${{ github.event.workflow_run.head_sha || inputs.ref || github.sha }}
+          TARGET_SHA: ${{ needs.gate.outputs.sha || inputs.ref || github.sha }}
         run: |
           git rev-parse --verify --quiet "$TARGET_SHA^{commit}" > /dev/null
           git merge-base --is-ancestor "$TARGET_SHA" origin/main || { echo "::error::$TARGET_SHA is not on main"; exit 1; }
@@ -168,6 +203,7 @@ jobs:
         run: |
           if [ "$APP_AT_ROOT" = 'true' ]; then app=_site; prefix=''; else app=_site/app; prefix='app/'; fi
           {
+            echo "sha=$(git rev-parse HEAD)"
             echo "app-path=$prefix"
             echo "config-sha256=$(sha256sum "$app/config.js" | cut -d' ' -f1)"
             echo "sw-sha256=$(sha256sum "$app/sw.js" | cut -d' ' -f1)"
@@ -177,7 +213,7 @@ jobs:
           path: _site
 
   deploy:
-    needs: build
+    needs: [gate, build]
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -186,6 +222,9 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
+      - name: Manual operations require a fresh dispatch
+        shell: pwsh
+        run: if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and [int]$env:GITHUB_RUN_ATTEMPT -gt 1) { throw 'manual-rerun-refused-dispatch-again' }
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - id: deploy
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
@@ -197,6 +236,7 @@ jobs:
           APP_PATH: ${{ needs.build.outputs.app-path }}
           CONFIG_SHA256: ${{ needs.build.outputs.config-sha256 }}
           SW_SHA256: ${{ needs.build.outputs.sw-sha256 }}
+          DEPLOYED_SHA: ${{ needs.build.outputs.sha }}
         run: |
           base="${PAGE_URL%/}/$APP_PATH"
           live() { curl -fsS -H 'Cache-Control: no-cache' "$base$1?verify=$GITHUB_RUN_ID-$2" | sha256sum | cut -d' ' -f1; }
@@ -204,6 +244,7 @@ jobs:
             config=$(live config.js "$attempt" || true)
             sw=$(live sw.js "$attempt" || true)
             if [ "$config" = "$CONFIG_SHA256" ] && [ "$sw" = "$SW_SHA256" ]; then
+              echo "Deployed $DEPLOYED_SHA; named PWA jobs: success (manual rollback exempt)." >> "$GITHUB_STEP_SUMMARY"
               echo "Live config.js and sw.js match the build (attempt $attempt)."; exit 0
             fi
             echo "Attempt $attempt: live files differ from the build; waiting."; sleep 10

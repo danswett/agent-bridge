@@ -56,7 +56,7 @@ public class DiscoveryTests
         Assert.Equal("octo/repo", s.Repository);
         Assert.Equal("main", s.Branch);
         Assert.Equal(100, s.ProcessId);
-        Assert.Equal(DateTimeOffset.Parse("2026-10-28T03:00:00Z"), s.StartedAt);
+        Assert.Null(s.StartedAt);
     }
 
     [Fact]
@@ -84,6 +84,62 @@ public class DiscoveryTests
         await source.RefreshAsync();
 
         Assert.Equal(A, Assert.Single(source.Snapshot()).Id);
+    }
+
+    [Fact]
+    public async Task A_Copilot_named_on_a_command_line_has_no_claimable_startedAt()
+    {
+        using var f = new Fixture();
+        var startedAt = Fixture.T0.AddMinutes(-5);
+        var events = f.CopilotSession(A, lockPid: null);
+        Fixture.Append(events, Copilot.User("resumed", 1));
+        f.Processes.Run(AgentKind.Copilot, 300, $"copilot --resume --session-id {A}", startedAt);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Null(Assert.Single(source.Snapshot()).StartedAt);
+    }
+
+    [Fact]
+    public async Task A_Copilot_session_found_only_by_its_lock_has_no_claimable_startedAt()
+    {
+        using var f = new Fixture();
+        var startedAt = Fixture.T0.AddMinutes(-5);
+        f.CopilotSession(A, lockPid: 301);
+        f.Processes.Run(AgentKind.Copilot, 301, startedAt: startedAt);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Null(Assert.Single(source.Snapshot()).StartedAt);
+    }
+
+    [Fact]
+    public async Task A_Copilot_process_returning_to_a_session_does_not_reuse_its_old_startedAt()
+    {
+        using var f = new Fixture();
+        var started = Fixture.T0.AddMinutes(-10);
+        var a = f.CopilotSession(A, lockPid: 400, lockWrite: started.AddSeconds(1));
+        Fixture.Append(a, Copilot.User("first", 1));
+        File.SetLastWriteTimeUtc(a, started.AddSeconds(2).UtcDateTime);
+        f.Processes.Run(AgentKind.Copilot, 400, $"copilot --session-id={A}", started);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        var b = f.CopilotSession(B, lockPid: 400, lockWrite: started.AddMinutes(1));
+        Fixture.Append(b, Copilot.User("second", 2));
+        File.SetLastWriteTimeUtc(b, started.AddMinutes(5).UtcDateTime);
+        await source.RefreshAsync();
+        Assert.Equal(B, Assert.Single(source.Snapshot()).Id);
+
+        Fixture.Append(a, Copilot.User("returned", 3));
+        File.SetLastWriteTimeUtc(a, started.AddMinutes(10).UtcDateTime);
+        await source.RefreshAsync();
+
+        var resumed = Assert.Single(source.Snapshot());
+        Assert.Equal(A, resumed.Id);
+        Assert.Null(resumed.StartedAt);
     }
 
     [Fact]
@@ -922,7 +978,7 @@ public class DiscoveryTests
     [Fact]
     public void VS_Codes_copilot_shim_is_left_out_when_the_real_cli_it_started_is_listed()
     {
-        // DEV-VM2's processes (#615): Agency runs Copilot through VS Code's shim, which starts the
+        // node-b's processes (#615): Agency runs Copilot through VS Code's shim, which starts the
         // real CLI with the same arguments. The CLI holds the session's lock; the shim held
         // discovery for two minutes on every launch and every restart.
         var t = DateTimeOffset.Parse("2026-11-03T21:08:13.123Z", System.Globalization.CultureInfo.InvariantCulture);

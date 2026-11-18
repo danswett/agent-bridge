@@ -158,6 +158,36 @@ test('an open delegate that is running is fetched again, as a host sends nothing
   await expect(pane(page).locator('.delegate-latest .md')).toHaveText('Commit 7 of 10 is the first to fail.', { timeout: 15000 });
 });
 
+test('a hidden delegate stops polling and returns with its last words and current age before refreshing', async ({ page }) => {
+  await page.clock.install();
+  await openDemo(page);
+  await showList(page);
+  await openRow(page, 'demo-agent-suite');
+  const latest = pane(page).locator('.delegate-latest .md');
+  await expect(latest).toContainText('The suite fails on HEAD');
+  const age = await fact(page, 'status').textContent();
+  await latest.locator(':scope > *').first().evaluate((el) => { el.dataset.kept = 'true'; });
+  const before = await fetches(page, 'demo-agent-suite');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.clock.runFor(600000);
+  expect(await fetches(page, 'demo-agent-suite')).toBe(before);
+  await page.evaluate(() => {
+    window.agentBridgeDemo.host.holdResponses();
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(() => fetches(page, 'demo-agent-suite')).toBe(before + 1);
+  await expect(latest.locator(':scope > [data-kept="true"]')).toHaveCount(1);
+  await expect(fact(page, 'status')).not.toHaveText(age);
+  await expect(pane(page).locator('[role="status"]')).toBeHidden();
+  await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+});
+
 test('a delegate\'s task and line the budget left out of the list are kept, not taken for silence', async ({ page }) => {
   await openDemo(page);
   await showList(page);
