@@ -19,6 +19,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="..\..\build\updater-images.json" LogicalName="updater-images.json" />
     <InternalsVisibleTo Include="AgentBridge.App.Tests" />
     <!-- Published as one self-contained bundle; share the coordinator and contracts, not copies. -->
     <ProjectReference Include="..\AgentBridge.App.Core\AgentBridge.App.Core.csproj" />
