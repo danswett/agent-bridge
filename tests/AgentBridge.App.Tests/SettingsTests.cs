@@ -72,6 +72,7 @@ public sealed class SettingsTests : IAsyncLifetime
         host.Capabilities.Add(HostOps.AgentVerificationCapability);
         host.Capabilities.Add(LaunchProtocol.Capability);
         host.Capabilities.Add(HostOps.AgentSignInCapability);
+        host.Capabilities.Add(HostOps.LaunchFolders);
         host.Start();
         connection = host.Connect(ui);
         // Start and stop timeouts on a clock that never moves, as in AutoUpdaterTests: they wait
@@ -99,6 +100,97 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     Task Connected() => Wait.UntilAsync(() => settings.HostRunning && connection.Status is not null, "the connection");
+
+    [Fact]
+    public async Task Launch_folder_edits_and_cancel_are_local_drafts_not_approval_or_restart()
+    {
+        host.On(HostOps.LaunchFolders, _ => new LaunchFolderSnapshot("v1", [@"C:\work\approved"]));
+        await Connected();
+        await settings.LoadLaunchFoldersAsync();
+        settings.LaunchFoldersDraft = @"C:\work\added";
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        Assert.True(settings.CanSaveLaunchFolders);
+        var consent = settings.CaptureLaunchFolderSave();
+        Assert.Contains(@"C:\work\added", consent.Consent);
+        Assert.Contains("Replace", consent.Consent);
+        settings.CancelLaunchFolderDraft();
+        Assert.Equal(@"C:\work\approved", settings.LaunchFoldersDraft);
+        Assert.False(settings.CanSaveLaunchFolders);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.LaunchFolders && r.Data.TryGetProperty("folders", out var f) && f.ValueKind == JsonValueKind.Array);
+        Assert.DoesNotContain(host.Received, r => r.Op is HostOps.Settings or HostOps.Restart or LaunchProtocol.Launch);
+    }
+
+    [Theory]
+    [InlineData("confirmed")]
+    [InlineData("draft")]
+    [InlineData("baseline")]
+    [InlineData("host")]
+    public async Task Folder_confirmation_saves_only_the_exact_draft_host_and_current_baseline(string change)
+    {
+        var snapshot = new LaunchFolderSnapshot("v1", [@"C:\work\approved"]);
+        LaunchFolderRequest? saved = null;
+        host.On(HostOps.LaunchFolders, data =>
+        {
+            var request = data.Deserialize<LaunchFolderRequest>(ProtocolJson.Options)!;
+            if (request.Folders is not null) { saved = request; snapshot = new("v2", request.Folders); }
+            return snapshot;
+        });
+        await Connected();
+        await settings.LoadLaunchFoldersAsync();
+        settings.LaunchFoldersDraft = @"C:\work\added";
+        var consent = settings.CaptureLaunchFolderSave();
+        if (change == "draft") { settings.LaunchFoldersDraft = @"C:\work\different"; }
+        if (change == "baseline") { snapshot = snapshot with { Baseline = "changed" }; }
+        if (change == "host") { consent = consent with { Host = "replaced-host" }; }
+        await settings.SaveLaunchFoldersAsync(consent);
+        if (change == "confirmed")
+        {
+            Assert.Null(settings.Error);
+            Assert.NotNull(saved);
+            Assert.True(saved.Confirmed);
+            Assert.Equal("v1", saved.Baseline);
+            Assert.Equal([@"C:\work\added"], saved.Folders);
+            Assert.False(settings.CanSaveLaunchFolders);
+        }
+        else
+        {
+            Assert.Null(saved);
+            Assert.NotNull(settings.Error);
+            Assert.Contains(change == "draft" ? "different" : "added", settings.LaunchFoldersDraft);
+        }
+        Assert.DoesNotContain(host.Received, r => r.Op is HostOps.Settings or HostOps.Restart or LaunchProtocol.Launch);
+    }
+
+    [Fact]
+    public async Task A_stale_folder_draft_is_kept_but_cannot_save_until_explicitly_discarded()
+    {
+        var snapshot = new LaunchFolderSnapshot("v1", [@"C:\work\approved"]);
+        host.On(HostOps.LaunchFolders, _ => snapshot);
+        await Connected();
+        await settings.LoadLaunchFoldersAsync();
+        settings.LaunchFoldersDraft = @"C:\work\draft";
+        snapshot = new("v2", [@"C:\work\current"]);
+        await settings.LoadLaunchFoldersAsync();
+        Assert.Equal(@"C:\work\draft", settings.LaunchFoldersDraft);
+        Assert.False(settings.CanSaveLaunchFolders);
+        Assert.Throws<InvalidOperationException>(() => settings.CaptureLaunchFolderSave());
+        settings.CancelLaunchFolderDraft();
+        Assert.Equal(@"C:\work\current", settings.LaunchFoldersDraft);
+    }
+
+    [Fact]
+    public async Task Host_refusal_keeps_the_folder_draft_and_surfaces_the_error()
+    {
+        host.On(HostOps.LaunchFolders, data => data.TryGetProperty("folders", out var f) && f.ValueKind == JsonValueKind.Array
+            ? throw new InvalidOperationException("folder is unavailable")
+            : new LaunchFolderSnapshot("v1", []));
+        await Connected();
+        await settings.LoadLaunchFoldersAsync();
+        settings.LaunchFoldersDraft = @"C:\work\draft";
+        await settings.SaveLaunchFoldersAsync(settings.CaptureLaunchFolderSave());
+        Assert.Contains("folder is unavailable", settings.Error);
+        Assert.Equal(@"C:\work\draft", settings.LaunchFoldersDraft);
+    }
 
     [Fact]
     public async Task The_reply_Return_choice_is_local_persisted_and_updates_existing_cards_at_once()
