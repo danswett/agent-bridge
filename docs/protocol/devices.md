@@ -465,7 +465,7 @@ no new trust root or roster op is introduced.
 
 Exactly `{v:1, kind:"keywrap", account, generation, epoch, manifest, holder,
 holderAdd, target, targetAdd, nonce, ciphertext}`. `manifest` is its body hash.
-Both devices must be active, non-probationary, non-held persons without a signer
+Holder and target must be distinct, active, non-probationary, non-held persons without a signer
 key collision. Check each **id AND add-entry hash** in the verified current roster
 before wrapping; never trust a public DH key supplied alongside a request.
 Use those exact admissions' DH keys, never signing keys.
