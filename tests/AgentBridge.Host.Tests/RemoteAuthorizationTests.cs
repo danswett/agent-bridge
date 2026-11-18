@@ -332,6 +332,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         foreach (var op in new[]
         {
             Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop, Ops.AttachmentStart, Ops.PushSubscribe,
+            ApnsPushRequest.Subscribe, ApnsPushRequest.Unsubscribe, ApnsPushRequest.List,
             LaunchProtocol.Options, LaunchProtocol.Launch, TransferProtocol.Op, TrustProtocol.Answer,
             UsageProtocol.Get, UpdateProtocol.Install, "host.peers.reset", "future.operation",
             // The HA connector's reads are the latest exchange; a session's history is a person's (#292).
@@ -478,6 +479,35 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         await old.Closed.WaitAsync(Patience);
         var current = await peer.Hub.OpenAsync(host.Id, Patience);
         Result(await current.RequestAsync(Ops.SessionsList, new { }, Patience));
+    }
+
+    [Fact]
+    public async Task Native_operations_are_offered_only_to_a_pinned_person_and_bind_the_channel_key()
+    {
+        var subscriptions = PushStore.Load(null, host.Relay.AccountId);
+        await using var push = new PushNotifier(source, new MachineInfo(host.Id, "Fixture", "windows", "0.1.0"), subscriptions, trust: authorization);
+        host.Hub.Handler = authorization.Handler(new SessionService(source, new MachineInfo(host.Id, "Fixture", "windows", "0.1.0"), push: push));
+        using var encryption = P256KeyPair.Generate();
+        foreach (var role in new[] { TrustedPeerStore.Person, TrustedPeerStore.Service, TrustedPeerStore.Host })
+        {
+            var peer = await PeerAsync("app");
+            Pin(peer, role);
+            var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+            var hello = Result(await channel.RequestAsync(Ops.Hello, new { }, Patience)).Deserialize<HelloResult>(ProtocolJson.Options)!;
+            Assert.Equal(role == TrustedPeerStore.Person, hello.Capabilities.Contains(ApnsPushRequest.Capability));
+            if (role != TrustedPeerStore.Person)
+            {
+                foreach (var op in new[] { ApnsPushRequest.Subscribe, ApnsPushRequest.Unsubscribe, ApnsPushRequest.List }) { await DeniedAsync(channel, op); }
+                continue;
+            }
+            Result(await channel.RequestAsync(ApnsPushRequest.Subscribe, new
+            {
+                token = "0102", target = "prod", keyId = B64Url.Encode(new byte[32]),
+                keys = new { p256dh = B64Url.Encode(encryption.Public), auth = B64Url.Encode(new byte[16]) },
+            }, Patience));
+            Assert.Equal(peer.Id, Assert.Single(Result(await channel.RequestAsync(ApnsPushRequest.List, new { }, Patience)).GetProperty("devices").EnumerateArray()).GetProperty("device").GetString());
+            Assert.True(Result(await channel.RequestAsync(ApnsPushRequest.Unsubscribe, new { target = "prod" }, Patience)).GetProperty("removed").GetBoolean());
+        }
     }
 
     [Fact]
