@@ -97,6 +97,148 @@ public sealed class FleetLaunchGrantTests : IDisposable
         Assert.NotNull(grant.CheckDispatch(actual with { Workspaces = [new("workers", Path.GetTempPath(), true)] }, Request));
     }
 
+    [Fact]
+    public void A_script_credential_cannot_exceed_the_fleet_cap_of_8_an_hour_nor_6_live_workers()
+    {
+        Config();
+        var now = Now;
+        FleetLaunchAdmission Reopen() => new(folder, () => now);
+        const string principal = "script:fixture/dispatcher";
+        var requests = Enumerable.Range(0, 6).Select(_ => Request).ToArray();
+        foreach (var request in requests) { Assert.True(Reopen().Reserve(principal, request).Allowed); }
+        Assert.Contains("live", Reopen().Reserve(principal, Request).Reason);
+        Assert.True(Reopen().Reserve(principal, requests[0]).Duplicate);
+        Assert.Equal("requestReused", Reopen().Reserve(principal, requests[0] with { Prompt = "changed" }).Reason);
+        Assert.Equal("requestReused", Reopen().Reserve("script:fixture/other", requests[0]).Reason);
+        foreach (var request in requests) { Assert.Null(Reopen().Release(principal, request.Request)); }
+        for (var i = 0; i < 2; i++)
+        {
+            var request = Request;
+            Assert.True(Reopen().Reserve("script:fixture/other", request).Allowed);
+            Assert.Null(Reopen().Release("script:fixture/other", request.Request));
+        }
+        Assert.Contains("hour", Reopen().Reserve(principal, Request).Reason);
+        now -= TimeSpan.FromMinutes(10);
+        Assert.Contains("hour", Reopen().Reserve(principal, Request).Reason);
+        now = Now + TimeSpan.FromHours(1);
+        Assert.True(Reopen().Reserve(principal, Request).Allowed);
+    }
+
+    [Fact]
+    public void A_coordinator_can_launch_while_the_fleet_cap_is_full()
+    {
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
+            """{"agents":{"enabled":true,"launch":{"enabled":true},"limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":10,"liveAgentLaunched":6,"agentLaunchedIdleHours":2}}}""");
+        var fleet = new FleetLaunchAdmission(folder, () => Now);
+        const string principal = "script:fixture/dispatcher";
+        var requests = Enumerable.Range(0, 6).Select(_ => Request).ToArray();
+        foreach (var request in requests) { Assert.True(fleet.Reserve(principal, request).Allowed); }
+        Assert.False(fleet.Reserve(principal, Request).Allowed);
+        var coordinator = new AgentLaunchGate(folder);
+        Assert.True(coordinator.CheckLaunch("agent:coordinator", Request.Request, "fixture").Allowed);
+        foreach (var request in requests) { Assert.Null(fleet.Release(principal, request.Request)); }
+        for (var i = 0; i < 2; i++)
+        {
+            var request = Request;
+            Assert.True(fleet.Reserve(principal, request).Allowed);
+            Assert.Null(fleet.Release(principal, request.Request));
+        }
+        Assert.Contains("hour", fleet.Reserve(principal, Request).Reason);
+        Assert.True(coordinator.CheckLaunch("agent:coordinator", Request.Request, "fixture").Allowed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_last_fleet_slot_is_reserved_atomically(bool hourly)
+    {
+        Config();
+        var now = Now;
+        var fleet = new FleetLaunchAdmission(folder, () => now);
+        const string principal = "script:fixture/dispatcher";
+        foreach (var _ in Enumerable.Range(0, hourly ? 7 : 5))
+        {
+            var request = Request;
+            Assert.True(fleet.Reserve(principal, request).Allowed);
+            if (hourly) { Assert.Null(fleet.Release(principal, request.Request)); }
+        }
+        var results = await Task.WhenAll(Task.Run(() => new FleetLaunchAdmission(folder, () => now).Reserve(principal, Request)),
+            Task.Run(() => new FleetLaunchAdmission(folder, () => now).Reserve(principal, Request)));
+        Assert.Single(results, r => r.Allowed);
+        Assert.Contains(hourly ? "hour" : "live", fleet.Reserve(principal, Request).Reason);
+        if (!hourly)
+        {
+            now += TimeSpan.FromHours(2);
+            Assert.Contains("live", new FleetLaunchAdmission(folder, () => now).Reserve(principal, Request).Reason);
+        }
+    }
+
+    [Theory]
+    [InlineData("fleetPerHour", 0)]
+    [InlineData("fleetPerHour", 9)]
+    [InlineData("liveFleetWorkers", -1)]
+    [InlineData("liveFleetWorkers", 7)]
+    public void Unsafe_fleet_limits_refuse_instead_of_becoming_unlimited(string key, int value)
+    {
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
+            JsonSerializer.Serialize(new { agents = new { enabled = true, limits = new Dictionary<string, int> { [key] = value } } }));
+        Assert.False(new FleetLaunchAdmission(folder).Reserve("script:fixture/dispatcher", Request).Allowed);
+    }
+
+    [Fact]
+    public void Lowered_limits_and_storage_faults_cannot_refund_or_release_another_principals_slot()
+    {
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
+            """{"agents":{"enabled":true,"limits":{"fleetPerHour":2,"liveFleetWorkers":1}}}""");
+        const string principal = "script:fixture/dispatcher";
+        var fleet = new FleetLaunchAdmission(folder, () => Now);
+        var request = Request;
+        Assert.True(fleet.Reserve(principal, request).Allowed);
+        Assert.NotNull(fleet.Release("script:fixture/other", request.Request));
+        Assert.Contains("live", fleet.Reserve(principal, Request).Reason);
+        Assert.Null(fleet.Release(principal, request.Request));
+        var next = Request;
+        Assert.True(fleet.Reserve(principal, next).Allowed);
+        Assert.Null(fleet.Release(principal, next.Request));
+        Assert.Contains("hour", fleet.Reserve(principal, Request).Reason);
+        File.WriteAllText(Path.Combine(folder, FleetLaunchAdmission.FileName), "");
+        Assert.False(new FleetLaunchAdmission(folder).Reserve(principal, Request).Allowed);
+        Assert.NotNull(fleet.Release(principal, request.Request));
+    }
+
+    [Fact]
+    public void Owner_config_commands_can_lower_fleet_limits_but_never_remove_their_bounds()
+    {
+        Config();
+        using var errors = new StringWriter();
+        Assert.Equal(0, ConfigCommands.Run(["config", "set", "agents.limits.fleetPerHour", "2"], folder, TextWriter.Null, errors));
+        Assert.Equal(0, ConfigCommands.Run(["config", "set", "agents.limits.liveFleetWorkers", "1"], folder, TextWriter.Null, errors));
+        Assert.Equal(1, ConfigCommands.Run(["config", "set", "agents.limits.fleetPerHour", "0"], folder, TextWriter.Null, errors));
+        Assert.Equal(2, HostSettings.Load(folder).Settings.Agents.Limits.Launch.FleetPerHour);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("""{"version":2,"lastSeen":"2026-11-17T00:00:00Z","entries":[]}""")]
+    public void Missing_corrupt_or_locked_admission_evidence_refuses_instead_of_resetting_the_caps(string? replacement)
+    {
+        Config();
+        const string principal = "script:fixture/dispatcher";
+        var fleet = new FleetLaunchAdmission(folder);
+        var request = Request;
+        Assert.True(fleet.Reserve(principal, request).Allowed);
+        var path = Path.Combine(folder, FleetLaunchAdmission.FileName);
+        using (var held = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.False(fleet.Reserve(principal, Request).Allowed);
+            Assert.NotNull(fleet.Release(principal, request.Request));
+        }
+        if (replacement is null) { File.Delete(path); }
+        else { File.WriteAllText(path, replacement); }
+        Assert.False(new FleetLaunchAdmission(folder).Reserve(principal, Request).Allowed);
+    }
+
     [Theory]
     [InlineData(true, "bind")]
     [InlineData(false, "bind")]
