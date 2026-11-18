@@ -78,7 +78,6 @@ public sealed partial class HaConnector
             p.Reply.Ack = MakeAck(next.Rid, next.Sender, "queued");
             await TransientAsync(p, "Reply queued", [], ct);
             p.Reply.Ack = prior;
-            inbox.Start(p.Node, next.Rid, time.GetUtcNow());
             var read = await CardReplyAsync(sessionId, p, state, ct, fromInbox: true);
             if (read == CardRead.Delivering) { return true; }
             if (read == CardRead.Nothing) { throw new InvalidDataException("Inbox entry is not a reply."); }

@@ -44,6 +44,8 @@ public sealed partial class ReplyTests
             await Pass(c);
             await c.DeliveredAsync();
             await Pass(c);
+            await c.DeliveredAsync();
+            await Pass(c);
         }
 
         Assert.True(startedBeforeInvocation);
