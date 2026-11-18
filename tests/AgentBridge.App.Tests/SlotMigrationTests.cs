@@ -4,7 +4,7 @@ using Xunit;
 
 public sealed partial class SlotPreparationTests
 {
-    const string EntryDescription = "fixture helper [slot-entry-v1] [coordinator-v1]";
+    const string EntryDescription = "fixture helper [slot-apply-v1] [slot-entry-v1] [coordinator-v1]";
     SlotMigration Migration(string? description = EntryDescription) =>
         new(Root, HostwBundleTests.Target, _ => description);
 

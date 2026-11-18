@@ -58,7 +58,7 @@ public class AppBrandTests
     // brand.md's sentence case as the creative director confirmed on #537.
     [Theory]
     [InlineData("AgentBridge.Host", "agent-bridge-host", "host")]
-    [InlineData("AgentBridge.HostLauncher", "agent-bridge-hostw", "host launcher [slot-entry-v1] [coordinator-v1]")]
+    [InlineData("AgentBridge.HostLauncher", "agent-bridge-hostw", "host launcher [slot-apply-v1] [slot-entry-v1] [coordinator-v1]")]
     [InlineData("AgentBridge.Injector", "agent-bridge-injector", "typing helper")]
     [InlineData("AgentBridge.Hook", "agent-bridge-host-hook", "agent hook")]
     public void The_hosts_executables_carry_the_products_name_and_keep_their_file_names(string project, string file, string role)
