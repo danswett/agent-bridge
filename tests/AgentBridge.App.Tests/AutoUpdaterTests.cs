@@ -2977,6 +2977,40 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task Quitting_during_a_post_stop_policy_read_that_never_returns_recovers_within_the_25_second_exit_budget()
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        await auto.TickAsync();
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var never = new TaskCompletionSource<HaltPolicySnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (stopAsked, letGo) = HeldStop();
+        var install = auto.RestartToUpdateAsync();
+        await stopAsked;
+        shared!.ReadHaltPolicy = () => { reading.TrySetResult(); return never.Task; };
+        letGo();
+        await Wait.UntilAsync(() => reading.Task.IsCompleted, "the post-stop policy read");
+        try
+        {
+            await Task.Run(() => manager.Quit(TimeSpan.FromSeconds(25), log.Add));
+
+            Assert.False(never.Task.IsCompleted);
+            Assert.Single(processes.Started);
+            Assert.False(updater.Applied);
+            Assert.False(manager.UpdateUnderWay);
+            Assert.DoesNotContain(log, line => line.Contains("not back within", StringComparison.Ordinal));
+            await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
+        }
+        finally
+        {
+            never.TrySetCanceled();
+            await install;
+            await Wait.UntilAsync(() => processes.Started.Count == 1, "cleanup recovery");
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Settings_Restart_to_update_pressed_while_the_banners_installs_is_refused_and_leaves_it_alone()
     {
         await StartAsync();
