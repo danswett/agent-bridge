@@ -35,16 +35,27 @@ public sealed class RosterSyncTests
         Assert.DoesNotContain(sessions, s => s.GetProperty("id").GetString() == ended);
     }
 
-    [Fact]
-    public async Task An_unreachable_host_has_no_session_rows_even_if_a_cached_record_arrives_with_it()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_unreachable_hosts_rows_are_stale_then_expire_even_when_the_relay_omits_it(bool offlineFrame)
     {
+        var time = new FakeTimeProvider(Now);
         JsonElement record = default;
         var publisher = new FleetPublisher(new FleetPublisherTests.Source(), "host");
         Assert.True(await publisher.PublishAsync((value, _) => { record = value; return Task.CompletedTask; }));
+        var reader = new RelayFleetRoster(time: time);
+        var live = Assert.Single(reader.Read([Frame("host", record)]));
+        Assert.True(live.Online);
 
-        var machines = RelayFleetRoster.Parse([Frame("host", record, online: false)]);
-
-        Assert.All(machines, machine => Assert.Empty(machine.Sessions));
+        JsonElement[] frames = offlineFrame ? [Frame("host", record, online: false)] : [];
+        time.Advance(TimeSpan.FromMinutes(1));
+        var stale = Assert.Single(reader.Read(frames));
+        Assert.False(stale.Online);
+        Assert.False(stale.Verified);
+        Assert.Equal(live.Sessions, stale.Sessions);
+        time.Advance(TimeSpan.FromHours(24));
+        Assert.All(reader.Read(frames), machine => Assert.Empty(machine.Sessions));
     }
 
     [Fact]

@@ -46,7 +46,7 @@ public sealed class HostRosterPinTests : IDisposable
     }
 
     [Fact]
-    public async Task A_pinned_roster_with_the_switch_off_neither_signs_nor_supplies_registry_authority()
+    public async Task A_pinned_roster_with_the_switch_off_supplies_membership_but_never_signs()
     {
         if (!OperatingSystem.IsWindows()) { return; }
         Pin();
@@ -56,7 +56,7 @@ public sealed class HostRosterPinTests : IDisposable
         {
             using var key = HostSignKey.LoadOrCreate(folder, KeyStorage.Dpapi);
             var trust = new FleetTrust(reader, folder, () => RosterFixture.Account);
-            Assert.Null(trust.VerifiedRoster());
+            Assert.NotNull(trust.VerifiedRoster());
             var publication = new FleetPublication(new FleetPublisherTests.Source(), "machine", share: true, sign: trust.Sign);
             Assert.True(await publication.PollAsync((record, ct) =>
             {
@@ -66,6 +66,39 @@ public sealed class HostRosterPinTests : IDisposable
             Assert.False(reader.Verified!.AcceptHostSign);
         }
         finally { Directory.Delete(Path.Combine(folder, "host-sign"), recursive: true); }
+    }
+
+    [Fact]
+    public void The_same_pinned_reader_tracks_joins_and_revocations_and_refuses_unavailable_membership()
+    {
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        string? scope = RosterFixture.Account;
+        var trust = new FleetTrust(reader, folder, () => scope);
+        var roster = new RelayFleetRoster(trust.VerifiedRoster);
+        var machine = w.Id("H");
+        var frames = new[] { JsonSerializer.SerializeToElement(new
+        {
+            machine, online = true, record = new { sessions = new[] {
+                new { node = "agent_bridge_0000000000000001", state = "idle", since = DateTimeOffset.UtcNow } } },
+        }) };
+        reader.Update(Relay("G", "B"), RosterFixture.Account);
+        Assert.Empty(roster.Read(frames));
+        w.Add("H", "G", "H", "B", kind: "host");
+        reader.Update(Relay("G", "B", "H"), RosterFixture.Account);
+        Assert.Single(Assert.Single(roster.Read(frames)).Sessions);
+        w.Remove("remove", "G", "H", "H");
+        reader.Update(Relay("G", "B", "H", "remove"), RosterFixture.Account);
+        Assert.Empty(roster.Read([]));
+        Assert.Empty(roster.Read(frames));
+        reader.Update(null, RosterFixture.Account);
+        Assert.Throws<InvalidOperationException>(() => roster.Read(frames));
+        reader.Update(Relay("G", "B", "H", "remove"), RosterFixture.Account);
+        scope = "another-account";
+        Assert.Throws<InvalidOperationException>(() => roster.Read(frames));
+        scope = null;
+        Assert.Throws<InvalidOperationException>(() => roster.Read(frames));
+        Assert.False(reader.Verified!.AcceptHostSign);
     }
 
     [Fact]
