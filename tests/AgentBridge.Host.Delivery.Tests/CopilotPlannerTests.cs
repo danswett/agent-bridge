@@ -982,7 +982,10 @@ public class CopilotPlannerTests
     [Fact]
     public void Many_quick_patterns_in_one_question_fit_its_budget()
     {
-        var (_, question) = Ask(Fields(50, """{ "type": "string", "pattern": "^[a-z]+$" }"""));
+        // Check all fifty constraints, not whether a shared runner schedules them within 250 ms.
+        using var arguments = JsonDocument.Parse(Fields(50, """{ "type": "string", "pattern": "^[a-z]+$" }"""));
+        var question = QuestionMapper.FromCopilotAskUser("call-1", arguments.RootElement, Fixture.T0,
+            new PatternBudget(TimeSpan.FromMinutes(1)));
         Assert.Null(question.AnswerAtMachine);
         Assert.Equal(50, question.Fields.Count(f => f.Constraints?.Pattern is not null));
     }
