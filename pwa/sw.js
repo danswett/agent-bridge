@@ -4,12 +4,13 @@
 // session showed, 3.4 s on a phone. Nothing from the relay is ever cached.
 //
 // A release changes only as a whole. Its worker is new whenever anything served changes (sw.js
-// carries a hash including its own pre-stamp template), the browser checks for one on each start and the app on each
-// return to the front (main.js), and the new worker fills its own cache before it takes over;
-// the app then offers Reload. So an open app runs one release's files throughout, never old
-// modules under a new main.js: usage (#26) was missing on an iPhone when they mixed. The app's
-// scripts are bundled under names that carry their content's hash (tools/build-site.mjs), so a
-// page never asks for one of another release's by mistake either.
+// carries a hash including its own pre-stamp template), the browser checks for one on each
+// start and the app on each return to the front (main.js), and the new worker fills its own
+// cache before it takes over; the app then offers Reload. So an open app runs one release's
+// files throughout, never old modules under a new main.js: usage (#26) was missing on an
+// iPhone when they mixed. The app's scripts are bundled under names that carry their content's
+// hash (tools/build-site.mjs), so a page never asks for one of another release's by mistake
+// either.
 const PREFIX = 'agent-bridge-app-';
 // A hash of every file the site serves, written by tools/build-site.mjs. The browser only
 // installs a new worker when this file's bytes change, and the app only announces an
