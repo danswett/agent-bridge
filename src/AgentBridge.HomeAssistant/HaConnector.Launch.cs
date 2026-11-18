@@ -326,9 +326,9 @@ public sealed partial class HaConnector
         // An agent's request: answered before the slot is cleared, so it is always in one place or
         // the other, then taken (Use-DaemonLaunchRequest).
         var id = read.Id!;
-        await OutcomeAsync(id, "starting", "Received; checking its settings before launching.", pressed: pressed, ct: ct);
+        try { await OutcomeAsync(id, "starting", "Received; checking its settings before launching.", pressed: pressed, ct: ct); }
+        catch (IOException) { launchPressHandled = null; throw; }
         await ClearPromptPayloadAsync(ct);
-        launchRequestsHandled.Add(id);
         launchConsumedPress = pressedAt;
         log($"Home Assistant connector: launch request {id} received ({(read.Settings!.Count > 0 ? string.Join(", ", read.Settings.OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => $"{k.Key}={k.Value}")) : "machine defaults")}; prompt of {read.Text.Length} chars)");
         var refusal = read.Problem;
@@ -462,12 +462,12 @@ public sealed partial class HaConnector
         var hasId = a.TryGetProperty("request", out var idElement) && idElement.ValueKind != JsonValueKind.Null;
         var hasSettings = a.TryGetProperty("settings", out var settings) && settings.ValueKind != JsonValueKind.Null;
         if (!hasId && !hasSettings) { return new("none"); }
+        var id = idElement.ValueKind == JsonValueKind.String ? idElement.GetString() : null;
+        if (id is not null && launchRequestsHandled.Contains(id)) { return new("handled"); }
         var age = state.LastUpdated is { } published ? (pressedAt - published).TotalSeconds : double.PositiveInfinity;
         if (age < 0) { return new("newer"); }
         if (age > 60) { return new("stale"); }
-        var id = idElement.ValueKind == JsonValueKind.String ? idElement.GetString() : null;
         if (id is null || !RequestIdPattern().IsMatch(id)) { return new("malformed"); }
-        if (launchRequestsHandled.Contains(id, StringComparer.Ordinal)) { return new("handled"); }
 
         var parsed = new Dictionary<string, string>(StringComparer.Ordinal);
         var problem = "";
@@ -751,15 +751,15 @@ public sealed partial class HaConnector
         }
     }
 
-    // Set-DaemonLaunchOutcome: the latest few, newest first; never throws, since the launch it
-    // describes has happened either way.
+    // Record before handoff; publication is best effort, but durable state must be saved.
     async Task OutcomeAsync(string request, string outcome, string note, string session = "", JsonObject? launched = null, string pressed = "", CancellationToken ct = default)
     {
+        var before = launchOutcomes.ToArray();
         var previous = launchOutcomes.FirstOrDefault(o => o["request"]!.GetValue<string>() == request);
         if (previous is not null)
         {
             launched ??= previous["launched"]?.DeepClone().AsObject();
-            if (pressed.Length == 0) { pressed = previous["pressed"]!.GetValue<string>(); }
+            if (pressed.Length == 0) { pressed = previous["pressed"]?.GetValue<string>() ?? ""; }
             launchOutcomes.Remove(previous);
         }
         launchOutcomes.Insert(0, new JsonObject
@@ -772,7 +772,13 @@ public sealed partial class HaConnector
             ["at"] = time.GetUtcNow().ToString("o", CultureInfo.InvariantCulture),
             ["launched"] = launched?.DeepClone(),
         });
-        while (launchOutcomes.Count > HaContract.LaunchOutcomesKept) { launchOutcomes.RemoveAt(launchOutcomes.Count - 1); }
+        TrimLaunchOutcomes();
+        if (!SaveLaunchLedger(request))
+        {
+            launchOutcomes.Clear();
+            launchOutcomes.AddRange(before);
+            throw new IOException("The launch outcome could not be recorded durably; a new request requires a writable connector StateFile before handoff.");
+        }
         try
         {
             await PublishAsync(HaContract.LaunchOutcomeTopic(Slug), new JsonObject { ["recent"] = new JsonArray([.. launchOutcomes.Select(o => (JsonNode)o.DeepClone())]) }, true, ct);
@@ -793,31 +799,29 @@ public sealed partial class HaConnector
     async Task<bool> RestoreOutcomesAsync(CancellationToken ct)
     {
         if (launchOutcomesRestored) { return true; }
+        if (launchLedgerUnreadable) { return false; }
         HaState? state;
         try { state = await ha.GetStateAsync(LaunchEntity("sensor", "new_session_result"), ct); }
         catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { return false; }
-        launchOutcomesRestored = true;
-        if (state?.Attributes is not { ValueKind: JsonValueKind.Object } a
-            || !a.TryGetProperty("recent", out var recent) || recent.ValueKind != JsonValueKind.Array)
+        if (state?.Attributes is { ValueKind: JsonValueKind.Object } a
+            && a.TryGetProperty("recent", out var recent) && recent.ValueKind == JsonValueKind.Array)
         {
-            return true;
+            MergeLaunchOutcomes(recent);
         }
-        // What Home Assistant holds is the newest account, whoever wrote it.
-        launchOutcomes.Clear();
-        var cut = false;
-        foreach (var item in recent.EnumerateArray().Take(HaContract.LaunchOutcomesKept))
+        foreach (var o in launchOutcomes)
         {
-            if (JsonNode.Parse(item.GetRawText()) is not JsonObject o || o["request"] is not JsonValue r || !r.TryGetValue<string>(out var id)) { continue; }
-            if (o["outcome"] is JsonValue v && v.TryGetValue<string>(out var outcome) && outcome == "starting" && id != launchInFlight)
+            var id = o["request"]!.GetValue<string>();
+            if (o["outcome"] is JsonValue v && v.TryGetValue<string>(out var outcome) && outcome == "starting"
+                && id != launchInFlight && !launchQueue.Any(q => q.Id == id))
             {
                 o["outcome"] = "unconfirmed";
                 o["note"] = "This machine's bridge restarted while the launch was starting, so whether it started is not known; check the machine.";
-                cut = true;
+                o["at"] = Instant(time.GetUtcNow());
             }
-            launchOutcomes.Add(o);
-            if (!launchRequestsHandled.Contains(id, StringComparer.Ordinal)) { launchRequestsHandled.Add(id); }
         }
-        if (cut)
+        if (launchRequestsHandled.Count > 0 && !SaveLaunchLedger()) { return false; }
+        launchOutcomesRestored = true;
+        if (launchOutcomes.Count > 0)
         {
             try
             {

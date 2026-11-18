@@ -766,9 +766,10 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   PowerShell compares them, and the host is given the offered spelling; permissions alone must
   be exact. Its outcome (`starting`, then `started`,
   `refused`, `busy`, `failed` or `unconfirmed`, with the session id and what was launched) is
-  kept with the four before it, newest first, on `new_session_result`'s `recent`, which is what
+  kept for at least 15 minutes (and always the latest five), newest first, on
+  `new_session_result`'s `recent`, which is what
   the bridge's MCP `launch_agent_session` reads. A request published after the press waits for
-  its own; one more than 60 s older than the press is skipped, words and all, and the press
+  its own; an unserved request more than 60 s older than the press is skipped, words and all, and the press
   launches from the card; an id not matching `^[A-Za-z0-9-]{8,64}$` is refused; one already
   served is never served again; and one that reached the machine more than five minutes after
   its press is refused rather than started late. An agent's second press within 10 s of the one
@@ -795,17 +796,21 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   The watch snapshots each request payload and press before another writer can replace the
   shared slot. Each press takes the oldest preceding, distinct request snapshot, preserving
   its prompt and settings; a payload alone never launches. Repeated request ids do not launch
-  from the card, and an admitted id is remembered for this connector's lifetime. Queued
-  requests older than five minutes are refused before dispatch. Snapshots and queued requests
+  from the card. Before admission, the id and `starting` outcome are saved atomically to the
+  connector's state file; ids remain recorded even after their outcomes age out. An unconfigured
+  state-file path or unwritable ledger leaves the request waiting without clearing its payload
+  or launching; unreadable state blocks launches and is not overwritten (repair then restart).
+  Queued requests older than five minutes are refused before dispatch. Snapshots and queued requests
   exist only in this connector's memory and are lost when it stops; they are not saved to
   disk. Events missed while the watch is disconnected cannot be reconstructed from an
-  overwritten slot. Durable dedupe and at-least-fifteen-minute outcome history remain separate
-  follow-up work; this queue does not change the existing five-entry history.
+  overwritten slot. Request ids and outcome history, unlike the queue, survive restarts.
 * **A restart**, or taking the machine back after agent-ha-bridge had it, reads the outcomes back
-  before taking any press: what Home Assistant holds is the newest account, the requests it
-  names are not served again, the history agents read carries on, and one left at `starting`
-  (other than the connector's own launch still under way) is reported `unconfirmed` rather than
-  launched a second time.
+  before taking any press. Local and Home Assistant histories merge by request id and outcome
+  timestamp, so a missing or shortened HA history does not erase the durable record.
+  A completed outcome never resets to `starting`. Legacy
+  outcomes without usable timestamps age from restoration. All outcomes within 15 minutes remain,
+  even beyond five entries. One left at `starting` (other than this connector's own active or
+  queued launch) is reported `unconfirmed` rather than launched a second time.
 * What the button holds when the connector first reads it is not a press, and the note is
   cleared after ten minutes, as the daemon clears it. A note that cannot be shown does not stop
   the launch it describes.

@@ -52,11 +52,11 @@ public sealed partial class LaunchTests : IDisposable
 
     readonly SessionDrivers drivers = new();
 
-    HaConnector Connector(bool launches = true) => new(new HaConnectorOptions
+    HaConnector Connector(bool launches = true, bool persist = true) => new(new HaConnectorOptions
     {
         MachineName = Machine,
         Version = "0.1.0",
-        StateFile = Path.Combine(folder, "ha-connector.json"),
+        StateFile = persist ? Path.Combine(folder, "ha-connector.json") : null,
         FieldPinDelay = TimeSpan.Zero,
         SelectDelay = TimeSpan.Zero,
         AgentUserIds = [AgentUser],
@@ -82,9 +82,9 @@ public sealed partial class LaunchTests : IDisposable
 
     // Published, pinned once the pin delay has passed, and its selectors driven to their
     // defaults on a later pass, well before the card would next be refreshed.
-    async Task<HaConnector> Ready()
+    async Task<HaConnector> Ready(bool persist = true)
     {
-        var c = Connector();
+        var c = Connector(persist: persist);
         await Pass(c);
         await Pass(c, 2);
         await Pass(c, 6);
@@ -631,7 +631,7 @@ public sealed partial class LaunchTests : IDisposable
         Payload(new JsonObject { ["text"] = "the daemon's request", ["request"] = "req-0020-abcd" });
         await Launch(c, AgentUser);
         Assert.Single(launched);
-        Assert.Equal(["req-0020-abcd"], JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Select(o => o!["request"]!.GetValue<string>()));
+        Assert.Equal(["req-0020-abcd", "req-0019-abcd"], JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Select(o => o!["request"]!.GetValue<string>()));
     }
 
     [Fact]

@@ -1202,16 +1202,18 @@ public sealed partial class HaConnector : IAsyncDisposable
     IEnumerable<string> LoadLedger()
     {
         ledgerLoaded = true;
+        launchLedgerUnreadable = false;
         if (options.StateFile is not { } path || !File.Exists(path)) { return []; }
         try
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) { return []; }
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) { throw new JsonException("The connector ledger is not an object."); }
             lock (gate)
             {
                 LoadOnPhones(doc.RootElement);
                 LoadSignIns(doc.RootElement);
                 LoadUpdateAttempt(doc.RootElement);
+                LoadLaunchLedger(doc.RootElement);
             }
             return [.. new[] { "retiring", "starting" }
                 .SelectMany(key => doc.RootElement.TryGetProperty(key, out var list) && list.ValueKind == JsonValueKind.Array ? list.EnumerateArray().ToArray() : [])
@@ -1220,7 +1222,9 @@ public sealed partial class HaConnector : IAsyncDisposable
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
+            launchLedgerUnreadable = launchServing;
             log($"Home Assistant connector could not read {path} ({e.Message}); the orphan sweep finds what it named");
+            if (launchLedgerUnreadable) { Problem("launch-ledger", "Home Assistant connector launches are blocked because the durable ledger could not be read; repair it before restarting the host."); }
             return [];
         }
     }
@@ -1238,6 +1242,7 @@ public sealed partial class HaConnector : IAsyncDisposable
 
     bool SaveLedger()
     {
+        if (launchLedgerUnreadable) { return false; }
         if (options.StateFile is not { } path || !ledgerLoaded) { return true; }
         lock (ledgerSave) { return WriteLedger(path); }
     }
@@ -1254,6 +1259,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 ["onPhones"] = OnPhonesLedger(),
                 ["signIn"] = SignInLedger(),
                 ["update"] = UpdateAttemptLedger(),
+                ["launch"] = launchLedger.DeepClone(),
             });
         }
         try

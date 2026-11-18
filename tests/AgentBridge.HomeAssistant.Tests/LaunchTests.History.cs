@@ -11,9 +11,11 @@ public sealed partial class LaunchTests
         HaContract.Serialize(new JsonObject { ["recent"] = new JsonArray() }));
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Request_ids_are_durable_before_handoff_and_after_completion_when_HA_loses_its_history(bool interrupted)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Request_ids_are_durable_before_handoff_and_after_completion_when_HA_loses_its_history(bool interrupted, bool stale)
     {
         var handed = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -41,6 +43,7 @@ public sealed partial class LaunchTests
         answer = null;
         await using var restarted = await Ready();
         Payload(new JsonObject { ["request"] = "durable-request", ["text"] = "must not replay" });
+        if (stale) { ha.Now = ha.Now.AddSeconds(61); }
         await Launch(restarted, AgentUser);
 
         Assert.Equal("only once", Assert.Single(launched).Prompt);
@@ -87,6 +90,46 @@ public sealed partial class LaunchTests
         Payload(new JsonObject { ["request"] = "history-request-0" });
         await Launch(next, AgentUser);
         Assert.Equal(8, launched.Count);
+    }
+
+    [Fact]
+    public async Task An_unconfigured_durable_state_path_does_not_admit_an_identified_request()
+    {
+        await using var c = await Ready(persist: false);
+        Payload(new JsonObject { ["request"] = "durable-path-required" });
+        await Launch(c, AgentUser);
+
+        Assert.Empty(launched);
+        Assert.Contains("durable-path-required", ha.Retained[HaContract.PromptPayloadTopic(Slug)]);
+        Assert.Contains(log, entry => entry.Contains("writable connector StateFile", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Stale_or_malformed_HA_history_does_not_replace_a_durable_completion(bool malformed, bool unstamped)
+    {
+        JsonObject stale;
+        await using (var c = await Ready())
+        {
+            Payload(new JsonObject { ["request"] = "durable-terminal-outcome" });
+            await Launch(c, AgentUser);
+            stale = Outcome().DeepClone().AsObject();
+            stale["outcome"] = "starting";
+            if (malformed)
+            {
+                stale["launched"] = new JsonArray("not launch settings");
+                stale["at"] = time.GetUtcNow().AddMinutes(1).ToString("o");
+            }
+            if (unstamped) { stale["at"] = 10.2; }
+        }
+        ha.Seed(HaContract.LaunchOutcomeTopic(Slug), HaContract.Serialize(
+            new JsonObject { ["recent"] = new JsonArray(stale) }));
+        await using var restarted = await Ready();
+
+        Assert.Equal("started", Outcome()["outcome"]!.GetValue<string>());
+        Assert.Single(launched);
     }
 
     [Fact]
