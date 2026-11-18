@@ -809,6 +809,9 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
 
 ## 5. Coverage, timing, flakes and reports
 
+Run `pwsh quality/main-queue-wait.ps1 -Limit 10` with the job's `GH_TOKEN` (Actions read) for recent main-push queue wait and total minutes, using attempt one only.
+It only reads GitHub; blank durations mean missing evidence. `-RunsFile snapshot.json -Json` measures retained runs/jobs offline, including an `attempt1` object for reruns.
+
 - **Coverage** (collected since #363, no gates yet): the `dotnet-coverage` tool (Cobertura,
   pinned in `.config/dotnet-tools.json`) around `dotnet test` for .NET, with no test project
   changed. Node's built-in coverage for the PWA's unit tests, later Playwright's V8 coverage,

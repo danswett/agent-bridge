@@ -22,10 +22,13 @@ static partial class SelfTest
     public static async Task RunAsync(MainWindow window, MainViewModel main, LaunchViewModel launch, string outFile, DemoHost demo, DemoHost remote, Action<int> exit)
     {
         var result = new Dictionary<string, object?>();
+        var timings = new SelfTestTimings();
+        void boundary(string stage) => timings.Boundary(stage);
         var checks = new List<string>();
         var failures = new List<string>();
         void Check(bool ok, string what)
         {
+            timings.Check(what);
             (ok ? checks : failures).Add(what);
             if (!ok) { AppLog.Write($"self-test: failed: {what}; {ForegroundOwner()}"); }
         }
@@ -36,11 +39,13 @@ static partial class SelfTest
         Application.Current.DebugSettings.XamlResourceReferenceFailed += (_, e) =>
         {
             AppLog.Write($"self-test: a XAML resource reference failed: {e.Message}");
+            timings.Check($"a XAML resource reference failed: {e.Message}");
             failures.Add($"a XAML resource reference failed: {e.Message}");
         };
         DisplayPass? display = null;
         try
         {
+            boundary("display and initial rows");
             display = await DisplayPass.BeginAsync(1600, 1000);
             result["display"] = display.How;
             AppLog.Write($"self-test: the screen {display.How}");
@@ -97,9 +102,9 @@ static partial class SelfTest
             await CheckCodeBlocks(window, Check, outFile);
             await CheckUnparsableMarkdown(window, Check);
             // Written down first: without its fix, the next check ends the process (0xC000027B).
-            await Write(outFile, result, checks, failures, "a word too long for WinUI's text layout");
+            await Write(outFile, result, timings, checks, failures, "a word too long for WinUI's text layout");
             await CheckLongWords(window, Check);
-            await Write(outFile, result, checks, failures, null);
+            await Write(outFile, result, timings, checks, failures, null);
             await CheckFeedbackEntry(window, Check);
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
@@ -108,6 +113,7 @@ static partial class SelfTest
 
             // Needs you (#165): every question on both machines, its count the one the tray shows,
             // and Approve once and Deny right there for the permission prompt.
+            boundary("needs-you and keyboard navigation");
             var lane = ById<FrameworkElement>(window.RootElement, "NeedsYou");
             // Waited for: the lane's entries are drawn a layout pass after its list changes, which
             // can come after the cards are.
@@ -283,6 +289,7 @@ static partial class SelfTest
             Check(again is not null && ById<Button>(again, "Option:approve") is { IsEnabled: true }, "still shows a question's choices on a session chosen again after the tabs change");
             Check(settled && shown > hidden && hidden >= 0, $"a row's control listens while shown and lets go when hidden, however often the tabs change ({hidden} listeners hidden: {hiddenBy}; {shown} shown: {shownBy}; {Listeners(watched)} after five more changes: {ListenersBy(watched)})");
 
+            boundary("panes delegates and history");
             await CheckPanes(window, main, Check, outFile);
             await CheckDividers(window, main, Check, outFile);
             await CheckMachineTabs(window, main, Check, outFile);
@@ -295,6 +302,7 @@ static partial class SelfTest
             await CheckHistoryScrollBudget(window, main, demo, Check, result);
 
             // Launch a session from the Launch page: it starts, its row appears, and Open goes to it.
+            boundary("launch and messages");
             window.ShowPage("launch");
             var ready = await Until(() => launch.ShowForm && launch.Machines.Count == 2 && ById<Button>(window.RootElement, "LaunchButton") is { IsEnabled: true }, TimeSpan.FromSeconds(10));
             Check(ready, "offers both machines on the Launch page");
@@ -330,6 +338,7 @@ static partial class SelfTest
             launch.Launch();
             Check(launch.Problem.StartsWith("Not launched: Codex starts its session only on a first message", StringComparison.Ordinal), "refuses to launch Codex on another machine without a first message");
 
+            boundary("usage settings and agent rows");
             window.ShowPage("usage");
             await Task.Delay(500);
             Check(main.Usage.Rows.Count == 3, "shows usage for three agents across both machines");
@@ -374,6 +383,7 @@ static partial class SelfTest
             Resize(window, 1440, 1000);
             main.Selected = main.AllCards.First(c => c.Id == "demo-approval");
             await Task.Delay(700);
+            boundary("machine pages and held sessions");
             await CheckMachinesPage(window, main, Check, outFile);
             await CheckMachineHeld(window, main, remote, Check, outFile);
             await CheckResumeHeld(window, launch, remote, Check, outFile);
@@ -381,39 +391,49 @@ static partial class SelfTest
             await CheckNarrowest(window, Check, outFile);
             // The theme passes draw the Sessions page with a delegate in its strip and inspector.
             await ShowADelegate(window, main, Check);
+            boundary("theme pages");
             await CheckPagesInEveryTheme(window, Check, outFile);
+            boundary("sign-in");
             AppLog.Write("self-test: sign-in");
             await CheckSignIn(window, main, remote, Check, outFile);
             await CaptureSignIn(window, main, remote, Check, outFile);
             AppLog.Write("self-test: update captures");
+            boundary("update captures");
             await CaptureUpdate(window, main, Check, outFile);
             // The receipt's states (ui.md §6.5) in each theme and at the narrowest width; high
             // contrast's pass draws them too.
+            boundary("progress passes");
             await ProgressPasses(window, main, demo, Check, outFile, result);
+            boundary("move strip");
             await CheckMoveStrip(window, main, demo, Check, outFile, result);
             // The gallery's sessions are gone, and the one open with them: high contrast's pass
             // draws the Sessions page as the theme passes did, a delegate in its strip and inspector.
             await ShowADelegate(window, main, Check);
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
-            await Write(outFile, result, checks, failures, "high contrast");
+            boundary("high contrast");
+            await Write(outFile, result, timings, checks, failures, "high contrast");
             await CheckHighContrast(window, main, launch, demo, remote, Check, outFile, result);
             // Last, as it adds sessions every check above counts without (#765).
-            await Write(outFile, result, checks, failures, "live resize");
+            boundary("live resize");
+            await Write(outFile, result, timings, checks, failures, "live resize");
             await MeasureResize(window, main, demo, Check, outFile, result);
         }
         catch (Exception e)
         {
+            timings.Check($"crashed: {e}");
             failures.Add($"crashed: {e}");
         }
+        boundary("display cleanup");
         if (display is not null) { await display.EndAsync(); }
+        timings.Boundary(null);
         // Written again if a failure arrived while it was written (a resource reference failing as
         // a theme settles), so the file always says why the run failed.
         int written;
         do
         {
             written = failures.Count;
-            await Write(outFile, result, checks, failures, null);
+            await Write(outFile, result, timings, checks, failures, null);
         }
         while (failures.Count != written);
         var code = failures.Count == 0 ? 0 : 1;
@@ -422,8 +442,9 @@ static partial class SelfTest
     }
 
     // The result file. unfinished: the check under way, when written part-way through.
-    static async Task Write(string outFile, Dictionary<string, object?> result, List<string> checks, List<string> failures, string? unfinished)
+    static async Task Write(string outFile, Dictionary<string, object?> result, SelfTestTimings timings, List<string> checks, List<string> failures, string? unfinished)
     {
+        timings.WriteTo(result);
         result["passed"] = checks;
         result["failed"] = failures;
         result["unfinished"] = unfinished;
