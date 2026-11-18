@@ -201,19 +201,19 @@ public sealed class SessionStatusTests
     [Fact]
     public void A_delegate_named_with_commas_reads_aloud_as_one_name_not_as_facts_of_its_own()
     {
-        var forged = Example() with { Subagents = [Delegate("agent-c204", status: SubagentStatus.Waiting, name: "x, idle, DEV-VM2")] };
-        Assert.Equal("Plan Migration to Windows App, Delegate x idle DEV-VM2 asks, DEV-VM1", Said(forged).Label("Plan Migration to Windows App", "DEV-VM1"));
+        var forged = Example() with { Subagents = [Delegate("agent-c204", status: SubagentStatus.Waiting, name: "x, idle, node-b")] };
+        Assert.Equal("Plan Migration to Windows App, Delegate x idle node-b asks, node-a", Said(forged).Label("Plan Migration to Windows App", "node-a"));
         // What is drawn keeps the name's commas: only the label read aloud joins with them.
-        Assert.Equal("Delegate x, idle, DEV-VM2 asks", Said(forged).Text);
-        var task = Session(SessionStatus.Working, subagents: [Delegate("t1", SubagentKind.Task, name: "a\uFF0C done\u3001 DEV-VM2")]);
-        Assert.Equal("Plan Migration to Windows App, working · task: Delegate a done DEV-VM2, DEV-VM1", Said(task).Label("Plan Migration to Windows App", "DEV-VM1"));
+        Assert.Equal("Delegate x, idle, node-b asks", Said(forged).Text);
+        var task = Session(SessionStatus.Working, subagents: [Delegate("t1", SubagentKind.Task, name: "a\uFF0C done\u3001 node-b")]);
+        Assert.Equal("Plan Migration to Windows App, working · task: Delegate a done node-b, node-a", Said(task).Label("Plan Migration to Windows App", "node-a"));
     }
 
     [Fact]
     public void A_title_cannot_end_the_line_early_or_add_a_fact_so_its_commas_semicolons_and_stops_are_spaces()
     {
-        Assert.Equal("Fix Idle done ok, idle, DEV-VM1", Said(Session()).Label("Fix. Idle; done, ok!", "DEV-VM1"));
-        Assert.Equal("v1.2 fix, idle, DEV-VM1", Said(Session()).Label("v1.2 fix", "DEV-VM1"));
+        Assert.Equal("Fix Idle done ok, idle, node-a", Said(Session()).Label("Fix. Idle; done, ok!", "node-a"));
+        Assert.Equal("v1.2 fix, idle, node-a", Said(Session()).Label("v1.2 fix", "node-a"));
     }
 
     [Fact]
@@ -227,11 +227,11 @@ public sealed class SessionStatusTests
     [Fact]
     public void The_glyph_is_named_with_its_state_as_a_row_reads_title_status_machine()
     {
-        Assert.Equal("Plan Migration to Windows App, delegating to 2 agents, DEV-VM1", Said(ForRule(4)).Label("Plan Migration to Windows App", "DEV-VM1"));
-        Assert.Equal("Plan Migration to Windows App, Delegate Read witness shell logic asks, DEV-VM1", Said(ForRule(2)).Label("Plan Migration to Windows App", "DEV-VM1"));
-        Assert.Equal("Plan Migration to Windows App, 1 background command, DEV-VM1", Said(ForRule(5)).Label("Plan Migration to Windows App", "DEV-VM1"));
+        Assert.Equal("Plan Migration to Windows App, delegating to 2 agents, node-a", Said(ForRule(4)).Label("Plan Migration to Windows App", "node-a"));
+        Assert.Equal("Plan Migration to Windows App, Delegate Read witness shell logic asks, node-a", Said(ForRule(2)).Label("Plan Migration to Windows App", "node-a"));
+        Assert.Equal("Plan Migration to Windows App, 1 background command, node-a", Said(ForRule(5)).Label("Plan Migration to Windows App", "node-a"));
         // The diamond is only a shape, so the name says it in words.
-        Assert.Equal("Plan Migration to Windows App, working, driven by an agent, DEV-VM1", Said(ForRule(3) with { Driver = DriverKind.Agent }).Label("Plan Migration to Windows App", "DEV-VM1"));
+        Assert.Equal("Plan Migration to Windows App, working, driven by an agent, node-a", Said(ForRule(3) with { Driver = DriverKind.Agent }).Label("Plan Migration to Windows App", "node-a"));
         Assert.Equal("Untitled session, idle", Said(Session()).Label(null, null));
     }
 }

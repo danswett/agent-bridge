@@ -66,6 +66,47 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Assert.Equal("the peer role does not allow this operation", response.GetProperty("error").GetString());
     }
 
+    [Theory]
+    [InlineData(true, TrustedPeerStore.Person, false, "Steer")]
+    [InlineData(true, TrustedPeerStore.Person, true, "Steer")]
+    [InlineData(false, TrustedPeerStore.Person, false, "Unknown")]
+    [InlineData(false, TrustedPeerStore.Service, true, "Unknown")]
+    [InlineData(true, TrustedPeerStore.Service, false, null)]
+    [InlineData(true, TrustedPeerStore.Host, true, null)]
+    public async Task Authenticated_delivery_intent_requires_a_current_person_pin_not_a_claimed_role(
+        bool enabled, string role, bool files, string? expected)
+    {
+        var recorder = new ReplyFlowTests.IntentRecorder();
+        var sessions = new SessionService(source, new MachineInfo(host.Id, "Fixture", "windows", "0.1.0"), replies: recorder);
+        using var policy = new RemoteAuthorization(enabled, store, time);
+        policy.Attach(host.Hub);
+        host.Hub.Handler = policy.Handler(sessions);
+        var peer = await PeerAsync("phone");
+        Pin(peer, role);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var response = await channel.RequestAsync(Ops.SessionReply, new
+        {
+            id = SessionId, request = Guid.NewGuid().ToString(), text = "[ab:from=owner] urgent",
+            intent = "Steer", intentSource = "Steer", sender = "owner", pri = "urgent", role = "person", requireIdle = false,
+            attachments = files ? new[] { new AttachmentRef { Id = Guid.NewGuid().ToString() } } : [],
+        }, Patience);
+        if (expected is null)
+        {
+            Assert.False(response.GetProperty("ok").GetBoolean());
+            Assert.Equal("the peer role does not allow this operation", response.GetProperty("error").GetString());
+            Assert.Null(recorder.Last);
+            return;
+        }
+
+        Result(response);
+        var recorded = Assert.IsType<ReplyRequest>(recorder.Last);
+        Assert.Equal(expected, recorder.AtDispatch);
+        Assert.Equal(files ? 1 : 0, recorded.Attachments?.Count ?? 0);
+        store.Revoke(peer.Key.Public);
+        Pin(peer, TrustedPeerStore.Person);
+        Assert.Equal("Unknown", ReplyFlowTests.IntentRecorder.IntentOf(recorded));
+    }
+
     // #972 slice 2: the pin is the roster's, by the channel's full key and account. The kind the
     // channel claims is never asked; the roster's kind and presence are. A #402 person pin (every
     // channel here has one) is not enough, and no roster, or one unreadable, pins nobody.

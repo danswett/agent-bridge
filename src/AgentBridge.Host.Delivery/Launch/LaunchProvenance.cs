@@ -13,7 +13,7 @@ internal sealed class LaunchProvenance
     readonly Lock gate = new();
     readonly Dictionary<Guid, Origin> origins = [];
     bool unavailable;
-    sealed record Origin(string Session, SessionProcess? Process);
+    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null);
 
     public LaunchProvenance(string? path, Action<string> log)
     {
@@ -26,7 +26,7 @@ internal sealed class LaunchProvenance
             if (stream.Length > MaxBytes) { throw new InvalidDataException(); }
             var stored = JsonSerializer.Deserialize<Dictionary<Guid, Origin>>(stream, Json)
                 ?? throw new InvalidDataException();
-            if (stored.Values.Any(o => o is null || o.Session is not { Length: <= 1024 } ||
+            if (stored.Values.Any(o => o is null || o.Grant is not (null or "fleet") || o.Session is not { Length: <= 1024 } ||
                 (o.Process is not null && (o.Session.Length == 0 || o.Process is not { Id: > 0, StartedAt: not null }
                     || o.Process.StartedAt == default(DateTimeOffset)))))
             { throw new InvalidDataException(); }
@@ -41,9 +41,9 @@ internal sealed class LaunchProvenance
         }
     }
 
-    public void Preparing(Guid request, string session = "")
+    public void Preparing(Guid request, string session = "", string? grant = null)
     {
-        lock (gate) { Check(); origins[request] = new(session, null); Save(); }
+        lock (gate) { Check(); origins[request] = new(session, null, grant); Save(); }
     }
 
     public void Abandon(Guid request)
@@ -56,7 +56,7 @@ internal sealed class LaunchProvenance
         lock (gate)
         {
             Check();
-            var origin = new Origin(session, process);
+            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant);
             if (origins.GetValueOrDefault(request) == origin) { return; }
             origins[request] = origin;
             Save();
@@ -71,6 +71,19 @@ internal sealed class LaunchProvenance
             if (origins.Values.Any(o => o.Process is null && (o.Session.Length == 0 || string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase))))
             { throw new InvalidOperationException("refused: an unfinished launch has no durable process binding"); }
             return process is not null && origins.Values.Any(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase) && o.Process == process);
+        }
+    }
+
+    public bool IsFleetWorker(string session, SessionProcess? process)
+    {
+        lock (gate)
+        {
+            Check();
+            if (origins.Values.Any(o => o.Grant == "fleet" && o.Process is null
+                && (o.Session.Length == 0 || string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase))))
+            { throw new InvalidOperationException("refused: a fleet launch has no durable process binding"); }
+            return process is not null && origins.Values.Any(o => o.Grant == "fleet"
+                && string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase) && o.Process == process);
         }
     }
 

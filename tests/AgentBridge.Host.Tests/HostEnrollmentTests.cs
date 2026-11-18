@@ -20,6 +20,98 @@ public sealed class HostEnrollmentTests : IDisposable
     readonly World w = new();
     public void Dispose() => Directory.Delete(profile, true);
 
+    sealed class ProbeKey(Action sign) : IHostEnrollmentKey
+    {
+        public byte[] PublicPoint => World.Keys("G").Dh.Public;
+        public byte[] Sign(byte[] message) { sign(); return [1]; }
+        public void Dispose() { }
+    }
+
+    [WindowsFact("host enrollment uses Windows custody")]
+    public async Task Custody_does_not_hold_the_reader_lock_and_rechecks_the_switch_before_publication()
+    {
+        var reader = Reader();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var enrollment = new HostEnrollment(reader, Account, Generation, _ => new ProbeKey(() =>
+        {
+            entered.SetResult();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
+        }));
+        var describe = Task.Run(() => enrollment.Describe(profile, World.Keys("H").Dh.Public));
+        Task? disable = null;
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            disable = Task.Run(() => reader.Enrollment(Account, Generation,
+                _ =>
+                {
+                    var off = new RosterVerifier(Account, Generation, () => w.Now);
+                    off.Offer(w.Entry("G"));
+                    typeof(HostRosterReader).GetProperty(nameof(HostRosterReader.Verified))!.SetValue(reader, off);
+                    return true;
+                }, _ => false));
+            await disable.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            release.Set();
+            await describe.WaitAsync(TimeSpan.FromSeconds(10));
+            if (disable is not null) { await disable.WaitAsync(TimeSpan.FromSeconds(10)); }
+        }
+        var result = await describe;
+        Assert.Equal("no-switch", result.Refusal);
+        Assert.Null(result.Descriptor);
+        Assert.Equal("not-enrolled", enrollment.Status(null, w.Id("G")));
+    }
+
+    [HostSignKeyTests.WindowsHostSignTheory]
+    [InlineData("io")]
+    [InlineData("access")]
+    [InlineData("argument")]
+    [InlineData("disposed")]
+    [InlineData("platform")]
+    [InlineData("security")]
+    public void Custody_failures_are_content_free_refusals_and_leave_the_attempt_retryable(string failure)
+    {
+        Exception Failure() => failure switch
+        {
+            "io" => new IOException("private sentinel"),
+            "access" => new UnauthorizedAccessException("private sentinel"),
+            "argument" => new ArgumentException("private sentinel"),
+            "disposed" => new ObjectDisposedException("private sentinel"),
+            "platform" => new PlatformNotSupportedException("private sentinel"),
+            _ => new System.Security.SecurityException("private sentinel"),
+        };
+        var opens = 0;
+        var enrollment = new HostEnrollment(Reader(), Account, Generation, _ =>
+            ++opens == 1 ? throw Failure() : new ProbeKey(() => throw Failure()));
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var result = enrollment.Describe(profile, World.Keys("H").Dh.Public);
+            Assert.Equal("missing-key", result.Refusal);
+            Assert.Null(result.Descriptor);
+            Assert.Equal("not-enrolled", enrollment.Status(null, w.Id("G")));
+        }
+        Assert.Equal(2, opens);
+    }
+
+    [WindowsFact("host enrollment uses Windows custody")]
+    public async Task Concurrent_descriptors_open_custody_once_per_instance()
+    {
+        var opens = 0;
+        var enrollment = new HostEnrollment(Reader(), Account, Generation, _ =>
+        {
+            Interlocked.Increment(ref opens);
+            return new ProbeKey(() => { });
+        });
+        var results = await Task.WhenAll(Enumerable.Range(0, 8)
+            .Select(_ => Task.Run(() => enrollment.Describe(profile, World.Keys("H").Dh.Public))));
+        Assert.Equal(1, opens);
+        Assert.Single(results, result => result.Descriptor is not null);
+        Assert.Equal(7, results.Count(result => result.Refusal == "attempt-already-open"));
+    }
+
     [WindowsFact("hostSign private-scalar regression uses disposable DPAPI custody")]
     public void Descriptor_status_signed_frame_and_command_never_expose_the_actual_private_scalar()
     {

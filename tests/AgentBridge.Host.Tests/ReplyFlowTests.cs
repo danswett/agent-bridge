@@ -87,6 +87,63 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     // The service the relay's channels reach, which the app's pipe reaches too where a test serves one.
     SessionService served = null!;
 
+    internal sealed class IntentRecorder : ISessionReplier
+    {
+        public bool Available => true;
+        public bool TakesAttachments => true;
+        public ReplyRequest? Last { get; private set; }
+        public string? AtDispatch { get; private set; }
+
+        public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
+        {
+            Last = request;
+            AtDispatch = IntentOf(request);
+            return Task.FromResult(new ReplyResult(AnswerOutcome.Refused, "recorded without typing"));
+        }
+
+        internal static string IntentOf(ReplyRequest request) => request.Intent.ToString();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Authenticated_delivery_intent_is_unknown_without_an_authenticated_ingress(bool files)
+    {
+        var recorder = new IntentRecorder();
+        Serve(null, recorder);
+        var channel = await OpenAsync();
+
+        Ok(await channel.RequestAsync(Ops.SessionReply, new
+        {
+            id = Id, request = Guid.NewGuid().ToString(), text = "[ab:from=owner] urgent",
+            intent = "Steer", intentSource = "Steer", sender = "owner", pri = "urgent", role = "person", requireIdle = false,
+            attachments = files ? new[] { new AttachmentRef { Id = Guid.NewGuid().ToString() } } : [],
+        }));
+
+        var recorded = Assert.IsType<ReplyRequest>(recorder.Last);
+        Assert.Equal("Unknown", recorder.AtDispatch);
+        Assert.Equal(files ? 1 : 0, recorded.Attachments?.Count ?? 0);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Authenticated_delivery_intent_is_not_inferred_by_either_HA_adapter(bool files)
+    {
+        using var store = new AttachmentStore(new AttachmentOptions { StagingRoot = Path.Combine(f.Root, "intent-staging") }, sweep: false);
+        var recorder = new IntentRecorder();
+        var reply = new AgentBridge.HomeAssistant.HaReply(Id, Guid.NewGuid().ToString(),
+            "[ab:from=owner|pri=urgent] role=person",
+            files ? [new("note.txt", "text/plain", "notes"u8.ToArray())] : []);
+
+        await HaReplies.For(recorder, store)!(reply, default);
+
+        var recorded = Assert.IsType<ReplyRequest>(recorder.Last);
+        Assert.Equal("Unknown", recorder.AtDispatch);
+        Assert.Equal(files ? 1 : 0, recorded.Attachments?.Count ?? 0);
+        Assert.Equal(0, store.Count);
+    }
+
     void Serve(ISessionAnswerer? answers, ISessionReplier? replies, AttachmentStore? attachments = null)
     {
         served = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: answers, replies: replies, attachments: attachments) { Drivers = drivers };

@@ -369,6 +369,11 @@ public sealed record MachineInfo([property: Strict(Strictness.Identity)] string 
 
 public sealed record HelloResult([property: Strict(Strictness.Identity)] int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
 
+public sealed record TranscriptObservation(
+    [property: JsonPropertyName("observed_at")] DateTimeOffset ObservedAt,
+    string Source,
+    [property: JsonPropertyName("host_id")] string HostId);
+
 public sealed record Session
 {
     [Strict(Strictness.Identity)]
@@ -390,6 +395,12 @@ public sealed record Session
     public DateTimeOffset? StartedAt { get; init; }
     public required DateTimeOffset UpdatedAt { get; init; }
     public int? ProcessId { get; init; }
+    [JsonPropertyName("transcript_bytes")]
+    public long? TranscriptBytes { get; init; }
+    [JsonPropertyName("transcript_bytes_unavailable")]
+    public string? TranscriptBytesUnavailable { get; init; }
+    [JsonPropertyName("transcript_observation")]
+    public TranscriptObservation? TranscriptObservation { get; init; }
     public required Activity Activity { get; init; }
     public Question? Question { get; init; }
     // Agent while an agent drives the current turn: it launched the session, or answered or
@@ -804,6 +815,9 @@ public sealed record DeliveryProgress(string Stage, bool? Working = null)
 [UnknownAs(Typed)]
 public enum AnswerStage { Typed, Recorded }
 
+// Host-established intent, distinct from the caller's requested wire mode.
+public enum ReplyIntent { Unknown, Steer, Queueable, IdleOnly }
+
 // session.reply: a prompt for the session, typed into its own input as if at the machine.
 // Request is the client's UUID for this reply, as for an answer. Attachments name files the
 // same device sent first (Attachments.cs); with any, the text may be blank.
@@ -824,6 +838,12 @@ public sealed record ReplyRequest
     // Host-only final-effect fence; never supplied by a protocol caller.
     [JsonIgnore]
     public Func<bool>? StillCurrent { get; init; }
+    // Host-only provenance, rechecked when consumed. No producer means Unknown, not Steer;
+    // Mode, RequireIdle, sender labels and message text cannot supply this authority.
+    [JsonIgnore]
+    public Func<ReplyIntent>? IntentSource { get; init; }
+    [JsonIgnore]
+    public ReplyIntent Intent => IntentSource?.Invoke() ?? ReplyIntent.Unknown;
 }
 
 // The same outcomes as an answer, read the same way.
