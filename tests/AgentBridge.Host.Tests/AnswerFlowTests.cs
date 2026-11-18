@@ -1953,7 +1953,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal(3, Enters());
     }
 
-    // A form taller than its window, as Copilot CLI drew one in a 120 by 30 console on VM3, read
+    // A form taller than its window, as Copilot CLI drew one in a 120 by 30 console on node-c, read
     // with agent-bridge-injector --screen (#1123, #1193): a question of twelve long paragraphs
     // over a list, a Yes/No and a text field. Only the form's bottom shows, its rule on the last
     // row; its heading and top rule, and the first three paragraphs, are above the window.

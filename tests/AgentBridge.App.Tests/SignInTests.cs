@@ -208,7 +208,7 @@ public sealed class SignInTests
     }
 
     static IReadOnlyList<SignInBanners.Banner> Banners(IReadOnlyList<Session> sessions, bool canSignIn = true, Dictionary<string, SignInBanners.Flow>? flows = null, Dictionary<string, SignInBanners.Resolved>? resolved = null) =>
-        SignInBanners.For([new SignInBanners.Source("m1", "DEV-VM1", sessions, canSignIn)], flows ?? [], resolved ?? [], DateTimeOffset.Parse("2026-11-05T00:45:00Z"));
+        SignInBanners.For([new SignInBanners.Source("m1", "node-a", sessions, canSignIn)], flows ?? [], resolved ?? [], DateTimeOffset.Parse("2026-11-05T00:45:00Z"));
 
     [Fact]
     public void One_banner_per_machine_agent_and_account_lists_its_sessions()
@@ -218,7 +218,7 @@ public sealed class SignInTests
         Assert.Equal(3, banners.Count);
         var b = banners.Single(x => x.Account == "octocat" && x.Agent == AgentKind.Copilot);
         Assert.Equal(new[] { "a", "b" }, b.Sessions.Select(s => s.Id).Order());
-        Assert.Equal(("Copilot on DEV-VM1 needs sign-in · @octocat", "2 sessions affected: Session a, Session b", "Copilot on DEV-VM1 needs sign-in"), SignInBanners.Words(b));
+        Assert.Equal(("Copilot on node-a needs sign-in · @octocat", "2 sessions affected: Session a, Session b", "Copilot on node-a needs sign-in"), SignInBanners.Words(b));
         Assert.Equal("Sign in", SignInBanners.Verb(b));
     }
 
@@ -292,9 +292,9 @@ public sealed class SignInTests
         Assert.Equal("Sign-in failed · The code was not entered in time", SignInBanners.Words(failed).Line);
         // While this device's own flow runs, its sheet is open and the banner offers nothing.
         Assert.Null(SignInBanners.Verb(Banners([Needing("a")], flows: new() { [key] = new SignInBanners.Flow("pending", "flow-1") }).Single()));
-        var signedIn = Banners([], resolved: new() { [key] = new SignInBanners.Resolved("signedIn", 2, DateTimeOffset.Parse("2026-11-05T00:44:30Z"), AgentKind.Copilot, "octocat", "m1", "DEV-VM1") }).Single();
-        Assert.Equal(("Copilot on DEV-VM1 · @octocat", "Signed in · 2 sessions recovered"), (SignInBanners.Words(signedIn).Head, SignInBanners.Words(signedIn).Line));
-        Assert.Empty(Banners([], resolved: new() { [key] = new SignInBanners.Resolved("signedIn", 2, DateTimeOffset.Parse("2026-11-05T00:43:00Z"), AgentKind.Copilot, "octocat", "m1", "DEV-VM1") }));
+        var signedIn = Banners([], resolved: new() { [key] = new SignInBanners.Resolved("signedIn", 2, DateTimeOffset.Parse("2026-11-05T00:44:30Z"), AgentKind.Copilot, "octocat", "m1", "node-a") }).Single();
+        Assert.Equal(("Copilot on node-a · @octocat", "Signed in · 2 sessions recovered"), (SignInBanners.Words(signedIn).Head, SignInBanners.Words(signedIn).Line));
+        Assert.Empty(Banners([], resolved: new() { [key] = new SignInBanners.Resolved("signedIn", 2, DateTimeOffset.Parse("2026-11-05T00:43:00Z"), AgentKind.Copilot, "octocat", "m1", "node-a") }));
     }
 
     [Fact]

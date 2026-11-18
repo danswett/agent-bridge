@@ -997,6 +997,17 @@ even if hello was stale. A host implementing queue delivery supplies it on every
 Slice 1 defines the contract and models only; hosts must not advertise queue support
 until the delivery path implements it.
 
+**Host-owned intent (#2568 A-i).** `ReplyRequest.Intent` is an in-process carrier,
+not a wire field or the requested `mode`. It defaults to `Unknown`. Only the host's
+current local App/HostCli classification or a current pinned-person relay lease
+produces `Steer`; disabled pinning is not person proof. The carrier rechecks that
+same ingress when read, so a revoked lease cannot be replaced by a later grant.
+Unclassified ingress and both HA reply adapters retain `Unknown`. Text, sender or
+driver labels, `pri=urgent`, a claimed role and `RequireIdle` cannot grant intent;
+neither the carrier nor its source delegate is serialized or accepted from JSON.
+This producer-only slice changes no key behavior and offers no queue capability.
+Capability qualification and the fail-closed submit consumer are separate slices.
+
 **Agent-sender version boundary.** Queue-reply extension **v1** (protocol 1 with
 `sessions.reply.queue`, [#2468](https://github.com/danswett/agent-bridge/issues/2468))
 supersedes the base-v1 agent rule "nothing queued; working-session reply refused

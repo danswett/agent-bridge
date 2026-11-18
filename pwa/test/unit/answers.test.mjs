@@ -119,12 +119,12 @@ test('an unconfirmed answer says how far it got: typed into the prompt, or recor
   assert.equal(readAnswerResult({ outcome: 'unconfirmed', stage: 'acknowledged' }).stage, 'typed');
   assert.equal(readAnswerResult({ outcome: 'delivered', stage: 'typed' }).stage, null);
   const done = (stage) => ({ state: 'done', outcome: 'unconfirmed', reason: 'why', detail: { outcome: 'unconfirmed', stage } });
-  assert.match(describeAnswer(done('typed'), 'DEV-VM1').text, /^Typed into the prompt, but not confirmed as submitted\. Check the conversation\. \(why\)$/);
+  assert.match(describeAnswer(done('typed'), 'Machine A').text, /^Typed into the prompt, but not confirmed as submitted\. Check the conversation\. \(why\)$/);
   // A retry of an answer already typed (#1093): the bridge's reason only adds that this send typed nothing.
   const retried = { state: 'done', outcome: 'unconfirmed', reason: 'nothing was typed again: this repeats an answer already typed once', detail: { outcome: 'unconfirmed', stage: 'typed' } };
-  assert.equal(describeAnswer(retried, 'DEV-VM1').text, 'Typed into the prompt, but not confirmed as submitted. Check the conversation. (nothing was typed again: this repeats an answer already typed once)');
-  assert.match(describeAnswer(done('recorded'), 'DEV-VM1').text, /^The session recorded something for this question, but not confirmed as this answer\./);
-  assert.match(describeAnswer(done(null), 'DEV-VM1').text, /^Sent, but not confirmed\./);
+  assert.equal(describeAnswer(retried, 'Machine A').text, 'Typed into the prompt, but not confirmed as submitted. Check the conversation. (nothing was typed again: this repeats an answer already typed once)');
+  assert.match(describeAnswer(done('recorded'), 'Machine A').text, /^The session recorded something for this question, but not confirmed as this answer\./);
+  assert.match(describeAnswer(done(null), 'Machine A').text, /^Sent, but not confirmed\./);
 });
 
 // #1193: a question that left the list is "Question closed" for any answer that did not go through,
@@ -132,34 +132,34 @@ test('an unconfirmed answer says how far it got: typed into the prompt, or recor
 test('a closed answer is "Question closed" unless it may have gone in or the host says why it did not', () => {
   const done = (outcome, extra = {}) => ({ state: 'done', outcome, reason: 'r', ...extra });
   for (const entry of [done('stale'), done('busy'), done('refused'), { state: 'failed', reason: 'offline' }]) {
-    const d = describeClosed(entry, 'DEV-VM1');
+    const d = describeClosed(entry, 'Machine A');
     assert.deepEqual([d.key, d.text, d.tone], ['closed', 'Question closed', 'closed']);
   }
   // May have gone in: its words, neutral.
-  const unconfirmed = describeClosed(done('unconfirmed'), 'DEV-VM1');
+  const unconfirmed = describeClosed(done('unconfirmed'), 'Machine A');
   assert.deepEqual([unconfirmed.key, unconfirmed.tone], ['unconfirmed', 'closed']);
   // Delivered, and on its way, as they are.
-  assert.equal(describeClosed(done('delivered'), 'DEV-VM1').key, 'delivered');
-  assert.notEqual(describeClosed({ state: 'sending' }, 'DEV-VM1').tone, 'closed');
+  assert.equal(describeClosed(done('delivered'), 'Machine A').key, 'delivered');
+  assert.notEqual(describeClosed({ state: 'sending' }, 'Machine A').tone, 'closed');
   // A stale answer from a form the host cancelled part answered: not delivered, never "already answered".
-  const reset = describeClosed(done('stale', { detail: { code: 'formReset' } }), 'DEV-VM1');
+  const reset = describeClosed(done('stale', { detail: { code: 'formReset' } }), 'Machine A');
   assert.deepEqual([reset.key, reset.text, reset.tone], ['notDelivered', 'Not delivered: the form could not take your answer at the machine.', 'closed']);
-  assert.equal(describeAnswer(done('stale', { detail: { code: 'formReset' } }), 'DEV-VM1').tone, 'warn');
-  assert.match(describeAnswer(done('stale'), 'DEV-VM1').text, /^Already answered or gone/);
+  assert.equal(describeAnswer(done('stale', { detail: { code: 'formReset' } }), 'Machine A').tone, 'warn');
+  assert.match(describeAnswer(done('stale'), 'Machine A').text, /^Already answered or gone/);
 });
 
 test('a refusal says the host\'s own words as they came, never "Already answered or gone" (#1213)', () => {
   const tall = 'This question is taller than the session window, so Slipgates cannot check it. Make the window taller, or answer it at the machine.';
   const refused = (reason) => ({ state: 'done', outcome: 'refused', reason, detail: { outcome: 'refused' } });
-  const d = describeAnswer(refused(tall), 'DEV-VM1');
+  const d = describeAnswer(refused(tall), 'Machine A');
   // The host's sentence already ends with its stop: no second one.
   assert.equal(d.text, `The machine refused this answer: ${tall}`);
   assert.deepEqual([d.key, d.tone], ['refused', 'bad']);
   assert.doesNotMatch(d.text, /Already answered|Question closed/);
   // A reason with no stop of its own gets one.
-  assert.equal(describeAnswer(refused('the session is running elevated'), 'DEV-VM1').text, 'The machine refused this answer: the session is running elevated.');
+  assert.equal(describeAnswer(refused('the session is running elevated'), 'Machine A').text, 'The machine refused this answer: the session is running elevated.');
   // Once the question has left the list there is nothing to refuse: the neutral closed line.
-  assert.deepEqual([describeClosed(refused(tall), 'DEV-VM1').text, describeClosed(refused(tall), 'DEV-VM1').tone], ['Question closed', 'closed']);
+  assert.deepEqual([describeClosed(refused(tall), 'Machine A').text, describeClosed(refused(tall), 'Machine A').tone], ['Question closed', 'closed']);
 });
 
 test('a stale answer can be given again only when the host cancelled its form, and what was typed is read back as typed', () => {
