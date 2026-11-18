@@ -53,6 +53,25 @@ public sealed class ConversationEndPinTests
         Assert.Empty(view.Scroller.Targets);
     }
 
+    [Fact]
+    public void History_cannot_repin_navigation_before_its_first_view_change_even_when_a_hold_ends()
+    {
+        var view = new SessionView();
+        view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
+        view.FollowState.PointerOver(1);
+        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Parent = view.Scroller });
+        Assert.False(view.HistoryEnd);
+        view.FollowState.PointerLeft(1);
+        Assert.False(view.HistoryEnd);
+        Assert.Empty(view.Scroller.Targets);
+        view.Scroller.VerticalOffset = 50;
+        view.StopScrolling();
+        Assert.False(view.HistoryEnd);
+        view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
+        view.StopScrolling();
+        Assert.True(view.HistoryEnd);
+    }
+
     [Theory]
     [InlineData("release")]
     [InlineData("cancel")]
