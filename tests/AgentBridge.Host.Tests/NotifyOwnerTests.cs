@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AgentBridge.Host;
+using AgentBridge.Host.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -24,8 +25,8 @@ public sealed class NotifyOwnerTests : IDisposable
     }
 
     public void Dispose() => fixture.Dispose();
-    Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(AgentAuditLog? audit) =>
-        LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.HostCli, "fixture")),
+    Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(AgentAuditLog? audit, SessionService? sessions = null) =>
+        LocalApi.Handler(sessions!, null!, new FixedCallerGuard(new(CallerKind.App, "fixture")),
             credentials: credentials, audit: audit, auditTime: fixture.Time);
 
     void Grant(bool enabled = true)
@@ -155,6 +156,101 @@ public sealed class NotifyOwnerTests : IDisposable
     {
         Assert.Equal(2, await NotifyOwnerCommands.RunAsync(["notify-owner", "title", "body", "--profile", ".."],
             fixture.Root, new StringWriter(), new StringWriter(), _ => throw new InvalidOperationException("must not connect")));
+    }
+
+    [Theory]
+    [InlineData(true, true, "delivered", "")]
+    [InlineData(false, true, "refused", "noSubscribedClient")]
+    [InlineData(true, false, "refused", "auditUnwritable")]
+    public async Task Owner_pages_need_an_opted_in_app_and_a_writable_intent_audit(bool optIn, bool audited, string outcome, string reason)
+    {
+        Grant();
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time);
+        var sessions = new SessionService(source, new MachineInfo("machine1", "Test", "windows", "0.1.0")) { Time = fixture.Time };
+        var route = Handler(audited ? new AgentAuditLog(fixture.Root, fixture.Time) : null, sessions);
+        await using var server = LocalServer.Start(LocalEndpoint.For(fixture.Root), route);
+        await using var app = await LocalClient.ConnectAsync(LocalEndpoint.For(fixture.Root), TimeSpan.FromSeconds(2));
+        await app.CallAsync(Ops.SessionsSubscribe, new { ownerPages = optIn });
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        Assert.Equal(Events.SessionsSynced, (await app.Events.ReadAsync(timeout.Token)).Name);
+        var result = JsonSerializer.SerializeToElement(await route(channel, "notify-owner", Body()), ProtocolJson.Options);
+        var ack = result.GetProperty("clients")[0];
+        Assert.Equal((outcome, reason), (ack.GetProperty("outcome").GetString(), ack.GetProperty("reason").GetString()));
+        if (outcome == "delivered")
+        {
+            var page = await app.Events.ReadAsync(timeout.Token);
+            Assert.Equal(("notify-owner", "private page"), (page.Name, page.Data.GetProperty("body").GetString()));
+            var audit = string.Join("\n", Directory.GetFiles(Path.Combine(fixture.Root, "audit"), "*.jsonl").SelectMany(File.ReadAllLines));
+            Assert.Contains("attempted", audit);
+            Assert.DoesNotContain("private page", audit);
+        }
+        else { Assert.False(app.Events.TryRead(out _)); }
+    }
+
+    [Theory]
+    [InlineData("send")]
+    [InlineData("script")]
+    [InlineData("person")]
+    [InlineData("activeBefore")]
+    [InlineData("activeAfter")]
+    [InlineData("pinningOff")]
+    [InlineData("noSubscriber")]
+    public async Task Owner_push_is_encrypted_and_rechecks_authority_pins_and_active_device_policy(string change)
+    {
+        Grant();
+        using var host = P256KeyPair.Generate();
+        using var person = P256KeyPair.Generate();
+        using var browser = P256KeyPair.Generate();
+        var pins = new TrustedPeerStore(fixture.Root, host.Public, () => "1", fixture.Time);
+        pins.Reset();
+        pins.Put(person.Public, TrustedPeerStore.Person, fixture.Time.GetUtcNow().AddHours(1));
+        using var trust = new RemoteAuthorization(change != "pinningOff", pins, fixture.Time);
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time);
+        var store = PushStore.Load(null, "1");
+        await using var push = new PushNotifier(source, new MachineInfo("machine1", "Test", "windows", "0.1.0"), store, time: fixture.Time, trust: trust);
+        var sender = new Sender();
+        push.Attach(sender);
+        var auth = new byte[16];
+        push.Handle(new PushPeer(Wire.DeviceId(person.Public), "Person", "1", true, person.Public), Ops.PushSubscribe,
+            JsonSerializer.SerializeToElement(new { endpoint = "https://web.push.apple.com/fake", keys = new { p256dh = B64Url.Encode(browser.Public), auth = B64Url.Encode(auth) }, app = "https://example.invalid/" }));
+        var sessions = new SessionService(source, new MachineInfo("machine1", "Test", "windows", "0.1.0"), push: push) { Time = fixture.Time };
+        var route = Handler(new AgentAuditLog(fixture.Root, fixture.Time), sessions);
+        await using var server = LocalServer.Start(LocalEndpoint.For(fixture.Root), route);
+        await using var app = await LocalClient.ConnectAsync(LocalEndpoint.For(fixture.Root), TimeSpan.FromSeconds(2));
+        await app.CallAsync(Ops.SessionsSubscribe, new { });
+        if (change == "activeBefore") { await app.CallAsync(Ops.SessionsFocus, new { visible = true, idleMs = 0 }); }
+        if (change == "noSubscriber") { store.Remove(Wire.DeviceId(person.Public)); }
+        var result = JsonSerializer.SerializeToElement(await route(channel, "notify-owner", Body()), ProtocolJson.Options);
+        if (change is "activeBefore" or "pinningOff" or "noSubscriber")
+        {
+            var refused = result.GetProperty("clients")[1];
+            var reason = change == "activeBefore" ? "policySuppressed" : change == "pinningOff" ? "deliveryUnavailable" : "noSubscribedClient";
+            Assert.Equal(("refused", reason), (refused.GetProperty("outcome").GetString(), refused.GetProperty("reason").GetString()));
+            await push.PumpAsync();
+            Assert.Empty(sender.Bodies);
+            return;
+        }
+        Assert.Equal("queued", result.GetProperty("clients")[1].GetProperty("outcome").GetString());
+        if (change == "script") { credentials.RevokeScript("desk"); }
+        if (change == "person") { pins.Revoke(person.Public); }
+        if (change == "activeAfter") { await app.CallAsync(Ops.SessionsFocus, new { visible = true, idleMs = 0 }); }
+        await push.PumpAsync();
+        if (change != "send") { Assert.Empty(sender.Bodies); return; }
+        var encrypted = Assert.Single(sender.Bodies);
+        Assert.DoesNotContain("private page", Encoding.UTF8.GetString(encrypted));
+        var notice = JsonDocument.Parse(WebPushCrypto.Decrypt(encrypted, browser, auth)).RootElement.GetProperty("notification");
+        Assert.Equal(("Attention", "private page", "needsYou"), (notice.GetProperty("title").GetString(), notice.GetProperty("body").GetString(), notice.GetProperty("data").GetProperty("class").GetString()));
+        Assert.False(notice.GetProperty("data").TryGetProperty("question", out _));
+        Assert.False(notice.GetProperty("silent").GetBoolean());
+    }
+
+    sealed class Sender : IPushSender
+    {
+        public string AccountId => "1";
+        public bool Connected => true;
+        public List<byte[]> Bodies { get; } = [];
+        public Task<PushResult> PushAsync(string endpoint, byte[] body, int ttl, string urgency, string? topic)
+        { Bodies.Add(body); return Task.FromResult(new PushResult(201, null)); }
     }
 
     sealed class Channel : IProtocolChannel
