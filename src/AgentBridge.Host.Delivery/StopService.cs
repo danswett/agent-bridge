@@ -55,7 +55,7 @@ public sealed class StopOptions
     // How long a first press waits for the second. agent-ha-bridge: StopConfirmSeconds.
     public TimeSpan ConfirmWindow { get; init; } = TimeSpan.FromSeconds(Stops.ConfirmSeconds);
 
-    // How long the agent is given to exit on /exit before it is terminated.
+    // The total graceful budget, including waiting to type and injecting /exit.
     // agent-ha-bridge: Stop-BridgeCopilotSession's GraceSeconds.
     public TimeSpan Grace { get; init; } = TimeSpan.FromSeconds(12);
 
@@ -102,6 +102,7 @@ public sealed class StopService : ISessionStopper
     // First presses waiting for their second, by session. Several can be waiting at once (two
     // devices pressed), and any one of them confirms.
     readonly Dictionary<string, List<Arm>> arms = new(StringComparer.Ordinal);
+    readonly System.Collections.Concurrent.ConcurrentDictionary<IHeldProcess, byte> uncertainProcesses = new();
 
     sealed record Arm(string Token, int ProcessId, DateTimeOffset StartedAt, DateTimeOffset At);
 
@@ -249,10 +250,15 @@ public sealed class StopService : ISessionStopper
         if (opened.Refusal is { } refusal) { return Refused(refusal); }
         // Gone between the press and now: what the press asked for has happened.
         if (opened.Process is not { } held) { return Ended(false); }
-        using (held)
+        Task? pendingWorker = null;
+        var began = Environment.TickCount64;
+        using var deadline = new CancellationTokenSource(options.Grace);
+        try
         {
             var typed = false;
-            await gate.WaitToTypeAsync();
+            try { await gate.WaitToTypeAsync(deadline.Token); }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            { return Failed("ending timed out waiting for another delivery; try again"); }
             try
             {
                 if (probe.Active() is { } active) { return Refused(active); }
@@ -272,8 +278,15 @@ public sealed class StopService : ISessionStopper
                 if (!asking)
                 {
                     InjectionResult typing;
-                    try { typing = await injector.InjectAsync(pid, ExitKeys); }
-                    catch (Exception e) { typing = new InjectionResult(InjectionStatus.Interrupted, e.Message); }
+                    try { typing = await injector.InjectAsync(pid, ExitKeys, deadline.Token); }
+                    catch (InjectorWorkerException e) when (e.Exited.IsCompletedSuccessfully)
+                    { typing = new InjectionResult(InjectionStatus.Interrupted, e.Message); }
+                    catch (Exception e)
+                    {
+                        pendingWorker = e is InjectorWorkerException worker ? worker.Exited : Task.FromException(e);
+                        log($"end of {Short(session.Id)} waits for injector quiescence: {e.Message}");
+                        return Failed("the injector's exit could not be confirmed; the session was not terminated");
+                    }
                     typed = typing.Status != InjectionStatus.NothingTyped;
                     log($"typed /exit into {Short(session.Id)} (pid {pid}) -> {typing.Status} {typing.Detail}");
                 }
@@ -284,9 +297,10 @@ public sealed class StopService : ISessionStopper
                         : $"{Short(session.Id)} (pid {pid}) is asking a question, so /exit is not typed");
                 }
             }
-            finally { gate.DoneTyping(); }
+            finally { if (pendingWorker is null) { gate.DoneTyping(); } }
 
-            if (typed && await held.WaitForExitAsync(options.Grace))
+            var remaining = options.Grace - TimeSpan.FromMilliseconds(Environment.TickCount64 - began);
+            if (typed && await held.WaitForExitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero))
             {
                 log($"ended {Short(session.Id)}: exited cleanly (pid {pid})");
                 return Ended(false);
@@ -306,6 +320,28 @@ public sealed class StopService : ISessionStopper
                 ? "the machine couldn't end the session"
                 : "the session's process was terminated but has not exited; check at the machine");
         }
+        finally
+        {
+            if (pendingWorker is null) { held.Dispose(); }
+            else
+            {
+                uncertainProcesses.TryAdd(held, 0);
+                _ = ReleaseWhenQuietAsync(held, pendingWorker);
+            }
+        }
+    }
+
+    async Task ReleaseWhenQuietAsync(IHeldProcess held, Task worker)
+    {
+        try { await worker; }
+        catch (Exception e)
+        {
+            log($"injector quiescence remains unknown for pid {held.Id}; retaining its handle and typing fence: {e.Message}");
+            return;
+        }
+        held.Dispose();
+        uncertainProcesses.TryRemove(held, out _);
+        gate.DoneTyping();
     }
 
     // A Copilot question, a subagent's included, written since the session source last read

@@ -257,9 +257,11 @@ public sealed class DeliveryGate
     public void Release(string sessionId, Guid request) => sessions.TryRemove(new KeyValuePair<string, Guid>(sessionId, request));
 
     // The one typing slot. Whoever holds it makes its last checks, types, and lets go.
-    public async Task WaitToTypeAsync()
+    public Task WaitToTypeAsync() => WaitToTypeAsync(CancellationToken.None);
+
+    public async Task WaitToTypeAsync(CancellationToken cancellationToken)
     {
-        var wait = typing.WaitAsync();
+        var wait = typing.WaitAsync(cancellationToken);
         if (!wait.IsCompleted) { TypingQueued?.TrySetResult(); }
         await wait;
         lock (state)
