@@ -80,8 +80,9 @@ internal static class AgentFleetLaunchAdmission
             if (current.State != "active" || current.Grant?.Id != grant)
             { return "the exact fleet-launch grant is no longer active"; }
             var (settings, problem) = HostSettings.Load(folder);
-            if (problem is not null || settings.SectionProblems.Any()) { return "fleet launch settings cannot be read safely"; }
-            if (!settings.Agents.Enabled || !settings.Launch.Enabled) { return "agents or launching are disabled"; }
+            if (problem is not null || settings.SectionProblems.Any()) { return "cap-state: fleet launch settings cannot be read safely"; }
+            if (!settings.Agents.Enabled) { return "agents.enabled: fleet launches are off"; }
+            if (!settings.Launch.Enabled) { return "launch.enabled: launching is disabled"; }
             if (request.Role is null || !settings.Launch.WorkerMcp.ContainsKey(request.Role))
             { return "only an exact configured fleet role may launch"; }
             if (request.FleetName is null || !Fleet.FleetNames.IsValidName(request.FleetName))

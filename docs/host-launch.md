@@ -498,3 +498,23 @@ Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
 an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,
 transfers and attachments. A fresh worktree is checked before starting; its worker receives
 only `read+reply`, and the durable launch audit records `grant: fleet`.
+
+## Granted agent fleet-launch hard caps
+
+The person-owned `agents.fleet.launchesPerHour` and `agents.fleet.liveSessions`
+settings default to **8 per sliding hour** and **6 live fleet sessions**. Agent
+requests cannot set either. The H2 admission hook remains closed when unwired;
+the caps do not enable legacy script credentials or person-only operations.
+
+| Refusal | Operator action |
+|---|---|
+| `hourly-limit` | Wait until an admitted launch leaves the sliding hour, or have the person change the hourly setting. |
+| `live-limit` | Wait for a proven fleet-session exit; unknown/unconfirmed reservations stay held across restarts, without ending any session automatically. |
+| `run-queue` | Wait for a readable sample no older than 15 seconds with queue **under 8**; missing, negative, future or stale readings refuse. |
+| `agents.enabled` | The person may re-enable agents; switching off also refuses a pending launch at its pre-start check. |
+| `cap-state` | Repair policy, lifecycle or audit readability at the machine; never delete audit history to reset caps. |
+
+Cap refusals name the cap in the attributed audit. Separate `fleet-cap:` launch-history
+reservations are flushed before dispatch and never age-pruned. Proven pre-start
+refusals release their reservation; an uncertain start retains it. Only a registered,
+provenance-bound fleet session's confirmed absence frees its live slot.

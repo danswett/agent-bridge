@@ -9,9 +9,9 @@ namespace AgentBridge.Host;
 // Fail closed: an absent section is Off (agents are off, every grant off, the design's default
 // limits). A section, or a nested object, that is not what it should be is Off too, and said.
 // A single bad key falls back to that key's own safe default, which is always the narrowest
-// value, so an error never widens a grant. Limits can only be lowered: the design's number is
-// both the default and the ceiling. Invalid launch limits refuse launch rather than silently
-// using defaults; all four are required when launch is enabled. Unknown keys are said and ignored.
+// value, so an error never widens a grant. Legacy agents.limits can only be lowered; the
+// separate fleet caps are person-owned positive integers. Invalid launch limits refuse launch
+// rather than silently using defaults; all four are required when launch is enabled. Unknown keys are said and ignored.
 public sealed record AgentPolicy
 {
     public const int DefaultCredentialDays = 7;
@@ -22,6 +22,8 @@ public sealed record AgentPolicy
     public bool Enabled { get; init; }
     public bool LaunchEnabled { get; init; }
     public IReadOnlyList<string> FleetWorkspaces { get; init; } = [];
+    public int FleetLaunchesPerHour { get; init; } = 8;
+    public int FleetLiveSessions { get; init; } = 6;
     public int CredentialDays { get; init; } = DefaultCredentialDays;
     public string IssueLaunched { get; init; } = ScopeNone;
     public string IssueAdopted { get; init; } = ScopeNone;
@@ -41,6 +43,8 @@ public sealed record AgentPolicy
         var problems = new List<string>();
         if (section is not { } s || s.ValueKind == JsonValueKind.Null) { return (Off, problems); }
         if (s.ValueKind != JsonValueKind.Object) { return Denied(problems, "agents is not an object"); }
+        if (s.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() != 1))
+        { return Denied(problems, "agents has duplicate settings"); }
         var policy = Off;
         JsonElement? launchLimits = null;
         var inboundLocal = AgentInboundPolicy.Off;
@@ -52,9 +56,15 @@ public sealed record AgentPolicy
                 case "enabled": policy = policy with { Enabled = Bool(p.Value, "agents.enabled", problems) }; break;
                 case "fleet":
                     if (!Object(p.Value, "agents.fleet", problems, out var fleet)) { return Denied(problems); }
+                    if (fleet.EnumerateObject().GroupBy(f => f.Name).Any(g => g.Count() != 1))
+                    { return Denied(problems, "agents.fleet has duplicate settings"); }
                     foreach (var f in fleet.EnumerateObject())
                     {
                         if (f.Name == "workspaces") { policy = policy with { FleetWorkspaces = Strings(f.Value, "agents.fleet.workspaces", problems) ?? [] }; }
+                        else if (f.Name == "launchesPerHour")
+                        { policy = policy with { FleetLaunchesPerHour = Int(f.Value, "agents.fleet.launchesPerHour", 1, int.MaxValue, 0, problems) }; }
+                        else if (f.Name == "liveSessions")
+                        { policy = policy with { FleetLiveSessions = Int(f.Value, "agents.fleet.liveSessions", 1, int.MaxValue, 0, problems) }; }
                         else { Unknown($"agents.fleet.{f.Name}", problems); }
                     }
                     break;
