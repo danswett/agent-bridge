@@ -14,10 +14,13 @@ public sealed class SessionGroups
     readonly string deviceTag;
     readonly TimeProvider time;
     readonly Action save;
+    readonly Action<string> prepend;
     readonly Func<IReadOnlyList<string>> unpinned;
+    DateTimeOffset listingSavedAt;
+    internal bool ListingDirty { get; private set; }
 
     internal SessionGroups(Dictionary<string, GroupRegister> groups, Dictionary<string, GroupRegister> membership,
-        Dictionary<string, DateTimeOffset> listed, string deviceTag, TimeProvider time, Action save, Func<IReadOnlyList<string>> unpinned)
+        Dictionary<string, DateTimeOffset> listed, string deviceTag, TimeProvider time, Action save, Action<string> prepend, Func<IReadOnlyList<string>> unpinned)
     {
         this.groups = groups;
         this.membership = membership;
@@ -25,7 +28,9 @@ public sealed class SessionGroups
         this.deviceTag = deviceTag;
         this.time = time;
         this.save = save;
+        this.prepend = prepend;
         this.unpinned = unpinned;
+        listingSavedAt = time.GetUtcNow();
         foreach (var map in new[] { groups, membership })
         {
             foreach (var (key, r) in map.ToArray())
@@ -90,6 +95,7 @@ public sealed class SessionGroups
         if (GroupOf(key) == id) { return; }
         Write(membership, key, id);
         if (id is null) { listed.Remove(key); } else { listed[key] = time.GetUtcNow(); }
+        prepend(key);
         save();
     }
 
@@ -105,6 +111,9 @@ public sealed class SessionGroups
         save();
     }
 
+    internal void Saved() { ListingDirty = false; listingSavedAt = time.GetUtcNow(); }
+
+    // Keep exact listing times in memory; batch automatic saves, never the retention clock.
     internal bool Remember(IReadOnlyList<OrderEntry> entries)
     {
         var live = entries.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
@@ -116,11 +125,9 @@ public sealed class SessionGroups
             var stamped = listed.TryGetValue(key, out var last);
             if (live.Contains(key) || !stamped)
             {
-                if (!stamped || now - last >= TimeSpan.FromDays(1))
-                {
-                    listed[key] = now;
-                    changed = true;
-                }
+                ListingDirty |= !stamped || last != now;
+                listed[key] = now;
+                changed |= !stamped;
             }
             else if (now - last > TimeSpan.FromDays(30))
             {
@@ -129,6 +136,6 @@ public sealed class SessionGroups
                 changed = true;
             }
         }
-        return changed;
+        return changed || ListingDirty && now - listingSavedAt >= TimeSpan.FromDays(1);
     }
 }

@@ -183,8 +183,12 @@ public sealed class GroupTests : IDisposable
         Machine M(string key, HostConnection host) => new(key, host, new CardContext { Host = host, Deliveries = new Deliveries(host, ui), Folds = new FoldStore(null), Capabilities = () => host.Capabilities });
         var main = new MainViewModel(M(Machine.LocalKey, local), new UsageViewModel(clock), order: new SessionOrder(null, clock));
         main.Add(M("remote", remote));
+        local.Sessions.BeginSnapshot();
+        remote.Sessions.BeginSnapshot();
         local.Sessions.Upsert(Make.Session("a"));
         remote.Sessions.Upsert(Make.Session("b"));
+        local.Sessions.EndSnapshot();
+        remote.Sessions.EndSnapshot();
         var id = main.CreateGroup("Work");
         var key = SessionOrder.KeyOf("remote", "b");
         var card = main.AllCards.Single(c => c.Id == "b");
