@@ -1039,11 +1039,11 @@
                                      glyph cross-fades; the button keeps its size and colour. -->
                                 <Grid>
                                     <ContentControl Style="{StaticResource AbIconSend}" Width="16" Height="16" Opacity="{x:Bind local:Ui.Fade(Card.Reply.SendRest), Mode=OneWay, FallbackValue=1}">
-                                        <ContentControl.OpacityTransition><ScalarTransition Duration="0:0:0.15" /></ContentControl.OpacityTransition>
+                                        <ContentControl.OpacityTransition><ScalarTransition Duration="{StaticResource AbMotionAcknowledgeDuration}" /></ContentControl.OpacityTransition>
                                     </ContentControl>
                                     <local:InFlightRing AutomationProperties.AutomationId="SendRing" Active="{x:Bind Card.Reply.Pending, Mode=OneWay, FallbackValue=False}" Still="{x:Bind Card.Reply.SendStill, Mode=OneWay, FallbackValue=False}" />
                                     <local:CheckGlyph AutomationProperties.AutomationId="SendCheck" Opacity="{x:Bind local:Ui.Fade(Card.Reply.SendCheck), Mode=OneWay, FallbackValue=0}">
-                                        <local:CheckGlyph.OpacityTransition><ScalarTransition Duration="0:0:0.15" /></local:CheckGlyph.OpacityTransition>
+                                        <local:CheckGlyph.OpacityTransition><ScalarTransition Duration="{StaticResource AbMotionAcknowledgeDuration}" /></local:CheckGlyph.OpacityTransition>
                                     </local:CheckGlyph>
                                 </Grid>
                             </Button>
