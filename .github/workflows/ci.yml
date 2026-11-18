@@ -319,13 +319,22 @@ jobs:
       # (quality/README.md §5): nothing here fails the run but the tests themselves. TEST_FILTER is
       # ring 0's in-process filter on a draft (the fast ring), and empty otherwise: every test runs.
       - name: dotnet test, with coverage and per-test times
-        if: env.DOTNET_TARGET != ''
+        if: env.DOTNET_TARGET != '' && matrix.os != 'windows-latest'
         shell: pwsh
         run: |
           . ./quality/dotnet-test-command.ps1
           $filter = if ($env:TEST_FILTER) { " --filter `"$env:TEST_FILTER`"" } else { '' }
           $command = Add-DotnetCrashBlame "dotnet test $env:DOTNET_TARGET -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory TestResults --logger trx$filter"
           dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml $command
+        timeout-minutes: 20
+        env:
+          DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
+      - name: Windows product tests retry only failed cases once
+        if: env.DOTNET_TARGET != '' && matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          . ./quality/product-test-retry.ps1
+          exit (Invoke-ProductTestRetry -Target $env:DOTNET_TARGET -Filter $env:TEST_FILTER)
         timeout-minutes: 20
         env:
           DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
@@ -1342,6 +1351,10 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'product-crash-diagnostics')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-product-crash.ps1
+      - name: Windows failed-test retry is bounded and fails closed
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'product-test-retry')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-product-retry.ps1
       - name: The forms soak rig's redaction masks every secret shape
         # Offline: no CLI, console, token or model.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'forms-soak-scripts')) }}

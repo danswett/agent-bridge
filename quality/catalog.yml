@@ -340,6 +340,18 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: product-test-retry
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [.github/workflows/ci.yml, quality/product-test-retry.ps1, quality/test-product-retry.ps1]
+    command: pwsh -NoProfile -File quality/test-product-retry.ps1
+    where: ci.yml light
+    status: exists
+
   - id: catalog-check
     validation_plan: native
     kind: static
