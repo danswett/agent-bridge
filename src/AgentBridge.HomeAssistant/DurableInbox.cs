@@ -8,6 +8,7 @@ internal sealed record InboxMessage(string Node, string Rid, string Sender, stri
     DateTimeOffset? StartedAt = null, string? Outcome = null, int Attempt = 0, string? HostRequest = null,
     string? Incarnation = null, List<InboxCleanupFence>? ConsumedTokens = null);
 internal sealed record InboxCleanupFence(string Token, long Revision, int Attempt, string HostRequest, string Incarnation, string? Receipt = null);
+internal sealed record InboxCleanupReceipt(InboxCleanupFence Identity, string Receipt, bool InputFenced, bool BufferEmpty, bool NeverAccepted);
 internal enum InboxResolution { IncarnationEnded, OperatorResolved }
 internal sealed record InboxRetirement(string Node, DateTimeOffset At, InboxResolution Resolution);
 
@@ -103,6 +104,10 @@ internal sealed class DurableInbox
         {
             throw new InvalidOperationException("Only an unclaimed FIFO head can start delivery.");
         }
+        if (messages[index].ConsumedTokens is { Count: > 0 } && (request is null || messages[index].Incarnation != incarnation) ||
+            request is not null && (messages[index].HostRequest == request ||
+            messages[index].ConsumedTokens?.Any(f => f.HostRequest == request) == true))
+        { throw new InvalidOperationException("A new attempt requires a fresh host request."); }
         messages[index] = messages[index] with { StartedAt = at, Attempt = checked(messages[index].Attempt + 1),
             HostRequest = request, Incarnation = incarnation };
         Save(state);
@@ -118,11 +123,12 @@ internal sealed class DurableInbox
     static bool Pinned(InboxMessage m) => m.Outcome is "unconfirmed" or "refused" ||
         (m.StartedAt is not null && m.DeliveredAt is null) || m.ConsumedTokens is { Count: > 0 };
     static bool Valid(InboxCleanupFence f) => f is not null && !string.IsNullOrWhiteSpace(f.Token) && f.Revision >= 0 &&
-        f.Attempt > 0 && !string.IsNullOrWhiteSpace(f.HostRequest) && !string.IsNullOrWhiteSpace(f.Incarnation) && f.Receipt is not "";
+        f.Attempt > 0 && !string.IsNullOrWhiteSpace(f.HostRequest) && !string.IsNullOrWhiteSpace(f.Incarnation) &&
+        (f.Receipt is null || !string.IsNullOrWhiteSpace(f.Receipt));
 
     public bool ConsumeCleanup(string node, string rid, InboxCleanupFence fence)
     {
-        if (!Valid(fence)) { throw new ArgumentException("Invalid cleanup identity.", nameof(fence)); }
+        if (!Valid(fence) || fence.Receipt is not null) { throw new ArgumentException("Invalid cleanup reservation.", nameof(fence)); }
         using var held = Lock();
         var state = Load();
         if (state.Retired!.Any(r => r.Node == node) || state.Messages.Where(m => m.Node == node)
@@ -133,9 +139,57 @@ internal sealed class DurableInbox
         {
             throw new InvalidOperationException("Cleanup must belong to the started FIFO attempt.");
         }
+        if (m.ConsumedTokens?.Any(f => f.Attempt == m.Attempt) == true) { return false; }
         state.Messages[index] = m with { ConsumedTokens = [.. m.ConsumedTokens ?? [], fence] };
         Save(state);
         return true;
+    }
+
+    static bool Matches(InboxMessage m, InboxCleanupFence f) =>
+        m.Attempt == f.Attempt && m.HostRequest == f.HostRequest && m.Incarnation == f.Incarnation;
+
+    // Only a supported adapter's authoritative, correlated completion is proof; a screen is not.
+    public InboxCleanupFence CompleteCleanup(string node, string rid, InboxCleanupReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        var identity = receipt.Identity;
+        if (!Valid(identity) || identity.Receipt is not null || string.IsNullOrWhiteSpace(receipt.Receipt) ||
+            !receipt.InputFenced || !receipt.BufferEmpty || !receipt.NeverAccepted)
+        { throw new ArgumentException("Cleanup requires drained input, an empty owned buffer and no acceptance.", nameof(receipt)); }
+        using var held = Lock();
+        var state = Load();
+        var index = state.Messages.FindIndex(m => m.Node == node && m.Rid == rid);
+        var message = index < 0 ? null : state.Messages[index];
+        var token = message?.ConsumedTokens?.FindIndex(f => (f with { Receipt = null }) == identity) ?? -1;
+        if (message is null || token < 0) { throw new InvalidOperationException("Cleanup was not reserved for this identity."); }
+        var completed = identity with { Receipt = receipt.Receipt };
+        if (message.ConsumedTokens![token].Receipt is { } prior)
+        {
+            if (prior != receipt.Receipt) { throw new InvalidOperationException("Cleanup already has a different receipt."); }
+            return completed;
+        }
+        if (message.StartedAt is null || message.DeliveredAt is not null || !Matches(message, identity) ||
+            state.Messages.FindIndex(m => m.Node == node && m.DeliveredAt is null) != index)
+        { throw new InvalidOperationException("Cleanup completion must belong to the started FIFO attempt."); }
+        var tokens = new List<InboxCleanupFence>(message.ConsumedTokens);
+        tokens[token] = completed;
+        state.Messages[index] = message with { ConsumedTokens = tokens };
+        Save(state);
+        return completed;
+    }
+
+    public void Requeue(string node, string rid, InboxCleanupFence completed)
+    {
+        if (!Valid(completed) || completed.Receipt is null) { throw new ArgumentException("Cleanup completion is required.", nameof(completed)); }
+        using var held = Lock();
+        var state = Load();
+        var index = state.Messages.FindIndex(m => m.Node == node && m.DeliveredAt is null);
+        if (index < 0 || state.Messages[index] is not { } message || message.Rid != rid ||
+            !Matches(message, completed) || message.ConsumedTokens?.Contains(completed) != true)
+        { throw new InvalidOperationException("Only the proven-cleaned FIFO attempt can be requeued."); }
+        if (message.StartedAt is null) { return; }
+        state.Messages[index] = message with { StartedAt = null };
+        Save(state);
     }
 
     // The caller supplies authoritative resolution, never an empty screen or cache expiry.
