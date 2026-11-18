@@ -560,9 +560,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      share a head get the worst of their verdicts, since a status belongs to the commit.
    - Main must be green, since auto-merge doesn't pause while main's CI is red and would keep
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
-     walks main's `ci.yml` push runs newest first, across up to 100 runs. A cancelled run never
-     counts. A candidate needs a successful completed plan and completed product instances;
-     queued, in-progress or cancelled named jobs pass the run over. A failed plan or a
+     walks main's `ci.yml` push runs newest first, across up to 100 runs.
+     A candidate needs a successful completed plan and completed product instances;
+     queued or in-progress named jobs pass the run over. A failed plan or a
      classification-skipped product family also passes it over. A newer main head still running
      does not block; the pull request's own running checks still do. The single
      `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
@@ -578,12 +578,20 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      The aggregate quality-gate is excluded because it waits on installer. The plan job must
      succeed. Completed `skipped` siblings count as green, including GitHub's unexpanded
      matrix-family entry; a skipped product family is not product evidence. Every named job
-     that ran must succeed: a failed product or sibling holds main red, even beside skipped
+     that ran must succeed or have an infra-only failure: a test/build failure holds main red, even beside skipped
      siblings. Missing, renamed or neutral named jobs never grant green.
      Jobs are paged across all attempts, then judged by their own latest attempt (and job id
      within an attempt), so rerunning only failed jobs can free main without discarding earlier
      successful jobs. Installer, signing and publishing results do not hold, even if red or
      pending; the evaluator prints them as non-gating jobs for Quality's main-red log.
+     Owner decision Nov 18 15:05 PT: `main_green.infra_steps` lists case-sensitive infra step
+     names/globs per exact job or matrix family. Only those failing steps are exempt; unknown
+     failures and missing/empty step data hold. Cancellation needs evidence no test/build step
+     started; a never-assigned runner also needs a nonempty step manifest. Cancelled runs are
+     inspected rather than hiding a test failure behind older green evidence.
+     Each exempt job adds `ALERT infra-only` to the merge-rule description and detailed log.
+     [S2](https://github.com/danswett/agent-bridge/pull/3079) is not on main: flag `rerun needed
+     (once)` rather than dispatching another rerun path; attempt two or later says `rerun already used`.
      Unreadable history, plan or product data fails closed without fallback. No usable run in
      the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from Quality, since labels take triage

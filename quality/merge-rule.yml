@@ -72,7 +72,9 @@ arm64_waiver:
 # any named job below isn't completed successfully at its latest attempt in main's latest push
 # run, every pull request fails. Main's commit, not run finish time, determines the run.
 # Plan must succeed. Only then may a skipped job (or unexpanded skipped family) count as green.
-# Exact display names pin every selected matrix instance: missing, renamed or cancelled holds.
+# Exact display names pin every selected matrix instance: missing or renamed holds.
+# Owner decision Nov 18 15:05 PT: infra-only failures warn, rather than holding main red.
+# Unknown failing steps and missing/empty step data hold. Cancellation needs proof tests never ran.
 # A bare name covers a dynamic family: at least one entry, and every present instance green.
 # The aggregate quality-gate waits on installer, so only its test inputs are listed.
 # Installer, sign and publish jobs do not hold, but their results are printed by the evaluator.
@@ -98,6 +100,46 @@ main_green:
     - pwa-e2e
     - app (win-x64)
     - app (win-arm64)
+  # Exact job or matrix-family name -> case-sensitive step globs. Never list tests or builds.
+  # S2 is not on main yet: the evaluator flags one rerun, and never dispatches a second path.
+  infra_steps:
+    product: &dotnet_infra
+      - Set up job
+      - Complete job
+      - Run actions/checkout@*
+      - Post Run actions/checkout@*
+      - Run actions/setup-dotnet@*
+      - NuGet packages from main's cache
+      - Save NuGet packages to main's cache
+    ha-integration: *dotnet_infra
+    spikes: *dotnet_infra
+    app: *dotnet_infra
+    light:
+      - Set up job
+      - Complete job
+      - Run actions/checkout@*
+      - Post Run actions/checkout@*
+      - Run actions/setup-node@*
+      - .NET for the installer input quality harness
+    pwa-ui: &browser_infra
+      - Set up job
+      - Complete job
+      - Run actions/checkout@*
+      - Post Run actions/checkout@*
+      - Run actions/setup-node@*
+      - Run actions/setup-dotnet@*
+      - Run npm ci
+      - npm ci, for both
+      - Which Playwright
+      - Playwright's browsers from main's cache
+      - Download Playwright's system packages
+      - Download Playwright's system packages, S2
+      - Download Playwright's system packages, S4
+      - Run npx playwright install*
+      - Playwright's browsers, for both
+      - Save Playwright's browsers to main's cache
+    pwa-e2e: *browser_infra
+    spikes-linux: *browser_infra
 
 # The standing rule (owner decision 2026-11-08): Copilot and Codex reviews are optional extras and
 # never block a merge; the independent-review receipts are the gate. A pull request needs a success

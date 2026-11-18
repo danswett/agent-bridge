@@ -1271,7 +1271,7 @@ public class MergeRuleTests
                 [$"{Head} error merge-rule Couldn't read main's CI: gh: HTTP 502 ",
                  $"{Older} success merge-rule Copilot reviewed 0000000; every check passed; independent review on file; fixes-main tests-only bypass used "],
                 unreadable.Posted);
-            Assert.Equal([$"{Head} failure merge-rule No completed non-cancelled CI run on main: waiting for one "], unfinished.Posted);
+            Assert.Equal([$"{Head} failure merge-rule No completed CI product evidence on main: waiting for one "], unfinished.Posted);
         }
         finally
         {
@@ -1628,7 +1628,7 @@ public class MergeRuleTests
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
             if (scenario is "running" or "plan-failed" or "rerun-running")
-                Assert.Contains("no completed non-cancelled product evidence", output.ToString(), StringComparison.Ordinal);
+                Assert.Contains("no completed product evidence", output.ToString(), StringComparison.Ordinal);
             else if (scenario is not ("missing-run" or "invalid-attempt"))
                 Assert.Contains("app-installer (win-arm64)", output.ToString(), StringComparison.Ordinal);
         }
@@ -1745,7 +1745,8 @@ public class MergeRuleTests
             .Select(id => new { id, head_sha = $"c{id}".PadRight(40, '0'), status = "in_progress", conclusion = (string?)null, run_attempt = 1 }) });
         var older = MainRuns((5, "completed", "failure", 1));
         var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: older,
-            mainRunPages: unreadable ? [first] : [first, older]);
+            mainRunPages: unreadable ? [first] : [first, older],
+            jobsByRun: Enumerable.Range(6, 20).ToDictionary(id => (long)id, _ => """{"total_count":0,"jobs":[]}"""));
         var config = WriteConfig();
         try
         {
@@ -2146,7 +2147,10 @@ public class MergeRuleTests
             steps = [Step("Set up job", "success"),
                 Step("Run tests", scenario == "cancelled-after-tests" ? "success" : "skipped")];
             if (scenario == "runner-never-started")
+            {
+                conclusion = "failure";
                 steps = [Step("Set up job", "skipped"), Step("Run tests", "skipped")];
+            }
         }
         if (scenario == "build-failure") steps = [Step("Build", "failure")];
         var jobs = required.Select(n => n == "product" ? "product (ubuntu-latest)" : n).Append("plan")
