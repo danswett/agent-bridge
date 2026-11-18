@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Host.SignIn;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -64,6 +65,77 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         var response = await channel.RequestAsync(op, new { }, Patience);
         Assert.False(response.GetProperty("ok").GetBoolean());
         Assert.Equal("the peer role does not allow this operation", response.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task Gate_pause_queues_actions_until_its_original_deadline_and_preserves_read_access()
+    {
+        var clock = new FakeTimeProvider(time.GetUtcNow());
+        var audit = new AgentAuditLog(Path.Combine(fixture.Root, "gate"), clock);
+        var replies = new GateReplies();
+        var handler = authorization.Handler(new SessionService(source,
+            new MachineInfo(host.Id, "Host", "windows", "0.1.0"), replies: replies), audit);
+        var arrived = new TaskCompletionSource<Task<object?>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.Hub.Handler = (channel, op, data) =>
+        {
+            var result = handler(channel, op, data);
+            if (op == Ops.SessionReply) { arrived.TrySetResult(result); }
+            return result;
+        };
+        var peer = await PeerAsync();
+        Pin(peer, TrustedPeerStore.Person);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var run = Result(await channel.RequestAsync("gate.start", new { request = Guid.NewGuid() }, Patience)).GetProperty("run").GetGuid();
+        var pause = Result(await channel.RequestAsync("gate.pause", new { request = Guid.NewGuid(), run }, Patience));
+        Assert.Equal("paused", pause.GetProperty("outcome").GetString());
+        Assert.Equal(clock.GetUtcNow().AddMinutes(5), pause.GetProperty("deadline").GetDateTimeOffset());
+        var queued = channel.RequestAsync(Ops.SessionReply, new { id = SessionId, request = Guid.NewGuid(), text = "continue" }, Patience);
+        Assert.False((await arrived.Task.WaitAsync(Patience)).IsCompleted);
+        Assert.Equal(0, replies.Calls);
+        Result(await channel.RequestAsync(Ops.SessionsList, new { }, Patience));
+        clock.Advance(TimeSpan.FromMinutes(4));
+        var retry = Result(await channel.RequestAsync("gate.pause", new { request = Guid.NewGuid(), run }, Patience));
+        Assert.Equal(pause.GetProperty("deadline").GetDateTimeOffset(), retry.GetProperty("deadline").GetDateTimeOffset());
+        clock.Advance(TimeSpan.FromMinutes(1));
+        Result(await queued);
+        Assert.Equal(1, replies.Calls);
+        Assert.Null(audit.ControlWriterRun);
+        Assert.True(GateAuditProjection.Read(audit.Profile, run).Invalidated);
+        Assert.False((await channel.RequestAsync("gate.pause", new { request = Guid.NewGuid(), run }, Patience)).GetProperty("ok").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData(false), InlineData(true)]
+    public async Task Gate_pause_invalidates_on_restart_or_an_earlier_control_clock(bool restart)
+    {
+        var clock = new FakeTimeProvider(time.GetUtcNow());
+        var profile = Path.Combine(fixture.Root, "gate");
+        var audit = new AgentAuditLog(profile, clock);
+        host.Hub.Handler = authorization.Handler(service, audit);
+        var peer = await PeerAsync();
+        Pin(peer, TrustedPeerStore.Person);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var run = Result(await channel.RequestAsync("gate.start", new { request = Guid.NewGuid() }, Patience)).GetProperty("run").GetGuid();
+        Result(await channel.RequestAsync("gate.pause", new { request = Guid.NewGuid(), run }, Patience));
+        if (restart) { host.Hub.Handler = authorization.Handler(service, new AgentAuditLog(profile, clock)); }
+        else { clock.AdjustTime(clock.GetUtcNow().AddSeconds(-1)); }
+        var refused = await channel.RequestAsync("gate.pause", new { request = Guid.NewGuid(), run }, Patience);
+        Assert.False(refused.GetProperty("ok").GetBoolean());
+        Assert.True(GateAuditProjection.Read(profile, run).Invalidated);
+        Assert.Null(audit.ControlWriterRun);
+        clock.Advance(TimeSpan.FromMinutes(5));
+    }
+
+    sealed class GateReplies : ISessionReplier
+    {
+        public int Calls;
+        public bool Available => true;
+        public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null,
+            CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
+        {
+            Interlocked.Increment(ref Calls);
+            return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
+        }
     }
 
     [Fact]
