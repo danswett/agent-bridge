@@ -157,9 +157,13 @@ public sealed class LaunchTests : IDisposable
         await using var c = await Ready();
         try
         {
-            foreach (var id in ids) { await Submit(c, id); await pending.Entered(id); }
+            foreach (var id in ids)
+            {
+                await Submit(c, id, new JsonObject { ["workspace"] = id == ids[2] ? "scratch" : "agent-bridge", ["permissions"] = HaContract.PermissionAllowAll });
+                await pending.Entered(id);
+            }
             Assert.Equal(3, launched.Count);
-            Assert.All(launched, r => Assert.Equal(LaunchProtocol.Ask, r.Permissions ?? offered.Defaults.Permissions));
+            Assert.All(launched, r => Assert.Equal((r.Prompt == ids[2] ? "scratch" : "agent-bridge", LaunchProtocol.AllowAll), (r.Workspace, r.Permissions)));
             Assert.Equal(3, JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Count);
             foreach (var id in ids.Reverse()) { await Complete(c, pending, id); }
             foreach (var id in ids)
@@ -184,11 +188,13 @@ public sealed class LaunchTests : IDisposable
             await Submit(c, "req-cutf-0012"); await pending.Entered("req-cutf-0012");
             await Complete(c, pending, "req-cutf-0012");
             Assert.Equal("started", Outcome()["outcome"]!.GetValue<string>());
+            Assert.StartsWith("Starting", Note, StringComparison.Ordinal);
             c.Observe(ha.Press(Entity("button", "new_session")));
             await Pass(c);
             Assert.Equal(2, launched.Count);
             daemon = "agent-ha-bridge is running";
             await Pass(c);
+            ha.Seed(HaContract.LaunchOutcomeTopic(Slug), HaContract.Serialize(new JsonObject { ["recent"] = new JsonArray(Outcome().DeepClone()) }));
             daemon = null;
             await Pass(c); await Pass(c, 2); await Pass(c, 6);
             var a = JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Single(o => o!["request"]!.GetValue<string>() == "req-cutf-0011")!;
@@ -215,10 +221,13 @@ public sealed class LaunchTests : IDisposable
         var recent = JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray();
         Assert.Equal(ids, recent.Select(o => o!["request"]!.GetValue<string>()));
         Assert.All(recent, o => Assert.Equal("unconfirmed", o!["outcome"]!.GetValue<string>()));
-        foreach (var id in ids) { await LaunchDuplicate(id); }
+        foreach (var id in ids)
+        {
+            Payload(new JsonObject { ["request"] = id });
+            ha.Now = ha.Now.AddSeconds(61);
+            await Launch(c, AgentUser);
+        }
         Assert.Empty(launched);
-
-        async Task LaunchDuplicate(string id) { Payload(new JsonObject { ["request"] = id }); await Launch(c, AgentUser); }
     }
 
     [Fact]
@@ -238,7 +247,7 @@ public sealed class LaunchTests : IDisposable
             }
             var recent = JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray();
             Assert.Equal(HaContract.LaunchOutcomesKept + 1, recent.Count);
-            Assert.Contains(recent, o => o!["request"]!.GetValue<string>() == id && o["outcome"]!.GetValue<string>() == "starting");
+            Assert.Contains(recent, o => o is JsonObject result && result["request"]!.GetValue<string>() == id && result["outcome"]!.GetValue<string>() == "starting");
             await Complete(c, pending, id);
             Assert.Equal((id, pressed, "session-" + id), (Outcome()["request"]!.GetValue<string>(), Outcome()["pressed"]!.GetValue<string>(), Outcome()["session"]!.GetValue<string>()));
         }
@@ -541,11 +550,8 @@ public sealed class LaunchTests : IDisposable
         ha.Now = ha.Now.AddSeconds(11);
         Payload(new JsonObject { ["text"] = "again", ["request"] = "req-0003-abcd", ["at"] = ha.Now.ToString("o", System.Globalization.CultureInfo.InvariantCulture) + "x" });
         await Launch(c, AgentUser);
-        Assert.Equal(2, launched.Count);
-        // From the card: neither the request's words nor a second answer to it.
+        Assert.Single(launched);
         Assert.Single(JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray());
-        Assert.Null(launched[1].Prompt);
-        Assert.Equal("copilot", launched[1].Agent);
     }
 
     [Fact]
