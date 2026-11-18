@@ -916,6 +916,40 @@ public class HistoryTests
         Assert.Equal((HistoryLimits.Answer, true, true, true), (asked.Answer!.Length, asked.Truncated, turn.Truncated, page.Partial));
     }
 
+    [Theory]
+    [InlineData("agent-1")]
+    [InlineData("agent-2")]
+    public async Task A_late_unstamped_approval_keeps_its_owner_after_more_than_64_calls_on_every_page(string caller)
+    {
+        await using var s = new Copilot_();
+        var lines = new List<string>
+        {
+            Copilot.User("start work", 1),
+            Copilot.ToolStart("t1", "task", new { description = "First helper" }, 2),
+            Copilot.SubagentStarted("t1", "agent-1", 2),
+            Copilot.ToolStart("t2", "task", new { description = "Second helper" }, 3),
+            Copilot.SubagentStarted("t2", "agent-2", 3),
+            Copilot.ToolStart("early-call", "powershell", new { command = "git diff" }, 4, agentId: "agent-1"),
+        };
+        for (var i = 0; i < 80; i++)
+        {
+            lines.Add(Copilot.ToolStart($"later-{i}", "view", new { path = "/work" }, 5 + i, agentId: caller));
+        }
+        lines.Add(Copilot.User("next turn", 90));
+        lines.Add(Copilot.Permission("early-request", "early-call", Copilot.Prompts["commands"], 91));
+        await s.After([.. lines]);
+
+        var together = (await s.Page(limit: 2)).Turns![1];
+        var alone = (await s.Page(limit: 1)).Turns!.Single();
+        var asked = alone.Parts.Single(p => p.Kind == HistoryPartKind.Question);
+        Assert.Equal("agent-1", asked.Question!.Agent);
+        Assert.Equal(JsonSerializer.Serialize(together, ProtocolJson.Options), JsonSerializer.Serialize(alone, ProtocolJson.Options));
+
+        await s.RestartAsync();
+        var restarted = (await s.Page(limit: 1)).Turns!.Single();
+        Assert.Equal(JsonSerializer.Serialize(alone, ProtocolJson.Options), JsonSerializer.Serialize(restarted, ProtocolJson.Options));
+    }
+
     [Fact]
     public async Task A_delegates_question_stays_in_history_with_whose_it_is_and_how_it_was_answered()
     {
