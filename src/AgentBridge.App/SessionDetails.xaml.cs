@@ -60,10 +60,10 @@ public sealed partial class SessionDetails : UserControl
         while (low <= high)
         {
             var mid = (low + high) / 2;
-            if (Width(Words.Middle(full, mid)) <= room) { best = mid; low = mid + 1; }
+            if (Width(Words.MiddleByFolder(full, mid)) <= room) { best = mid; low = mid + 1; }
             else { high = mid - 1; }
         }
-        block.Text = Words.Middle(full, best);
+        block.Text = Words.MiddleByFolder(full, best);
     }
     // One state for the control, so "Copied" survives the row being redrawn by an update.
     readonly DetailCopy copier = new(ClipboardText.Put, new QueueDispatcher(Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread()));

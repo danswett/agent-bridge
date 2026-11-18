@@ -68,6 +68,36 @@ public static class Words
         return $"{text[..head]}\u2026{text[^tail..]}";
     }
 
+    public static string MiddleByFolder(string? text, int most)
+    {
+        if (string.IsNullOrEmpty(text) || most <= 0) { return ""; }
+        if (text.Length <= most) { return text; }
+        var end = text.Length;
+        while (end > 0 && text[end - 1] is '\\' or '/') { end--; }
+        if (end == 0) { return text[..most]; }
+
+        var tail = text.AsSpan(0, end).LastIndexOfAny('\\', '/') + 1;
+        if (end - tail > most)
+        {
+            // Middle's minimum is five; a smaller budget can only show the omission.
+            return most < 5 ? "\u2026" : Middle(text, most);
+        }
+        var tailEnd = text.Length - tail <= most ? text.Length : end;
+        if (tailEnd - tail == most) { return text[tail..tailEnd]; }
+        if (tail > 0 && tailEnd - tail + 2 <= most) { tail--; }
+
+        // Grow the suffix by whole folders, reserving about half the budget for the start.
+        while (tail > 0)
+        {
+            var previous = text.AsSpan(0, tail).LastIndexOfAny('\\', '/');
+            if (previous < 0 || tailEnd - previous > (most - 1) / 2) { break; }
+            tail = previous;
+        }
+        var headRoom = most - 1 - (tailEnd - tail);
+        var head = text.AsSpan(0, headRoom).LastIndexOfAny('\\', '/') + 1;
+        return $"{text[..head]}\u2026{text[tail..tailEnd]}";
+    }
+
     // "in 25d" / "in 4h" / "in 12m"; "due" once the window has rolled over.
     public static string Until(DateTimeOffset? at, DateTimeOffset now)
     {

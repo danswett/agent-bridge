@@ -1145,7 +1145,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   identifiers (19-20). Agent and Model sit together because the model is part of who is
   working. A value carries its unit ("12 turns", "pid 4312"), so it still reads right when it
   is copied or read alone. A value wraps rather than being cut off; only Folder shortens, and
-  only by its middle. A label may wrap too. While the session's machine is away (§2.2), Status
+  only by its middle. Windows cuts at folder boundaries, keeping the last folder name whole;
+  only when that name alone cannot fit does it use a character middle cut. The tooltip keeps
+  the full path. A label may wrap too. While the session's machine is away (§2.2), Status
   reads the away words, "Offline · last seen 5m ago" or "Reconnecting…", whose time is the only
   one in the state group; In this state, Last activity, Not responding since and Driven by are left out, since
   they may no longer be so. The other rows stay as last known, and Updated says how old they are. Every value can be selected and copied. The ages and durations tick
