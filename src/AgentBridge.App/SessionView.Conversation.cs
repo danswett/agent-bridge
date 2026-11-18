@@ -89,7 +89,7 @@ public sealed partial class SessionView
             scrolling = e.IsIntermediate;
             if (!e.IsIntermediate)
             {
-                anchoring = null; keyTarget = null;
+                anchoring = null; keyTarget = null; navigationPending = false;
                 if (pinEnd) { DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FollowPinnedEnd); }
             }
             HistoryScrolled(e.IsIntermediate);
@@ -97,15 +97,6 @@ public sealed partial class SessionView
         scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); ReleasePin(); };
         scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
         HookConversationInput(scroll);
-        // Take the view only when focus actually asks to scroll out of it, not on every Tab.
-        ConversationHeader.BringIntoViewRequested += FocusScroll;
-        ConversationFooter.BringIntoViewRequested += FocusScroll;
-        void FocusScroll(UIElement sender, BringIntoViewRequestedEventArgs e)
-        {
-            if (!Under(FocusManager.GetFocusedElement(ConversationList.XamlRoot) as DependencyObject, e.TargetElement)) { return; }
-            var top = e.TargetElement.TransformToVisual(scroll).TransformPoint(new Point(e.TargetRect.X, e.TargetRect.Y)).Y;
-            if (!ConversationKeyboard.WhollyInView(top, e.TargetRect.Height, scroll.ViewportHeight)) { ReleasePin(); }
-        }
         ConversationList.LayoutUpdated += OnConversationLaidOut;
         // Tunnelling, so the keys reach this before anything inside the list can take them: the list
         // would move between its items, a child might handle a key first (ui.md §6.4). What has focus
