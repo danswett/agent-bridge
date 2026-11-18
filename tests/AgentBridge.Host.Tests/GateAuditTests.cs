@@ -33,6 +33,20 @@ public sealed class GateAuditTests : IDisposable
     GateAuditReport Read() => Assert.IsType<GateAuditReport>(GateAuditProjection.Read(Profile, run));
 
     [Fact]
+    public void Invalidating_a_run_preserves_its_coherent_request_receipts()
+    {
+        var operation = Guid.NewGuid();
+        Append(operation);
+        Append(operation, "terminal", "started");
+        var control = new GateAuditMetadata(1, Guid.NewGuid(), run, 0, "control", "relay", "person-client", Guid.Empty, "pause-timeout");
+        Assert.True(new AgentAuditLog(Profile, clock).Append(new("in", Guid.NewGuid().ToString(),
+            "person:fixture", [], "gate.pause", "profile", "invalidated", Gate: control)));
+        var (rows, complete) = GateAuditProjection.Load(Profile);
+        Assert.True(GateAuditProjection.Project(rows, complete, run).Invalidated);
+        Assert.False(GateAuditProjection.Project(rows, complete, run, operation).Invalidated);
+    }
+
+    [Fact]
     public void Begin_marker_preserves_pinned_host_profiles_heads_and_existing_recorder_cursor()
     {
         var enrollment = new

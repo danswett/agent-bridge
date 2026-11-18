@@ -8,6 +8,31 @@ public sealed class DeliveryQuietTests
     static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     [Fact]
+    public async Task Gate_pause_drains_admitted_work_and_preserves_queued_identity_and_revalidation()
+    {
+        var gate = new DeliveryGate();
+        var memory = new OutcomeMemory<int>(TimeProvider.System, TimeSpan.FromMinutes(15), gate, () => -1);
+        var finish = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var existing = memory.Once(Guid.NewGuid(), () => finish.Task, _ => { });
+        using var pause = gate.PauseAdmission();
+        Assert.False(pause.Drained.IsCompleted);
+        var key = Guid.NewGuid();
+        var allowed = true;
+        var dispatched = 0;
+        var queued = memory.Once(key, () => { dispatched++; return Task.FromResult(allowed ? 7 : 0); }, _ => { });
+        Assert.Same(queued, memory.Once(key, () => throw new Exception("queued request was replaced"), _ => { }));
+        Assert.False(queued.IsCompleted);
+        Assert.Null(await gate.PrepareStopAsync(Bound));
+        finish.SetResult(9);
+        Assert.Equal(9, await existing.WaitAsync(Bound));
+        await pause.Drained.WaitAsync(Bound);
+        allowed = false;
+        pause.Dispose();
+        Assert.Equal(0, await queued.WaitAsync(Bound));
+        Assert.Equal(1, dispatched);
+    }
+
+    [Fact]
     public async Task Planned_stop_waits_through_confirmation_and_resends_get_the_original_outcome()
     {
         var gate = new DeliveryGate();
