@@ -50,6 +50,63 @@ function pasteImage(page, { width = 24, height = 16, noise = false, name = 'imag
 const pick = (page, ...files) => box(page).locator('input.file-picker').setInputFiles(files);
 const textFile = (name, size = 40, mimeType = 'text/markdown') => ({ name, mimeType, buffer: Buffer.alloc(size, 'a') });
 
+test('with HA off, a picked image reaches a stub host in chunks and renders in the conversation', async ({ page, baseURL }) => {
+  const external = [];
+  await page.route('**/*', (route) => {
+    if (new URL(route.request().url()).origin === new URL(baseURL).origin) { return route.continue(); }
+    external.push(route.request().url());
+    return route.abort();
+  });
+  await page.route('**/blob-ha-off-fixture', (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Attachment fixture</title><main aria-label="Conversation"></main>' }));
+  await page.goto('/blob-ha-off-fixture');
+  const result = await page.evaluate(async () => {
+    const { prepareAttachment, AttachmentLimits } = await import('/js/attachments.js');
+    const { ReplyService } = await import('/js/reply-service.js');
+    const { HostClient } = await import('/js/host-client.js');
+    const { accountStore } = await import('/js/signin.js');
+    const { sentMessage } = await import('/js/ui/sent-message.js');
+    await accountStore.save({ accountId: 'attachment-fixture', token: 'test-only' });
+    const canvas = Object.assign(document.createElement('canvas'), { width: 96, height: 96 });
+    const context = canvas.getContext('2d'), pixels = context.createImageData(96, 96);
+    let seed = 1;
+    for (let i = 0; i < pixels.data.length; i++) {
+      seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+      pixels.data[i] = i % 4 === 3 ? 255 : seed & 255;
+    }
+    context.putImageData(pixels, 0, 0);
+    const image = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    const file = await prepareAttachment(new File([image], 'picked.png', { type: 'image/png' }));
+    const received = new Uint8Array(file.size), messages = [];
+    const ref = '@/attachments/0123456789abcdef0123456789abcdef-picked.png';
+    const transport = { send(message) {
+      messages.push(message);
+      let result = { received: 0, complete: false };
+      if (message.op === 'attachment.chunk') {
+        const bytes = Uint8Array.from(atob(message.data.data), (c) => c.charCodeAt(0));
+        received.set(bytes, message.data.offset);
+        const end = message.data.offset + bytes.length;
+        result = { received: end, complete: end === file.size };
+      } else if (message.op === 'session.reply') { result = { outcome: 'delivered', attachments: [{ id: file.id, ref }] }; }
+      queueMicrotask(() => this.onmessage({ re: message.id, ok: true, result }));
+    } };
+    const client = new HostClient(transport), service = new ReplyService({ current: () => ({ client, hostId: 'h1' }) });
+    try {
+      service.submit({ hostId: 'h1', sessionId: 's1', text: 'Look', attachments: [file] });
+      for (let i = 0; i < 100 && service.get('h1', 's1').state !== 'done'; i++) { await new Promise((resolve) => setTimeout(resolve, 10)); }
+      document.querySelector('main').append(sentMessage(`${ref} Look`, 'received-image'));
+      return { outcome: service.get('h1', 's1').outcome, matches: received.every((b, i) => b === file.bytes[i]), ops: messages.map((m) => m.op), chunks: Math.ceil(file.size / AttachmentLimits.chunk) };
+    } finally { service.clear(); }
+  });
+  expect(result.outcome).toBe('delivered');
+  expect(result.matches).toBe(true);
+  expect(result.chunks).toBeGreaterThan(1);
+  expect(result.ops).toEqual(['attachment.start', ...Array(result.chunks).fill('attachment.chunk'), 'session.reply']);
+  const rendered = page.getByRole('main', { name: 'Conversation' }).getByRole('img', { name: 'picked.png' });
+  await expect(rendered).toBeVisible();
+  expect(await rendered.evaluate(async (image) => { await image.decode(); return [image.naturalWidth, image.naturalHeight]; })).toEqual([96, 96]);
+  expect(external).toEqual([]);
+});
+
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
