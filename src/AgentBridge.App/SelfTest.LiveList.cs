@@ -6,11 +6,43 @@ using AgentBridge.App.Core;
 using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
 
 namespace AgentBridge.App;
 
 static partial class SelfTest
 {
+    static async Task CheckGroupHeaders(MainWindow window, MainViewModel main, Action<bool, string> check)
+    {
+        var members = main.Sessions.Where(c => !c.Pinned).Take(2).ToArray();
+        var previous = members.Select(c => main.Order.Groups.GroupOf(main.KeyOf(c))).ToArray();
+        var id = main.CreateGroup("Header UIA");
+        try
+        {
+            foreach (var card in members) { main.MoveToGroup(card, id); }
+            DisclosureButton? Header() => Find<DisclosureButton>(window.Sessions).FirstOrDefault(b => b.DataContext is SessionSection s && s.Id == id);
+            await Until(() => Header() is not null, TimeSpan.FromSeconds(5));
+            var peer = Header() is { } header ? FrameworkElementAutomationPeer.CreatePeerForElement(header) : null;
+            var pattern = peer?.GetPattern(PatternInterface.ExpandCollapse) as IExpandCollapseProvider;
+            check(members.Length == 2 && peer?.GetName() == $"Header UIA · {members.Length}" && pattern?.ExpandCollapseState == ExpandCollapseState.Expanded,
+                "group header exposes its name, count and expanded state in UIA");
+            pattern?.Collapse();
+            check(pattern?.ExpandCollapseState == ExpandCollapseState.Collapsed && main.Order.IsGroupCollapsed(id),
+                "UIA collapse updates the group and its saved device-local state");
+            pattern?.Expand();
+            check(pattern?.ExpandCollapseState == ExpandCollapseState.Expanded && !main.Order.IsGroupCollapsed(id),
+                "UIA expand restores the group members");
+        }
+        finally
+        {
+            for (var i = 0; i < members.Length; i++)
+            { if (previous[i] is { } group) { main.MoveToGroup(members[i], group); } else { main.RemoveFromGroup(members[i]); } }
+            main.DeleteGroup(id);
+        }
+    }
+
     public static async Task RunLiveListAsync(MainWindow window, MainViewModel main, DemoHost demo, string report, Action<int> exit)
     {
         using var output = new StreamWriter(report) { AutoFlush = true };

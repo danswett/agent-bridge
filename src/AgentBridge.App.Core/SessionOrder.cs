@@ -69,6 +69,7 @@ public sealed class SessionOrder
         public Dictionary<string, GroupRegister> Membership { get; set; } = [];
         public Dictionary<string, DateTimeOffset> GroupListed { get; set; } = [];
         public string? GroupDeviceTag { get; set; }
+        public HashSet<string> CollapsedGroups { get; set; } = [];
     }
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -89,6 +90,14 @@ public sealed class SessionOrder
     }
 
     public SessionGroups Groups { get; }
+    public bool IsGroupCollapsed(string id) => state.CollapsedGroups?.Contains(id) == true;
+    public void SetGroupCollapsed(string id, bool collapsed)
+    {
+        if (!Groups.Items.Any(g => g.Id == id)) { throw new ArgumentOutOfRangeException(nameof(id)); }
+        var saved = state.CollapsedGroups ??= [];
+        saved.IntersectWith(Groups.Items.Select(g => g.Id));
+        if (collapsed ? saved.Add(id) : saved.Remove(id)) { Save(); }
+    }
 
     public static string KeyOf(string machine, string session) => $"{machine}\n{session}";
 

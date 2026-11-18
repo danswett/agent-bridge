@@ -395,7 +395,7 @@ public sealed partial class MainWindow : Window
         if (SearchBox.Width != fit) { SearchBox.Width = fit; }
     }
 
-    internal void SearchFor(string text) => SearchBox.ItemsSource = ViewModel.Search(text);
+    internal void SearchFor(string text) { ViewModel.ListQuery = text; SearchBox.ItemsSource = ViewModel.Search(text); }
 
     // Enter, a click or a tap opens the suggestion picked, or the first one found. Not on
     // SuggestionChosen: that comes as the arrow keys move through the suggestions, and opening
@@ -410,6 +410,7 @@ public sealed partial class MainWindow : Window
     {
         SearchBox.Text = "";
         SearchBox.ItemsSource = null;
+        ViewModel.ListQuery = "";
         ViewModel.Open(hit);
     }
 

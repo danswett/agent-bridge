@@ -46,7 +46,7 @@ public sealed partial class MainViewModel
 
     // Sessions a host removed while the app was running, the most recently ended first.
     public ObservableCollection<EndedRow> Ended { get; } = [];
-    public bool HasEnded => Ended.Count > 0;
+    public bool HasEnded => !NeedsOnly && string.IsNullOrWhiteSpace(ListQuery) && Ended.Count > 0;
     public string EndedHeader => $"Ended · {Ended.Count}";
 
     public string KeyOf(SessionCardViewModel card) => CardKey(owner.TryGetValue(card, out var m) ? m.Key : Machine.LocalKey, card.Id);
@@ -113,18 +113,10 @@ public sealed partial class MainViewModel
             if (c == open) { Order.MarkSeen(key, c.Session.Activity?.ResponseTurn); }
             c.Unread = Order.Unread(key, c.Session.Activity?.ResponseTurn);
         }
-        // Headings by the order on screen, which a held update leaves as it was.
-        bool pinnedSeen = false, restSeen = false;
-        foreach (var c in Sessions)
-        {
-            c.GroupHeader = pins.Count == 0 ? null
-                : c.Pinned ? (pinnedSeen ? null : "Pinned")
-                : (restSeen ? null : "Sessions");
-            if (c.Pinned) { pinnedSeen = true; } else { restSeen = true; }
-        }
         SyncEnded(a.Ended);
         Raise(nameof(Groups));
         Raise(nameof(GroupCounts));
+        SyncSections();
         // Saving failed (the file can't be written), here or in the change before: the list is Most
         // recent now, and says so.
         if (Order.Sort != toldSort)

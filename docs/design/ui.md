@@ -832,6 +832,7 @@ names and membership roam; collapsed or expanded is per device; a new group star
 Groups are the person's own, for purpose ("Team", "Personal"). Nothing groups a session by
 itself: not its repository, folder, machine or the session that launched it. Suggestions from
 launch lineage may come later, on top of this, once hosts report it.
+Windows G5a draws headers, local collapse, needs counts and filter expansion; row menus follow in G5b.
 - **Where:** between Pinned and Sessions, in your order. A row is in at most one group. A
   group spans machines: with a machine chosen or a search on, each group shows only the rows
   that match, and a group with none is hidden. With All and no search, an empty group shows,

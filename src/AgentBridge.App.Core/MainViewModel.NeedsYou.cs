@@ -10,7 +10,7 @@ namespace AgentBridge.App.Core;
 public sealed partial class MainViewModel
 {
     public ObservableCollection<NeedsYouEntry> NeedsYou { get; } = [];
-    public bool HasNeedsYou => NeedsYou.Count > 0;
+    public bool HasNeedsYou => NeedsYou.Count > 0 || NeedsOnly;
     public string NeedsYouHeader => $"Needs you · {NeedsYou.Count}";
     public int Waiting => NeedsYou.Count;
 
@@ -95,6 +95,7 @@ public sealed partial class MainViewModel
         }
         // The banners name the same sessions, and go with the machine's rows (#800).
         SyncSignIns();
+        SyncSections();
     }
 
     // "3m" moves on with the clock.

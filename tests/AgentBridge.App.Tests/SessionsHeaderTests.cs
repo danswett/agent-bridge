@@ -9,7 +9,7 @@ public sealed class SessionsHeaderTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "src", "AgentBridge.App", "SessionsPage.xaml"))) { dir = dir.Parent; }
         var page = XDocument.Load(Path.Combine(dir!.FullName, "src", "AgentBridge.App", "SessionsPage.xaml"));
-        var header = Assert.Single(page.Descendants().Where(e => (string?)e.Attribute("AutomationProperties.AutomationId") == "GroupHeader"));
+        var header = Assert.Single(page.Descendants(), e => (string?)e.Attribute("AutomationProperties.AutomationId") == "GroupHeader");
         Assert.Equal("DisclosureButton", header.Name.LocalName);
         Assert.Equal("{x:Bind Header, Mode=OneWay}", (string?)header.Attribute("AutomationProperties.Name"));
         Assert.Equal("{x:Bind Expanded, Mode=TwoWay}", (string?)header.Attribute("IsExpanded"));

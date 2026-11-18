@@ -78,6 +78,14 @@ public sealed class GroupHeaderTests : IAsyncLifetime
         if (search) { main.ListQuery = "Quiet"; } else { main.NeedsOnly = true; }
         Assert.True(Work.Expanded);
         Assert.Equal(search ? ["c"] : ["a", "b"], Work.Rows.Select(c => c.Id));
+        if (!search)
+        {
+            connection.Sessions.Upsert(Make.Session("a"));
+            connection.Sessions.Upsert(Make.Session("b"));
+            Assert.Equal(["a", "b"], Work.Rows.Select(c => c.Id));
+            Assert.True(main.HasNeedsYou);
+            Assert.Empty(main.NeedsYou);
+        }
         Work.Expanded = false;
         Assert.True(Work.Expanded);
         Assert.True(new SessionOrder(FilePath).IsGroupCollapsed(group));

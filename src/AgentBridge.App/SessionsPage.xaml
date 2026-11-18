@@ -5,6 +5,9 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:AgentBridge.App"
     xmlns:core="using:AgentBridge.App.Core">
+    <UserControl.Resources>
+        <CollectionViewSource x:Name="GroupedSessions" IsSourceGrouped="True" Source="{x:Bind ViewModel.Sections, Mode=OneWay}" />
+    </UserControl.Resources>
     <!-- The Sessions page's panes by window width (docs/design/ui.md §5.2, #180), at the PWA's
          breakpoints (design/tokens.json layout): list · session · inspector from 1280, list · session
          with tabs from 760, and one column below, the list or the session with a way back.
@@ -185,11 +188,43 @@
                 SingleSelectionFollowsFocus="False"
                 AutomationProperties.AutomationId="Rows"
                 AutomationProperties.Name="Sessions"
-                ItemsSource="{x:Bind ViewModel.Sessions, Mode=OneWay}"
+                ItemsSource="{x:Bind GroupedSessions.View, Mode=OneWay}"
                 SelectionChanged="OnRowChosen"
                 ContainerContentChanging="OnRowRecycled"
                 PreviewKeyDown="OnListKey"
                 ContextRequested="OnListMenu">
+                <ListView.GroupStyle>
+                    <GroupStyle HidesIfEmpty="False">
+                        <GroupStyle.HeaderTemplate>
+                            <DataTemplate x:DataType="core:SessionSection">
+                                <StackPanel Margin="12,4,12,4" Visibility="{x:Bind local:Ui.Show(IsGroup), Mode=OneWay}">
+                                    <local:DisclosureButton MinHeight="36" Padding="4,0" BorderThickness="0"
+                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                                        Background="{ThemeResource SubtleFillColorTransparentBrush}"
+                                        AutomationProperties.AutomationId="GroupHeader"
+                                        AutomationProperties.Name="{x:Bind Header, Mode=OneWay}"
+                                        IsExpanded="{x:Bind Expanded, Mode=TwoWay}" PreviewKeyDown="OnGroupKey">
+                                        <Grid ColumnSpacing="6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <ContentControl Style="{StaticResource AbIconChevron}" Width="16" Height="16" RenderTransformOrigin="0.5,0.5">
+                                                <ContentControl.RenderTransform><RotateTransform Angle="{x:Bind ChevronAngle, Mode=OneWay}" /></ContentControl.RenderTransform>
+                                            </ContentControl>
+                                            <TextBlock Grid.Column="1" Style="{StaticResource AbTypeRow}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis">
+                                                <Run Text="{x:Bind Name, Mode=OneWay}" /><Run Text="{x:Bind CountText, Mode=OneWay}" Foreground="{ThemeResource AbText2}" FontWeight="Normal" />
+                                            </TextBlock>
+                                            <local:StatusGlyphView Grid.Column="2" Size="16" Glyph="Needs" Visibility="{x:Bind local:Ui.Show(HasNeeds), Mode=OneWay}" />
+                                            <TextBlock Grid.Column="3" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbNeedsHead}" Text="{x:Bind NeedsText, Mode=OneWay}" />
+                                            <Ellipse Grid.Column="3" Width="6" Height="6" Fill="{ThemeResource AbBridge}" Visibility="{x:Bind local:Ui.Show(HasUnread), Mode=OneWay}" />
+                                        </Grid>
+                                    </local:DisclosureButton>
+                                    <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" TextWrapping="Wrap" Text="{x:Bind EmptyNote, Mode=OneWay}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </GroupStyle.HeaderTemplate>
+                    </GroupStyle>
+                </ListView.GroupStyle>
                 <!-- None of the list's own transitions (ui.md §5.3, Arriving and leaving, Reorder): they
                      slide a row's neighbours as it comes, goes or moves, and stagger the rows in on
                      load. Only the row that changed moves (SessionsPage, SessionRow). -->
@@ -387,12 +422,14 @@
                             CornerRadius="8"
                             Padding="12,10">
                             <StackPanel Spacing="8">
-                                <TextBlock
-                                    AutomationProperties.HeadingLevel="Level2"
+                                <ToggleButton
+                                    AutomationProperties.AutomationId="NeedsFilter"
+                                    AutomationProperties.Name="{x:Bind ViewModel.NeedsYouHeader, Mode=OneWay}"
                                     FontSize="13"
                                     FontWeight="SemiBold"
                                     Foreground="{ThemeResource AbNeedsHead}"
-                                    Text="{x:Bind ViewModel.NeedsYouHeader, Mode=OneWay}" />
+                                    IsChecked="{x:Bind ViewModel.NeedsOnly, Mode=TwoWay}"
+                                    Content="{x:Bind ViewModel.NeedsYouHeader, Mode=OneWay}" />
                                 <ItemsControl x:Name="LaneItems" ItemsSource="{x:Bind ViewModel.NeedsYou}" IsTabStop="False">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>

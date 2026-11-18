@@ -369,6 +369,7 @@ static partial class SelfTest
             Check(window.CurrentPage == "sessions" && main.Selected == sought && window.Sessions.Rows.SelectedItem == sought && window.Search.Text.Length == 0,
                 "opens a session chosen in the search box on the Sessions page, its row selected");
 
+            await CheckGroupHeaders(window, main, Check);
             // Every page, and every pane, in every theme: three panes, with a delegate in the strip and
             // the inspector, and the session's Details and Tools.
             Resize(window, 1440, 1000);

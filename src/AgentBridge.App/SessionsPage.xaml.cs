@@ -91,6 +91,7 @@ public sealed partial class SessionsPage : UserControl
             Layout.Moved += OnMoved;
             Layout.PropertyChanged += OnLaneShown;
             value.PropertyChanged += OnMain;
+            value.GroupCollapsing += OnGroupCollapsing;
             value.Machines.CollectionChanged += (_, _) => BuildMachineTabs();
             value.Sessions.CollectionChanged += OnSessionsChanged;
             value.NeedsYou.CollectionChanged += OnLaneChanged;
@@ -133,6 +134,7 @@ public sealed partial class SessionsPage : UserControl
     {
         if (viewModel is null) { return; }
         var want = viewModel.Selected;
+        if (want is not null && !List.Items.Contains(want)) { return; }
         if (List.SelectedItem == want) { return; }
         syncing = true;
         try { List.SelectedItem = want; }
@@ -318,6 +320,27 @@ public sealed partial class SessionsPage : UserControl
     }
 
     void OnNew(object sender, RoutedEventArgs e) => NewRequested?.Invoke();
+    void OnGroupKey(object sender, KeyRoutedEventArgs e)
+    {
+        if (sender is DisclosureButton button && e.Key is VirtualKey.Left or VirtualKey.Right)
+        {
+            button.IsExpanded = e.Key == VirtualKey.Right;
+            e.Handled = true;
+        }
+    }
+    void OnGroupCollapsing(string id)
+    {
+        if (XamlRoot is null || RowOf(FocusManager.GetFocusedElement(XamlRoot) as DependencyObject)?.Card is not { Pinned: false } card
+            || ViewModel.Order.Groups.GroupOf(ViewModel.KeyOf(card)) != id) { return; }
+        FindHeader(List)?.Focus(FocusState.Programmatic);
+        DisclosureButton? FindHeader(DependencyObject node)
+        {
+            if (node is DisclosureButton { DataContext: SessionSection section } button && section.Id == id) { return button; }
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+            { if (FindHeader(VisualTreeHelper.GetChild(node, i)) is { } found) { return found; } }
+            return null;
+        }
+    }
 
     // --- The machine tabs (§6.1, #290): built here, as a SelectorBar takes no items source. ---
     // One tab per machine choice, kept while the choice is; the bar holds only those that fit
