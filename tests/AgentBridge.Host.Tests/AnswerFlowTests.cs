@@ -1176,6 +1176,10 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     {
         // The same prompt drawn just after one of the writes went: the host's own read before the
         // next write sees it below the form (CopilotFormScreen), and nothing more is attempted.
+        await using var clock = new PollClock();
+        // Rechecks and the last write's missing-answer wait must not spend the channel's real-time budget.
+        Serve(Answerer(time: clock));
+        var started = clock.GetTimestamp();
         await AskFormAsync();
         var grown = false;
         injector.Screen = () => grown ? [.. FormScreen(Picked(), WordsTyped(), moved: Moved()), .. PermissionPrompt] : FormScreen(Picked(), WordsTyped(), moved: Moved());
@@ -1184,9 +1188,11 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
 
-        Assert.NotEqual("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
         Assert.Equal(write + 1, injector.Attempts.Count);
         Assert.Equal(write + 1, injector.Plans.Count);
+        Assert.True(clock.GetElapsedTime(started) >= TimeSpan.FromSeconds(2),
+            "The form recheck or missing-answer confirmation must exhaust the service's clock, not the channel's wall-clock budget.");
     }
 
     [Fact]
