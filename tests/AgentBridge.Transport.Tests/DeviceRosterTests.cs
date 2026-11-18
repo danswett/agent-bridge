@@ -245,6 +245,48 @@ public class DeviceRosterTests
         Assert.Equal(second.Canonical(), snapshot.Entries[^1]);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Same_node_upgrades_cannot_leak_unpersisted_state_into_an_unrelated_removal(bool full)
+    {
+        var w = Scenario();
+        var store = new MemoryRosterStore();
+        var roster = Make(w, store);
+        if (full) { (w, store, roster) = await FullOrdinaryLog(); }
+        else { await roster.AppendAsync(RosterFixture.Account, [Wire(w, "G"), Wire(w, "addB")]); }
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        w.Rename("E", "G", "G", "addB", "unrelated");
+        var rename = Padded(w["E"], Entry.MaxBytes, parent);
+        w.Remove("R", "G", "addB", "addB");
+        var removal = Padded(w["R"], 1024, parent);
+        var result = await roster.AppendAsync(RosterFixture.Account,
+            [rename.AsEvidence().Canonical(), rename.Canonical(), removal.Canonical()]);
+        var snapshot = (await roster.GetAsync(RosterFixture.Account))!;
+        w.Rename("after", "G", "G", "addB", "after replay");
+        Assert.NotNull(await Make(w, store).AppendAsync(RosterFixture.Account, [Wire(w, "after")]));
+        Assert.Equal(full ? ["refused", "refused", "accepted"] : ["refused", "accepted", "accepted"],
+            result!.Select(r => r.Verdict));
+        Assert.Equal(before.Entries.Count + (full ? 1 : 2), snapshot.Entries.Count);
+        Assert.Equal(!full, snapshot.Entries.Any(s => Entry.Parse(Encoding.UTF8.GetBytes(s)).Hash.SequenceEqual(rename.Hash)));
+    }
+
+    [Fact]
+    public async Task A_plain_copy_can_upgrade_its_marked_candidate_below_the_storage_cap()
+    {
+        var w = Scenario();
+        var roster = Make(w);
+        await roster.AppendAsync(RosterFixture.Account, [Wire(w, "G"), Wire(w, "addB")]);
+        w.Rename("E", "B", "addB", "addB", "renamed");
+        var entry = w.Entry("E");
+        var result = await roster.AppendAsync(RosterFixture.Account, [entry.AsEvidence().Canonical(), entry.Canonical()]);
+        Assert.Equal(["refused", "accepted"], result!.Select(r => r.Verdict));
+        var snapshot = (await roster.GetAsync(RosterFixture.Account))!;
+        Assert.Equal(3, snapshot.Entries.Count);
+        Assert.Equal(entry.Canonical(), snapshot.Entries[^1]);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Maximum_removal_and_four_ancestors_reach_the_roster_over_websocket()
