@@ -2441,6 +2441,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [InlineData("under")]
     public async Task A_permission_prompt_drawn_against_the_form_still_stops_the_answer(string where)
     {
+        await using var clock = new PollClock(frozen: true);
+        var rechecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        clock.OnNextWait(() => rechecking.TrySetResult());
         List<string> prompt = where switch
         {
             "above, boxed with hints" => ["\u256D\u2500\u2500\u2500\u2500\u256E", "\u2502 Run command \u2502", "\u2502 Do you want to run this command? \u2502", "\u2502 \u276F 1. Yes \u2502", "\u2502   2. Yes, and approve git for the rest of the running \u2502", "\u2502      session \u2502", "\u2502   3. No, and tell Copilot what to do differently (Esc to stop) \u2502", "\u2502 \u2502", "\u2502 \u2191\u2193 to navigate \u00B7 enter to select \u00B7 esc to \u2502", "\u2502 cancel \u2502", "\u2570\u2500\u2500\u2500\u2500\u256F"],
@@ -2450,7 +2453,16 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         injector.Screen = () => where == "under" ? [.. WhichOne, .. prompt] : [.. prompt, "", .. WhichOne];
         var ch = await OpenAsync();
 
-        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+        var answering = AnswerAsync(ch, new { pick = "b" });
+        try
+        {
+            // Observe the refusal's recheck with its budget held still, however late this test resumes.
+            await rechecking.Task.WaitAsync(Patience);
+            Assert.False(answering.IsCompleted);
+            Assert.Empty(injector.Attempts);
+        }
+        finally { clock.Run(); }
+        var (outcome, reason) = await answering;
 
         Assert.Equal("refused", outcome);
         Assert.Contains("permission prompt", reason);
