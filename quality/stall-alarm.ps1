@@ -1,6 +1,6 @@
 #Requires -Version 7.4
 [CmdletBinding()]
-param([string]$Repository, [string]$Mentions)
+param([string]$Repository, [string]$MainGreenNode, [string]$ChiefNode)
 
 function Read-StallAlarmConfig {
     $yaml = Get-Content (Join-Path $PSScriptRoot 'merge-rule.yml') -Raw
@@ -65,7 +65,8 @@ function Test-MergeStall {
 
 function Invoke-StallAlarm {
     [CmdletBinding()]
-    param([string]$Repository, [hashtable]$Config, [string]$Mentions, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow)
+    param([string]$Repository, [hashtable]$Config, [string]$MainGreenNode, [string]$ChiefNode,
+        [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow)
     $ErrorActionPreference = 'Stop'
     if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'Invalid repository.' }
     $owner, $name = $Repository.Split('/')
@@ -97,26 +98,38 @@ query($owner: String!, $name: String!) {
         return
     }
     if (-not $result.Known -or (-not $result.Stalled -and -not $result.Issue)) { return }
-    if ($Mentions -cnotmatch '^@[A-Za-z0-9-]+(?:/[A-Za-z0-9_-]+)? @[A-Za-z0-9-]+(?:/[A-Za-z0-9_-]+)?$') {
-        throw 'Configure exactly the Main-Green and Chief @mentions; no other alert route is permitted.'
+    if ($MainGreenNode -cnotmatch '^agent_bridge_[0-9a-f]{16}$' -or
+        $ChiefNode -cnotmatch '^agent_bridge_[0-9a-f]{16}$' -or $MainGreenNode -ceq $ChiefNode) {
+        throw 'Configure distinct full Main-Green and Chief nodes; no owner mention or fallback route is permitted.'
     }
-    $body = (@($Mentions, "Last merge: $($result.MergeAgeMinutes) min ago.") +
+    $body = (@("Last merge: $($result.MergeAgeMinutes) min ago.") +
         @($result.PullRequests | ForEach-Object { "#$($_.Number): $($_.AgeMinutes) min old." })) -join "`n"
     function Write-Issue([string[]]$Arguments) {
         gh api @Arguments | Out-Null
         if ($LASTEXITCODE) { throw 'Stall alarm issue write failed.' }
     }
-    if ($result.Issue) {
-        $path = "repos/$Repository/issues/$($result.Issue.number)"
-        if (-not $result.Stalled) { $body = "Merge stall cleared.`n$body" }
-        Write-Issue @('-X', 'POST', "$path/comments", '-f', "body=$body")
-        if (-not $result.Stalled) { Write-Issue @('-X', 'PATCH', $path, '-f', 'state=closed') }
-    } elseif ($result.Stalled) {
-        Write-Issue @('-X', 'POST', "repos/$Repository/issues", '-f', 'title=Ops: review-clean merge queue stalled',
-            '-f', 'labels[]=area:ops', '-f', "body=$body")
+    $body = "$(if ($result.Stalled) { 'Merge stall alarm.' } else { 'Merge stall cleared.' })`n$body"
+    $failures = [Collections.Generic.List[string]]::new()
+    try {
+        if ($result.Issue) {
+            $path = "repos/$Repository/issues/$($result.Issue.number)"
+            Write-Issue @('-X', 'POST', "$path/comments", '-f', "body=$body")
+            if (-not $result.Stalled) { Write-Issue @('-X', 'PATCH', $path, '-f', 'state=closed') }
+        } elseif ($result.Stalled) {
+            Write-Issue @('-X', 'POST', "repos/$Repository/issues", '-f', 'title=Ops: review-clean merge queue stalled',
+                '-f', 'labels[]=area:ops', '-f', "body=$body")
+        }
+    } catch { $failures.Add("Ops issue publication failed: $($_.Exception.Message)") }
+    foreach ($node in @($MainGreenNode, $ChiefNode)) {
+        try {
+            & pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot '..\tools\agents\reply-session.ps1') `
+                -Session $node -Text $body -Attempts 1 -Sender stall-alarm -Rid ('stall-' + [guid]::NewGuid().ToString('N')) | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "Reply delivery not confirmed (exit $LASTEXITCODE)." }
+        } catch { $failures.Add("Operational alert failed for ${node}: $($_.Exception.Message)") }
     }
+    if ($failures.Count) { throw ($failures -join ' ') }
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
-    Invoke-StallAlarm -Repository $Repository -Config (Read-StallAlarmConfig) -Mentions $Mentions
+    Invoke-StallAlarm -Repository $Repository -Config (Read-StallAlarmConfig) -MainGreenNode $MainGreenNode -ChiefNode $ChiefNode
 }
