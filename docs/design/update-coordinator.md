@@ -42,6 +42,8 @@ the app/launcher cutover. This layer alone changes no production apply path.
 
 ### B2: native evidence adapter and build closure
 
+Pin the [Velopack 1.2.161 image](https://github.com/velopack/velopack/blob/92d6a1c91716729d449034df5c50307dcce39493/src/bins/build.rs)
+read-only through observed exit; missing or other native release metadata is unknown.
 The adapter pins the original process handle before checking its UTC creation time,
 and owns the real apply handle through its exit wait. A nonzero updater exit alone
 cannot disprove a surviving elevated worker; it stays unknown, never retry authority.

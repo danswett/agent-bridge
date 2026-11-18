@@ -46,7 +46,7 @@ public sealed class UpdateCoordinatorAdapterTests : IDisposable
                 return worker;
             }
             return new Child(33);
-        }, time);
+        }, time, _ => new MemoryStream());
 
     [Fact]
     public async Task Actual_apply_completion_precedes_the_fresh_manifest_and_profile_respawn()
@@ -106,6 +106,37 @@ public sealed class UpdateCoordinatorAdapterTests : IDisposable
         Assert.Equal("package-custody", result.Step);
         Assert.Equal("PackageMismatchException", result.ErrorType);
         Assert.Empty(starts);
+    }
+
+    [Fact]
+    public async Task A_new_attempt_cannot_report_the_previous_attempts_process_as_current()
+    {
+        var adapter = Adapter();
+        Assert.Equal(UpdateApplyEnd.Completed, (await adapter.RunAsync()).End);
+        Assert.Equal(22, adapter.ApplyProcessId);
+        File.WriteAllText(Package, "changed");
+
+        var result = await adapter.RunAsync();
+
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Null(adapter.ApplyProcessId);
+        Assert.Equal(2, starts.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_unproven_updater_contract_cannot_authorize_apply(bool versioned)
+    {
+        var updater = Path.Combine(root, "Update.exe");
+        if (versioned) File.Copy(typeof(UpdateCoordinatorAdapter).Assembly.Location, updater);
+        else File.WriteAllText(updater, "unknown");
+        var result = await new UpdateCoordinatorAdapter(new(root, Packages, Package, Digest,
+            "AgentBridgeApp", Target, [], 11, 123), _ => original,
+            _ => throw new InvalidOperationException("must not start")).RunAsync();
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Equal("apply-start", result.Step);
+        Assert.Equal(nameof(InvalidDataException), result.ErrorType);
     }
 
     [Theory]
