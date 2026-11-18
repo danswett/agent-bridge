@@ -12,13 +12,7 @@ public sealed record OrderEntry(string Machine, Session Session)
     public string Key => SessionOrder.KeyOf(Machine, Session.Id);
 }
 
-// A session a host removed while the app was running, for the Ended group.
-public sealed record EndedSession(string Machine, Session Session, DateTimeOffset EndedAt)
-{
-    public string Key => SessionOrder.KeyOf(Machine, Session.Id);
-}
-
-public sealed record Arrangement(IReadOnlyList<OrderEntry> Pinned, IReadOnlyList<OrderEntry> Sessions, IReadOnlyList<EndedSession> Ended);
+public sealed record Arrangement(IReadOnlyList<OrderEntry> Pinned, IReadOnlyList<OrderEntry> Sessions);
 
 // The order of the sessions list, kept on this device: the person's, not the host's (ui.md §1
 // principle 2 and §6.1, #164; pwa/js/session-order.js is the same, rule for rule). Sorting by
@@ -182,7 +176,7 @@ public sealed class SessionOrder
         rest.Sort(by);
         shownPinned = pinned.Select(e => e.Key).ToList();
         shownSessions = rest.Select(e => e.Key).ToList();
-        return new Arrangement(pinned, rest, []);
+        return new Arrangement(pinned, rest);
     }
 
     // Sessions never placed go to the top of the unpinned rows, once; a session seen for the

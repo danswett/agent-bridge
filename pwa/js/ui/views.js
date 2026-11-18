@@ -24,7 +24,7 @@ const LONG_PRESS_SLOP = 10;
 const titleOf = (card) => card.session.title || 'Untitled session';
 
 // Keeps one row per session, from every machine shown, in the person's order (session-order.js):
-// Pinned, then the rest, then an Ended group (ui.md §6.1); and each session's view in the session
+// Pinned, then the rest (ui.md §6.1); and each live session's view in the session
 // pane, the selected one shown (./session-card.js). Both are updated in place so an open
 // disclosure, scroll position or focus survives an upsert. Most recent batches activity moves; a
 // session is its machine's: two machines may each have a session of the same id, and each acts
@@ -42,7 +42,6 @@ export class SessionListView {
   #groupEditor = null;
   #groupMenu = null;
   #groupLeaving = null;
-  #ended = null;
   #press = null;
   #swallowClick = false;
   #selected = null;
@@ -192,7 +191,6 @@ export class SessionListView {
     const grouped = this.order.groupRows(arranged.sessions, {
       matches: keep, filtered: !!this.filter || this.needsOnly, showEmpty: this.showEmptyGroups() && !this.needsOnly,
     });
-    const ended = this.needsOnly ? [] : arranged.ended.filter(keep);
     this.container.dataset.sort = this.order.sort;
     this.container.dataset.filtered = this.filter || this.needsOnly ? 'true' : 'false';
     this.onSorted?.();
@@ -285,7 +283,6 @@ export class SessionListView {
     for (const id of this.#groups.keys()) {
       if (!this.order.groups.some((g) => g.id === id)) { this.#groups.delete(id); }
     }
-    if (ended.length) { want.push(this.#endedGroup(ended)); }
     // Move only what is out of place, so a card being read is not torn out and put back.
     let prev = null;
     for (const el of want) {
@@ -331,8 +328,7 @@ export class SessionListView {
       if (el?.isConnected) { enter(el, 'listItem'); }
     }
     this.#drawn = true;
-    // An ended session that matches is a result too: Ended shows it.
-    this.shownCount = shown + ended.length;
+    this.shownCount = shown;
     this.onRender?.(entries.length);
     // A save that failed while drawing (storage full) turned the list to Most recent: draw it so.
     if (this.order.sort !== sort) { this.schedule(); }
@@ -395,25 +391,6 @@ export class SessionListView {
     head.querySelector('.group-needs > span:last-child').textContent = needs;
     head.querySelector('.unread-dot').hidden = group.expanded || !!needs || !group.unread;
     return head;
-  }
-
-  // Ended · N, folded unless opened: the sessions the host removed while this page was open.
-  #endedGroup(ended) {
-    if (!this.#ended) {
-      this.#ended = { summary: h('summary'), list: h('ul', { class: 'ended-list' }) };
-      this.#ended.el = h('details', { class: 'ended-group' }, this.#ended.summary, this.#ended.list);
-    }
-    const { el, summary, list } = this.#ended;
-    summary.textContent = `Ended \u00b7 ${ended.length}`;
-    const now = Date.now();
-    list.replaceChildren(...ended.map((e) => {
-      const m = this.machine(e.hostId);
-      const when = ago(e.endedAt, now);
-      return h('li', { class: 'ended', dataset: { id: e.session.id, hostId: e.hostId } },
-        h('span', { class: 'ended-title' }, e.session.title || 'Untitled session'),
-        h('span', { class: 'ended-meta' }, [m.show ? m.name : null, when ? `ended ${when}` : null].filter(Boolean).join(' \u00b7 ')));
-    }));
-    return el;
   }
 
   #cardOf(el) {

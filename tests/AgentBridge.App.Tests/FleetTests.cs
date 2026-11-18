@@ -508,11 +508,89 @@ public sealed class FleetTests : IAsyncLifetime
         await Wait.UntilAsync(() => question.CanAnswer && main.Waiting == 1, "the question answerable again");
         Assert.Same(there, Card("there"));
         Assert.Equal(["there", "here"], main.Sessions.Select(c => c.Id));
-        Assert.Contains(main.Ended, e => e.Title == "A session");
+        Assert.Empty(main.Ended);
 
         ui.Post(() => question.Choose(question.Fields[0].Options.Single(o => o.Value == "sqlite")));
         await Wait.UntilAsync(() => question.StatusText == "You answered · \u2068sqlite\u2069", "delivered");
         Assert.Single(remoteHost.Sent(Ops.SessionAnswer));
+    }
+
+    [Theory]
+    [InlineData("ending", SessionStatus.Ending)]
+    [InlineData("ended", SessionStatus.Idle)]
+    public async Task Ending_and_unknown_ended_status_upserts_stay_live_until_removed(string wireStatus, SessionStatus expected)
+    {
+        await BothMachinesAsync();
+        var card = Card("there")!;
+        var update = JsonSerializer.SerializeToNode(Make.Session("there", title: "Status update"), ProtocolJson.Options)!.AsObject();
+        update["status"] = wireStatus;
+        await remoteHost.SendAsync(Events.SessionUpsert, update);
+        await Wait.UntilAsync(() => Card("there")?.Session.Title == "Status update", "the status upsert");
+
+        Assert.Same(card, Card("there"));
+        Assert.Equal(expected, card.Session.Status);
+        Assert.Equal(["there", "here"], main.Sessions.Select(c => c.Id));
+        Assert.Empty(main.Ended);
+
+        await remoteHost.SendAsync(Events.SessionRemove, new SessionRemoved("there"));
+        await Wait.UntilAsync(() => Card("there") is null, "the authoritative removal");
+        Assert.Equal("here", Assert.Single(main.Sessions).Id);
+        Assert.Empty(main.Ended);
+    }
+
+    [Fact]
+    public async Task A_replaced_channels_late_upsert_cannot_resurrect_a_removed_row_but_a_current_upsert_can_resume_it()
+    {
+        await using var host = new FakeHost();
+        host.Sessions.Add(Make.Session("returned"));
+        host.Start();
+        var delayedUi = new HoldingDispatcher();
+        await using var connection = new HostConnection(ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromSeconds(1), ct), delayedUi)
+        {
+            RetryDelay = TimeSpan.Zero,
+            CapabilityRefresh = TimeSpan.FromHours(1),
+        };
+        var cards = new CardContext
+        {
+            Deliveries = new Deliveries(connection, delayedUi),
+            Folds = new FoldStore(null),
+            Capabilities = () => connection.Capabilities,
+            Host = connection,
+        };
+        var view = new MainViewModel(connection, cards, new UsageViewModel());
+        connection.Start();
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Complete
+            && view.AllCards.Count() == 1, "the first live row");
+        delayedUi.Hold();
+        try
+        {
+            var old = Assert.Single(host.Channels.Where(c => c.IsOpen).Distinct());
+            await old.SendEventAsync(Events.SessionUpsert, Make.Session("returned", title: "Late old row"));
+            await Wait.UntilAsync(() => delayedUi.QueuedCount == 1, "the old upsert queued");
+            var delayed = delayedUi.TakeHeld();
+            host.Sessions[0] = Make.Session("returned", title: "Fresh row");
+            await host.StopAsync();
+            host.Start();
+            await Wait.UntilAsync(() => connection.ConnectionNumber == 2 && connection.Sessions.Complete
+                && connection.Sessions.Get("returned")?.Title == "Fresh row", "the replacement channel");
+
+            await host.SendAsync(Events.SessionRemove, new SessionRemoved("returned"));
+            await Wait.UntilAsync(() => !view.AllCards.Any(), "the current channel's removal");
+            foreach (var action in delayed) { delayedUi.Post(action); }
+            Assert.Null(connection.Sessions.Get("returned"));
+            Assert.Empty(view.AllCards);
+            Assert.Empty(view.Ended);
+
+            await host.SendAsync(Events.SessionUpsert, Make.Session("returned", title: "Resumed row"));
+            await Wait.UntilAsync(() => connection.Sessions.Get("returned")?.Title == "Resumed row", "the newer current upsert");
+            Assert.Equal("Resumed row", Assert.Single(view.AllCards).Session.Title);
+            Assert.Empty(view.Ended);
+        }
+        finally
+        {
+            delayedUi.Release();
+            foreach (var card in view.AllCards.ToList()) { card.Detach(); }
+        }
     }
 
     [Fact]

@@ -621,7 +621,6 @@ public sealed partial class MainViewModel : Observable
         if (++ticks % 5 == 0)
         {
             foreach (var c in byId.Values) { c.RefreshTimes(); }
-            RefreshEnded();
             RefreshNeedsYou();
             // A code runs out, and "signed in" goes, with nothing from the machine (#800).
             SyncSignIns();
