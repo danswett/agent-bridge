@@ -21,12 +21,15 @@ function hasPinnedMachineName(text) {
     });
   const normalized = decoded.replace(/\p{Cf}/gu, '').normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '');
   const tokens = normalized.match(/[a-z0-9]+/g) ?? [];
-  return tokens.some((_, start) => {
+  return tokens.some((token, start) => {
+    // Keep joined VM substrings without manufacturing one from an unrelated word and number.
+    if (/vm[0-9]/.test(token)) { return true; }
     let candidate = '';
     // Six tokens cover the longest family prefix even with a separator between every letter.
     for (const token of tokens.slice(start, start + 6)) {
       candidate += token;
-      if (candidate.startsWith('dswett') || /^(?:arm8|vm[0-9]+|ultra[0-9]*)$/.test(candidate)) { return true; }
+      if (candidate.includes('dswett') || /devvm[0-9]/.test(candidate)
+        || /^(?:arm8|vm[0-9])/.test(candidate) || /^ultra[0-9]*$/.test(candidate)) { return true; }
     }
     return false;
   });
@@ -74,8 +77,16 @@ for (const [description, probe] of probes) {
 for (const [description, value, rejected] of [
   ['standalone Ultra host', ultra, true],
   ['lowercase Ultra host', ultra.toLowerCase(), true],
+  ['joined development VM host', vm.join(''), true],
+  ['zero-padded joined VM host', vm[0].toLowerCase() + vm[1].toLowerCase() + '0' + vm[2], true],
+  ['embedded owner-prefixed host', 'my' + prefix, true],
+  ['suffixed VM host', vm[0] + '-' + vm.slice(1).join('') + 'a', true],
+  ['embedded VM host', 'x' + vm.slice(1).join('').toLowerCase(), true],
+  ['suffixed architecture host', ['arm', '8', 'x'].join(''), true],
   ['compiler version', 'LLVM 19', false],
   ['ordinary numbered word', 'alarm 8', false],
+  ['current architecture', ['ARM', '64'].join(''), false],
+  ['ordinary spectral word', ultra.toLowerCase() + 'violet', false],
 ]) {
   test(`the scoped source scan classifies a ${description} correctly`, () => {
     const file = 'pwa/js/demo.js';
