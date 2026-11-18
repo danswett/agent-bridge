@@ -304,7 +304,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
             }
             else if (offered.Verdict == Verdict.Refused && verifier.Graph.Find(entry.Hash) is not null)
             {
-                aside.Add((index, entry, false));
+                aside.Add((index, entry.AsEvidence(), false));
             }
         }
         return (results, changed ? new Stored(1, generation, kept) : null);
