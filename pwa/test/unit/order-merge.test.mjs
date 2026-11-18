@@ -19,7 +19,7 @@ for (const [kind, cases] of Object.entries(vectors)) {
       const merge = { order: mergeOrder, register: mergeRegisters, marker: mergeMarkers }[kind];
       const before = JSON.stringify(vector);
       const actual = merge(vector.a, vector.b);
-      assert.deepEqual(plain(actual), vector.expected);
+      assert.deepEqual(plain(actual), plain(vector.expected));
       assert.deepEqual(plain(merge(vector.b, vector.a)), plain(actual));
       assert.deepEqual(plain(merge(actual, vector.a)), plain(actual));
       assert.deepEqual(plain(merge(actual, actual)), plain(actual));

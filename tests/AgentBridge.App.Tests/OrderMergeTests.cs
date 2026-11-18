@@ -4,6 +4,21 @@ using Xunit;
 
 public sealed class OrderMergeTests
 {
+    [Theory]
+    [InlineData(double.NaN, "NaN")]
+    [InlineData(double.PositiveInfinity, "Infinity")]
+    [InlineData(double.NegativeInfinity, "-Infinity")]
+    public void Nonfinite_values_use_JSON_null_but_retain_JS_row_key_spelling(double number, string text)
+    {
+        var a = new JsonObject { ["value"] = number, ["counter"] = 1d, ["deviceTag"] = "01" };
+        var b = new JsonObject { ["value"] = null, ["counter"] = 1d, ["deviceTag"] = "01" };
+        Assert.Equal(0, OrderMerge.CompareRegisters(a, b));
+        a["value"] = new JsonObject { ["key"] = number };
+        var order = OrderMerge.EmptyOrder();
+        order["rows"]!["r"] = a;
+        Assert.Equal(text, OrderMerge.OrderedRows(order)[0]!["key"]!.GetValue<string>());
+    }
+
     public static IEnumerable<object[]> Vectors()
     {
         var vectors = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "order-merge.json")))!.AsObject();
