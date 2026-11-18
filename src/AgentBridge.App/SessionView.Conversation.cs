@@ -60,8 +60,17 @@ public sealed partial class SessionView
         if (!reset && card == blocksOf && from == blocksFrom) { return; }
         blocksOf = card;
         blocksFrom = from;
-        IReadOnlyList<MdBlock> next = from is null ? [] : MarkdownModel.Parse(from);
-        ConversationBlocks.Update(blocks, next);
+        try
+        {
+            IReadOnlyList<MdBlock> next = from is null ? [] : MarkdownModel.Parse(from);
+            ConversationBlocks.Update(blocks, next);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            // Exception messages can contain response text.
+            AppLog.Write($"render-failure chars={from?.Length ?? 0} blocks={blocks.Count} exception={e.GetType().FullName} hresult=0x{e.HResult:X8}");
+            throw;
+        }
         // Indexes have moved: the anchor taken again once the list has laid them out.
         anchor = null;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, TakeAnchor);
