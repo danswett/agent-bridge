@@ -99,6 +99,19 @@ public sealed class LaunchRoleTests : LaunchFlowFixture
     }
 
     [Fact]
+    public async Task A_provenance_file_cannot_create_authoritative_roles_after_host_restart()
+    {
+        var launched = await Launcher(Config()).LaunchAsync(new LaunchRequest
+        {
+            Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", SessionRole = "lead",
+        }, "fixture");
+        var path = Path.Combine(f.Root, "profile", "launch-provenance.json");
+        File.WriteAllText(path, File.ReadAllText(path).Replace("\"lead\"", "\"one-shot\""));
+        var service = new SessionService(source, new("fixture", "Fixture", "windows", "test"), launcher: Launcher(Config()));
+        Assert.Null(Assert.Single(Assert.IsType<SessionList>(await service.HandleAsync(null!, Ops.SessionsList, default)).Sessions).Role);
+    }
+
+    [Fact]
     public void Legacy_unbound_or_reused_processes_never_acquire_a_role()
     {
         var path = Path.Combine(f.Root, "provenance.json");
