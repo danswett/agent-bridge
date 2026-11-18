@@ -1177,6 +1177,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         // The same prompt drawn just after one of the writes went: the host's own read before the
         // next write sees it below the form (CopilotFormScreen), and nothing more is attempted.
         await using var clock = new PollClock();
+        // Rechecks and the last write's missing-answer wait must not spend the channel's real-time budget.
+        Serve(Answerer(time: clock));
         var started = clock.GetTimestamp();
         await AskFormAsync();
         var grown = false;
