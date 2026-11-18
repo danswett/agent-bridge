@@ -89,4 +89,18 @@ public sealed partial class HaConnector
         return true;
     }
 
+    async Task RefuseInboxAtQuestionAsync(Published p, CancellationToken ct)
+    {
+        if (underWay.ContainsKey(p.SessionId)) { return; }
+        while (inbox?.Peek(p.Node) is { } next)
+        {
+            var outcome = next.StartedAt is null ? "refused" : "unconfirmed";
+            CompleteInbox(p.Node, next.Rid, outcome);
+            p.Reply.Ack = MakeAck(next.Rid, next.Sender, outcome);
+            if (outcome == "unconfirmed") { log($"Home Assistant connector: interrupted reply {next.Rid} was not retyped"); }
+            await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = outcome == "refused"
+                ? "The session is asking a question; retry after it closes." : "Delivery was interrupted; check the terminal before retrying." }, ct);
+        }
+        p.Reply.ReadAgain = false;
+    }
 }

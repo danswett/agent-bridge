@@ -702,6 +702,7 @@ public sealed partial class HaConnector
             await ReplyAsync(sessionId, p, seen, now, ct);
             return;
         }
+        if (armed is not null) { await RefuseInboxAtQuestionAsync(p, ct); }
         if (armed is null || armed.Plan.TerminalOnly || armed.Settled)
         {
             if (seen.Count > 0) { await UnservedAsync(p, seen[^1].Hit, ct); }
@@ -834,15 +835,20 @@ public sealed partial class HaConnector
             words = box.Present && !string.IsNullOrWhiteSpace(box.Value) ? box.Value : null;
         }
         if (string.IsNullOrWhiteSpace(words)) { return; }
-        var key = hit.EntityId + "|" + hit.State.State;
+        var key = hit.EntityId + "|" + hit.State.State + "|" + CleanRid(Str(hit.State.Attributes, "rid"));
         if (p.ToldUnserved == key) { return; }
         p.ToldUnserved = key;
         // The sender's request id gets its outcome, so a sender that waits for it is told rather than left to guess.
         string? sender = null;
         if (hit.EntityId == SessionEntities.ReplyPayload(p.Node) && hit.State.Attributes is { ValueKind: JsonValueKind.Object } at)
         {
+            p.Reply.Handle(hit.State);
             sender = CleanSender(Str(at, "sender"));
-            if (CleanRid(Str(at, "rid")) is { } rid) { p.Reply.Ack = MakeAck(rid, sender, "refused"); }
+            if (CleanRid(Str(at, "rid")) is { } rid)
+            {
+                var prior = inbox?.Find(p.Node, rid);
+                p.Reply.Ack = MakeAck(rid, sender, prior is null ? "refused" : InboxOutcome(prior));
+            }
         }
         log($"Home Assistant connector refused a reply to {p.Node} from {sender ?? "an unnamed sender"}: " + (ServesReplies ? "the session is waiting on a question" : "replies from the dashboard are not served here"));
         // With the host's reply delivery, a reply waits for no question: this one is being
