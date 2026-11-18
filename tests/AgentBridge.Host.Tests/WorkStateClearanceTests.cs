@@ -59,12 +59,56 @@ public sealed class WorkStateClearanceTests
     [InlineData("""{"fork":true,"private":false}""")]
     [InlineData("""{"fork":false,"private":true}""")]
     [InlineData("""{"fork":"false","private":false}""")]
+    [InlineData("""{"fork":false,"private":false}""")]
+    [InlineData("""{"fork":false,"private":false,"full_name":"octo/renamed"}""")]
+    [InlineData("""{"fork":false,"private":false,"full_name":123}""")]
     public void Fork_private_or_unproven_repository_metadata_never_clears(string metadata)
     {
         using var repo = new Repository();
         using var client = repo.Client(metadata: metadata);
         Assert.Equal(WorkState.Unknown, new WorkStateClearanceProvider(repo.Source, client)
             .Read(repo.Session.Id, repo.Process).OpenOwnedPr.State);
+    }
+
+    [Fact]
+    public void Reviewer_transferred_repository_must_not_clear_the_old_owner_pr_filter()
+    {
+        using var repo = new Repository();
+        var head = Git.Run(repo.Root, ["rev-parse", "HEAD"]).Output.Trim();
+        using var client = new HttpClient(new ApiHandler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/repos/octo/demo")
+            { return Json("""{"fork":false,"private":false,"full_name":"new-owner/demo","owner":{"login":"new-owner"}}"""); }
+            if (path.EndsWith("/pulls", StringComparison.Ordinal))
+            {
+                var canonical = Uri.UnescapeDataString(request.RequestUri.Query).Contains("head=new-owner:main", StringComparison.Ordinal);
+                return Json(canonical ? """[{"number":42}]""" : "[]");
+            }
+            return Json(JsonSerializer.Serialize(new { commit = new { sha = head } }));
+        }));
+        var result = new WorkStateClearanceProvider(repo.Source, client).Read(repo.Session.Id, repo.Process);
+        Assert.NotEqual(WorkState.Cleared, result.OpenOwnedPr.State);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Reviewer_wrong_json_field_types_must_return_unknown(bool invalidSha)
+    {
+        using var repo = new Repository();
+        using var client = new HttpClient(new ApiHandler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/repos/octo/demo")
+            { return Json("""{"fork":false,"private":false,"full_name":"octo/demo"}"""); }
+            if (path.EndsWith("/pulls", StringComparison.Ordinal)) { return Json("[]"); }
+            if (path.EndsWith("/branches/main", StringComparison.Ordinal))
+            { return Json(invalidSha ? """{"commit":{"sha":123}}""" : """{"commit":{"sha":"different"}}"""); }
+            return Json("""{"ahead_by":"unknown"}""");
+        }));
+        var result = new WorkStateClearanceProvider(repo.Source, client).Read(repo.Session.Id, repo.Process);
+        Assert.Equal(WorkState.Unknown, result.UnpushedWork.State);
     }
 
     sealed class Repository : IDisposable
@@ -93,7 +137,7 @@ public sealed class WorkStateClearanceTests
         }
 
         public HttpClient Client(bool openPullRequest = false, int aheadBy = 0,
-            string metadata = """{"fork":false,"private":false}""") =>
+            string metadata = """{"fork":false,"private":false,"full_name":"OcTo/DeMo"}""") =>
             new(new ApiHandler(request =>
             {
                 var path = request.RequestUri!.AbsolutePath;
