@@ -212,7 +212,7 @@ public sealed class SessionService
         HandleAsync(channel, op, data, shape, null);
 
     internal async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape,
-        AgentAuditLog? actionAudit, GateLaunchIngress? launchIngress = null)
+        AgentAuditLog? actionAudit, GateLaunchIngress? launchIngress = null, Func<ReplyIntent>? replyIntent = null)
     {
         switch (op)
         {
@@ -232,7 +232,7 @@ public sealed class SessionService
             case Ops.SessionAnswer:
                 return await AnswerAsync(channel, data, actionAudit);
             case Ops.SessionReply:
-                return await ReplyAsync(channel, data);
+                return await ReplyAsync(channel, data, replyIntent);
             case Ops.AttachmentStart or Ops.AttachmentChunk or Ops.AttachmentDiscard when attachments is not null:
                 return Attach(channel, op, data);
             case Ops.SessionStop:
@@ -698,12 +698,13 @@ public sealed class SessionService
         return offered;
     }
 
-    async Task<ReplyResult> ReplyAsync(IProtocolChannel channel, JsonElement data)
+    async Task<ReplyResult> ReplyAsync(IProtocolChannel channel, JsonElement data, Func<ReplyIntent>? intent)
     {
         // As for answers: a request without an id or request UUID fails as a request, and
         // anything that can be read gets an outcome.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.reply needs an id, a request and text"); }
         var request = data.Deserialize<ReplyRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.reply needs an id, a request and text");
+        request = request with { IntentSource = intent };
         var (watch, progress) = Watch(request.Progress);
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);

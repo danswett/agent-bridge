@@ -163,6 +163,8 @@ revocable at the machine in one command.
 ## 7. Placing it on each machine
 
 * **Per machine, minted on that machine.** A credential works only on the host that minted it.
+  Copying its protected file, token or hash record never rebinds it: the protected file uses
+  Windows CurrentUser DPAPI, and a store with another machine's script identity fails closed.
   Nothing is synced, and the relay never holds one (agent-token-rotation.md §3).
 * **Where it lives.** One owner-only file per script, outside session folders and the profile
   bundle area, wrapped by the platform's user-bound protection (DPAPI on Windows), the same
@@ -173,8 +175,25 @@ revocable at the machine in one command.
   an environment variable is inherited by every child process, which is how the HA token ended
   up in every session.
 * **Rollout, one machine at a time.** The owner runs `scripts add` for each script on each of
-  the four machines. A fleet roll-out that wants to avoid running it by hand needs a
+  the participating machines. A fleet roll-out that wants to avoid running it by hand needs a
   person-approved remote mint, which is out of scope here (Q3).
+  In a person's terminal outside any agent session, run
+  `agent-bridge-host scripts add collector --profile default`. The result contains the
+  principal, scope, expiry and protected file path, never the token. Configure only that path
+  in the script's private configuration; the scheduled process must use the minting Windows
+  user and read/unprotect the file on each run. Do not copy the store, file or token between
+  hosts, export it into session environments, or include it in bundles.
+* **Audit before use.** Presentations and scope refusals append one row by script principal;
+  fleet reads append one attempt even for invalid input or an unavailable registry.
+  Invalid sends append one refusal; valid sends retain their existing attempt and terminal
+  outcome rows. Separately granted fleet launches audit credential admission/refusal without
+  replacing launch-history evidence. None includes token or message text.
+  Missing/unwritable audit refuses use.
+  Audit-only hash/name attribution for recently revoked credentials is bounded and in-memory;
+  after restart, an unknown/deleted token cannot be attributed to a credential name.
+  Rotate by minting the same name locally, verify an audited fleet read, then retire the
+  old consumer. Revoke locally with `agent-bridge-host scripts revoke collector --profile default`
+  if compromised. HA-token retirement remains separate work after fleet cutover validation.
 * **No Apple host yet.** Apple machines are out for now (epic #1396), and the session
   credential has no Mac or Linux path until peer identification exists (agent-principals.md
   §3.4); the same holds here.

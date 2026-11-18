@@ -15,6 +15,7 @@ const bytes = (s) => new TextEncoder().encode(s).length;
 test('the person\'s own prompt, and one from a host that doesn\'t say who sent it, has no origin and stays a bubble', () => {
   assert.equal(promptOrigin(session()), null);
   assert.equal(promptOrigin(session({ from: 'person' })), null);
+  assert.equal(promptOrigin(session({ from: 'person', label: 'Build helper' })), null);
   assert.equal(promptOrigin(session({ from: 'schedule', text: null })), null);
 });
 
@@ -48,6 +49,41 @@ test('an agent\'s prompt is labelled Sent by an agent under the driven diamond, 
   // A sender the host knows only as not the person.
   const other = promptOrigin(session({ from: 'other', label: 'x' }));
   assert.deepEqual([other.icon, other.facts, other.spoken], ['driven', ['Automatic prompt'], 'Automatic prompt']);
+});
+
+test('a live agent-sent prompt names its sending session on the agent line, never the person bubble', () => {
+  const o = promptOrigin(session({ from: 'agent', label: 'Build helper', driver: 'agent', driverPrincipal: 'agent:sender' }));
+  assert.ok(o);
+  assert.deepEqual([o.from, o.icon, o.facts, o.by, o.spoken],
+    ['agent', 'driven', ['From: Build helper'], 'agent:sender', 'From: Build helper']);
+  assert.equal(disclosureName(o, false), 'From: Build helper, Show prompt');
+  assert.equal(disclosureName(o, true), 'From: Build helper, Hide prompt');
+});
+
+test('a stored agent-sent prompt has the same From label and agent origin as its live line', () => {
+  const stored = historyPromptOrigin({ text: MONITOR, from: 'agent', label: 'Build helper' });
+  assert.ok(stored);
+  assert.deepEqual(stored, promptOrigin(session({ from: 'agent', label: 'Build helper' })));
+  assert.deepEqual([stored.from, stored.icon, stored.facts, stored.spoken],
+    ['agent', 'driven', ['From: Build helper'], 'From: Build helper']);
+});
+
+test('agent sender facts are sanitized and capped in live and stored prompts, with a fallback for empty labels', () => {
+  for (const origin of [
+    (label) => promptOrigin(session({ from: 'agent', label })),
+    (label) => historyPromptOrigin({ text: MONITOR, from: 'agent', label }),
+  ]) {
+    const o = origin('Build\u202E\u200B\nhelper \u00b7 owner, expanded');
+    assert.deepEqual(o.facts, ['From: Build helper - owner, expanded']);
+    assert.equal(o.spoken, 'From: Build helper - owner expanded');
+    const long = origin('\u00e9'.repeat(100)).facts[0].slice('From: '.length);
+    assert.ok(bytes(long) <= LABEL_MAX_BYTES);
+    assert.ok(long.endsWith('\u2026'));
+    for (const label of [undefined, '', '\u202E\u200B']) {
+      assert.deepEqual(origin(label).facts, ['Sent by an agent']);
+      assert.equal(origin(label).spoken, 'Prompt sent by an agent');
+    }
+  }
 });
 
 test('the preview is the prompt on one line, and all of it is kept for Show prompt', () => {
