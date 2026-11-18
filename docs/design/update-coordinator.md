@@ -91,6 +91,8 @@ observation times out. Its result includes step, elapsed time and apply PID/path
 No native execution is used as local proof; the closed build is checked statically.
 The SDK native icon directory is 1,358,076 bytes: the bounded resource envelope is
 16 MiB, matching C2's section ceiling; version nesting/block limits remain unchanged.
+Before PEReader materializes the containing raw section, its entire extent must fit
+the retained stream and the 16 MiB ceiling; the resource window must fit that section.
 Legacy `current` remains authoritative until D proves activation/migration.
 
 ## C/D: approved design basis, not activation proof

@@ -28,6 +28,15 @@ internal static class CoordinatorImage
             // Native apphost resources include icons; retain the bundle verifier's section ceiling.
             if (resource.RelativeVirtualAddress <= 0 || resource.Size < 16 || resource.Size > 16 * 1024 * 1024)
                 throw Bad("Invalid resource directory.");
+            // GetSectionData materializes the entire raw section, not just the resource window.
+            var sectionIndex = pe.PEHeaders.GetContainingSectionIndex(resource.RelativeVirtualAddress);
+            if (sectionIndex < 0) throw Bad("Unmapped resource directory.");
+            var section = pe.PEHeaders.SectionHeaders[sectionIndex];
+            var resourceOffset = (long)resource.RelativeVirtualAddress - section.VirtualAddress;
+            if (section.SizeOfRawData < 0 || section.SizeOfRawData > 16 * 1024 * 1024
+                || section.PointerToRawData < 0 || section.PointerToRawData > image.Length - section.SizeOfRawData
+                || resourceOffset < 0 || resourceOffset > section.SizeOfRawData - (long)resource.Size)
+                throw Bad("Invalid resource section extent.");
             var bytes = pe.GetSectionData(resource.RelativeVirtualAddress).GetContent(0, resource.Size).ToArray();
             var visited = new HashSet<int>();
             string? description = null;
