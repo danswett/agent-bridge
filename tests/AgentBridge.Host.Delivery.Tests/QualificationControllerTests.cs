@@ -7,7 +7,7 @@ using Xunit;
 
 public sealed class QualificationControllerTests
 {
-    sealed class Probe : IQualificationProbe
+    internal sealed class Probe : IQualificationProbe
     {
         public string? Identity = "identity 42 100 200:44:101 7 " + B64(@"C:\private-fixture\cli.exe") + " " + B64("1.2")
             + " " + new string('a', 64) + " " + B64(@"C:\private-fixture\injector.exe") + " " + B64("2.3")
@@ -36,7 +36,7 @@ public sealed class QualificationControllerTests
         }
     }
 
-    sealed class Receipts : IQualificationReceiptJournal
+    internal sealed class Receipts : IQualificationReceiptJournal
     {
         public readonly List<QualificationRecord> Entries = [];
         public bool Available = true;
@@ -48,7 +48,7 @@ public sealed class QualificationControllerTests
         }
     }
 
-    sealed class Run
+    internal sealed class Run
     {
         public readonly QualificationGrantTests.Run Authority = new();
         public readonly Probe Probe = new();
