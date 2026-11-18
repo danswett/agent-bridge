@@ -37,6 +37,52 @@ public sealed partial class ReplyTests
         Assert.Null(new DurableInbox(InboxPath).Peek(Node));
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task A_question_refusal_survives_failed_publication_and_retries_only_the_ack(bool restart, bool closeQuestion)
+    {
+        async Task CheckAck(HaConnector c)
+        {
+            await Pass(c);
+            if (restart) { await Do(c, ha.SendFromCard(Node, "ack retry", rid: "refused-durable")); }
+            Assert.Equal("refused-durable", Ack.GetProperty("rid").GetString());
+            Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+            await CardCloses(c);
+            await Do(c, ha.SendFromCard(Node, "same rid after question", rid: "refused-durable"));
+            Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+            Assert.True(Ack.GetProperty("duplicate").GetBoolean());
+            Assert.Empty(replied);
+            Assert.Empty(answered);
+        }
+
+        await using (var c = await Ready())
+        {
+            c.Observe(ha.SendFromCard(Node, "accepted before question", rid: "refused-durable"));
+            Idle(question: Pick() with { AnswerAtMachine = true });
+            ha.PublishFailsFor = (_, value) => value == "Reply NOT sent";
+            await Pass(c);
+
+            var refused = new DurableInbox(InboxPath).Find(Node, "refused-durable");
+            Assert.NotNull(refused);
+            Assert.Equal("refused", refused.Outcome);
+            Assert.NotNull(refused.DeliveredAt);
+            Assert.Empty(refused.Payload);
+            Assert.Empty(replied);
+            Assert.Contains(log, m => m.Contains("answers failed", StringComparison.Ordinal));
+            ha.PublishFailsFor = null;
+            if (closeQuestion) { Idle(); }
+            if (!restart) { await CheckAck(c); }
+        }
+        if (restart)
+        {
+            await using var c = Connector();
+            await CheckAck(c);
+        }
+    }
+
     [Fact]
     public async Task A_terminal_only_question_refuses_and_removes_a_queued_reply_instead_of_delivering_it_later()
     {
