@@ -171,6 +171,27 @@ public sealed class DurableInboxTests : IDisposable
         Assert.Null(new DurableInbox(Pathname).Peek("one"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Migration_preserves_v1_and_the_v2_fence_refuses_missing_or_rolled_back_state(bool rollback)
+    {
+        var legacy = """{"Version":1,"Messages":[]}""";
+        File.WriteAllText(Pathname, legacy);
+        var inbox = new DurableInbox(Pathname);
+        inbox.Enqueue("one", "a", "sender", "pending", Now);
+        Assert.Equal(legacy, File.ReadAllText(Pathname + ".v1"));
+        Assert.True(File.Exists(Pathname + ".v2"));
+        var snapshot = JsonDocument.Parse(File.ReadAllText(Pathname)).RootElement;
+        Assert.Equal(2, snapshot.GetProperty("Version").GetInt32());
+        Assert.Empty(snapshot.GetProperty("Retired").EnumerateArray());
+        if (rollback) { File.WriteAllText(Pathname, legacy); }
+        else { File.Delete(Pathname); }
+
+        if (rollback) { Assert.Throws<InvalidDataException>(() => new DurableInbox(Pathname).Peek("one")); }
+        else { Assert.Throws<FileNotFoundException>(() => new DurableInbox(Pathname).Peek("one")); }
+    }
+
     [Fact]
     public void Inbox_caps_reject_full_queues_and_prune_delivered_entries()
     {
