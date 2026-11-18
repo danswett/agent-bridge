@@ -557,31 +557,25 @@ public sealed class ReplyService : ISessionReplier
         using var cleanup = CancellationTokenSource.CreateLinkedTokenSource(Stopping, expiry.Token);
         try
         {
-            while (!cleanup.IsCancellationRequested)
-            {
-                if (Proceed() is not null) return;
-                var (_, _, _, box) = await InputBoxAsync(process.Id, cleanup.Token);
-                // Empty means the paste is gone; later identical text belongs to the person.
-                if (box is { Main: true, Complete: true, Content.Length: 0 } or { Working: true }) return;
-                if (box is { Main: true, Complete: true, Shell: false, Working: false, Vim: not CopilotVimMode.Normal, Content.Length: > 0 })
-                {
-                    // Row boundaries cannot distinguish hard newlines from soft wraps.
-                    if (box.Lines != 1 || box.Content != owned.Trim(' ')) return;
-                    var footer = box.Rows[^1].Row + 1;
-                    // Still inside the original typing slot: one guarded clear, never Enter.
-                    var plan = new KeyPlan([new("\u0005\u0015", false, 0, 0, box.Rows,
-                    [
-                        new(footer, ScreenCheck.WithAny, CopilotInputBoxReader.FooterSigns),
-                        new(footer, ScreenCheck.WithoutParts, CopilotInputBoxReader.UnsafeFooter),
-                        new(footer, ScreenCheck.WithNone, CopilotInputBoxReader.TurnSigns),
-                        new(footer + 1, ScreenCheck.BlankFrom, []),
-                    ])]) { Proceed = Proceed };
-                    var result = await injector.InjectAsync(process.Id, plan, cleanup.Token);
-                    log($"reply cleanup to {Short(session.Id)}: {length} proven characters, clear {result.Status}");
-                    return;
-                }
-                await Task.Delay(options.SubmitAfter, options.Time, cleanup.Token);
-            }
+            if (Proceed() is not null) return;
+            var (_, _, _, box) = await InputBoxAsync(process.Id, cleanup.Token);
+            // Any empty, unsafe or ambiguous observation relinquishes ownership permanently.
+            if (box is not { Main: true, Complete: true, Shell: false, Working: false,
+                Vim: not CopilotVimMode.Normal, Content.Length: > 0, Lines: 1 }) return;
+            // Keep typed leading spaces: only the renderer's glyph and one padding space may go.
+            var row = box.Rows[1].Text;
+            if (row != "\u2503 " + owned && row != "\u276F " + owned) return;
+            var footer = box.Rows[^1].Row + 1;
+            // Still inside the original typing slot: one guarded clear, never Enter.
+            var plan = new KeyPlan([new("\u0005\u0015", false, 0, 0, box.Rows,
+            [
+                new(footer, ScreenCheck.WithAny, CopilotInputBoxReader.FooterSigns),
+                new(footer, ScreenCheck.WithoutParts, CopilotInputBoxReader.UnsafeFooter),
+                new(footer, ScreenCheck.WithNone, CopilotInputBoxReader.TurnSigns),
+                new(footer + 1, ScreenCheck.BlankFrom, []),
+            ])]) { Proceed = Proceed };
+            var result = await injector.InjectAsync(process.Id, plan, cleanup.Token);
+            log($"reply cleanup to {Short(session.Id)}: {length} proven characters, clear {result.Status}");
         }
         catch (OperationCanceledException) when (cleanup.IsCancellationRequested) { }
         catch (Exception e) { log($"reply cleanup to {Short(session.Id)} ended: {e.GetType().Name}; delivery uncertain"); }

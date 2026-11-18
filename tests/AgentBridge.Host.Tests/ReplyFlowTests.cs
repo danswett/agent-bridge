@@ -1580,7 +1580,9 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     [Theory]
     [InlineData(5)]
     [InlineData(12)]
-    public async Task SliceA_a_failed_paste_clears_only_its_proven_prefix_and_never_submits_or_clears_a_retyped_draft(int count)
+    [InlineData(5, true)]
+    [InlineData(12, true)]
+    public async Task SliceA_a_failed_paste_clears_only_its_proven_prefix_and_never_submits_or_clears_a_retyped_draft(int count, bool plain = false)
     {
         const string words = "agent report";
         injector.Result = new(InjectionStatus.Interrupted, "partial native write");
@@ -1588,7 +1590,9 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         injector.Sent = i =>
         {
             var text = injector.Plans[^1].Plan.Sends[i].Text;
-            if (text == words) injector.Screen = _ => CopilotBox(words[..count]);
+            if (text == words) injector.Screen = _ => plain
+                ? ["\u2500\u2500\u2500\u2500", "\u276F " + words[..count], "\u2500\u2500\u2500\u2500", " Interactive \u00B7 @ files"]
+                : CopilotBox(words[..count]);
             if (text == "\u0005\u0015")
             {
                 injector.Screen = _ => CopilotIdle;

@@ -26,6 +26,9 @@ idle, single-row input outside shell/vim-normal mode. Multiline input is ambiguo
 (hard newline or soft wrap), so cleanup ends without keys. An anchored empty box
 or any transcript advance after the pre-injection boundary ends cleanup permanently,
 including on the final worker check; retyping the same prefix cannot revive it.
+Cleanup takes one observation: shell/vim-normal, non-main, unreadable or otherwise
+unsafe input ends it permanently. Raw row matching preserves leading-space edits,
+excluding only the renderer's glyph and its one padding space.
 Process, transcript, G5 and worker
 screen guards are rechecked inside the original typing admission, bounded by
 submit patience/shutdown. Edited drafts, dialogs or unknown evidence stay untouched;
