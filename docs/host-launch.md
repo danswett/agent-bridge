@@ -69,6 +69,8 @@ An initialization marker outside the ledger directory prevents deletion of that 
 directory from becoming first use. UUID request keys are canonical. Charged requests,
 including completed ones, retain debit identities cross-checked against both hourly
 ledgers; unattributable legacy completed debits fail closed rather than reset capacity.
+Expired debits remain explicitly expired across clock rollback and restart without
+releasing their live reservations or resurrecting hourly charges.
 The L2 pipe composition observes registered/failed requests and session removals, reconciling
 durable terminal proof and process identity (PID plus start time). Proven no-start/exit closure
 releases live capacity once without refunding Failed/Unconfirmed hourly charges.
