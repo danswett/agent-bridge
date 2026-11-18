@@ -919,7 +919,14 @@ static partial class SelfTest
     sealed class WheelInputPort(MainWindow window, ListView list) : INativeWheelInputPort
     {
         WheelPoint mouse;
-        public bool FocusList() => list.Focus(FocusState.Programmatic);
+        public bool FocusList()
+        {
+            // Focus establishes routing; only the wheel should take the view away from the end.
+            var held = new Windows.Foundation.TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
+            window.RootElement.BringIntoViewRequested += held;
+            try { return list.Focus(FocusState.Programmatic); }
+            finally { window.RootElement.BringIntoViewRequested -= held; }
+        }
         public bool ListHasFocus => ReferenceEquals(FindAncestor<ListView>(
             FocusManager.GetFocusedElement(list.XamlRoot) as DependencyObject), list);
         public bool WindowIsForeground => GetForegroundWindow() == window.Handle;

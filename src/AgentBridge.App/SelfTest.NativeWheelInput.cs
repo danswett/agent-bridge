@@ -19,9 +19,22 @@ sealed class NativeWheelInput(INativeWheelInputPort port)
 
     public void Post()
     {
+        if (!port.FocusList()) { throw new InvalidOperationException($"setup: native wheel list focus failed ({port.DescribeTarget()})"); }
         var target = port.PrepareTarget();
+        if (!port.ListHasFocus || !port.TargetIsVerified(target) || !port.WindowIsForeground)
+        {
+            throw new InvalidOperationException($"setup: native wheel target not ready ({port.DescribeTarget()})");
+        }
+        Target = port.DescribeTarget();
         if (!port.Post(target)) { throw new InvalidOperationException("The native wheel message could not be posted."); }
     }
 
-    public void RecordReceipt(bool received) { }
+    public void RecordReceipt(bool received)
+    {
+        if (received) { return; }
+        var chain = port.ReadHwndChain();
+        Target = $"self-test: wheel not received; before: {Target}; now: {port.DescribeTarget()}; HWND chain: "
+            + (chain.Count == 0 ? "(empty)" : string.Join(" -> ", chain.Select(hwnd => $"0x{hwnd:X}")));
+        port.Log(Target);
+    }
 }
