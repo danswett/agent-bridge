@@ -65,6 +65,10 @@ public sealed class SessionOrder
         public List<string> Pinned { get; set; } = [];
         public List<string> Order { get; set; } = [];
         public Dictionary<string, string?> SeenTurns { get; set; } = [];
+        public Dictionary<string, GroupRegister> Groups { get; set; } = [];
+        public Dictionary<string, GroupRegister> Membership { get; set; } = [];
+        public Dictionary<string, DateTimeOffset> GroupListed { get; set; } = [];
+        public string? GroupDeviceTag { get; set; }
     }
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -79,7 +83,12 @@ public sealed class SessionOrder
         this.time = time ?? TimeProvider.System;
         state = Load(path, out var usable);
         Usable = usable;
+        if (!Guid.TryParseExact(state.GroupDeviceTag, "N", out _)) { state.GroupDeviceTag = Guid.NewGuid().ToString("N"); }
+        Groups = new(state.Groups ??= [], state.Membership ??= [], state.GroupListed ??= [],
+            state.GroupDeviceTag, this.time, Save, () => shownSessions);
     }
+
+    public SessionGroups Groups { get; }
 
     public static string KeyOf(string machine, string session) => $"{machine}\n{session}";
 
@@ -199,7 +208,7 @@ public sealed class SessionOrder
         var placed = state.Pinned.Concat(state.Order).ToHashSet(StringComparer.Ordinal);
         var fresh = entries.Where(e => !placed.Contains(e.Key)).ToList();
         fresh.Sort(Newer);
-        var changed = fresh.Count > 0;
+        var changed = Groups.Remember(all) || fresh.Count > 0;
         state.Order.InsertRange(0, fresh.Select(e => e.Key).Distinct(StringComparer.Ordinal));
         foreach (var e in all)
         {
@@ -218,7 +227,8 @@ public sealed class SessionOrder
         if (changed) { Save(); }
     }
 
-    List<string>? GroupOf(string key) => shownPinned.Contains(key, StringComparer.Ordinal) ? shownPinned : shownSessions.Contains(key, StringComparer.Ordinal) ? shownSessions : null;
+    List<string>? GroupOf(string key) => shownPinned.Contains(key, StringComparer.Ordinal) ? shownPinned
+        : shownSessions.Contains(key, StringComparer.Ordinal) ? shownSessions.Where(k => Groups.GroupOf(k) == Groups.GroupOf(key)).ToList() : null;
 
     // Whether a row on screen can move by one (-1 up, 1 down) within its group: not a row its machine
     // hasn't finished sending, nor past one.
@@ -244,6 +254,7 @@ public sealed class SessionOrder
     public bool Place(string key, string target, bool after)
     {
         if (Sort != SessionSort.Yours || key == target || GroupOf(key) is null || GroupOf(target) is null || pending.Contains(key) || pending.Contains(target)) { return false; }
+        if (!IsPinned(target) && Groups.GroupOf(key) != Groups.GroupOf(target)) { return false; }
         Insert(key, target, after);
         return true;
     }

@@ -98,6 +98,8 @@ The groups redesign's G1 (#2073) adds `groups.js` helpers over that same `Sessio
 non-mutating name validation, shared with create/rename, and counts of current unpinned live
 rows. It adds no storage key or membership record; edits still use the existing order API.
 
+Windows G4 (#1617) keeps the same registers locally in `SessionOrder`, with group operations in `SessionGroups`; nothing syncs yet.
+
 G2 (#1615) draws those groups between Pinned and Sessions. Collapse is kept only in the device's
 local order, outside the group registers. Collapsed groups retain visible needs-you rows; search
 and Needs you temporarily expand matching groups without changing the saved collapse.
