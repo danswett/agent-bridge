@@ -83,6 +83,15 @@ public static class JournalEvents
     public static JournalEntry HostStarted(string? version) =>
         JournalContract.Draft(JournalKind.HostStarted, JournalOutcome.Ok, version: version);
 
+    public static JournalEntry PreviousHostExit(HostExitRecord previous, DateTimeOffset now)
+    {
+        var reason = Enum.IsDefined(previous.Reason) ? previous.Reason : HostExitReason.Unknown;
+        long? age = previous.At is { } at ? (long)Math.Max(0, (now - at).TotalSeconds) : null;
+        return JournalContract.Draft(JournalKind.PreviousHostExit,
+            reason is HostExitReason.CleanStop or HostExitReason.PlannedRestart ? JournalOutcome.Ok : JournalOutcome.Unavailable,
+            code: (int)reason, ageSeconds: age);
+    }
+
     // The serve loop ended: normally (no failure), by a cancellation nobody caught, or by an
     // exception, kept as its type and frames only.
     public static JournalEntry HostStopped(Exception? failure, string? version) =>

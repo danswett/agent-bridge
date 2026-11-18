@@ -119,6 +119,13 @@ The host also records `HostStarted` (with its release, just before it starts ser
 exception's type and frames, never its message, when something escaped). These are produced now
 (#1270, #737).
 
+`PreviousHostExit` is a `HostLifecycle` event, recorded once before restore/start
+when a previous exit marker exists. Its `code` is 0 unknown, 1 clean-stop,
+2 planned-restart, 3 unhandled-exception or 4 no exit record (a running marker).
+Optional `ageSeconds` is a nonnegative whole-second age, absent when unknown;
+clock rollback clamps it to zero. It carries no version, exception, duration or stages.
+A missing marker is first start and produces no event.
+
 The host also records `LaunchRequested` once for each launch or resume request that finishes (#1271,
 #737). The outcome is `Ok` for started, `TimedOut` for unconfirmed, `Unavailable` for busy,
 `Refused` for refused and `Failed` for anything else. The code is the agent's 1-based place in the
