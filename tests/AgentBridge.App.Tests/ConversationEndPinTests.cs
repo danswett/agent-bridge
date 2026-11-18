@@ -5,6 +5,55 @@ namespace AgentBridge.App.Tests;
 public sealed class ConversationEndPinTests
 {
     [Theory]
+    [InlineData("pointer")]
+    [InlineData("touch")]
+    [InlineData("cancel")]
+    [InlineData("press")]
+    public void A_held_conversation_defers_end_correction_until_the_hold_ends(string hold)
+    {
+        var view = new SessionView();
+        if (hold == "pointer") { view.FollowState.PointerOver(1); }
+        else if (hold == "press") { view.FollowState.Pressed(1); }
+        else { view.FollowState.TouchDown(1); }
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+        view.Scroller.ScrollableHeight = 300;
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+        if (hold == "pointer") { view.FollowState.PointerLeft(1); }
+        else if (hold == "press") { view.FollowState.Released(1); }
+        else if (hold == "cancel") { view.FollowState.TouchCanceled(1); }
+        else { view.FollowState.TouchUp(1); }
+        Assert.Equal([300.0], view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void Only_the_last_hold_ending_retries_the_latest_end_without_another_layout()
+    {
+        var view = new SessionView();
+        view.FollowState.PointerOver(1);
+        view.FollowState.TouchDown(2);
+        view.Follow();
+        view.FollowState.PointerLeft(1);
+        Assert.Empty(view.Scroller.Targets);
+        view.Scroller.ScrollableHeight = 400;
+        view.FollowState.TouchUp(2);
+        Assert.Equal([400.0], view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void Ending_a_hold_does_not_repin_a_destination_chosen_while_held()
+    {
+        var view = new SessionView();
+        view.FollowState.PointerOver(1);
+        view.Follow();
+        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Parent = view.Scroller });
+        view.FollowState.PointerLeft(1);
+        Assert.False(view.Pinned);
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Theory]
     [InlineData("release")]
     [InlineData("cancel")]
     [InlineData("capture lost")]

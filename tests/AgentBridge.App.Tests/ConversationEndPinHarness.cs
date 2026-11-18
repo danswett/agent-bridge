@@ -88,6 +88,7 @@ namespace AgentBridge.App
 {
     public sealed partial class SessionView
     {
+        readonly Core.ConversationFollow follow = new();
         readonly Microsoft.UI.Xaml.UIElement ConversationList = new();
         Microsoft.UI.Xaml.Controls.ScrollViewer? ConversationScroll { get; } = new();
         bool pinEnd = true;
@@ -105,6 +106,7 @@ namespace AgentBridge.App
         public int Releases => pinReleases;
         public double AnchorAt => anchorAt;
         public bool HistoryEnd => HistoryAtEnd();
+        public Core.ConversationFollow FollowState => follow;
         public void Follow() => FollowPinnedEnd();
         public void Scrolling(double? correction = null) { scrolling = true; anchoring = correction; }
         public void StopScrolling() => scrolling = false;
