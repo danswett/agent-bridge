@@ -11,6 +11,7 @@ public sealed class SessionGroups
     readonly Dictionary<string, GroupRegister> groups;
     readonly Dictionary<string, GroupRegister> membership;
     readonly Dictionary<string, DateTimeOffset> listed;
+    readonly Dictionary<string, DateTimeOffset> savedListed;
     readonly string deviceTag;
     readonly TimeProvider time;
     readonly Action save;
@@ -22,6 +23,7 @@ public sealed class SessionGroups
         this.groups = groups;
         this.membership = membership;
         this.listed = listed;
+        savedListed = new(listed, StringComparer.Ordinal);
         this.deviceTag = deviceTag;
         this.time = time;
         this.save = save;
@@ -105,7 +107,16 @@ public sealed class SessionGroups
         save();
     }
 
-    internal bool Remember(IReadOnlyList<OrderEntry> entries)
+    internal bool ListingsDirty { get; private set; }
+
+    internal void Saved()
+    {
+        savedListed.Clear();
+        foreach (var (key, at) in listed) { savedListed[key] = at; }
+        ListingsDirty = false;
+    }
+
+    internal bool Remember(IReadOnlyList<OrderEntry> entries, Func<string, bool>? settled)
     {
         var live = entries.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
         var now = time.GetUtcNow();
@@ -116,13 +127,15 @@ public sealed class SessionGroups
             var stamped = listed.TryGetValue(key, out var last);
             if (live.Contains(key) || !stamped)
             {
-                if (!stamped || now - last >= TimeSpan.FromDays(1))
+                if (!stamped || now != last)
                 {
                     listed[key] = now;
-                    changed = true;
+                    ListingsDirty = true;
                 }
+                // Batch disk writes, never the last-seen time used for expiry.
+                if (!savedListed.TryGetValue(key, out var saved) || now - saved >= TimeSpan.FromDays(1)) { changed = true; }
             }
-            else if (now - last > TimeSpan.FromDays(30))
+            else if (now - last > TimeSpan.FromDays(30) && settled?.Invoke(key.Split('\n', 2)[0]) != false)
             {
                 Write(membership, key, null);
                 listed.Remove(key);

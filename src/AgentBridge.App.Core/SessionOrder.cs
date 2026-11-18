@@ -164,7 +164,7 @@ public sealed class SessionOrder
     public Arrangement Arrange(IReadOnlyList<OrderEntry> entries, Func<string, string?>? nameOf = null, Func<string, bool>? shows = null, Func<string, bool>? settled = null)
     {
         foreach (var e in entries) { Observe(e.Machine, e.Session, snapshot: settled?.Invoke(e.Machine) == false); }
-        PlaceNew(entries.Where(e => settled?.Invoke(e.Machine) ?? true).ToList(), entries);
+        PlaceNew(entries.Where(e => settled?.Invoke(e.Machine) ?? true).ToList(), entries, settled);
         var placed = state.Pinned.Concat(state.Order).ToHashSet(StringComparer.Ordinal);
         var unplaced = entries.Where(e => !placed.Contains(e.Key)).ToList();
         unplaced.Sort(Newer);
@@ -203,12 +203,12 @@ public sealed class SessionOrder
 
     // Sessions never placed go to the top of the unpinned rows, once; a session seen for the
     // first time starts read. all: every session shown, which the trim never forgets.
-    void PlaceNew(IReadOnlyList<OrderEntry> entries, IReadOnlyList<OrderEntry> all)
+    void PlaceNew(IReadOnlyList<OrderEntry> entries, IReadOnlyList<OrderEntry> all, Func<string, bool>? settled)
     {
         var placed = state.Pinned.Concat(state.Order).ToHashSet(StringComparer.Ordinal);
         var fresh = entries.Where(e => !placed.Contains(e.Key)).ToList();
         fresh.Sort(Newer);
-        var changed = Groups.Remember(all) || fresh.Count > 0;
+        var changed = Groups.Remember(all, settled) || fresh.Count > 0;
         state.Order.InsertRange(0, fresh.Select(e => e.Key).Distinct(StringComparer.Ordinal));
         foreach (var e in all)
         {
@@ -296,10 +296,10 @@ public sealed class SessionOrder
         seenDirty = true;
     }
 
-    // Writes what MarkSeen noted, if anything: every few seconds and when the app quits.
-    public void Flush()
+    // Periodic flushes batch read markers; the final flush also keeps exact listing times.
+    public void Flush(bool includeListings = true)
     {
-        if (seenDirty) { Save(); }
+        if (seenDirty || (includeListings && Groups.ListingsDirty)) { Save(); }
     }
 
     // A session a host removed has ended.
@@ -334,6 +334,7 @@ public sealed class SessionOrder
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(state, Json));
+            Groups.Saved();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {

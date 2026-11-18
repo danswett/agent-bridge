@@ -628,7 +628,7 @@ public sealed partial class MainViewModel : Observable
             // A machine kept offline says when it was last seen, which moves on; a hold waiting for
             // its two minutes is drawn when they are up (#1064).
             if (machines.Any(m => m.Offline) || machines.Any(m => m.Host.Sessions.Held is not null)) { SyncMachineRows(); }
-            Order.Flush();
+            Order.Flush(includeListings: false);
             // A flush that failed turned the list to Most recent: arrange it so, and tell the picker.
             if (Order.Sort != toldSort) { Rearrange(); }
         }
