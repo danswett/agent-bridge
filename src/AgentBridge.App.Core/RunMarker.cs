@@ -36,11 +36,16 @@ public sealed class RunMarker : IDisposable
             Save();
             if (recovered is not null)
             {
-                try { File.Delete(recovered); }
-                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                List<string> warnings = [];
+                foreach (var lease in recoveredLeases)
                 {
-                    RecoveryWarnings = [$"Recovered run marker not removed: {error.GetType().Name}"];
+                    try { File.Delete(lease.Path); }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                    {
+                        warnings.Add($"Recovered run marker not removed: {error.GetType().Name}");
+                    }
                 }
+                RecoveryWarnings = warnings.AsReadOnly();
             }
             saved = true;
         }
