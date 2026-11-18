@@ -32,6 +32,7 @@ namespace Microsoft.UI.Xaml.Controls
         public double VerticalOffset { get; set; } = 100;
         public double ScrollableHeight { get; set; } = 200;
         public List<double> Targets { get; } = [];
+        public bool AcceptChange { get; set; } = true;
 
         public void AddHandler(object routedEvent, object handler, bool handledEventsToo) =>
             handlers.Add((routedEvent, (Input.PointerEventHandler)handler, handledEventsToo));
@@ -50,7 +51,7 @@ namespace Microsoft.UI.Xaml.Controls
         public bool ChangeView(double? horizontalOffset, double? verticalOffset, float? zoomFactor, bool disableAnimation)
         {
             if (verticalOffset is { } to) { Targets.Add(to); }
-            return true;
+            return AcceptChange;
         }
     }
 }

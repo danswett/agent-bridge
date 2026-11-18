@@ -4,6 +4,18 @@ namespace AgentBridge.App.Tests;
 
 public sealed class ConversationEndPinTests
 {
+    [Fact]
+    public void A_rejected_end_correction_can_retry_on_the_next_layout()
+    {
+        var view = new SessionView();
+        view.Scroller.AcceptChange = false;
+        view.Follow();
+        view.Scroller.AcceptChange = true;
+        view.Follow();
+        view.Follow();
+        Assert.Equal([200.0, 200.0], view.Scroller.Targets);
+    }
+
     [Theory]
     [InlineData("thumb")]
     [InlineData("track")]
