@@ -62,11 +62,18 @@ public sealed class SessionReaperPolicyTests
         Assert.False(Assert.Single(Plan(row)).Eligible);
     }
 
-    [Fact]
-    public void Fully_pushed_builder_completion_is_derived_even_with_an_open_PR()
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(null, true)]
+    [InlineData(false, false)]
+    [InlineData(false, null)]
+    public void Open_PR_incomplete_or_unknown_work_stays_even_when_fully_pushed(bool? openPr, bool? complete)
     {
-        Assert.True(Assert.Single(Plan(Builder() with { OpenOwnedPr = true, WorkComplete = null })).Eligible);
-        Assert.True(Assert.Single(Plan(Builder() with { OpenOwnedPr = null, WorkComplete = false })).Eligible);
+        var row = Builder() with { OpenOwnedPr = openPr, WorkComplete = complete };
+        Assert.False(Assert.Single(Plan(row)).Eligible);
+        var reviewer = row with { Name = "SG Reviewer a", Role = ReaperRole.Reviewer,
+            Verdict = ReaperVerdict.Clean, VerdictAt = Now };
+        Assert.DoesNotContain(Plan(reviewer, reviewer with { Id = "b", Name = "SG Reviewer b" }), decision => decision.Eligible);
     }
 
     [Fact]

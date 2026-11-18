@@ -31,12 +31,15 @@ public sealed class SessionReaperNativeTests : IDisposable
     }
 
     [Fact]
-    public async Task Native_builder_no_longer_needs_invented_completion_or_PR_fields()
+    public async Task Native_builder_keeps_unknown_completion_and_PR_state_despite_clean_pushed_git()
     {
         var runner = new SessionReaperLiveTests.FakeGit(folder);
         var git = new SessionReaperGit(runner, _ => { });
         var row = SessionReaperHost.Native(Session(), "fixture-vm", now) with { Git = await git.ReadAsync(folder, default) };
         var snapshot = new ReaperSnapshot("fixture-vm", now, true, true, false, [row]);
+        Assert.False(Assert.Single(SessionReaperPolicy.Plan(snapshot, now)).Eligible);
+        row = row with { OpenOwnedPr = false, WorkComplete = true };
+        snapshot = snapshot with { Sessions = [row] };
         Assert.True(Assert.Single(SessionReaperPolicy.Plan(snapshot, now)).Eligible);
         Assert.Equal(1, runner.Fetches);
         Assert.False(Assert.Single(SessionReaperPolicy.Plan(snapshot, now, protectedNames: [row.Name])).Eligible);
@@ -59,15 +62,42 @@ public sealed class SessionReaperNativeTests : IDisposable
         Assert.Equal(ReaperVerdict.NotClean, verdict.Verdict); Assert.Equal(now.AddMinutes(-60), verdict.At);
         Assert.Equal(2, source.Reads);
         ReaperSession Reviewer(string id) => SessionReaperHost.Native(Session(id, "Reviewer"), "fixture-vm", now)
-            with { Verdict = verdict.Verdict, VerdictAt = verdict.At };
+            with { Verdict = verdict.Verdict, VerdictAt = verdict.At, OpenOwnedPr = false, WorkComplete = true };
         var snapshot = new ReaperSnapshot("fixture-vm", now, true, true, false, [Reviewer("a"), Reviewer("b")]);
         Assert.Single(SessionReaperPolicy.Plan(snapshot, now), row => row.Eligible);
-        source.Page = _ => Page([Part("VERDICT CLEAN", -120), Part("Review: NOT CLEAN", -59), Part("Done.")]);
+        source.Page = _ => Page([Part("VERDICT CLEAN", -120), Part("VERDICT NOT CLEAN", -59), Part("Done.")]);
         verdict = await SessionReaperHost.VerdictAsync(source, "fixture", now, default);
         Assert.Equal(now.AddMinutes(-59), verdict.At);
         Assert.DoesNotContain(SessionReaperPolicy.Plan(snapshot with { Sessions = [Reviewer("a"), Reviewer("b")] }, now), row => row.Eligible);
         source.Page = _ => Page([Part("**VERDICT CLEAN**")]);
         Assert.Equal(ReaperVerdict.Clean, (await SessionReaperHost.VerdictAsync(source, "fixture", now, default)).Verdict);
+    }
+
+    [Theory]
+    [InlineData("VERDICT CLEAN\nFurther investigation is still needed.")]
+    [InlineData("The prior response said VERDICT CLEAN.")]
+    [InlineData("> VERDICT CLEAN")]
+    [InlineData("`VERDICT CLEAN`")]
+    [InlineData("```text\nVERDICT CLEAN\n```")]
+    [InlineData("```text\nVERDICT CLEAN")]
+    [InlineData("~~~text\nVERDICT CLEAN")]
+    [InlineData("    VERDICT CLEAN")]
+    public async Task Earlier_embedded_or_quoted_verdict_text_never_authorizes_reaping(string text)
+    {
+        var source = new HistorySource { Page = _ => Page([Part("VERDICT CLEAN", -120), Part(text)]) };
+        Assert.Null((await SessionReaperHost.VerdictAsync(source, "fixture", now, default)).Verdict);
+    }
+
+    [Theory]
+    [InlineData("VERDICT CLEAN\nFindings follow.\nVERDICT NOT CLEAN", ReaperVerdict.NotClean)]
+    [InlineData("The quoted VERDICT NOT CLEAN is obsolete.\n**VERDICT: CLEAN**\r\n\r\n", ReaperVerdict.Clean)]
+    [InlineData("```text\nVERDICT CLEAN\n```\nVERDICT NOT CLEAN", ReaperVerdict.NotClean)]
+    public async Task Only_the_final_standalone_verdict_line_controls_the_result(string text, ReaperVerdict expected)
+    {
+        var source = new HistorySource { Page = _ => Page([Part(text, -59)]) };
+        var result = await SessionReaperHost.VerdictAsync(source, "fixture", now, default);
+        Assert.Equal(expected, result.Verdict);
+        Assert.Equal(now.AddMinutes(-59), result.At);
     }
 
     [Theory]
@@ -107,7 +137,8 @@ public sealed class SessionReaperNativeTests : IDisposable
     public void Final_stop_guard_rechecks_markers_questions_tools_identity_and_new_activity()
     {
         var session = Session();
-        var row = SessionReaperHost.Native(session, "fixture-vm", now) with { Git = SessionReaperPolicyTests.Builder().Git };
+        var row = SessionReaperHost.Native(session, "fixture-vm", now) with
+            { Git = SessionReaperPolicyTests.Builder().Git, OpenOwnedPr = false, WorkComplete = true };
         var expected = Assert.Single(SessionReaperPolicy.Plan(new("fixture-vm", now, true, true, false, [row]), now));
         var config = new SessionReaperSettings { Live = true };
         Assert.True(SessionReaperHost.StillSafe(expected, session, config, now));
