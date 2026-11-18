@@ -1364,6 +1364,10 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   200 ms, reader content within 1.5 DIP, and blocks unselected. Client drawing only, not host reads
   or physical input. Run published `AgentBridge.exe --self-test-history-scroll <result.json>`;
   normal `--self-test` includes it on both Windows CI architectures.
+  The queued-wheel check temporarily makes the conversation list focusable through receipt
+  and older drawing, restoring its original Tab-stop setting even if setup refuses the wheel.
+  Posting still requires verified list focus, native target and foreground; no focus or
+  scroll retry substitutes for a received wheel.
   The sign-in row captures run `CheckSignInRowTypography` in Light, Dark and CI high contrast:
   the status run alone uses proportional figures for words-only text, fixing the bundled face's
   wide tabular hyphen (#903); any digit keeps the whole run tabular. The check measures the drawn

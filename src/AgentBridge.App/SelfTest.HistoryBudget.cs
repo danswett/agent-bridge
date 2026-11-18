@@ -371,7 +371,8 @@ static partial class SelfTest
                     return WheelHistoryCount() > 0 && !wheelMoving && scroll.ScrollableHeight > 0
                         && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
                 }, TimeSpan.FromSeconds(10));
-                var wheel = Wheel(window, list);
+                using var wheel = new NativeWheelInput(new WheelInputPort(window, list));
+                wheel.Post();
                 var wheelTarget = wheel.Target;
                 var wheeled = await Until(() => wheelReceivedCount is not null
                     && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
@@ -909,16 +910,10 @@ static partial class SelfTest
         }, result);
     }
 
-    static NativeWheelInput Wheel(MainWindow window, ListView list)
-    {
-        var wheel = new NativeWheelInput(new WheelInputPort(window, list));
-        wheel.Post();
-        return wheel;
-    }
-
     sealed class WheelInputPort(MainWindow window, ListView list) : INativeWheelInputPort
     {
         WheelPoint mouse;
+        public bool ListIsTabStop { get => list.IsTabStop; set => list.IsTabStop = value; }
         public bool FocusList()
         {
             // Focus establishes routing; only the wheel should take the view away from the end.
