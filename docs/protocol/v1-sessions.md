@@ -34,6 +34,11 @@ without failing reads. Slice A adds no EndSelf operation and leaves the existing
 agent `session.stop` refusal unchanged. Slice B must make roles
 authoritative from host-owned state that sessions cannot write before using them for
 EndSelf admission; A's persisted display role is never that authority.
+Role display uses the process incarnation captured with each snapshot or upsert, not the
+latest binding when a queued event is sent. Binding changes advance the source revision;
+an initially undated launch remains pending until its original incarnation can be verified.
+When the optional role would exceed the session byte budget, omit it without trimming
+the already-budgeted session content.
 
 * JSON, UTF-8, `camelCase` names. A field that is absent and one that is `null` mean
   the same thing. Text in the Basic Multilingual Plane, accented letters and CJK

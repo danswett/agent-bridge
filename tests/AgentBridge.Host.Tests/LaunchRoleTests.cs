@@ -42,7 +42,7 @@ public sealed class LaunchRoleTests : LaunchFlowFixture
         var feed = subscription.Then(channel);
         try { Assert.Equal(role, (await channel.Upsert.Task.WaitAsync(TimeSpan.FromSeconds(5))).Role); }
         finally { channel.End.TrySetResult(); await feed.WaitAsync(TimeSpan.FromSeconds(5)); }
-        var publisher = new FleetPublisher(source, "fixture", role: restarted.RoleOf);
+        var publisher = new FleetPublisher(source, "fixture", role: restarted.RoleOf, relaySupportsRoles: true);
         Assert.True(await publisher.PublishAsync((record, _) =>
         {
             Assert.Equal(role, Assert.Single(record.GetProperty("sessions").EnumerateArray()).GetProperty("role").GetString());
@@ -150,9 +150,10 @@ public sealed class LaunchRoleTests : LaunchFlowFixture
         var reads = 0;
         var discovered = new FleetPublisherTests.Source { Binding = _ => new(++reads, Fixture.T0.AddSeconds(reads)) };
         discovered.Sessions = [discovered.Sessions[0]];
-        await new FleetPublisher(discovered, "fixture", role: (_, _) => "lead").PublishAsync((record, _) =>
+        await new FleetPublisher(discovered, "fixture", role: (_, _) => "lead", relaySupportsRoles: true).PublishAsync((record, _) =>
         {
             Assert.Equal(Fixture.T0.AddSeconds(1), record.GetProperty("sessions")[0].GetProperty("startedAt").GetDateTimeOffset());
+            Assert.Equal("lead", record.GetProperty("sessions")[0].GetProperty("role").GetString());
             Assert.Equal(1, reads);
             return Task.CompletedTask;
         });
@@ -213,6 +214,9 @@ public sealed class LaunchRoleTests : LaunchFlowFixture
         Assert.Null(source.ProcessOf(launched.Session!)!.StartedAt);
         var original = Assert.Single(launcher.LaunchedProcesses());
         f.Processes.Queried = null;
+        f.Processes.Run(AgentKind.Copilot, original.ProcessId, $"copilot --session-id {launched.Session}", original.StartedAt.AddMilliseconds(10));
+        await source.RefreshAsync();
+        Assert.Null(launcher.RoleOf(launched.Session!, source.ProcessOf(launched.Session!)));
         f.Processes.Run(AgentKind.Copilot, original.ProcessId, $"copilot --session-id {launched.Session}", original.StartedAt);
         await source.RefreshAsync();
         await WaitAsync(() => Task.FromResult(launcher.RoleOf(launched.Session!, source.ProcessOf(launched.Session!)) == "lead"));

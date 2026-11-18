@@ -20,11 +20,11 @@ public sealed class FleetPublication
 
     public FleetPublication(ISessionSource source, string machine, bool share, Func<string, string?>? name = null,
         TimeProvider? time = null, Action<string>? log = null, Func<JsonElement, JsonElement>? sign = null,
-        Func<string, SessionProcess?, string?>? role = null)
+        Func<string, SessionProcess?, string?>? role = null, bool relaySupportsRoles = false)
     {
         this.source = source; this.share = share; this.log = log;
         clock = time ?? TimeProvider.System;
-        publisher = new FleetPublisher(source, machine, name, clock, sign, role);
+        publisher = new FleetPublisher(source, machine, name, clock, sign, role, relaySupportsRoles);
     }
 
     public FleetPublicationStatus Status => Volatile.Read(ref status);

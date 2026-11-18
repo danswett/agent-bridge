@@ -105,6 +105,12 @@ public interface ISessionSource : IAsyncDisposable
     // tells it from a later process given the same id before the next discovery pass
     // notices. Null when the session has gone or the source cannot say.
     SessionProcess? ProcessOf(string id) => null;
+
+    // Snapshot-aware sources retain the original binding for queued older upserts.
+    SessionProcess? ProcessOf(Session session) => ProcessOf(session.Id);
+
+    // Advisory launch metadata changed for this incarnation; revision and upsert it again.
+    void RoleChanged(string id, SessionProcess process) { }
 }
 
 public sealed record SessionProcess(int Id, DateTimeOffset? StartedAt);

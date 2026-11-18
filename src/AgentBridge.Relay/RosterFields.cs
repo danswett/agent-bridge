@@ -56,7 +56,8 @@ public static class RosterFields
         if (seen.Contains("total") && (!truncated.GetBoolean() || !Int(record.GetProperty("total"), out var total) || total <= sessions.GetArrayLength())) { return "bad-record"; }
         foreach (var s in sessions.EnumerateArray())
         {
-            if (!SessionOk(s)) { return "bad-record"; }
+            try { if (!SessionOk(s)) { return "bad-record"; } }
+            catch (InvalidOperationException) { return "bad-record"; }
         }
         return null;
     }

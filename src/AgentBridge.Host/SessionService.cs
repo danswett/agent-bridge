@@ -307,10 +307,12 @@ public sealed class SessionService
         }
     }
 
-    Session WithRole(Session session) => SessionBudget.Fit(session with
+    Session WithRole(Session session)
     {
-        Role = SessionRoles.Known(launcher?.RoleOf(session.Id, source.ProcessOf(session.Id))),
-    });
+        var plain = session with { Role = null };
+        var shown = plain with { Role = SessionRoles.Known(launcher?.RoleOf(session.Id, source.ProcessOf(session))) };
+        return shown.Role is null || ProtocolJson.ByteCount(shown) <= SessionBudget.MaxSessionBytes ? shown : plain;
+    }
 
     // session.history (docs/protocol/v1-history.md), read strictly as every request a client sends:
     // a request with a field missing, of the wrong type or out of range fails as a request.

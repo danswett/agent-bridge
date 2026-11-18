@@ -52,16 +52,18 @@ internal sealed class LaunchProvenance
         lock (gate) { Check(); origins.Remove(request); Save(); }
     }
 
-    public void Bound(Guid request, string session, SessionProcess process)
+    public bool Bound(Guid request, string session, SessionProcess process)
     {
         lock (gate)
         {
             Check();
             var prior = origins.GetValueOrDefault(request);
             var origin = new Origin(session, process, prior?.Grant, prior?.Role);
-            if (origins.GetValueOrDefault(request) == origin) { return; }
+            if (prior == origin) { return false; }
+            if (prior?.Process is not null) { throw new InvalidOperationException("refused: launch provenance is already bound to another incarnation"); }
             origins[request] = origin;
             Save();
+            return true;
         }
     }
 

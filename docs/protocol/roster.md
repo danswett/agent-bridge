@@ -170,6 +170,10 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
   unknown values refuse the record. `fleet.list` and `fleet.find` preserve it only for online, verified machines,
   ignoring a caller-supplied role. Neither a supplied nor a missing role authorizes a stop;
   the persistence is same-user-writable, not trusted role authority.
+  Host emission defaults off (`relaySupportsRoles=false`), including the current host wiring:
+  older relays reject the whole record when they see `role`. A caller may explicitly enable it
+  only after verifying relay support, and must disable it before a relay rollback. This slice
+  adds no capability handshake. Malformed role strings refuse the record as `bad-record`.
   Optional session evidence is `stale, attention, openAsks, unsentLength, unsentHash,
   observedAt, lastReplyAt, provenance, senderVerified`, with the bounded types and
   rejection rules in [agent-operations.md](agent-operations.md#fleetlist).* **Same account only; memory only.** Records are never logged, never in the roster blob, and
