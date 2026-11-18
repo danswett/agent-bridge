@@ -238,6 +238,12 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         var verifierDirty = false;
         foreach (var (index, entry) in parsed)
         {
+            // Persisted evidence is a duplicate, not a new ancestor to carry or upgrade.
+            if (replay.Any(e => e.Hash.AsSpan().SequenceEqual(entry.Hash)))
+            {
+                results[index] = new Result(Codec.Base64Url(entry.Hash), "duplicate", null);
+                continue;
+            }
             if (aside.Count > 0 || verifierDirty)
             {
                 // Size-refused entries must not affect later entries unless they are ancestors.
