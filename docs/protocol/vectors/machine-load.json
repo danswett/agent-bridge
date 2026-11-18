@@ -1,5 +1,5 @@
 {
-  "about": "Numerical machine and session load on the relay channel.",
+  "about": "Numerical machine and session load on authenticated channels; subscriptions are relay-only.",
   "spec": "v1-machine-load.md#1-machineload-1150",
   "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
   "contexts": {},
@@ -191,6 +191,7 @@
           "json": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
             "ageMs": 100,
+            "runQueueAvg": 2.5,
             "state": "fresh",
             "staleAfterMs": 15000,
             "cpu": {
@@ -225,6 +226,7 @@
           "json": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
             "ageMs": 100,
+            "runQueueAvg": 2.5,
             "state": "partial",
             "staleAfterMs": 15000,
             "cpu": {
@@ -288,6 +290,7 @@
           "json": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
             "ageMs": 100,
+            "runQueueAvg": 2.5,
             "state": "fresh",
             "staleAfterMs": 15000,
             "memory": {
@@ -324,6 +327,7 @@
           "json": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
             "ageMs": 100,
+            "runQueueAvg": 2.5,
             "state": "fresh",
             "staleAfterMs": 15000,
             "cpu": {
@@ -1551,6 +1555,7 @@
           "reads": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
             "ageMs": 100,
+            "runQueueAvg": 2.5,
             "state": "partial",
             "staleAfterMs": 15000,
             "cpu": {
@@ -2876,6 +2881,7 @@
           "json": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
             "ageMs": "many",
+            "runQueueAvg": 2.5,
             "state": "fresh",
             "staleAfterMs": 15000,
             "cpu": {
@@ -2906,6 +2912,7 @@
           },
           "reads": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
+            "runQueueAvg": 2.5,
             "state": "fresh",
             "staleAfterMs": 15000,
             "cpu": {

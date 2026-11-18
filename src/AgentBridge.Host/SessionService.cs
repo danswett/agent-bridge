@@ -282,6 +282,8 @@ public sealed class SessionService
             // Never this machine's pipe: a LocalChannel falls through to an unknown op.
             case DiagnosticsProtocol.Get when Diagnostics is not null && channel is SecureChannel:
                 return await Diagnostics.HandleAsync(channel, data);
+            case "load.get" when LoadEnabled() && Load is not null && Direct(channel):
+                return await Load.HandleAsync(channel, op);
             case "load.get" or "load.subscribe" or "load.unsubscribe" when LoadEnabled() && Load is not null && channel is SecureChannel:
                 return await Load.HandleAsync(channel, op);
             case Ops.SessionsList:

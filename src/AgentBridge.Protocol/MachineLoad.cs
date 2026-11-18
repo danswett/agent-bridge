@@ -12,7 +12,7 @@ public enum LoadAgentKind { Other, Agency, Direct, Copilot, Claude, Codex }
 [UnknownAs(Other)]
 public enum LoadHandleKind { Other, Handles, Fds }
 
-// Relay-only numerical readings (v1-machine-load.md). Unknown figures stay absent, never zero.
+// Numerical readings on authenticated channels (v1-machine-load.md). Unknown stays absent.
 public sealed record MachineLoad
 {
     MachineLoadState state;
@@ -21,6 +21,7 @@ public sealed record MachineLoad
 
     public DateTimeOffset? SampledAt { get; init; }
     public long? AgeMs { get; init; }
+    public double? RunQueueAvg { get; init; }
     public MachineLoadState State { get => truncated && state == MachineLoadState.Fresh ? MachineLoadState.Partial : state; init => state = value; }
     public long? StaleAfterMs { get; init; }
     public MachineLoadCpu? Cpu { get; init; }
