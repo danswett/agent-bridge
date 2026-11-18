@@ -107,19 +107,19 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
         Assert.Equal((13, 13, 1), Rows(first.Text)["Alpha"]);
     }
 
-    [Fact]
-    public async Task Report_fails_clearly_on_a_vector_that_cannot_be_parsed()
+    [Theory]
+    [InlineData("{broken")]
+    [InlineData("""{"records":{"Broken":{"valid":[{}],"refused":[]}}}""")]
+    public async Task Report_fails_clearly_on_a_vector_that_cannot_be_parsed(string malformed)
     {
         using var sample = new VectorFolder();
-        foreach (var malformed in new[] { "{broken", """{"records":{"Broken":{"valid":[{}],"refused":[]}}}""" })
-        {
-            sample.Write("broken.json", malformed);
-            var result = await RunAsync(sample.Path);
-            Assert.NotEqual(0, result.ExitCode);
-            Assert.Contains("broken.json", result.Error);
-            Assert.Contains("Cannot measure vector file", result.Error);
-            Assert.Empty(result.Text);
-        }
+        sample.Write("broken.json", malformed);
+        var result = await RunAsync(sample.Path);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("broken.json", result.Error);
+        Assert.Contains("Cannot measure vector file", result.Error);
+        Assert.Empty(result.Text);
+        Assert.StartsWith("Cannot measure vector file 'broken.json': ", result.Error);
     }
 
     [Fact]
