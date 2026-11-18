@@ -384,6 +384,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    - the test filter `product` adds: ring 0's on a draft, none otherwise (ci.yml passes it
      on only for a draft pull request, whatever the plan says).
 
+   Ubuntu caps assemblies with `-m:2` and retries only a testhost startup abort with
+   zero executed/failed tests once, loudly, retaining both TRXs; real failures stay red.
+
    The jobs, and what each one's for (#459):
    - `app-installer` keeps its x64 and Arm64 check names and the full install, architecture,
      distribution-notice and installed-app self-test checks. It waits for `app`, downloads that

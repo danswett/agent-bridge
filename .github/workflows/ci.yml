@@ -318,8 +318,15 @@ jobs:
       # needs no package in the test projects. Coverage and the TRX timings are only reported
       # (quality/README.md §5): nothing here fails the run but the tests themselves. TEST_FILTER is
       # ring 0's in-process filter on a draft (the fast ring), and empty otherwise: every test runs.
+      - name: Ubuntu tests with bounded assembly parallelism and one startup retry
+        if: env.DOTNET_TARGET != '' && runner.os == 'Linux'
+        shell: pwsh
+        run: dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "pwsh -NoProfile -File quality/testhost-startup.ps1"
+        timeout-minutes: 20
+        env:
+          DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
       - name: dotnet test, with coverage and per-test times
-        if: env.DOTNET_TARGET != ''
+        if: env.DOTNET_TARGET != '' && runner.os != 'Linux'
         shell: pwsh
         run: |
           . ./quality/dotnet-test-command.ps1
@@ -1354,6 +1361,10 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'beta-release-manifest')) }}
         shell: pwsh
         run: pwsh -NoProfile -File build/test-release-manifest.ps1
+      - name: Startup retries refuse real test failures
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'testhost-startup')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-testhost-startup.ps1
       - name: .NET for the installer input quality harness
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'app-installer-input')) }}
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0

@@ -553,6 +553,18 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: testhost-startup
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [.github/workflows/ci.yml, quality/testhost-startup.ps1, quality/test-testhost-startup.ps1]
+    command: pwsh -NoProfile -File quality/test-testhost-startup.ps1
+    where: ci.yml light
+    status: exists
+
   - id: arm64-waiver-script
     validation_plan: native
     kind: unit
