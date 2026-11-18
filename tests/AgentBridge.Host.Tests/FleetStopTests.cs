@@ -70,6 +70,7 @@ public sealed partial class StopFlowTests
     {
         var setup = StopFleet(new StopClearance());
         Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await SendFleet(setup.Handler, node)).Outcome);
+        Assert.Contains(GateAuditProjection.Load(setup.Audit).Rows, row => row.Action == Ops.SessionStop && row.Outcome == "refused");
         Assert.Empty(injector.Plans);
         Assert.Empty(control.Terminated);
     }
@@ -90,6 +91,7 @@ public sealed partial class StopFlowTests
         var setup = StopFleet(blocked == 1 ? null : clearance, fleet: blocked != 0);
         if (blocked == 7) { File.WriteAllText(Path.Combine(setup.Audit, HostSettings.FileName), """{"agents":{"enabled":false}}"""); }
         Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await SendFleet(setup.Handler)).Outcome);
+        Assert.Contains(GateAuditProjection.Load(setup.Audit).Rows, row => row.Action == Ops.SessionStop && row.Outcome == "refused");
         Assert.Empty(injector.Plans);
         Assert.Empty(control.Terminated);
     }
@@ -99,6 +101,7 @@ public sealed partial class StopFlowTests
     {
         var setup = StopFleet(new StopClearance(), grant: false);
         await Assert.ThrowsAsync<InvalidOperationException>(() => SendFleet(setup.Handler));
+        Assert.Equal("script:fixture/sre", Assert.Single(GateAuditProjection.Load(setup.Audit).Rows, row => row.Action == Ops.SessionStop).Principal);
         Assert.Throws<InvalidOperationException>(() => ScriptCredentialCommands.Handle(stopScript, "scripts.grant-stop",
             JsonSerializer.SerializeToElement(new { name = "sre" }),
             new FixedCallerGuard(new(CallerKind.HostCli, "spoofed owner")), setup.Credentials, new AgentAuditLog(setup.Audit)));
@@ -119,6 +122,7 @@ public sealed partial class StopFlowTests
         else { clearance.Change = value => value with { UnpushedWork = new(WorkState.Refused, "new work") }; }
         release.SetResult();
         Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await stop).Outcome);
+        Assert.Contains(GateAuditProjection.Load(setup.Audit).Rows, row => row.Action == Ops.SessionStop && row.Outcome == "refused");
         Assert.Empty(control.Terminated);
         Assert.NotNull(source.Get(Id));
     }
@@ -137,6 +141,7 @@ public sealed partial class StopFlowTests
             JsonSerializer.SerializeToElement(new { name = "sre" }),
             new FixedCallerGuard(new(CallerKind.HostCli, "fixture owner")), setup.Credentials, new AgentAuditLog(setup.Audit));
         await Assert.ThrowsAsync<InvalidOperationException>(() => SendFleet(setup.Handler));
+        Assert.Equal("script:fixture/sre", Assert.Single(GateAuditProjection.Load(setup.Audit).Rows, row => row.Action == Ops.SessionStop).Principal);
         var after = new AgentCredentials(setup.Audit, "fixture", clock);
         after.Accept(connection, granted);
         Assert.False(after.Of(connection)!.FleetStop);
@@ -150,6 +155,7 @@ public sealed partial class StopFlowTests
         injector.OnInject = (_, _) => clearance.Change = value => value with { Held = new(WorkState.Refused, "held now") };
         var setup = StopFleet(clearance);
         Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await SendFleet(setup.Handler)).Outcome);
+        Assert.Contains(GateAuditProjection.Load(setup.Audit).Rows, row => row.Action == Ops.SessionStop && row.Outcome == "refused");
         Assert.Empty(control.Terminated);
     }
 }
