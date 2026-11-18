@@ -113,6 +113,80 @@ public sealed class RunMarkerTests : IDisposable
         finally { (live as object as IDisposable)?.Dispose(); (next as object as IDisposable)?.Dispose(); }
     }
 
+    [Fact]
+    public void Competing_start_cannot_recover_the_same_record_while_the_first_start_saves()
+    {
+        Start("abandoned").Dispose();
+        PreviousRun? competing = null;
+        RunMarker.WriteFileOverride = (target, bytes) =>
+        {
+            RunMarker.WriteFileOverride = null;
+            var other = Start("competing");
+            competing = other.Previous;
+            other.Complete();
+            File.WriteAllBytes(target, bytes);
+        };
+        try
+        {
+            var recovered = Start("recovering");
+            Assert.Equal("abandoned", recovered.Previous.Version);
+            Assert.NotNull(competing);
+            Assert.False(competing.Unclean);
+            recovered.Complete();
+            Assert.False(RunMarker.ReadPrevious(folder).Unclean);
+        }
+        finally { RunMarker.WriteFileOverride = null; }
+    }
+
+    [Fact]
+    public void Read_only_recovered_record_does_not_disable_the_new_marker_or_release_its_lease()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Start("abandoned").Dispose();
+        var old = Assert.Single(Directory.GetFiles(folder, "*.json"));
+        File.SetAttributes(old, FileAttributes.ReadOnly);
+        try
+        {
+            var recovered = Start("recovering");
+            Assert.Equal("abandoned", recovered.Previous.Version);
+            Assert.Contains(nameof(UnauthorizedAccessException), Assert.Single(recovered.RecoveryWarnings));
+            var file = Assert.Single(Directory.GetFiles(folder, "*.json"), file => file != old);
+            using var competingOwner = UserLock.TryTake(file + ".lock");
+            Assert.Null(competingOwner);
+            recovered.Complete();
+            Assert.False(File.Exists(file));
+            recovered.RecordCrash(new InvalidOperationException());
+            Assert.Contains(nameof(InvalidOperationException), File.ReadAllText(file));
+        }
+        finally { File.SetAttributes(old, FileAttributes.Normal); }
+    }
+
+    [Fact]
+    public void Recovery_consumes_every_abandoned_record_only_after_a_durable_save_and_preserves_live_runs()
+    {
+        var live = Start("live");
+        var old = Path.Combine(folder, "run-marker.old.json");
+        var latest = Path.Combine(folder, "run-marker.latest.json");
+        var corrupt = Path.Combine(folder, "run-marker.corrupt.json");
+        File.WriteAllText(old, System.Text.Json.JsonSerializer.Serialize(new PreviousRun(true, "old", clock.GetUtcNow().AddMinutes(-1))));
+        File.WriteAllText(latest, System.Text.Json.JsonSerializer.Serialize(new PreviousRun(true, "latest", clock.GetUtcNow())));
+        File.WriteAllText(corrupt, "{broken");
+        RunMarker.WriteFileOverride = (_, _) => throw new IOException("Synthetic failed replacement");
+        try { Assert.Throws<IOException>(() => Start("failed")); }
+        finally { RunMarker.WriteFileOverride = null; }
+        Assert.All(new[] { old, latest, corrupt }, file => Assert.True(File.Exists(file)));
+        var recovered = Start("recovering");
+        Assert.Equal("latest", recovered.Previous.Version);
+        Assert.Equal(2, Directory.GetFiles(folder, "*.json").Length);
+        Assert.All(new[] { old, latest, corrupt }, file => Assert.False(File.Exists(file)));
+        recovered.Complete();
+        var next = Start("next");
+        Assert.False(next.Previous.Unclean);
+        next.Complete();
+        live.Dispose();
+        Assert.Equal("live", RunMarker.ReadPrevious(folder).Version);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("{broken")]
@@ -157,6 +231,28 @@ public sealed class RunMarkerTests : IDisposable
     }
 
     static void Crash() => throw new InvalidOperationException("private conversation");
+
+    [Fact]
+    public void Crash_descriptions_include_nested_and_aggregate_inner_types_and_frames_without_private_text()
+    {
+        var inner = Assert.Throws<ArgumentException>((Action)InnerCrash);
+        var error = new System.Reflection.TargetInvocationException("private wrapper",
+            new AggregateException("private aggregate", inner, new IOException("private IO message")));
+        var marker = Start("1");
+        marker.RecordCrash(error);
+        marker.Dispose();
+        var description = Assert.IsType<string>(RunMarker.ReadPrevious(folder).Crash);
+        Assert.Contains(nameof(System.Reflection.TargetInvocationException), description);
+        Assert.Contains(nameof(AggregateException), description);
+        Assert.Contains(nameof(ArgumentException), description);
+        Assert.Contains(nameof(IOException), description);
+        Assert.Contains("RunMarkerTests.InnerCrash", description);
+        Assert.DoesNotContain("private", description);
+        Assert.DoesNotContain("RunMarkerTests.cs", description);
+        Assert.Equal(RunMarker.DescribeCrash(error), description);
+    }
+
+    static void InnerCrash() => throw new ArgumentException("private inner conversation");
 
     [Fact]
     public void A_late_watchdog_callback_does_not_recreate_a_completed_marker()

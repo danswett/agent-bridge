@@ -52,7 +52,11 @@ public static class Program
         if (options.SelfTest is null)
         {
             var version = JournalEvents.Version(typeof(Program).Assembly) ?? "0.0.0";
-            try { Marker = RunMarker.Start(Path.Combine(Paths.AppData, "runs", options.Demo ? "demo" : options.Profile), version); }
+            try
+            {
+                Marker = RunMarker.Start(Path.Combine(Paths.AppData, "runs", options.Demo ? "demo" : options.Profile), version);
+                foreach (var warning in Marker.RecoveryWarnings) { AppLog.Write(warning); }
+            }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { AppLog.Write($"run marker not started: {e.GetType().Name}"); }
             AppLog.Write($"app started: {version}");
         }
