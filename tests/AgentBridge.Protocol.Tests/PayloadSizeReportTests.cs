@@ -173,8 +173,12 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
         }
     }
 
-    static async Task WaitForReportAsync(Task ready, Task exited, Func<Task, Task> withinBudget) =>
+    static async Task WaitForReportAsync(Task ready, Task exited, Func<Task, Task> withinBudget)
+    {
+        // Hosted process startup is not report work; the test runner owns the outer hang bound.
+        await ready;
         await withinBudget(exited);
+    }
 
     sealed class VectorFolder : IDisposable
     {
