@@ -159,16 +159,22 @@ public sealed class NotifyOwnerTests : IDisposable
     }
 
     [Theory]
-    [InlineData(true, true, "delivered", "")]
-    [InlineData(false, true, "refused", "noSubscribedClient")]
-    [InlineData(true, false, "refused", "auditUnwritable")]
-    public async Task Owner_pages_need_an_opted_in_app_and_a_writable_intent_audit(bool optIn, bool audited, string outcome, string reason)
+    [InlineData(true, true, false, "delivered", "")]
+    [InlineData(false, true, false, "refused", "noSubscribedClient")]
+    [InlineData(true, false, false, "refused", "auditUnwritable")]
+    [InlineData(true, true, true, "refused", "noSubscribedClient")]
+    public async Task Owner_pages_need_an_opted_in_app_and_a_writable_intent_audit(bool optIn, bool audited, bool credentialed, string outcome, string reason)
     {
         Grant();
         await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time);
         var sessions = new SessionService(source, new MachineInfo("machine1", "Test", "windows", "0.1.0")) { Time = fixture.Time };
         var route = Handler(audited ? new AgentAuditLog(fixture.Root, fixture.Time) : null, sessions);
-        await using var server = LocalServer.Start(LocalEndpoint.For(fixture.Root), route);
+        await using var server = LocalServer.Start(LocalEndpoint.For(fixture.Root), async (ch, op, data) =>
+        {
+            var result = await route(ch, op, data);
+            if (credentialed && op == Ops.SessionsSubscribe) { credentials.Accept(ch, credentials.Of(channel)!); }
+            return result;
+        });
         await using var app = await LocalClient.ConnectAsync(LocalEndpoint.For(fixture.Root), TimeSpan.FromSeconds(2));
         await app.CallAsync(Ops.SessionsSubscribe, new { ownerPages = optIn });
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
@@ -242,6 +248,12 @@ public sealed class NotifyOwnerTests : IDisposable
         Assert.Equal(("Attention", "private page", "needsYou"), (notice.GetProperty("title").GetString(), notice.GetProperty("body").GetString(), notice.GetProperty("data").GetProperty("class").GetString()));
         Assert.False(notice.GetProperty("data").TryGetProperty("question", out _));
         Assert.False(notice.GetProperty("silent").GetBoolean());
+        await route(channel, "notify-owner", Body());
+        await push.PumpAsync();
+        Assert.Equal(2, sender.Bodies.Count);
+        var replacement = JsonDocument.Parse(WebPushCrypto.Decrypt(sender.Bodies[1], browser, auth)).RootElement.GetProperty("notification");
+        Assert.True(replacement.GetProperty("silent").GetBoolean());
+        Assert.Equal(notice.GetProperty("tag").GetString(), replacement.GetProperty("tag").GetString());
     }
 
     sealed class Sender : IPushSender

@@ -43,7 +43,7 @@ public sealed record PushDevice(string Device, string Name, string Service, Date
 // that opens Needs you. It names no session or question, so an older client, which reads it as a
 // question, shows its words and opens the machine, with nothing to answer.
 [UnknownAs(Question)]
-public enum NoticeKind { Question, Finished, Resolved, SignIn, Restored, Group }
+public enum NoticeKind { Question, Finished, Resolved, SignIn, Restored, Group, OwnerPage }
 
 // The plaintext of one push, before RFC 8291 encryption. It is a Declarative Web Push
 // message (web_push: 8030), which Safari 18.4+ shows without running the service worker,

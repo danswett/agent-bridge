@@ -5,13 +5,13 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-internal sealed class NotifyOwnerService(AgentCredentials? credentials, AgentAuditLog? audit, TimeProvider time)
+internal sealed class NotifyOwnerService(AgentCredentials? credentials, AgentAuditLog? audit, TimeProvider time, SessionService? sessions)
 {
     readonly object gate = new();
     readonly Dictionary<string, (DateTimeOffset At, int Count)> windows = new(StringComparer.Ordinal);
     static readonly UTF8Encoding Utf8 = new(false, true);
 
-    public NotifyOwnerResult Handle(IProtocolChannel channel, JsonElement data)
+    public async Task<NotifyOwnerResult> HandleAsync(IProtocolChannel channel, JsonElement data)
     {
         var caller = credentials?.Of(channel);
         var requestId = Guid.NewGuid();
@@ -62,8 +62,19 @@ internal sealed class NotifyOwnerService(AgentCredentials? credentials, AgentAud
             if (window.Count >= 6) { return Refuse("rateLimited"); }
             windows[principal] = (window.At, window.Count + 1);
         }
-        // Client admission and #913 delivery belong to the next slice: never turn silent manage
-        // messages, host-gone events or a sealed relay send into an owner page.
-        return Refuse("deliveryUnavailable");
+        if (sessions is null) { return Refuse("deliveryUnavailable"); }
+        var intent = new AgentAuditEntry("local", requestId.ToString("D"), credentials!.PrincipalOf(caller), caller.Chain,
+            NotifyOwnerProtocol.Op, "owner:policy", "attempted");
+        if (audit?.Append(intent) != true) { return Refuse("auditUnwritable"); }
+        var admitted = true;
+        bool Authorized() => Volatile.Read(ref admitted) && credentials.IsLive(caller);
+        var result = await sessions.NotifyOwnerAsync(request, Authorized);
+        foreach (var ack in result.Clients)
+        {
+            if (audit.Append(intent with { Outcome = ack.Outcome.ToString().ToLowerInvariant(), Reason = $"{ack.Client}:{ack.Reason}" })) { continue; }
+            Volatile.Write(ref admitted, false);
+            return Refuse("auditUnwritable");
+        }
+        return result;
     }
 }

@@ -139,6 +139,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     readonly Dictionary<(string Session, string Question), string> answeredBy = [];
     // When each device was last sent a finished notice per session, for FinishedCollapse.
     readonly Dictionary<(string Device, string Session), DateTimeOffset> finishedSent = [];
+    readonly Dictionary<string, DateTimeOffset> ownerSent = new(StringComparer.Ordinal);
     // When each sign-in notice (PushNotice.SignInKey) was last made, while its sessions still need sign-in.
     readonly Dictionary<string, DateTimeOffset> signInSent = new(StringComparer.Ordinal);
     readonly Queue<DateTimeOffset> recent = new();
@@ -218,6 +219,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         public DateTimeOffset NotBefore;
         public int Attempts;
         public TrustedPeerLease? Grant;
+        public Func<bool>? OwnerAllowed;
         // A finished notice waiting out FinishedCollapse.
         public bool Collapsed;
         // A grouped notice that alerts.
@@ -270,6 +272,50 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
 
     public int Subscribers => store.Count;
 
+    internal OwnerClientAck NotifyOwner(NotifyOwnerRequest request, Func<bool> authorized, Func<string, bool> policy)
+    {
+        OwnerClientAck Refused(string reason) => new(OwnerClientKind.Pwa, OwnerNotifyOutcome.Refused, reason);
+        lock (gate)
+        {
+            if (!authorized()) { return Refused("callerNotAuthorized"); }
+            if (trust is not { Enabled: true } || sender is null || sender.AccountId != store.Account) { return Refused("deliveryUnavailable"); }
+            foreach (var old in ownerSent.Keys.Where(d => store.Get(d) is null).ToArray()) { ownerSent.Remove(old); }
+            var eligible = store.All.Where(MayNotify).ToArray();
+            if (eligible.Length == 0) { return Refused("noSubscribedClient"); }
+            var selected = eligible.Where(s => policy(s.Device)).ToArray();
+            if (selected.Length == 0) { return Refused("policySuppressed"); }
+            var now = time.GetUtcNow();
+            const string key = "~owner";
+            var pending = new List<Outgoing>();
+            foreach (var sub in selected)
+            {
+                var quiet = ownerSent.TryGetValue(sub.Device, out var last) && now - last < TimeSpan.FromSeconds(30);
+                var message = new PushMessage
+                {
+                    Notification = new PushNotification
+                    {
+                        Title = request.Title, Body = request.Body, Navigate = PushNotice.NavigateMachine(sub.App, machine.Id),
+                        Tag = PushNotice.Tag(machine.Id, key), Silent = quiet,
+                        Data = new PushNoticeData { Kind = NoticeKind.OwnerPage, Class = NotificationClass.NeedsYou, Machine = machine.Id, At = now },
+                    },
+                };
+                var plain = PushNotice.Serialize(message);
+                if (plain.Length > PushNotice.MaxBytes) { return Refused("payloadTooLarge"); }
+                pending.Add(new Outgoing
+                {
+                    Device = sub.Device, Session = key, Kind = NoticeKind.OwnerPage, Plain = plain, Ttl = 300,
+                    Urgency = quiet ? "normal" : "high", Topic = PushNotice.Topic(machine.Id, key), Created = now, NotBefore = now, Grant = sub.Grant,
+                    OwnerAllowed = () => authorized() && policy(sub.Device),
+                });
+            }
+            if (!authorized()) { return Refused("callerNotAuthorized"); }
+            outbox.RemoveAll(o => o.Kind == NoticeKind.OwnerPage && selected.Any(s => s.Device == o.Device));
+            outbox.AddRange(pending);
+        }
+        Signal();
+        return new(OwnerClientKind.Pwa, OwnerNotifyOutcome.Queued, "");
+    }
+
     bool MayNotify(PushSubscriber subscriber) => trust is not { Enabled: true } ||
         (subscriber.Grant is { Role: TrustedPeerStore.Person } grant && trust.Store.Current(grant, store.Account)
             && BlobFormat.FromBase64Url(grant.PublicKey) is { } key && Wire.DeviceId(key) == subscriber.Device);
@@ -310,6 +356,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                 if (dropped > 0) { log($"signed in to another account: dropped {dropped} push subscription(s)"); }
                 outbox.Clear();
                 shownOn.Clear();
+                ownerSent.Clear();
                 // The new account's devices have heard nothing yet.
                 signInSent.Clear();
             }
@@ -499,6 +546,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
 
     void Forget(string device)
     {
+        ownerSent.Remove(device);
         outbox.RemoveAll(o => o.Device == device);
         foreach (var k in finishedSent.Keys.Where(k => k.Device == device).ToList()) { finishedSent.Remove(k); }
         foreach (var k in shownOn.Keys.Where(k => k.Device == device).ToList()) { shownOn.Remove(k); }
@@ -683,6 +731,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                 while (recent.Count > 0 && now - recent.Peek() >= TimeSpan.FromMinutes(1)) { recent.Dequeue(); }
                 if (recent.Count >= options.MaxPerMinute) { return NextWake(now); }
                 outbox.Remove(ready);
+                if (ready.OwnerAllowed?.Invoke() == false) { Dropped(ready, "owner-page-refused", now); continue; }
                 if (store.Get(ready.Device) is not { } found) { Dropped(ready, "unsubscribed", now); ready.Settled?.TrySetResult(); continue; }
                 if (ready.Reminder && !StillReminds(ready)) { Dropped(ready, "answered", now); continue; }
                 // A finished notice that waited (the relay down, the rate limit, a retry, or
@@ -710,7 +759,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                 var encrypted = WebPushCrypto.Encrypt(next.Plain, sub.Subscription);
                 lock (gate)
                 {
-                    if (!MayNotify(sub) || store.Get(sub.Device)?.Grant != next.Grant || next.Reminder && !StillReminds(next)) { next.Settled?.TrySetResult(); continue; }
+                    if (next.OwnerAllowed?.Invoke() == false || !MayNotify(sub) || store.Get(sub.Device)?.Grant != next.Grant || next.Reminder && !StillReminds(next)) { next.Settled?.TrySetResult(); continue; }
                     var now = time.GetUtcNow();
                     while (recent.Count > 0 && now - recent.Peek() >= TimeSpan.FromMinutes(1)) { recent.Dequeue(); }
                     if (recent.Count >= options.MaxPerMinute)
@@ -781,6 +830,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
             }
             else { shownOn.Remove(key); }
             if (o.Kind == NoticeKind.Finished) { finishedSent[key] = time.GetUtcNow(); }
+            if (o.Kind == NoticeKind.OwnerPage) { ownerSent[o.Device] = time.GetUtcNow(); }
             // The hourly repeat counts from a notice that reached a device, and only that is kept
             // across a restart: one lost with the outbox is made again by the next host.
             if (o.Kind == NoticeKind.SignIn && signInSent.ContainsKey(o.Session))

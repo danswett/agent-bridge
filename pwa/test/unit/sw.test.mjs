@@ -79,6 +79,16 @@ const notice = (kind, extra = {}) => ({
   },
 });
 
+test('an owner page shows its text and opens only its machine without approval actions', async () => {
+  const sw = worker();
+  await sw.fire('push', push(notice('ownerPage', { title: 'Attention', body: 'Private page', tag: `${MACHINE}:~owner`,
+    navigate: `${scope}?host=${MACHINE}`, data: { kind: 'ownerPage', machine: MACHINE, class: 'needsYou' } })));
+  const [n] = sw.shown;
+  assert.deepEqual([n.title, n.body, n.data.url, n.data.session, n.data.question], ['Attention', 'Private page', `${scope}?host=${MACHINE}`, null, null]);
+  assert.equal(n.actions, undefined);
+  assert.equal(n.renotify, true);
+});
+
 test('a question shows its title and body under the session\'s tag, alerting again, with where a tap goes', async () => {
   const sw = worker();
   await sw.fire('push', push(notice('question')));

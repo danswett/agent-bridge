@@ -32,6 +32,22 @@ public sealed class ToastTests
 
     static XElement Xml(ToastNotice n) => XElement.Parse(n.Xml);
 
+    [Fact]
+    public void Owner_page_bursts_replace_the_same_tag_quietly_and_respect_notifications_off()
+    {
+        var enabled = true;
+        var p = new ToastPlanner(sink, clock) { Enabled = () => enabled };
+        var page = new NotifyOwnerRequest(Guid.NewGuid(), "owner", "policy", "Attention", "A page");
+        p.OwnerPage(page);
+        p.OwnerPage(page);
+        enabled = false;
+        p.OwnerPage(page);
+        Assert.Equal([false, true], sink.Shown.Select(n => n.Quiet));
+        Assert.Single(sink.Shown.Select(n => n.Tag).Distinct());
+        p.MachineGone();
+        Assert.Equal(sink.Shown[0].Tag, Assert.Single(sink.Withdrawn));
+    }
+
     // Toasts about sessions, without the machine's sign-in toast (SignIns).
     List<ToastNotice> Finished() => [.. sink.Shown.Where(t => !t.Tag.StartsWith("signin:", StringComparison.Ordinal))];
 
@@ -631,6 +647,7 @@ public sealed class ToastTests
             [nameof(ToastXml.CouldNotInstall)] = [ToastXml.CouldNotInstall("Couldn't install version 0.1.9. Slipgates is still on 0.1.8.")],
             [nameof(ToastXml.Outcome)] = [ToastXml.Outcome("s1", "A session", "Sent.", "remote-id"), ToastXml.Outcome("s1", "A session", "Sent.")],
             [nameof(ToastXml.SignIn)] = [ToastXml.SignIn(AgentKind.Copilot, 4, "PC", "remote-id"), ToastXml.SignIn(AgentKind.Claude, 1, null)],
+            [nameof(ToastXml.OwnerPage)] = [ToastXml.OwnerPage(new(Guid.NewGuid(), "owner", "policy", "Title", "Body"))],
         };
         // A builder added later is held to this too: every public method whose output is a <toast>
         // is listed. Told apart by what it returns, not by name, so a text helper such as Plain or
@@ -650,6 +667,7 @@ public sealed class ToastTests
         var args = m.GetParameters().Select(p => p.ParameterType switch
         {
             var t when t == typeof(Session) => Make.Session(question: Make.Choice(), response: "Done."),
+            var t when t == typeof(NotifyOwnerRequest) => new NotifyOwnerRequest(Guid.NewGuid(), "owner", "policy", "Title", "Body"),
             var t when t == typeof(IReadOnlyList<string>) => (object)Caps,
             var t when t == typeof(string) => "x",
             var t when t == typeof(int) => 300,

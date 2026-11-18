@@ -152,7 +152,14 @@ public partial class App : Application
         // The list's order, pins and sort, kept beside the folds (#164): every machine's, not only this one's.
         // Usage kept between runs for the account (#172), beside them too.
         main = self = new MainViewModel(localMachine, new UsageViewModel(cache: new UsageCache(Path.Combine(appData, $"{options.Profile}-usage.json"))), settings, new SessionOrder(Path.Combine(appData, $"{options.Profile}-order.json")));
-        settings.PreferencesChanged += () => { foreach (var c in main.AllCards) { c.CapabilitiesChanged(); } };
+        var ownerPagesEnabled = prefs.Toasts && installed;
+        settings.PreferencesChanged += () =>
+        {
+            foreach (var c in main.AllCards) { c.CapabilitiesChanged(); }
+            if (ownerPagesEnabled == (prefs.Toasts && installed)) { return; }
+            ownerPagesEnabled = prefs.Toasts && installed;
+            foreach (var m in main.AllMachines) { m.Host.Resync(); }
+        };
         responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (machine, id) => ShowWindow(machine, id))
         {
             SessionOf = (key, id) => main.MachineOf(key)?.Host.Sessions.Get(id),
