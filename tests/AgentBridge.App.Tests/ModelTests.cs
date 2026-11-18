@@ -99,10 +99,67 @@ public sealed class MarkdownTests
         return Assert.Single(copied);
     }
 
+    [Theory]
+    [InlineData("`git  status`", "git  status")]
+    [InlineData("``echo `value` ``", "echo `value` ")]
+    [InlineData("`git\nstatus`", "git status")]
+    public void A_lone_code_span_paragraph_becomes_a_code_block_and_copies_exactly(string markdown, string code)
+    {
+        Assert.Equal(new MdCode(code, null), Assert.Single(MarkdownModel.Parse(markdown)));
+        Assert.Equal(code, CopyOf(markdown));
+    }
+
+    [Theory]
+    [InlineData("Run `git status` now")]
+    [InlineData("`git status` and `git log`")]
+    [InlineData("`git status` ``git log``")]
+    [InlineData("**`git status`**")]
+    [InlineData("[`git status`](https://example.com)")]
+    [InlineData("![`git status`](https://example.com/a.png)")]
+    [InlineData("pwsh -NoProfile -File build.ps1")]
+    [InlineData("``")]
+    public void Anything_other_than_one_bare_code_span_stays_a_paragraph(string markdown)
+    {
+        Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse(markdown)));
+    }
+
+    [Fact]
+    public void Lone_code_spans_in_lists_and_quotes_use_the_same_code_block_rule()
+    {
+        var quote = Assert.IsType<MdQuote>(Assert.Single(MarkdownModel.Parse("> `git status`")));
+        var list = Assert.IsType<MdList>(Assert.Single(MarkdownModel.Parse("- `git status`")));
+
+        Assert.Equal(new MdCode("git status", null), Assert.Single(quote.Blocks));
+        Assert.Equal(new MdCode("git status", null), Assert.Single(Assert.Single(list.Items)));
+    }
+
+    [Fact]
+    public void A_very_long_lone_code_span_copies_as_one_unbroken_line()
+    {
+        var command = "echo " + new string('x', 16000);
+
+        Assert.Equal(command, CopyOf($"`{command}`"));
+    }
+
+    [Fact]
+    public void A_promoted_span_reveals_hidden_and_right_to_left_text_through_CodeCopy()
+    {
+        const string command = "echo \u2067\u05D0\u2069\u00A0#; next";
+        const string drawn = @"echo \u2067\u05D0\u2069\u00A0#; next";
+        var code = Assert.IsType<MdCode>(Assert.Single(MarkdownModel.Parse($"`{command}`")));
+        var copy = new CodeCopy(code, _ => true);
+
+        Assert.True(copy.Hidden);
+        Assert.True(copy.RightToLeft);
+        Assert.Equal(drawn, copy.Text);
+        Assert.Equal(drawn, CopyOf($"`{command}`"));
+        Assert.Equal("`git status`", Drawn("`git status`"));
+    }
+
     [Fact]
     public void A_long_command_is_copied_exactly_as_one_line()
     {
-        const string command = "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\me\\repos\\agent-bridge\\tools\\rehearsal\\run-rehearsal.ps1\" -Profile dev -Machine DEV-VM2 -Checklist docs\\parity-checklist.md -Evidence out\\evidence -Verbose  ";
+        const string command = "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\me\\repos\\agent-bridge\\tools\\rehearsal\\run-rehearsal.ps1\" -Profile dev -Machine node-b -Checklist docs\\parity-checklist.md -Evidence out\\evidence -Verbose  ";
 
         Assert.Equal(command, CopyOf($"Run this:\n\n```powershell\n{command}\n```\n"));
     }
@@ -847,7 +904,7 @@ public sealed class UsageTests
         // #225: on a phone the login was cut to "d" while "read on <machine>" kept its space, and
         // the summary read "GitHub Copilot 12% · GitHub Copilot 0%".
         const string first = "danswett-with-a-much-longer-login", second = "dswett_microsoft-enterprise-managed";
-        var reader = new UsageReader(new string('b', 32), "DSWETT-DEV-VM1-WITH-A-LONG-NAME");
+        var reader = new UsageReader(new string('b', 32), "TEST-NODE-WITH-A-LONG-NEUTRAL-NAME");
         var vm = new UsageViewModel(new FakeTimeProvider(Now));
 
         vm.Update(new UsageReport([Agent("GitHub Copilot", 12) with { Account = first, Plan = null, ReadBy = reader },
@@ -858,7 +915,7 @@ public sealed class UsageTests
         Assert.Equal([first, second], vm.Rows.Select(r => r.Detail));
         Assert.All(vm.Rows, r => Assert.DoesNotContain("read on", r.Label + r.Detail + r.Age, StringComparison.Ordinal));
         // Kept for the age's tooltip and accessible description.
-        Assert.All(vm.Rows, r => Assert.Equal("read on DSWETT-DEV-VM1-WITH-A-LONG-NAME", r.ReadOn));
+        Assert.All(vm.Rows, r => Assert.Equal("read on TEST-NODE-WITH-A-LONG-NEUTRAL-NAME", r.ReadOn));
     }
 
     [Fact]

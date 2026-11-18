@@ -320,6 +320,2538 @@
           }
         },
         {
+          "name": "over-200-sessions",
+          "json": {
+            "sampledAt": "2026-10-28T04:22:43.182Z",
+            "ageMs": 100,
+            "state": "fresh",
+            "staleAfterMs": 15000,
+            "cpu": {
+              "percent": 25,
+              "cores": 8
+            },
+            "memory": {
+              "totalBytes": 17179869184,
+              "availableBytes": 8589934592,
+              "committedPercent": 50
+            },
+            "sessions": [
+              {
+                "session": "s-0",
+                "agent": "other",
+                "workingSetBytes": 0,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-1",
+                "agent": "other",
+                "workingSetBytes": 1,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-2",
+                "agent": "other",
+                "workingSetBytes": 2,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-3",
+                "agent": "other",
+                "workingSetBytes": 3,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-4",
+                "agent": "other",
+                "workingSetBytes": 4,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-5",
+                "agent": "other",
+                "workingSetBytes": 5,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-6",
+                "agent": "other",
+                "workingSetBytes": 6,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-7",
+                "agent": "other",
+                "workingSetBytes": 7,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-8",
+                "agent": "other",
+                "workingSetBytes": 8,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-9",
+                "agent": "other",
+                "workingSetBytes": 9,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-10",
+                "agent": "other",
+                "workingSetBytes": 10,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-11",
+                "agent": "other",
+                "workingSetBytes": 11,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-12",
+                "agent": "other",
+                "workingSetBytes": 12,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-13",
+                "agent": "other",
+                "workingSetBytes": 13,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-14",
+                "agent": "other",
+                "workingSetBytes": 14,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-15",
+                "agent": "other",
+                "workingSetBytes": 15,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-16",
+                "agent": "other",
+                "workingSetBytes": 16,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-17",
+                "agent": "other",
+                "workingSetBytes": 17,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-18",
+                "agent": "other",
+                "workingSetBytes": 18,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-19",
+                "agent": "other",
+                "workingSetBytes": 19,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-20",
+                "agent": "other",
+                "workingSetBytes": 20,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-21",
+                "agent": "other",
+                "workingSetBytes": 21,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-22",
+                "agent": "other",
+                "workingSetBytes": 22,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-23",
+                "agent": "other",
+                "workingSetBytes": 23,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-24",
+                "agent": "other",
+                "workingSetBytes": 24,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-25",
+                "agent": "other",
+                "workingSetBytes": 25,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-26",
+                "agent": "other",
+                "workingSetBytes": 26,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-27",
+                "agent": "other",
+                "workingSetBytes": 27,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-28",
+                "agent": "other",
+                "workingSetBytes": 28,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-29",
+                "agent": "other",
+                "workingSetBytes": 29,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-30",
+                "agent": "other",
+                "workingSetBytes": 30,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-31",
+                "agent": "other",
+                "workingSetBytes": 31,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-32",
+                "agent": "other",
+                "workingSetBytes": 32,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-33",
+                "agent": "other",
+                "workingSetBytes": 33,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-34",
+                "agent": "other",
+                "workingSetBytes": 34,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-35",
+                "agent": "other",
+                "workingSetBytes": 35,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-36",
+                "agent": "other",
+                "workingSetBytes": 36,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-37",
+                "agent": "other",
+                "workingSetBytes": 37,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-38",
+                "agent": "other",
+                "workingSetBytes": 38,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-39",
+                "agent": "other",
+                "workingSetBytes": 39,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-40",
+                "agent": "other",
+                "workingSetBytes": 40,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-41",
+                "agent": "other",
+                "workingSetBytes": 41,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-42",
+                "agent": "other",
+                "workingSetBytes": 42,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-43",
+                "agent": "other",
+                "workingSetBytes": 43,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-44",
+                "agent": "other",
+                "workingSetBytes": 44,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-45",
+                "agent": "other",
+                "workingSetBytes": 45,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-46",
+                "agent": "other",
+                "workingSetBytes": 46,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-47",
+                "agent": "other",
+                "workingSetBytes": 47,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-48",
+                "agent": "other",
+                "workingSetBytes": 48,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-49",
+                "agent": "other",
+                "workingSetBytes": 49,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-50",
+                "agent": "other",
+                "workingSetBytes": 50,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-51",
+                "agent": "other",
+                "workingSetBytes": 51,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-52",
+                "agent": "other",
+                "workingSetBytes": 52,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-53",
+                "agent": "other",
+                "workingSetBytes": 53,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-54",
+                "agent": "other",
+                "workingSetBytes": 54,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-55",
+                "agent": "other",
+                "workingSetBytes": 55,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-56",
+                "agent": "other",
+                "workingSetBytes": 56,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-57",
+                "agent": "other",
+                "workingSetBytes": 57,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-58",
+                "agent": "other",
+                "workingSetBytes": 58,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-59",
+                "agent": "other",
+                "workingSetBytes": 59,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-60",
+                "agent": "other",
+                "workingSetBytes": 60,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-61",
+                "agent": "other",
+                "workingSetBytes": 61,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-62",
+                "agent": "other",
+                "workingSetBytes": 62,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-63",
+                "agent": "other",
+                "workingSetBytes": 63,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-64",
+                "agent": "other",
+                "workingSetBytes": 64,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-65",
+                "agent": "other",
+                "workingSetBytes": 65,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-66",
+                "agent": "other",
+                "workingSetBytes": 66,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-67",
+                "agent": "other",
+                "workingSetBytes": 67,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-68",
+                "agent": "other",
+                "workingSetBytes": 68,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-69",
+                "agent": "other",
+                "workingSetBytes": 69,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-70",
+                "agent": "other",
+                "workingSetBytes": 70,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-71",
+                "agent": "other",
+                "workingSetBytes": 71,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-72",
+                "agent": "other",
+                "workingSetBytes": 72,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-73",
+                "agent": "other",
+                "workingSetBytes": 73,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-74",
+                "agent": "other",
+                "workingSetBytes": 74,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-75",
+                "agent": "other",
+                "workingSetBytes": 75,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-76",
+                "agent": "other",
+                "workingSetBytes": 76,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-77",
+                "agent": "other",
+                "workingSetBytes": 77,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-78",
+                "agent": "other",
+                "workingSetBytes": 78,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-79",
+                "agent": "other",
+                "workingSetBytes": 79,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-80",
+                "agent": "other",
+                "workingSetBytes": 80,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-81",
+                "agent": "other",
+                "workingSetBytes": 81,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-82",
+                "agent": "other",
+                "workingSetBytes": 82,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-83",
+                "agent": "other",
+                "workingSetBytes": 83,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-84",
+                "agent": "other",
+                "workingSetBytes": 84,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-85",
+                "agent": "other",
+                "workingSetBytes": 85,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-86",
+                "agent": "other",
+                "workingSetBytes": 86,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-87",
+                "agent": "other",
+                "workingSetBytes": 87,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-88",
+                "agent": "other",
+                "workingSetBytes": 88,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-89",
+                "agent": "other",
+                "workingSetBytes": 89,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-90",
+                "agent": "other",
+                "workingSetBytes": 90,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-91",
+                "agent": "other",
+                "workingSetBytes": 91,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-92",
+                "agent": "other",
+                "workingSetBytes": 92,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-93",
+                "agent": "other",
+                "workingSetBytes": 93,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-94",
+                "agent": "other",
+                "workingSetBytes": 94,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-95",
+                "agent": "other",
+                "workingSetBytes": 95,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-96",
+                "agent": "other",
+                "workingSetBytes": 96,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-97",
+                "agent": "other",
+                "workingSetBytes": 97,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-98",
+                "agent": "other",
+                "workingSetBytes": 98,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-99",
+                "agent": "other",
+                "workingSetBytes": 99,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-100",
+                "agent": "other",
+                "workingSetBytes": 100,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-101",
+                "agent": "other",
+                "workingSetBytes": 101,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-102",
+                "agent": "other",
+                "workingSetBytes": 102,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-103",
+                "agent": "other",
+                "workingSetBytes": 103,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-104",
+                "agent": "other",
+                "workingSetBytes": 104,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-105",
+                "agent": "other",
+                "workingSetBytes": 105,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-106",
+                "agent": "other",
+                "workingSetBytes": 106,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-107",
+                "agent": "other",
+                "workingSetBytes": 107,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-108",
+                "agent": "other",
+                "workingSetBytes": 108,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-109",
+                "agent": "other",
+                "workingSetBytes": 109,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-110",
+                "agent": "other",
+                "workingSetBytes": 110,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-111",
+                "agent": "other",
+                "workingSetBytes": 111,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-112",
+                "agent": "other",
+                "workingSetBytes": 112,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-113",
+                "agent": "other",
+                "workingSetBytes": 113,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-114",
+                "agent": "other",
+                "workingSetBytes": 114,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-115",
+                "agent": "other",
+                "workingSetBytes": 115,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-116",
+                "agent": "other",
+                "workingSetBytes": 116,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-117",
+                "agent": "other",
+                "workingSetBytes": 117,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-118",
+                "agent": "other",
+                "workingSetBytes": 118,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-119",
+                "agent": "other",
+                "workingSetBytes": 119,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-120",
+                "agent": "other",
+                "workingSetBytes": 120,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-121",
+                "agent": "other",
+                "workingSetBytes": 121,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-122",
+                "agent": "other",
+                "workingSetBytes": 122,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-123",
+                "agent": "other",
+                "workingSetBytes": 123,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-124",
+                "agent": "other",
+                "workingSetBytes": 124,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-125",
+                "agent": "other",
+                "workingSetBytes": 125,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-126",
+                "agent": "other",
+                "workingSetBytes": 126,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-127",
+                "agent": "other",
+                "workingSetBytes": 127,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-128",
+                "agent": "other",
+                "workingSetBytes": 128,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-129",
+                "agent": "other",
+                "workingSetBytes": 129,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-130",
+                "agent": "other",
+                "workingSetBytes": 130,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-131",
+                "agent": "other",
+                "workingSetBytes": 131,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-132",
+                "agent": "other",
+                "workingSetBytes": 132,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-133",
+                "agent": "other",
+                "workingSetBytes": 133,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-134",
+                "agent": "other",
+                "workingSetBytes": 134,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-135",
+                "agent": "other",
+                "workingSetBytes": 135,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-136",
+                "agent": "other",
+                "workingSetBytes": 136,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-137",
+                "agent": "other",
+                "workingSetBytes": 137,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-138",
+                "agent": "other",
+                "workingSetBytes": 138,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-139",
+                "agent": "other",
+                "workingSetBytes": 139,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-140",
+                "agent": "other",
+                "workingSetBytes": 140,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-141",
+                "agent": "other",
+                "workingSetBytes": 141,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-142",
+                "agent": "other",
+                "workingSetBytes": 142,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-143",
+                "agent": "other",
+                "workingSetBytes": 143,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-144",
+                "agent": "other",
+                "workingSetBytes": 144,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-145",
+                "agent": "other",
+                "workingSetBytes": 145,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-146",
+                "agent": "other",
+                "workingSetBytes": 146,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-147",
+                "agent": "other",
+                "workingSetBytes": 147,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-148",
+                "agent": "other",
+                "workingSetBytes": 148,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-149",
+                "agent": "other",
+                "workingSetBytes": 149,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-150",
+                "agent": "other",
+                "workingSetBytes": 150,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-151",
+                "agent": "other",
+                "workingSetBytes": 151,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-152",
+                "agent": "other",
+                "workingSetBytes": 152,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-153",
+                "agent": "other",
+                "workingSetBytes": 153,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-154",
+                "agent": "other",
+                "workingSetBytes": 154,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-155",
+                "agent": "other",
+                "workingSetBytes": 155,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-156",
+                "agent": "other",
+                "workingSetBytes": 156,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-157",
+                "agent": "other",
+                "workingSetBytes": 157,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-158",
+                "agent": "other",
+                "workingSetBytes": 158,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-159",
+                "agent": "other",
+                "workingSetBytes": 159,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-160",
+                "agent": "other",
+                "workingSetBytes": 160,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-161",
+                "agent": "other",
+                "workingSetBytes": 161,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-162",
+                "agent": "other",
+                "workingSetBytes": 162,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-163",
+                "agent": "other",
+                "workingSetBytes": 163,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-164",
+                "agent": "other",
+                "workingSetBytes": 164,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-165",
+                "agent": "other",
+                "workingSetBytes": 165,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-166",
+                "agent": "other",
+                "workingSetBytes": 166,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-167",
+                "agent": "other",
+                "workingSetBytes": 167,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-168",
+                "agent": "other",
+                "workingSetBytes": 168,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-169",
+                "agent": "other",
+                "workingSetBytes": 169,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-170",
+                "agent": "other",
+                "workingSetBytes": 170,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-171",
+                "agent": "other",
+                "workingSetBytes": 171,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-172",
+                "agent": "other",
+                "workingSetBytes": 172,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-173",
+                "agent": "other",
+                "workingSetBytes": 173,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-174",
+                "agent": "other",
+                "workingSetBytes": 174,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-175",
+                "agent": "other",
+                "workingSetBytes": 175,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-176",
+                "agent": "other",
+                "workingSetBytes": 176,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-177",
+                "agent": "other",
+                "workingSetBytes": 177,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-178",
+                "agent": "other",
+                "workingSetBytes": 178,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-179",
+                "agent": "other",
+                "workingSetBytes": 179,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-180",
+                "agent": "other",
+                "workingSetBytes": 180,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-181",
+                "agent": "other",
+                "workingSetBytes": 181,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-182",
+                "agent": "other",
+                "workingSetBytes": 182,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-183",
+                "agent": "other",
+                "workingSetBytes": 183,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-184",
+                "agent": "other",
+                "workingSetBytes": 184,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-185",
+                "agent": "other",
+                "workingSetBytes": 185,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-186",
+                "agent": "other",
+                "workingSetBytes": 186,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-187",
+                "agent": "other",
+                "workingSetBytes": 187,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-188",
+                "agent": "other",
+                "workingSetBytes": 188,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-189",
+                "agent": "other",
+                "workingSetBytes": 189,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-190",
+                "agent": "other",
+                "workingSetBytes": 190,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-191",
+                "agent": "other",
+                "workingSetBytes": 191,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-192",
+                "agent": "other",
+                "workingSetBytes": 192,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-193",
+                "agent": "other",
+                "workingSetBytes": 193,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-194",
+                "agent": "other",
+                "workingSetBytes": 194,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-195",
+                "agent": "other",
+                "workingSetBytes": 195,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-196",
+                "agent": "other",
+                "workingSetBytes": 196,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-197",
+                "agent": "other",
+                "workingSetBytes": 197,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-198",
+                "agent": "other",
+                "workingSetBytes": 198,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-199",
+                "agent": "other",
+                "workingSetBytes": 199,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-200",
+                "agent": "other",
+                "workingSetBytes": 200,
+                "state": "unavailable"
+              }
+            ],
+            "unattributed": {
+              "processes": 1,
+              "workingSetBytes": 1048576
+            }
+          },
+          "reads": {
+            "sampledAt": "2026-10-28T04:22:43.182Z",
+            "ageMs": 100,
+            "state": "partial",
+            "staleAfterMs": 15000,
+            "cpu": {
+              "percent": 25,
+              "cores": 8
+            },
+            "memory": {
+              "totalBytes": 17179869184,
+              "availableBytes": 8589934592,
+              "committedPercent": 50
+            },
+            "sessions": [
+              {
+                "session": "s-200",
+                "agent": "other",
+                "workingSetBytes": 200,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-199",
+                "agent": "other",
+                "workingSetBytes": 199,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-198",
+                "agent": "other",
+                "workingSetBytes": 198,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-197",
+                "agent": "other",
+                "workingSetBytes": 197,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-196",
+                "agent": "other",
+                "workingSetBytes": 196,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-195",
+                "agent": "other",
+                "workingSetBytes": 195,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-194",
+                "agent": "other",
+                "workingSetBytes": 194,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-193",
+                "agent": "other",
+                "workingSetBytes": 193,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-192",
+                "agent": "other",
+                "workingSetBytes": 192,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-191",
+                "agent": "other",
+                "workingSetBytes": 191,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-190",
+                "agent": "other",
+                "workingSetBytes": 190,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-189",
+                "agent": "other",
+                "workingSetBytes": 189,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-188",
+                "agent": "other",
+                "workingSetBytes": 188,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-187",
+                "agent": "other",
+                "workingSetBytes": 187,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-186",
+                "agent": "other",
+                "workingSetBytes": 186,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-185",
+                "agent": "other",
+                "workingSetBytes": 185,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-184",
+                "agent": "other",
+                "workingSetBytes": 184,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-183",
+                "agent": "other",
+                "workingSetBytes": 183,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-182",
+                "agent": "other",
+                "workingSetBytes": 182,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-181",
+                "agent": "other",
+                "workingSetBytes": 181,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-180",
+                "agent": "other",
+                "workingSetBytes": 180,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-179",
+                "agent": "other",
+                "workingSetBytes": 179,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-178",
+                "agent": "other",
+                "workingSetBytes": 178,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-177",
+                "agent": "other",
+                "workingSetBytes": 177,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-176",
+                "agent": "other",
+                "workingSetBytes": 176,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-175",
+                "agent": "other",
+                "workingSetBytes": 175,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-174",
+                "agent": "other",
+                "workingSetBytes": 174,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-173",
+                "agent": "other",
+                "workingSetBytes": 173,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-172",
+                "agent": "other",
+                "workingSetBytes": 172,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-171",
+                "agent": "other",
+                "workingSetBytes": 171,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-170",
+                "agent": "other",
+                "workingSetBytes": 170,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-169",
+                "agent": "other",
+                "workingSetBytes": 169,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-168",
+                "agent": "other",
+                "workingSetBytes": 168,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-167",
+                "agent": "other",
+                "workingSetBytes": 167,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-166",
+                "agent": "other",
+                "workingSetBytes": 166,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-165",
+                "agent": "other",
+                "workingSetBytes": 165,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-164",
+                "agent": "other",
+                "workingSetBytes": 164,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-163",
+                "agent": "other",
+                "workingSetBytes": 163,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-162",
+                "agent": "other",
+                "workingSetBytes": 162,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-161",
+                "agent": "other",
+                "workingSetBytes": 161,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-160",
+                "agent": "other",
+                "workingSetBytes": 160,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-159",
+                "agent": "other",
+                "workingSetBytes": 159,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-158",
+                "agent": "other",
+                "workingSetBytes": 158,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-157",
+                "agent": "other",
+                "workingSetBytes": 157,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-156",
+                "agent": "other",
+                "workingSetBytes": 156,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-155",
+                "agent": "other",
+                "workingSetBytes": 155,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-154",
+                "agent": "other",
+                "workingSetBytes": 154,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-153",
+                "agent": "other",
+                "workingSetBytes": 153,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-152",
+                "agent": "other",
+                "workingSetBytes": 152,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-151",
+                "agent": "other",
+                "workingSetBytes": 151,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-150",
+                "agent": "other",
+                "workingSetBytes": 150,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-149",
+                "agent": "other",
+                "workingSetBytes": 149,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-148",
+                "agent": "other",
+                "workingSetBytes": 148,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-147",
+                "agent": "other",
+                "workingSetBytes": 147,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-146",
+                "agent": "other",
+                "workingSetBytes": 146,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-145",
+                "agent": "other",
+                "workingSetBytes": 145,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-144",
+                "agent": "other",
+                "workingSetBytes": 144,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-143",
+                "agent": "other",
+                "workingSetBytes": 143,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-142",
+                "agent": "other",
+                "workingSetBytes": 142,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-141",
+                "agent": "other",
+                "workingSetBytes": 141,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-140",
+                "agent": "other",
+                "workingSetBytes": 140,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-139",
+                "agent": "other",
+                "workingSetBytes": 139,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-138",
+                "agent": "other",
+                "workingSetBytes": 138,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-137",
+                "agent": "other",
+                "workingSetBytes": 137,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-136",
+                "agent": "other",
+                "workingSetBytes": 136,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-135",
+                "agent": "other",
+                "workingSetBytes": 135,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-134",
+                "agent": "other",
+                "workingSetBytes": 134,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-133",
+                "agent": "other",
+                "workingSetBytes": 133,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-132",
+                "agent": "other",
+                "workingSetBytes": 132,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-131",
+                "agent": "other",
+                "workingSetBytes": 131,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-130",
+                "agent": "other",
+                "workingSetBytes": 130,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-129",
+                "agent": "other",
+                "workingSetBytes": 129,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-128",
+                "agent": "other",
+                "workingSetBytes": 128,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-127",
+                "agent": "other",
+                "workingSetBytes": 127,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-126",
+                "agent": "other",
+                "workingSetBytes": 126,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-125",
+                "agent": "other",
+                "workingSetBytes": 125,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-124",
+                "agent": "other",
+                "workingSetBytes": 124,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-123",
+                "agent": "other",
+                "workingSetBytes": 123,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-122",
+                "agent": "other",
+                "workingSetBytes": 122,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-121",
+                "agent": "other",
+                "workingSetBytes": 121,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-120",
+                "agent": "other",
+                "workingSetBytes": 120,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-119",
+                "agent": "other",
+                "workingSetBytes": 119,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-118",
+                "agent": "other",
+                "workingSetBytes": 118,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-117",
+                "agent": "other",
+                "workingSetBytes": 117,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-116",
+                "agent": "other",
+                "workingSetBytes": 116,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-115",
+                "agent": "other",
+                "workingSetBytes": 115,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-114",
+                "agent": "other",
+                "workingSetBytes": 114,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-113",
+                "agent": "other",
+                "workingSetBytes": 113,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-112",
+                "agent": "other",
+                "workingSetBytes": 112,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-111",
+                "agent": "other",
+                "workingSetBytes": 111,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-110",
+                "agent": "other",
+                "workingSetBytes": 110,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-109",
+                "agent": "other",
+                "workingSetBytes": 109,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-108",
+                "agent": "other",
+                "workingSetBytes": 108,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-107",
+                "agent": "other",
+                "workingSetBytes": 107,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-106",
+                "agent": "other",
+                "workingSetBytes": 106,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-105",
+                "agent": "other",
+                "workingSetBytes": 105,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-104",
+                "agent": "other",
+                "workingSetBytes": 104,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-103",
+                "agent": "other",
+                "workingSetBytes": 103,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-102",
+                "agent": "other",
+                "workingSetBytes": 102,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-101",
+                "agent": "other",
+                "workingSetBytes": 101,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-100",
+                "agent": "other",
+                "workingSetBytes": 100,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-99",
+                "agent": "other",
+                "workingSetBytes": 99,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-98",
+                "agent": "other",
+                "workingSetBytes": 98,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-97",
+                "agent": "other",
+                "workingSetBytes": 97,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-96",
+                "agent": "other",
+                "workingSetBytes": 96,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-95",
+                "agent": "other",
+                "workingSetBytes": 95,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-94",
+                "agent": "other",
+                "workingSetBytes": 94,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-93",
+                "agent": "other",
+                "workingSetBytes": 93,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-92",
+                "agent": "other",
+                "workingSetBytes": 92,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-91",
+                "agent": "other",
+                "workingSetBytes": 91,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-90",
+                "agent": "other",
+                "workingSetBytes": 90,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-89",
+                "agent": "other",
+                "workingSetBytes": 89,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-88",
+                "agent": "other",
+                "workingSetBytes": 88,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-87",
+                "agent": "other",
+                "workingSetBytes": 87,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-86",
+                "agent": "other",
+                "workingSetBytes": 86,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-85",
+                "agent": "other",
+                "workingSetBytes": 85,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-84",
+                "agent": "other",
+                "workingSetBytes": 84,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-83",
+                "agent": "other",
+                "workingSetBytes": 83,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-82",
+                "agent": "other",
+                "workingSetBytes": 82,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-81",
+                "agent": "other",
+                "workingSetBytes": 81,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-80",
+                "agent": "other",
+                "workingSetBytes": 80,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-79",
+                "agent": "other",
+                "workingSetBytes": 79,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-78",
+                "agent": "other",
+                "workingSetBytes": 78,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-77",
+                "agent": "other",
+                "workingSetBytes": 77,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-76",
+                "agent": "other",
+                "workingSetBytes": 76,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-75",
+                "agent": "other",
+                "workingSetBytes": 75,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-74",
+                "agent": "other",
+                "workingSetBytes": 74,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-73",
+                "agent": "other",
+                "workingSetBytes": 73,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-72",
+                "agent": "other",
+                "workingSetBytes": 72,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-71",
+                "agent": "other",
+                "workingSetBytes": 71,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-70",
+                "agent": "other",
+                "workingSetBytes": 70,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-69",
+                "agent": "other",
+                "workingSetBytes": 69,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-68",
+                "agent": "other",
+                "workingSetBytes": 68,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-67",
+                "agent": "other",
+                "workingSetBytes": 67,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-66",
+                "agent": "other",
+                "workingSetBytes": 66,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-65",
+                "agent": "other",
+                "workingSetBytes": 65,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-64",
+                "agent": "other",
+                "workingSetBytes": 64,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-63",
+                "agent": "other",
+                "workingSetBytes": 63,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-62",
+                "agent": "other",
+                "workingSetBytes": 62,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-61",
+                "agent": "other",
+                "workingSetBytes": 61,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-60",
+                "agent": "other",
+                "workingSetBytes": 60,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-59",
+                "agent": "other",
+                "workingSetBytes": 59,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-58",
+                "agent": "other",
+                "workingSetBytes": 58,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-57",
+                "agent": "other",
+                "workingSetBytes": 57,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-56",
+                "agent": "other",
+                "workingSetBytes": 56,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-55",
+                "agent": "other",
+                "workingSetBytes": 55,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-54",
+                "agent": "other",
+                "workingSetBytes": 54,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-53",
+                "agent": "other",
+                "workingSetBytes": 53,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-52",
+                "agent": "other",
+                "workingSetBytes": 52,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-51",
+                "agent": "other",
+                "workingSetBytes": 51,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-50",
+                "agent": "other",
+                "workingSetBytes": 50,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-49",
+                "agent": "other",
+                "workingSetBytes": 49,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-48",
+                "agent": "other",
+                "workingSetBytes": 48,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-47",
+                "agent": "other",
+                "workingSetBytes": 47,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-46",
+                "agent": "other",
+                "workingSetBytes": 46,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-45",
+                "agent": "other",
+                "workingSetBytes": 45,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-44",
+                "agent": "other",
+                "workingSetBytes": 44,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-43",
+                "agent": "other",
+                "workingSetBytes": 43,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-42",
+                "agent": "other",
+                "workingSetBytes": 42,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-41",
+                "agent": "other",
+                "workingSetBytes": 41,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-40",
+                "agent": "other",
+                "workingSetBytes": 40,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-39",
+                "agent": "other",
+                "workingSetBytes": 39,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-38",
+                "agent": "other",
+                "workingSetBytes": 38,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-37",
+                "agent": "other",
+                "workingSetBytes": 37,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-36",
+                "agent": "other",
+                "workingSetBytes": 36,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-35",
+                "agent": "other",
+                "workingSetBytes": 35,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-34",
+                "agent": "other",
+                "workingSetBytes": 34,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-33",
+                "agent": "other",
+                "workingSetBytes": 33,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-32",
+                "agent": "other",
+                "workingSetBytes": 32,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-31",
+                "agent": "other",
+                "workingSetBytes": 31,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-30",
+                "agent": "other",
+                "workingSetBytes": 30,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-29",
+                "agent": "other",
+                "workingSetBytes": 29,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-28",
+                "agent": "other",
+                "workingSetBytes": 28,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-27",
+                "agent": "other",
+                "workingSetBytes": 27,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-26",
+                "agent": "other",
+                "workingSetBytes": 26,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-25",
+                "agent": "other",
+                "workingSetBytes": 25,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-24",
+                "agent": "other",
+                "workingSetBytes": 24,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-23",
+                "agent": "other",
+                "workingSetBytes": 23,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-22",
+                "agent": "other",
+                "workingSetBytes": 22,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-21",
+                "agent": "other",
+                "workingSetBytes": 21,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-20",
+                "agent": "other",
+                "workingSetBytes": 20,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-19",
+                "agent": "other",
+                "workingSetBytes": 19,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-18",
+                "agent": "other",
+                "workingSetBytes": 18,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-17",
+                "agent": "other",
+                "workingSetBytes": 17,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-16",
+                "agent": "other",
+                "workingSetBytes": 16,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-15",
+                "agent": "other",
+                "workingSetBytes": 15,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-14",
+                "agent": "other",
+                "workingSetBytes": 14,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-13",
+                "agent": "other",
+                "workingSetBytes": 13,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-12",
+                "agent": "other",
+                "workingSetBytes": 12,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-11",
+                "agent": "other",
+                "workingSetBytes": 11,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-10",
+                "agent": "other",
+                "workingSetBytes": 10,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-9",
+                "agent": "other",
+                "workingSetBytes": 9,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-8",
+                "agent": "other",
+                "workingSetBytes": 8,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-7",
+                "agent": "other",
+                "workingSetBytes": 7,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-6",
+                "agent": "other",
+                "workingSetBytes": 6,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-5",
+                "agent": "other",
+                "workingSetBytes": 5,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-4",
+                "agent": "other",
+                "workingSetBytes": 4,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-3",
+                "agent": "other",
+                "workingSetBytes": 3,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-2",
+                "agent": "other",
+                "workingSetBytes": 2,
+                "state": "unavailable"
+              },
+              {
+                "session": "s-1",
+                "agent": "other",
+                "workingSetBytes": 1,
+                "state": "unavailable"
+              }
+            ],
+            "unattributed": {
+              "processes": 1,
+              "workingSetBytes": 1048576
+            }
+          }
+        },
+        {
+          "name": "mixed-case-names",
+          "json": {
+            "STATE": "stale",
+            "sTaTe": "fresh",
+            "sampledAT": "2025-01-02T03:04:05.000Z",
+            "AGEMs": 100,
+            "sTaleAfterMS": 15000,
+            "CPU": {
+              "PERCENT": 1,
+              "pErCeNt": 25,
+              "CORES": 8
+            },
+            "MEMORY": {
+              "TOTALBYTES": 17179869184,
+              "availableBYTES": 8589934592,
+              "COMMITTEDPERCENT": 50
+            },
+            "SESSIONS": [
+              {
+                "SESSION": "s-1",
+                "AGENT": "AGENCY",
+                "PROCESSES": 3,
+                "CPUPERCENT": 12.5,
+                "WORKINGSETBYTES": 104857600,
+                "worKingSetBytes": 7,
+                "HANDLES": 42,
+                "HANDLEKIND": "FDS",
+                "stAte": "partial"
+              }
+            ],
+            "UNATTRIBUTED": {
+              "PROCESSES": 1,
+              "WORKINGSETBYTES": 1048576
+            }
+          },
+          "reads": {
+            "sampledAt": "2025-01-02T03:04:05.000Z",
+            "ageMs": 100,
+            "state": "fresh",
+            "staleAfterMs": 15000,
+            "cpu": {
+              "percent": 25,
+              "cores": 8
+            },
+            "memory": {
+              "totalBytes": 17179869184,
+              "availableBytes": 8589934592,
+              "committedPercent": 50
+            },
+            "sessions": [
+              {
+                "session": "s-1",
+                "agent": "other",
+                "processes": 3,
+                "cpuPercent": 12.5,
+                "workingSetBytes": 104857600,
+                "handles": 42,
+                "handleKind": "other",
+                "state": "partial"
+              }
+            ],
+            "unattributed": {
+              "processes": 1,
+              "workingSetBytes": 1048576
+            }
+          }
+        },
+        {
+          "name": "offset-submillisecond-sampled-at",
+          "json": {
+            "state": "fresh",
+            "sampledAt": "2025-01-02T03:04:05.1234567+02:30",
+            "sessions": []
+          },
+          "reads": {
+            "sampledAt": "2025-01-02T00:34:05.123Z",
+            "state": "fresh",
+            "sessions": []
+          }
+        },
+        {
           "name": "unknown-state",
           "json": {
             "state": "future",

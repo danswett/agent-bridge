@@ -6,8 +6,11 @@ Start with [CONTRIBUTING.md](../CONTRIBUTING.md).
 this page does not create exceptions to them.
 Current role holders and their acceptance links live in
 [status: running work](status.md#running-work), not in this procedure.
-Outside contributors (pull requests only, no fleet access) start with
-[outside-contributors.md](outside-contributors.md).
+Outside contributors (pull requests only, no fleet access) may use
+[outside-contributors.md](outside-contributors.md) for background. Where it
+conflicts, that guide is historical/superseded, not a source of permission:
+current AGENTS and the Fleet register control; published heads never rebase or
+force-push, and Quality controls PR/body custody, receipt posting and arming.
 
 ## Operational sources of truth
 
@@ -19,8 +22,10 @@ Outside contributors (pull requests only, no fleet access) start with
 | [#170 root/index](https://github.com/danswett/agent-bridge/issues/170), after verified cutover | Current roles, operating rules and links; not a repeated whole-project inventory or per-PR queue |
 | Repository docs and approved designs | Durable architecture, roadmap and decisions; not a minute-by-minute activity log |
 
-[Product, #696](https://github.com/danswett/agent-bridge/issues/696), owns the order
-of work; SG Chief of Staff records its priority decisions on canonical issues and
+[Product, #696](https://github.com/danswett/agent-bridge/issues/696), is the interim
+home of the ONE ordered backlog in agent-bridge pending its repo file, managed and reordered by Product.
+Reconcile Project 1 to that order; Fleet #251 is a pointer, not a second backlog.
+Docs-only PRs use Quality's fast lane. SG Chief of Staff records priority decisions on canonical issues and
 owns issue triage, deduplication, routing and escalation.
 Keep cross-track dependencies on their canonical issues. Put readiness and
 merge/rebase requests on the PR for Quality. Public issue and PR updates work
@@ -69,6 +74,44 @@ Delegation does not transfer the contributor's permissions to the agent.
 visit or a coding assignment. Existing active coordinators retain their accepted
 obligations until an explicit handoff or stand-down.
 
+## Current owner policy
+
+The [Fleet register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
+is the single standing pipeline register; its dated owner-decisions companion
+retains quotes/provenance. Do not copy its exception/decision register into Bridge.
+Operationally: 400 WHOLE changed lines in either repo includes docs, tests and
+carried changes; larger cuts need written exact-head Chief authority.
+Quality opens PRs/edits bodies, alone gates/arms; GitHub merges on required checks.
+General per-push admission is lifted, not specific held-head/sensitive-cut orders.
+Builders/reviewers never poll: at most one conditional own-PR failure-evidence read
+per 10 minutes. Ready cap 95, plain-English comments <=8 lines; conserve Fleet
+Actions until Dec 1. Do not infer quarantine/waiver approval or runtime switch state.
+Any red main/new flake/stalled PR gets a live-session DRI within 2 minutes on
+agent-bridge #2454, cause or next step with a time within 15 minutes.
+Apply [guarded evidence rules](../quality/README.md#independent-review-depth);
+owner exceptions and spent records belong only in Fleet's register.
+
+### Staged rule 17
+
+Authority: current Chief-recorded owner rule 17, Nov 15, 2026; its 09:30 PT
+label is not evidence of receipt chronology.
+Adopt all three below, with **NO ROLLOUT BEFORE MAIN-GREEN IS DONE**:
+
+1. Agent messages have one kind: ASSIGN, ACCEPT, REPORT, BLOCKER, DECISION, ASK or ACK;
+   fixed fields `subjectid`, `owner`, `duePT`, `evidencepath/link`, `state`, plus a
+   short body. Free text belongs only in the body. The helper validates/refuses
+   malformed envelopes; SRE designs validation after green (not implemented here).
+2. Every custody hold, region reservation and task claim has an owner and expiry
+   date, with explicit renewal/release. After-green adjudication: a hold with no
+   owner AND no date is void; holder silence for 5 minutes on an adjudication
+   question counts as no objection. Missing expiry alone never implies release
+   of existing held/private work or a source grant. Fleet Ops owns expiry reconciliation.
+3. AGENTS stays small/nonstandard-only, with detail loaded on demand; one designated
+   Engineering writer proposes changes through normal PRs, never direct-main agent edits.
+   Fleet Quality remains sole Fleet source writer. SRE owns the after-green
+   registry/resolver design due 10:30 PT. Until rollout, retain current transport,
+   messaging and custody protections; this is not a helper implementation or launch grant.
+
 ## Readiness and review evidence
 
 Use [AGENTS.md's current merge requirements](../AGENTS.md#pull-requests). Copilot
@@ -77,14 +120,16 @@ receipts are the gate. This page does not
 maintain a second merge checklist. A ready packet is not a merge grant.
 
 Every head change needs fresh head-specific evidence under those requirements;
-neither old CI nor an old receipt is inherited. Only an **independent**
-review may use a bounded delta: the previously reviewed commit must be a proved
-ancestor of the new head, and the independent reviewer must explicitly clear that
-delta at the new head. A rebase without that ancestry needs a full independent
-review. Safety, trust, security and required checks remain gates.
+neither old CI nor a commit status is automatically inherited. Quality may bind
+eligible CI/review evidence under the [guarded rules](../quality/README.md#independent-review-depth),
+recording old/new heads, ancestry, file blobs and input/path comparisons.
+Independent delta reads require a proved reviewed ancestor and explicit new-head
+clearance. Unpublished work may rebase; published heads use plain children/main merges,
+never rebase or force-push. Holds, trust, safety and required checks remain binding.
+Quality alone opens PRs, edits bodies, gates and arms; authors submit packets.
 Quality's [operating receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617409924)
 allows ready PRs while main CI is pending; AGENTS.md defines the main-red gate and
-the coordinator-controlled fix-forward exception.
+the Quality-controlled fix-forward exception.
 
 On the PR, report:
 
@@ -155,9 +200,9 @@ a Project-permission failure is not an empty queue or a completed migration.
 
 In any question or message to the owner, put every command or code line in its own
 fenced block (three backticks, one block per command) so the PWA card shows a Copy
-button. The Windows app shows the same Copy button on fenced blocks. Inline
-backticks and plain paragraphs get no Copy button, and nothing detects commands
-automatically.
+button. The Windows app and PWA also show that Copy button for a paragraph holding
+only one inline code span. Inline code within a sentence, multiple spans and plain
+paragraphs get no Copy button, and nothing detects commands automatically.
 
 ````text
 ```powershell
@@ -197,8 +242,8 @@ links coordinator check-ins and blocker acknowledgments to the existing
 [private Project](https://github.com/users/danswett/projects/1).
 Shiproom owns coordination, Project health, deadlines and escalation only.
 The then-current triage role retained issue triage, deduplication and the single
-collector; implementation, design and Quality retain their existing authorities. Authors may still arm
-their own exact-head auto-merge under AGENTS.md. Shiproom is not a merge grant,
+collector; implementation, design and Quality retain their existing authorities.
+Only Quality arms exact-head auto-merge under AGENTS.md. Shiproom is not a merge grant,
 a second implementation coordinator or completion of the #170 index cutover.
 
 Active agent coordinators explicitly acknowledge the protocol and post a first

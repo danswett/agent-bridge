@@ -395,7 +395,9 @@ public class CiPlanTests
         var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)((YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode)["jobs"];
         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
         var steps = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["steps"];
-        var check = (YamlDotNet.RepresentationModel.YamlMappingNode)steps.Children[0];
+        // The waiver's steps come first; the check is the one that reads the needs.
+        var check = steps.Children.Cast<YamlDotNet.RepresentationModel.YamlMappingNode>()
+            .Single(step => step.Children.ContainsKey("run") && step["run"].ToString().Contains(".key == \"plan\" or ($all", StringComparison.Ordinal));
         Assert.Contains(".key == \"plan\" or ($all and .key != \"app\" and .key != \"app-installer\") or $plan[.key] == \"true\"",
             check["run"].ToString(), StringComparison.Ordinal);
     }
@@ -427,6 +429,47 @@ public class CiPlanTests
         var problems = CiPlan.Check(catalog, File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml")));
 
         Assert.Empty(problems.Select(p => p.Message));
+    }
+
+    [Theory]
+    [InlineData("app")]
+    [InlineData("app-installer")]
+    public void Arm64_native_jobs_prepare_foreground_immediately_after_checkout(string job)
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlDotNet.RepresentationModel.YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml"))));
+        var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)((YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode)["jobs"];
+        var steps = (YamlDotNet.RepresentationModel.YamlSequenceNode)((YamlDotNet.RepresentationModel.YamlMappingNode)jobs[job])["steps"];
+        var prep = (YamlDotNet.RepresentationModel.YamlMappingNode)steps.Children[1];
+        Assert.Equal("./.github/actions/arm64-foreground", prep["uses"].ToString());
+        Assert.Equal("matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'", prep["if"].ToString());
+        Assert.False(prep.Children.ContainsKey("continue-on-error"));
+    }
+
+    [Fact, Trait("Category", "Process")]
+    public async Task Popup_preparation_parses_and_obeys_the_popup_and_probe_failure_rule_offline()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var start = new System.Diagnostics.ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", Path.Combine(root, ".github", "actions", "arm64-foreground", "test-dismiss.ps1") })
+            start.ArgumentList.Add(arg);
+        using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        var completed = true;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        try { await process.WaitForExitAsync(timeout.Token); }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            completed = false;
+            try { process.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) when (process.HasExited) { }
+            await process.WaitForExitAsync();
+        }
+        var diagnostics = $"stdout:{Environment.NewLine}{await output}{Environment.NewLine}stderr:{Environment.NewLine}{await error}";
+        Assert.True(completed, $"Offline popup checks timed out after 120 s.{Environment.NewLine}{diagnostics}");
+        Assert.True(process.ExitCode == 0, diagnostics);
     }
 
     [Fact]

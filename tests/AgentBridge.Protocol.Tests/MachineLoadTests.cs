@@ -65,6 +65,25 @@ public class MachineLoadTests
         Assert.DoesNotContain(read.Sessions, s => s.Session == "s-0");
     }
 
+    [Fact]
+    public void The_shared_over_200_sessions_vector_keeps_the_largest_working_sets_and_reads_as_partial()
+    {
+        var vectors = VectorFiles.Read("machine-load.json")["records"]!["MachineLoad"]!["valid"]!.AsArray();
+        var vector = Assert.Single(vectors, v => v!["name"]!.GetValue<string>() == "over-200-sessions")!;
+        var json = JsonSerializer.SerializeToElement(vector["json"]);
+        Assert.Equal("fresh", json.GetProperty("state").GetString());
+        Assert.Equal(201, json.GetProperty("sessions").GetArrayLength());
+
+        var read = Received.Read<MachineLoad>(json);
+        Assert.Equal(MachineLoadState.Partial, read.State);
+        Assert.Equal(Enumerable.Range(1, 200).Reverse().Select(i => $"s-{i}"),
+            read.Sessions.Select(s => s.Session));
+        Assert.Equal(Enumerable.Range(1, 200).Reverse().Select(i => (long?)i),
+            read.Sessions.Select(s => s.WorkingSetBytes));
+        Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(vector["reads"],
+            ProtocolVectors.Write(read, typeof(MachineLoad))));
+    }
+
     [Theory]
     [InlineData("fresh", MachineLoadState.Partial)]
     [InlineData("partial", MachineLoadState.Partial)]

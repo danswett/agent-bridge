@@ -45,6 +45,8 @@ internal sealed class DeliveryTimeline
     readonly DateTimeOffset startUtc;
     readonly Lock gate = new();
     readonly List<DeliveryWatch> watches = [];
+    public Func<Action<AnswerOutcome>?>? AuditPrepare { get; set; }
+    Action<AnswerOutcome>? auditTerminal;
     DeliveryWatch? sender;
     long? checkedAt, turn, injectStart, injectEnd, typed, recorded, confirmed, settled, sent;
     bool? working;
@@ -128,7 +130,16 @@ internal sealed class DeliveryTimeline
         lock (gate) { return (typed, working ?? false, recorded); }
     }
 
-    public void Confirmed() { lock (gate) { confirmed ??= Now(); } }
+    public bool PrepareAudit()
+    {
+        if (AuditPrepare is not { } prepare) { return true; }
+        auditTerminal = prepare();
+        return auditTerminal is not null;
+    }
+
+    public void CompleteAudit(AnswerOutcome outcome) => Interlocked.Exchange(ref auditTerminal, null)?.Invoke(outcome);
+
+    public void Confirmed() { lock (gate) { confirmed ??= Now(); } CompleteAudit(AnswerOutcome.Delivered); }
 
     public void Settled()
     {

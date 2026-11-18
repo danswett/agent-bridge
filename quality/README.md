@@ -49,7 +49,7 @@ The base is strong. CI already tests what ships, not just the code:
 - **Relay:** smoke-tested on staging with a throwaway account, two Noise devices, push and
   blobs. Production is gated on approval.
 - **Live:** the migrate-and-rollback rehearsal on Azure VMs ([parity-checklist.md](../docs/parity-checklist.md),
-  automated in part by `agent-bridge-rehearsal`), and the shadow soak on VM-M driving real
+  automated in part by `agent-bridge-rehearsal`), and the shadow soak on a disposable Azure VM driving real
   Copilot, Claude and Codex sessions.
 
 The gaps this plan closes:
@@ -73,7 +73,7 @@ The gaps this plan closes:
    Axe.Windows scan, no keyboard-only pass and no screen-reader checklist.
 7. **macOS, iOS and Linux live.** The Apple clients' SwiftPM tests (about 35 files on
    `codex/apple-*`) and the macOS tmux delivery tests have no CI. The Linux host has unit
-   tests but no live run since `rehearsal-l` was deleted.
+   tests but no live run since the disposable Linux rehearsal VM was deleted.
 8. **Agents drift.** Copilot CLI, Claude Code and Codex change their transcript formats in
    new releases. Today we find out on a real machine.
 
@@ -286,9 +286,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
    so it runs beside them and can't take a waiting push run's place and leave that push's commit
    untested (#938's review). GitHub promises no
-   order between push runs: the merge rule reads the current main commit's push run and its
-   named test jobs, not an older finished run. Missing or cancelled jobs and read errors hold;
-   there is no green-ancestor fallback for merging (item 9).
+   order between push runs: the merge rule ignores cancelled runs and unfinished product
+   evidence, judging the newest usable named-job result (item 9).
    So a main run's change is everything since the last commit main's CI
    passed on: the plan reads `ci.yml`'s passed push runs on `main` (the newest 100, through the
    `actions: read` token), takes the newest whose commit is an ancestor of this one, fetches
@@ -297,6 +296,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    or the runs unreadable, runs the whole ring, never "no change". A docs-only push to `main`
    runs what docs select (`light`'s link check, say), not the app or the product's builds.
    Pull requests keep cancelling a superseded run, and a run by hand its own group.
+   Known docs/ordinary-test-only main changes also skip `product` through its plan output.
+   The selector proves test-source ownership through the project graph: files linked into or
+   referenced by shipped projects, embedded protocol examples, whole-ring inputs (including the
+   selector's tests), and unclassifiable paths still run product. PRs still test changed tests;
+   unknown-base main runs keep the whole ring. There are no push-trigger path filters.
 
    **Packaging needs an app reason over a known range (#1910).** Pull requests and main pushes
    with a proven base pass
@@ -369,7 +373,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      the build scripts, the relay container) and inside `light`: when the whole ring runs,
      every one of those steps runs;
    - `product`'s test projects, tested through a solution filter, still under
-     `dotnet-coverage` with TRX and `--blame-hang`. When the whole ring runs, it's
+     `dotnet-coverage` with TRX, `--blame-crash` and the existing `--blame-hang` watchdog.
+     The shared quality command builder also adds crash blame locally. Public crash diagnostics
+     remain execution-sequence XML only; private crash-dump upload is deferred.
+     When the whole ring runs, it's
      `AgentBridge.slnx` as before. The whole solution is always built, since projects no
      test references (the benchmarks) are compiled nowhere else on a pull request;
    - `product`'s runners, from its selected suites' `platforms` (all three when the whole
@@ -505,16 +512,29 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    failure, a nightly job asks whether ring 1's selection for that PR would have included
    the failing test. A **selection miss** is a bug in the catalog. It gets an issue, and the
    rate is a tracked metric (target: zero).
-9. **The merge rule, enforced (#452):** main's ruleset ([`ruleset-main.json`](ruleset-main.json))
+9. **Merge policy and current enforcement (#452):** main's ruleset ([`ruleset-main.json`](ruleset-main.json))
    requires `quality-gate` from GitHub Actions and `merge-rule` from the merge-rule GitHub App,
-   plus resolved threads, squash merges and no force pushes or deletion, with no bypass, and asks
-   Copilot to review each push. Auto-merge has been on since 2026-11-04 00:50 PT: sessions turn
-   it on once their pull request is ready, pinned to its head, and GitHub merges when both are
-   green.
+   plus resolved threads, squash merges and no force pushes or deletion. No standing
+   bypass exists; only the Fleet register's bounded main-green owner exception applies.
+   Copilot is optional. Quality alone gates and arms auto-merge pinned to the exact
+   head; GitHub merges when required checks pass. Builders never arm or merge.
+   The [single Fleet pipeline register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
+   owns standing decisions/exceptions; this section describes Bridge operations only.
+   **Reader enforcement is STALE:** the current evaluator/config can accept one
+   independent receipt plus completed Copilot instead of the required second family.
+   Before arming or permitting merge, Quality MUST manually verify authorized
+   posters and Quality-only posting; actual approved model/effort (or approved
+   retained continuity); successful receipts backed by linked CLEAN review verdicts explicitly
+   naming the PR's current full head SHA; reviewer independence/non-authorship;
+   and completed required whole/security reads. Ordinary PRs need one required
+   independent receipt (new single reads: `gpt-6.1-sol`); sensitive/two-family heads
+   need BOTH independent, distinct-family receipts. Copilot NEVER counts.
+   Green evaluator/bot credit is insufficient; missing proof holds the PR.
+   Reader requirements below describe policy, not complete technical enforcement.
    - `merge-rule` is a commit status that main's copy of `.github/workflows/merge-rule.yml` posts
      on each open pull request's head, from `agent-bridge-quality merge-rule` (`MergeRule.cs`) and
-     the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is every named test job
-     in main's latest push run of `ci.yml` passed at its own latest attempt, unless the pull request has the
+     the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is its newest completed
+     product evidence in `ci.yml` passed the named jobs at their own latest attempts, unless the pull request has the
      `fixes-main` label; not a draft; no `hold` or `do-not-merge`
      label; an independent-review receipt on the head (see the standing rule below; a Copilot review is optional and an errored one is ignored, #706); CodeQL's latest run on the head green and
      code scanning's `CodeQL` check not failed; every other check run and status on the head
@@ -525,28 +545,38 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      title starts with `Security` or the `security` label is on, an `independent-review` status
      on the head whose latest from a listed poster is success. The files are those of the exact
      commit judged (`compare/main...<sha>`), not the pull request's latest. Pending while
-     Copilot, CodeQL or a check is on its way, failure otherwise, with the missing piece named in
+     CodeQL or a required check is on its way, failure otherwise, with the missing piece named in
      its description and the run's summary. Pull requests that
      share a head get the worst of their verdicts, since a status belongs to the commit.
    - Main must be green, since auto-merge doesn't pause while main's CI is red and would keep
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
-     reads main's current ref once and selects that commit's latest `ci.yml` push run, not the
-     run that finished last or an older commit whose run id is newer. The single
+     walks main's `ci.yml` push runs newest first, across up to 100 runs. A cancelled run never
+     counts. A candidate needs a successful completed plan and completed product instances;
+     queued, in-progress or cancelled named jobs pass the run over. A failed plan or a
+     classification-skipped product family also passes it over. A newer main head still running
+     does not block; the pull request's own running checks still do. The single
      `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
      light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
      dynamic family: at least one entry must exist and every present instance must pass; runners
      omitted by the plan are not required. Entirely absent families still hold.
+     Optional `main_green.leg_families` adds lists of exact alternative check names to
+     the universal `jobs`: exactly one complete family must be present and successful.
+     Missing, mixed, extra or skipped legs cannot substitute for that family. An absent
+     or empty families list preserves the existing `jobs` behavior. Pages' `pages-jobs.json`
+     likewise accepts either its existing flat list or lists of complete alternative
+     manifests; only an exact manifest whose jobs all succeeded is deployable.
      The aggregate quality-gate is excluded because it waits on installer. The plan job must
-     succeed. Only then may completed `skipped` entries count as green, including GitHub's
-     unexpanded matrix-family skipped entry: the selector chose not to run that family.
-     Otherwise every named instance must succeed: missing, renamed, running, red or cancelled holds.
+     succeed. Completed `skipped` siblings count as green, including GitHub's unexpanded
+     matrix-family entry; a skipped product family is not product evidence. Every named job
+     that ran must succeed: a failed product or sibling holds main red, even beside skipped
+     siblings. Missing, renamed or neutral named jobs never grant green.
      Jobs are paged across all attempts, then judged by their own latest attempt (and job id
      within an attempt), so rerunning only failed jobs can free main without discarding earlier
      successful jobs. Installer, signing and publishing results do not hold, even if red or
      pending; the evaluator prints them as non-gating jobs for Quality's main-red log.
-     There is no green-ancestor fallback for missing or cancelled named jobs. Main unread, or
-     with no push run for its current commit, fails closed. The fix itself gets the `fixes-main`
-     label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage
+     Unreadable history, plan or product data fails closed without fallback. No usable run in
+     the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
+     label (`main_green.exempt_labels`) from Quality, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.
    - The standing rule (owner decision 2026-11-08, replacing the 2026-11-05 label of #955):
@@ -556,23 +586,27 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      that needs that receipt (a sensitive path, a security mark, or an incomplete file list) also
      needs a second success receipt, `copilot_waiver.second_review` (`independent-review-2`), from
      a listed poster on the same head, and the two receipts' descriptions must each name a model
-     whose family the other doesn't share (`claude-opus-5.5` and `gpt-6.1-sol`, say). A sensitive
+     whose family the other doesn't share. New reads use `claude-sonnet-5.5` medium and
+     `gpt-6.1-sol`; a single read uses `gpt-6.1-sol`. Retained in-flight reviewers keep
+     their model. These owner rules supersede older fallback model lists below. A sensitive
      file in `copilot_waiver.one_review_paths` (`docs/status.md`, whose row the receipt checks
-     against its decision) doesn't call for the second. A completed Copilot review on the head is
-     still the other family when present, but never replaces the first receipt; a Copilot error or timeout review is ignored. A failed
+     against its decision) doesn't call for the second. Copilot is optional and NEVER
+     counts as a reader family; optional bots never substitute for required independent,
+     model-verified exact-head receipts. A failed
      receipt from a poster blocks. The `copilot-waived` label is still accepted and changes
      nothing. Bot-only threads, which would still block the ruleset's 0-unresolved-threads
      requirement, are resolved with `quality/resolve-bot-threads.ps1`.
    - A pull request can't loosen its own gate (#487, Finding 1): every trigger
      (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
-     10-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
+     30-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
      and builds main and reads the pull request only through the API. Each run judges every open
      pull request, one run at a time, so a run starting turns a head pending, a late red flips the
      verdict, and no stale read lands last.
      Changing the rule means changing `quality/`, `.github/` or the tool,
      all sensitive, so it takes an independent review and only applies once merged. Reviews reach
      it through a relay workflow (`merge-rule-review.yml`), since `pull_request_review` runs the
-     pull request's copy. The schedule is the backstop, Dependabot's pull requests included.
+     pull request's copy. The schedule is a backstop only, Dependabot's pull requests included.
+     This slows the same timer; it adds no new timer and does not replace event-driven evaluation.
    - CodeQL is judged here, not by a `code_scanning` rule: since #464 a pull request whose
      languages CodeQL skips uploads no results, and that rule would wait for them forever.
      A CodeQL run that ended `skipped` (a pull request opened seconds before `ready_for_review`,
@@ -585,6 +619,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      reads that checkout's evaluator and `quality/merge-rule.yml`, so a pull request's own would
      judge it. It prints the commit they came from, and refuses unless that's `origin/main`'s
      with no local changes to them (`--allow-non-main` judges anyway, with a warning).
+     Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE
+     clearance. Full or hosted verification remains CI-only. ANYTHING BEYOND
+     (full suites, CI-equivalent verification, serving hosts) needs a WRITTEN QUALITY
+     ORDER CLEARED WITH SRE; that order does not grant local full-suite permission.
+     Preserve explicit case holds.
    - A head whose facts can't be read gets `error`, which fails the required check like failure,
      so an earlier success doesn't stand; a hold label, read with the open list, still fails it.
      When the open list itself stops partway, no head gets success from that run: a held pull
@@ -598,10 +637,32 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    - Fast path (#1251): an event about one pull request or head judges only that head
      (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
-     its source, and built (then saved) only when main changed it. Admission coalesces events per
-     head, separately from global sweeps (#1922); skipped events have unique admission keys.
-     Every admitted writer then waits in the shared `merge-rule` job group with `queue: max`,
-     reading main only after taking that lock. A scoped event cannot displace a sweep or another
+     its source, and built (then saved) only when main changed it. With `FLEET_MERGERULE`
+     not `off`, `pull_request_target` admission in `.github/workflows/merge-rule.yml`
+     is per pull request, and a new head cancels that pull request's in-progress run (#2577).
+     Other scoped events coalesce per head, separately from main sweeps, cron and dispatch
+     (#1922, #2130); skipped events have unique admission keys.
+     Before joining the writer queue, cron checks for other queued, pending or waiting scoped
+     evaluations. It yields only to a positively identified fresh scoped job; a queue at least
+     30 minutes old, unreadable/incomplete API data, or an unknown queued job name lets it run
+     with a warning. Versioned job display names classify scoped evaluations versus sweeps;
+     this is a weak API classifier, so unknown names never suppress evaluation. Main sweeps,
+     dispatch and event runs bypass this check. Cron admission cannot displace a main sweep.
+     Fresh replacements cannot keep deferring cron: yielding also requires a completed cron
+     writer within the last 30 minutes, established from completed schedule runs and their
+     actual writer jobs. Writer success or failure counts; skipped/cancelled jobs do not.
+     No such writer, or unreadable history, warns and proceeds. The age is measured at writer
+     completion, not the creation time of whichever scoped job is queued now.
+     This adds one short read-only job per cron, four paginated active-run lists plus job lists;
+     a proposed deferral also reads one page of ten completed cron runs and at most ten job lists,
+     stopping when recent writer evidence is found, otherwise warning and proceeding.
+     It is not a resolver job per event. The PR dry run in
+     `.github/workflows/weekly-report.yml` and the review relay in
+     `.github/workflows/merge-rule-review.yml` also cancel in-progress runs per pull request
+     (#2577). All triggers stay unchanged.
+     Every admitted writer still waits in the shared `merge-rule` job group with
+     `cancel-in-progress: false` and `queue: max`, reading main only after taking that lock.
+     A scoped event cannot displace a sweep or another
      head; a newer sweep replaces only a pending sweep, and still judges every open PR. A scoped run that finds main not
      green judges every open pull request, as `--all` does, so a sweep displaced while main turns
      red can't leave another pull request's success standing (about 15 points, only while main is
@@ -645,9 +706,13 @@ pwsh quality/run.ps1 -Explain   # the selection and why, without running
 pwsh quality/run.ps1 -Suite pwa-ui,host
 ```
 
-People and agents follow the same loop: AGENTS.md's Tests section says to run
-`pwsh quality/run.ps1` before a push. It skips, with a note, suites that only CI can run, suites
-that are planned, and suites whose tool (Node, Swift) isn't installed.
+Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE clearance.
+Full or hosted verification remains CI-only.
+ANYTHING BEYOND (full suites, CI-equivalent verification, serving hosts) needs a
+WRITTEN QUALITY ORDER CLEARED WITH SRE; that order does not grant local full-suite
+permission. Preserve explicit case holds.
+The broad commands above illustrate tooling, not permission for full local runs.
+Unavailable tools and CI-only/planned suites are reported explicitly.
 
 **Behind a firewall that blocks api.nuget.org**, set `AGENT_BRIDGE_NUGET_SOURCE` to a NuGet
 mirror's `index.json` before running it:
@@ -676,16 +741,33 @@ sets review depth by risk, effective 2026-11-05 12:27 PT:
 | A re-push after a CLEAN review | **Delta:** the diff since the last CLEAN head, plus a whole read of only the files touched since |
 | A test-only or docs-only re-push | Delta only |
 
-A rebase may retain its independent review when `git range-diff` shows that the
-PR's own commits are unchanged; the receipt cites that range-diff. Otherwise,
+A rebase of unpublished work may retain evidence when `git range-diff` shows its
+commits unchanged; published heads never rebase or force-push. Cite that proof. Otherwise,
 a carried delta needs a proved previously reviewed ancestor and an explicit
 review of the delta at the new head.
 
-Reduced read depth does not carry CI, Copilot's review or a commit status to a new
-head. The new head still needs fresh CI, a completed Copilot review at that head,
-all substantive findings disposed of, no unresolved threads and, where required,
-an independent-review receipt at that exact head. Retained review evidence belongs
-in that receipt; neither a rebase nor a delta clears a hold or admits the PR.
+Reduced depth alone carries neither CI nor a commit status. Copilot and Codex
+are optional everywhere; never request, wait for or depend on them.
+Every head needs the required CI/checks, finding dispositions, resolved threads and
+its own posted independent receipts. Retained evidence belongs in those receipts.
+Quality classifies sensitivity with the evaluator: one ordinary family, two sensitive
+families; both read security-subject docs in full and verdicts name the exact head.
+
+Owner, Nov 15, 2026, 08:05–08:55 PT: guarded CI carry-over applies to ALL PRs.
+The new head must be a plain no-ff main-merge child of the previously read head and
+main, with identical PR-file blobs, no overlapping main change and no resolved conflict.
+Intervening changes to CI workflows, quality/merge-rule config, shared build props,
+`global.json` or shared test infrastructure used by the PR prohibit carry-over.
+Quality records old/new heads, parents, blob proof and the actual dependency/path
+comparison. Unknown or failed proof means no carry-over and normal required CI.
+This reuses approved hosted CI evidence only; it fabricates no head status and
+changes no evaluator, ruleset or required checks. Review carry-over is separate.
+
+ALL PRs may be at most three commits behind main only with no file or same-project
+overlap, a fail-closed comparison and the existing exclusions: never gate, wheel,
+scroll, input or reply-delivery PRs, or a missing-main window with `fixes-main`.
+There is NO Nov 20 expiry on freshness. Unknown comparison fails closed.
+Neither freshness nor CI/review carry-over releases a held phase or admits a PR.
 Changes to `merge-rule.yml` are themselves ENTIRE-review changes. The existing
 merge rule and its other gates remain in force; this table does not change the
 App, ruleset or allowed receipt posters.
@@ -724,7 +806,7 @@ request is otherwise reviewed.
 Receipts count only from `independent_review.posters` in `quality/merge-rule.yml`: `danswett`
 and the receipts GitHub App `agent-bridge-receipts`, written as GraphQL names it, without REST's
 `[bot]`. The App holds Commit statuses (write), Pull requests (read) and Metadata (read), and
-nothing else; its key stays on VM4. It has its own rate pool, so danswett's quota running out
+nothing else; its key stays on the authorized receipt host. It has its own rate pool, so danswett's quota running out
 doesn't stop receipts. danswett stays a poster as the fallback for when the App's machine is down.
 To roll back, revoke the App's key or suspend it in GitHub settings; nothing else depends on it.
 
@@ -754,11 +836,15 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
 - **Flakes:** a test that passes and fails on the same code is flaky. It's reported, never
   silently retried to green. The one exception is the pwa-ui WebKit shards, which retry a failed
   test once in CI (Chromium none): a pass on retry is listed on the run's summary and as a
-  warning by `pwa/tools/flaky-report.mjs`, so it is reported, not hidden. A test that flakes more
-  than twice in a week is quarantined with an issue: `test.skip` with the issue number and a
-  restore-by date 3 days out, the `quarantined` label, an owner, as in #1493. The flake record is
-  the `flaky` label and its issues, one per test,
-  each with its run links and counts.
+  warning by `pwa/tools/flaky-report.mjs`, so it is reported, not hidden.
+  The [Fleet register's quarantine rule](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
+  governs eligibility: a named test, ARM included, needs three failures on three
+  separate runs in seven days, with the same signature and an open issue.
+  Quality proposes; the owner approves. Record the issue, owner and expiry:
+  at most seven days, or three days for ARM with a passes-on-rerun check.
+  Tests still run and report; there is no automatic skip or quarantine.
+  This guidance approves no active quarantine. The flake record is the `flaky`
+  label and its issues, one per test, each with its run links and counts.
   - **The nightly flake hunt** (`flake-hunt`, ring 3, [flake-hunt.yml](../.github/workflows/flake-hunt.yml),
     #509) finds them before they turn a pull request or `main` red. At about 02:30 PT it runs
     every .NET test project 10 times on `ubuntu-latest`, `windows-latest` and `windows-11-arm`.
@@ -815,6 +901,20 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
+- **The win-arm64 waiver** (#2564, owner decision 2026-11-13, until **2026-11-20 00:00 PT**, 08:00 UTC):
+  while the repository variable `ARM64_WAIVER` is exactly `on` (off or unset waives nothing; the owner
+  sets it), `quality-gate` counts a failed needed job as success when its only failures are
+  `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly,
+  on main and PRs, and every other leg of that job succeeded. The warning and summary identify
+  each waived job, its run and the expiry.
+  [arm64-waiver.ps1](arm64-waiver.ps1) reads the run's jobs from the API, because a matrix is one
+  result in `needs`, and compares the clock with the expiry itself, so the waiver ends with no edit.
+  Any API error, any other job that did not succeed (x64 included), and a cancelled, timed-out or
+  skipped leg waive nothing. The Arm64 jobs still run and stay red, and `publish-gate` still reads
+  `app`'s raw result, so main doesn't publish while app legs fail. Remove it (script, test, catalog suite,
+  the gate's two steps) once #2563 and the self-test fix are on main and three main push runs in a
+  row show all three jobs green; extending it needs a new owner decision.
+  Offline test: `quality/test-arm64-waiver.ps1` (catalog suite `arm64-waiver-script`).
 - **The weekly report** (`weekly-report`, [weekly-report.yml](../.github/workflows/weekly-report.yml))
   is how the flake record gets read, so flakes are fixed rather than re-run. Every Monday at 08:00
   PT, `agent-bridge-quality report` reads the past 7 days from GitHub and the workflow comments it
@@ -847,6 +947,13 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   `main`'s and nightly runs, keeps the time series (coverage, durations, flakes, benchmarks,
   selection misses). It's rendered at `https://danswett.github.io/agent-bridge/quality/` by
   the existing Pages workflow. Generated data never lands in `main`, so it causes no churn.
+  Owner decision (Nov 15, 2026, 13:07 PT): process dumps and other dump content must
+  never be published as artifacts in this public repository; derived text, such as
+  stack analysis, is allowed only if size-capped and scrubbed of paths and secret-like
+  strings, while private channels require a separate owner decision.
+  The existing cdb crash-analysis text for #2685 is the sole dated exception to the
+  size-cap and scrubbing requirements, valid until the dump-hardening follow-up to
+  #2683 merges or Nov 18, 2026, 00:00 PT, whichever is first.
 - **Release-readiness report:** ring 4 generates one page per candidate. It lists each
   suite's last result on that build, the lab runs, the soak gate, perf against baseline, open
   `flaky` and `security` issues, and the manual checklists signed off. It's attached to the
@@ -874,7 +981,7 @@ They plan only and refuse execution; neither produces scenario evidence or `resu
   | `win-arm64` | Windows 11 Arm64 (Azure Cobalt or Ampere) | E2E |
   | `win10` | Windows 10 22H2 x64 | Compatibility |
   | `linux-x64`, `linux-arm64` | Ubuntu 24.04 | Host E2E, agent drift |
-  | `ha` | VM-W's role: disposable Home Assistant and Mosquitto | HA E2E and soak |
+  | `ha` | Disposable Home Assistant and Mosquitto | HA E2E and soak |
   | `perf` | A fixed-size VM kept only for benchmarks | §3.2 comparisons |
   | `macos` | See §9: hosted `macos-latest`, a self-hosted Mac mini, or EC2 Mac | macOS host and app E2E |
 - **`quality/lab/run.ps1 -Subscription <id> -Role <r> -Build <artifact> -Scenario <s> -Relay <staging|ppe>`:**
@@ -914,8 +1021,11 @@ the PR gate can stop a regression. The rings only protect users if releases pass
 | Channel | Gets | Promoted when | Who runs it |
 |---|---|---|---|
 | `dev` | Every merge to `main` (today's behaviour) | Ring 2 green | Lab VMs, and any machine opted in |
-| `beta` | The newest `dev` build with a green ring 3 | Nightly, automatically | The owner's migrated machines (ULTRA, DEV-VM1, ARM8) |
-| `stable` | A `beta` build with ring 4 signed off | By the owner | Everyone else, and HOME once migrated |
+| `beta` | The newest `dev` build with a green ring 3 | Nightly, automatically | The owner's migrated machines |
+| `stable` | A `beta` build with ring 4 signed off | By the owner | Everyone else, including the publication writer once migrated |
+
+Fleet membership comes only from the relay roster. These channel audiences are
+not a hardcoded fleet list.
 
 Velopack channels already exist per architecture (`build/app-channels.ps1`). Promotion
 re-publishes the same bytes into the next channel's feed, with the same digest; it never

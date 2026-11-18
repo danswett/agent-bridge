@@ -187,6 +187,7 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
     return Promise.all(subscribers().map((ch) => event(ch, 'session.upsert', listed(s))));
   }
   return {
+    account,
     deviceId,
     name,
     log,

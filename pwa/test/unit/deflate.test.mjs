@@ -35,6 +35,17 @@ test('a message deflates to less than half and inflates back byte for byte', asy
   assert.deepEqual(await unpack(packed), plain);
 });
 
+for (const bytes of [149, 150, 511]) {
+  test(`a ${bytes}-byte message respects the compression floor and round trips`, async () => {
+    const plain = utf8.encode(JSON.stringify({ text: 'x'.repeat(bytes - 11) }));
+    assert.equal(plain.length, bytes);
+    const packed = await pack(plain);
+    if (bytes < 150) { assert.equal(packed, plain); }
+    else { assert.equal(packed[0], MARKER); assert.ok(packed.length < plain.length); }
+    assert.deepEqual(await unpack(packed), plain);
+  });
+}
+
 test('a small message, or one that does not shrink, goes as it is', async () => {
   const small = utf8.encode('{"id":1,"op":"hello","data":{}}');
   const noise = crypto.getRandomValues(new Uint8Array(4096));
@@ -42,6 +53,11 @@ test('a small message, or one that does not shrink, goes as it is', async () => 
   assert.equal(await pack(small), small);
   assert.equal(await pack(noise), noise);
   assert.equal(await unpack(small), small);
+  for (const bytes of [150, 511]) {
+    const noise = crypto.getRandomValues(new Uint8Array(bytes));
+    noise[0] = '{'.charCodeAt(0);
+    assert.equal(await pack(noise), noise);
+  }
 });
 
 // The same bytes MessageDeflate's tests read: one stored block of raw DEFLATE, no zlib header.
@@ -101,6 +117,16 @@ test('a message too large to send as JSON is refused before it is sent, though i
 });
 
 for (const hostInflates of [true, false]) {
+  test(`a 150-byte message is compressed only when the host inflates: ${hostInflates}`, async () => {
+    const { set, host, settled } = await pair({ hostInflates });
+    const ch = await set.open(host.id);
+    const message = { text: 'x'.repeat(139) };
+    await ch.send(message);
+    await settled();
+    assert.equal(host.received[0][0], hostInflates ? MARKER : '{'.charCodeAt(0));
+    assert.deepEqual(JSON.parse(fromUtf8.decode(await unpack(host.received[0]))), message);
+  });
+
   test(`a large message goes ${hostInflates ? 'deflated to a host that said it inflates' : 'as JSON to a host that did not say it inflates'}`, async () => {
     const { set, host, settled } = await pair({ hostInflates });
     const ch = await set.open(host.id);

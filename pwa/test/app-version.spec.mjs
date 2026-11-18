@@ -70,7 +70,7 @@ for (const { name, viewport } of [{ name: 'on a phone', viewport: { width: 390, 
       }
     }
     expect(requests).toBe(4);
-    expect(await page.evaluate(() => window.releaseTest.updates)).toBe(3);
+    expect(await page.evaluate(() => window.releaseTest.updates)).toBe(5);
     await expect(section.locator('#release-id')).toHaveText('64a4019');
     const { violations } = await new AxeBuilder({ page }).include('#release').analyze();
     expect(violations).toEqual([]);
@@ -169,7 +169,7 @@ for (const { name, viewport } of [{ name: 'on a phone', viewport: { width: 390, 
     await expect(section.getByRole('button', { name: 'Reload', exact: true })).toBeHidden();
     await section.getByRole('button', { name: 'Check for updates' }).click();
     await expect(section.locator('#release-result')).toHaveText('Up to date');
-    expect(await page.evaluate(() => window.releaseTest.updates)).toBe(1);
+    expect(await page.evaluate(() => window.releaseTest.updates)).toBe(2);
     await page.evaluate(() => window.releaseTest.worker.to('activated'));
     await expect(section.getByRole('button', { name: 'Reload', exact: true })).toBeHidden();
     await page.evaluate(() => { window.releaseTest.install(); window.releaseTest.worker.to('installed'); });
@@ -177,10 +177,73 @@ for (const { name, viewport } of [{ name: 'on a phone', viewport: { width: 390, 
     await page.evaluate(() => window.releaseTest.worker.to('activated'));
     await expect(section.locator('#release-result')).toHaveText('A new version of the app is ready.');
   });
+  test(`launch and foreground checks find a stalled version with Reload ${name}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const start = new Date('2026-11-11T08:00:00-08:00');
+    await page.clock.install({ time: start });
+    await fakeRegistration(page, true, true);
+    let requests = 0;
+    await page.route('**/version.json', (route) => {
+      requests++;
+      return route.fulfill({ json: { version: 'b'.repeat(40), builtAt: '' } });
+    });
+    await page.goto('?demo=1&static=1');
+    await page.waitForSelector('html[data-demo-ready]');
+    await go(page, 'settings');
+    const section = page.getByRole('region', { name: 'This app' });
+    await expect(section.locator('#release-newer')).toBeVisible();
+    expect(requests).toBe(1);
+    await page.clock.pauseAt(new Date(start.getTime() + 120000));
+    const foreground = () => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await foreground();
+    await expect.poll(() => requests).toBe(2);
+    await foreground();
+    expect(requests).toBe(2);
+    await page.clock.runFor(4999);
+    await foreground();
+    expect(requests).toBe(2);
+    await page.clock.runFor(1);
+    await foreground();
+    await expect.poll(() => requests).toBe(3);
+    await page.evaluate(() => { window.releaseTest.install(); window.releaseTest.worker.to('installed'); });
+    await page.clock.runFor(9999);
+    await expect(section.locator('#release-result')).toHaveText('Installing the new version…');
+    await page.clock.runFor(1);
+    await expect(section.locator('#release-result')).toHaveText("The new version installed but hasn't started.");
+    await expect(section.getByRole('button', { name: 'Check for updates' })).toBeHidden();
+    const reload = section.getByRole('button', { name: 'Reload', exact: true });
+    await expect(reload).toBeVisible();
+    await expect(section.locator('#release-id')).toHaveText('64a4019');
+    await Promise.all([page.waitForEvent('load'), reload.click()]);
+  });
+
+  test(`failed installs use the banner sentence in This app ${name}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await fakeRegistration(page);
+    await page.goto('?demo=1&static=1');
+    await page.waitForSelector('html[data-demo-ready]');
+    await go(page, 'settings');
+    await page.evaluate(() => {
+      for (let i = 0; i < 3; i++) { window.releaseTest.install(); window.releaseTest.worker.to('redundant'); }
+    });
+    await expect(page.locator('#stuck-banner')).toBeVisible();
+    await expect(page.locator('#release-result')).toHaveText(await page.locator('#stuck-banner span').textContent());
+    await expect(page.locator('#release-check')).toBeVisible();
+  });
 }
 
-async function fakeRegistration(page, controlled = true) {
-  await page.addInitScript((controlled) => {
+async function fakeRegistration(page, controlled = true, automatic = false) {
+  await page.addInitScript(({ controlled, automatic }) => {
+    // Existing manual-check cases start with a quiet, current cold-start result.
+    const fetch = window.fetch.bind(window);
+    let cold = !automatic;
+    window.fetch = (...args) => {
+      if (cold && args[0] === 'version.json') {
+        cold = false;
+        return Promise.resolve(new Response(JSON.stringify({ version: '64a4019c0ffee0123456789abcdef0123456789a', builtAt: '' })));
+      }
+      return fetch(...args);
+    };
     const registration = new EventTarget();
     registration.update = async () => { window.releaseTest.updates++; };
     const serviceWorker = new EventTarget();
@@ -203,5 +266,5 @@ async function fakeRegistration(page, controlled = true) {
       },
     };
     if (!controlled) { window.releaseTest.install(); }
-  }, controlled);
+  }, { controlled, automatic });
 }

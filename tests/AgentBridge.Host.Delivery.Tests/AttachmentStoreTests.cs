@@ -2,6 +2,9 @@ using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
+using System.Text.Json;
+using AgentBridge.Host.Core;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Copilot;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
@@ -478,13 +481,13 @@ public sealed class AttachmentStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task A_blob_that_is_not_what_was_sealed_is_refused_with_the_reason_and_one_out_of_reach_is_kept_for_another_try()
+    public async Task A_blob_that_is_not_what_was_sealed_is_refused_safely_and_one_out_of_reach_is_kept_for_another_try()
     {
         var blobs = new FakeBlobs { Failure = new InvalidDataException("a part of the blob was changed, moved or is not from this blob") };
         using var s = WithBlobs(blobs);
         var tampered = FromBlob(Png(1000), blobs);
         s.Start(Phone, tampered);
-        Assert.Equal("the attachment in the blob store is not what was sent (a part of the blob was changed, moved or is not from this blob), so it was dropped; send it again",
+        Assert.Equal("the attachment in the blob store is not what was sent, so it was dropped; send it again",
             (await WaitForFailureAsync(s, tampered)).Message);
         await UntilAsync(() => { lock (blobs.Forgotten) { return blobs.Forgotten.Count == 1; } }, "the blob to be deleted from the store");
         Assert.Equal([tampered.Blob!.Id], blobs.Forgotten);
@@ -492,8 +495,106 @@ public sealed class AttachmentStoreTests : IDisposable
         blobs.Failure = new HttpRequestException("storage answered 503 to the download");
         var unreachable = FromBlob(Png(1000), blobs);
         s.Start(Phone, unreachable);
-        Assert.Contains("could not fetch the attachment from the blob store (storage answered 503", (await WaitForFailureAsync(s, unreachable)).Message);
+        Assert.Equal("the host could not fetch the attachment from the blob store; send it again", (await WaitForFailureAsync(s, unreachable)).Message);
         Assert.DoesNotContain(unreachable.Blob!.Id, blobs.Forgotten);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Blob_fetch_exception_text_never_reaches_a_held_reason_or_serialized_refused_reply(bool invalidData)
+    {
+        string[] diagnostics =
+        [
+            @"C:\synthetic-private\blob-fetch-sentinel.bin",
+            "https://example.invalid/synthetic-blob-fetch-sentinel",
+            "fake-secret=synthetic-blob-fetch-sentinel-0123456789",
+        ];
+        const string peer = "phone-device";
+        var message = string.Join(" ", diagnostics);
+        var blobs = new FakeBlobs
+        {
+            Failure = invalidData ? new InvalidDataException(message) : new HttpRequestException(message),
+        };
+        using var s = WithBlobs(blobs);
+        var start = FromBlob(Png(1000), blobs);
+        s.Start(peer, start);
+        await UntilAsync(() => s.Claim(peer, Refs(start)).Problem?.Contains("could not be fetched:", StringComparison.Ordinal) == true,
+            "the blob fetch failure to be held");
+        var (claim, problem) = s.Claim(peer, Refs(start));
+
+        var session = Guid.NewGuid().ToString();
+        f.CopilotSession(session, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        var injector = new UntouchedInjector();
+        var replies = new ReplyService(new DeliveryGate(), source, f.Processes, new NoBridge(), new NoGuard(), injector,
+            new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, PreRead = false }, attachments: s);
+        var request = new ReplyRequest
+        {
+            Id = session, Request = Guid.NewGuid().ToString(), Text = "look", Attachments = Refs(start),
+        };
+
+        var result = await replies.ReplyAsync(request, peer);
+        var wire = JsonSerializer.SerializeToElement(result, ProtocolJson.Options);
+        var repeated = await replies.ReplyAsync(request, peer);
+
+        Assert.Null(claim);
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Equal(problem, result.Reason);
+        Assert.Equal("refused", wire.GetProperty("outcome").GetString());
+        Assert.All(diagnostics, diagnostic =>
+        {
+            Assert.DoesNotContain(diagnostic, problem!);
+            Assert.DoesNotContain(diagnostic, wire.GetRawText());
+        });
+        Assert.False(wire.TryGetProperty("attachments", out _));
+        Assert.Equal(result, repeated);
+        Assert.Equal(0, injector.Calls);
+        Assert.Equal(1, s.Count);
+        Assert.Empty(Directory.GetFiles(s.IncomingRoot));
+        var safeReason = invalidData
+            ? "the attachment in the blob store is not what was sent, so it was dropped; send it again"
+            : "the host could not fetch the attachment from the blob store; send it again";
+        Assert.Equal($"attachment {start.Attachment[..8]} could not be fetched: {safeReason}", problem);
+        if (invalidData)
+        {
+            Assert.Equal(start.Blob!.Id, await blobs.FirstForgotten.Task.WaitAsync(TimeSpan.FromSeconds(60)));
+        }
+        else { Assert.Empty(blobs.Forgotten); }
+
+        var heldReason = Assert.Throws<InvalidOperationException>(() => s.Start(peer, start)).Message;
+        Assert.All(diagnostics, diagnostic => Assert.DoesNotContain(diagnostic, heldReason));
+        Assert.Equal(safeReason, heldReason);
+        Assert.Equal(0, s.Count);
+        blobs.Failure = null;
+        var retry = FromBlob(Png(1000), blobs);
+        Assert.True((await FetchedAsync(s, retry, peer)).Complete);
+        var (retried, retryProblem) = s.Claim(peer, Refs(retry));
+        Assert.NotNull(retried);
+        Assert.Null(retryProblem);
+        s.Release(retried);
+    }
+
+    sealed class NoBridge : IAgentHaBridgeProbe
+    {
+        public string? Active() => null;
+    }
+
+    sealed class NoGuard : ITargetGuard
+    {
+        public string? Refuse(int processId) => null;
+    }
+
+    sealed class UntouchedInjector : IConsoleInjector
+    {
+        public int Calls;
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            throw new InvalidOperationException("a refused blob must never be typed");
+        }
     }
 
     static async Task<Exception> WaitForFailureAsync(AttachmentStore s, AttachmentStart start)

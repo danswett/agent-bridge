@@ -93,6 +93,85 @@ test('tools follow the host\'s capabilities and keep the old names', async () =>
   connection.close(); host.close();
 });
 
+test('usage is hidden and refused without its exact capability or an accepted principal', async (t) => {
+  for (const [capabilities, token] of [
+    [['sessions.read'], 'abat1_x'],
+    [['usage.shared', 'usage.write', 'future.usage'], 'abat1_x'],
+    [['usage'], ''],
+  ]) {
+    const host = await fakeHost({
+      hello: () => ({ capabilities }), 'agent.hello': () => ({ principal: 'p' }),
+      'usage.get': () => ({ agents: [] }),
+    });
+    t.after(() => host.close());
+    const { client, connection } = await clientFor(host, { AGENT_BRIDGE_TOKEN: token });
+    t.after(() => connection.close());
+    assert.equal((await client.listTools()).tools.some((tool) => tool.name === 'read_agent_usage'), false);
+    const refused = await client.callTool({ name: 'read_agent_usage', arguments: {} });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /not available on this connection/);
+    assert.equal(host.seen.some((r) => r.op.startsWith('usage.')), false);
+  }
+});
+
+test('usage reads preserve allowance fields and failures without adding zero readings', async (t) => {
+  const report = { agents: [
+    { agent: 'copilot', label: 'GitHub Copilot', account: 'example', plan: 'enterprise', source: 'api',
+      measuredAt: '2026-11-17T08:00:00Z', windows: [
+        { key: 'plan', label: 'Plan', percent: 75.5, used: 755, limit: 1000, unit: 'AIC',
+          startsAt: '2026-11-01T00:00:00Z', resetsAt: '2026-12-01T00:00:00Z' },
+      ] },
+    { agent: 'codex', label: 'Codex', source: 'none', windows: [],
+      measuredAt: '2026-11-17T08:01:00Z', error: 'No reading available' },
+  ] };
+  const host = await fakeHost({
+    hello: () => ({ capabilities: ['usage'] }), 'agent.hello': () => ({ principal: 'p' }),
+    'usage.get': () => report,
+  });
+  t.after(() => host.close());
+  const { client, connection } = await clientFor(host);
+  t.after(() => connection.close());
+  assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name), ['read_agent_usage']);
+  assert.deepEqual(await call(client, 'read_agent_usage', {}), report);
+  assert.deepEqual(host.seen.filter((r) => r.op.startsWith('usage.')).map(({ op, data }) => ({ op, data })),
+    [{ op: 'usage.get', data: {} }]);
+});
+
+test('usage offers no write path and rejects operation, shared and remote arguments', async (t) => {
+  const host = await fakeHost({
+    hello: () => ({ capabilities: ['usage', 'usage.shared', 'usage.write'] }),
+    'agent.hello': () => ({ principal: 'p' }), 'usage.get': () => ({ agents: [] }),
+  });
+  t.after(() => host.close());
+  const { client, connection } = await clientFor(host);
+  t.after(() => connection.close());
+  const [tool] = (await client.listTools()).tools;
+  assert.equal(tool?.name, 'read_agent_usage');
+  assert.equal(tool.annotations.readOnlyHint, true);
+  assert.equal(tool.inputSchema.additionalProperties, false);
+  for (const arguments_ of [{ op: 'usage.reset' }, { shared: true }, { machine: 'other' }]) {
+    assert.equal((await client.callTool({ name: 'read_agent_usage', arguments: arguments_ })).isError, true);
+  }
+  for (const name of ['write_agent_usage', 'reset_agent_usage', 'usage.get', 'usage.subscribe']) {
+    assert.equal((await client.callTool({ name, arguments: {} })).isError, true);
+  }
+  assert.equal(host.seen.some((r) => r.op.startsWith('usage.')), false);
+});
+
+test('usage host refusals remain errors rather than empty reports', async (t) => {
+  const host = await fakeHost({
+    hello: () => ({ capabilities: ['usage'] }), 'agent.hello': () => ({ principal: 'p' }),
+    'usage.get': () => { throw new Error('usage permission revoked'); },
+  });
+  t.after(() => host.close());
+  const { client, connection } = await clientFor(host);
+  t.after(() => connection.close());
+  const refused = await client.callTool({ name: 'read_agent_usage', arguments: {} });
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /usage permission revoked/);
+  assert.equal(refused.structuredContent, undefined);
+});
+
 test('the server tells agents to prefer Slipgates messaging', async () => {
   const { client } = await clientFor(null);
   assert.match(client.getInstructions(), /use these tools instead of any other messaging route/);
@@ -199,6 +278,61 @@ test('launch maps permissions, remembers the outcome, and read_launch_result ret
   assert.equal((await call(client, 'read_launch_result', { request: out.request })).outcome, 'started');
   assert.equal((await call(client, 'read_launch_result', { request: 'nope' })).status, 'unknown');
   connection.close(); host.close();
+});
+
+test('a coordinator MCP launch defaults omitted roles and preserves an explicit unlisted role', async (t) => {
+  const host = await fakeHost({
+    hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'session.launch': () => ({ outcome: 'started', session: 's9' }),
+  });
+  t.after(() => host.close());
+  const { client, connection } = await clientFor(host);
+  t.after(() => connection.close());
+
+  for (const options of [{}, { role: undefined }, { role: 'unlisted' }]) {
+    const out = await call(client, 'launch_agent_session', { agent: 'copilot', prompt: 'go', ...options });
+    assert.equal(out.outcome, 'started');
+  }
+  assert.deepEqual(host.seen.filter((r) => r.op === 'session.launch').map((r) => r.data.role), ['default', 'default', 'unlisted']);
+});
+
+test('caller-supplied origin fields cannot select or bypass the MCP default role', async (t) => {
+  const host = await fakeHost({
+    hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'session.launch': () => ({ outcome: 'started' }),
+  });
+  t.after(() => host.close());
+  const { client, connection } = await clientFor(host);
+  t.after(() => connection.close());
+
+  for (const origin of ['person', 'coordinator']) {
+    await call(client, 'launch_agent_session', { agent: 'copilot', origin, coordinator: origin === 'coordinator' });
+  }
+
+  const launches = host.seen.filter((r) => r.op === 'session.launch');
+  assert.equal(launches.length, 2);
+  for (const { data } of launches) {
+    assert.equal(data.role, 'default');
+    assert.equal(Object.hasOwn(data, 'origin'), false);
+    assert.equal(Object.hasOwn(data, 'coordinator'), false);
+  }
+});
+
+test('null, empty and whitespace-only roles are rejected without forwarding a launch', async (t) => {
+  const host = await fakeHost({
+    hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'session.launch': () => ({ outcome: 'started' }),
+  });
+  t.after(() => host.close());
+  const { client, connection } = await clientFor(host);
+  t.after(() => connection.close());
+
+  for (const role of [null, '', ' \t ']) {
+    const out = await client.callTool({ name: 'launch_agent_session', arguments: { agent: 'copilot', role } });
+    assert.equal(out.isError, true, JSON.stringify(role));
+    assert.match(out.content[0].text, /role/);
+  }
+  assert.equal(host.seen.some((r) => r.op === 'session.launch'), false);
 });
 
 test('without a credential only read tools are listed and dispatched', async () => {

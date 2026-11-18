@@ -16,7 +16,7 @@ static partial class SelfTest
         Id = $"scroll{n}",
         At = StoredFrom.AddMinutes(n),
         Prompt = new HistoryPrompt { Text = $"Scroll prompt {n}" },
-        Parts = [new HistoryPart { Id = $"scrollp{n}", Kind = HistoryPartKind.Response, At = StoredFrom.AddMinutes(n), Text = $"Reply {n}.\n\nA second paragraph so the turn is a few lines tall." }],
+        Parts = new[] { new HistoryPart { Id = $"scrollp{n}", Kind = HistoryPartKind.Response, At = StoredFrom.AddMinutes(n), Text = $"Reply {n}.\n\nA second paragraph so the turn is a few lines tall." } },
     };
 
     // Selects another session without waiting for any part of it.

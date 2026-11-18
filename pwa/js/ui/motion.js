@@ -216,6 +216,69 @@ export function slide(el, entry, fromX, fromY, { pseudo = null, scaleX = 1 } = {
   return run(el, [{ transform: `translate(${fromX}px, ${fromY}px)${scale}`, ...origin }, { transform: 'none', ...origin }], entry, t, pseudo ? { pseudoElement: pseudo } : {});
 }
 
+const flips = new WeakMap();
+
+// Mutations act now; one frame measures the final layout for the whole burst. Capture the
+// drawn positions before cancelling a running shift, so another change never jumps back.
+// Keep it running through mutate(): a leaving item's copy must see that same drawn position.
+export function flip(container, mutate, { entry = 'shift', viewport = false } = {}) {
+  const doc = container.ownerDocument;
+  if (doc.visibilityState === 'hidden') {
+    const pending = flips.get(container);
+    if (pending) { pending.hidden = true; }
+    return mutate();
+  }
+  let state = flips.get(container);
+  if (!state) {
+    state = { origin: container.getBoundingClientRect(), viewport: false, before: new Map(), interrupted: new Set(), animations: [], entries: new Map() };
+    for (const el of container.children) {
+      if (!el.getClientRects().length) { continue; }
+      state.before.set(el, el.getBoundingClientRect());
+    }
+    for (const el of state.before.keys()) {
+      for (const a of el.getAnimations?.() ?? []) {
+        if (!/^ab-motion-(shift|reorder)$/.test(a.id)) { continue; }
+        state.interrupted.add(el);
+        state.animations.push(a);
+      }
+    }
+    flips.set(container, state);
+    const visibility = () => { state.hidden ||= doc.visibilityState === 'hidden'; };
+    doc.addEventListener?.('visibilitychange', visibility);
+    doc.defaultView.requestAnimationFrame(() => {
+      doc.removeEventListener?.('visibilitychange', visibility);
+      flips.delete(container);
+      for (const a of state.animations) { a.cancel(); }
+      if (!container.isConnected || state.hidden || doc.visibilityState === 'hidden') { return; }
+      const origin = state.viewport ? state.origin : container.getBoundingClientRect();
+      const after = new Map([...container.children].filter((el) => el.getClientRects().length).map((el) => [el, el.getBoundingClientRect()]));
+      const slotsChanged = state.before.size !== after.size || [...after.keys()].some((el) => !state.before.has(el));
+      const positions = [...state.before].filter(([el]) => after.has(el)).map(([el, was]) => [el, was, after.get(el)]);
+      for (const [el, was, at] of positions) {
+        const name = state.entries.get(el);
+        // Internal placement cannot cross adjacent controls; anchored layouts keep viewport positions.
+        const x = was.left - state.origin.left - (at.left - origin.left);
+        const y = was.top - state.origin.top - (at.top - origin.top);
+        if (!name || (!x && !y)) { continue; }
+        const t = timing(name, { doc: el.ownerDocument });
+        if (!t.duration) { if (name === 'shift' && slotsChanged) { enter(el, 'value'); } continue; }
+        if (state.interrupted.has(el)) { t.easing = timing('listItem', { doc: el.ownerDocument }).easing; }
+        run(el, [{ transform: `translate(${x}px, ${y}px)` }, { transform: 'none' }], name, t);
+      }
+    });
+  }
+  const result = mutate();
+  state.viewport ||= typeof viewport === 'function' ? viewport() : viewport;
+  for (const el of container.children) {
+    // Exclusions always win; a redraw must not downgrade an explicit reorder to a shift.
+    const name = typeof entry === 'function' ? entry(el) : entry;
+    if (name === null || (state.entries.get(el) !== null && state.entries.get(el) !== 'reorder')) {
+      state.entries.set(el, name);
+    }
+  }
+  return result;
+}
+
 // Where an element is on screen (its box), or null when none of it shows: off the viewport, or
 // scrolled out of a list that clips it. What an indicator may slide from (ui.md §5.3, Selection).
 export function seen(el) {

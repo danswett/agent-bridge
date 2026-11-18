@@ -1,4 +1,4 @@
-// Settings > This app (#1246): the running release and the release controller's manual check.
+// Settings > This app (#1246): the running release and its update result.
 import { copyText } from '../markdown.js';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -37,17 +37,19 @@ export function mountRelease({ version, builtAt, check, doc = document, win = wi
     }
     // Capture before hiding: browsers may clear activeElement as soon as Check disappears.
     const hadFocus = doc.activeElement === button;
-    button.hidden = phase === 'installing' || phase === 'ready';
+    const reload = phase === 'ready' || phase === 'stalled';
+    button.hidden = phase === 'installing' || reload;
     button.setAttribute('aria-disabled', String(phase === 'checking'));
     button.setAttribute('aria-busy', String(phase === 'checking'));
     button.textContent = phase === 'checking' ? 'Checking…' : 'Check for updates';
-    $('release-reload').hidden = phase !== 'ready';
+    $('release-reload').hidden = !reload;
     $('release-result').textContent = error || ({
       current: 'Up to date',
       installing: 'Installing the new version…',
       ready: 'A new version of the app is ready.',
+      stalled: "The new version installed but hasn't started.",
     }[phase] ?? '');
-    if (hadFocus && button.hidden) { $(phase === 'ready' ? 'release-reload' : 'release-result').focus(); }
+    if (hadFocus && button.hidden) { $(reload ? 'release-reload' : 'release-result').focus(); }
   };
   return { ...line, render };
 }

@@ -181,6 +181,11 @@ public static class SessionBudget
     {
         bool Fits(Session x) => ProtocolJson.ByteCount(x) <= maxBytes;
         if (Fits(s)) { return s; }
+        if (s.Activity.Notice is { } notice)
+        {
+            s = s with { Activity = s.Activity with { Notice = new HistoryTurn { Id = notice.Id, At = notice.At, Kind = notice.Kind, Truncated = true } } };
+            if (Fits(s)) { return s; }
+        }
 
         s = Subagents(s, a => a.Where(e => !e.Finished));
         if (!Fits(s)) { s = Subagents(s, a => a.Select(e => e with { Line = null })); }
@@ -301,7 +306,7 @@ public enum DriverKind { Person, Agent }
 // Who wrote activity.userMessage (#489). A value a client does not know is Other, never the
 // person's: a prompt is shown as the person's own only when nothing says it was not.
 [UnknownAs(Other)]
-public enum UserMessageFrom { Person, Schedule, Agent, Other }
+public enum UserMessageFrom { Person, Schedule, Agent, Other, Notification }
 
 [UnknownAs(Done)]
 public enum ToolStatus { Running, Done, Failed }
@@ -360,9 +365,14 @@ public enum NotificationClass { NeedsYou, Done, Fyi }
 // DiagnosticsReason: why this channel is not offered diagnostics (#1921); absent when offered
 // or from a host without a diagnostics service. Never an authorization grant.
 public sealed record MachineInfo([property: Strict(Strictness.Identity)] string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null, string? ReadOnly = null, string? Instance = null,
-    RestoreNotice? Restore = null, string? DiagnosticsReason = null);
+    RestoreNotice? Restore = null, string? DiagnosticsReason = null, string? Role = null);
 
 public sealed record HelloResult([property: Strict(Strictness.Identity)] int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
+
+public sealed record TranscriptObservation(
+    [property: JsonPropertyName("observed_at")] DateTimeOffset ObservedAt,
+    string Source,
+    [property: JsonPropertyName("host_id")] string HostId);
 
 public sealed record Session
 {
@@ -385,14 +395,20 @@ public sealed record Session
     public DateTimeOffset? StartedAt { get; init; }
     public required DateTimeOffset UpdatedAt { get; init; }
     public int? ProcessId { get; init; }
+    [JsonPropertyName("transcript_bytes")]
+    public long? TranscriptBytes { get; init; }
+    [JsonPropertyName("transcript_bytes_unavailable")]
+    public string? TranscriptBytesUnavailable { get; init; }
+    [JsonPropertyName("transcript_observation")]
+    public TranscriptObservation? TranscriptObservation { get; init; }
     public required Activity Activity { get; init; }
     public Question? Question { get; init; }
     // Agent while an agent drives the current turn: it launched the session, or answered or
     // replied to it, and nobody has taken it back since with an answer, a reply or input at the
     // machine. Null (absent) for the person.
     public DriverKind? Driver { get; init; }
-    // With Driver Agent, which agent, when the host knows (within Limits.DriverPrincipal):
-    // "homeassistant:<user id>" for a press by one of homeAssistant.agentUserIds.
+    // With Driver Agent, display text only (within Limits.DriverPrincipal):
+    // "homeassistant:<user id>" for an agent account press, or an unverified card sender label.
     public string? DriverPrincipal { get; init; }
     // The sub-agents this session started, at any depth (docs/design/subagents.md): running
     // ones first, then the most recently finished. Absent when there are none. Older clients
@@ -454,6 +470,8 @@ public sealed record Attention
 
 public sealed record Activity
 {
+    public TurnKind? Kind { get; init; }
+    public HistoryTurn? Notice { get; init; }
     public string? Response { get; init; }
     public bool? ResponseTruncated { get; init; }
     public string? Reasoning { get; init; }
@@ -693,6 +711,7 @@ public sealed record ListRequest(string? Cursor = null);
 public sealed record SubscribeRequest
 {
     public bool? Patch { get; init; }
+    public bool? Handles { get; init; }
     public SubscribeSince? Since { get; init; }
 }
 
@@ -725,6 +744,8 @@ public sealed record SubscribeResult(long Revision, int Count, bool? Resumed = n
 // with an id left out, a session still running would be dropped from the client's list.
 public sealed record SessionsSynced(long Revision, [property: Strict(Strictness.Security)] DiscoveryHeld? DiscoveryHeld = null, [property: Strict(Strictness.Identity)] IReadOnlyList<string>? Live = null)
 {
+    [Strict(Strictness.Identity)]
+    public IReadOnlyDictionary<string, int>? Handles { get; init; }
     // The most of Live a host sends; a host with more sessions sends the whole snapshot instead.
     public const int MaxLiveBytes = 32 * 1024;
 }
@@ -779,9 +800,9 @@ public sealed record DeliveryProgress(string Stage, bool? Working = null)
 {
     // The host has the request, before any check.
     public const string Received = "received";
-    // Every key has gone: the outcome will be delivered or unconfirmed. Working: the session was
-    // working, so the agent takes it at its next step (queued).
+    // Every key has gone: Working alone is not proof of queueing.
     public const string Typed = "typed";
+    public const string Queued = "queued";
 }
 
 // How far an unconfirmed answer is known to have got (#467), named as DeliveryTimings names the
@@ -794,6 +815,9 @@ public sealed record DeliveryProgress(string Stage, bool? Working = null)
 [UnknownAs(Typed)]
 public enum AnswerStage { Typed, Recorded }
 
+// Host-established intent, distinct from the caller's requested wire mode.
+public enum ReplyIntent { Unknown, Steer, Queueable, IdleOnly }
+
 // session.reply: a prompt for the session, typed into its own input as if at the machine.
 // Request is the client's UUID for this reply, as for an answer. Attachments name files the
 // same device sent first (Attachments.cs); with any, the text may be blank.
@@ -803,24 +827,39 @@ public sealed record ReplyRequest
     public required string Request { get; init; }
     public string? Text { get; init; }
     public IReadOnlyList<AttachmentRef>? Attachments { get; init; }
+    // Absent means Steer, preserving older clients' behaviour.
+    [JsonConverter(typeof(ReplyRequestModeConverter))]
+    public ReplyMode? Mode { get; init; }
     // As on AnswerRequest.
     public bool? Progress { get; init; }
     // Host-only condition for Lite's Copilot delivery, never accepted from session.reply.
     [JsonIgnore]
     public bool RequireIdle { get; init; }
+    // Host-only final-effect fence; never supplied by a protocol caller.
+    [JsonIgnore]
+    public Func<bool>? StillCurrent { get; init; }
+    // Host-only provenance, rechecked when consumed. No producer means Unknown, not Steer;
+    // Mode, RequireIdle, sender labels and message text cannot supply this authority.
+    [JsonIgnore]
+    public Func<ReplyIntent>? IntentSource { get; init; }
+    [JsonIgnore]
+    public ReplyIntent Intent => IntentSource?.Invoke() ?? ReplyIntent.Unknown;
 }
 
 // The same outcomes as an answer, read the same way.
 public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
 {
+    // The mode actually used; absent from an older host means Steer.
+    public ReplyMode? Mode { get; init; }
+    public ReplyStage? Stage { get; init; }
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }
     public IReadOnlyList<ReplyAttachmentBinding>? Attachments { get; init; }
     [JsonIgnore]
     public ReplyRefusal Refusal { get; init; }
     // Refusal is advice to callers, not part of the result's identity.
-    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments);
-    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Timings, Attachments);
+    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Mode == other.Mode && Stage == other.Stage && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments);
+    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments);
 }
 
 public enum ReplyRefusal { Other, Asking, ComposerUnverified, Busy }
@@ -891,6 +930,7 @@ public static class Capabilities
     // sessions.subscribe takes patch (live changes as session.patch) and since (resuming without
     // a whole snapshot): docs/protocol/v1-sessions.md, Patches and Resuming.
     public const string SessionsPatch = "sessions.patch";
+    public const string SessionsHandles = "sessions.handles";
     // hello takes { "changes": true }: the host then sends hello.changed on that channel whenever
     // what hello would say to it changes, and a client needs to ask hello again only rarely
     // (docs/protocol/v1-sessions.md, hello). Apps asked every 10 s, ~36 hellos a minute (#640).
@@ -901,6 +941,7 @@ public static class Capabilities
     public const string SessionsFocus = "sessions.focus";
     public const string SessionsAnswer = "sessions.answer";
     public const string SessionsReply = "sessions.reply";
+    public const string SessionsReplyQueue = "sessions.reply.queue";
     public const string SessionsStop = "sessions.stop";
     public const string Push = "push";
     public const string SessionsAttach = "sessions.attach";

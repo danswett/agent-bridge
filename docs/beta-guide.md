@@ -110,8 +110,9 @@ fact we do not yet know, not one we are leaving out.
   versioning and change feed are off in the reviewed account. Regional replication is not an
   absence of copies; other provider and downstream copies have not yet been confirmed. Forgetting
   a machine is not account erasure, and recently forgotten IDs and times remain in the roster.
-  There is no relay account-erasure feature. A documented, accepted manual account-purge procedure
-  has not yet been confirmed; contact the privacy address for requests.
+  There is no relay account-erasure feature, and the beta does not promise manual deletion. The
+  privacy address still receives and answers requests as required by applicable law; the beta
+  plan does not waive applicable rights or duties.
 
 ### Session delivery and content
 
@@ -151,10 +152,9 @@ fact we do not yet know, not one we are leaving out.
   days. These are configuration settings, not a guarantee of deletion from every copy. The
   contents of client-IP and payload fields have not been checked and remain unconfirmed. We do not
   claim that those fields contain no IP addresses or session content. Other copies and provider
-  residuals are unconfirmed. No
-  per-person telemetry deletion procedure is currently established in the supplied operational
-  record. The privacy contact coordinates requests; scheduled ageing is not proof of
-  request-based or all-copy erasure.
+  residuals are unconfirmed. The beta does not promise manual per-person telemetry deletion. The
+  privacy contact still receives and answers requests as required by applicable law; scheduled
+  ageing is not proof of request-based or all-copy erasure.
 
 ### Temporary transfers and push notifications
 
@@ -187,8 +187,8 @@ personal information in public GitHub issues. Screenshots, logs and attachments 
 paths, prompts, code, tokens or other private information; check them before sharing.
 
 The confirmed contact for beta support and privacy requests is support@slipgates.com. Beta support
-is email only: reply to your invitation email or write support@slipgates.com. Teams is not a beta
-support route. Cloudflare Email Routing forwards messages sent to support@slipgates.com to the
+is email only: reply to the invitation email or write support@slipgates.com.
+Cloudflare Email Routing forwards messages sent to support@slipgates.com to the
 operator's personal Gmail account. Only the operator reads support mail in the current beta setup;
 there are no delegates, further forwarding or integrations receiving its content. There is no
 automatic deletion: the operator keeps mail until he deletes it. Gmail and Cloudflare processing
@@ -305,10 +305,9 @@ remains held.
 
 You can stop participating, disconnect devices or uninstall. Uninstalling or revoking GitHub
 authorization does not itself erase server or support records. Use the privacy contact for separate
-requests about retained information; the privacy notice describes the beta's plan to let records
-age out without promised manual deletion, and known limits. The published acknowledgement aim is
-not a guaranteed
-support response, resolution or erasure deadline.
+requests about retained information; the privacy notice describes the beta's
+age-out/no-promised-manual-deletion plan and known limits. The published acknowledgement aim is
+not a guaranteed support response, resolution or erasure deadline.
 
 The applicable open-source and third-party licences accompany the distribution. These beta
 conditions do not take away rights those licences grant or mandatory rights the law gives you.

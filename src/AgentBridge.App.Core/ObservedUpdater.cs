@@ -1,3 +1,4 @@
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
@@ -46,7 +47,8 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public event Action? Changed;
 
     // The release the last check found, null when it found nothing newer (or none has finished).
-    public string? Found { get; private set; }
+    string? found;
+    public string? Found { get => Offered(found); private set => found = value; }
     public DateTimeOffset? CheckedAt { get; private set; }
     // As of when Found is known: the feed's own answer may be older than the check that read it,
     // from the machine's shared copy (#530), and the devices are told how old it really is.
@@ -55,12 +57,27 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public int? GitHubRemaining => inner.GitHubRemaining;
     public DateTimeOffset? GitHubQuotaAt => inner.GitHubQuotaAt;
     public DateTimeOffset? DiscoveredAt => inner.DiscoveredAt;
+    public HaltPolicySnapshot? HaltPolicy => inner.HaltPolicy;
     public UpdatePhase Phase => Volatile.Read(ref downloads) > 0 ? UpdatePhase.Downloading : Volatile.Read(ref checks) > 0 ? UpdatePhase.Checking : UpdatePhase.Idle;
     public int? Progress { get; private set; }
+    public long? Bytes { get; private set; }
+    public long? Total { get; private set; }
+    public bool? Downloaded => !inner.ReportsDownloadFacts ? null : Ready is not null ? true : Found is not null ? false : null;
 
     public string? InstalledVersion => inner.InstalledVersion;
     public string? PendingNotes => inner.PendingNotes;
-    public string? Ready => inner.Ready;
+    public string? Ready => Offered(inner.Ready);
+
+    string? Offered(string? release) =>
+        release is not null && HaltPolicy?.Policy?.Halted?.Contains(release, StringComparer.Ordinal) == true ? null : release;
+
+    void RefuseHalted(string? release)
+    {
+        if (release is not null && Offered(release) is null)
+        {
+            throw new InvalidOperationException($"the update to {release} has been halted; nothing was started");
+        }
+    }
 
     public async Task<string?> CheckAsync()
     {
@@ -72,12 +89,13 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
             var from = Bound();
             var found = await inner.CheckAsync();
             // A check that finished after its source changed answers for the old one.
-            if (Bound() != from) { return found; }
+            if (Bound() != from) { return Offered(found); }
+            if (Found != found) { (Bytes, Total) = (null, null); }
             Found = found;
             CheckedAt = time.GetUtcNow();
             FoundAsOf = inner.DiscoveredAt is { } at && at < CheckedAt ? at : CheckedAt;
             CheckSource = inner.CheckSource;
-            return found;
+            return Offered(found);
         }
         finally
         {
@@ -97,15 +115,21 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         {
             await downloading.WaitAsync();
             held = true;
+            // Read after the queue wait: a halt may have arrived since the check.
+            RefuseHalted(found);
+            RefuseHalted(inner.Ready);
             // The one waited for downloaded the release the last check found: nothing to do.
             if (inner.Ready is not null) { return; }
-            var from = Bound();
+            var from = Source;
             var release = Found;
+            (Bytes, Total) = (null, null);
             var now = time.GetUtcNow();
             if (failed is { } f && f.Release == release && now - f.At < HoldAfter(f.Times))
             {
-                throw new DownloadHeldException($"downloading {release} failed {Words.Ago(f.At, now)}; it is tried again after {(f.At + HoldAfter(f.Times)).ToLocalTime():t}");
+                throw new DownloadHeldException($"downloading {release} failed {Words.Ago(f.At, now)}; trying again soon");
             }
+            var reporting = true;
+            var reportsDownloadFacts = inner.ReportsDownloadFacts;
             try
             {
                 await inner.DownloadAsync(p =>
@@ -113,26 +137,36 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
                     var at = Math.Clamp(p, 0, 100);
                     if (Progress != at) { Progress = at; Raise(); }
                     progress(p);
+                }, (bytes, total) =>
+                {
+                    if (!Volatile.Read(ref reporting) || !reportsDownloadFacts || Source != from || Found != release) { return; }
+                    (Bytes, Total) = (bytes, total);
+                    Raise();
                 });
             }
             catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
             {
                 // Held against this source only: one that changed meanwhile owes it nothing.
-                if (Bound() == from) { failed = (release, time.GetUtcNow(), failed is { } before && before.Release == release ? before.Times + 1 : 1); }
+                if (Source == from) { failed = (release, time.GetUtcNow(), failed is { } before && before.Release == release ? before.Times + 1 : 1); }
                 throw;
             }
+            finally { Volatile.Write(ref reporting, false); }
             failed = null;
         }
         finally
         {
             if (held) { downloading.Release(); }
             // Settings' and the automatic one's may overlap: the progress goes with the last.
-            if (Interlocked.Decrement(ref downloads) == 0) { Progress = null; }
+            if (Interlocked.Decrement(ref downloads) == 0) { Progress = null; (Bytes, Total) = (null, null); }
             Raise();
         }
     }
 
-    public void ApplyAndRestart(string version, Action? handedOver = null) => inner.ApplyAndRestart(version, handedOver);
+    public void ApplyAndRestart(string version, Action? handedOver = null)
+    {
+        RefuseHalted(version);
+        inner.ApplyAndRestart(version, handedOver);
+    }
 
     // Something the state reads besides the updater changed: Settings' install failing.
     public void Noted() => Raise();
@@ -150,6 +184,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         FoundAsOf = null;
         CheckSource = null;
         failed = null;
+        (Bytes, Total) = (null, null);
         Raise();
     }
     int changes;
@@ -163,7 +198,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     string Bound()
     {
         var now = inner.Source;
-        if (bound is not null && bound != now) { (Found, CheckedAt, FoundAsOf, CheckSource, failed) = (null, null, null, null, null); }
+        if (bound is not null && bound != now) { (Found, CheckedAt, FoundAsOf, CheckSource, failed, Bytes, Total) = (null, null, null, null, null, null, null); }
         bound = now;
         return now;
     }

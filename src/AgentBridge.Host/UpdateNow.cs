@@ -115,10 +115,10 @@ public sealed record UpdateDeparture(UpdateDepartureOutcome Outcome, string? Cod
 }
 
 // The rules an Update now press's signed args follow (docs/protocol/v1-update.md, "The press"): now
-// true, the release shown, and accept, and nothing else; no contentSha256. Anything else is bad-args.
+// true, the release shown, accept and optional batch/unchecked; no contentSha256.
 public static class UpdateNowRules
 {
-    static readonly HashSet<string> ArgNames = new(["now", "release", "accept"], StringComparer.Ordinal);
+    static readonly HashSet<string> ArgNames = new(["now", "release", "accept", "batch", "unchecked"], StringComparer.Ordinal);
     static readonly HashSet<string> AcceptNames = new(["working", "waiting", "unknown", "sessions", "moreApprovals", "moreOther"], StringComparer.Ordinal);
     static readonly HashSet<string> SessionNames = new(["id", "state"], StringComparer.Ordinal);
 
@@ -134,6 +134,12 @@ public static class UpdateNowRules
             return (null, "an Update now's args must name the release the person was shown");
         }
         UpdateBusy? accept = null;
+        foreach (var flag in new[] { "batch", "unchecked" })
+        {
+            if (a.TryGetProperty(flag, out var value) && value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            { return (null, $"an Update now's {flag} must be a boolean"); }
+            if (a.EnumerateObject().Count(p => p.NameEquals(flag)) > 1) { return (null, $"an Update now repeats {flag}"); }
+        }
         if (a.TryGetProperty("accept", out var given))
         {
             if (AcceptShape(given) is { } shape) { return (null, shape); }
@@ -142,7 +148,12 @@ public static class UpdateNowRules
             if (accept is null) { return (null, "an Update now's accept is not one"); }
             if (Check(accept) is { } problem) { return (null, problem); }
         }
-        return (new UpdateNowArgs { Now = true, Release = version, Accept = accept }, null);
+        return (new UpdateNowArgs
+        {
+            Now = true, Release = version, Accept = accept,
+            Batch = a.TryGetProperty("batch", out var batch) ? batch.GetBoolean() : null,
+            Unchecked = a.TryGetProperty("unchecked", out var uncheckedFlag) ? uncheckedFlag.GetBoolean() : null,
+        }, null);
     }
 
     static string? AcceptShape(JsonElement e)

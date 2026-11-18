@@ -119,6 +119,7 @@ export class ReplyBox {
   #turn;
   #sent = null;
   #composing = false;
+  #claiming = false;
   #session = null;
   // The busy outcome whose pause has been started, so a re-render does not start another.
   #busyFor = null;
@@ -197,6 +198,12 @@ export class ReplyBox {
     });
     const { service, hostId, sessionId } = replying;
     this.#unwatch = service.watch(hostId, sessionId, (e) => this.#show(e));
+    const saved = this.entry;
+    if (saved && saved.outcome !== 'delivered') {
+      this.els.input.value = saved.answer.text;
+      this.#sent = { request: saved.request, text: saved.answer.text, files: [] };
+      this.#show(saved);
+    }
   }
 
   destroy() {
@@ -389,7 +396,7 @@ export class ReplyBox {
 
   #held() { return !!this.#session?.question || !!this.#offline; }
 
-  #pending(entry = this.entry) { return !!entry && (entry.state === 'sending' || entry.state === 'waiting'); }
+  #pending(entry = this.entry) { return this.#claiming || (!!entry && (entry.state === 'sending' || entry.state === 'waiting')); }
 
   #sync() {
     const e = this.els;
@@ -527,7 +534,7 @@ export class ReplyBox {
     e.files.hidden = this.#files.length === 0;
   }
 
-  #send() {
+  async #send() {
     if (this.#composing) { return; }
     if (this.#hold.updating && !this.#held() && !this.#pending() && !this.#busyTimer && this.#preparing === 0 && (this.els.input.value.trim() !== '' || this.#files.length > 0)) {
       this.els.updating.textContent = UPDATING;
@@ -547,10 +554,17 @@ export class ReplyBox {
     }
     this.#clearError();
     for (const f of files) { f.offered = true; }
-    const entry = service.submit({ hostId, sessionId, text: replyRequest({ sessionId, request: '', text }).text, attachments: files });
+    let entry;
+    const sentText = replyRequest({ sessionId, request: '', text }).text;
+    this.#claiming = true;
+    this.#sync();
+    try { entry = await service.submit({ hostId, sessionId, text: sentText, attachments: files }); }
+    catch (error) { this.#error(error.message); return; }
+    finally { this.#claiming = false; this.#sync(); }
     // Refused unsent: its machine takes nothing now.
     if (!entry) { for (const f of files) { f.offered = false; } return; }
-    this.#sent = { request: entry.request, text, files };
+    this.#sent = { request: entry.request, text: entry.answer.text === sentText ? text : entry.answer.text, files: entry.answer.attachments };
+    this.#show(this.entry);
   }
 
   #cancel() {
@@ -558,10 +572,15 @@ export class ReplyBox {
     service.cancel?.(hostId, sessionId);
   }
 
-  #resend() {
+  async #resend() {
     if (this.entry?.request === this.#edited || this.#offline) { return; }
+    const previous = this.entry;
     const { service, hostId, sessionId } = this.replying;
-    service.resend(hostId, sessionId);
+    try {
+      const entry = await service.resend(hostId, sessionId);
+      if (entry && this.#sent) { this.#sent = { request: entry.request, text: entry.answer.text === previous.answer.text ? this.#sent.text : entry.answer.text, files: entry.answer.attachments }; }
+      this.#show(this.entry);
+    } catch (error) { this.#error(error.message); }
   }
 
   #show(entry) {

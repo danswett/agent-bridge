@@ -32,7 +32,7 @@ public interface IHeldProcess : IDisposable
     // True once the process has exited; false if it is still running after timeout.
     Task<bool> WaitForExitAsync(TimeSpan timeout);
 
-    // Null once termination is asked for; otherwise why it could not be.
+    // Null once termination is asked for; otherwise a host-log diagnostic, not client text.
     string? Terminate();
 }
 
@@ -70,10 +70,10 @@ public sealed class StopOptions
 // Ends a session the way agent-ha-bridge's End session does (hooks/daemon-launch.ps1,
 // Invoke-PendingStops; hooks/session-launch.ps1, Stop-BridgeCopilotSession):
 //   * A session that is not idle (working, waiting on you, or idle with background work it
-//     started) takes two presses. The first only arms, and says so; the second, within
-//     ConfirmWindow and against the same process, ends it. Enforced here, not by a client,
-//     because every client and every device can send session.stop. An idle session ends on
-//     one press.
+//     started), or may be asking despite reporting idle, takes two presses. The first only
+//     arms, and says so; the second, within ConfirmWindow and against the same process, ends
+//     it. Enforced here, not by a client, because every client and every device can send
+//     session.stop. An otherwise idle session ends on one press.
 //   * Graceful first: /exit typed into the agent's console, as a reply would be, so the CLI
 //     writes its transcript and releases its lock, and the session stays resumable. If it is
 //     still running after Grace, the process alone is terminated, never its tree.
@@ -133,13 +133,23 @@ public sealed class StopService : ISessionStopper
     public Func<string, string?>? LaunchHeld { get; set; }
 
     public Task<StopResult> StopAsync(StopRequest request, CancellationToken cancellationToken = default)
+        => StopAuditedAsync(request, null, cancellationToken);
+
+    public Task<StopResult> StopAuditedAsync(StopRequest request, Func<int, DateTimeOffset, bool>? beforeDispatch,
+        CancellationToken cancellationToken = default, string? principal = null, Action? onConflict = null,
+        Action? onReplay = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => EndAsync(request, key), result =>
-            log($"end {key.ToString()[..8]} for {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Forced == true ? " (terminated)" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
+        return requests.Once(key, () => EndAsync(request, key, beforeDispatch), result =>
+            log($"end {key.ToString()[..8]} for {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Forced == true ? " (terminated)" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"),
+            owner: (principal, request.Id), foreign: () =>
+            {
+                onConflict?.Invoke();
+                return Task.FromResult(Refused("the stop request belongs to another operation"));
+            }, repeated: onReplay is null ? null : result => { onReplay(); return result; });
     }
 
-    async Task<StopResult> EndAsync(StopRequest request, Guid key)
+    async Task<StopResult> EndAsync(StopRequest request, Guid key, Func<int, DateTimeOffset, bool>? beforeDispatch)
     {
         Session session;
         int processId;
@@ -175,9 +185,13 @@ public sealed class StopService : ISessionStopper
             // Another press is ending it already.
             if (session.Status == SessionStatus.Ending) { return Busy(); }
 
-            if (Doing(session) is { } doing)
+            if (ConfirmationHint(session) is { } doing)
             {
-                if (!Confirms(session.Id, request.Confirm, processId, startedAt, out var why)) { return AskAgain(session.Id, processId, startedAt, doing, why); }
+                if (!Confirms(session.Id, request.Confirm, processId, startedAt, out var why))
+                {
+                    if (beforeDispatch?.Invoke(processId, startedAt) == false) { return AuditRefused(); }
+                    return AskAgain(session.Id, processId, startedAt, doing, why);
+                }
                 confirmed = true;
             }
             Disarm(session.Id);
@@ -192,7 +206,7 @@ public sealed class StopService : ISessionStopper
         StopResult result;
         try
         {
-            try { result = await EndProcessAsync(session, processId, startedAt, confirmed); }
+            try { result = await EndProcessAsync(session, processId, startedAt, confirmed, beforeDispatch); }
             catch (Exception e)
             {
                 log($"end of {Short(session.Id)} (pid {processId}) failed part way: {e.Message}");
@@ -229,7 +243,7 @@ public sealed class StopService : ISessionStopper
     // that was idle when it arrived is checked again once the typing turn is taken, which can
     // be a while if another session is being typed into: a session that has started working
     // or asking meanwhile needs a second press like any other.
-    async Task<StopResult> EndProcessAsync(Session session, int pid, DateTimeOffset startedAt, bool confirmed)
+    async Task<StopResult> EndProcessAsync(Session session, int pid, DateTimeOffset startedAt, bool confirmed, Func<int, DateTimeOffset, bool>? beforeDispatch)
     {
         var opened = control.Open(pid, startedAt);
         if (opened.Refusal is { } refusal) { return Refused(refusal); }
@@ -244,13 +258,17 @@ public sealed class StopService : ISessionStopper
                 if (probe.Active() is { } active) { return Refused(active); }
                 // Read before the session is shown as ending, which would hide its own status.
                 if (source.Get(session.Id) is not { } now) { return Stale("the session has ended"); }
-                if (!confirmed && Doing(now) is { } doing) { return AskAgain(session.Id, pid, startedAt, doing, "the session is no longer idle"); }
-                await SetEndingAsync(session.Id, true);
                 // Typed words would answer a question, and Enter accept it: a session that is
                 // asking anything, or whose launch here has not seen its window ready, is
                 // terminated without them.
-                var notReady = LaunchHeld?.Invoke(session.Id);
-                var asking = now.Question is not null || notReady is not null || CopilotAsking(session);
+                var asking = MayBeAsking(now, out var notReady);
+                if (!confirmed && ConfirmationHint(now, asking) is { } doing)
+                {
+                    if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
+                    return AskAgain(session.Id, pid, startedAt, doing, "the session is no longer idle");
+                }
+                if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
+                await SetEndingAsync(session.Id, true);
                 if (!asking)
                 {
                     InjectionResult typing;
@@ -278,12 +296,15 @@ public sealed class StopService : ISessionStopper
                 return Failed($"{started}, so the host stopped short of terminating the session; check at the machine");
             }
             var refused = held.Terminate();
+            if (refused is not null) { log($"end of {Short(session.Id)} (pid {pid}) could not terminate: {refused}"); }
             if (await held.WaitForExitAsync(options.TerminateWait))
             {
                 log($"ended {Short(session.Id)}: {(typed ? $"did not exit within {options.Grace.TotalSeconds:0} s; " : "")}terminated pid {pid}");
                 return Ended(true);
             }
-            return Failed(refused ?? "the session's process was terminated but has not exited; check at the machine");
+            return Failed(refused is not null
+                ? "the machine couldn't end the session"
+                : "the session's process was terminated but has not exited; check at the machine");
         }
     }
 
@@ -295,6 +316,15 @@ public sealed class StopService : ISessionStopper
         var state = CopilotPrompts.Before(Path.Combine(options.CopilotHome, "session-state", session.Id, "events.jsonl"));
         return !state.Readable || state.Asking;
     }
+
+    bool MayBeAsking(Session session, out string? notReady)
+    {
+        notReady = LaunchHeld?.Invoke(session.Id);
+        return session.Question is not null || notReady is not null || CopilotAsking(session);
+    }
+
+    string? ConfirmationHint(Session session, bool? asking = null) =>
+        Doing(session) ?? ((asking ?? MayBeAsking(session, out _)) ? "this session may be asking a question" : null);
 
     async Task SetEndingAsync(string id, bool ending)
     {
@@ -365,6 +395,7 @@ public sealed class StopService : ISessionStopper
     static string Short(string id) => id.Length > 8 ? id[..8] : id;
 
     static StopResult Ended(bool forced) => new(StopOutcome.Ended) { Forced = forced ? true : null };
+    static StopResult AuditRefused() => Refused("the host could not record the stop; check at the machine");
     static StopResult Refused(string reason) => new(StopOutcome.Refused, reason);
     static StopResult Stale(string reason) => new(StopOutcome.Stale, reason);
     static StopResult Failed(string reason) => new(StopOutcome.Failed, reason);

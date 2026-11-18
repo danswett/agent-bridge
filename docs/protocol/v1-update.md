@@ -48,7 +48,7 @@ longer, and the caveat stays until no such app is left.
 
 | Limit | |
 |---|---|
-| Presses per device | Each device may have 3 presses of each kind taken in 10 minutes. The rest are refused (`"too many presses of Install from this device just now; try again in 7 minutes"`), and the host logs a refusal from a device at most once a minute |
+| Presses per device | Each device may have 3 presses of each kind taken in 10 minutes. A Check past the guard returns the app's last reported state without queuing a check or extending the guard, even when 8 presses wait. An Install past the guard is refused with `code: rate-limited` and `retryAt`: exactly when the oldest counted press ages out. The host logs a refusal from a device at most once a minute |
 | Presses waiting | At most 8 wait for the machine's app at once; a new one is then refused (`"this machine has too many presses waiting for its app already; try again in a few minutes"`), never one already accepted dropped |
 | The same press | A request sent again is the same press, before and for ten minutes after the app took it, and the app remembers the last 32 it took across restarts: none is carried out twice |
 | The feed | A press within a minute of the app's last check is answered from that check (its release, or its failure) without asking the feed again |
@@ -58,6 +58,26 @@ longer, and the caveat stays until no such app is left.
 
 hello's `capabilities` include `update` on a channel through the relay to a machine that is not
 read-only. The pipe never offers it.
+
+### Release hint contract (#2240)
+
+The relay hello may optionally carry `releaseHint: true`; absent, false, a duplicate or any
+non-boolean value does not opt in. This is a relay-hello field, not a Noise hello capability.
+Advertising it and sending hints belong to later slices; this slice only defines parsing.
+
+| Relay control frame field | Required validation |
+|---|---|
+| `t` | Exactly `release.hint` |
+| `tag` | `^v0\.1\.[0-9]{1,19}$`, also the existing release eligibility rule: canonical decimal run, no leading zeros except zero itself, at most Int64.MaxValue |
+| `channel` | Exactly `win` or `win-arm64` |
+| `seenAt` | UTC ISO timestamp ending `Z`, under 40 characters, at most five minutes ahead of now |
+
+The **whole UTF-8 frame is under 256 bytes**. Missing, duplicate, extra, malformed or invalid
+fields drop the frame and increment `ReleaseHints.Dropped`. Its diagnostic callback receives
+only `t`, `tag`, `channel`, `seenAt` or `frame`, never an input value or an unrecognised field name.
+The bounded reader returns untrusted control JSON, not release authority. No hint is trusted,
+shown, used to install or followed as a URL; it carries no URL. Detection and host/app use are
+later slices. Shared examples are `vectors/update.json`'s `release-hints` context.
 
 ## Ops
 
@@ -104,20 +124,45 @@ review, Low). A client sends it only to a machine whose state says `canUpdateNow
 | `busy` | `UpdateBusy`? | **#1159, the host's.** Only with `canUpdateNow`: what Update now would go over, from the host's own session snapshot ([What the phone sees](#what-the-phone-sees-before-the-press)); sent again when a session changes, at most every 2 s |
 | `requestNow` | bool | **#1159, the app's.** The press in `request` is an Update now |
 | `waitingCode` | string? | **#1159, the app's.** With phase `waiting`: why, as a code a client words itself (`turn-running`, `question-waiting`, `unknown`, `usage-check`), never showing `waiting`'s text ([The confirmation](#the-confirmation)) |
+| `bytes`, `total` | long? | Optional real download byte counts, each non-negative; absent means unknown. Never infer bytes from elapsed time |
+| `downloaded` | bool? | `true` only after the package checksum passed; absence is unknown, not false |
+| `installing` | time? | When installation started, reported by the updater |
+| `leaving` | `UpdateLeaving`? | `{to, at, backBy}`: target release, departure instant, expected return (3 minutes after `at`). Channel closure after this fact permits a client's restarting inference; it is not itself proof of return |
+| `back` | `UpdateBack`? | `{from, to, request?, at}`: observed return on `to`, correlated to the press when one exists. A client confirms only when `current` equals `to` and the request matches |
+| `mode` | `restartToUpdate` `installBetweenTurns` `asSoonAsReady`? | Read-only configured mode; unknown values read as `restartToUpdate`. Defining a value does not enable its installation behavior |
+| `checksHeldUntil` | time? | End of the updater's background-check hold, a UTC instant, never a local time-of-day string |
+| `policy` | `UpdatePolicy`? | `{state: ok \| stale \| unreadable, at?}`: availability of authoritative bad-release protection. `at` is the last authoritative check, not a relay hint. Unknown state reads as `unreadable`; absence never means `ok` |
 
 An unknown `phase` reads as `idle`. Text fields are cut to 64 bytes (versions), 512 (reasons)
 and 4 KiB (notes).
+
+These #2229 fields define the wire only; reporters and enforcement ship separately under
+[#2225](../design/updates-fast-fleet-update.md). All are optional and omitted when unknown.
+The Windows app reports `bytes`, `total`, `downloaded`, the install-start instant `installing`,
+the observed matching-target return `back`, and failure `last.step` (`downloading`, `installing`,
+`restarting` or `host-start`). Return uses the per-profile attempt preferences, survives restart,
+and is forwarded only when the app and host both run its target. Unreadable preferences mean no
+return fact. `leaving` is not reported yet; a report reply is not proof of a subscriber send.
+Old updaters leave these facts absent.
+Hello's `machine.role` is optional: absent means an old host or unknown role; an empty string
+means explicitly no role. Once role reporting ships, every new host sends it, even when empty.
+The label is display/availability metadata, never an authorization grant.
+Old readers ignore them; new readers facing an old host retain `phase` and the existing 90-second
+restart inference. Every time, including nested times, serializes as UTC with milliseconds and `Z`.
+`UpdateLeaving` and `UpdateBack` versions obey the existing 64-byte limit; `back.request` obeys
+the UUID rule. Adding these facts grants no authority and changes no signature or install check.
 
 ### `UpdateResult`
 
 | Field | Type | |
 |---|---|---|
-| `outcome` | `updated` `current` `refused` `failed` | `updated`: running the new release now. `current`: there was nothing newer. `refused`: not attempted, and `reason` says why. `failed`: attempted, and still the old release. An unknown outcome reads as `failed`, never as `updated` |
+| `outcome` | `updated` `current` `refused` `failed` | `updated`: running the new release now. `current`: there was nothing newer. `refused`: not attempted, and `reason` says why. `failed`: an attempt did not finish, or app and host versions have not converged. An unknown outcome reads as `failed`, never as `updated` |
 | `from`, `to` | string? | The releases |
 | `reason` | string? | |
 | `request` | string? | The press it answers; absent for one the person started at the machine (Restart to update), or an automatic one before #516 |
-| `code` | string? | **#1159, the app's.** For an Update now, as in `UpdateCommandResult` |
+| `code` | string? | For an Update now, as in `UpdateCommandResult`; also the host's `version-skew` when app and host versions differ |
 | `at` | time | |
+| `step` | string? | Optional last step reached (`downloading`, `installing`, `restarting`, `host-start`, `host-version`), using the existing short-code syntax. Clients word known steps themselves; an unknown step must not imply success |
 
 An install restarts the app and host, so its outcome is reported by the new version: the app
 keeps the press it is carrying out in its preferences when it hands over to the updater, and its
@@ -130,14 +175,27 @@ anything else (quit, sign-out, the machine restarting) is not carried out by its
 which reports it `refused`, "the app on this machine restarted before carrying it out; press it
 again": an install pressed hours before must not go ahead on sessions never watched for it.
 
+When an installed app reports `updated` or `current` but its reported `current` differs
+from the host's own known version, the host forwards `last` as `failed`, with
+`code: version-skew`, `step: host-version` and both versions in `reason`. The original
+request, releases and outcome time stay correlated; the installed/downloaded release
+facts remain available for recovery. Existing failures and refusals are not replaced.
+A later matching-version report is forwarded normally. An unknown app/host version,
+including the unavailable-version sentinel `0.0.0`, or an app that is not installed,
+does not establish skew. Release identity ignores surrounding whitespace, an optional
+`v` prefix and build metadata; identities are compared case-insensitively.
+This detects false success; it does not itself restart either process, apply a package
+or prove self-repair.
+
 ### `UpdateCommandResult`
 
 | Field | Type | |
 |---|---|---|
-| `outcome` | `accepted` `refused` `confirm` | `confirm` (#1159): an Update now that would go over more than the person accepted; nothing was asked, and `state.busy` says what is busy now. An unknown outcome reads as `refused`. `accepted`: the machine's app has been asked, and how it goes is in the state (`request`, then `last` with this request). A Check that finds a newer release ends instead with `request` gone and `available` and `checkedAt` set (`last` stays how the last update, or a check finding nothing, ended). `refused`: nothing was asked |
+| `outcome` | `accepted` `refused` `confirm` | `confirm` (#1159): an Update now that would go over more than the person accepted; nothing was asked, and `state.busy` says what is busy now. An unknown outcome reads as `refused`. `accepted`: the machine's app has been asked, and how it goes is in the state (`request`, then `last` with this request), or a Check past its guard was answered from the app's last reported state without asking it again. A Check that finds a newer release ends instead with `request` gone and `available` and `checkedAt` set (`last` stays how the last update, or a check finding nothing, ended). `refused`: nothing was asked |
 | `reason` | string? | Why it was refused |
 | `state` | `UpdateState`? | The state as the press found it |
-| `code` | string? | **#1159.** Only for a press with `now`: why it was refused or needs confirming, as a code: `manage.*`'s reason codes (`ManageReason`) and Update now's own (`release-changed`, `other-profile`, `old-app`, `restart-cap`, `sign-in`, `usage-check`). Clients word it themselves ([What the person sees](#what-the-person-sees)); `reason` stays for the log and older clients. An unknown code reads as a refusal |
+| `code` | string? | Why a press was refused or needs confirming: `rate-limited` also accompanies an ordinary Install past its guard; other codes are for a press with `now`: `manage.*`'s reason codes (`ManageReason`) and Update now's own (`release-changed`, `other-profile`, `old-app`, `restart-cap`, `sign-in`, `usage-check`, `policy-unreadable`). `policy-unreadable` refuses stale or unreadable halt protection for a batch, or a single press without `unchecked`. Clients word it themselves ([What the person sees](#what-the-person-sees)); `reason` stays for the log and older clients. An unknown code reads as a refusal |
+| `retryAt` | time? | Optional UTC retry instant with `code: rate-limited`; render in the viewer's time. Older hosts omit it, so clients retain their generic retry wording. It grants no retry or cap exemption |
 
 The host refuses a device that is not connected to the relay now, one that is not a person's,
 and a press with no app to carry it out. The app's refusals (another profile running, the host
@@ -236,6 +294,15 @@ can't be replayed as a forced one, nor an Update now for one release or machine 
 command lives at most **2 minutes** from `issuedAt`, as a manage command does; the press it
 starts lives at most **15 minutes** from that `issuedAt` ([After the press](#the-confirmation)).
 
+Optional booleans in those signed `args` are reserved for the later halt-policy enforcement
+slice (#2234); this contract change parses them but makes no policy decision.
+
+Absent flags are omitted, so old bodies and signatures remain unchanged. Present values must
+be booleans, not null, strings or numbers; duplicate flags are refused. Both flags are inside
+the exact signed body bytes, so adding, removing or changing either invalidates its MAC.
+Older hosts may refuse these new args; parsing support is not evidence that policy enforcement
+exists. Clients must not send them until the corresponding host behavior ships.
+
 **Replay, durably** (security review, Medium 3). The host records each `request` it verifies in
 its profile folder (`update-now.json`, as `manage.json` keeps `manage.*`'s), written
 through **before** the ask is handed to the app, and keeps it for the press's longest life, 15
@@ -263,6 +330,8 @@ not the authority. Its `args`, signed with the rest:
 | `now` | `true` | Required. Anything else is refused `bad-args` |
 | `release` | string | The release the person was shown (`available`). Anything else at the press, or at the departure, is refused `release-changed` |
 | `accept` | `UpdateBusy`? | What the person confirmed it may go over: the counts, `unknown` if it was shown, `sessions`, the ids and states the confirmation listed, and past 32 `moreApprovals` and `moreOther`, how many approvals and other busy sessions it left out. Each count is at most 1,000,000 (`UpdateProtocol.BusyMost`, far past any machine's sessions, so no sum of them overflows); more is `bad-args`. Absent: the one-press case, valid only while the machine is quiet |
+| `batch` | bool? | Optional. This press belongs to Update all; unreadable/stale policy must refuse it once #2234 ships |
+| `unchecked` | bool? | Optional. The single-machine warning about unreadable protection was accepted; never overrides `batch`; enforcement is #2234 |
 
 Anything else in `args`, or a `contentSha256`, is refused `bad-args`.
 
@@ -288,7 +357,7 @@ Update now interrupts what Install would wait for.
 | A Codex usage check still running after the 11 minutes every install waits for it (#238) | `usage-check` (the app's, in `last`) | Stopping the host cuts the app-server's input and can sign Codex out; Product kept the wait for now (settled Q5) |
 | An agent sign-in (#800) running now, not merely the entrypoint switched on (#1454) | `sign-in` | A restart cancels a running sign-in, as for `manage.restart` (Connection, Q-C8) |
 | More than 3 presses of Update now from one device in 10 minutes; 8 presses waiting already; another Update now downloading or leaving on the machine | `rate-limited`, `busy` | As today. Update now is its own kind for the per-device limit, so Install stays usable. An Update now **waiting for a quiet moment**, or in its usage-check hold, is not "under way": a new press replaces it, keeping its download (decision 3) |
-| Update now's **own allowance** (1 committed restart per machine in 6 hours) **and** the **shared cap** (2 committed restarts in 6 hours, counted together with `manage.restart`; 6 an hour once #55's roster is enforced) both used | `restart-cap` | The owner's ruling (settled Q7): an Update now spends its own allowance first, and only when that is used does it spend a slot of the shared cap, so it adds at most one restart in 6 hours beyond what `manage.restart` may do. `manage.restart` never spends Update now's allowance. The words say when it works again |
+| Update now's **own allowance** (1 committed restart per machine in 6 hours) **and** the **shared cap** (2 committed restarts in 6 hours, counted together with `manage.restart`; 6 an hour once #55's roster is enforced) both used | `restart-cap` at departure | At the press, an otherwise eligible signed Update becomes one ordinary Install (Update when idle), with `now` absent from the app's ask and no slot spent. The signed release, device, lifetime, busy/queue guards and replay checks still apply; a carried waiting press is replaced by the app's ordinary Install path, keeping its download. A slot lost later, at departure, still refuses `restart-cap`. The counters and settled Q7's own-first rule are unchanged |
 | The same press sent again | (none) | The same-press rule: one request is one press. The host's durable record of verified `request`s, kept 15 minutes from `issuedAt` plus `Skew` across its own restart ([The press](#the-press)), decides it; the app's record of its last 32 is a second line |
 | The release offered is no longer `args.release` | `release-changed` | The person confirmed one version |
 | More busy than the person accepted | (outcome `confirm`) | [The confirmation](#the-confirmation) |

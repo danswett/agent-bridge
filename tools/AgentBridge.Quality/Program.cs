@@ -194,6 +194,7 @@ static class Program
             selection.Platform,
             Source = source,
             selection.Mode,
+            selection.NonProductOnly,
             // The dotnet test filter for the ring as a whole, so CI's product job (a draft's fast
             // ring) leaves out what ring 0 does without a second copy of the categories.
             TestFilter = selection.Ring == 0 ? string.Join('&', RingCommand.Ring0Exclusions) : null,

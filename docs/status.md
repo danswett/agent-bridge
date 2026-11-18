@@ -4,12 +4,12 @@
 This page supplies project context, dated snapshots and links to current role holders.
 The [contributor workflow](contributor-workflow.md) owns durable coordination procedures;
 canonical issues and PRs hold current assignments and exact-head evidence.
-Keep this page current when a change moves the project along, and retain explicit
-dates on historical snapshots rather than treating them as current assignments.
+This page is a weekly snapshot by Product; updates are not required in each PR.
+Retain explicit dates on historical snapshots rather than treating them as current
+assignments.
 
-*Last updated: 2026-11-06, Pacific (contributor entry path, #1045; product decisions of
-11-04 and 11-05, including the no-RDP tenet). Older implementation and machine snapshots
-below retain their stated dates.*
+*Last updated: 2026-11-11, Pacific (HA retirement decision, #387/#1396).
+Older implementation and machine snapshots below retain their stated dates.*
 
 **Product tenet (owner, 2026-11-04): you never have to RDP into a machine.** Anything that can
 only be fixed or diagnosed at the machine is a product gap: it is labelled `needs-rdp` and
@@ -27,7 +27,7 @@ prioritised by [#696](https://github.com/danswett/agent-bridge/issues/696) rule 
 | [migration.md](migration.md) | `migrate` and `rollback`: what moves and what doesn't |
 | [/quality](../quality/) | The test plan: rings from inner loop to release, and the catalog of every suite |
 | [/ops](../ops/README.md) | Running the live service: the SRE plan, SLOs, alerts, runbooks and incident process (#568) |
-| [Epic dashboard](../tools/epic-dashboard/README.md) | Hourly #755 body refresh (#756 part 1); main-only environment and owner credential setup required |
+| [Epic dashboard (retired)](../tools/epic-dashboard/README.md) | Historical #755 automation (#1971); see the [live roadmap and blockers](https://roadmap.slipgates.com/) instead. No dashboard credential setup required |
 | [/AGENTS.md](../AGENTS.md) | How to work in this repository: rules, merge procedure, releases, relay deploys, guards |
 
 ## 1. Goal
@@ -43,29 +43,35 @@ standalone product. The product has:
 All current features carry over: cards, hooks, answers, replies, attachments, launch,
 resume, stop, usage, updates and transfers.
 
-**Hard rule:** the live HA bridge keeps working throughout. Machines move one at a time,
-with rollback, and the publication writer (DSWETT-HOME) moves last.
+**Hard rule:** development does not break the live HA bridge. Current compatibility,
+G5/G6/G7 and owner-only management stay until reviewed, evidence-backed retirement;
+this documentation change authorizes no live operation.
 
 **Current goal (decided 2026-10-29):** parity with agent-ha-bridge first, then migrate
 real machines. New features wait, except the few marked "beyond parity" in parity.md.
 
-**HA redirect (owner, 2026-11-02; reconciled 2026-11-05):** HA functionality must
-remain without any legacy daemon. #387 redirects delivery to the separate
-[HA integration and companion card](https://github.com/danswett/agent-bridge-home-assistant/issues/1);
-HA owns entities/actions/presentation and Bridge remains generic at protocol/core.
-The current host connector is compatibility, not that target implemented.
-#318's permanent native publisher direction is superseded, not completed.
-#317 remains the parent goal, #319 the verified reversible production cutover,
-and #389 cleanup only after replacement. G7 still refuses writer migration.
-[Disposition and dependencies](ha-connector.md#retaining-ha-without-a-legacy-daemon-317)
-retain #322 and existing owners. #331/#337 closed unmerged on 2026-11-05 at
-12:45 PT, with branches and heads kept. #345 closed
-unmerged on 2026-11-05 at 00:59:49 PT, with sources retained. #394's original
-architecture/enrollment proposal at `d9382fd31dc9fad9d34919317bf7a3265de43c18`
-is preserved historical, unadopted evidence, withdrawn from its corrected
-documentation-only scope. #522 is merged design and #534 a draft read profile
-with reference fixtures, not proof of installable HA delivery.
-Copilot CLI session `d5ac689c-a9f6-4618-8e8f-9220793487f4` retains coordination.
+**HA retirement (owner, 2026-11-11; #387/#1396):** the Nov 2 retention requirement
+is reversed in part. HA is an optional client later (#1419), not required, and S0
+is done: nothing the owner built in HA must keep working. The
+[master decision record](design.md#02-ha-retirement-decision-3871396) records the
+authority and boundaries. The connector is current compatibility; the optional
+client design is not an installed replacement or a retirement prerequisite.
+
+Removal waits on #1396's required row evidence, #1949's load parity proof,
+the approved HA-off rehearsal (one machine, then the other three, zero HA
+fallbacks, every row exercised at least 3 times) and owner sign-off. No 24-hour dual
+run or calendar wait; rollback is
+turning HA back on. #317 is closed as superseded by #1419; #319 is closed as
+superseded by the rehearsal, not completed migration. #388 is superseded by
+#1406/#1418/#1419. #389 tracks separately reviewed removal, not immediate cleanup.
+
+[Publisher disposition](ha-connector.md#publisher-work-disposition-387) preserves
+#322's current compatibility evidence and the closed-unmerged #331/#337/#345
+sources and heads. #318's permanent native publisher remains superseded, not
+completed. Extraction for optional HA delivery is not required; no source or tree
+is removed here. #394's corrected docs are merged; its original enrollment
+proposal remains unadopted. #522 and merged #534 are design/read-contract
+groundwork, not enrollment or installability proof. Existing area owners remain.
 
 ## 2. Where things are (2026-11-02)
 
@@ -86,7 +92,8 @@ principals, and binds standing push access to the current grant. See
 [host config](host-config.md#trusted-peers-disposable-host-foundation). Evaluation is
 disposable-host only: no relay enrollment, production enablement or live migration
 is authorized by this slice. Independent implementation review and final-head CI
-remain gates; the wider HA architecture redirect is tracked separately in #388.
+remain gates. The former headless-client issue #388 is closed as superseded by
+#1406/#1418/#1419; the HA retirement decision and gate belong to #1396.
 
 ### Test timeout diagnostics (#660)
 
@@ -104,7 +111,8 @@ Other raw App/Host task waits are outside this bounded diagnostic slice.
 Fleet #238 host registry publication is wired with explicit `fleet.share`, bounded failed-put
 backoff, content-free `host.status` and skipped-invalid-ID counts; relay read-side byte
 coverage preserves the 24 KiB budget for maximum plus names. No deployment or live-parity
-claim: records remain unsigned and HA remains the rollback pending the registry dual run.
+claim: records remain unsigned in this snapshot. HA remains the rollback pending
+#1396's current gate, not the older registry dual-run duration.
 
 ### Built and merged
 
@@ -131,16 +139,19 @@ The work has been built phone-first. All merged PRs are listed in §7.
 
 ### Machines
 
-| Machine | State |
+Historical migration evidence only: current fleet membership comes only from the relay roster. These dated scenarios
+record migration evidence, not a current machine list or placement map.
+
+| Scenario | Recorded state |
 |---|---|
-| DSWETT-ULTRA | **Migrated** from agent-ha-bridge on 2026-10-31. HA connector on since 2026-11-01 08:48 (online in HA). Updated to 0.1.700 on 2026-11-01 11:06 by **Install from the PWA**, the first remote install on a real machine (#161). It then auto-updated through the unchanged x64 channel to 0.1.914 (11-01 23:47), the first release with Arm64 too. The first real machine; watch it |
-| DSWETT-DEV-VM1 | **Migrated** 2026-11-02 14:16 PT on 0.1.1108, a **Dev Box**. `migration status` reads "as migrated" for the Copilot and Claude hooks, hook intake is on, and agent-ha-bridge's daemon and keep-awake tasks are disabled. `devbox status`: the host's own keep-awake is on (#47, #224). The first session launched through the new host (14:20) is the overall coordinator. **HA connector online since 14:33:** the first token stored was refused twice. The host held off as designed (#234): after 3 refusals a token is retried only once `ha token set` is run again, or sent once to a new `homeAssistant.baseUrl`. It was accepted once set again and the host restarted. 20 entities, no `_2` duplicates. The first Restart reported "the host did not start" until a second Start (#280). The read-only **shadow host** was uninstalled at 14:50, keeping its reports and profile; VM-M now carries the shadow gate alone |
-| DSWETT-HOME | agent-ha-bridge, and the **dashboard publication writer**: migrate refuses there (G7), so it moves last. Since 2026-11-01 13:39 also a **view-only app install** (0.1.730 or later; `delivery.readOnly`, push off, HA connector off). The PWA lists it online and read-only, and its Claude and Codex usage rows are back. agent-ha-bridge there is unaffected |
-| DSWETT-ARM8 (ARM laptop) | **Migrated** 2026-11-01 23:54 on the native **Arm64** build (0.1.914, #222), auto-updating since (0.1.1018 on 11-02). Device key in the TPM; an answer from the PWA was typed into a session, so injection works on Arm64. HA connector online since 11-02 00:13, after an IP ban (below) |
-| DSWETT-DEV-VM2 | New on 11-02: the UI coordinator moved here from DEV-VM1 so DEV-VM1 could migrate |
-| Mac, DASDESK | agent-ha-bridge only. The Mac waits for P5 (macOS host) |
-| Hyperloop VM01 (on DEV-VM1) | Down since a reboot on 2026-10-31: its autologon failed and no one knows its generated password. Left down by the owner's decision; not needed |
-| Azure `rehearsal-w`, `rehearsal-m` | **Running** a scripted shadow soak (§3) since 2026-11-01, auto-shutdown off; snapshots S0/S1 kept. `build/rehearsal-azure-vmw.ps1 -Start` / `-Deallocate`; the soak's `build/shadow-soak-vm.ps1 -Finish` deallocates. A Linux VM (`rehearsal-l`) was created for the E13 checks and deleted. Azure: the owner's Visual Studio Enterprise subscription `0e38f344…` only, named on every call (the `~/.azure-agentbridge` config's default is a trial) |
+| First migrated x64 machine | **Migrated** from agent-ha-bridge on 2026-10-31. HA connector on since 2026-11-01 08:48 (online in HA). Updated to 0.1.700 on 2026-11-01 11:06 by **Install from the PWA**, the first remote install on a real machine (#161). It then auto-updated through the unchanged x64 channel to 0.1.914 (11-01 23:47), the first release with Arm64 too. This is historical evidence, not a fixed monitoring target |
+| Dev Box migration | **Migrated** 2026-11-02 14:16 PT on 0.1.1108. `migration status` reads "as migrated" for the Copilot and Claude hooks, hook intake is on, and agent-ha-bridge's daemon and keep-awake tasks are disabled. `devbox status`: the host's own keep-awake is on (#47, #224). The first session launched through the new host (14:20) is the overall coordinator. **HA connector online since 14:33:** the first token stored was refused twice. The host held off as designed (#234): after 3 refusals a token is retried only once `ha token set` is run again, or sent once to a new `homeAssistant.baseUrl`. It was accepted once set again and the host restarted. 20 entities, no `_2` duplicates. The first Restart reported "the host did not start" until a second Start (#280). The read-only **shadow host** was uninstalled at 14:50, keeping its reports and profile; the disposable Azure comparator then carried the shadow gate alone |
+| Dashboard publication writer | agent-ha-bridge; migrate refuses there (G7), so it moves last. Since 2026-11-01 13:39 also a **view-only app install** (0.1.730 or later; `delivery.readOnly`, push off, HA connector off). The PWA lists it online and read-only, and its Claude and Codex usage rows are back. agent-ha-bridge there is unaffected |
+| Native Arm64 migration | **Migrated** 2026-11-01 23:54 on the native **Arm64** build (0.1.914, #222), auto-updating since (0.1.1018 on 11-02). Device key in the TPM; an answer from the PWA was typed into a session, so injection works on Arm64. HA connector online since 11-02 00:13, after an IP ban (below) |
+| Coordinator relocation | On 11-02 the UI coordinator moved to another fleet machine so the Dev Box could migrate |
+| Remaining desktop and macOS migrations | agent-ha-bridge only. The macOS host waits for P5 |
+| Disposable Hyperloop guest | Down since a reboot on 2026-10-31: its autologon failed and no one knows its generated password. Left down by the owner's decision; not needed |
+| Disposable Azure rehearsal machines | **Running** a scripted shadow soak (§3) since 2026-11-01, auto-shutdown off; snapshots S0/S1 kept. `build/rehearsal-azure-vmw.ps1 -Start` / `-Deallocate`; the soak's `build/shadow-soak-vm.ps1 -Finish` deallocates. A disposable Linux VM was created for the E13 checks and deleted. Azure: the owner's Visual Studio Enterprise subscription `0e38f344…` only, named on every call (the `~/.azure-agentbridge` config's default is a trial) |
 
 ### Running work
 
@@ -216,33 +227,38 @@ current-run hook activity; CLI sign-in, trust and new-session activation remain 
 This does not complete onboarding or #231's setup/repair controls and makes no live hook,
 legacy daemon or HA changes. Scope is coordinated on #170.
 
-**Handoff, 2026-11-02 13:30 PT** (the overall coordinator's session ends for DEV-VM1's migration; background delegates are lost, their work is on branches):
+**Handoff, 2026-11-02 13:30 PT** (the overall coordinator's session ends for its Dev Box's migration; background delegates are lost, their work is on branches):
 - **#238 (#200, live Claude and Codex usage)**, head ac2b8498: CI green, Copilot reviewed, 0 threads. Before merge it needs:
   1. an **independent security re-review** at the final head; earlier rounds were clean of vulnerabilities, and the update-gate paths were the last findings;
-  2. the **six live checks on `rehearsal-m`** listed in the PR body (E1/E2, E4, E7, E9, E11, E14), run by a delegate on the VM.
+  2. the **six live checks on a disposable rehearsal VM** listed in the PR body (E1/E2, E4, E7, E9, E11, E14), run by a delegate on the VM.
   
-  Its worktree is `~/repos/wt/agent-bridge-usage-live` on DEV-VM1 (branch `feat/usage-live`).
-- **The VM soak** keeps running on VM-M without a coordinator (driver at bfc4744, shadow host at #251's 670fc077). #251 labels agent-ha-bridge#289 and #290; the earliest gate pass is about 11:18 PT on 11-03 if nothing new recurs. Check with `-Status` (§3), then `-Finish`.
-- **After DEV-VM1 migrates:** check its HA entities (online, version, no `_2` duplicates), `devbox status`, then `build/shadow-week.ps1 -Uninstall`. Post on #170. *Done 11-02 14:50 PT.*
+  Its worktree is `~/repos/wt/agent-bridge-usage-live` on the migrating Dev Box (branch `feat/usage-live`).
+- **The VM soak** keeps running on the disposable Azure comparator without a coordinator (driver at bfc4744, shadow host at #251's 670fc077). #251 labels agent-ha-bridge#289 and #290; the earliest gate pass is about 11:18 PT on 11-03 if nothing new recurs. Check with `-Status` (§3), then `-Finish`.
+- **After the Dev Box migrates:** check its HA entities (online, version, no `_2` duplicates), `devbox status`, then `build/shadow-week.ps1 -Uninstall`. Post on #170. *Done 11-02 14:50 PT.*
 
-**Resumed, 2026-11-02 14:20 PT** (session 50e5b45a). Delegates restarted: #238's security re-review and its six live checks on `rehearsal-m`; #263 (host name cleaning); #266 (hooks test flake); S2 (#174). The Apple client drafts (#254, #260, #264–#268, #276, #277) are another contributor's and are not coordinated here.
+**Resumed, 2026-11-02 14:20 PT** (session 50e5b45a). Delegates restarted: #238's security re-review and its six live checks on a disposable rehearsal VM; #263 (host name cleaning); #266 (hooks test flake); S2 (#174). The Apple client drafts (#254, #260, #264–#268, #276, #277) are another contributor's and are not coordinated here.
 - **Next on track A:** S2 (#174), using the sub-agent transcripts the soak recorded (in `~/repos/wt/agent-bridge-soak-transcripts`, not committed). #175 still needs its live check.
 - **Queued backend:** #231 (agents installed later), #257 (provider-neutral account ID), #239, #206, #207, #241.
 
-Historical native publication work under #317, superseded by #387's redirect:
+Historical native publication work under closed #317; #387 records the Nov 11
+partial reversal and #1419 is optional later work:
 - #322's merged protocol-1 policy/fence contract and recordings are retained
   compatibility evidence, not publication enablement. #331/#337 closed unmerged on
   2026-11-05 at 12:45 PT, with branches and heads kept; #345 closed unmerged on
   2026-11-05 at 00:59:49 PT, with sources retained. The
   [retain/extract/supersede boundaries](ha-connector.md#publisher-work-disposition-387)
   replace the former instruction to continue that stack.
-- #319 still gates writer cutover on the replacement integration/card and
-  disposable-HA handover/rollback verification. No live HA or legacy-install
-  changes during development; no cleanup under #389 before that gate.
+- #319's former HA-side writer-cutover gate is closed as superseded by #1396's
+  HA-off rehearsal. No replacement integration is required. No live HA or
+  legacy-install changes during development; #389 removal follows #1396's gate.
 
 </details>
 
 ## 3. Shadow gate (#40)
+
+**Historical compatibility gate.** The dated results and operator procedures below
+remain evidence, not the current HA retirement gate. The Nov 11 decision in §1
+replaces time-based retirement waits with #1949, the HA-off rehearsal and sign-off.
 
 **Scope (owner, 2026-11-03).** The shadow gate is a checkpoint for comparing against HA and
 retiring the legacy bridge. It is **not** a prerequisite for native Agent Bridge delivery. Host,
@@ -252,26 +268,27 @@ app, PWA, relay and native MCP work ships on its own gates:
 - a qualified main under the serial merge rule;
 - explicit production approval where that is required.
 
-Nothing native waits for Home Assistant, for a shadow PASS, for the dashboard writer cutover
-(#317/#319/#389) or for retiring the legacy bridge. Those are an optional compatibility and
-retirement lane with their own acceptance criteria. #238 needs its own security review and
-product live checks, not a shadow PASS. #45 uses the product's native agent identity, not HA
-credentials. The VM safety and finish rules below apply to this lane only.
+Nothing native waits for Home Assistant, a shadow PASS or retiring the legacy
+bridge. HA retirement follows #1396's current gate, then reviewed #389 removal;
+optional-client delivery (#1419) is a separate later lane, not its prerequisite.
+#238 needs its own security review and product live checks, not a shadow PASS.
+#45 uses the product's native agent identity, not HA credentials. The VM safety
+and finish rules below apply to this historical compatibility lane only.
 
 This scoping does **not** authorize stopping another session's VM, interfering with the soak,
 starting paid resources without authority, skipping a required product test, removing installed
 compatibility or making a live cutover. #238's live checks run on its final head, with the owner's
-consent where needed, on a slot agreed with VM-M's owner or another already-authorized test slot.
+consent where needed, on a slot agreed with the disposable comparator's owner or another already-authorized test slot.
 
-The gate is coverage-based (design §10, Stage 4). Since DEV-VM1 migrated (11-02 14:16 PT) and
-its shadow host was uninstalled (14:50), **VM-M's scripted soak is the only comparator.** Check it
+The gate is coverage-based (design §10, Stage 4). Since the Dev Box migrated (11-02 14:16 PT) and
+its shadow host was uninstalled (14:50), **the disposable Azure scripted soak is the only comparator.** Check it
 from the operator's machine:
 
 ```
 ./build/shadow-soak-vm.ps1 -Subscription <id> -Status
 ```
 
-DEV-VM1's shadow reports stay on disk under its `shadow` profile, but they are history, not a
+The migrated Dev Box's shadow reports stay on disk under its `shadow` profile, but they are history, not a
 current gate reading. The record of that shadow follows.
 
 - **2026-11-01:** FAIL, from 43 `background.shells` episodes in one session before 09:57 PST. These are agent-ha-bridge#276, which the daemon gets wrong: a shell restarted under the same id is lost. #162 now labels them as a known difference (the shadow build is at 350bce6, which has it). The FAIL clears when they leave the 24 h window (about 10:00 PST on 11-02). Before that the verdict was **NOT YET**, on coverage; at 11:00 PST on 11-01 it read questions 40 of 100, sessions 10 of 30, status transitions 408 of 500. Claude and Codex have no sessions there yet.
@@ -279,17 +296,17 @@ current gate reading. The record of that shadow follows.
   - `session.missingOnHost`, 74 s at 11:03 PST on 11-01: a session the daemon saw end;
   - `status`, 76 s at 13:52 PST on 11-01.
   
-  Both look like timing just over the 60 s threshold. Coverage is still short: questions 31/100, sessions 7/30, status transitions 353/500, resume snapshots 65/100. DEV-VM1's shadow ends with its migration, so VM-M carries the gate.
-- **Scripted soak on Azure VM-M (decided 2026-11-01, so as not to wait for organic use).** VM-M runs agent-ha-bridge and a read-only shadow host built from main, against VM-W's disposable HA. The driver is `build/shadow-soak-vm.ps1` (#208), and its sessions cover Copilot, Claude and Codex. Coverage from VM-M counts toward the gate.
+  Both look like timing just over the 60 s threshold. Coverage is still short: questions 31/100, sessions 7/30, status transitions 353/500, resume snapshots 65/100. The Dev Box's shadow ends with its migration, so the disposable Azure comparator carries the gate.
+- **Scripted soak on a disposable Azure VM (decided 2026-11-01, so as not to wait for organic use).** The comparator runs agent-ha-bridge and a read-only shadow host built from main, against a separate disposable HA machine. The driver is `build/shadow-soak-vm.ps1` (#208), and its sessions cover Copilot, Claude and Codex. Coverage from the comparator counts toward the gate.
   - Two agent-ha-bridge bugs are labelled as known differences under narrow rules (#226): Copilot's `name:` titles in the resume list (agent-ha-bridge#278) and Codex compactions (agent-ha-bridge#279).
   - At 11-02 03:05 PT: no unexplained mismatch since the #226 host went on (00:45 PT). Coverage: sessions 21, questions 42, status transitions 163, background 10, compactions 1, resume snapshots 58.
   - The earliest pass is about 01:00 PT on 11-03, when the older mismatches leave the 24 h window.
   - At 11-02 10:05 PT `-Status` read FAIL: compactions 1, model 2, resumable 17, session 1, status 2, usage.missingOnDaemon 3 in the last 24 h. Coverage: sessions 42 (Copilot 19, Claude 18, Codex 5), questions 133, status transitions 501, responses 300, background 50, compactions 7, resume snapshots 124. Being triaged: which of the mismatches came after 00:45 PT.
-  - Triage (11-02 11:00 PT): every mismatch after 00:45 PT is an agent-ha-bridge bug, none a host bug. agent-ha-bridge#289: an ended Claude session comes back when a new one reuses its pid. agent-ha-bridge#290: a resumed Claude session's answered question is held about 60-70 s, with the model left as the launch alias. #251 labels both under narrow rules (independently reviewed clean, merged 9aa9fcf6) and has run on VM-M since about 12:35 PT. The earliest pass is about 11:18 PT on 11-03, 24 h after the last unlabelled episode, if nothing new recurs. Coverage is past every target. Codex usage "not compared" is expected: Codex is capped and has no current reading.
+  - Triage (11-02 11:00 PT): every mismatch after 00:45 PT is an agent-ha-bridge bug, none a host bug. agent-ha-bridge#289: an ended Claude session comes back when a new one reuses its pid. agent-ha-bridge#290: a resumed Claude session's answered question is held about 60-70 s, with the model left as the launch alias. #251 labels both under narrow rules (independently reviewed clean, merged 9aa9fcf6) and has run on the disposable comparator since about 12:35 PT. The earliest pass is about 11:18 PT on 11-03, 24 h after the last unlabelled episode, if nothing new recurs. Coverage is past every target. Codex usage "not compared" is expected: Codex is capped and has no current reading.
   - Codex is capped: its weekly allowance read 95% used.
-  - Check VM-M's gate with `./build/shadow-soak-vm.ps1 -Subscription <id> -Status`, which runs `shadow summary --gate` on VM-M. Run `-Finish` only after that reads PASS.
-- DEV-VM1's shadow ended with its migration (uninstalled 11-02 14:50 PT); VM-M is the comparator.
-- To move VM-M's shadow host to a newer build after relevant merges, use `-Stop`, then `-Prepare -HostRef <ref>` (which runs `build/shadow-week.ps1 -Update` on VM-M), then `-Start -Caps @{ Codex = 6 }`. Always repeat the cap: a bare `-Start` recreates the driver task with no caps and would resume Codex episodes against its nearly spent allowance. DEV-VM1 has no shadow tasks left, so `-Update` there fails. Agent sessions can't use `shadow-week.ps1 -Install` on a real machine; the #67 guard refuses it.
+  - Check the comparator's gate with `./build/shadow-soak-vm.ps1 -Subscription <id> -Status`, which runs `shadow summary --gate` on that disposable VM. Run `-Finish` only after that reads PASS.
+- The Dev Box's shadow ended with its migration (uninstalled 11-02 14:50 PT); the disposable Azure VM is the comparator.
+- To move the comparator's shadow host to a newer build after relevant merges, use `-Stop`, then `-Prepare -HostRef <ref>` (which runs `build/shadow-week.ps1 -Update` on that disposable VM), then `-Start -Caps @{ Codex = 6 }`. Always repeat the cap: a bare `-Start` recreates the driver task with no caps and would resume Codex episodes against its nearly spent allowance. The migrated Dev Box has no shadow tasks left, so `-Update` there fails. Agent sessions can't use `shadow-week.ps1 -Install` on a real machine; the #67 guard refuses it.
 - #163: a skipped sample splits one disagreement into many episodes. Not fixed.
 
 ## 4. Next steps, in order
@@ -299,16 +316,16 @@ The order of work across the product is
 reliability come first. The feature freeze for the P0s ended on 11-04 at 23:08 PT, when all four
 closed. The steps below are the machine and migration steps within it.
 
-1. **Watch ULTRA.** Its HA entities (`*_dswett_ultra_*`) and the PWA should agree, and answers, replies and launches from the phone and the HA card should all work. Install from the PWA worked on 2026-11-01 (0.1.690 to 0.1.700); Install from the HA card's button is still untried live (#161).
-2. ~~**HOME view-only install**~~ Done 2026-11-01: the PWA lists HOME online and read-only.
-3. **Migrate machines while the soak runs** (owner, 2026-11-01): ~~ARM8~~ done. ~~DEV-VM1~~ done 11-02 14:16 PT. Its keep-awake has landed (#224), and the commands are with the owner. Then DASDESK when it's online, and the Mac after P5. Repeat rehearsal step E6-07 (worktree reclaim) on one of them.
+1. **Watch the target migrated machine.** Resolve it from the relay roster; its host-published HA entities and the PWA should agree, and answers, replies and launches from the phone and the HA card should all work. Install from the PWA worked on 2026-11-01 (0.1.690 to 0.1.700); Install from the HA card's button is still untried live (#161).
+2. ~~**Publication-writer view-only install**~~ Done 2026-11-01: the PWA lists the target machine online and read-only.
+3. **Migrate machines while the soak runs** (owner, 2026-11-01): native Arm64 migration done; Dev Box migration done 11-02 14:16 PT. Keep-awake has landed (#224), and the commands are with the owner. Select remaining targets from the relay roster when ready; macOS waits for P5 and the publication writer moves last. Repeat rehearsal step E6-07 (worktree reclaim) on one of them.
 4. **The VM soak's gate** (§3; the legacy and HA-comparison lane): report it when it passes,
    then run `-Finish` to deallocate. No native delivery waits for it.
-5. **Writer migration** (P7, #317; the optional HA compatibility lane): verify the separate
-   HA integration/card replacement (#387), then reversible handover/rollback (#319). Do not
-   resume superseded #318 publication work, bypass G7, or retire HA functionality as a
-   migration prerequisite. Cleanup remains gated under #389. None of it gates host, app, PWA,
-   relay or native MCP work.
+5. **HA retirement** (P7, #1396): required parity evidence, #1949 load proof, HA-off
+   rehearsal and owner sign-off, then #389's bounded removal slices. #1419 is
+   optional and later; no HA replacement is required. Do not resume superseded
+   #318 publication work or bypass G7. This record does not pass the gate or
+   authorize a live cutover, credential change or cleanup.
 6. **UI design track** (§5).
 7. **Later:** turning on code signing (Azure Artifact Signing, #734: built and off; the owner provisions the account, identity validation and the `signing` environment, app-windows.md "Signing"; until then releases are unsigned legacy builds, not dogfood-ready), macOS (P5), native phone apps (P8), relay scale (S9), observability (§5.10), and decommissioning the old relay stamp in the trial subscription (awaiting the owner's approval).
 
@@ -318,7 +335,7 @@ The design session's output is in the repository (#182). The owner **signed off 
 2026-11-01**; subagents.md's sign-off and its §8 questions sit with the overall coordinator
 (track A). A UI coordinator session runs track B and keeps this section
 current. Since 2026-11-02 13:10 PT that is a Copilot session on a Cloud PC, which
-took over when DEV-VM1 began migrating. Quality now owns all merges
+took over when the previous coordinator's Dev Box began migrating. Quality now owns all merges
 (see Running work above). The sources:
 
 - [design/ui.md](design/ui.md): the spec for every client (status language, colour, type,
@@ -387,7 +404,7 @@ ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rul
 - **Parity gaps:**
   - #42: Claude free text and an empty multi-select;
   - #45: MCP server retargeted to the host;
-  - #47: Dev Box keep-awake: shipped in #224 (0.1.977) and on since DEV-VM1's migration (11-02);
+  - #47: Dev Box keep-awake: shipped in #224 (0.1.977) and on since the recorded Dev Box migration (11-02);
   - #48: macOS and Linux tmux delivery;
   - #52: usage settings;
   - #53: card wording;
@@ -471,12 +488,12 @@ agent-ha-bridge releases from this work:
 
 - **Install on a new machine.** Download the installer for its architecture from the newest
   [release](https://github.com/danswett/agent-bridge/releases): `Slipgates-win-Setup.exe`
-  on an x64 PC, `Slipgates-win-arm64-Setup.exe` on Windows on Arm (DSWETT-ARM8; Settings,
+  on an x64 PC, `Slipgates-win-arm64-Setup.exe` on Windows on Arm (Settings,
   System, About, "System type" says which). They are all pre-releases, so `releases/latest`
   does not work. Run it, then sign in from the app. Each copy updates only from its own
   architecture's channel ([app-windows.md](app-windows.md#releases-and-updates-every-merge-to-main-is-a-pre-release)).
   A plain install is read-only beside agent-ha-bridge and registers no hooks.
-- **View only** (e.g. HOME), run at the machine in a normal PowerShell window, not from
+- **View only** (e.g. a publication writer), run at the machine in a normal PowerShell window, not from
   an agent session, then restart the host from the app:
   ```
   $h="$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h config set delivery.readOnly true; & $h config set push.enabled false; & $h config set homeAssistant.enabled false
@@ -509,8 +526,7 @@ agent-ha-bridge releases from this work:
   at 22:59 PT, and merged branches delete themselves. The merge-rule GitHub App (ID 5607979,
   `agent-bridge-merge-rule`; docs/merge-rule-app.md) was created on 2026-11-04 and posts
   `merge-rule` (#623); the ruleset accepts `merge-rule` only from that App. **Auto-merge has been
-  on since 2026-11-04 00:50 PT:** sessions arm it on their ready PR, pinned to the head
-  (AGENTS.md rule 4), and the coordinator merges by hand only a PR whose session didn't. Since
+  on since 2026-11-04 00:50 PT:** Quality alone arms GitHub auto-merge pinned to the exact head, builders never arm or merge, Copilot review is optional and never a reader family. Since
   auto-merge doesn't pause for a red main, `merge-rule` also
   requires main green: the latest finished push run of `ci.yml` on main passed. While it hasn't,
   nothing merges but a PR the merge coordinator has labelled `fixes-main`, which skips only that
@@ -522,12 +538,12 @@ agent-ha-bridge releases from this work:
 |---|---|
 | 10-29 | Parity first, then migration; the shadow gate is coverage-based, not a fixed week |
 | 10-29 | The HA connector is full, not status-only, so a migrated machine stays drivable from HA |
-| 10-30 | The rehearsal ran on Azure VMs (VM-W and VM-M), reached through a key-restricted jump host |
+| 10-30 | The rehearsal ran on disposable Azure HA and comparator VMs, reached through a key-restricted jump host |
 | 10-31 | Folder trust from a device: answered by a person only, off by default per machine, with allowed devices approved in the app's Settings |
 | 10-31 | Every merge to main publishes a release-build pre-release; the app auto-updates when idle (on by default), and read-only machines update too |
-| 10-31 | ULTRA is the first real machine migrated, supervised by the owner |
+| 10-31 | The first real x64 machine migrated, supervised by the owner |
 | 11-01 | Remote update: only a person's device presses it; it obeys the same idle rules; read-only hosts don't offer it |
-| 11-01 | VM01 is left down |
+| 11-01 | The unused disposable Hyperloop guest is left down |
 | 11-01 | Design, status and handoff live in this repository (this page, design.md, AGENTS.md) |
 | 11-01 | A new coordinator session took over |
 | 11-01 | UI track order: #164, #165, #167, #166, #168, after the design session signs off |
@@ -539,14 +555,14 @@ agent-ha-bridge releases from this work:
 | 11-01 | UI PRs no longer wait for overlapping backend PRs (#186); they merge when ready and the backend PR rebases (overall coordinator, 16:05) |
 | 11-01 | Usage belongs to an account: hosts share readings with each other, any online host serves the freshest per account, and the app and PWA keep the last one (#172) |
 | 11-01 | Sub-agents in HA (#175): agent-ha-bridge keeps its behaviour, its card showing the latest writer's text, a delegate's included. The HA connector shows the main agent's own and lists delegates in a `subagents` attribute; the difference is known and intentional (subagents.md §7, host-shadow.md) |
-| 11-01 | Dev Box keep-awake (#47) is built now, since migrating DEV-VM1 (a Dev Box) disables agent-ha-bridge's keep-awake task. It runs inside the host on agent-ha-bridge's terms (`az` login, skip then delay, no-op beyond 24 h, at most every 30 min), and any host stands back while agent-ha-bridge's own keep-awake task is enabled, so the schedule never has two writers. Migrate follows that task, not its config value: an enabled task is carried as on, or migrate refuses. Unusable Dev Box agent settings and a stand-back on an unreadable scheduler alarm on every pass rather than pass for "not a Dev Box" |
-| 11-01 | Shadow coverage comes from a scripted soak on the Azure rehearsal VMs (Copilot, Claude, Codex), not only from organic use; DEV-VM1 no longer waits for its own gate |
-| 11-01 | Migrate machines now, while the soak continues as the comparator. Order: ARM8 (after a native Arm64 build, #222), DEV-VM1 (after keep-awake, #47), DASDESK, the Mac (P5), HOME last |
+| 11-01 | Dev Box keep-awake (#47) is built now, since migrating a Dev Box disables agent-ha-bridge's keep-awake task. It runs inside the host on agent-ha-bridge's terms (`az` login, skip then delay, no-op beyond 24 h, at most every 30 min), and any host stands back while agent-ha-bridge's own keep-awake task is enabled, so the schedule never has two writers. Migrate follows that task, not its config value: an enabled task is carried as on, or migrate refuses. Unusable Dev Box agent settings and a stand-back on an unreadable scheduler alarm on every pass rather than pass for "not a Dev Box" |
+| 11-01 | Shadow coverage comes from a scripted soak on the Azure rehearsal VMs (Copilot, Claude, Codex), not only from organic use; the migrated Dev Box no longer waits for its own gate |
+| 11-01 | Migrate machines now, while the soak continues as the comparator. Prerequisites: native Arm64 build (#222), Dev Box keep-awake (#47) and macOS host (P5) for their respective targets; the publication writer moves last. Resolve target membership from the relay roster, not a fixed host list |
 | 11-01 | Live Claude and Codex usage (#197/#200): read through the agents themselves, never with their tokens. The host's direct Claude token read is to be retired (Anthropic's consumer terms) once the `/usage` route works; until #200 ships it is still the default collector. The build waits for the disposable-VM checks, now done (#236, #228). The Linux-only Codex checks ran on a temporary Azure Linux VM, since deleted |
 | 11-01 | E14a (a real Codex revoke) was simulated on the VM. ChatGPT has no per-device revoke, and the owner declined "Log out of all devices" |
-| 11-02 | ARM8 migrated on Arm64. The HA connector's 30 s retry of a rejected token got its IP banned in HA. The owner cleared the ban and restarted HA (00:12), and every machine was back within 3 min. Fix tracked as #227, merged in #234 (released in 0.1.1040): a refused token gets a bounded number of tries across processes, then stops until `ha token set`. For any migration, reuse agent-ha-bridge's admin token rather than minting one |
+| 11-02 | A native Arm64 machine migrated. The HA connector's 30 s retry of a rejected token got its IP banned in HA. The owner cleared the ban and restarted HA (00:12), and every machine was back within 3 min. Fix tracked as #227, merged in #234 (released in 0.1.1040): a refused token gets a bounded number of tries across processes, then stops until `ha token set`. For any migration, reuse agent-ha-bridge's admin token rather than minting one |
 | 11-02 | Agents installed after the bridge should be detected and offered "Set up", and Settings should show each agent's state (#231, builds on #54). The backend belongs to the overall coordinator, the UI to the UI coordinator |
-| 11-02 | New layouts merge first and are checked on ULTRA afterwards (the owner's call); a broken build is reverted |
+| 11-02 | New layouts merge first and are checked on the owner's selected target machine afterwards (the owner's call); a broken build is reverted |
 | 11-02 | Motion (ui.md §5.3, #232) signed off. Native transitions keep their platform timing. The progress ring is the only extra looping animation. Scrolling to a question never jumps the view while the person is reading. Everything honours reduced motion |
 | 11-02 | A delegate's name is untrusted text. The clients clean it, cap its length, show "Main agent" as `Delegate "Main agent"`, keep a fixed Delegate label in the inspector, and name the delegate by id in the stop pre-fill (ui.md §6.3, §8; subagents.md §6) |
 | 11-02 | Monospace width (#295): Agent Bridge Mono's 560 width looked condensed beside the system face, so it is rebuilt at a normal 600 (IoskeleyMono's own, close to Cascadia Mono and Consolas) and is the one face in the app, the PWA and the Apple clients (#260) |

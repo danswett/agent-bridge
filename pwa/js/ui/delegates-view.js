@@ -15,6 +15,7 @@ import { glyph, setGlyph } from './glyph.js';
 import { renderMarkdown } from '../markdown.js';
 import { askToStopText, delegateList, delegateName, delegateState, delegateTime, descendants } from '../attribution.js';
 import { clock, localTime } from './time.js';
+import { enter, flip, leave } from './motion.js';
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
@@ -178,6 +179,7 @@ function nestedCounts(list, ids) {
 
 export class DelegateStrip {
   #items = new Map();
+  #drawn = false;
   #open = false;
   #session = null;
   #selected = null;
@@ -197,6 +199,12 @@ export class DelegateStrip {
   }
 
   update(session, now = Date.now(), selected = this.#selected) {
+    if (!this.#drawn) { this.#update(session, now, selected); this.#drawn = true; return; }
+    flip(this.element, () => this.#update(session, now, selected));
+  }
+
+  #update(session, now, selected) {
+    const previous = new Set(this.element.children);
     const was = this.#selected;
     this.#session = session;
     this.#selected = selected;
@@ -209,8 +217,13 @@ export class DelegateStrip {
     const top = (rows) => rows.filter((r) => !r.parent || r.parent === r.id);
     const active = d ? top(d.active) : [];
     const finished = d ? top(d.finished) : [];
-    this.element.hidden = !d || (active.length === 0 && finished.length === 0 && !d.more);
-    if (!d) { return; }
+    if (!d) {
+      if (this.#drawn) { for (const el of previous) { leave(el, 'listItem'); } }
+      this.element.hidden = true;
+      this.element.replaceChildren();
+      this.#items.clear();
+      return;
+    }
     // An open delegate stays in view as it finishes, and a finished one chosen is shown: the fold
     // opens then, once, so it can still be shut over it.
     const finishedNow = new Set(finished.map((r) => r.id));
@@ -232,10 +245,13 @@ export class DelegateStrip {
       this.more.textContent = `${plural(d.more, 'more delegate', 'more delegates')} not listed`;
       els.push(this.more);
     }
+    if (this.#drawn) { for (const el of previous) { if (!els.includes(el)) { leave(el, 'listItem'); } } }
+    this.element.hidden = active.length === 0 && finished.length === 0 && !d.more;
     keepFocus(this.element, () => {
       els.forEach((el, i) => { if (this.element.children[i] !== el) { this.element.insertBefore(el, this.element.children[i] ?? null); } });
       while (this.element.children.length > els.length) { this.element.lastElementChild.remove(); }
     });
+    if (this.#drawn) { for (const el of els) { if (!previous.has(el)) { enter(el, 'listItem'); } } }
     for (const id of [...this.#items.keys()]) { if (!live.has(id)) { this.#items.delete(id); } }
   }
 
@@ -294,6 +310,13 @@ export class DelegateDetail {
   #known = new Map();
   // The time the view last drew with, so a fetch coming back draws to the same clock as the rest.
   #now = null;
+  #visibility = () => {
+    if (!this.#id) { return; }
+    this.#stop();
+    if (document.hidden) { this.#state.skipped = true; return; }
+    this.refreshTimes();
+    this.#tick();
+  };
 
   // fetchDelegate(agentId) -> Promise<Subagent|null>, or null. onOpen(id): a nested delegate
   // pressed. onAsk(text): "Ask main agent to stop it". onBack(): back to the list, where the
@@ -323,6 +346,7 @@ export class DelegateDetail {
     e.ask = h('button', { type: 'button', class: 'button secondary delegate-ask', hidden: true, onclick: () => { const text = this.#a ? askToStopText(this.#a) : null; if (text) { this.onAsk(text); } } }, 'Ask main agent to stop it');
     this.element = h('section', { class: 'delegate-pane', 'aria-labelledby': `${idBase}-label ${idBase}-title`, hidden: true },
       e.back, e.label, e.title, e.props, e.status, e.taskBlock, e.latestBlock, e.reasoning, e.toolsBlock, e.nestedBlock, e.ask);
+    document.addEventListener('visibilitychange', this.#visibility);
   }
 
   get id() { return this.#id; }
@@ -492,6 +516,7 @@ export class DelegateDetail {
 
   dispose() {
     this.#stop();
+    document.removeEventListener('visibilitychange', this.#visibility);
     this.#id = null;
     this.#known.clear();
   }
@@ -504,6 +529,7 @@ export class DelegateDetail {
 
   // A fetch in ms, unless one is due sooner.
   #schedule(ms) {
+    if (document.hidden) { this.#state.skipped = true; return; }
     const due = Date.now() + ms;
     if (this.#state.timer && this.#state.due <= due) { return; }
     clearTimeout(this.#state.timer);
@@ -512,11 +538,12 @@ export class DelegateDetail {
   }
 
   // Nothing is fetched for a delegate nobody can see: its session left, its pane hidden, or the
-  // app in the background. It is looked at again later, and fetched once it shows.
+  // app in the background. Visibility or shown() wakes it, without a hidden polling timer.
   #tick() {
+    clearTimeout(this.#state.timer);
     this.#state.timer = null;
     if (!this.#id) { return; }
-    if (document.hidden || this.element.getClientRects().length === 0) { this.#state.skipped = true; this.#schedule(POLL_MS); return; }
+    if (document.hidden || this.element.getClientRects().length === 0) { this.#state.skipped = true; return; }
     this.#state.skipped = false;
     this.#load();
   }
@@ -559,7 +586,7 @@ export class DelegateDetail {
     if (gen !== this.#state.gen || !this.#id) { return; }
     if (this.#state.again) {
       this.#state.again = false;
-      this.#load();
+      this.#tick();
     } else if (failed || (this.#a && (this.#a.status === 'working' || this.#a.status === 'waiting'))) {
       // A failed fetch (a reconnect, say) is tried again, finished delegate or not.
       this.#schedule(POLL_MS);

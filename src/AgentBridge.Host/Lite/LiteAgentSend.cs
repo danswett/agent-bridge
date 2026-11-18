@@ -16,6 +16,7 @@ public static partial class LiteAgentSend
 
     public static async Task<object?> HandleAsync(AgentCredentials? credentials, ILiteSender? sender, IProtocolChannel channel, JsonElement data, CancellationToken ct = default, bool? windows = null, Func<AgentAuditEntry, string?, bool>? appendAttempt = null)
     {
+        credentials?.CheckScriptOperation(channel, Op);
         if (credentials is null || !(windows ?? OperatingSystem.IsWindows()))
         {
             throw new InvalidOperationException("refused: agent.send isn't available on this host");
@@ -44,12 +45,31 @@ public static partial class LiteAgentSend
         try { written = appendAttempt?.Invoke(attempt, text) == true; }
         catch (Exception) { throw AuditUnavailable(); }
         if (!written) { throw AuditUnavailable(); }
-        var outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct);
-        return new LiteSendReply(outcome.Kind.ToString().ToLowerInvariant(), outcome.Code, outcome.Request);
+        LiteOutcome outcome;
+        try { outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct); }
+        catch (Exception)
+        {
+            AppendTerminal("unconfirmed");
+            throw;
+        }
+        var name = outcome.Kind.ToString().ToLowerInvariant();
+        AppendTerminal(name);
+        return new LiteSendReply(name, outcome.Code, outcome.Request);
+
+        void AppendTerminal(string terminal)
+        {
+            bool terminalWritten;
+            try { terminalWritten = appendAttempt?.Invoke(attempt with { Outcome = terminal }, text) == true; }
+            catch (Exception) { throw TerminalAuditUnavailable(); }
+            if (!terminalWritten) { throw TerminalAuditUnavailable(); }
+        }
     }
 
     static InvalidOperationException AuditUnavailable() =>
         new("refused: auditUnwritable: the agent audit log could not be written; nothing was sent");
+
+    static InvalidOperationException TerminalAuditUnavailable() =>
+        new("refused: auditUnwritable: the terminal agent audit outcome could not be written; the message may have been sent");
 
     [GeneratedRegex(@"^[A-Za-z0-9._-]{1,64}\z")]
     private static partial Regex MachinePattern();

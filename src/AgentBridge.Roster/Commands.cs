@@ -154,6 +154,7 @@ public static class CommandAction
     public const string Update = "update";
     public const string Forget = "forget";
     public const string Attest = "attest";
+    public const string AcceptHostSign = "accept-host-sign";
 
     // The members each action has besides the common ones, in the body and in its target. Every
     // member an action has is required, and no other is allowed.
@@ -164,6 +165,7 @@ public static class CommandAction
         Update => (["nonce"], []),
         Forget => ([], []),
         Attest => (["nonce"], []),
+        AcceptHostSign => (["nonce"], []),
         _ => null,
     };
 

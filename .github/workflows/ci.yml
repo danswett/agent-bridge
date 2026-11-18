@@ -28,8 +28,7 @@ permissions:
 # (re-runs, below, run beside them). GitHub promises no order
 # between them, so nothing here relies on one: each run plans from the last commit main's CI
 # passed on, so a replaced run's changes are tested with a later one (the plan job), merge-rule
-# passes over a replaced run only when the newest run's commit builds on its commit, and
-# otherwise blocks until it's re-run (quality/README.md §4.9), and publish's own checks keep
+# ignores cancelled or unfinished product evidence (quality/README.md §4.9), and publish's checks keep
 # releases in version and commit order (publish-gate). A re-run (attempt 2 on) never joins
 # ci-main, so it can't take a waiting push run's place: like a run by hand, it's grouped by its
 # own run id, never cancelled.
@@ -226,9 +225,9 @@ jobs:
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
             ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -ExcludePlatform win-arm64 -Jobs $jobs
           } elseif ($env:EVENT -eq 'push' -and $env:BASE_KNOWN -eq 'true') {
-            # Main keeps every product platform, but the whole ring alone needs no packages.
+            # Main keeps every selected platform; proven docs/ordinary tests need no product run.
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
-            ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -Jobs $jobs
+            ./quality/plan.ps1 -MainPush -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -Jobs $jobs
           } else {
             # Unknown main base: HEAD^1 alone cannot prove earlier app changes were packaged.
             # Keep full packaging, as on a manual whole-ring run.
@@ -312,8 +311,8 @@ jobs:
         with:
           path: ~/.nuget/packages
           key: ${{ steps.nuget.outputs.cache-primary-key }}
-      # --blame-hang: a test running five minutes is a hang (none takes one); its test host is dumped
-      # and killed, and the run fails naming the test in progress, instead of stalling the job.
+      # --blame-hang: a test running five minutes is a hang (none takes one); its test host is
+      # killed without a process dump, and the run fails naming the test in progress.
       # dotnet-coverage follows every process the test hosts start (the host, hook and injector
       # run as real processes in several tests), which a per-project collector would miss, and
       # needs no package in the test projects. Coverage and the TRX timings are only reported
@@ -323,8 +322,10 @@ jobs:
         if: env.DOTNET_TARGET != ''
         shell: pwsh
         run: |
+          . ./quality/dotnet-test-command.ps1
           $filter = if ($env:TEST_FILTER) { " --filter `"$env:TEST_FILTER`"" } else { '' }
-          dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "dotnet test $env:DOTNET_TARGET -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults --logger trx$filter"
+          $command = Add-DotnetCrashBlame "dotnet test $env:DOTNET_TARGET -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory TestResults --logger trx$filter"
+          dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml $command
         timeout-minutes: 20
         env:
           DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
@@ -352,14 +353,42 @@ jobs:
             TestResults/**/*.trx
           if-no-files-found: ignore
           retention-days: 14
-      - name: Keep the hang dumps
+      - name: Stage only valid hang execution sequences
         if: failure()
+        id: hang-sequences
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'public-hang-sequences'
+          New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
+          $settings = [Xml.XmlReaderSettings]::new()
+          $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
+          $settings.XmlResolver = $null
+          $index = 0
+          foreach ($file in Get-ChildItem TestResults -Recurse -File -Filter '*_Sequence.xml' -ErrorAction SilentlyContinue) {
+            if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked sequence input refused' }
+            for ($item = $file.Directory; $null -ne $item; $item = $item.Parent) {
+              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked sequence directory refused' }
+            }
+            $reader = [Xml.XmlReader]::Create($file.FullName, $settings)
+            try {
+              $xml = [Xml.XmlDocument]::new()
+              $xml.XmlResolver = $null
+              $xml.Load($reader)
+              if ($xml.DocumentElement.Name -ne 'TestSequence' -or
+                  @($xml.DocumentElement.ChildNodes | Where-Object { $_ -is [Xml.XmlElement] -and $_.Name -ne 'Test' }).Count) {
+                throw 'Unexpected execution sequence format'
+              }
+              $xml.Save((Join-Path $out "sequence-$(($index++)).xml"))
+            }
+            finally { $reader.Dispose() }
+          }
+      - name: Keep the hang execution sequences, never process dumps
+        if: failure() && steps.hang-sequences.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-hang-${{ matrix.os }}
-          path: |
-            TestResults/**/*.dmp
-            TestResults/**/Sequence_*.xml
+          path: ${{ runner.temp }}/public-hang-sequences/sequence-*.xml
           if-no-files-found: ignore
           retention-days: 14
       - name: The NativeAOT injector types into a real console
@@ -595,6 +624,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/arm64-foreground
+        if: matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
@@ -683,11 +714,45 @@ jobs:
           path: ${{ runner.temp }}/sbom
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - name: Stage named self-test text, never WER dumps or archives
         if: always()
+        id: selftest-text
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:RUNNER_TEMP 'selftest'
+          $out = Join-Path $env:RUNNER_TEMP 'public-selftest'
+          New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
+          $utf8 = [Text.UTF8Encoding]::new($false, $true)
+          function Read-DiagnosticText([string]$path) {
+            $file = Get-Item -LiteralPath $path
+            for ($item = $file.Directory; $null -ne $item; $item = $item.Parent) {
+              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked diagnostic directory refused' }
+            }
+            if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked diagnostic input refused' }
+            $text = $utf8.GetString([IO.File]::ReadAllBytes($file.FullName)).TrimStart([char]0xFEFF)
+            if ($text -match '[\x00-\x08\x0B\x0C\x0E-\x1F]' -or $text -match '^(MDMP|PAGEDUMP|PAGEDU64|PK\x03\x04|\x7FELF)') {
+              throw 'Binary diagnostic input refused'
+            }
+            return $text
+          }
+          foreach ($name in 'result.json', 'app-exit-cause.json', 'app.stderr.log', 'app.log', 'app-crash-analysis.txt') {
+            $path = Join-Path $source $name
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            $text = Read-DiagnosticText $path
+            if ($name.EndsWith('.json')) { $null = ConvertFrom-Json -InputObject $text -ErrorAction Stop }
+            [IO.File]::WriteAllText((Join-Path $out $name), $text, $utf8)
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.selftest-text.outcome == 'success'
         with:
           name: app-self-test-${{ matrix.runtime }}
-          path: ${{ runner.temp }}/selftest
+          path: |
+            ${{ runner.temp }}/public-selftest/result.json
+            ${{ runner.temp }}/public-selftest/app-exit-cause.json
+            ${{ runner.temp }}/public-selftest/app.stderr.log
+            ${{ runner.temp }}/public-selftest/app.log
+            ${{ runner.temp }}/public-selftest/app-crash-analysis.txt
           retention-days: 7
 
   app-installer:
@@ -713,6 +778,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/arm64-foreground
+        if: matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'
       - name: The matching tested release files from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -762,11 +829,54 @@ jobs:
           Write-AppDistributionEvidence -Publish "$env:RUNNER_TEMP/installer-input/publish" -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Installed "$root/current" -Out "$logs/distribution-evidence.json"
           ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 720
           exit $LASTEXITCODE
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - name: A failed installed self-test includes the app process exit cause
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./build/test-app-self-test-cause.ps1 -Evidence "$env:RUNNER_TEMP/selftest/installed/app-exit-cause.json"
+      - name: Stage named installed self-test text, never WER dumps or archives
         if: always()
+        id: installed-selftest-text
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:RUNNER_TEMP 'selftest'
+          $out = Join-Path $env:RUNNER_TEMP 'public-installed-selftest'
+          New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
+          $utf8 = [Text.UTF8Encoding]::new($false, $true)
+          function Read-DiagnosticText([string]$path) {
+            $file = Get-Item -LiteralPath $path
+            for ($item = $file.Directory; $null -ne $item; $item = $item.Parent) {
+              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked diagnostic directory refused' }
+            }
+            if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked diagnostic input refused' }
+            $text = $utf8.GetString([IO.File]::ReadAllBytes($file.FullName)).TrimStart([char]0xFEFF)
+            if ($text -match '[\x00-\x08\x0B\x0C\x0E-\x1F]' -or $text -match '^(MDMP|PAGEDUMP|PAGEDU64|PK\x03\x04|\x7FELF)') {
+              throw 'Binary diagnostic input refused'
+            }
+            return $text
+          }
+          foreach ($name in 'installer-input.json', 'installed/result.json', 'installed/app-exit-cause.json', 'installed/app.stderr.log', 'installed/app.log', 'installed/setup.log', 'installed/distribution-evidence.json', 'installed/app-crash-analysis.txt') {
+            $path = Join-Path $source $name
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            $text = Read-DiagnosticText $path
+            if ($name.EndsWith('.json')) { $null = ConvertFrom-Json -InputObject $text -ErrorAction Stop }
+            $target = Join-Path $out $name
+            New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+            [IO.File]::WriteAllText($target, $text, $utf8)
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.installed-selftest-text.outcome == 'success'
         with:
           name: app-installer-self-test-${{ matrix.runtime }}
-          path: ${{ runner.temp }}/selftest
+          path: |
+            ${{ runner.temp }}/public-installed-selftest/installer-input.json
+            ${{ runner.temp }}/public-installed-selftest/installed/result.json
+            ${{ runner.temp }}/public-installed-selftest/installed/app-exit-cause.json
+            ${{ runner.temp }}/public-installed-selftest/installed/app.stderr.log
+            ${{ runner.temp }}/public-installed-selftest/installed/app.log
+            ${{ runner.temp }}/public-installed-selftest/installed/setup.log
+            ${{ runner.temp }}/public-installed-selftest/installed/distribution-evidence.json
+            ${{ runner.temp }}/public-installed-selftest/installed/app-crash-analysis.txt
           retention-days: 7
 
   publish-gate:
@@ -1166,6 +1276,7 @@ jobs:
     #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
     #  - post-receipt-script: the receipts App's posting script, refusals and a dry run, offline;
     #  - red-minutes-script: the red-minutes figure's spell counting, offline (quality/red-minutes.ps1);
+    #  - arm64-waiver-script: quality-gate's time-boxed win-arm64 waiver, offline (quality/arm64-waiver.ps1);
     #  - rerun-known-flakes: the automatic re-run of a known flake on main, refusals included, offline;
     #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
     #    server, offline (tools/lab/forms-soak);
@@ -1217,11 +1328,20 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-red-minutes.ps1
+      - name: "The waiver covers three named jobs: app (win-arm64), app-installer (win-arm64), product (windows-11-arm), only before expiry"
+        # Fixed needs and jobs JSON: nothing reaches GitHub.
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'arm64-waiver-script')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-arm64-waiver.ps1
       - name: Known-flake re-runs refuse real failures
         # Against a stand-in for gh: nothing reaches GitHub.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'rerun-known-flakes')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-rerun-known-flakes.ps1
+      - name: Product crashes name the test without enabling hang dumps
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'product-crash-diagnostics')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-product-crash.ps1
       - name: The forms soak rig's redaction masks every secret shape
         # Offline: no CLI, console, token or model.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'forms-soak-scripts')) }}
@@ -1339,7 +1459,9 @@ jobs:
         shell: pwsh
         run: |
           pwsh -NoProfile -File quality/test-pages-workflow.ps1
+          $workflowExit = $LASTEXITCODE
           pwsh -NoProfile -File quality/test-pages-gate.ps1
+          if ($workflowExit -ne 0 -or $LASTEXITCODE -ne 0) { exit 1 }
       - name: Halt uploads validate before writing and verify the newest release
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'halts-upload-test')) }}
         shell: pwsh
@@ -1624,13 +1746,60 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      # Only the waiver step reads this run's jobs, which needs can't show: a matrix is one result.
+      actions: read
+      contents: read
     outputs:
       # Whether this run built and checked the app's packages: publish-gate publishes only then.
+      # The raw result, never the waiver's: main doesn't publish while an Arm64 leg is red.
       app: ${{ needs.app.result }}
     steps:
+      # Time-boxed win-arm64 waiver (#2564, owner decision 2026-11-13; quality/README.md §4.7):
+      # while the repository variable ARM64_WAIVER is exactly "on" and before 2026-11-20 00:00 PT
+      # (08:00 UTC, checked in the script), only app (win-arm64), app-installer (win-arm64) and
+      # product (windows-11-arm) failures count as success below, on main and PRs. Raw jobs stay red.
+      # Publishing refuses raw app failures; x64, every other failure and any API error block.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ vars.ARM64_WAIVER == 'on' && contains(needs.*.result, 'failure') }}
+        with:
+          persist-credentials: false
+          sparse-checkout: quality
+      - name: Waive the failed win-arm64 legs, until 2026-11-20 00:00 PT
+        id: waiver
+        if: ${{ vars.ARM64_WAIVER == 'on' && contains(needs.*.result, 'failure') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SETTING: ${{ vars.ARM64_WAIVER }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          printf '%s' "$NEEDS" > "$RUNNER_TEMP/needs.json"
+          fetched=
+          for attempt in 1 2 3; do
+            if gh api --paginate --slurp "repos/$REPO/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/jobs.json"; then
+              fetched=yes
+              break
+            fi
+            sleep $((attempt * 5))
+          done
+          if [ -z "$fetched" ]; then
+            echo "::warning title=quality-gate::the jobs API failed 3 times, so no win-arm64 failure is waived"
+            exit 0
+          fi
+          pwsh -NoProfile -File quality/arm64-waiver.ps1 -NeedsFile "$RUNNER_TEMP/needs.json" -JobsFile "$RUNNER_TEMP/jobs.json" -OutFile "$RUNNER_TEMP/waived.json" -Setting "$SETTING" -SummaryFile "$GITHUB_STEP_SUMMARY"
+          waived=$(cat "$RUNNER_TEMP/waived.json")
+          if [ "$waived" != "[]" ]; then
+            echo "Run: [$RUN_ID](https://github.com/$REPO/actions/runs/$RUN_ID); waiver expires 2026-11-20 00:00 PT (08:00 UTC)." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=quality-gate win-arm64 waiver::Run $RUN_ID; waived job ids: $waived; expires 2026-11-20 00:00 PT (08:00 UTC). Raw failed jobs remain red."
+            effective=$(echo "$NEEDS" | jq -c --argjson w "$waived" 'with_entries(.key as $k | if ($w | any(. == $k)) then .value.result = "success" else . end)')
+            echo "needs=$effective" >> "$GITHUB_OUTPUT"
+          fi
       - name: Every job the plan selected passed, and none failed
         env:
-          NEEDS: ${{ toJSON(needs) }}
+          # The waiver's needs when it waived something, otherwise the real ones.
+          NEEDS: ${{ steps.waiver.outputs.needs || toJSON(needs) }}
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')

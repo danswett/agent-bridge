@@ -5,6 +5,33 @@ using Xunit;
 
 public class ContractTests
 {
+    [Fact]
+    public void A_notice_over_budget_keeps_its_identity_for_history_fetch_without_trimming_the_owner_answer()
+    {
+        var notice = new HistoryTurn
+        {
+            Id = "notice", At = DateTimeOffset.UnixEpoch, Kind = TurnKind.Notification,
+            Prompt = new HistoryPrompt { Text = "Synthetic notice.", From = UserMessageFrom.Notification },
+            Parts = [new HistoryPart { Id = "reply", At = DateTimeOffset.UnixEpoch, Kind = HistoryPartKind.Response, Text = new string('n', 16_000) }],
+        };
+        var session = new Session
+        {
+            Id = "fixture", Agent = AgentKind.Copilot, Status = SessionStatus.Idle,
+            StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch,
+            Activity = new Activity { Kind = TurnKind.User, Turn = "owner", ResponseTurn = "owner", Response = "Owner answer.", Notice = notice },
+        };
+
+        var fit = SessionBudget.Fit(session, 1024);
+        var decoded = JsonSerializer.Deserialize<Session>(JsonSerializer.Serialize(fit, ProtocolJson.Options), ProtocolJson.Options)!;
+
+        Assert.True(ProtocolJson.ByteCount(fit) <= 1024);
+        Assert.Equal("Owner answer.", decoded.Activity.Response);
+        Assert.Equal("owner", decoded.Activity.ResponseTurn);
+        Assert.Equal("notice", decoded.Activity.Notice!.Id);
+        Assert.Equal(TurnKind.Notification, decoded.Activity.Notice.Kind);
+        Assert.True(decoded.Activity.Notice.Truncated);
+    }
+
     static string Example(string name) => File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "examples", name));
 
     [Fact]

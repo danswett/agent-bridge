@@ -28,9 +28,9 @@ public sealed class SessionSourceOptions
     // session where ps has flattened its command line (#200). None: only its exact options tell.
     public IReadOnlyList<string> UsageProbeRoots { get; init; } = [];
 
-    // The polling fallback. FileSystemWatcher only shortens the wait; every change is
-    // still found by polling, because watchers drop events (buffer overflow, network
-    // drives, inotify limits) without saying so.
+    // Active reconciliation: while sessions or discovery holds exist, and for 30 seconds
+    // after a watcher wake or observed process exit. Empty, quiet sources reconcile every
+    // 15 seconds to recover dropped watcher events (including unavailable watchers).
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(1);
 
     // At most one upsert per session per interval; the latest state always follows.

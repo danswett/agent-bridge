@@ -2,6 +2,7 @@
 // reply box says one is waiting while it is out of sight, and answering keeps its place.
 import { test, expect } from '@playwright/test';
 import { open, view } from './nav.mjs';
+import { loadEarlierTo } from './history-fixture.mjs';
 
 const CODEX = '019a1b2c-codex-example';
 const QID = 'q-inline';
@@ -377,6 +378,7 @@ test('delayed history and disjoint local closures share one newest-20 window', a
   }, { id, source: CODEX });
   await open(page, id);
   const card = view(page, id);
+  await loadEarlierTo(card, 20);
   const closed = card.locator('.question.resolved');
   await expect(closed).toHaveCount(20);
   await page.evaluate((id) => {

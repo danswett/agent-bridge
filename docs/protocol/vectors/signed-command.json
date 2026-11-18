@@ -318,6 +318,37 @@
         "by": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
         "mac": "eAJfIn6LYiGNBfcL3XpblmLe-JQ32xzVPrjWEVt6M9E"
       }
+    },
+    {
+      "name": "an-update-now-with-batch-and-unchecked",
+      "action": "update.install.now",
+      "now": 1793300060,
+      "body": {
+        "v": 1,
+        "action": "update.install.now",
+        "request": "7d0f3a2e-1c4b-4d5e-8f60-112233445566",
+        "principal": {
+          "kind": "user",
+          "device": "8f6549035c05abc0d83d83be0eb9bce6"
+        },
+        "target": {
+          "machine": "31031edf3b6085d01d1c4ba3b34c1274"
+        },
+        "to": "31031edf3b6085d01d1c4ba3b34c1274",
+        "issuedAt": 1793300000,
+        "expiresAt": 1793300300,
+        "args": {
+          "now": true,
+          "release": "0.1.201",
+          "batch": true,
+          "unchecked": true
+        }
+      },
+      "command": {
+        "body": "eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUuaW5zdGFsbC5ub3ciLCJyZXF1ZXN0IjoiN2QwZjNhMmUtMWM0Yi00ZDVlLThmNjAtMTEyMjMzNDQ1NTY2IiwicHJpbmNpcGFsIjp7ImtpbmQiOiJ1c2VyIiwiZGV2aWNlIjoiOGY2NTQ5MDM1YzA1YWJjMGQ4M2Q4M2JlMGViOWJjZTYifSwidGFyZ2V0Ijp7Im1hY2hpbmUiOiIzMTAzMWVkZjNiNjA4NWQwMWQxYzRiYTNiMzRjMTI3NCJ9LCJ0byI6IjMxMDMxZWRmM2I2MDg1ZDAxZDFjNGJhM2IzNGMxMjc0IiwiaXNzdWVkQXQiOjE3OTMzMDAwMDAsImV4cGlyZXNBdCI6MTc5MzMwMDMwMCwiYXJncyI6eyJub3ciOnRydWUsInJlbGVhc2UiOiIwLjEuMjAxIiwiYmF0Y2giOnRydWUsInVuY2hlY2tlZCI6dHJ1ZX19",
+        "by": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
+        "mac": "BpvZ3_hCb3KzYE4FFWLK2PjoNjGUFgiR6sqng98kWPo"
+      }
     }
   ],
   "refused": [

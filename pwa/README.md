@@ -42,6 +42,11 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 
 ## Modules
 
+On opening a session, history asks for the newest five turns. Once drawn, at most
+one older page is fetched automatically, only if the visible pane does not yet
+scroll (#2480). Resizing or reopening does not renew that allowance. Load earlier
+messages, Try again and near-top scroll gestures still load earlier pages on demand.
+
 If a stale-cursor recovery walk runs out of its budget before finding held turns or the start,
 the history store keeps the held turns and reports a recoverable earlier-load error (#1437).
 
@@ -63,6 +68,7 @@ the history store keeps the held turns and reports a recoverable earlier-load er
 | `js/host-session.js` | Which machines are shown, one or all (`ALL`), each with a channel and store of its own kept across reconnects; remembers the choice; honours `?host=`; `route(hostId)`, the only way to a machine's channel for what a card sends |
 | `js/sessions-store.js` | The live sessions, most recently updated first (the Most recent sort); a removed session goes with its change, for the Ended group |
 | `js/session-order.js` | The list's order, kept on this device (#164): Your order (new sessions at the top once, then never moved by the host), pins, Most recent and Machine sorts, the Ended group, and which rows have news since last open. Blocked storage falls back to Most recent |
+| `js/groups.js` | Groups helpers over the existing `SessionOrder` (#2073): `new Groups(order)` validates a name without writing and counts the current unpinned live rows, including empty groups. Create, rename, delete and membership stay on `SessionOrder` and its existing storage key. Both use `validateGroupName`: trimmed 1-40 Unicode code points, unique ignoring case, with `GroupNameError` (`RangeError`) codes `length` and `duplicate`. `validateName(name, groupId)` excludes that group for rename |
 | `js/status.js` | What a session says about itself: [ui.md](../docs/design/ui.md) §2.2's rules, as its glyph, its words, the colour role of the words, and the glyph's accessible name (§9). Rules 1-6 first match wins, 8 refining 4, and 7 (an agent driving) as an overlay. Pure, and tested rule by rule in `test/unit/status.test.mjs` |
 | `js/attribution.js` | Who said what (#176): the main agent's own response and reasoning, never a delegate's (`activity.source` and `activity.own`, [v1-sessions.md](../docs/protocol/v1-sessions.md) Activity), and the delegates as a card lists them: running first, then idle, each under its parent, with its glyph and words, and the finished folded apart; the delegates one started, at any depth; the conversation's "Started N delegates" and "Delegate *name* reported back" lines; the words "Ask main agent to stop it" puts in the reply box; and a host's background counts where it lists none. Pure, and tested in `test/unit/attribution.test.mjs` |
 | `js/prompt-origin.js` | A prompt the person didn't type (#489, [ui.md](../docs/design/ui.md) §6.4): who sent it (`activity.userMessageFrom`: a schedule, an agent, or other; absent is the person), its label line's words and spoken name, its label cleaned and cut to 64 bytes, its hidden characters as escapes, and `PromptMemory`, which folds a schedule's repeat ("same as last time") and dates a prompt by its turn. Pure, and tested in `test/unit/prompt-origin.test.mjs` |
@@ -95,7 +101,7 @@ the history store keeps the held turns and reports a recoverable earlier-load er
 | `js/forget.js` | Forgetting an offline machine ([roster.md](../docs/protocol/roster.md)): two presses, the first arming for 5 seconds; an arm goes with a machine that comes back; the relay's refusals in words |
 | `sw.js` | The service worker: each release in a cache of its own, filled whole when its worker installs and served from there without asking the network, so a warm start waits on nothing and works offline (#609); anything else (the demo's chunk) stale-while-revalidate; and showing pushes (`push`) and opening the app at them (`notificationclick`). A release changes only as a whole: the browser checks `sw.js` on each start and the app on each return to the front, a new worker fills its own cache before it takes over, and the app then offers Reload, so old and new modules never mix (#26). The release before is kept for a page still open on it |
 | `js/release-watch.js` | New releases that keep failing to install (#650): a release installs whole or not at all, so one file missing from a deploy leaves the app on the release it has, and the browser tries again quietly at every start. After three failures in a row (counted in `localStorage` under the release in control, from the worker's record, so a release that installs with no page open clears them too), an app running a release it has says so, with Try again (a reload, the browser's next try); a release that installs clears it |
-| `js/app-release.js` | Release-state model (#1277, Settings wiring #1965): reads `version.json` with `no-store`, asks an attached service-worker registration to update, and reports idle, checking, current, behind, installing or ready. Failed checks preserve the prior release result and expose only a generic error; concurrent checks do nothing. Only an observed activation/takeover proves ready, never installation alone or attaching an already-active worker. Readiness lasts until reload and means an update from the running page, not that the separately published id identifies that worker. Settings > This app shows the newer-version line and manual Check for updates results, tested in Chromium and WebKit at phone and desktop widths. Automatic metadata checks and stalled-install handling remain on #1278. Nothing reloads automatically |
+| `js/app-release.js` | Release-state model (#1277, Settings wiring #1965, lifecycle #1278): reads `version.json` with `no-store`, asks an attached service-worker registration to update, and reports idle, checking, current, behind, installing, stalled, failed or ready. Manual check failures preserve the prior result and expose a generic error; concurrent checks do nothing. Automatic checks run on open and return to the front, at least 5 s after the last check, quietly unless a newer release is found. Only observed activation/takeover proves ready; an installed worker without takeover after 10 s says "The new version installed but hasn't started." with Reload. A replacement gets a fresh deadline; takeover and disposal cancel it. ReleaseWatch's repeated-install failure appears in This app with the banner's exact sentence and clears on successful installation. Readiness lasts until reload and means an update from the running page, not that the separately published id identifies that worker. Unit fake clocks and the phone/desktop Chromium/WebKit spec cover these states. Nothing reloads automatically |
 | `js/platform.js` | The platform layer (#168, [ui.md](../docs/design/ui.md) §7): `windows`, `macos`, `ios`, `ipados`, `android`, `chromeos`, `linux` or `unknown`, from Chromium's client hints or else the user agent (a Mac with a touch screen is an iPad), and whether the app is installed (`display-mode: standalone`, or iOS's `navigator.standalone`), set once on `<html data-platform data-standalone>`. The hints (⌘↩ and ⌘K on Apple's, Ctrl+Enter and Ctrl+K elsewhere; either modifier works everywhere), the safe areas (`viewport-fit=cover` kept only when installed on iOS or iPadOS, where the app bar, the bottom navigation or rail and the reply box keep clear of the notch and the home indicator; elsewhere the browser keeps the page out of them), no double-tap wait there, and its edge swipe back. `unknown` is Windows; nothing depends on detection being right |
 | `js/key-check.js`, `js/ui/key-check-view.js` | Settings > Keyboard check (#1209): while on, each keydown anywhere in the app is listed (key, code, Option, Control, Command, Shift, what had focus by what it is, never its words, and whether the app used the key), with how the page is open (installed or browser, and the raw `display-mode`). It only watches; a key that could be typing in a text box (a character, an input method's or a dead key, AltGr's or Option's) is listed without the key or its code; nothing is saved or sent, and Copy results puts the list on the clipboard. The words are tested in `test/unit/key-check.test.mjs` |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
@@ -117,6 +123,16 @@ the history store keeps the held turns and reports a recoverable earlier-load er
 | `tools/brand.mjs` | Writes `js/brand.js`'s name into what can't import it: the page's title, home-screen title, app-bar and navigation labels and each `<span data-brand>`, the manifest's `name` and `short_name`, and `sw.js`'s title for a push without one. `--check` (run by `test/unit/brand.test.mjs`) fails while any of them differs, so renaming is an edit to `design/tokens.json` `brand`, a run of `node tools/design-gen/generate.mjs`, then `node tools/brand.mjs` |
 | `design/tokens.css`, `design/sprite.svg` | Generated by `tools/design-gen` from `/design` ([design/README.md](../design/README.md)); never edit them. The colour roles and surfaces as `--ab-*` custom properties (light, dark and forced colours), the glyphs and icons as symbols, and `@font-face` for Slipgates Sans and Slipgates Mono, whose WOFF2s and licences (licensed separately under SIL OFL 1.1, not this project's AGPL) `tools/build-site.mjs` copies from `/design/fonts` into the site's `design/fonts/`. `app.css` takes every colour from them |
 | `icon.svg`, `icons/*.png` | The app icon (ui.md §7, [brand.md](../docs/design/brand.md) §6), generated by `tools/design-gen` too: the favicon and the manifest's `any` icons (the Windows tile), its maskable icons at 192 and 512, its `monochrome` icons at 192 and 512 (the maskable icon's mark alone, white on transparency, for Android's themed icons), and the 180 px `apple-touch-icon`. The offline shell holds them all. Notifications show `icons/icon-192.png`, with `icons/badge-96.png` as the badge Android draws in the status bar (the native 24 px mark, as the Android client's `ic_stat_slipgates`) |
+
+The offline shell omits Mono's unused 500-weight pair and the bundled brand source module
+(#2479). All ten font files and their CSS declarations still ship unchanged: no glyphs
+are subset, and a medium face can be fetched on demand. The eight used faces stay
+precached. The demo sessions fixture also stays precached: its first fetch can precede
+worker control, so dropping it would put the next demo start back on the network.
+Every worker edit now changes the release hash, using the worker's pre-stamp template,
+so a smaller shell gets a fresh active cache. The previous release is still kept until
+the next release. `test/unit/font-precache.test.mjs` and `build-site.test.mjs` report
+source and built file-size sums separately; neither measures HTTP savings.
 
 ### Connecting a host
 
@@ -358,6 +374,8 @@ next outcomes), and asks a follow-up question a little after each answer.
 
 ### Replying
 
+Without working local storage or Web Locks, Send shows an error and sends nothing.
+
 Delivered image attachments can retain a sender-only preview on this device (#1802).
 The local account's store holds at most 32 raster images, 8 MiB total, for 24 hours;
 sign-out or forgetting a pairing clears it. Missing bytes or reply bindings (including
@@ -557,6 +575,14 @@ small secondary buttons, and Check for updates under the rows in the same column
 sends a new one; `?usage=0` plays a host without it; `?keep=1` keeps readings between visits,
 in the demo's own storage).
 
+A held release check says "Checked 20 minutes ago · checking again soon", without
+quota wording or a retry clock. Legacy hosts' hold reasons are recognised only by
+their fixed prefix; their machine-local times are never parsed or displayed.
+New app reasons retain that clock-free prefix so an already installed PWA still
+recognises the hold; the new PWA normalises it to the plain wording above.
+Successful checks clear that wording. The host's existing hold and retry schedule
+are unchanged (#2227); the structured UTC deadline belongs to protocol slice #2229.
+
 ### Markdown
 
 Agent text is rendered by `js/markdown.js`, written for this app rather than vendored.
@@ -605,10 +631,26 @@ span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
 
-Update discovery details (#927) are read and worded in `js/update.js`, separately from the
-Machines card's status and actions. Valid metadata adds the original update-list age and the
-historical direct GitHub quota with its own age; missing data adds nothing. Reader cases are
-in `test/unit/update.test.mjs`, and independent detail redraws in `test/machines.spec.mjs`.
+Groups overlays (#2074) use `openSheet` in `js/ui/sheet.js`: `title`, DOM `content`
+and optional pinned `footer`, `kind` (`sheet`, `menu`, `form`, `alert`) and `anchor`.
+It returns `{ dialog, close }`; Cancel and Escape also close it and restore focus.
+For an alert, pass `cancelLabel: null` and `initialFocus` as its safe footer action.
+`onClose` runs once. Native modality keeps the background inert; the body alone scrolls.
+Phone sheets respect safe areas and the visual viewport; iPad sheets/menus anchor beside
+the list, forms centre at 440px, and alerts centre at 300px. `test/sheet.spec.mjs`
+covers the primitive in both engines; existing group and approval UI is not migrated.
+
+The open delegate detail (#2300) clears its polling timer while the document is hidden.
+On return it redraws ages and fetches once, keeping the last words while the fetch is
+pending or fails. Fake-clock cases are in `test/unit/delegates-view.test.mjs`;
+`test/delegates.spec.mjs` checks the retained content and catch-up in both browsers.
+
+The Fleet update block (#2187) shows a status glyph and word, a quiet "Checked" age and a
+44 px secondary Check now button. Update now is the only primary action when offered;
+Check now then drops out. Historical feed/quota metadata stays hidden. A limited check
+says "checking again soon" without a machine-local clock or locking Check now: only the
+host knows when that hold expires. Known update actions remain usable. Reader and age cases are in
+`test/unit/update.test.mjs`; phone/iPad states and geometry are in `test/machines.spec.mjs`.
 
 Settings > Reply box keeps Return key in replies on this device only (#1877): New line
 is the default; Send uses Return, with Shift+Return for a new line. Ctrl/Cmd+Return
@@ -650,6 +692,13 @@ stamped with a fixed release id and build time (`64a4019…`, 7 Nov 2026), which
 running another checkout's tests at the same time. CI splits the run over several jobs
 (quality/README.md §4.7): Chromium, three WebKit shards (`--shard`), and `test/e2e` alone in
 the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
+
+The Fleet update-line ordering regression in `test/machines.spec.mjs` delivers a
+subscription response and a newer event in one task (#1959). `HostClient` applies
+the subscription snapshot synchronously through `subscribeUpdate(onState)`, before
+later wire events; a promise continuation must not restore the older state.
+The update fixture also waits for that initial snapshot before changing the demo
+host: the demo-ready marker covers sessions, not update subscriptions.
 
 On a ready PR, `pwa-ui` then repeats only added or modified specs since the PR's
 merge base five times, with zero retries, in the same Chromium and WebKit shards.

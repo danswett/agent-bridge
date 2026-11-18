@@ -138,7 +138,7 @@ const tokens = (page) => page.evaluate(() => {
     return m ? Number(m[1]) * (m[2] === 's' ? 1000 : 1) : 0;
   };
   const out = {};
-  for (const entry of ['push', 'pane', 'tab', 'disclosure', 'list-item', 'glyph', 'activity-dot', 'selection', 'press', 'acknowledge', 'toast', 'menu', 'scroll', 'reorder']) {
+  for (const entry of ['push', 'pane', 'tab', 'disclosure', 'list-item', 'shift', 'value', 'glyph', 'activity-dot', 'selection', 'press', 'acknowledge', 'toast', 'menu', 'scroll', 'reorder']) {
     out[entry.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = [ms(`--ab-motion-${entry}-duration`), ms(`--ab-motion-${entry}-exit-duration`)].filter((v) => v > 0);
   }
   out.crossFade = ms('--ab-motion-cross-fade');
@@ -774,19 +774,86 @@ test('opening reasoning at the bottom stays put, but subsequent response growth 
   await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
 });
 
+async function lateHistoryDuringReveal(page, { pendingReaderScroll = false } = {}) {
+  await openDemo(page, { height: 600 });
+  await page.evaluate((id) => {
+    const client = window.agentBridgeDemo.client;
+    const history = client.history.bind(client);
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    client.history = async (sessionId, options) => {
+      const result = await history(sessionId, options);
+      if (sessionId === id) { window.__historyPrepared = true; await gate; }
+      return result;
+    };
+    const scrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (options) {
+      const first = !window.__historyReveal && this.matches('.question-slot .question') && this.closest(`[data-id="${id}"]`);
+      if (first) {
+        const sc = this.closest('.stream-scroll');
+        window.__historyReveal = {
+          behavior: options.behavior,
+          turns: sc.querySelectorAll('.history-turn').length,
+          outside: this.getBoundingClientRect().top >= sc.getBoundingClientRect().bottom,
+        };
+      }
+      scrollIntoView.call(this, options);
+      // Let the app finish installing its reveal listeners before the prepared history lands.
+      if (first) { queueMicrotask(release); }
+    };
+  }, CODEX);
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response: long, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  await expect.poll(() => page.evaluate(() => window.__historyPrepared)).toBe(true);
+  await scroller.evaluate((el, pending) => { el.scrollTop = pending ? 0 : el.scrollHeight; }, pendingReaderScroll);
+  await atRest(page, scroller);
+  await page.evaluate(({ id, pendingReaderScroll }) => {
+    const d = window.agentBridgeDemo;
+    const question = { id: 'q-late-history', kind: 'form', message: 'Carry on?', askedAt: new Date().toISOString(), fields: [] };
+    if (pendingReaderScroll) {
+      const sc = document.querySelector(`.session-view[data-id="${id}"] .stream-scroll`);
+      sc.scrollTop = sc.scrollHeight;
+    }
+    d.upsert({ ...d.host.get(id), question, status: 'waiting', updatedAt: new Date(Date.now() + 3000).toISOString() });
+  }, { id: CODEX, pendingReaderScroll });
+  await expect.poll(() => page.evaluate(() => window.__historyReveal)).toEqual({ behavior: 'smooth', turns: 0, outside: true });
+  await expect(v.locator('.history-turn')).toHaveCount(2);
+  await atRest(page, scroller);
+  await expect(v.locator('.question-slot .question:not(.resolved)')).toBeInViewport();
+}
+
+test('a question stays in sight when late history lands during its reveal with native scroll events', async ({ page }) => {
+  await lateHistoryDuringReveal(page);
+});
+
+test('late history during a native question reveal preserves visibility after a same-task reader scroll and upsert', async ({ page }) => {
+  await lateHistoryDuringReveal(page, { pendingReaderScroll: true });
+});
+
 test('where the reader is is read when a question comes, though the scroll that took them there has yet to send its event', async ({ page }) => {
   await openDemo(page, { height: 600 });
   const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
   await upsert(page, CODEX, { activity: { response: long, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
   const v = await open(page, CODEX);
   const scroller = v.locator('.stream-scroll');
+  await conversationReady(v);
   const settle = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  // A scroll's event comes at the browser's next frame: held back here, as if it hadn't come yet.
-  await page.evaluate(() => {
-    for (const type of ['scroll', 'scrollend']) { document.addEventListener(type, (e) => e.stopPropagation(), true); }
-  });
   const ask = (id, top, ms) => page.evaluate(({ id, top, ms }) => {
     const el = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .stream-scroll');
+    // Demo delivery is asynchronous. Hold only this reader's pending events until the
+    // matching question is drawn, then let native app-scroll completion through.
+    const pending = new AbortController();
+    const arrived = new MutationObserver(() => {
+      if (el.querySelector('.question-slot .question:not(.resolved)')?.dataset.question !== id) { return; }
+      pending.abort();
+      arrived.disconnect();
+    });
+    arrived.observe(el, { childList: true, subtree: true });
+    for (const type of ['scroll', 'scrollend']) {
+      document.addEventListener(type, (e) => { if (e.target === el) { e.stopPropagation(); } }, { capture: true, signal: pending.signal });
+    }
     el.scrollTop = top === 'end' ? el.scrollHeight : top;
     const d = window.agentBridgeDemo;
     const question = { id, kind: 'form', message: 'Carry on?', askedAt: new Date().toISOString(), fields: [] };
@@ -799,6 +866,7 @@ test('where the reader is is read when a question comes, though the scroll that 
   await expect(scroller).toContainText('One more.');
   await ask('q-race-end', 'end', 3000);
   await expect(v.locator('.question-slot .question:not(.resolved)')).toBeInViewport();
+  await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
   // At the end when last measured; back at the top, just now, when a question comes: left there.
   await clear(4000);
   await expect(v.locator('.question-slot .question:not(.resolved)')).toHaveCount(0);
@@ -1807,6 +1875,53 @@ test('where the browser sends no scrollend, as Safari doesn\'t, a question scrol
   await page.clock.runFor(50);
   expect({ held, after, mine: await question() }).toEqual({ held: true, after: false, mine: false });
 });
+for (const takeover of ['wheel', 'touchstart', 'keydown']) {
+  test(`without scrollend, ${takeover} after the quiet fallback cancels a retained question reveal before a no-extent update`, async ({ page }) => {
+    await page.addInitScript(() => {
+      const add = EventTarget.prototype.addEventListener;
+      EventTarget.prototype.addEventListener = function (type, ...rest) { return type === 'scrollend' ? undefined : add.call(this, type, ...rest); };
+    });
+    await openDemo(page, { height: 600 });
+    const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+    await upsert(page, CODEX, { activity: { response: long, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+    const v = await open(page, CODEX);
+    await conversationReady(v);
+    await askCodex(page, choices('q-retained-reveal'));
+    const scroller = v.locator('.stream-scroll');
+    await atRest(page, scroller);
+    await scroller.evaluate((el) => { el.scrollTop = 0; });
+    await atRest(page, scroller);
+    await expect(v.locator('.question-slot .question')).not.toBeInViewport();
+    const snapshot = await page.evaluate(async ({ id, takeover }) => {
+      const sc = document.querySelector(`.session-view[data-id="${id}"] .stream-scroll`);
+      const started = performance.now();
+      await new Promise((resolve) => {
+        let quiet;
+        const step = () => {
+          clearTimeout(quiet);
+          quiet = setTimeout(() => { sc.removeEventListener('scroll', step); resolve(); }, 150);
+        };
+        sc.addEventListener('scroll', step);
+        document.querySelector(`#needs-you .needs-entry[data-id="${id}"] .needs-title`).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      });
+      // Past the 100 ms fallback, but still inside the retained reveal's 1.5 s lifetime.
+      const elapsed = performance.now() - started;
+      sc.dispatchEvent(takeover === 'keydown'
+        ? new KeyboardEvent(takeover, { key: 'PageUp', bubbles: true })
+        : new Event(takeover, { bubbles: true }));
+      sc.scrollTop = 0;
+      const extent = sc.scrollHeight;
+      const d = window.agentBridgeDemo;
+      d.upsert({ ...d.host.get(id), updatedAt: new Date(Date.now() + 61_000).toISOString() });
+      return { elapsed, extent, after: sc.scrollHeight };
+    }, { id: CODEX, takeover });
+    expect(snapshot.elapsed).toBeLessThan(1500);
+    expect(snapshot.after).toBe(snapshot.extent);
+    await atRest(page, scroller);
+    expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
+  });
+}
+
 test('a question that arrives while another page is shown takes no click for a moment when Sessions is shown again', async ({ page }) => {
   await openDemo(page);
   await open(page, CODEX);

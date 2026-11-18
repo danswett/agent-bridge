@@ -5,10 +5,12 @@
 #   pwsh build/measure-update-gap.ps1 -Publish out/app/publish -Work <empty scratch folder>
 #
 # Each run extracts the 1.0.0 portable package into -Work, starts the old app in its demo, hands
-# Update.exe the 1.0.1 package with the arguments PackageHandoff gives it (--waitPid, --rootDir,
+# Update.exe the 1.0.1 package with the same package and restart arguments as PackageHandoff (--rootDir,
 # --packageDir, restart arguments) and Velopack's --silent, which #1167 adds, ends the old app, and
 # waits for the new version's window. The app restarts into its demo (--demo), so no host is
 # started and nothing reaches a relay.
+# Unlike the app's direct launch (--wait, #1173), this script remains alive as Update.exe's parent,
+# so it must name the old app with --waitPid; it does not exercise the app's parent-wait path.
 #
 # The update hooks run the app's own Lifecycle code, which manages the default profile's host. On
 # a machine where a person's host may run, they are kept from touching it: AGENT_BRIDGE_SESSION is

@@ -135,8 +135,8 @@ public sealed partial class MainViewModel : Observable
     }
 
     // Why answers, replies and End session are off on this machine's cards, when its host says so.
-    public string? ReadOnlyWhy => host.Status?.AgentHaBridge is { Length: > 0 } ha
-        ? $"Answering, replying and ending sessions are off: {ha}. {Product.Name} only watches while agent-ha-bridge runs; replies from your phone and Home Assistant still work."
+    public string? ReadOnlyWhy => (host.Status?.ReadOnly ?? host.Status?.AgentHaBridge) is { Length: > 0 } why
+        ? $"Answering, replying and ending sessions are off: {Words.Sentence(Words.ReadOnlyReason(why))} {Words.ReadOnlyApprovals}"
         : null;
 
     // The account's machines that are offline (the relay's roster), each with a two-press Forget.

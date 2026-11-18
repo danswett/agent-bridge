@@ -39,7 +39,7 @@ export const Events = Object.freeze({
   helloChanged: 'hello.changed',
 });
 
-export const Capabilities = Object.freeze({ helloChanged: 'hello.changed', sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', sessionsFocus: 'sessions.focus', sessionsHistory: 'sessions.history', push: 'push' });
+export const Capabilities = Object.freeze({ helloChanged: 'hello.changed', sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsHandles: 'sessions.handles', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', sessionsFocus: 'sessions.focus', sessionsHistory: 'sessions.history', push: 'push' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 
@@ -57,7 +57,8 @@ export const readDriver = tolerant(['person', 'agent'], 'person');
 // field; any other text this client doesn't know is still a sender the host says isn't the
 // person, so it is never drawn as theirs. A value that isn't text at all is refused with the whole
 // activity (readActivity): strict under v1-sessions.md, as the host's reader has it.
-export const readUserMessageFrom = (v) => (v === undefined || v === null ? 'person' : tolerant(['person', 'schedule', 'agent', 'other'], 'other')(v));
+export const readUserMessageFrom = (v) => (v === undefined || v === null ? 'person' : tolerant(['person', 'schedule', 'agent', 'other', 'notification'], 'other')(v));
+export const readTurnKind = tolerant(['user', 'notification', 'scheduled', 'unknown'], 'unknown');
 // An outcome from a newer host is unconfirmed: never delivered, and never a reason to
 // answer again.
 export const readOutcome = tolerant(Outcomes, 'unconfirmed');
@@ -76,6 +77,39 @@ const str = (v) => (typeof v === 'string' ? v : null);
 const optionId = (v) => (typeof v === 'string' && v.length > 0 && v.length <= 64 ? v : null);
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const obj = (v) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? v : null);
+
+export const NO_TIME = '0001-01-01T00:00:00.000Z';
+
+export function readPrompt(raw) {
+  const p = obj(raw);
+  if (!p || (p.from !== undefined && p.from !== null && typeof p.from !== 'string')) { return null; }
+  return { text: str(p.text) ?? '', truncated: p.truncated === true, from: readUserMessageFrom(p.from), label: str(p.label) };
+}
+
+// Shared by history pages and activity.notice without a protocol/history module cycle.
+export function readTurnHeader(raw) {
+  const t = obj(raw);
+  if (!t || !str(t.id)) { return null; }
+  const prompt = t.prompt === undefined || t.prompt === null ? null : readPrompt(t.prompt);
+  if (t.prompt !== undefined && t.prompt !== null && !prompt) { return null; }
+  return { id: t.id, at: str(t.at) ?? NO_TIME, prompt,
+    ...(t.kind === undefined || t.kind === null ? {} : { kind: readTurnKind(t.kind) }),
+    partsMore: Number.isSafeInteger(t.partsMore) && t.partsMore > 0 ? t.partsMore : 0,
+    truncated: t.truncated === true, unreadable: t.unreadable === true };
+}
+
+function readNotice(raw) {
+  const t = readTurnHeader(raw);
+  if (!t) { return null; }
+  const kind = t.kind ?? 'unknown';
+  const from = kind === 'notification' ? 'notification' : kind === 'scheduled' ? 'schedule' : 'other';
+  const prompt = t.prompt?.from === 'person' ? { ...t.prompt, from } : t.prompt;
+  // The live contract carries only response parts; it cannot introduce tools or approvals.
+  const parts = (Array.isArray(raw.parts) ? raw.parts : []).filter((p) => obj(p) && str(p.id)
+    && p.kind === 'response' && (p.outcome === undefined || p.outcome === null || typeof p.outcome === 'string'))
+    .map((p) => ({ id: p.id, kind: 'response', at: str(p.at) ?? NO_TIME, text: str(p.text), truncated: p.truncated === true }));
+  return { ...t, kind, prompt, parts };
+}
 
 export function readTool(raw) {
   const t = obj(raw);
@@ -242,6 +276,8 @@ export function readActivity(raw) {
     turn: str(a.turn),
     // The turn the main agent's latest reply is of: the latest turn's own only when it equals turn.
     responseTurn: str(a.responseTurn),
+    ...(a.kind === undefined || a.kind === null ? {} : { kind: readTurnKind(a.kind) }),
+    notice: readNotice(a.notice),
     turnCount: num(a.turnCount),
     compactions: num(a.compactions),
     background: readBackground(a.background),

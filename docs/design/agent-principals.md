@@ -125,7 +125,7 @@ the third-party connector API that Home Assistant is the first client of.
 | A reply is never typed while the session is asking anything. Folder trust is answered only by a person's device through the relay, never from the pipe | v1-sessions.md:460, :468; v1-launch.md:139-147, :191-232 | Decision 1's "never approvals or trust" is already enforced by the existing paths. This design adds no path around them, and a policy check on top (§5.2) |
 | design.md §5.6 grants local `agent@session` "read, reply, **answer**, launch with `ask` permissions" | design.md:495 | It conflicts with decision 1, which omits answer. This note follows the decision (Q3) |
 | design.md §13 item 8: "Decide whether remote agent actions need a per-target grant, defaulting to off for launch with allow-all" | design.md:1356-1358 | Answered by §5. Allow-all is never available to an agent as a launch (§5.2). As a reply target it needs a per-target grant: a per-message, presence-signed approval, or the owner's own-account setting (§5.3, §5.7) |
-| A reply is typed as a burst, then Enter 300 ms later as a separate keystroke. Copilot replies have **no screen guard**. A question or permission prompt that opens between the transcript check and the keys takes them | host-replies.md:21-23, :33-40, :205-209; `KeySend.Expect` (`src/AgentBridge.Host.Delivery/KeyPlan.cs:20`), used today only for Claude's and Codex's first send (host-replies.md:108-110) | Agent replies need idle-only delivery and a screen guard on words *and* Enter (§5.2). The same gap was found in answers in PR #510 (#467) |
+| A reply is typed as a burst, then Enter 300 ms later as a separate keystroke. Copilot replies have **no screen guard**. A question or permission prompt that opens between the transcript check and the keys takes them | host-replies.md:21-23, :33-40, :205-209; `KeySend.Expect` (`src/AgentBridge.Host.Delivery/KeyPlan.cs:20`), used today only for Claude's and Codex's first send (host-replies.md:108-110) | Agent replies need §5.2's base-v1 idle-only delivery (superseded for mode-capable agent senders by queue-reply v1, Q35), plus screen guards on words *and* the chosen submit key. The same gap was found in answers in PR #510 (#467) |
 
 ---
 
@@ -192,6 +192,14 @@ The credential replaces `AGENT_HA_AGENT_TOKEN`, as design.md:495 planned.
   policy, and never resurrects a credential whose process has ended.
 
 ### 3.4 Local agent → host authentication
+
+**Script caller slice (#2346, Windows).** A registered script uses the same hashed token store
+but authenticates as `script:<machine>/<name>`, without a session/process binding. Its complete,
+traceable ancestry must contain no named or host-known agent process. Only `fleet.list` and
+`fleet.find` are enabled, with the host's own account scope; unsigned results stay `unverified`.
+The connection retains its script restriction after expiry, record removal or a store fault,
+so it never falls back to person authority. See [script-credentials.md](script-credentials.md)
+for protected files, expiry and successful-read rotation. Session binding below is unchanged.
 
 The agent's tools (the MCP server of #45, or `agent-bridge-host agent …` for scripts) connect to
 the pipe and open with a new op:
@@ -486,7 +494,7 @@ The owner's tuple maps as: `agent` → `principal.agent`/`launcher`; `session` �
   identical gets the remembered outcome back, and nothing is typed or launched again. That is
   exactly `session.reply`'s and `session.launch`'s `request` semantics today (v1-sessions.md:429;
   v1-launch.md:94). The same `request` with *different* bytes is refused as `replayed`.
-  Outcomes are remembered for at least 10 minutes, so an issuer that lost a result asks with
+  Outcomes are remembered for at least 15 minutes, so an issuer that lost a result asks with
   `agent.outcome {request}` rather than signing a new command.
 * **Skew.** A command is refused if `issuedAt` is more than **120 s** in the target's future
   (`TransferProtocol.Skew`, as transfers use), or if `expiresAt` has passed. Lifetime ≤ 120 s
@@ -766,7 +774,14 @@ usually "Yes". An agent controls the text and the timing, can steer the target i
 permission, and can retry. So, for every reply whose principal is an agent (and for a future
 connector `act` profile, Q26):
 
-1. **Idle only.** It is delivered only while the target is `idle` with no turn running
+**Version boundary:** queue-reply extension **v1** (protocol 1 plus
+`sessions.reply.queue`, [#2468](https://github.com/danswett/agent-bridge/issues/2468))
+supersedes the idle-only/`notIdle`/no-queue rule below, §5.3's working-only exclusion,
+and AP1's idle-only exit criterion for authorized agent senders on that path (Q35).
+The other guards still apply to the chosen submit key, Enter or Ctrl+Q.
+Hosts without the capability, and the separate AP5-lite profile, retain the old rule.
+
+1. **Base v1: idle only.** It is delivered only while the target is `idle` with no turn running
    (`status: idle`, no `activity.background`, no question). That is re-checked immediately before
    the Enter (step 3). A target that isn't idle gets `refused` with `code: "notIdle"`, and nothing
    is typed.
@@ -774,7 +789,8 @@ connector `act` profile, Q26):
      (v1-sessions.md:454).
    * `code` is an **additive field** on reply results, a protocol change to v1-sessions.md's
      outcome table. A client that doesn't know a code shows `refused` with its `reason`.
-   * Nothing is queued in v1 (Q35). The agent retries after the turn ends, within its rate limits.
+   * Nothing is queued in base v1; queue-reply v1 supersedes this rule as stated in Q35.
+     Without that extension the agent retries after the turn ends, within its rate limits.
    * **Claude:** its permission prompts and `AskUserQuestion` aren't in the transcript until
      they're answered (v1-sessions.md:1026). So for Claude the transcript can't show a prompt is
      pending, and **its safety rests on the screen guard** below. The same holds for any agent
@@ -789,15 +805,21 @@ connector `act` profile, Q26):
 
    This stops an agent's words being **appended** to a draft such as `! echo `, where `; <cmd>`
    and Enter would run a command.
-3. **A screen guard on the words and on the Enter.**
-   * Each `KeySend`, the burst *and* the separate Enter, carries `Expect`: the input-box rows as
-     read on screen immediately before (`KeySend.Expect`, `src/AgentBridge.Host.Delivery/KeyPlan.cs:20`,
+3. **A screen guard on the words and on the submit key.**
+   * Each `KeySend`, the burst *and* the separate Enter or Ctrl+Q, carries `Expect`: the
+     input-box rows read on screen immediately before (`KeySend.Expect`,
+     `src/AgentBridge.Host.Delivery/KeyPlan.cs:20`,
      as Claude's and Codex's first send already do, host-replies.md:108-110).
-   * **Before the Enter**, the host reads the screen again. It requires the **complete composer
-     to equal exactly the authorized message**: prefix and words, nothing before or after, normal
-     mode, the session still idle. Only then does the Enter go, held to those rows.
-   * If anything differs, the Enter isn't pressed, the host clears what it typed if it can, and
-     the outcome is `unconfirmed` (never retried).
+   * **Before the chosen submit key**, the host reads the screen again. It requires the
+     **complete composer to equal exactly the authorized message**: prefix and words,
+     nothing before or after, normal
+     mode. Under base v1 the session must still be idle. Queue-reply v1 may queue a working
+     target only on the negotiated mode-capable agent path with `queue` actually selected
+     (Q35). For either mode, no question or permission prompt may be pending: recheck that
+     condition before typing and immediately before the chosen submit key. Only then does
+     the submit key go, held to those rows.
+   * If anything differs, the submit key isn't pressed, the host clears what it typed if it
+     can, and the outcome is `unconfirmed` (never retried).
    * This is required for **every agent kind, including Copilot**, which has no screen guard for
      replies today. An **input-box reader for Copilot** is an AP1 deliverable, since host-replies.md
      describes none (host-replies.md:19-23). An agent whose input box can't be read positively
@@ -1030,8 +1052,10 @@ launch:
   file or `.claude/` directory, a plugin change, and `/skills reload`, each making the session
   `unknown` (§11.2).
 The other hard-coded exclusions:
-* A session that is **working** or asking anything: replies are `refused` with
-  `code: "notIdle"` (§5.2).
+* **Base v1:** a session that is **working** or asking anything: replies are `refused`
+  with `code: "notIdle"` (§5.2). Queue-reply v1 supersedes the working-only exclusion
+  for its mode-capable path (Q35). A pending question or permission prompt still
+  refuses a reply in every mode.
 * A session that is **excluded** (`inbound.exclude`).
 * The **sender itself** (no self-reply loop through the bridge).
 * A session **elevated** or another user's (existing delivery refusals, design.md:498-501).
@@ -1187,8 +1211,9 @@ review (revision 11).
 * What §5.3 forbids is an agent's words arriving, **unattended**, in a session that will run them
   without a prompt. Since forced-ask is rarely provable (§5), the paths below are how agent
   messaging normally works.
-* Each keeps §5.2's delivery guard (idle only, an empty normal-mode composer, `Expect` on the
-  words and the Enter, escaping), which there protects the **timing**, not the mode.
+* Each keeps §5.2's delivery guard: an empty normal-mode composer, `Expect` on the words and
+  chosen submit key, and escaping. Its base-v1 idle-only rule is superseded for mode-capable
+  agent senders by queue-reply v1 (Q35); G still waits for idle as specified below.
 
 **(G) The per-message gate, for every target that isn't provably forced-ask** (§5.3 (B)):
 allow-all, unknown, adopted, manually started, a session whose configuration changed, and
@@ -1214,6 +1239,9 @@ Claude, Codex and organisation-managed sessions. Same account and cross-account.
   * An approved hold waits for the target's next idle, up to that expiry. At delivery the host
     **rechecks everything**: policy, link revocation, taint, the target instance and §5.2's
     guard. It types once, and never retries a delivery that came back `unconfirmed`.
+    Queue mode does not release an approved hold early into a working session. A held
+    `queue` request still waits for idle, then follows the idle Enter path with result
+    `mode: "steer"`, not an early Ctrl+Q path.
 * **Notifications. No push per hold.** This is normative. Quiet holds are counted on Needs-you
   and never pushed. A person can opt in to **at most one aggregated push per hour**, carrying a
   generic count and **no text** ("3 agent messages are waiting"). Quiet hours are per device. A
@@ -3134,6 +3162,12 @@ exactly one purpose, and each verifier checks it.
 | `F("agent-bridge roster entry v1" / "roster cosign v1" / "person command v1" / "presence v1" / "roster head v1", …)` | #391 | — |
 | `F("agent-bridge agent command v1", body)`, host `hostSign` key (roster v2, §8.10) | Agent envelopes (§4.3) | A roster entry or person command: a different label, and those verifiers require a person kind (#391 §3.2, §7.2) |
 | `F("agent-bridge host key binding v1", account, generation, dh)`, by `hostSign` | The `hostSignProof` in a v2 host add (§8.10, V1) | Anything else. It proves possession of `hostSign`, not of `dh`, which is why carrier binding (V4) is also required |
+| `F("agent-bridge fleet registry v1", canonicalRecordBytes)`, by `hostSign` | A host's own registry record (#2370; [encoding and vectors](../protocol/devices.md#fleet-registry-signatures-2370)) | Agent commands, link attestations, roster entries/cosignatures, person commands, key bindings or verifier-support evidence |
+| `F("agent-bridge verifier support v1", bodyBytes)`, by enrolled `hostSign` or `capSign` | Verifier capability evidence ([devices.md](../protocol/devices.md)) | Consent, command authority, registry records, roster entries or key-binding proofs |
+| `SHA-256(F("agent-bridge verifier frontier v1", head1, ..., headN))` | Digest of the held collection frontier | A signature, consent or transition authority |
+| `SHA-256(F("agent-bridge verifier set v1", member1, ..., memberN))` | Digest of the complete active verifier set | A signature, consent or transition authority |
+| `F("agent-bridge verifier key binding v1", account, generation, dh)`, by `capSign` | A person's enrolled capability-key possession proof | Possession of generic `sign`, `dh` or `hostSign`, capability evidence or consent |
+| `F("agent-bridge enroll capSign v1", account, generation, h, nA, nN, D)` | Proposed v3 person-enrollment transcript hash T3; exact frozen descriptor D ([design](../protocol/devices.md#enrollment-transcript-and-domains), #2385) | Never v1 T, a signature or evidence; all existing purpose labels stay distinct |
 | `F("agent-bridge session instance v1", …)` | A hash, not a signature (§3.1) | — |
 | `F("agent-bridge link v1", …)`, per-link key | Link codes and peer host statements (§7.3) | Anything in the peer's own roster |
 | `F("agent-bridge link-attest v1", statement)`, by an attester: a host's `hostSign` off the custodian's machine, or a revoker device's key | An attester's co-signature of its side's peer host statement (§7.3) | An entry, cosign or person command, adding a host, or rotating `linkKey`. It only keeps an already-confirmed statement fresh |
@@ -3318,7 +3352,7 @@ grant names.
 |---|---|---|
 | `read` v1 | `hello`, `sessions.list`, `session.get`, `sessions.subscribe`. Events `session.upsert`, `session.remove`, `sessions.synced`, `discovery.changed` (#534's index) | First slice (§9.7) |
 | `usage` v1 (later) | `usage.get`, `usage.subscribe` | Separate grant |
-| `act` v1 (later, Q26) | Candidates, each its **own** grant: `session.reply`, `session.stop`, `launch.options` and `session.launch` (`ask` only) | Needs its own design and review (Q18), with `automation` attribution. Any reply act has §5.2's idle-only, screen-guarded delivery, and §5.3's allow-all exclusion |
+| `act` v1 (later, Q26) | Candidates, each its **own** grant: `session.reply`, `session.stop`, `launch.options` and `session.launch` (`ask` only) | Needs its own design and review (Q18), with `automation` attribution. A connector reply act retains §5.2's base-v1 idle-only, screen-guarded delivery and §5.3's allow-all exclusion; queue-reply v1's agent-sender supersession (Q35) grants no connector queue path |
 | **Never in any profile** | `session.answer` on any approval; `launch.trust.answer`; `host.*`; roster, account and credential administration; `pairing.*`; `update.*`; `push.*`; `session.transfer`; `agent.command`; `agent.chainLink` | Enforced by the host's classification test (§9.4) |
 
 Whether connectors may ever answer `ask_user` *forms* (not approvals) is part of Q26. Note the
@@ -3559,7 +3593,7 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 
 | Party | Assumption | Must not be able to | Can (residual) |
 |---|---|---|---|
-| **A prompt-injected agent with tools only** (MCP and file tools in an `ask` session, no unattended shell) | Holds its own credential and follows hostile instructions | Answer an approval or folder trust anywhere. Launch with allow-all, or without an explicit `ask`. Reply into an allow-all, unknown-mode or working session (§5.3), unless the target's owner approves that exact message or enabled own-account allow-all targets (§5.7). Have its words or Enter land in a prompt that opens mid-delivery (§5.2's guard). Stop, transfer, update, change settings, adopt, or widen its own scope. Reach excluded sessions. Exceed depth, budget or rates. Appear as the person | Read and reply to sessions the policy allows, and launch `ask` sessions in approved workspaces, within budgets. Each act is attributed, audited and shown violet. That is the owner's chosen reach (decision 2). If the owner enabled `allowAllTargets` (§5.7 O): get commands run without a prompt through an allow-all session in that scope, the risk the setting's warning states |
+| **A prompt-injected agent with tools only** (MCP and file tools in an `ask` session, no unattended shell) | Holds its own credential and follows hostile instructions | Answer an approval or folder trust anywhere. Launch with allow-all, or without an explicit `ask`. Reply into an allow-all or unknown-mode session (§5.3), unless the target's owner approves that exact message or enabled own-account allow-all targets (§5.7). The working-only ban is base v1, superseded for authorized mode-capable agent senders by queue-reply v1 (Q35), never the pending-prompt guard. Have its words or submit key land in a prompt that opens mid-delivery (§5.2's guard). Stop, transfer, update, change settings, adopt, or widen its own scope. Reach excluded sessions. Exceed depth, budget or rates. Appear as the person | Read and reply to sessions the policy allows, and launch `ask` sessions in approved workspaces, within budgets. Each act is attributed, audited and shown violet. That is the owner's chosen reach (decision 2). If the owner enabled `allowAllTargets` (§5.7 O): get commands run without a prompt through an allow-all session in that scope, the risk the setting's warning states |
 | **A prompt-injected agent with a shell** (it can run commands, after the person approved them or because its own session is allow-all) | All of the above, plus it runs processes as the user | Make another session's agent act through the bridge without a reply that passes §5.2 and §5.3 at the target | Everything the user can, locally: it is same-user code (§1.3, local-pipe.md:121-130). That includes using another session's token if it can read it, by spoofing its parent or joining that session's Job (§3.4: the ancestry check is a safety rail, not a boundary). Its subprocesses inherit its token (§3.4) |
 | **Another session's agent, or a detached helper**, on the same machine, holding a stolen token (from a readable environment, or a transcript that printed it) | Same OS user | Use it casually: on Windows the token is accepted only from a process inside the bound session's ancestry or Job object, read in full and failing closed, and `AGENT_BRIDGE_SESSION` proves nothing (§3.4). Outlive the session: the token dies with its process | On macOS and Linux nothing, because there are no agent credentials until peer identification exists (§3.4). On Windows, a helper that deliberately spoofs its parent (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`) or joins the session's Job passes the rail: that is a **safety rail, not a boundary**, and such code is same-user malware (below) |
 | **A stolen person's device** (unlocked, with its presence check passable) | Holds `sign`, maybe a `linkKey` | Beyond #391 §2's bounds: add or re-key hosts on a federation link, or rotate its key, without the peer person's confirmation (§7.3). Renew a link after its removal, holding only that device: the attesters stop co-signing (§7.3) | Until removed: what #391 allows a person's device, including drive sessions (#391 §7.3), and re-sign statements for links it holds the key for. Removal revokes those links, and each host sends a tombstone under its own `hostSign` (§7.3, §7.7). If the device is also a listed host or attester (the single-laptop setup), it renews its links until a tombstone from the required separate revoker arrives, or they expire |
@@ -3650,7 +3684,7 @@ Each slice is one PR, security-reviewed independently before merge.
 
 | # | Slice | Depends on | Crosses machines? |
 |---|---|---|---|
-| **AP1** | **Smallest first slice: local agent principals, Windows only** (§3.4). It covers:<br>• credentials issued at launch (`AGENT_BRIDGE_TOKEN`, hashed store with process binding, a Job object per launch);<br>• `agent.hello` with **ancestry or Job membership read in full, failing closed**, never the environment variable. It is a **safety rail, not a boundary**: parent-PID spoofing and Job joining are stated residuals (§3.4);<br>• **isolation for forced-ask launches** (§5.3 (A)): a host-owned configuration home per agent (`COPILOT_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) with a manifest checked and reset before every launch; project sources switched off, or the launch refused when the workspace or main checkout has a repository extension path; refusal when managed, MDM or server policy may apply; the Copilot flag allowlist with no Agency or `extraArgs`, Claude's `--permission-mode default`, Codex's `-a untrusted -s workspace-write -c features.hooks=false`; a scrubbed environment; failing closed on any unreadable or ambiguous scope;<br>• **directory watches** on every scope, including the creation of new extension paths, and the CLI's plugin, skill and agent sets;<br>• in-session grant and mode-change **detection**: Copilot from `permission.requested`/`permission.completed`, the others `unknown` unless a vector proves a signal before delivery;<br>• a **Copilot input-box reader** (host-replies.md:19-23 has none today), so the composer can be read before typing and before Enter (§5.2);<br>• the `agents` policy (`enabled`, `issue`, `inbound.local`, `exclude`, `limits`);<br>• local `session.reply`, `session.launch` and reads as an agent connection;<br>• chains, budgets and rates for local targets, and the audit log;<br>• `driverPrincipal = agent:<machine>/<session>`, `driverFrom`, the escaped prefix, and `userMessageFrom = agent` from the verified source;<br>• `agent-bridge-host agent list\|read\|reply\|launch` for tests, and the federation stub fields (§7.9).<br>**Exit criteria, each with a test that fails without it:**<br>• **an allow-all or unknown-mode session is never a reply target** (§5.3), including a session switched to allow-all after launch. The §5.7 opt-ins come later (AP8, AP9), so AP1 has none;<br>• **an agent launch or resume without an explicit `permissions: "ask"` is refused**, as are a non-allowlisted `agent` or `profile`, a resume of an allow-all session, and a `transfer`;<br>• **agent replies are delivered only to idle sessions** (`notIdle` otherwise, re-checked before Enter), **with `KeySend.Expect` on both the words and the Enter for every agent kind**, Copilot included. A prompt opened between the check and each key types nothing;<br>• a **non-empty or shell-mode composer is refused**, and Enter is sent only when the **complete** composer equals the authorized message exactly (§5.2);<br>• a session launched in forced-ask mode becomes `unknown` after an in-session "don't ask again" grant or a runtime mode switch (§5.3, Q44);<br>• **the mandatory refusal vectors of §5.3, for all three agents**: pre-seeded user allow rules, hooks, rule files and skills or commands with `allowed-tools`; subagents with a `permissionMode`; every repository extension path (in the workspace and in a linked worktree's main checkout); a managed file and a policy registry key; Copilot's `defaultPermissionMode: "assisted"`; Codex hooks with `features.hooks=false` unproven; the known gaps (Copilot `.claude/skills`, `.agents/skills`, `~/.agents/skills`; Codex `.agents/skills` up to the repository root, `$HOME/.agents/skills`, `/etc/codex`, a parent `.codex/config.toml`, cloud-managed requirements; `CLAUDE_CONFIG_DIR` leaks); a managed (corporate) account, which goes to G or O; a copied credential file; an `auto` launch that would pick Agency. Each refuses the forced-ask launch. File-access traces are kept as **regression tests, not proofs**;<br>• **mid-session vectors**: adding a hook, a skill, a settings file or a `.claude/` directory, a plugin change, and `/skills reload` each make the session `unknown`; a Codex agent writing `.codex/` into an untrusted workspace gains nothing;<br>• leading option keys and `@path` are escaped;<br>• a token from another session or a plain detached helper is refused, as are `AGENT_BRIDGE_SESSION` alone and a partial ancestry read;<br>• a manual or adopted session isn't a reply target, and a manual one gets no credential;<br>• an agent can't answer an approval or folder trust;<br>• a forged header in a title or body (including confusables) is neutralized;<br>• depth counts distinct sessions with the destination: A → B → C is allowed and C → D is refused (`chain-too-deep`) at `maxDepth` 3, a launch counts its new session, and an A ⇄ B conversation keeps `via` at two entries and stops only at the 20-message budget (`conversation-budget`); the person's reply resets them;<br>• a resumed session's old token is dead | #501 merged | **No** (decision 4 holds) |
+| **AP1** | **Smallest first slice: local agent principals, Windows only** (§3.4). It covers:<br>• credentials issued at launch (`AGENT_BRIDGE_TOKEN`, hashed store with process binding, a Job object per launch);<br>• `agent.hello` with **ancestry or Job membership read in full, failing closed**, never the environment variable. It is a **safety rail, not a boundary**: parent-PID spoofing and Job joining are stated residuals (§3.4);<br>• **isolation for forced-ask launches** (§5.3 (A)): a host-owned configuration home per agent (`COPILOT_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) with a manifest checked and reset before every launch; project sources switched off, or the launch refused when the workspace or main checkout has a repository extension path; refusal when managed, MDM or server policy may apply; the Copilot flag allowlist with no Agency or `extraArgs`, Claude's `--permission-mode default`, Codex's `-a untrusted -s workspace-write -c features.hooks=false`; a scrubbed environment; failing closed on any unreadable or ambiguous scope;<br>• **directory watches** on every scope, including the creation of new extension paths, and the CLI's plugin, skill and agent sets;<br>• in-session grant and mode-change **detection**: Copilot from `permission.requested`/`permission.completed`, the others `unknown` unless a vector proves a signal before delivery;<br>• a **Copilot input-box reader** (host-replies.md:19-23 has none today), so the composer can be read before typing and before Enter (§5.2);<br>• the `agents` policy (`enabled`, `issue`, `inbound.local`, `exclude`, `limits`);<br>• local `session.reply`, `session.launch` and reads as an agent connection;<br>• chains, budgets and rates for local targets, and the audit log;<br>• `driverPrincipal = agent:<machine>/<session>`, `driverFrom`, the escaped prefix, and `userMessageFrom = agent` from the verified source;<br>• `agent-bridge-host agent list\|read\|reply\|launch` for tests, and the federation stub fields (§7.9).<br>**Exit criteria, each with a test that fails without it:**<br>• **an allow-all or unknown-mode session is never a reply target** (§5.3), including a session switched to allow-all after launch. The §5.7 opt-ins come later (AP8, AP9), so AP1 has none;<br>• **an agent launch or resume without an explicit `permissions: "ask"` is refused**, as are a non-allowlisted `agent` or `profile`, a resume of an allow-all session, and a `transfer`;<br>• **base-v1 agent replies are delivered only to idle sessions** (`notIdle` otherwise, re-checked before Enter; queue-reply v1 supersedes this idle-only criterion for authorized mode-capable agent senders, Q35), **with `KeySend.Expect` on both the words and the chosen submit key for every agent kind**, Copilot included. A prompt opened between the check and each key types nothing;<br>• a **non-empty or shell-mode composer is refused**, and the submit key is sent only when the **complete** composer equals the authorized message exactly (§5.2);<br>• a session launched in forced-ask mode becomes `unknown` after an in-session "don't ask again" grant or a runtime mode switch (§5.3, Q44);<br>• **the mandatory refusal vectors of §5.3, for all three agents**: pre-seeded user allow rules, hooks, rule files and skills or commands with `allowed-tools`; subagents with a `permissionMode`; every repository extension path (in the workspace and in a linked worktree's main checkout); a managed file and a policy registry key; Copilot's `defaultPermissionMode: "assisted"`; Codex hooks with `features.hooks=false` unproven; the known gaps (Copilot `.claude/skills`, `.agents/skills`, `~/.agents/skills`; Codex `.agents/skills` up to the repository root, `$HOME/.agents/skills`, `/etc/codex`, a parent `.codex/config.toml`, cloud-managed requirements; `CLAUDE_CONFIG_DIR` leaks); a managed (corporate) account, which goes to G or O; a copied credential file; an `auto` launch that would pick Agency. Each refuses the forced-ask launch. File-access traces are kept as **regression tests, not proofs**;<br>• **mid-session vectors**: adding a hook, a skill, a settings file or a `.claude/` directory, a plugin change, and `/skills reload` each make the session `unknown`; a Codex agent writing `.codex/` into an untrusted workspace gains nothing;<br>• leading option keys and `@path` are escaped;<br>• a token from another session or a plain detached helper is refused, as are `AGENT_BRIDGE_SESSION` alone and a partial ancestry read;<br>• a manual or adopted session isn't a reply target, and a manual one gets no credential;<br>• an agent can't answer an approval or folder trust;<br>• a forged header in a title or body (including confusables) is neutralized;<br>• depth counts distinct sessions with the destination: A → B → C is allowed and C → D is refused (`chain-too-deep`) at `maxDepth` 3, a launch counts its new session, and an A ⇄ B conversation keeps `via` at two entries and stops only at the 20-message budget (`conversation-budget`); the person's reply resets them;<br>• a resumed session's old token is dead | #501 merged | **No** (decision 4 holds) |
 | AP2 | #45's MCP server on AP1 (stdio), with the old tool names and outcomes | AP1 | No |
 | AP3 | Adoption on Windows: app action, CLI, `agent.credential` | AP1 | No |
 | AP4 | Envelope library: encoding, signing (a) or MAC (b), strict parser, shared positive and negative vectors | #391 R1 (+ roster v2 V1-V2 if (a), §8.10) | Library only |
@@ -3798,10 +3832,11 @@ The connector API (§9):
 26. **Q26. An `act` profile later: which acts, and may connectors answer `ask_user` forms?**
     **Recommended:** later, each act its own grant (`session.reply`, `session.stop`, launch with
     `ask` only), with `automation` attribution, and **no** answering of forms in v1. A reply act gets
-    §5.2's idle-only, screen-guarded delivery and §5.3's allow-all exclusion, as agents do, but
-    **not** §5.7's gate or own-account setting: a connector reply into an allow-all or unknown
-    session is refused, with no hold. Whether a later `act` profile may use the gate is its own
-    question for that design. Approvals
+    §5.2's base-v1 idle-only, screen-guarded delivery and §5.3's allow-all exclusion. This
+    is connector-scoped: queue-reply v1's agent-sender supersession (Q35) grants no connector
+    queue path. A connector gets neither §5.7's gate nor own-account setting: a reply into
+    an allow-all or unknown session is refused, with no hold. Whether a later `act` profile
+    may use the gate is its own question for that design. Approvals
     and folder trust are never available in any profile. This means Home Assistant no longer
     answers approvals as agent-ha-bridge did; the app and PWA do.
 27. **Q27. Default grant expiry for a connector.** **Recommended:** 1 year, with a reminder 14
@@ -3869,14 +3904,21 @@ Decisions the reviews of `f3559996` asked to make explicit:
     * **(S) Sandboxed allow-all**: **decided for immediately after AP9** (AP10, Q50). It is not a
       prerequisite for reads or federation, and doesn't remove the gate without separately
       demonstrated boundaries.
-35. **Q35. Replies into working sessions.** **Recommended:** refused as `notIdle`, idle only
+35. **Q35. Replies into working sessions.** **Base-v1 rule:** refused as `notIdle`, idle only
     (§5.2), re-checked before Enter. That is a new additive refusal code, since `busy` already
     means an answer or reply is being typed (v1-sessions.md:454).
-    A **direct** reply into a forced-ask session is not queued. A message **held by the gate**
+    In base v1, a **direct** reply into a forced-ask session is not queued. A message **held by the gate**
     is: once approved, it waits for the target's next idle up to the hold's absolute expiry,
     approval doesn't restart the clock, the person's own input cancels it, and everything is
     rechecked at delivery (§5.7 G). That bounds the "context changed" risk a general queue would
     have.
+    **Superseded for mode-capable agent senders from queue-reply extension v1**
+    (protocol 1 plus `sessions.reply.queue`, [#2468](https://github.com/danswett/agent-bridge/issues/2468)):
+    "nothing queued; working-session reply refused `notIdle`" no longer governs that
+    path. The [mode-specific contract](../protocol/v1-sessions.md#sessionreply) applies,
+    with every other §5.2 guard retained. Gate holds keep their §5.7 G approval,
+    next-idle delivery and expiry rules. Older hosts and AP5-lite remain idle-only;
+    this is not a grant to bypass authorization or to answer an approval.
 36. **Q36. Agent launches with `permissions` or `profile` absent.** **Recommended:** refuse.
     `permissions` must be explicit, never filled from the machine's defaults: `ask` for an
     unattended launch, or `allowAll` only as a new gated launch approved with presence (§5.7 G). `agent` and

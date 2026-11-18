@@ -1,12 +1,15 @@
-import { test } from 'node:test';
+import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { AppRelease } from '../../js/app-release.js';
+import { ReleaseWatch } from '../../js/release-watch.js';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
 const C = 'c'.repeat(40);
 const builtAt = '2026-11-08T20:00:00Z';
 const response = (version = B) => ({ ok: true, json: async () => ({ version, builtAt }) });
+const apps = [];
+afterEach(() => { for (const app of apps.splice(0)) { app.dispose(); } });
 
 class Worker extends EventTarget {
   state = 'installing';
@@ -31,6 +34,7 @@ class Registration extends EventTarget {
 function setup(fetchVersion = async () => response(), registration = new Registration()) {
   const phases = [];
   const app = new AppRelease({ version: A, fetchVersion, onChange: (state) => phases.push(state.phase) });
+  apps.push(app);
   app.attach(registration);
   return { app, registration, phases };
 }
@@ -228,3 +232,166 @@ test('replacing a registration and disposing remove obsolete listeners and suppr
   await check;
   assert.equal(app.state.phase, 'checking', 'disposed objects publish nothing more');
 });
+
+test('an installed worker that has not taken over in 10 s reads stalled until takeover', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { app, registration } = setup();
+  await app.check();
+  const worker = registration.found();
+  t.mock.timers.tick(10000);
+  assert.equal(app.state.phase, 'installing', 'download time does not count as takeover time');
+  worker.to('installed');
+  t.mock.timers.tick(9999);
+  assert.equal(app.state.phase, 'installing');
+  worker.to('activating');
+  t.mock.timers.tick(1);
+  assert.equal(app.state.phase, 'stalled');
+  await app.check();
+  assert.equal(app.state.phase, 'stalled', 'a recheck cannot restart the takeover deadline');
+  app.tookOver();
+  assert.equal(app.state.phase, 'ready');
+});
+
+test('waiting workers get a deadline, replacement resets it and disposal cancels it', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const registration = new Registration();
+  registration.waiting = new Worker();
+  registration.waiting.to('installed');
+  const { app, phases } = setup(undefined, registration);
+  await app.check();
+  t.mock.timers.tick(9000);
+  const next = registration.found();
+  next.to('installed');
+  t.mock.timers.tick(1000);
+  assert.equal(app.state.phase, 'installing');
+  t.mock.timers.tick(9000);
+  assert.equal(app.state.phase, 'stalled');
+  next.to('redundant');
+  t.mock.timers.tick(10000);
+  assert.equal(app.state.phase, 'behind');
+  registration.found().to('installed');
+  const before = [...phases];
+  app.dispose();
+  t.mock.timers.tick(10000);
+  assert.deepEqual(phases, before);
+});
+
+test('cold start checks once and not again within 5 s, staying quiet without a newer release', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  let latest = A;
+  const { app, registration, phases } = setup(async () => response(latest));
+  await app.auto();
+  assert.equal(registration.updates, 1);
+  assert.deepEqual(phases, []);
+  await app.auto();
+  t.mock.timers.tick(4999);
+  await app.auto();
+  assert.equal(registration.updates, 1);
+  latest = B;
+  t.mock.timers.tick(1);
+  await app.auto();
+  assert.equal(registration.updates, 2);
+  assert.equal(app.state.latest.version, B);
+  assert.deepEqual(phases, ['behind']);
+  await app.check();
+  t.mock.timers.tick(4999);
+  await app.auto();
+  assert.equal(registration.updates, 3, 'a manual check also starts the minimum automatic gap');
+  latest = A;
+  await app.check();
+  const before = [...phases];
+  t.mock.timers.tick(5000);
+  await app.auto();
+  assert.equal(registration.updates, 5);
+  assert.deepEqual(phases, before, 'a routine current check does not repeat the manual announcement');
+});
+
+test('a failed install shows the banner sentence and a successful install clears it', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { app, registration } = setup();
+  const sentence = "A new version of the app keeps failing to install. You're still on the version you had.";
+  const watch = new ReleaseWatch({ storage: null, onChange: (stuck) => app.installFailed(stuck ? sentence : '') });
+  await app.check();
+  for (let i = 0; i < 3; i++) {
+    const worker = registration.found();
+    watch.watch(worker);
+    worker.to('redundant');
+    t.mock.timers.tick(1000);
+  }
+  assert.equal(app.state.phase, 'failed');
+  assert.equal(app.state.error, sentence);
+  await app.check();
+  assert.equal(app.state.error, sentence, 'a metadata check is not a successful install');
+  const worker = registration.found();
+  watch.watch(worker);
+  worker.to('installed');
+  assert.equal(app.state.phase, 'installing');
+  assert.equal(app.state.error, '');
+});
+
+test('takeover deadlines and install failures publish while an automatic request is pending', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  let finish;
+  const { app, registration } = setup();
+  await app.auto();
+  registration.found().to('installed');
+  t.mock.timers.tick(5000);
+  app.fetchVersion = () => new Promise((resolve) => { finish = resolve; });
+  const pending = app.auto();
+  t.mock.timers.tick(5000);
+  assert.equal(app.state.phase, 'stalled');
+  app.installFailed('The banner sentence');
+  assert.equal(app.state.phase, 'failed');
+  assert.equal(app.state.error, 'The banner sentence');
+  finish(response());
+  await pending;
+  assert.equal(app.state.phase, 'failed');
+});
+
+test('a failed metadata request does not prevent the worker update attempt', async () => {
+  const { app, registration } = setup(async () => { throw new Error('offline metadata'); });
+  await app.auto();
+  assert.equal(registration.updates, 1);
+  assert.equal(app.state.phase, 'idle');
+  assert.equal(app.state.error, '');
+});
+
+test('disposing immediately cancels a worker update that has not started yet', async () => {
+  const { app, registration } = setup();
+  const pending = app.auto();
+  app.dispose();
+  await pending;
+  assert.equal(registration.updates, 0);
+});
+
+for (const rejected of ['metadata', 'worker update']) {
+  test(`a rejected ${rejected} keeps concurrent checks out until the other operation settles`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date'] });
+    let finish;
+    let requests = 0;
+    const held = new Promise((resolve) => { finish = resolve; });
+    t.after(() => finish(response()));
+    const { app, registration } = setup(async () => {
+      requests++;
+      if (rejected === 'metadata') { throw new Error('metadata unavailable'); }
+      return held;
+    });
+    registration.update = async () => {
+      registration.updates++;
+      if (rejected === 'worker update') { throw new Error('update unavailable'); }
+      await held;
+    };
+    const pending = app.check();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(app.checking, true, 'the unfinished operation still owns the single-flight guard');
+    await app.check();
+    t.mock.timers.tick(5000);
+    await app.auto();
+    assert.equal(requests, 1);
+    assert.equal(registration.updates, 1);
+    finish(response());
+    await pending;
+    assert.equal(app.checking, false);
+    assert.equal(app.state.error, "Couldn't check for updates.");
+  });
+}

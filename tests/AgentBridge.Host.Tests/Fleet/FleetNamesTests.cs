@@ -1,11 +1,12 @@
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Fleet;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using Xunit;
 
-public sealed class FleetNamesTests : IAsyncLifetime
+public sealed partial class FleetNamesTests : IAsyncLifetime
 {
     const string Id = "88888888-8888-4888-8888-888888888888";
     readonly Fixture fixture = new();
@@ -28,11 +29,12 @@ public sealed class FleetNamesTests : IAsyncLifetime
     SessionService MakeService() => new(source, new MachineInfo("host", "Fixture", "windows", "0.1.0"))
     {
         FleetNames = new AgentBridge.Host.Fleet.FleetNames(fixture.Root),
+        Time = fixture.Time,
     };
 
     async Task<JsonElement> CallAsync(object data)
     {
-        var result = await LocalApi.Handler(service, Control(), callers)(channel, "session.rename", JsonSerializer.SerializeToElement(data));
+        var result = await LocalApi.Handler(service, Control(), callers, fleet: new FleetList(null, roster))(channel, "session.rename", JsonSerializer.SerializeToElement(data));
         if (result is null) { throw new InvalidOperationException("unknown op: session.rename"); }
         return JsonSerializer.SerializeToElement(result, ProtocolJson.Options);
     }
@@ -54,13 +56,17 @@ public sealed class FleetNamesTests : IAsyncLifetime
     {
         callers.Current = new FixedCallerGuard(new Caller(kind, "person at the machine"));
         Assert.False(File.Exists(PathToNames));
+        Assert.Null(await PublishedNameAsync());
         var result = await CallAsync(new { id = Id, name = "  SG Quality Lead  " });
+        Assert.Equal("absent", result.GetProperty("duplicateStatus").GetString());
         Assert.Equal("SG Quality Lead", result.GetProperty("name").GetString());
+        Assert.Equal("SG Quality Lead", await PublishedNameAsync());
         Assert.Equal("SG Quality Lead", Saved()[Id]);
         Assert.Equal("Served session", source.Get(Id)!.Title);
         Assert.DoesNotContain("Served session", File.ReadAllText(PathToNames), StringComparison.Ordinal);
         await CallAsync(new { id = Id, name = " " });
         Assert.Empty(Saved());
+        Assert.Null(await PublishedNameAsync());
     }
 
     [Theory]
@@ -72,6 +78,7 @@ public sealed class FleetNamesTests : IAsyncLifetime
         var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => CallAsync(new { id = Id, name = "SG Quality Lead" }));
         Assert.Contains("only the app or host command line", refused.Message, StringComparison.Ordinal);
         Assert.False(File.Exists(PathToNames));
+        Assert.Equal(0, roster.Reads);
     }
 
     [Fact]
@@ -186,7 +193,8 @@ public sealed class FleetNamesTests : IAsyncLifetime
         public string PeerName => "fixture";
         public string PeerKind => "local";
         public bool IsOpen => true;
-        public Task Closed => Task.CompletedTask;
+        public TaskCompletionSource Closing { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task Closed => Closing.Task;
         public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
     }
 }
