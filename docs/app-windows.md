@@ -1326,6 +1326,12 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
 * CI (`app` jobs, one for x64 on `windows-latest` and one for Arm64 on `windows-11-arm`) runs on
   `main` always, and on a pull request only when it changes the app, its packaging inputs or the
   projects `pack-app.ps1` publishes (`app-package` and `app-package-host` in the quality catalog).
+  `CheckHistoryFormattedFromFirstFrame` uses an isolated host-metadata fixture
+  ([diagnostic brief](https://github.com/danswett/agent-bridge/issues/1759#issuecomment-6966552100)).
+  Invented transcripts pass through real `SessionSource`/`SessionDrivers`, history and local-wire reads,
+  not demo upserts or direct row mutation. Rendering-frame logs record load and two arriving replies;
+  passing means only no unformatted XAML was observed on that host path at the tested head.
+  It is not compositor proof or a production fix; the owner's affected version/recording remain missing.
   Each runs
   `build/pack-app.ps1 -Runtime <win-x64|win-arm64>`: publishes the app, host, launcher, injector
   and hook into one folder for that architecture, checks for the app's `.pri`, the executables
