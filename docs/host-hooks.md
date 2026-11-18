@@ -265,7 +265,7 @@ is one JSON value, prints the reply, logs the run and exits 0.
   snapshot of every process measured 30–45 ms on a busy machine, most of the budget, so it is
   only the fallback for when the hook's own parent cannot be asked. Linux reads `/proc`.
   macOS records none yet. The host ships on Windows first, and #48 covers the Mac.
-* **Timings** on DSWETT-DEV-VM1 (547 processes), measured 2026-10-29:
+* **Timings** on the cutover machine (547 processes), measured 2026-10-29:
   * spooled runs: 30–35 ms, as the hook logs them (from process start);
   * the fixed reply with no heartbeat: 23–28 ms;
   * agent-ha-bridge's Go hook on the same machine: an average of 45 ms over its last 400

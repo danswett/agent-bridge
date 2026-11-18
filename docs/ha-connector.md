@@ -63,7 +63,7 @@ usage, fleet status, update buttons and phone notifications, as today (decided 2
 design doc §2, §9, §10 "Path to migration", stage 1b, and §0.1 G5–G9). The connector is the
 host module that does it, by speaking agent-ha-bridge's **existing per-machine contract
 exactly**: the same MQTT discovery configs, state and attribute topics, retained messages,
-command topics and pinned entity ids. DSWETT-HOME, the publication writer, still on
+command topics and pinned entity ids. The publication writer, still on
 agent-ha-bridge, goes on generating the dashboard from every machine's retained session list,
 and a migrated machine's cards render unchanged.
 
@@ -265,8 +265,8 @@ parses every append whole and skims a cold start for unanswered questions.
 
 | What | Rule (agent-ha-bridge function) | Example |
 |---|---|---|
-| Machine slug | lowercase, every run of non-`[a-z0-9]` one `_`, trimmed, at most 24, `machine` if empty (`Get-BridgeMachineSlug`) | `DSWETT-DEV-VM1` → `dswett_dev_vm1` |
-| Machine node | `agent_bridge_<slug>` | `agent_bridge_dswett_dev_vm1` |
+| Machine slug | lowercase, every run of non-`[a-z0-9]` one `_`, trimmed, at most 24, `machine` if empty (`Get-BridgeMachineSlug`) | `host-a` → `host_a` |
+| Machine node | `agent_bridge_<slug>` | `agent_bridge_host_a` |
 | Machine topic root | `copilot/cli/machine/<slug>` | |
 | Session node | `agent_bridge_` + the id's letters and digits, at most 16, lowercased; an id with none gets 12 hex digits of its SHA-256 (`Get-CopilotMqttNodeId`) | `6fcbab0c-1d2e-…` → `agent_bridge_6fcbab0c1d2e4f50` |
 | Session topic root | `copilot/cli/<node>` | |
@@ -278,7 +278,7 @@ Assistant ignores): the dashboard and the other daemons read exactly these.
 ### Entity ids are pinned
 
 Home Assistant names an MQTT entity after its device and entity names and ignores `object_id`,
-so `sensor.ai_agent_bridge_dswett_dev_vm1_sessions` is what first appears. The daemon forces
+so `sensor.ai_agent_bridge_host_a_sessions` is what first appears. The daemon forces
 each entity onto the id the dashboard addresses, through `config/entity_registry/update`, once
 discovery has registered it (`Set-CopilotMqttEntityIds`, `Set-CopilotMqttMachineEntityId` and
 friends). The connector does the same 1.5 s after publishing a config, retrying while the entity
@@ -1446,13 +1446,13 @@ into the disposable instance:
 * Install agent-ha-bridge (the release the live machines run) on the VM as a first Windows user,
   pointed at the disposable instance with its token, and make it that instance's **publication
   writer** with an explicit bootstrap there (its README's operator procedure). It serves the
-  card resource and generates `/agent-decisions` exactly as DSWETT-HOME does for the live one.
+  card resource and generates `/agent-decisions` exactly as the publication writer does for the live one.
   This touches nothing outside the VM: different instance, broker, policy and fences.
 * A second Windows user on the same VM is the machine being migrated. It first runs
   agent-ha-bridge as a non-writer participant, then migrates to `agent-bridge-host` with the
   connector (`homeAssistant.enabled`, `baseUrl`, `disposable: true`; `machineName` set to a
   distinct name such as `REHEARSAL-M`, since both users share the computer's name). G5 is per
-  user, so the writer keeps running throughout, as DSWETT-HOME will.
+  user, so the publication writer keeps running throughout.
 
 ### 3. The checklist (both directions)
 
