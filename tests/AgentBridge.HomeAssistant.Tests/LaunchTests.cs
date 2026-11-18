@@ -602,8 +602,7 @@ public sealed partial class LaunchTests : IDisposable
         // The payload a lost clear left behind: not served a second time.
         Payload(new JsonObject { ["text"] = "the request's words", ["request"] = "req-0018-abcd" });
         await Launch(c, AgentUser);
-        var r = Assert.Single(launched);
-        Assert.Null(r.Prompt);
+        Assert.Empty(launched);
         Assert.Equal(2, JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Count);
     }
 
@@ -631,8 +630,7 @@ public sealed partial class LaunchTests : IDisposable
         ha.Now = ha.Now.AddSeconds(11);
         Payload(new JsonObject { ["text"] = "the daemon's request", ["request"] = "req-0020-abcd" });
         await Launch(c, AgentUser);
-        Assert.Equal(2, launched.Count);
-        Assert.Null(launched[1].Prompt);
+        Assert.Single(launched);
         Assert.Equal(["req-0020-abcd"], JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Select(o => o!["request"]!.GetValue<string>()));
     }
 

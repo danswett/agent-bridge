@@ -78,6 +78,60 @@ public sealed partial class LaunchTests
     }
 
     [Fact]
+    public async Task A_retransmitted_payload_does_not_consume_the_next_distinct_requests_press()
+    {
+        await using var c = await Ready();
+        await SnapshotPayload(c, "ingress-original", "original words");
+        await SnapshotPayload(c, "ingress-original", "retransmitted words");
+        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        await SnapshotPayload(c, "ingress-distinct", "distinct words");
+        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+
+        await DrainLaunches(c);
+
+        Assert.Equal(["original words", "distinct words"], launched.Select(r => r.Prompt));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Delayed_duplicate_presses_captured_together_never_fall_back_to_the_card(bool snapshotOnEarlierPass)
+    {
+        await using var c = await Ready();
+        await SnapshotPayload(c, "ingress-delayed-repeat", "original words");
+        if (snapshotOnEarlierPass) { await Pass(c); }
+        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        ha.Now = ha.Now.AddSeconds(11);
+        await SnapshotPayload(c, "ingress-delayed-repeat", "retransmitted words");
+        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        await DrainLaunches(c);
+
+        Assert.Equal("original words", Assert.Single(launched).Prompt);
+    }
+
+    [Fact]
+    public async Task A_queued_request_that_waited_more_than_five_minutes_is_refused_not_started_late()
+    {
+        var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        answer = _ => release.Task;
+        await using var c = await Ready();
+        ha.Now = time.GetUtcNow();
+        await SnapshotPayload(c, "ingress-active", "active words");
+        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        await Pass(c);
+        await SnapshotPayload(c, "ingress-delayed", "late words");
+        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        await Pass(c);
+        time.Advance(TimeSpan.FromMinutes(6));
+        release.SetResult(new LaunchResult(LaunchOutcome.Started));
+        await DrainLaunches(c);
+
+        Assert.Equal("active words", Assert.Single(launched).Prompt);
+        Assert.Equal("refused", Outcome()["outcome"]!.GetValue<string>());
+        Assert.Contains("5 minutes", Outcome()["note"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_snapshot_without_its_own_press_waits_and_keeps_its_settings()
     {
         await using var c = await Ready();

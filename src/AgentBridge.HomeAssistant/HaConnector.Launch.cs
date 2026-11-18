@@ -48,7 +48,7 @@ public sealed partial class HaConnector
     DateTimeOffset nextNoteCheck;
     readonly ConcurrentQueue<LaunchDone> launchesDone = new();
     // Requests served, by id, so one whose payload could not be cleared is never served twice.
-    readonly List<string> launchRequestsHandled = [];
+    readonly HashSet<string> launchRequestsHandled = new(StringComparer.Ordinal);
     DateTimeOffset launchConsumedPress = DateTimeOffset.MinValue;
     // The outcomes an agent reads, newest first (Set-DaemonLaunchOutcome).
     readonly List<JsonObject> launchOutcomes = [];
@@ -72,13 +72,19 @@ public sealed partial class HaConnector
     bool LaunchHit(HaTrigger hit)
     {
         if (!launchServing) { return false; }
-        if (hit.EntityId == LaunchEntity("button", "new_session")) { Interlocked.Exchange(ref launchTouched, 1); return true; }
+        if (hit.EntityId == LaunchEntity("button", "new_session") || hit.EntityId == LaunchEntity("sensor", "new_prompt_payload"))
+        {
+            if (!options.ConsumeAnswers) { return true; }
+            launchIngress.Enqueue(hit);
+            Interlocked.Exchange(ref launchTouched, 1);
+            return true;
+        }
         if (hit.EntityId == LaunchEntity("select", "new_agent")) { Interlocked.Exchange(ref launchAgentTouched, 1); return true; }
         return false;
     }
 
     IEnumerable<string> LaunchWatched() =>
-        launchServing ? [LaunchEntity("button", "new_session"), LaunchEntity("select", "new_agent")] : [];
+        launchServing ? [LaunchEntity("button", "new_session"), LaunchEntity("sensor", "new_prompt_payload"), LaunchEntity("select", "new_agent")] : [];
 
     async Task LaunchAsync(DateTimeOffset now, CancellationToken ct)
     {
@@ -102,9 +108,9 @@ public sealed partial class HaConnector
             try { await LaunchPressAsync(now, ct); }
             catch { if (pressed) { Interlocked.Exchange(ref launchTouched, 1); } throw; }
         }
-        // After the presses: one made while a launch was starting is busy, even when that launch
-        // finished before this pass; the card said Starting... when it was made.
+        // Card presses while starting remain busy; identified requests wait in their own queue.
         await LaunchesDoneAsync(now, ct);
+        await DispatchQueuedLaunchAsync(ct);
         if (now >= nextNoteCheck && !launchBusy)
         {
             nextNoteCheck = now + TimeSpan.FromSeconds(60);
@@ -239,9 +245,10 @@ public sealed partial class HaConnector
     }
 
     // Test-DaemonNewSessionPressed, Use-DaemonLaunchRequest and Resolve-DaemonLaunchRequest.
-    async Task LaunchPressAsync(DateTimeOffset now, CancellationToken ct)
+    async Task ReadLaunchPressAsync(DateTimeOffset now, CancellationToken ct, CapturedLaunchPress? captured = null)
     {
-        var press = await ObserveAsync(LaunchEntity("button", "new_session"), ct);
+        var press = captured is null ? await ObserveAsync(LaunchEntity("button", "new_session"), ct)
+            : new Observation("present", captured.Press.State, captured.Press, true);
         if (!launchPressBaselined)
         {
             // Once Home Assistant has the card on its ids (the pins land a pass or two after the
@@ -253,11 +260,12 @@ public sealed partial class HaConnector
             return;
         }
         if (!press.Present || press.Value == launchPressHandled) { return; }
+        if (captured is null && press.Snapshot is { } snapshot) { captured = CaptureLaunchPress(snapshot); }
         // The prompt payload first, and read for certain: unreadable is not "no request", which
         // would launch an agent's press with the card's settings (Allow all, say, for a request
         // that asked to be asked). The press waits for the next pass instead.
         HaState? payload;
-        try { payload = await ha.GetStateAsync(LaunchEntity("sensor", "new_prompt_payload"), ct); }
+        try { payload = captured?.Payload ?? await ha.GetStateAsync(LaunchEntity("sensor", "new_prompt_payload"), ct); }
         catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
         {
             if (launchPayloadUnreadable != press.Value) { log($"Home Assistant connector: a Launch press waits, its launch request unreadable: {Describe(e)}"); }
@@ -267,6 +275,7 @@ public sealed partial class HaConnector
         }
         launchPayloadUnreadable = null;
         launchPressHandled = press.Value;
+        if (captured?.Id is { } capturedId) { launchCapturedIds.Remove(capturedId); }
         if (!DateTimeOffset.TryParse(press.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var pressedAt)) { return; }
         var driver = DriverOf(press.Snapshot?.UserId);
         var principal = PrincipalOf(press.Snapshot?.UserId);
@@ -283,7 +292,11 @@ public sealed partial class HaConnector
                 await ClearPromptPayloadAsync(ct);
                 await LaunchNoteAsync("Launch refused: the request carried an id that is not valid, so nothing was started.", ct);
                 return;
-            case "stale" or "handled":
+            case "handled":
+                log("Home Assistant connector: a repeated launch request was ignored; nothing launched");
+                await ClearPromptPayloadAsync(ct);
+                return;
+            case "stale":
                 log($"Home Assistant connector: a Launch press ignored a {read.Kind} launch request left in the prompt payload");
                 await ClearPromptPayloadAsync(ct);
                 payloadSkip = true;
@@ -315,20 +328,13 @@ public sealed partial class HaConnector
         var id = read.Id!;
         await OutcomeAsync(id, "starting", "Received; checking its settings before launching.", pressed: pressed, ct: ct);
         await ClearPromptPayloadAsync(ct);
-        launchRequestsHandled.Insert(0, id);
-        if (launchRequestsHandled.Count > 50) { launchRequestsHandled.RemoveAt(50); }
+        launchRequestsHandled.Add(id);
         launchConsumedPress = pressedAt;
         log($"Home Assistant connector: launch request {id} received ({(read.Settings!.Count > 0 ? string.Join(", ", read.Settings.OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => $"{k.Key}={k.Value}")) : "machine defaults")}; prompt of {read.Text.Length} chars)");
         var refusal = read.Problem;
         if (refusal.Length == 0 && time.GetUtcNow() - pressedAt > TimeSpan.FromMinutes(5))
         {
             refusal = "Launch refused: the request waited more than 5 minutes for this machine, so it was not started late.";
-        }
-        if (refusal.Length == 0 && launchBusy)
-        {
-            refusal = "Busy: another launch on this machine is still starting, so nothing was launched. Try again in a moment.";
-            await OutcomeAsync(id, "busy", refusal, ct: ct);
-            return;
         }
         if (refusal.Length > 0)
         {
@@ -343,8 +349,7 @@ public sealed partial class HaConnector
             await OutcomeAsync(id, "refused", why!, ct: ct);
             return;
         }
-        await LaunchNoteAsync(StartingNote(launched!), ct);
-        Dispatch(request, id, pressed, driver, principal, launched, null);
+        launchQueue.Enqueue(new(request, id, pressed, pressedAt, driver, principal, launched!));
     }
 
     // A person's press, or an agent's without a request: everything from the card.
