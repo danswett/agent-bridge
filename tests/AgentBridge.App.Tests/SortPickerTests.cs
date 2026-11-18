@@ -29,6 +29,8 @@ public sealed class SortPickerTests : IDisposable
         main.Order.SetPinned("first", true);
 
         Assert.False(main.Order.Usable);
+        Assert.Equal(SessionOrderFailure.SaveFailed, main.Order.Failure);
+        Assert.Equal("Your order couldn't be saved. Most recent is shown instead.", main.Order.FailureMessage);
         Assert.False(main.CanSort((int)SessionSort.Yours));
         Assert.True(main.CanSort((int)SessionSort.Recent));
         Assert.True(main.CanSort((int)SessionSort.Machine));
@@ -39,6 +41,28 @@ public sealed class SortPickerTests : IDisposable
         Assert.Equal((int)SessionSort.Recent, main.SortIndex);
         Assert.False(main.Order.Usable);
         Assert.False(System.IO.File.Exists(File));
+    }
+
+    [Fact]
+    public async Task An_unread_order_stays_disabled_after_the_read_lock_is_released()
+    {
+        await using var host = new FakeHost();
+        await using var connection = host.Connect(start: false);
+        new SessionOrder(File).SetPinned("saved", true);
+        var original = System.IO.File.ReadAllText(File);
+        MainViewModel main;
+        using (var locked = System.IO.File.Open(File, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            main = Main(connection);
+        }
+
+        main.Order.SetPinned("new", true);
+        main.SortIndex = (int)SessionSort.Yours;
+
+        Assert.False(main.CanSort((int)SessionSort.Yours));
+        Assert.Equal((int)SessionSort.Recent, main.SortIndex);
+        Assert.Equal(SessionOrderFailure.LoadFailed, main.Order.Failure);
+        Assert.Equal(original, System.IO.File.ReadAllText(File));
     }
 
     [Fact]
@@ -70,6 +94,8 @@ public sealed class SortPickerTests : IDisposable
         main.Order.SetPinned("second", true);
 
         Assert.True(main.Order.Usable);
+        Assert.Equal(SessionOrderFailure.None, main.Order.Failure);
+        Assert.Null(main.Order.FailureMessage);
         Assert.True(main.CanSort((int)SessionSort.Yours));
         Assert.Equal((int)SessionSort.Recent, main.SortIndex);
         Assert.Equal(SessionSort.Recent, new SessionOrder(File).Sort);

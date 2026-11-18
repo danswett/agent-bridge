@@ -1153,7 +1153,10 @@ closure wiring are a separate slice; this model alone does not replace the old r
 **Sort menu** ([issue 191](https://github.com/danswett/agent-bridge/issues/191)):
 when the order file cannot be saved, the list uses Most recent and Your order is
 disabled. A later successful save enables Your order again; it stays unselected
-until the person chooses it.
+until the person chooses it. If the file could not be loaded, Your order stays
+disabled until the app restarts and reads it successfully; no changes overwrite
+the unread file. The menu item's tooltip distinguishes a load failure from a
+save failure.
 
 **Inline mono** ([ui.md](design/ui.md) §4.2, #215): a path, an id, a branch or a tool call on a line of text is in Slipgates Mono at that line's role's generated inline size (`AbInlineMono*`, through the app's `InlineMonoRow` and `InlineMonoMeta` styles), so its x-height is Slipgates Sans', on the role's own line height and weight; a code span in a response is scaled the same way (`AbInlineMonoScale`). Repository, machine and model names are in the text face, and separators are always text. Code standing on its own lines keeps the Code role.
 

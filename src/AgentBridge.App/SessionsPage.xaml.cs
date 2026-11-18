@@ -593,6 +593,7 @@ public sealed partial class SessionsPage : UserControl
                 Text = MainViewModel.SortChoices[i], GroupName = "Sort",
                 IsChecked = viewModel.SortIndex == i, IsEnabled = viewModel.CanSort(i),
             };
+            if (i == (int)SessionSort.Yours) { ToolTipService.SetToolTip(item, viewModel.Order.FailureMessage); }
             item.Click += (_, _) => viewModel.SortIndex = index;
             SortMenu.Items.Add(item);
         }

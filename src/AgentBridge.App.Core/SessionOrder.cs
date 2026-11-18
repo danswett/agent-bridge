@@ -5,6 +5,7 @@ using AgentBridge.Protocol;
 namespace AgentBridge.App.Core;
 
 public enum SessionSort { Yours, Recent, Machine }
+public enum SessionOrderFailure { None, LoadFailed, SaveFailed }
 
 // One live session as the list sees it: which machine it is on, by the machine's key.
 public sealed record OrderEntry(string Machine, Session Session)
@@ -77,15 +78,22 @@ public sealed class SessionOrder
     {
         this.path = path;
         this.time = time ?? TimeProvider.System;
-        state = Load(path, out var usable);
-        Usable = usable;
-        if (!usable) { state.Sort = SessionSort.Recent; }
+        state = Load(path, out var failure);
+        Failure = failure;
+        if (!Usable) { state.Sort = SessionSort.Recent; }
     }
 
     public static string KeyOf(string machine, string session) => $"{machine}\n{session}";
 
     // Whether the order can be kept. When it can't, the list is Most recent.
-    public bool Usable { get; private set; }
+    public bool Usable => Failure == SessionOrderFailure.None;
+    public SessionOrderFailure Failure { get; private set; }
+    public string? FailureMessage => Failure switch
+    {
+        SessionOrderFailure.LoadFailed => "Your order couldn't be loaded. Restart the app to try again.",
+        SessionOrderFailure.SaveFailed => "Your order couldn't be saved. Most recent is shown instead.",
+        _ => null,
+    };
 
     public SessionSort Sort
     {
@@ -98,16 +106,16 @@ public sealed class SessionOrder
         }
     }
 
-    static State Load(string? path, out bool usable)
+    static State Load(string? path, out SessionOrderFailure failure)
     {
-        usable = true;
+        failure = SessionOrderFailure.None;
         State? s = null;
         try
         {
             if (path is not null && File.Exists(path)) { s = JsonSerializer.Deserialize<State>(File.ReadAllText(path), Json); }
         }
         catch (JsonException) { s = null; }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { usable = false; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { failure = SessionOrderFailure.LoadFailed; }
         s ??= new State();
         s.Pinned = (s.Pinned ?? []).Where(k => k is not null).Distinct(StringComparer.Ordinal).ToList();
         var pins = s.Pinned.ToHashSet(StringComparer.Ordinal);
@@ -319,19 +327,20 @@ public sealed class SessionOrder
     void Save()
     {
         seenDirty = false;
-        if (path is null) { return; }
+        // A failed read left fallback state, not the person's saved order. Never overwrite it.
+        if (Failure == SessionOrderFailure.LoadFailed || path is null) { return; }
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(state, Json));
-            Usable = true;
+            Failure = SessionOrderFailure.None;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             // An order that can't be kept would be lost at the next start, so the list says Most
             // recent rather than pretend. Recovery enables Your order without selecting it.
             state.Sort = SessionSort.Recent;
-            Usable = false;
+            Failure = SessionOrderFailure.SaveFailed;
         }
     }
 }

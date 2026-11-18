@@ -257,6 +257,8 @@ public sealed class OrderTests : IDisposable
 
         Assert.Equal(original, System.IO.File.ReadAllText(File));
         Assert.False(order.Usable);
+        Assert.Equal(SessionOrderFailure.LoadFailed, order.Failure);
+        Assert.Equal("Your order couldn't be loaded. Restart the app to try again.", order.FailureMessage);
         Assert.Equal(SessionSort.Recent, order.Sort);
         var again = new SessionOrder(File);
         Assert.True(again.Usable);
