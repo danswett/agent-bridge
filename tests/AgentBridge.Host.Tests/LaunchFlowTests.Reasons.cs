@@ -4,7 +4,7 @@ using AgentBridge.Protocol;
 using Xunit;
 
 // What a person is told when a launch fails: fixed words, never an exception's own text (#802, #1021).
-// The exception goes to the host's log, which is where each of these tests finds it.
+// The log keeps exception details except when launch credentials could be exposed.
 public sealed partial class LaunchFlowTests
 {
     const string Recognisable = "SECRET-C:\\Users\\someone\\denied.dll";
@@ -87,7 +87,7 @@ public sealed partial class LaunchFlowTests
     }
 
     [Fact]
-    public async Task An_agent_that_cannot_be_started_says_so_in_fixed_words_and_logs_the_exception()
+    public async Task An_agent_that_cannot_be_started_says_so_in_fixed_words_and_logs_only_the_exception_type()
     {
         starter.Throws = new IOException(Recognisable);
         var launcher = Launcher(Config());
@@ -95,7 +95,8 @@ public sealed partial class LaunchFlowTests
         var result = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
 
         Assert.Equal((LaunchOutcome.Failed, "Copilot couldn't be started"), (result.Outcome, result.Reason));
-        Assert.Contains(Recognisable, LoggedAbout("could not be started"));
+        Assert.Contains(nameof(IOException), LoggedAbout("could not be started"));
+        Assert.DoesNotContain(Recognisable, string.Join('\n', logged));
     }
 
     [Fact]
