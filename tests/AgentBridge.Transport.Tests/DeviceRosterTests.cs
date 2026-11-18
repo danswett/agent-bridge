@@ -143,11 +143,7 @@ public class DeviceRosterTests
         return Entry.Parse(Encoding.UTF8.GetBytes(padded.Wire));
     }
 
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public async Task Removal_is_accepted_when_ordinary_entries_are_refused_with_cap(bool mixed, bool evidence)
+    static async Task<(World W, MemoryRosterStore Store, DeviceRoster Roster)> FullOrdinaryLog()
     {
         var w = Scenario();
         var store = new MemoryRosterStore();
@@ -168,26 +164,52 @@ public class DeviceRosterTests
             filled.AddRange((await roster.AppendAsync(RosterFixture.Account, batch))!);
         }
         Assert.Contains(filled, r => r is { Verdict: "refused", Reason: Invalid.Cap });
-        parent = Entry.Parse(Encoding.UTF8.GetBytes((await roster.GetAsync(RosterFixture.Account))!.Entries[^1]));
-        w.Rename("E", "B", "addB", "addB", "renamed");
-        var ancestor = Padded(w["E"], 8 * 1024, parent);
-        w.Remove("R", "G", "addB", evidence ? "E" : "addB");
-        var removal = Padded(w["R"], (evidence ? 32 : 46) * 1024, evidence ? ancestor : parent).Canonical();
+        return (w, store, roster);
+    }
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(true, 1)]
+    [InlineData(true, 4)]
+    [InlineData(true, 5)]
+    public async Task Removal_is_accepted_when_ordinary_entries_are_refused_with_cap(bool mixed, int ancestorCount)
+    {
+        var (w, store, roster) = await FullOrdinaryLog();
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        var ancestors = new List<string>();
+        for (var i = 0; i < Math.Max(1, ancestorCount); i++)
+        {
+            var label = $"E{i}";
+            w.Rename(label, "B", "addB", "addB", "renamed");
+            var ancestor = Padded(w[label], Entry.MaxBytes, parent);
+            ancestors.Add(ancestor.Canonical());
+            if (ancestorCount > 0) { parent = ancestor; }
+        }
+        w.Remove("R", "G", "addB", "addB");
+        var removal = Padded(w["R"], Entry.MaxRemoveBytes, parent).Canonical();
         if (!mixed)
         {
-            var refused = await roster.AppendAsync(RosterFixture.Account, [ancestor.Canonical()]);
+            var refused = await roster.AppendAsync(RosterFixture.Account, ancestors);
             Assert.Equal(("refused", Invalid.Cap), (refused![0].Verdict, refused[0].Reason));
         }
-        var result = await roster.AppendAsync(RosterFixture.Account, mixed ? [ancestor.Canonical(), removal] : [removal]);
+        var result = await roster.AppendAsync(RosterFixture.Account, mixed ? [.. ancestors, removal] : [removal]);
+        if (ancestorCount > 4)
+        {
+            Assert.Equal(("refused", "removal-ancestry-cap"), (result![^1].Verdict, result[^1].Reason));
+            Assert.Equal(before.Entries, (await roster.GetAsync(RosterFixture.Account))!.Entries);
+            return;
+        }
         Assert.Equal("accepted", result![^1].Verdict);
         if (mixed)
         {
-            Assert.Equal(evidence ? ("accepted", Invalid.Evidence) : ("refused", Invalid.Cap),
-                (result[0].Verdict, result[0].Reason));
+            Assert.All(result.Take(ancestors.Count), r =>
+                Assert.Equal(ancestorCount > 0 ? ("accepted", Invalid.Evidence) : ("refused", Invalid.Cap), (r.Verdict, r.Reason)));
         }
         var snapshot = (await Make(w, store).GetAsync(RosterFixture.Account))!;
         Assert.Equal(removal, snapshot.Entries[^1]);
-        Assert.Equal(evidence, snapshot.Entries.Contains(ancestor.Canonical()));
+        Assert.All(ancestors, a => Assert.Equal(ancestorCount > 0, snapshot.Entries.Contains(a)));
         var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
         replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
         Assert.True(replay.Holds(Entry.Parse(Encoding.UTF8.GetBytes(removal)).Hash));
@@ -197,6 +219,26 @@ public class DeviceRosterTests
         Assert.Equal(("refused", Invalid.Cap), (over![0].Verdict, over[0].Reason));
         Assert.Equal(snapshot.Entries, (await roster.GetAsync(RosterFixture.Account))!.Entries);
         Assert.True((await store.ReadAsync(store.Names.Single(), default))!.Body.Length <= DeviceRoster.MaxStoredBytes);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Ineligible_removals_cannot_promote_size_refused_ancestors_or_spend_the_reserve(bool self)
+    {
+        var (w, store, roster) = await FullOrdinaryLog();
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        w.Rename("ineligible", "G", "addB", "addB", "renamed");
+        var ancestor = Padded(w["ineligible"], Entry.MaxBytes, parent);
+        w.Remove("R", self ? "B" : "G", "addB", "addB");
+        var removal = Padded(w["R"], 32 * 1024, ancestor);
+        var result = await roster.AppendAsync(RosterFixture.Account, [ancestor.Canonical(), removal.Canonical()]);
+        Assert.Equal([("refused", Invalid.Cap), ("refused", Invalid.Evidence)], result!.Select(r => (r.Verdict, r.Reason)));
+        Assert.Equal(before.Entries, (await roster.GetAsync(RosterFixture.Account))!.Entries);
+        w.Remove("genuine", "G", "addB", "addB");
+        var genuine = await roster.AppendAsync(RosterFixture.Account, [Padded(w["genuine"], Entry.MaxRemoveBytes, parent).Canonical()]);
+        Assert.Equal("accepted", genuine![0].Verdict);
     }
 
     [Fact]

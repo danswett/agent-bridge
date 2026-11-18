@@ -278,20 +278,44 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     bool EvidenceFor(Facts r, Bits ancestors, out List<int> evidence)
     {
         evidence = [.. ancestors.Members().Where(i => _candidate[i])];
+        return EligibleEvidence(r, evidence);
+    }
+
+    // Storage-cap refusals use the same policy as the verifier's own cap refusals.
+    public bool CanCarryEvidence(Entry removal, IEnumerable<Entry> evidence)
+    {
+        if (_g.Find(removal.Hash) is not { } index || !Holds(removal.Hash) || _g[index].Op != EntryOp.Remove) { return false; }
+        var r = _g[index];
+        var pending = new List<int>();
+        foreach (var e in evidence)
+        {
+            if (_g.Find(e.Hash) is not { } ancestor || !_g.IsAncestor(ancestor, index)) { return false; }
+            pending.Add(ancestor);
+        }
+        return EligibleEvidence(new Facts(r.Signer, r.Cosigner, r.Target, r.Keep, r.Rank), pending.Distinct().ToList());
+    }
+
+    bool EligibleEvidence(Facts r, IReadOnlyList<int> evidence)
+    {
         if (r.Target == r.Signer) { return false; }
         var bySigner = new Dictionary<int, int>();
+        var fresh = 0;
         foreach (var x in evidence)
         {
             var s = _g[x].Signer;
             if (s != r.Target && !_g.InSubtree(s, r.Target)) { return false; }
             if (r.Keep.Contains(s)) { return false; }
-            bySigner[s] = bySigner.GetValueOrDefault(s) + 1;
+            if (!_g[x].Evidence)
+            {
+                bySigner[s] = bySigner.GetValueOrDefault(s) + 1;
+                fresh++;
+            }
         }
         foreach (var (s, n) in bySigner)
         {
             if (n > EvidenceSignerCap || _evidenceBySigner.GetValueOrDefault(s) + n > EvidenceSignerCap) { return false; }
         }
-        return _evidence + evidence.Count <= EvidenceCap;
+        return _evidence + fresh <= EvidenceCap;
     }
 
     // The history state of a set of parents: computed from all their ancestors, quarantine ignored.

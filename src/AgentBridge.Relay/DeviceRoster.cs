@@ -21,8 +21,11 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     public const int MaxPerAppend = 16;
     // The whole stored log: the library's own entry cap, in canonical form, bounded again by bytes.
     public const int MaxStoredBytes = 224 * 1024;
-    // Leave room for a maximum-sized removal's encoded wrapper, and its evidence.
-    const int MaxOrdinaryBytes = 160 * 1024;
+    // Reserve serialized space for one maximum removal and four maximum 8 KiB ancestors,
+    // including optional proofs, JSON escaping, and one array comma per appended entry.
+    const int MaxRemovalAncestors = 4;
+    static readonly int MaxOrdinaryBytes = MaxStoredBytes - MaxSerializedEntryBytes(Entry.MaxRemoveBytes)
+        - MaxRemovalAncestors * MaxSerializedEntryBytes(Entry.MaxBytes) - (MaxRemovalAncestors + 1);
     const int Retries = 5;
 
     // Appends waiting on one account's lock, beyond the one running, are refused rather than queued.
@@ -97,6 +100,14 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     };
 
     static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    static int MaxSerializedEntryBytes(int size)
+    {
+        var proof = new Assertion([], [], []);
+        var shape = Entry.Canonical([], [], [], proof, proof);
+        // n bytes split over k base64url components occupy at most floor((4*n + 2*k)/3).
+        return JsonSerializer.SerializeToUtf8Bytes(shape).Length + (4 * size + 2 * 9) / 3;
+    }
 
     // Offers the entries, in order, to the account's log; null when the store could not be reached
     // (the caller says so, and nothing was kept).
@@ -246,6 +257,12 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
             {
                 var promoted = aside.Where(a => verifier.Holds(a.Entry.Hash)).ToList();
                 var evidence = promoted.DistinctBy(a => Codec.Base64Url(a.Entry.Hash)).ToList();
+                if (entry.Body.Op == EntryOp.Remove
+                    && (evidence.Count > MaxRemovalAncestors || evidence.Any(a => a.Entry.Size > Entry.MaxBytes)))
+                {
+                    results[index] = results[index] with { Verdict = "refused", Reason = "removal-ancestry-cap" };
+                    continue;
+                }
                 var candidate = new List<string>(kept);
                 candidate.AddRange(evidence.Select(a => a.Entry.Canonical()));
                 candidate.Add(entry.Canonical());
@@ -254,6 +271,12 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
                 {
                     results[index] = results[index] with { Verdict = "refused", Reason = Invalid.Cap };
                     aside.Add((index, entry, true));
+                    continue;
+                }
+                if (evidence.Count > 0 && (entry.Body.Op != EntryOp.Remove
+                    || !verifier.CanCarryEvidence(entry, evidence.Where(a => a.Size).Select(a => a.Entry))))
+                {
+                    results[index] = results[index] with { Verdict = "refused", Reason = Invalid.Evidence };
                     continue;
                 }
                 foreach (var (ai, ae, _) in promoted)
