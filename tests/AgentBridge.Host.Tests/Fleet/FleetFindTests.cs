@@ -72,6 +72,27 @@ public sealed class FleetFindTests : IDisposable
         JsonSerializer.SerializeToElement(await op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(data)), Web);
 
     [Fact]
+    public async Task Host_wiring_without_a_pin_or_switch_never_returns_a_routing_node()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var pin = Path.Combine(root, "roster-pin.json");
+        var trust = new FleetTrust(new HostRosterReader(pin, HostRoster.Now), root, () => "account-a");
+        var reader = new RelayFleetRoster(trust.VerifiedRoster);
+        var machines = reader.Read([Body(new
+        {
+            machine = "a", online = true,
+            record = new { sessions = new[] { new { node = "n-a", name = "SG Quality", state = "idle", since = Started } } },
+        })]);
+        var result = await Find(Op(machines.ToArray()), new { name = "SG Quality" });
+        Assert.Equal("unverified", result.GetProperty("result").GetString());
+        Assert.False(result.TryGetProperty("session", out _));
+        Assert.DoesNotContain("\"node\"", result.GetRawText());
+        Assert.Null(trust.VerifiedRoster());
+        Assert.False(File.Exists(pin));
+        Assert.False(Directory.Exists(Path.Combine(root, "host-sign")));
+    }
+
+    [Fact]
     public async Task A_unique_verified_live_name_is_found_without_a_machine_pin_and_returns_its_model()
     {
         if (!OperatingSystem.IsWindows()) { return; }

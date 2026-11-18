@@ -84,6 +84,30 @@ public sealed class RosterSigningKeyTests : IDisposable
         DeviceKeys.Delete(folder);
     }
 
+    [WindowsFact("DPAPI exists only on Windows")]
+    [SupportedOSPlatform("windows")]
+    public void Opening_with_a_validating_reader_consumes_each_validated_snapshot_once()
+    {
+        var folder = Path.Combine(root, "validated");
+        using var made = RosterSigningKeys.LoadOrCreate(folder, KeyStorage.Dpapi);
+        var reads = new List<string>();
+        byte[] Read(string path)
+        {
+            reads.Add(Path.GetFileName(path));
+            var bytes = File.ReadAllBytes(path);
+            File.WriteAllText(path, "replaced after validation");
+            return bytes;
+        }
+        try
+        {
+            using var opened = RosterSigningKeys.OpenExisting(folder, Read);
+            Assert.Equal(new[] { "signing-key.json", "signing-key.dpapi" }, reads);
+            Assert.Equal(made.Public, opened.Public);
+            Assert.True(P256.Verify(made.Public, [1, 2, 3], opened.Sign([1, 2, 3])));
+        }
+        finally { File.Delete(Path.Combine(folder, "signing-key.json")); }
+    }
+
     [TpmSigningFact]
     [SupportedOSPlatform("windows")]
     public void A_TPM_signing_key_cannot_be_exported_signs_as_the_roster_requires_and_is_deleted_from_the_TPM_itself()

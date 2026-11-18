@@ -136,7 +136,7 @@
         {
           "name": "from-a-name",
           "json": {
-            "from": "DEV-VM2",
+            "from": "node-b",
             "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
             "command": {
               "body": "eyJ2IjoxfQ",

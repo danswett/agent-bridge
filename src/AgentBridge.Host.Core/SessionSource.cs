@@ -21,6 +21,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     static readonly TimeSpan ActiveAfterEvent = TimeSpan.FromSeconds(30);
 
     readonly SessionSourceOptions _options;
+    readonly string? _hostId;
     readonly IProcessInspector _processes;
     readonly TimeProvider _time;
     readonly SemaphoreSlim _pass = new(1, 1);
@@ -121,9 +122,10 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     }
 
     public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null,
-        Func<Session, bool>? answerAttempted = null)
+        Func<Session, bool>? answerAttempted = null, string? hostId = null)
     {
         _options = options;
+        _hostId = hostId;
         _processes = processes ?? new SystemProcessInspector();
         _time = time ?? TimeProvider.System;
         _unaccounted = new Unaccounted(_time, Log);
@@ -465,7 +467,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         {
             Entry? entry;
             lock (_gate) { _entries.TryGetValue(discovered.Id, out entry); }
-            var tracker = entry?.Tracker ?? new SessionTracker(discovered, _options, _time);
+            var tracker = entry?.Tracker ?? new SessionTracker(discovered, _options, _time, _hostId);
             // A restored session's boundary, before the transcript is read: what the interrupted run
             // left asking is set aside before the status and its times are worked out (#780).
             lock (_gate)

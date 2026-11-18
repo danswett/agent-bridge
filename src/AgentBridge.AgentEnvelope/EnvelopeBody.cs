@@ -7,7 +7,21 @@ namespace AgentBridge.AgentEnvelope;
 
 public enum OEligible { No, Yes, Unknown }
 
-public sealed record AgentPrincipal(string Machine, string Add, string Session, string Instance, string Credential, string Agent, string Launcher);
+public sealed record AgentPrincipal(string Machine, string Add, string Session, string Instance, string Credential, string Agent, string Launcher,
+    string Kind = "agent", string? Identity = null)
+{
+    public string SenderId => Kind == "script" ? Identity ?? "" : Session;
+
+    public static bool ValidScriptPart(string? value) => value is { Length: > 0 and <= 64 } && value is not "." and not ".."
+        && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+
+    public static bool ValidScriptIdentity(string? identity, string machine)
+    {
+        var prefix = $"script:{machine}/";
+        return ValidScriptPart(machine) && identity is { Length: <= 128 }
+            && identity.StartsWith(prefix, StringComparison.Ordinal) && ValidScriptPart(identity[prefix.Length..]);
+    }
+}
 
 public sealed record ChainSender(string Account, string Machine, string Session);
 
@@ -81,18 +95,30 @@ public sealed record EnvelopeBody(
     // is nothing to escape and nothing to choose.
     public byte[] Encode()
     {
+        if (Principal.Kind == "script"
+            ? !AgentPrincipal.ValidScriptIdentity(Principal.Identity, Principal.Machine) || Principal.Session != "" || Principal.Instance != "" || Principal.Agent != "" || Principal.Launcher != ""
+            : Principal.Kind != "agent" || Principal.Identity is not null)
+        { throw new EnvelopeException(Refusal.Value, "principal"); }
         var s = new StringBuilder(512);
         s.Append("{\"v\":1,\"request\":").Append(Q(Request));
         s.Append(",\"account\":").Append(Q(Account));
         s.Append(",\"generation\":").Append(Q(Generation));
         s.Append(",\"heads\":[").AppendJoin(',', Heads.Select(Q)).Append(']');
-        s.Append(",\"principal\":{\"kind\":\"agent\",\"machine\":").Append(Q(Principal.Machine));
+        s.Append(",\"principal\":{\"kind\":").Append(Q(Principal.Kind)).Append(",\"machine\":").Append(Q(Principal.Machine));
         s.Append(",\"add\":").Append(Q(Principal.Add));
-        s.Append(",\"session\":").Append(Q(Principal.Session));
-        s.Append(",\"instance\":").Append(Q(Principal.Instance));
-        s.Append(",\"credential\":").Append(Q(Principal.Credential));
-        s.Append(",\"agent\":").Append(Q(Principal.Agent));
-        s.Append(",\"launcher\":").Append(Q(Principal.Launcher)).Append('}');
+        if (Principal.Kind == "script")
+        {
+            s.Append(",\"identity\":").Append(Q(Principal.SenderId));
+            s.Append(",\"credential\":").Append(Q(Principal.Credential)).Append('}');
+        }
+        else
+        {
+            s.Append(",\"session\":").Append(Q(Principal.Session));
+            s.Append(",\"instance\":").Append(Q(Principal.Instance));
+            s.Append(",\"credential\":").Append(Q(Principal.Credential));
+            s.Append(",\"agent\":").Append(Q(Principal.Agent));
+            s.Append(",\"launcher\":").Append(Q(Principal.Launcher)).Append('}');
+        }
         s.Append(",\"chain\":{\"root\":").Append(Q(Chain.Root));
         s.Append(",\"rootAt\":").Append(Chain.RootAt);
         if (Chain.Prev is not null) { s.Append(",\"prev\":").Append(Q(Chain.Prev)); }
@@ -180,7 +206,7 @@ public sealed record EnvelopeBody(
         if (chain.Prev is not null && chain.Root == request) { throw new EnvelopeException(Refusal.Chain, "chain.root"); }
         // `via` lists distinct senders in first-seen order, so in A->B->A->B the sender (A) is not
         // the last entry: it need only be one of them.
-        if (!chain.Via.Any(s => s.Account == account && s.Machine == principal.Machine && s.Session == principal.Session)) { throw new EnvelopeException(Refusal.Chain, "chain.via"); }
+        if (!chain.Via.Any(s => s.Account == account && s.Machine == principal.Machine && s.Session == principal.SenderId)) { throw new EnvelopeException(Refusal.Chain, "chain.via"); }
 
         return new EnvelopeBody(request, account, generation, heads, principal, chain, provenance, action, target, dataSha256, issuedAt, expiresAt);
     }
@@ -188,11 +214,23 @@ public sealed record EnvelopeBody(
     static AgentPrincipal ReadPrincipal(JsonElement e)
     {
         var o = StrictJson.Object(e, "principal");
+        if (!o.TryGetProperty("kind", out var kindElement)) { throw new EnvelopeException(Refusal.Missing, "principal.kind"); }
+        var kind = StrictJson.String(kindElement, "principal.kind");
+        if (kind == "script")
+        {
+            string[] scriptNames = ["kind", "machine", "add", "identity", "credential"];
+            StrictJson.Members(o, scriptNames, scriptNames, "principal");
+            var scriptMachine = Id(o, "machine", "principal.machine");
+            var identity = StrictJson.String(o.GetProperty("identity"), "principal.identity");
+            if (!AgentPrincipal.ValidScriptIdentity(identity, scriptMachine)) { throw new EnvelopeException(Refusal.Value, "principal.identity"); }
+            return new AgentPrincipal(scriptMachine, Bytes(o, "add", 32, "principal.add"), "", "",
+                Bytes(o, "credential", 16, "principal.credential"), "", "", "script", identity);
+        }
         string[] names = ["kind", "machine", "add", "session", "instance", "credential", "agent", "launcher"];
         StrictJson.Members(o, names, names, "principal");
         // Connectors and people sign nothing of this kind: a person principal is for §7.12's
         // cross-account reads, which this version of the envelope does not carry.
-        if (StrictJson.String(o.GetProperty("kind"), "principal.kind") != "agent") { throw new EnvelopeException(Refusal.Value, "principal.kind"); }
+        if (kind != "agent") { throw new EnvelopeException(Refusal.Value, "principal.kind"); }
         var machine = Id(o, "machine", "principal.machine");
         var add = Bytes(o, "add", 32, "principal.add");
         var session = Chars(o, "session", 1, 128, SessionChar, "principal.session");
@@ -226,8 +264,10 @@ public sealed record EnvelopeBody(
             var v = StrictJson.Object(item, "chain.via");
             string[] names = ["account", "machine", "session"];
             StrictJson.Members(v, names, names, "chain.via");
-            via.Add(new ChainSender(AccountId(v, "account", "chain.via.account"), Id(v, "machine", "chain.via.machine"),
-                Chars(v, "session", 1, 128, SessionChar, "chain.via.session")));
+            var machine = Id(v, "machine", "chain.via.machine");
+            var sender = StrictJson.String(v.GetProperty("session"), "chain.via.session");
+            if (!AgentPrincipal.ValidScriptIdentity(sender, machine)) { sender = Chars(v, "session", 1, 128, SessionChar, "chain.via.session"); }
+            via.Add(new ChainSender(AccountId(v, "account", "chain.via.account"), machine, sender));
         }
         // `via` is the distinct sending sessions, this sender included, so it never outgrows
         // `depth` (which also counts the target) and never repeats a session.

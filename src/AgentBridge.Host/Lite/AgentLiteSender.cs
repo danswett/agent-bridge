@@ -46,15 +46,19 @@ public sealed class AgentLiteSender(
         if (string.IsNullOrEmpty(input.Text) || input.Text.Length > LiteReceiver.MaxText || string.IsNullOrEmpty(input.Session)) { return Out(LiteKind.Refused, Malformed); }
         var data = Encoding.UTF8.GetBytes(input.Text);
         // Checked afresh, before anything is signed: a credential revoked or expired since the pipe call signs nothing.
-        if (string.IsNullOrEmpty(caller.Session) || !credentialLive(caller)) { return Out(LiteKind.Refused, NoCredential); }
+        var script = caller.Kind == "script";
+        if ((script ? !AgentCredentials.ValidScript(caller, link.Self)
+            : caller.Kind != "session" || string.IsNullOrEmpty(caller.Session) || caller.Principal is not null)
+            || !credentialLive(caller)) { return Out(LiteKind.Refused, NoCredential); }
 
         var peer = peers.All().FirstOrDefault(p => p.DeviceId == input.Machine || string.Equals(p.Name, input.Machine, StringComparison.OrdinalIgnoreCase));
         if (peer is null) { return Out(LiteKind.Refused, NotPeer); }
         if (!link.Presence.Any(p => p.Id == peer.DeviceId && p.Kind == "host")) { return Out(LiteKind.Undeliverable, OfflineText); }
         if (signer() is not { } sign) { return Out(LiteKind.Refused, NoSigner); }
 
-        var from = new LiteSender(link.Account, link.Self, Codec.Base64Url(SHA256.HashData(staticPublic)), caller.Session, instance,
-            Codec.Base64Url(SHA256.HashData(Encoding.UTF8.GetBytes(caller.Id))[..16]), "agent", "agent-bridge");
+        var from = new LiteSender(link.Account, link.Self, Codec.Base64Url(SHA256.HashData(staticPublic)), caller.Session, script ? "" : instance,
+            Codec.Base64Url(SHA256.HashData(Encoding.UTF8.GetBytes(caller.Id))[..16]), script ? "" : "agent", script ? "" : "agent-bridge",
+            script ? "script" : "agent", script ? caller.Principal : null);
         byte[] envelope;
         try { envelope = LiteProfile.Seal(from, new LiteTarget(peer.DeviceId, input.Session, Zero12), request, data, time.GetUtcNow().ToUnixTimeSeconds(), sign); }
         catch (EnvelopeException) { return Out(LiteKind.Refused, Malformed); }
