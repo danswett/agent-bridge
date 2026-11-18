@@ -187,7 +187,7 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
             StringComparer.Ordinal);
     }
 
-    static async Task<(int ExitCode, string Text, string Error)> RunAsync(string folder)
+    async Task<(int ExitCode, string Text, string Error)> RunAsync(string folder)
     {
         var start = new ProcessStartInfo("pwsh")
         {
@@ -200,31 +200,89 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
         start.Environment["PAYLOAD_REPORT_SCRIPT"] = System.IO.Path.Combine(VectorFiles.Folder, "report-payload-sizes.ps1");
         start.Environment["PAYLOAD_REPORT_VECTORS"] = folder;
         foreach (var arg in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-            "[Console]::Out.WriteLine('payload-report-ready'); & $env:PAYLOAD_REPORT_SCRIPT -VectorPath $env:PAYLOAD_REPORT_VECTORS" })
+            """
+            [Console]::Out.WriteLine('payload-report-ready')
+            try { & $env:PAYLOAD_REPORT_SCRIPT -VectorPath $env:PAYLOAD_REPORT_VECTORS }
+            catch {
+                [Console]::Error.WriteLine($_.Exception.Message)
+                exit 1
+            }
+            finally { [Console]::Error.WriteLine('payload-report-finished') }
+            """ })
         {
             start.ArgumentList.Add(arg);
         }
+        var elapsed = Stopwatch.StartNew();
         using var process = Process.Start(start)!;
-        var ready = process.StandardOutput.ReadLineAsync();
+        Phase("started");
+        var capturedError = new StringBuilder();
+        var errorGate = new object();
+        var ready = ReadReadyAsync();
         var text = ReadTextAsync();
-        var error = process.StandardError.ReadToEndAsync();
+        var error = ReadErrorAsync();
+        var exited = ObserveExitAsync();
         try
         {
-            await WaitForReportAsync(ready, process.WaitForExitAsync(),
+            await WaitForReportAsync(ready, exited,
                 exited => exited.WaitAsync(TimeSpan.FromSeconds(30)));
         }
-        catch (TimeoutException)
+        catch (TimeoutException timeout)
         {
-            if (!process.HasExited) { process.Kill(entireProcessTree: true); }
-            await process.WaitForExitAsync();
-            throw new TimeoutException("Payload size report did not exit within 30 seconds after PowerShell became ready.");
+            var hasExited = process.HasExited;
+            Phase($"deadline expired; hasExited={hasExited}; stdoutComplete={text.IsCompleted}; stderrComplete={error.IsCompleted}");
+            lock (errorGate) { output.WriteLine("stderr at deadline: {0}", capturedError); }
+            if (!hasExited)
+            {
+                Phase("kill requested");
+                process.Kill(entireProcessTree: true);
+                Phase("kill returned");
+            }
+            await exited;
+            await Task.WhenAll(text, error);
+            Phase("timeout cleanup finished");
+            throw new TimeoutException("Payload size report did not exit within 30 seconds after PowerShell became ready.", timeout);
         }
         return (process.ExitCode, await text, await error);
 
+        void Phase(string name) =>
+            output.WriteLine("payload report pid={0} elapsedMs={1:F0}: {2}", process.Id, elapsed.Elapsed.TotalMilliseconds, name);
+
+        async Task ReadReadyAsync()
+        {
+            var marker = await process.StandardOutput.ReadLineAsync();
+            Phase("READY read");
+            Assert.Equal("payload-report-ready", marker);
+        }
+
         async Task<string> ReadTextAsync()
         {
-            Assert.Equal("payload-report-ready", await ready);
-            return await process.StandardOutput.ReadToEndAsync();
+            await ready;
+            var result = await process.StandardOutput.ReadToEndAsync();
+            Phase("stdout EOF");
+            return result;
+        }
+
+        async Task<string> ReadErrorAsync()
+        {
+            var first = true;
+            while (await process.StandardError.ReadLineAsync() is { } line)
+            {
+                if (line == "payload-report-finished")
+                {
+                    Phase("report finished");
+                    continue;
+                }
+                if (first) { Phase("first stderr"); first = false; }
+                lock (errorGate) { capturedError.AppendLine(line); }
+            }
+            Phase("stderr EOF");
+            lock (errorGate) { return capturedError.ToString(); }
+        }
+
+        async Task ObserveExitAsync()
+        {
+            await process.WaitForExitAsync();
+            Phase($"exit observed; code={process.ExitCode}");
         }
     }
 
