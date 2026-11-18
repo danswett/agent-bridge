@@ -134,6 +134,19 @@ public sealed class RosterEncodingTests
         Assert.Equal(Refusal.Version, Code(() => EntryBody.Parse(Bytes(body))));
     }
 
+    [Theory]
+    [InlineData(1, "future")]
+    [InlineData(1, "Add")]
+    [InlineData(1, "")]
+    [InlineData(2, "future")]
+    [InlineData(2, "Add")]
+    [InlineData(2, "")]
+    public void Legacy_unknown_ops_remain_refused_value(int version, string op)
+    {
+        var body = new JsonObject { ["v"] = version, ["op"] = op };
+        Assert.Equal(Refusal.Value, Code(() => EntryBody.Parse(Bytes(body))));
+    }
+
     [Fact]
     public void Domain_label_is_distinct_from_every_existing_label()
     {

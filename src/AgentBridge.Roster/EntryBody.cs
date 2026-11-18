@@ -107,9 +107,10 @@ public sealed record EntryBody(
         if (v.ValueKind != JsonValueKind.Number || v.GetRawText() is not ("1" or "2" or "3")) { throw new RosterFormatException(Refusal.Version, "body.v"); }
         var version = v.GetRawText() switch { "2" => 2, "3" => 3, _ => 1 };
         if (!root.TryGetProperty("op", out var opElement)) { throw new RosterFormatException(Refusal.Missing, "body.op"); }
-        var op = ParseOp(StrictJson.String(opElement, "body.op")) ?? throw new RosterFormatException(Refusal.Value, "body.op");
+        var opName = StrictJson.String(opElement, "body.op");
+        if (version == 3 && opName is not ("genesis" or "add")) { throw new RosterFormatException(Refusal.Version, "body.v: 3 is only for a person's genesis or add"); }
+        var op = ParseOp(opName) ?? throw new RosterFormatException(Refusal.Value, "body.op");
         if (version == 2 && op != EntryOp.Add) { throw new RosterFormatException(Refusal.Version, "body.v: 2 is only for a host's add"); }
-        if (version == 3 && op is not (EntryOp.Genesis or EntryOp.Add)) { throw new RosterFormatException(Refusal.Version, "body.v: 3 is only for a person's genesis or add"); }
         var (required, optional) = Fields(op);
         StrictJson.Members(root, [.. required, .. optional], Order.Where(required.Contains), "body");
 

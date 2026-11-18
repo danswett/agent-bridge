@@ -107,7 +107,7 @@ public sealed class CapSignDescriptorParserTests
             Refuse(name, code, body);
         }
 
-        foreach (var op in new[] { "remove", "rename", "confirm", "merge" })
+        foreach (var op in new[] { "remove", "rename", "confirm", "merge", "future", "Add", "" })
         { BodyRefuse($"version-on-{op}", Refusal.Version, body => body["op"] = op); }
         BodyRefuse("v2-person", Refusal.Version, body => body["v"] = 2);
         foreach (var member in new[] { "hostSign", "hostSignAlg", "hostSignProof", "tier" })
@@ -223,7 +223,7 @@ public sealed class CapSignDescriptorParserTests
         else { Assert.Equal(text, File.ReadAllText(path).ReplaceLineEndings("\n")); }
     }
 
-    static string VectorFileText()
+    internal static string VectorFileText(bool includeDomains = false)
     {
         var lines = new List<string>
         {
@@ -237,8 +237,32 @@ public sealed class CapSignDescriptorParserTests
             $"  \"exampleDh\": {JsonSerializer.Serialize(Codec.Base64Url(Pwa.Public), Raw)},",
             $"  \"exampleCapSign\": {JsonSerializer.Serialize(Codec.Base64Url(CapSign.Public), Raw)},",
             $"  \"exampleBinding\": {JsonSerializer.Serialize(Codec.Base64Url(VerifierKey.Binding(Account, Generation, Pwa.Public)), Raw)},",
-            "  \"vectors\": {",
         };
+        if (includeDomains)
+        {
+            lines.Add("  \"domainInputs\": \"F(label, UTF8(account), ASCII(generation), raw exampleDh); not enrollment transcript T3\",");
+            lines.Add("  \"domains\": [");
+            var labels = typeof(Framing).GetFields().Where(f => f.IsLiteral && f.FieldType == typeof(string))
+                .Select(f => (string)f.GetRawConstantValue()!).Concat(new[]
+                {
+                    "agent-bridge fleet registry v1", "agent-bridge verifier support v1",
+                    "agent-bridge verifier frontier v1", "agent-bridge verifier set v1",
+                    "agent-bridge agent command v1", "agent-bridge session instance v1", "agent-bridge link v1",
+                    "agent-bridge link-attest v1", "agent-bridge link tombstone v1", "agent-bridge command v1",
+                }).Order(StringComparer.Ordinal).ToArray();
+            for (var i = 0; i < labels.Length; i++)
+            {
+                var framed = Binding(Pwa, label: labels[i]);
+                var vector = new JsonObject
+                {
+                    ["label"] = labels[i], ["framed"] = Codec.Base64Url(framed),
+                    ["signature"] = Codec.Base64Url(CapSign.Sign(framed)),
+                };
+                lines.Add($"    {vector.ToJsonString(Raw)}{(i + 1 == labels.Length ? "" : ",")}");
+            }
+            lines.Add("  ],");
+        }
+        lines.Add("  \"vectors\": {");
         var vectors = Vectors();
         for (var i = 0; i < vectors.Count; i++)
         {

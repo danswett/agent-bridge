@@ -931,6 +931,10 @@ The unchanged field checks keep their existing codes. For the new fields:
 | Any capSign field on a v1 descriptor or a v2 host | `unknown-member` (v2 person remains `version`) |
 | Oversize entry | existing `size`; no increased 8 KiB bound |
 
+The v3 op rule includes unknown string values and case variants: they refuse
+`version` before op enumeration or body member checks. V1/v2 keep their existing
+`value` verdict for unknown ops.
+
 At `approval`, after `device`, a v3 add requires method `code` or `qr` and its
 32-byte transcript; `grandfather` or `genesis` refuses `approval`, even with a
 valid capSign proof. Bad transcript/member shapes also refuse `approval`.
@@ -1042,7 +1046,10 @@ Evidence `v: 1` is unchanged; advertising host-v2 support does not authorize v3
 enrollment or prove an old reader understands it.
 
 The C# v3 descriptor parser's fixed valid and first-refusal cases are in
-[capsign-descriptor.json](vectors/capsign-descriptor.json).
+[capsign-descriptor.json](vectors/capsign-descriptor.json), generated from the same
+corpus as `roster.json`'s new `capSignV3` key. That key also pins cross-domain
+framing/signatures, including fleet registry v1. The PWA's existing replay reads
+only the legacy sections, not `capSignV3`, until C3 adds its v3 reader/replay.
 Keep `acceptHostSign` false until #2366, #2369 and #2370 and their enrollment
 prerequisites are in; #2367 is last. Existing first-host bootstrap remains separate.
 

@@ -480,8 +480,13 @@ public sealed class RosterVectorTests
     [Fact]
     public void The_committed_roster_vectors_are_what_the_library_gives()
     {
-        var stale = VectorFiles.Stale(new Dictionary<string, JsonObject> { ["roster.json"] = Generate() });
-        Assert.True(stale.Count == 0, "docs/protocol/vectors/roster.json is not what the roster library gives; with UPDATE_PROTOCOL_VECTORS=1 this test writes it.");
+        var legacy = VectorFiles.Text(Generate());
+        var v3 = AgentBridge.Roster.Tests.CapSignDescriptorParserTests.VectorFileText(includeDomains: true).TrimEnd('\n').Replace("\n", "\n  ", StringComparison.Ordinal);
+        // Keep the legacy sections byte-identical; large signed v3 bodies stay one vector per line.
+        var text = legacy[..^3] + ",\n  \"capSignV3\": " + v3 + "\n}\n";
+        var path = Path.Combine(VectorFiles.Folder, "roster.json");
+        if (Environment.GetEnvironmentVariable(VectorFiles.UpdateVariable) == "1") { File.WriteAllText(path, text); }
+        else { Assert.Equal(text, File.ReadAllText(path).ReplaceLineEndings("\n")); }
     }
 
     [Fact]
