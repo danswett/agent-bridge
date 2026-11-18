@@ -26,7 +26,7 @@ public sealed class AgentAuditLogTests : IDisposable
     {
         var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
         Assert.True(Log().Append(entry));
-        Assert.True(Log().Append(entry with { Reason = "fallback" }));
+        Assert.True(Log().Append(entry));
         Assert.True(Log().Append(entry with { Principal = "agent:m1/other" }));
         Assert.True(Log().Append(entry with { Request = Guid.NewGuid().ToString("D") }));
         var rows = File.ReadAllLines(Path.Combine(Audit, "launches-2026-11-08.jsonl")).Skip(1)
@@ -44,6 +44,82 @@ public sealed class AgentAuditLogTests : IDisposable
         Assert.True(Log().Append(entry));
         Assert.True(Log().Append(entry with { Grant = "agent-worktree-refusal" }));
         Assert.Equal(4, File.ReadAllLines(Path.Combine(Audit, "launches-2026-11-08.jsonl")).Length);
+    }
+
+    [Theory]
+    [InlineData("reason")]
+    [InlineData("text")]
+    [InlineData("chain")]
+    [InlineData("target")]
+    [InlineData("direction")]
+    public void A_marked_request_with_different_audit_payload_is_not_a_replay(string field)
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry, "one"));
+        var changed = field switch
+        {
+            "reason" => entry with { Reason = "another refusal" },
+            "chain" => entry with { Chain = ["agent:m1/other"] },
+            "target" => entry with { Target = "another" },
+            "direction" => entry with { Direction = "another" },
+            _ => entry,
+        };
+        Assert.True(Log().Append(changed, field == "text" ? "two" : "one"));
+        Assert.Equal(3, File.ReadAllLines(Path.Combine(Audit, "launches-2026-11-08.jsonl")).Length);
+    }
+
+    [Fact]
+    public void Counted_summaries_are_never_marked_as_the_worktree_callback_fallback_pair()
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry));
+        var windows = new LocalApi.RefusalAudits(clock);
+        windows.Windows[entry.Principal] = (clock.GetTimestamp(), 60, 0, clock.GetTimestamp());
+        var data = JsonSerializer.SerializeToElement(new { request = entry.Request });
+        clock.Advance(TimeSpan.FromMinutes(1));
+        LocalApi.AuditRefusal(entry.Principal, [], entry.Action, data, Log(), "refused", windows, entry.Grant);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        LocalApi.AuditRefusal(entry.Principal, [], entry.Action, data, Log(), "refused", windows, entry.Grant);
+        var rows = File.ReadAllLines(Path.Combine(Audit, "launches-2026-11-08.jsonl")).Skip(1)
+            .Select(line => JsonSerializer.Deserialize<JsonElement>(line)).ToArray();
+        Assert.Equal(3, rows.Length);
+        Assert.Equal(2, rows.Count(row => row.GetProperty("reason").GetString()!.Contains("additional")));
+    }
+
+    [Theory]
+    [InlineData("write")]
+    [InlineData("flush")]
+    [InlineData("replay-flush")]
+    public void A_partial_write_or_flush_exception_never_acknowledges_unproven_durability(string fault)
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry with { Request = Guid.NewGuid().ToString("D") }));
+        Assert.True(Log().Bootstrap());
+        if (fault == "replay-flush") { Assert.True(Log().Append(entry)); }
+        var broken = new AgentAuditLog(profile, clock, said.Add)
+            { OpenFile = (file, options) => new InterruptedAuditStream(file, options, fault) };
+        Assert.False(broken.Append(entry));
+        var path = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        var before = File.ReadAllBytes(path);
+        Assert.Equal(fault != "write", Log().Append(entry));
+        Assert.Equal(before, File.ReadAllBytes(path));
+        if (fault != "write") { Assert.Equal(3, File.ReadAllLines(path).Length); }
+    }
+
+    sealed class InterruptedAuditStream(string file, FileStreamOptions options, string fault) : FileStream(file, options)
+    {
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            if (fault != "write") { base.Write(buffer); return; }
+            base.Write(buffer[..(buffer.Length / 2)]);
+            base.Flush(flushToDisk: false);
+            throw new IOException("injected partial audit row write");
+        }
+        public override void Flush(bool flushToDisk)
+        {
+            if (flushToDisk) { throw new IOException("injected durable audit flush failure"); }
+            base.Flush(flushToDisk);
+        }
     }
 
     [Theory]

@@ -327,12 +327,13 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
             });
         var handle = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher),
             null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: credentials, audit: audit);
-        var body = JsonSerializer.SerializeToElement(new { request = Guid.NewGuid().ToString("D"), agent = "claude", workspace = "App", permissions = "ask" });
+        var body = JsonSerializer.SerializeToElement(new { request = Guid.NewGuid().ToString("D"), agent = "claude", workspace = "App", permissions = "ask", prompt = "worktree refusal fixture" });
         var result = Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch, body));
         Assert.Equal(LaunchOutcome.Refused, result.Outcome);
         Assert.Equal(1, calls);
         Assert.Equal(callbackWrites && !failHeadWrite, callbackResult == true);
         Assert.DoesNotContain("refusalAudited", JsonSerializer.Serialize(result, ProtocolJson.Options));
+        Assert.DoesNotContain("worktreeRefusalReason", JsonSerializer.Serialize(result with { WorktreeRefusalReason = "host-only" }, ProtocolJson.Options));
         Assert.Empty(starter.Specs);
         var rows = Directory.GetFiles(Path.Combine(f.Root, AgentAuditLog.FolderName), "launches-*.jsonl")
             .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line))

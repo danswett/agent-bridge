@@ -46,6 +46,7 @@ public sealed class AgentAuditLog
     public const int MaxReason = 200;
     public const int MaxField = 256;
     public const int MaxChain = 16;
+    internal const string WorktreeRefusalGrant = "agent-worktree-refusal";
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = JsonIgnoreCondition.Never };
 
@@ -69,6 +70,7 @@ public sealed class AgentAuditLog
     readonly Action<string> log;
     readonly long maxBytes;
     internal AuditLockTiming? LockTiming { get; init; }
+    internal Func<string, FileStreamOptions, FileStream> OpenFile { private get; init; } = static (file, options) => new(file, options);
     bool failing;
     bool retentionFailing;
 
@@ -86,6 +88,9 @@ public sealed class AgentAuditLog
         var now = time.GetUtcNow();
         try
         {
+            var refusalRequest = entry is { Action: "session.launch", Outcome: "refused", Gate: null }
+                && Guid.TryParseExact(entry.Request, "D", out var id) ? id.ToString("D") : null;
+            if (refusalRequest is not null) { entry = entry with { Request = refusalRequest }; }
             var bytes = text is null || entry.Gate is not null ? null : Encoding.UTF8.GetBytes(text);
             var chain = (entry.Chain ?? []).Take(MaxChain).Select(c => Cap(c, MaxField)).ToArray();
             var line = new Line(now, Cap(entry.Direction, MaxField), Cap(entry.Request, MaxField), Cap(entry.Principal, MaxField), chain,
@@ -95,16 +100,24 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var folderLock = Lock(folder, timing: LockTiming);
-                if (entry is { Action: "session.launch", Outcome: "refused", Gate: null }
-                    && Guid.TryParseExact(entry.Request, "D", out _))
+                if (refusalRequest is not null && entry.Grant == WorktreeRefusalGrant)
                 {
                     var prior = GateAuditProjection.Load(profile, alreadyLocked: true);
-                    if (prior.Rows.Any(r => r.Action == line.Action && r.Outcome == line.Outcome && r.Gate is null
-                        && r.Request == line.Request && r.Principal == line.Principal))
+                    var persisted = prior.Rows.FirstOrDefault(r => r.Action == line.Action && r.Outcome == line.Outcome && r.Gate is null
+                        && r.Grant == WorktreeRefusalGrant && string.Equals(r.Request, line.Request, StringComparison.OrdinalIgnoreCase)
+                        && r.Principal == line.Principal && r.Direction == line.Direction && r.Target == line.Target
+                        && r.Reason == line.Reason && r.DataSha256 == line.DataSha256 && r.TextLength == line.TextLength
+                        && r.Chain is { } recordedChain && recordedChain.SequenceEqual(line.Chain, StringComparer.Ordinal));
+                    if (persisted is not null)
                     {
                         // A flushed refusal survives a failed checkpoint; never append its fallback twice.
-                        if (!VerifyProfile(profile, true, log, chainOnly: true).Intact || Files(folder, true).Any(EndsWithoutNewline))
+                        if ((!VerifyProfile(profile, true, log).Intact
+                            && (HeadFault(folder, true) != "audit-incomplete" || !VerifyProfile(profile, true, log, chainOnly: true).Intact))
+                            || Files(folder, true).Any(EndsWithoutNewline))
                         { throw new IOException("the persisted launch refusal cannot be verified"); }
+                        using (var durable = OpenFile(Path.Combine(folder, FileFor(persisted.At, true)),
+                            new() { Mode = FileMode.Open, Access = FileAccess.ReadWrite, Share = FileShare.Read }))
+                        { durable.Flush(flushToDisk: true); }
                         if (!prior.Complete || HasHeads(folder) && ReadHead(folder, true) is null)
                         { log("agent launch refusal is persisted; its audit checkpoint remains incomplete"); }
                         return true;
@@ -151,7 +164,7 @@ public sealed class AgentAuditLog
                 if (used > limit - data.Length - (torn ? 1 : 0)) { throw new IOException("the agent audit quota is full"); }
                 var options = new FileStreamOptions { Mode = FileMode.Append, Access = FileAccess.Write, Share = FileShare.Read };
                 if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
-                using (var stream = new FileStream(file, options))
+                using (var stream = OpenFile(file, options))
                 {
                     // A crash mid-write can leave a partial line: start on a fresh one so it can't swallow this event.
                     if (torn) { stream.Write("\n"u8); }
