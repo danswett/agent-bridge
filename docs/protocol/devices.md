@@ -497,7 +497,11 @@ Both messages are text frames from an admitted device of any kind, counted again
 * An entry that does not parse is refused with its parse code and an empty `hash`. Accepted and quarantined entries are kept; refused and duplicate ones are not.
 * An entry over a signer's budget or a cap is refused for now. A later removal in the same append that needs it as evidence (§3.3) brings it in: it is kept, ahead of the removal, and its result becomes `accepted` with reason `evidence`. So send such ancestors and the removal in one append, parent first.
 * `roster-get` is `{"error":"unavailable"}` too when the store cannot be reached. A stored log that does not decode or rebuild is never added to: an append says `unavailable`. So does an append that finds more than four others waiting on the account, and a request while the connection already has two roster requests running. Offering only entries already kept answers `duplicate` without replaying the log.
-* The log is bounded at 224 KiB stored; an append that would pass it is refused `cap`.
+* The log is bounded at 224 KiB stored, including JSON encoding. Ordinary entries are refused
+  `cap` above 160 KiB, reserving 64 KiB for removals. A removal and the ancestors it carries as
+  evidence may use the full 224 KiB; unrelated ordinary entries cannot use the reserve, even
+  in the same append. An entry that would exceed its limit is refused `cap` without preventing
+  later entries in that append from being considered.
 * The relay judges time by its own clock. That is defence in depth: a host applies the same rules on its own clock.
 
 ## Pinned person devices

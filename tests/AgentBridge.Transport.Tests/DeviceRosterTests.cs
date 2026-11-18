@@ -1,7 +1,7 @@
-using AgentBridge.Relay;
-using AgentBridge.Roster;
 using System.Text;
 using System.Text.Json.Nodes;
+using AgentBridge.Relay;
+using AgentBridge.Roster;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -129,10 +129,14 @@ public class DeviceRosterTests
         Assert.Equal(["duplicate", "duplicate"], r!.Select(x => x.Verdict));
     }
 
-    static Entry Padded(Signed signed, int bytes, byte[]? parent = null)
+    static Entry Padded(Signed signed, int bytes, Entry? parent = null)
     {
         var body = JsonNode.Parse(signed.Body)!;
-        if (parent is not null) { body["prev"] = RosterFixture.Hashes([parent]); }
+        if (parent is not null)
+        {
+            body["prev"] = RosterFixture.Hashes([parent.Hash]);
+            body["seq"] = parent.Body.Seq + 1;
+        }
         var raw = RosterFixture.Bytes(body);
         // Whitespace is signed body content; leave room for the largest DER signature.
         var padded = signed with { Body = [.. raw, .. Encoding.UTF8.GetBytes(new string(' ', bytes - 72 - raw.Length))] };
@@ -150,11 +154,13 @@ public class DeviceRosterTests
         var roster = Make(w, store);
         await roster.AppendAsync(RosterFixture.Account, [Wire(w, "G"), Wire(w, "addB")]);
         var ordinary = new List<string>();
+        var parent = w.Entry("addB");
         for (var i = 0; i < 22; i++)
         {
             var label = $"fill{i}";
-            w.Add(label, "G", $"D{i}", "G");
-            ordinary.Add(Padded(w[label], 8 * 1024).Canonical());
+            w.Add(label, "G", $"D{i}", "addB");
+            parent = Padded(w[label], 8 * 1024, parent);
+            ordinary.Add(parent.Canonical());
         }
         var filled = new List<DeviceRoster.Result>();
         foreach (var batch in ordinary.Chunk(DeviceRoster.MaxPerAppend))
@@ -162,10 +168,11 @@ public class DeviceRosterTests
             filled.AddRange((await roster.AppendAsync(RosterFixture.Account, batch))!);
         }
         Assert.Contains(filled, r => r is { Verdict: "refused", Reason: Invalid.Cap });
+        parent = Entry.Parse(Encoding.UTF8.GetBytes((await roster.GetAsync(RosterFixture.Account))!.Entries[^1]));
         w.Rename("E", "B", "addB", "addB", "renamed");
-        var ancestor = Padded(w["E"], 8 * 1024);
-        w.Remove("R", "G", "addB", "addB");
-        var removal = Padded(w["R"], (evidence ? 32 : 46) * 1024, evidence ? ancestor.Hash : null).Canonical();
+        var ancestor = Padded(w["E"], 8 * 1024, parent);
+        w.Remove("R", "G", "addB", evidence ? "E" : "addB");
+        var removal = Padded(w["R"], (evidence ? 32 : 46) * 1024, evidence ? ancestor : parent).Canonical();
         if (!mixed)
         {
             var refused = await roster.AppendAsync(RosterFixture.Account, [ancestor.Canonical()]);
@@ -184,6 +191,7 @@ public class DeviceRosterTests
         var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
         replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
         Assert.True(replay.Holds(Entry.Parse(Encoding.UTF8.GetBytes(removal)).Hash));
+        Assert.False(replay.State.Active.ContainsKey(w.Id("B")));
         w.Remove("full", "G", "G", "G");
         var over = await roster.AppendAsync(RosterFixture.Account, [Padded(w["full"], 46 * 1024).Canonical()]);
         Assert.Equal(("refused", Invalid.Cap), (over![0].Verdict, over[0].Reason));

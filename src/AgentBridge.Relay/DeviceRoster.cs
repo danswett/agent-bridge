@@ -21,6 +21,8 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     public const int MaxPerAppend = 16;
     // The whole stored log: the library's own entry cap, in canonical form, bounded again by bytes.
     public const int MaxStoredBytes = 224 * 1024;
+    // Leave room for a maximum-sized removal's encoded wrapper, and its evidence.
+    const int MaxOrdinaryBytes = 160 * 1024;
     const int Retries = 5;
 
     // Appends waiting on one account's lock, beyond the one running, are refused rather than queued.
@@ -219,29 +221,54 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         var changed = false;
         // Entries set aside over a budget or cap: a later removal in this append may need them as
         // evidence, and then they are kept with it, ahead of it.
-        var aside = new List<(int Index, Entry Entry)>();
+        var aside = new List<(int Index, Entry Entry, bool Size)>();
         foreach (var (index, entry) in parsed)
         {
+            if (aside.Count > 0)
+            {
+                // Size-refused entries must not affect later entries unless they are ancestors.
+                var needed = new HashSet<string>(entry.Body.Prev.Select(h => Codec.Base64Url(h)));
+                foreach (var a in aside.AsEnumerable().Reverse())
+                {
+                    if (needed.Contains(Codec.Base64Url(a.Entry.Hash)))
+                    {
+                        needed.UnionWith(a.Entry.Body.Prev.Select(h => Codec.Base64Url(h)));
+                    }
+                }
+                verifier = new RosterVerifier(accountId, generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
+                verifier.Offer(replay);
+                verifier.Offer(aside.Where(a => !a.Size || needed.Contains(Codec.Base64Url(a.Entry.Hash))).Select(a => a.Entry));
+            }
             var offered = verifier.Offer(entry)[0];
             var verdict = offered.Verdict.ToString().ToLowerInvariant();
             results[index] = new Result(Codec.Base64Url(offered.Hash), verdict, offered.Reason);
             if (offered.Verdict is Verdict.Accepted or Verdict.Quarantined)
             {
-                if (entry.Body.Op == EntryOp.Remove)
+                var promoted = aside.Where(a => verifier.Holds(a.Entry.Hash)).ToList();
+                var evidence = promoted.DistinctBy(a => Codec.Base64Url(a.Entry.Hash)).ToList();
+                var candidate = new List<string>(kept);
+                candidate.AddRange(evidence.Select(a => a.Entry.Canonical()));
+                candidate.Add(entry.Canonical());
+                var limit = entry.Body.Op == EntryOp.Remove ? MaxStoredBytes : MaxOrdinaryBytes;
+                if (JsonSerializer.SerializeToUtf8Bytes(new Stored(1, generation, candidate), Json).Length > limit)
                 {
-                    foreach (var (ai, ae) in aside.Where(a => verifier.Holds(a.Entry.Hash)).ToList())
-                    {
-                        kept.Add(ae.Canonical());
-                        results[ai] = new Result(Codec.Base64Url(ae.Hash), "accepted", Invalid.Evidence);
-                        aside.RemoveAll(a => a.Index == ai);
-                    }
+                    results[index] = results[index] with { Verdict = "refused", Reason = Invalid.Cap };
+                    aside.Add((index, entry, true));
+                    continue;
                 }
-                kept.Add(entry.Canonical());
+                foreach (var (ai, ae, _) in promoted)
+                {
+                    results[ai] = new Result(Codec.Base64Url(ae.Hash), "accepted", Invalid.Evidence);
+                }
+                aside.RemoveAll(a => verifier.Holds(a.Entry.Hash));
+                kept = candidate;
+                replay.AddRange(evidence.Select(a => a.Entry));
+                replay.Add(entry);
                 changed = true;
             }
             else if (offered.Verdict == Verdict.Refused && verifier.Graph.Find(entry.Hash) is not null)
             {
-                aside.Add((index, entry));
+                aside.Add((index, entry, false));
             }
         }
         return (results, changed ? new Stored(1, generation, kept) : null);
