@@ -44,6 +44,21 @@ public class SourceTests
         Assert.Null(restarted.Get(Id)!.StartedAt);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Neither_workspace_creation_nor_transcript_metadata_proves_a_tracker_session_start(bool workspace)
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        var discovered = new DiscoveredSession(Id, AgentKind.Copilot, null,
+            workspace ? Path.GetDirectoryName(events) : null, 100, ProcessStartedAt: Fixture.T0);
+        var tracker = new SessionTracker(discovered, f.Options(), f.Time, hostId: "host-id");
+        tracker.State.StartedAt = Fixture.T0.AddDays(-1);
+
+        Assert.Null(tracker.Update(discovered).StartedAt);
+    }
+
     [Fact]
     public async Task Queued_unbound_upserts_keep_their_own_process_and_no_startedAt()
     {

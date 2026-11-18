@@ -311,6 +311,111 @@ public sealed class SessionRosterFixtureTests
         Assert.Equal(250, subscription.Result.Count);
     }
 
+    [Fact]
+    public async Task An_ended_Claude_registration_cannot_be_readmitted_by_its_own_session_file_during_a_hold()
+    {
+        using var fixture = new Fixture();
+        fixture.ClaudeSessionFile(700, Id);
+        fixture.ClaudeRegistration(Id, 700, null);
+        fixture.Processes.Run(AgentKind.Claude, 700, "claude.exe");
+        fixture.ClaudeSessionFile(701, "99999999-9999-4999-8999-999999999999");
+        fixture.Processes.RunUndated(AgentKind.Claude, 701, "claude.exe");
+        fixture.Processes.Unidentify(AgentKind.Claude, 701);
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(Id, Assert.Single(source.List().Sessions).Id);
+        Assert.Contains("could not be read (pid 701)", source.Held!.Reason);
+        using var subscription = source.Subscribe();
+        while (subscription.Events.TryRead(out _)) { }
+        var path = Path.Combine(fixture.ClaudeRegistrations, Id + ".json");
+        var registration = JsonNode.Parse(File.ReadAllText(path))!;
+        registration["Ended"] = true;
+        File.WriteAllText(path, registration.ToJsonString());
+
+        await source.RefreshAsync();
+
+        var changes = new List<SessionEvent>();
+        while (subscription.Events.TryRead(out var change)) { changes.Add(change); }
+        Assert.Equal([Events.SessionRemove], changes.Select(c => c.Name));
+        Assert.Equal(Id, Assert.IsType<SessionRemoved>(changes[0].Data).Id);
+        Assert.Null(source.Get(Id));
+        Assert.Empty(source.List().Sessions);
+        Assert.NotNull(source.Held);
+        using var fresh = source.Subscribe();
+        Assert.Equal(0, fresh.Result.Count);
+        await source.RefreshAsync();
+        Assert.False(subscription.Events.TryRead(out _));
+        Assert.Null(source.Get(Id));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Overflow_is_held_before_mid_pass_reads_and_old_holds_survive_until_admission_completes(bool previousHold)
+    {
+        using var fixture = new Fixture();
+        var ids = Enumerable.Range(0, 251).Select(i => $"{i:D8}-0000-4000-8000-000000000000").ToArray();
+        for (var i = 0; i < 250; i++)
+        {
+            fixture.CodexRegistration(ids[i], 1000 + i, null);
+            fixture.Processes.Run(AgentKind.Codex, 1000 + i, "codex.exe");
+        }
+        if (previousHold)
+        {
+            fixture.ClaudeSessionFile(700, Id);
+            fixture.Processes.RunUndated(AgentKind.Claude, 700, "claude.exe");
+            fixture.Processes.Unidentify(AgentKind.Claude, 700);
+        }
+        TaskCompletionSource? entered = null;
+        using var proceed = new ManualResetEventSlim(true);
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, answerAttempted: _ =>
+        {
+            if (entered is { } paused)
+            {
+                paused.TrySetResult();
+                if (!proceed.Wait(Patience)) { throw new TimeoutException("Paused roster pass was not released."); }
+            }
+            return false;
+        }, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(250, source.Snapshot().Count);
+        fixture.CodexRegistration(ids[250], 1250, null);
+        fixture.Processes.Run(AgentKind.Codex, 1250, "codex.exe");
+        fixture.Processes.Exit(AgentKind.Claude, 700);
+
+        async Task DuringAdmission(Action inspect)
+        {
+            proceed.Reset();
+            entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var pass = Task.Run(() => source.RefreshAsync());
+            try { await entered.Task.WaitAsync(Patience); inspect(); }
+            finally { entered = null; proceed.Set(); await pass.WaitAsync(Patience); }
+        }
+        void AssertHeld()
+        {
+            Assert.Contains(AgentKind.Codex, Assert.IsType<DiscoveryHeld>(source.Held).Agents);
+            Assert.Contains(AgentKind.Codex, source.List().DiscoveryHeld!.Agents);
+            Assert.Null(source.Get(ids[250]));
+            using var subscription = source.Subscribe();
+            SessionEvent? last = null;
+            while (subscription.Events.TryRead(out var change)) { last = change; }
+            Assert.Contains(AgentKind.Codex, Assert.IsType<SessionsSynced>(last!.Data).DiscoveryHeld!.Agents);
+        }
+        await DuringAdmission(() =>
+        {
+            AssertHeld();
+            Assert.Contains("250-session roster limit", source.Held!.Reason);
+            if (previousHold) { Assert.Contains(AgentKind.Claude, source.Held.Agents); }
+        });
+        Assert.Equal([AgentKind.Codex], source.Held!.Agents);
+        var ended = source.Snapshot()[0].Id;
+        fixture.CodexRegistration(ended, 1000 + Array.IndexOf(ids, ended), null, status: "ended", ended: true);
+        await DuringAdmission(() => { AssertHeld(); Assert.Null(source.Get(ended)); });
+        Assert.NotNull(source.Get(ids[250]));
+        Assert.Null(source.Held);
+        Assert.Equal(250, source.Snapshot().Count);
+    }
+
     static void AssertRow(JsonElement row, string machine)
     {
         Assert.Equal(machine, row.GetProperty("machine").GetString());

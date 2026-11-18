@@ -358,7 +358,6 @@ internal sealed class SessionTracker
             Context = Text.NonBlank(_state.Context),
             Status = effective,
             StatusSince = since,
-            StartedAt = ws?.CreatedAt ?? _state.StartedAt,
             UpdatedAt = _state.UpdatedAt ?? reg?.Updated ?? ws?.UpdatedAt ?? _firstSeen,
             ProcessId = d.ProcessId,
             TranscriptBytes = _transcriptSize?.Bytes,
