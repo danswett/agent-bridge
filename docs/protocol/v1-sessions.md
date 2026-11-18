@@ -284,7 +284,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 | Field | Notes |
 |---|---|
 | `at` | When this run of the host started and compared |
-| `cause` | `reboot` (the machine started again, or the person signed out, so every agent went with it), `crash` (the host stopped without saying so, on the same boot) or `restart` (it stopped cleanly, on the same boot, and sessions went while it was away). A client reads a cause it doesn't know as `crash` |
+| `cause` | `reboot` (the machine started again, or the person signed out, so every agent went with it), `crash` (the host stopped without saying so, on the same boot) or `restart` (it stopped cleanly, on the same boot, and sessions went while it was away). `crash` is a legacy wire name, not a diagnosis: an external stop or launcher job close leaves the same record. A client reads a cause it doesn't know as `crash`; Continue uses neutral wording, "the host stopping unexpectedly", rather than claiming a crash |
 | `since` | When the earlier run last wrote down what was live: about when the sessions went |
 | `restored`, `loops` | Sessions restored, idle, through the resume path, and seen ready, and those not restored again because they died again within 10 minutes of a restore (offered, and among `offered`) |
 | `waiting` | Sessions still being judged: their agent's discovery is held ([Discovery held](#discovery-held)), or its hooks' endings are not yet taken in, so whether they still run, or ended, cannot be told yet. They are never read as gone; once judged, `restore` changes and `hello.changed` says so |
@@ -626,10 +626,12 @@ in `agents` is held:
 * the Home Assistant connector retires no session's entities, of any agent
   ([ha-connector.md](../ha-connector.md#lifecycle)).
 
-Host-bound roster membership is memory-only. The serving host neither loads nor writes
-`sessions-listed.json`; a restart requires fresh live discovery for each row, never disk
-membership to fill in an incomplete pass. An unavailable, empty or corrupt source supplies
-no membership. Holds are rediscovered, not restored from the earlier host's roster.
+Host-bound roster membership is memory-only: each row requires fresh live discovery,
+never disk membership to fill in an incomplete pass. `sessions-listed.json` keeps only
+process-generation resume guards: a previously known unreadable runtime holds its agent
+across passes and restarts, without supplying a row. A positively exited or replaced
+process releases that guard. Native discovery may supersede an ended registration only
+with a process proven to have started after that registration's last update.
 
 Sessions of the other agents are removed and resumed as usual. `reason` says what holds it, in
 words for a person, at most 512 bytes; a client shows it as it is ("discovery held: …", as the
@@ -1006,6 +1008,17 @@ The result's `mode` is the mode actually used, not an echo: absent reads as `ste
 even if hello was stale. A host implementing queue delivery supplies it on every result.
 Slice 1 defines the contract and models only; hosts must not advertise queue support
 until the delivery path implements it.
+
+**Host-owned intent (#2568 A-i).** `ReplyRequest.Intent` is an in-process carrier,
+not a wire field or the requested `mode`. It defaults to `Unknown`. Only the host's
+current local App/HostCli classification or a current pinned-person relay lease
+produces `Steer`; disabled pinning is not person proof. The carrier rechecks that
+same ingress when read, so a revoked lease cannot be replaced by a later grant.
+Unclassified ingress and both HA reply adapters retain `Unknown`. Text, sender or
+driver labels, `pri=urgent`, a claimed role and `RequireIdle` cannot grant intent;
+neither the carrier nor its source delegate is serialized or accepted from JSON.
+This producer-only slice changes no key behavior and offers no queue capability.
+Capability qualification and the fail-closed submit consumer are separate slices.
 
 **Agent-sender version boundary.** Queue-reply extension **v1** (protocol 1 with
 `sessions.reply.queue`, [#2468](https://github.com/danswett/agent-bridge/issues/2468))

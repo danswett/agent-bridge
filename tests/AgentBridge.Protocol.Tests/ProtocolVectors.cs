@@ -177,7 +177,7 @@ public static class ProtocolVectors
 
     // ---- sessions ----
 
-    static readonly MachineInfo Machine = new(MachineId, "DEV-VM1", "windows", "0.1.200", Dev: true, Sessions: 3, ReadOnly: "agent-ha-bridge is running for this user", Instance: "9a8b7c6d5e4f30211203f4e5d6c7b8a9");
+    static readonly MachineInfo Machine = new(MachineId, "node-a", "windows", "0.1.200", Dev: true, Sessions: 3, ReadOnly: "agent-ha-bridge is running for this user", Instance: "9a8b7c6d5e4f30211203f4e5d6c7b8a9");
 
     static readonly RestoreSession RestoredMidTurn = new() { Id = SessionId, Agent = AgentKind.Copilot, Title = "Fix the login page", MidTurn = true };
     static readonly RestoreSession RestoredAsking = new() { Id = "7a21c3d4-5e6f-4a1b-9c2d-3e4f5a6b7c8d", Agent = AgentKind.Claude, QuestionLost = true };
@@ -251,7 +251,7 @@ public static class ProtocolVectors
         Model = "claude-opus-5.5", Effort = "high", Context = "1M", Status = SessionStatus.Waiting, StatusSince = T1, StartedAt = T0, UpdatedAt = T1, ProcessId = 4120, Activity = FullActivity,
         Question = Form, Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c", Subagents = [Delegate, Nested], SubagentsMore = 2, WaitingOn = null,
     };
-    // #800: VM1's sign-in failure as a host shows it, with the sentence the host composes (#841).
+    // #800: node-a's sign-in failure as a host shows it, with the sentence the host composes (#841).
     static readonly Attention SignInNeeded = new() { Kind = AttentionKind.SignInNeeded, Since = T0, Agent = AgentKind.Copilot, Provider = "github", Account = "mona", Message = "Copilot needs you to sign in again (401).", SignIn = SignInWhere.Phone, Recovery = RecoveryState.Checking };
     static readonly Session MinimalSession = new() { Id = "b7e1c2d3-0000-4000-8000-000000000001", Agent = AgentKind.Claude, Status = SessionStatus.Idle, StatusSince = T0, UpdatedAt = T0, Activity = new Activity() };
 
@@ -319,7 +319,7 @@ public static class ProtocolVectors
         f.Record<HelloResult>(Host)
             .Valid("full", new HelloResult(1, Machine, [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsReply, Capabilities.SessionsStop, Capabilities.Push, Capabilities.SessionsAttach, Capabilities.SessionsAttachBlob, Capabilities.SessionsApprove, LaunchProtocol.Capability, UsageProtocol.Capability, UpdateProtocol.Capability]))
             .Valid("read-only", new HelloResult(1, new MachineInfo(MachineId, "DEV-LINUX", "linux", "0.1.200"), [Capabilities.SessionsRead]))
-            .Reads("a-capability-from-a-newer-host", $$"""{"protocol":1,"machine":{"id":"{{MachineId}}","name":"DEV-VM1","os":"windows","hostVersion":"0.2.0"},"capabilities":["sessions.read","sessions.teleport"],"region":"eu"}""");
+            .Reads("a-capability-from-a-newer-host", $$"""{"protocol":1,"machine":{"id":"{{MachineId}}","name":"node-a","os":"windows","hostVersion":"0.2.0"},"capabilities":["sessions.read","sessions.teleport"],"region":"eu"}""");
         f.Record<ToolCall>(Host)
             .Valid("done", Finished)
             .Valid("running", Running with { Summary = null })
@@ -752,7 +752,7 @@ public static class ProtocolVectors
             .Reads("an-unknown-kind-reads-as-a-question", $$"""{"v":1,"kind":"celebrate","machine":"{{MachineId}}","session":"{{SessionId}}","at":"2026-10-28T04:22:43.182Z"}""");
         var notification = new PushNotification
         {
-            Title = "DEV-VM1 · Protocol vectors", Body = "Which spike next, and why?", Tag = PushNotice.Tag(MachineId, SessionId), Data = data,
+            Title = "node-a · Protocol vectors", Body = "Which spike next, and why?", Tag = PushNotice.Tag(MachineId, SessionId), Data = data,
             Navigate = PushNotice.Navigate("https://danswett.github.io/agent-bridge/", MachineId, SessionId, "call_q1"),
         };
         f.Record<PushNotification>(Host)
@@ -760,12 +760,12 @@ public static class ProtocolVectors
             .Valid("resolved", notification with { Silent = true, Body = "Answered", Data = data with { Kind = NoticeKind.Resolved } })
             .Valid("sign-in", new PushNotification
             {
-                Title = "Copilot on DEV-VM1 needs sign-in", Body = "3 sessions affected", Tag = PushNotice.Tag(MachineId, PushNotice.SignInKey(AgentKind.Copilot, null)), Data = SignInData,
+                Title = "Copilot on node-a needs sign-in", Body = "3 sessions affected", Tag = PushNotice.Tag(MachineId, PushNotice.SignInKey(AgentKind.Copilot, null)), Data = SignInData,
                 Navigate = PushNotice.SignInNavigate("https://danswett.github.io/agent-bridge/", MachineId, AgentKind.Copilot),
             })
             .Valid("group", new PushNotification
             {
-                Title = "Needs you", Body = "DEV-VM1 · 3 sessions waiting on you", Tag = PushNotice.Tag(MachineId, "~needsyou"), Data = GroupData,
+                Title = "Needs you", Body = "node-a · 3 sessions waiting on you", Tag = PushNotice.Tag(MachineId, "~needsyou"), Data = GroupData,
                 Navigate = PushNotice.NavigateNeedsYou("https://danswett.github.io/agent-bridge/", MachineId),
             });
         f.Record<PushMessage>(Host).Valid("question", new PushMessage { Notification = notification });
@@ -817,7 +817,7 @@ public static class ProtocolVectors
             .Refused("an-empty-resume", new LaunchRequest { Request = Request, Resume = "" })
             .Refused("a-transfer-and-a-resume", new LaunchRequest { Request = Request, Resume = SessionId, Transfer = Bring })
             .Refused("a-transfer-without-a-workspace", new LaunchRequest { Request = Request, Transfer = Bring })
-            .Refused("a-transfer-from-something-not-a-device-id", New() with { Transfer = Bring with { From = "DEV-VM2" } })
+            .Refused("a-transfer-from-something-not-a-device-id", New() with { Transfer = Bring with { From = "node-b" } })
             .Refused("a-transfer-of-something-not-a-uuid", New() with { Transfer = Bring with { Session = "latest" } })
             .Refused("a-transfer-without-a-command", New() with { Transfer = Bring with { Command = null } })
             .Refused("a-transfer-with-a-malformed-command", New() with { Transfer = Bring with { Command = Signed with { Mac = "not a mac!" } } })
@@ -895,7 +895,7 @@ public static class ProtocolVectors
             .Refused("a-mac-over-64-characters", Signed with { Mac = Repeat('m', TransferProtocol.MaxMac + 1) });
         f.Record<LaunchTransfer>(Client, VectorChecks.Transfer)
             .Valid("signed", Bring)
-            .Refused("from-a-name", Bring with { From = "DEV-VM2" })
+            .Refused("from-a-name", Bring with { From = "node-b" })
             .Refused("from-an-upper-case-device-id", Bring with { From = OtherMachine.ToUpperInvariant() })
             .Refused("a-session-that-is-not-a-uuid", Bring with { Session = "latest" })
             .Refused("no-command", Bring with { Command = null });
@@ -1138,7 +1138,7 @@ public static class ProtocolVectors
         f.Record<UsageWindow>(Host)
             .Valid("full", window)
             .Valid("percent-only", new UsageWindow { Key = "5h", Label = "5-hour", Percent = 3 });
-        var reader = new UsageReader(OtherMachine, "DEV-VM2");
+        var reader = new UsageReader(OtherMachine, "node-b");
         f.Record<UsageReader>(Host).Valid("another-machine", reader);
         var reading = new AgentUsage { Agent = AgentKind.Copilot, Label = "Copilot", Account = "octocat", Plan = "Pro+", Source = UsageSource.Api, Windows = [window], MeasuredAt = T0 };
         f.Record<AgentUsage>(Host)

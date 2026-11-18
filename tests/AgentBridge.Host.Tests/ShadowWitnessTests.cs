@@ -90,7 +90,7 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Null(Known(Daemon(beforeEnd, shells: ["own1", "ended1"]), Host(shells: 1), ShadowKinds.BackgroundShells));
     }
 
-    // Seen on DEV-VM1 (#40): a watcher completed, was started again under the same id 40 s later,
+    // Seen on node-a (#40): a watcher completed, was started again under the same id 40 s later,
     // and the daemon, folding both into one batch, listed nothing while it ran (agent-ha-bridge#276).
     [Fact]
     public void A_shell_the_daemon_does_not_list_is_put_down_to_a_restart_under_the_same_id_only_when_it_read_both()
@@ -495,7 +495,7 @@ public sealed class ShadowWitnessTests : IDisposable
         return Assert.Single(new ShadowWitness(Paths).Explain(d, h, ShadowCompare.Compare(d, h).Differences), x => x.Kind == kind);
     }
 
-    // Seen on DEV-VM1 (#40): a question asked at 00:58 and answered at 09:32 stayed on the daemon's
+    // Seen on node-a (#40): a question asked at 00:58 and answered at 09:32 stayed on the daemon's
     // card, and so did its waiting: the ask_user had started 7 MiB before its answer, beyond the
     // 4 MiB the daemon reads to see it answered (agent-ha-bridge#259, filed as #263).
     [Fact]
