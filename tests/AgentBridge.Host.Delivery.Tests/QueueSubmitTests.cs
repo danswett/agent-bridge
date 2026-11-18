@@ -69,15 +69,17 @@ public sealed class QueueSubmitTests : IAsyncLifetime
         Assert.Empty(console.Actions); Assert.Equal("", console.Draft); Assert.Equal(0, console.TextWrites);
     }
 
-    [Fact]
-    public async Task A_queue_key_not_consumed_clears_only_the_owned_text_and_reports_failure_without_resubmitting()
+    [Theory]
+    [InlineData(false)][InlineData(true)]
+    public async Task A_failed_queue_key_cleans_exact_owned_text_but_preserves_internal_space_edits(bool edited)
     {
         console.AcceptQueue = false;
+        console.AfterQueue = () => { if (edited) { console.Draft = "one  two"; } };
         var rid = Guid.NewGuid().ToString();
-        Assert.Equal(AnswerOutcome.Unconfirmed, (await Send(rid: rid)).Outcome);
-        await Send(rid: rid);
-        Assert.Equal(new[] { "q", "u" }, console.Actions);
-        Assert.Equal("", console.Draft); Assert.Empty(console.Submitted);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Send("one two", rid)).Outcome);
+        await Send("one two", rid);
+        Assert.Equal(edited ? new[] { "q" } : ["q", "u"], console.Actions);
+        Assert.Equal(edited ? "one  two" : "", console.Draft); Assert.Empty(console.Submitted);
     }
 
     [Theory]
