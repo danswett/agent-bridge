@@ -213,9 +213,9 @@ public sealed class StopService : ISessionStopper
             if (check.Gone) { return Stale("the session's process has ended"); }
             lock (armsGate)
             {
-                // A snapshot must not erase uncertainty recorded after that snapshot began.
+                // Only a known replacement retires uncertainty; absence or missing metadata cannot.
                 foreach (var identity in treeProblems.Where(i => i.Value.Version <= seenTreeVersion && i.Key.Agent == session.Agent &&
-                    !live.Any(p => p.Id == i.Key.Pid && p.StartedAt is { } at && Same(at, i.Key.Started))).Select(i => i.Key).ToArray())
+                    live.Any(p => p.Id == i.Key.Pid && p.StartedAt is { } at && !Same(at, i.Key.Started))).Select(i => i.Key).ToArray())
                 { treeProblems.Remove(identity); }
             }
             if (check.Process is { } held) { treeProblem = RememberTreeProblem(session, held, startedAt, held.ExitProblem); }

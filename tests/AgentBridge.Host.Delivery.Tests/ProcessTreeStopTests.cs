@@ -125,8 +125,48 @@ public sealed class ProcessTreeStopTests
         });
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_incomplete_inspector_snapshot_cannot_erase_an_armed_lineage_loss(bool unknownStart)
+    {
+        const string other = "88888888-8888-4888-8888-888888888888";
+        var rig = new TreeRig();
+        rig.Nodes.Remove(103);
+        rig.BeforeOpen = id =>
+        {
+            if (id != 102 || !rig.Nodes[102].Running) { return; }
+            rig.Nodes[102].Running = false;
+            rig.Nodes.Add(103, new TreeNode(102, TreeRig.T0.AddSeconds(2)));
+        };
+        Fixture? fixture = null;
+        await Run(rig, true, async (stopper, keys, request, source, logs) =>
+        {
+            var first = await stopper.StopAsync(request);
+            Assert.Equal(StopOutcome.Confirm, first.Outcome);
+            if (unknownStart) { fixture!.Processes.RunUndated(AgentKind.Copilot, 101); }
+            else { fixture!.Processes.Exit(AgentKind.Copilot, 101); }
+            Assert.Equal(StopOutcome.Ended, (await stopper.StopAsync(new StopRequest { Id = other, Request = Guid.NewGuid().ToString("D") })).Outcome);
+            fixture.Processes.Run(AgentKind.Copilot, 101, startedAt: TreeRig.T0);
+            await source.RefreshAsync();
+            var result = await stopper.StopAsync(request with { Request = Guid.NewGuid().ToString("D"), Confirm = first.Confirm });
+            Assert.Equal(StopOutcome.Failed, result.Outcome);
+            Assert.False(rig.Nodes[101].Running);
+            Assert.True(rig.Nodes[103].Running);
+            Assert.Equal(1, keys.Calls);
+            Assert.Equal(0, rig.Handles);
+        }, prepare: f =>
+        {
+            fixture = f;
+            var events = f.CopilotSession(other, 104);
+            Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+            f.Processes.Run(AgentKind.Copilot, 104, startedAt: TreeRig.T0);
+            rig.Nodes[104].OnTerminate = () => f.Processes.Exit(AgentKind.Copilot, 104);
+        });
+    }
+
     static async Task Run(TreeRig rig, bool working,
-        Func<StopService, Keys, StopRequest, ISessionSource, List<string>, Task> check, TimeProvider? time = null)
+        Func<StopService, Keys, StopRequest, ISessionSource, List<string>, Task> check, TimeProvider? time = null, Action<Fixture>? prepare = null)
     {
         const string id = "77777777-7777-4777-8777-777777777777";
         using var f = new Fixture();
@@ -135,6 +175,7 @@ public sealed class ProcessTreeStopTests
         if (!working) { Fixture.Append(events, Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4)); }
         f.Processes.Run(AgentKind.Copilot, 101, startedAt: TreeRig.T0);
         rig.Nodes[101].OnTerminate = () => f.Processes.Exit(AgentKind.Copilot, 101);
+        prepare?.Invoke(f);
         await using var source = f.Source();
         await source.RefreshAsync();
         var keys = new Keys();
