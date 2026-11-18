@@ -1,6 +1,6 @@
-using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading.Channels;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -25,21 +25,30 @@ public sealed class RosterFieldsTests
 
     sealed class RegistryFrames(TimeProvider? clock = null)
     {
-        readonly ConcurrentQueue<JsonElement> frames = new();
+        readonly Channel<JsonElement> frames = Channel.CreateUnbounded<JsonElement>(
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
         readonly TimeProvider time = clock ?? TimeProvider.System;
 
-        public void Receive(JsonElement frame) => frames.Enqueue(frame);
+        public void Receive(JsonElement frame) => frames.Writer.TryWrite(frame);
 
         public async Task<List<JsonElement>> UntilAsync(Func<JsonElement, bool> done)
         {
             var got = new List<JsonElement>();
-            var end = time.GetUtcNow().AddSeconds(10);
-            while (time.GetUtcNow() < end)
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
+            try
             {
-                while (frames.TryDequeue(out var f)) { got.Add(f); if (done(f)) { return got; } }
-                await Task.Delay(TimeSpan.FromMilliseconds(20), time);
+                while (true)
+                {
+                    // Await delivery, not a poll that can resume past its deadline with a reply queued.
+                    var f = await frames.Reader.ReadAsync(deadline.Token);
+                    got.Add(f);
+                    if (done(f)) { return got; }
+                }
             }
-            throw new TimeoutException();
+            catch (OperationCanceledException e) when (deadline.IsCancellationRequested)
+            {
+                throw new TimeoutException("timed out waiting for a registry reply", e);
+            }
         }
     }
 
@@ -100,7 +109,7 @@ public sealed class RosterFieldsTests
 
         time.Advance(TimeSpan.FromSeconds(10));
 
-        await Assert.ThrowsAsync<TimeoutException>(() => pending.WaitAsync(TimeSpan.FromSeconds(5)));
+        await Assert.ThrowsAsync<TimeoutException>(() => pending).WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
