@@ -55,8 +55,9 @@ public sealed class RelayReplyInboxTests : IDisposable
     [Fact]
     public async Task An_interrupted_started_reply_is_unconfirmed_and_never_retyped_after_restart()
     {
-        var before = new RelayReplyInbox(PathName, (_, _) => throw new OperationCanceledException());
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => before.ReceiveAsync("session", First, Entry(First)));
+        using var stopped = new CancellationTokenSource();
+        var before = new RelayReplyInbox(PathName, (_, ct) => { stopped.Cancel(); throw new OperationCanceledException(ct); });
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => before.ReceiveAsync("session", First, Entry(First), stopped.Token));
         var restarted = new RelayReplyInbox(PathName, (_, _) => throw new Xunit.Sdk.XunitException("must not retype"));
         await restarted.RecoverAsync(["session"]);
         Assert.Equal(AnswerOutcome.Unconfirmed, (await restarted.ReceiveAsync("session", First, Entry(First))).Outcome);
@@ -67,7 +68,7 @@ public sealed class RelayReplyInboxTests : IDisposable
     {
         File.WriteAllText(PathName, "invalid snapshot");
         var inbox = new RelayReplyInbox(PathName, (_, _) => throw new Xunit.Sdk.XunitException("must not dispatch"));
-        await Assert.ThrowsAsync<JsonException>(() => inbox.ReceiveAsync("session", First, Entry(First)));
+        Assert.Equal(AnswerOutcome.Refused, (await inbox.ReceiveAsync("session", First, Entry(First))).Outcome);
     }
 
     [Fact]
