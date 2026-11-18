@@ -22,8 +22,7 @@ name: Merge rule
 #    https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run
 #    Only requested is dropped (#1821): a queued run not yet started on a runner can retain an
 #    earlier verdict until start or another judgement (the accepted P3 residual). A test keeps the list
-#    complete. That includes the review relay in merge-rule-review.yml: pull_request_review runs
-#    the pull request's copy of a workflow, which mustn't post statuses. And CI's push run on main
+#    complete. That includes CI's push run on main
 #    starting and finishing, so every verdict follows main going red or green again (main_green).
 #  - check_suite: a check from an app other than GitHub Actions finished (code
 #    scanning's CodeQL). Actions' own suites start no check_suite workflow, hence workflow_run.
@@ -45,7 +44,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
   status:
   workflow_run: # zizmor: ignore[dangerous-triggers]
-    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
+    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
     types: [in_progress, completed]
   check_suite:
     types: [completed] # the only type Actions accepts here

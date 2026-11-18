@@ -889,7 +889,7 @@ public class MergeRuleTests
                 // No jobs: a workflow file that doesn't parse, a run not started, a run awaiting approval.
                 Suite("github-actions", Workflow(15, "Workflow lint"), "COMPLETED", "STARTUP_FAILURE"),
                 Suite("github-actions", Workflow(16, "Dependencies"), "QUEUED", null),
-                Suite("github-actions", Workflow(17, "Merge rule review relay"), "COMPLETED", "ACTION_REQUIRED"),
+                Suite("github-actions", Workflow(17, "Pages"), "COMPLETED", "ACTION_REQUIRED"),
             ],
             extraStatuses: [new { context = "ci/legacy", state = "ERROR", description = "broke", createdAt = "2026-11-03T20:02:00Z", creator = new { login = "someone" } }]));
 
@@ -1167,7 +1167,7 @@ public class MergeRuleTests
 
     [Theory]
     [InlineData(6, "in_progress", 1, "Main is red (CI c500000): named job light is not green")]
-    [InlineData(5, "queued", 2, "")]
+    [InlineData(5, "queued", 2, "No completed non-cancelled CI run on main: waiting for one")]
     public void A_main_run_still_going_after_a_red_one_still_blocks(long id, string status, int attempt, string description)
     {
         var runs = new List<(long, string, string?, int)> { (id, status, null, attempt) };
@@ -1180,7 +1180,7 @@ public class MergeRuleTests
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
-            Assert.Contains(description.Length == 0 ? " success merge-rule " : description,
+            Assert.Contains(description,
                 Assert.Single(github.Posted), StringComparison.Ordinal);
         }
         finally

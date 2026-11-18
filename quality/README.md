@@ -600,9 +600,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      pull request, one run at a time, so a run starting turns a head pending, a late red flips the
      verdict, and no stale read lands last.
      Changing the rule means changing `quality/`, `.github/` or the tool,
-     all sensitive, so it takes an independent review and only applies once merged. Reviews reach
-     it through a relay workflow (`merge-rule-review.yml`), since `pull_request_review` runs the
-     pull request's copy. The schedule is a backstop only, Dependabot's pull requests included.
+     all sensitive, so it takes an independent review and only applies once merged. The schedule is a backstop only, Dependabot's pull requests included.
      This slows the same timer; it adds no new timer and does not replace event-driven evaluation.
    - CodeQL is judged here, not by a `code_scanning` rule: since #464 a pull request whose
      languages CodeQL skips uploads no results, and that rule would wait for them forever.
@@ -654,8 +652,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      a proposed deferral also reads one page of ten completed cron runs and at most ten job lists,
      stopping when recent writer evidence is found, otherwise warning and proceeding.
      It is not a resolver job per event. The PR dry run in
-     `.github/workflows/weekly-report.yml` and the review relay in
-     `.github/workflows/merge-rule-review.yml` also cancel in-progress runs per pull request
+     `.github/workflows/weekly-report.yml` also cancels in-progress runs per pull request
      (#2577). All triggers stay unchanged.
      Every admitted writer still waits in the shared `merge-rule` job group with
      `cancel-in-progress: false` and `queue: max`, reading main only after taking that lock.

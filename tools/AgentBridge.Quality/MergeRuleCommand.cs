@@ -506,6 +506,7 @@ static class MergeRuleCommand
     {
         var config = session.Config;
         var seen = 0;
+        var newest = true;
         for (var page = 1; ; page++)
         {
             using var doc = session.Rest($"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&per_page=20&page={page}");
@@ -539,6 +540,12 @@ static class MergeRuleCommand
                         latest.Remove(placeholder.Key);
                 if (!latest.TryGetValue("plan", out var plan))
                     throw new InvalidOperationException("CI job list has no plan");
+                // A re-run in flight is the newest word on its SHA; an older run's verdict must not stand in for it.
+                if (newest && RunAttempt(run) > 1 && latest.Any(j => (j.Key == "plan" || j.Key.StartsWith("product", StringComparison.Ordinal)
+                    || config.MainGreen.Jobs.Any(n => n.Split(" (", StringSplitOptions.None)[0] == j.Key.Split(" (", StringSplitOptions.None)[0])
+                    || config.MainGreen.LegFamilies.Any(f => f.Contains(j.Key, StringComparer.Ordinal))) && Incomplete(j.Value)))
+                    return null;
+                newest = false;
                 var planPending = Incomplete(plan);
                 var planConclusion = plan.GetProperty("conclusion").GetString();
                 if (!planPending && planConclusion is null)
