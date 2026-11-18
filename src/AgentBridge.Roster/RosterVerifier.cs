@@ -175,6 +175,8 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
         }
         var before = parents.Length == 0 ? RosterState.Empty : StateOf(parents);
         var reason = Validate(e, parents, ancestors, before, out var facts);
+        // An unsigned storage hint can only withhold application, never bypass validation.
+        if (reason is null && e.EvidenceOnly) { reason = Invalid.Cap; }
         var candidateParent = parents.Any(p => _candidate[p]);
         var overCap = reason is Invalid.Cap or Invalid.Budget;
         if (reason is not null && !overCap) { return new(e.Hash, Verdict.Refused, reason); }

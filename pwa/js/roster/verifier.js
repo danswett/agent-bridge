@@ -151,7 +151,8 @@ export class RosterVerifier {
     }
     const before = parents.length === 0 ? RosterState.empty : this.stateOf(parents);
     const facts = { signer: -1, cosigner: -1, target: -1, keep: [], rank: 0 };
-    const reason = await this.#validate(e, parents, ancestors, before, facts);
+    let reason = await this.#validate(e, parents, ancestors, before, facts);
+    if (reason === null && e.evidenceOnly) reason = INVALID.cap;
     const candidateParent = parents.some((p) => this.#candidate.has(p));
     const overCap = reason === INVALID.cap || reason === INVALID.budget;
     if (reason !== null && !overCap) return refused(reason);

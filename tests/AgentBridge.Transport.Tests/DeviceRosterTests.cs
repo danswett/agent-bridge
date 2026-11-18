@@ -201,7 +201,7 @@ public class DeviceRosterTests
             Assert.Equal(before.Entries, (await roster.GetAsync(RosterFixture.Account))!.Entries);
             return;
         }
-        Assert.Equal("accepted", result![^1].Verdict);
+        Assert.Equal(ancestorCount > 0 ? "quarantined" : "accepted", result![^1].Verdict);
         if (mixed)
         {
             Assert.All(result.Take(ancestors.Count), r =>
@@ -209,7 +209,8 @@ public class DeviceRosterTests
         }
         var snapshot = (await Make(w, store).GetAsync(RosterFixture.Account))!;
         Assert.Equal(removal, snapshot.Entries[^1]);
-        Assert.All(ancestors, a => Assert.Equal(ancestorCount > 0, snapshot.Entries.Contains(a)));
+        Assert.All(ancestors, a => Assert.Equal(ancestorCount > 0, snapshot.Entries.Any(s =>
+            Entry.Parse(Encoding.UTF8.GetBytes(s)).Hash.SequenceEqual(Entry.Parse(Encoding.UTF8.GetBytes(a)).Hash))));
         var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
         replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
         Assert.True(replay.Holds(Entry.Parse(Encoding.UTF8.GetBytes(removal)).Hash));
@@ -257,7 +258,7 @@ public class DeviceRosterTests
         w.Remove("R", "G", "addB", "addB");
         var removal = Padded(w["R"], Entry.MaxRemoveBytes, merge);
         var result = await roster.AppendAsync(RosterFixture.Account, [merge.Canonical(), removal.Canonical()]);
-        Assert.Equal([("accepted", Invalid.Evidence), ("accepted", (string?)null)], result!.Select(r => (r.Verdict, r.Reason)));
+        Assert.Equal([("accepted", Invalid.Evidence), ("quarantined", (string?)null)], result!.Select(r => (r.Verdict, r.Reason)));
         var snapshot = (await Make(w, store).GetAsync(RosterFixture.Account))!;
         var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
         replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
@@ -281,6 +282,21 @@ public class DeviceRosterTests
             Assert.Equal(parent.Canonical(), Entry.Parse(Encoding.UTF8.GetBytes(parent.Canonical())).Canonical());
             Assert.Equal(Verdict.Accepted, verifier.Offer(parent)[0].Verdict);
         }
+    }
+
+    [Theory]
+    [InlineData("false", Refusal.Value)]
+    [InlineData("\"true\"", Refusal.Type)]
+    public void Evidence_markers_are_strict_and_never_bypass_signature_checks(string marker, string code)
+    {
+        var w = Scenario();
+        var wire = Wire(w, "addB");
+        Assert.Equal(code, Assert.Throws<RosterFormatException>(() =>
+            Entry.Parse(Encoding.UTF8.GetBytes(wire[..^1] + ",\"evidence\":" + marker + "}"))).Code);
+        w.Rename("bad", "B", "addB", "addB", "bad", signAs: "Z");
+        var bad = Wire(w, "bad");
+        var entry = Entry.Parse(Encoding.UTF8.GetBytes(bad[..^1] + ",\"evidence\":true}"));
+        Assert.Equal(Invalid.Signature, w.Verifier("G", "addB").Offer(entry)[0].Reason);
     }
 
     [Fact]

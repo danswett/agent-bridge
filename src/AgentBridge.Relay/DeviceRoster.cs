@@ -104,7 +104,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     static int MaxSerializedEntryBytes(int size)
     {
         var proof = new Assertion([], [], []);
-        var shape = Entry.Canonical([], [], [], proof, proof);
+        var shape = Entry.Canonical([], [], [], proof, proof, evidenceOnly: true);
         // n bytes split over k base64url components occupy at most floor((4*n + 2*k)/3).
         return JsonSerializer.SerializeToUtf8Bytes(shape).Length + (4 * size + 2 * 9) / 3;
     }
@@ -270,7 +270,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
                 if (JsonSerializer.SerializeToUtf8Bytes(new Stored(1, generation, candidate), Json).Length > limit)
                 {
                     results[index] = results[index] with { Verdict = "refused", Reason = Invalid.Cap };
-                    aside.Add((index, entry, true));
+                    aside.Add((index, entry.AsEvidence(), true));
                     continue;
                 }
                 if (evidence.Count > 0 && (entry.Body.Op != EntryOp.Remove
