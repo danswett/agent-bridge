@@ -55,3 +55,23 @@ private func launchOptionsFixture() throws -> BridgeLaunchOptions {
     #expect(result.sessionID == "s")
     #expect(!result.allowsNewAttempt)
 }
+
+@Test func launchesRefuseInvisibleOnlyRequiredPromptsAndHiddenOperators() throws {
+    let options = try launchOptionsFixture()
+    var draft = BridgeLaunchDraft()
+    draft.agent = "codex"
+    for text in InvisibleFixtures.blanks {
+        draft.prompt = text
+        #expect(throws: BridgeOperationError.self) { try draft.operation(options: options, capabilities: ["sessions.launch"]) }
+    }
+    let vector = try invisibleVectorText("launch", record: "LaunchRequest", named: "a-prompt-led-by-an-invisible-operator", field: "prompt")
+    for resume in [nil, "old-session"] {
+        draft.resume = resume
+        for text in ["\u{FEFF}/clear", "\u{3164}/", "\u{2800}!dir", "\u{0903}/clear", vector] {
+            draft.prompt = text
+            #expect(throws: BridgeOperationError.self) { try draft.operation(options: options, capabilities: ["sessions.launch"]) }
+        }
+        draft.prompt = "\u{034F}\u{4F60}\u{597D}"
+        #expect(try draft.operation(options: options, capabilities: ["sessions.launch"]).data["prompt"] == .string(draft.prompt))
+    }
+}
