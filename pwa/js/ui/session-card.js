@@ -56,6 +56,7 @@ import { HISTORY, closedQuestionIds } from '../history.js';
 import { MoveStrip } from './move-view.js';
 import { moveView, moves } from '../move.js';
 import { ScrollFollow } from './scroll-follow.js';
+import { showDetail } from '../show-detail.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
@@ -524,8 +525,14 @@ export class SessionCard {
     this.#buildView();
     this.update(session);
     this.#unmove = moves.subscribe((id) => { if (id === this.#s?.id) { this.update(this.#s); } });
+    this.#undetail = showDetail.subscribe(() => {
+      this.update(this.#s);
+      if (!showDetail.value && this.#tab === 'tools') { this.setTab('conversation'); }
+      this.#revealTools();
+    });
   }
   #unmove = null;
+  #undetail = null;
 
   get id() { return this.#s.id; }
   get session() { return this.#s; }
@@ -909,6 +916,11 @@ export class SessionCard {
 
     const t = displayed.activity.currentTool;
     e.tool.hidden = !t;
+    for (const [node, parent, before] of [[e.reasoning, e.agentBlock, e.truncated], [e.tool, e.agentBlock, null], [e.tools, e.inspector, null]]) {
+      if (!showDetail.value) { node.remove(); }
+      else if (!node.parentNode) { parent.insertBefore(node, before); }
+    }
+    e.tabT.hidden = !showDetail.value;
     if (t) {
       e.tool.dataset.status = t.status;
       // Named for its state: the words beside it are the tool's name and summary (ui.md §9).
@@ -930,7 +942,7 @@ export class SessionCard {
     e.response.hidden = !voice.response;
     e.truncated.hidden = !voice.responseTruncated;
     e.dropped.hidden = !voice.responseDropped;
-    e.reasoning.hidden = !voice.reasoning;
+    e.reasoning.hidden = !showDetail.value || !voice.reasoning;
     e.reasoningText.textContent = voice.reasoning ?? '';
     e.voice.hidden = !voice.attributed;
     e.agentLabel.hidden = voice.attributed;
@@ -1132,7 +1144,7 @@ export class SessionCard {
     // was in, so focus follows to the delegate opened, at any width.
     const fromDetail = this.detail.element.contains(document.activeElement);
     this.#delegate = id;
-    if (!this.detail.element.isConnected) { this.els.inspector.insertBefore(this.detail.element, this.els.tools); }
+    if (!this.detail.element.isConnected) { this.els.inspector.insertBefore(this.detail.element, this.els.tools.parentNode ? this.els.tools : null); }
     this.detail.select(id, this.#s);
     this.view.dataset.delegate = 'open';
     // At three panes a hidden inspector is shown for it: the delegate is there, whenever the
@@ -1413,7 +1425,7 @@ export class SessionCard {
     const was = this.#tab;
     const before = this.#tabEl(was);
     const from = before?.getClientRects().length ? before.getBoundingClientRect() : null;
-    this.#tab = tab === 'tools' || tab === 'details' || (tab === 'delegates' && !this.els.tabD.hidden) ? tab : 'conversation';
+    this.#tab = (tab === 'tools' && showDetail.value) || tab === 'details' || (tab === 'delegates' && !this.els.tabD.hidden) ? tab : 'conversation';
     this.#applyTab();
     this.#revealTools();
     this.detail.shown();
@@ -1478,7 +1490,7 @@ export class SessionCard {
   #toolsShown() {
     // On screen only while Sessions shows (and, on a phone, the session is pushed). At three
     // panes a delegate open takes the inspector in their place, so they are not fetched then.
-    return this.#selected && this.viewing() && (this.layout().inspector ? !this.#delegate : this.#tab === 'tools');
+    return showDetail.value && this.#selected && this.viewing() && (this.layout().inspector ? !this.#delegate : this.#tab === 'tools');
   }
 
   // A phone's overflow menu: Pin, Details and End session (ui.md §6.2).
@@ -1495,6 +1507,7 @@ export class SessionCard {
   dispose() {
     this.#columnSize?.disconnect();
     this.#unmove?.();
+    this.#undetail?.();
     this.#panel?.destroy();
     this.#panel = null;
     this.#reply?.destroy();
@@ -1697,10 +1710,10 @@ export class SessionCard {
     e.user.hidden = !!t || !s.activity.userMessage || !!promptOrigin(s);
     e.prompt.hidden = !!t || !promptOrigin(s);
     e.response.hidden = !voice.response || (!!t && voice.response === (recorded('response') ?? t.live?.response));
-    e.reasoning.hidden = !voice.reasoning || (!!t && voice.reasoning === recorded('reasoning'));
+    e.reasoning.hidden = !showDetail.value || !voice.reasoning || (!!t && voice.reasoning === recorded('reasoning'));
     e.truncated.hidden = e.response.hidden || !voice.responseTruncated;
     e.dropped.hidden = !voice.responseDropped;
-    e.agentBlock.hidden = e.response.hidden && e.reasoning.hidden && !voice.responseDropped && !s.activity.currentTool && e.events.hidden;
+    e.agentBlock.hidden = e.response.hidden && e.reasoning.hidden && !voice.responseDropped && (!showDetail.value || !s.activity.currentTool) && e.events.hidden;
     e.speaker.hidden = e.agentBlock.hidden;
     if (t && focus.some(Boolean)) {
       const stored = [...this.turns.element.children].find((n) => n.dataset.turn === t.id) ?? this.turns.element;
