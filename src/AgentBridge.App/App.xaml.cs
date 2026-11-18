@@ -391,11 +391,7 @@ public partial class App : Application
         CompleteRun();
     }
 
-    void CompleteRun()
-    {
-        try { Program.Marker?.Complete(); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { AppLog.Write($"run marker not cleared: {error.GetType().Name}"); }
-    }
+    void CompleteRun() => Program.CompleteRun();
 
     void Quit()
     {
@@ -431,9 +427,10 @@ public partial class App : Application
         // left waiting to be delivered mid-close.
         var closing = window;
         closing.AppWindow.Hide();
-        if (!closing.DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { closing.Close(); Exit(); }))
+        if (!closing.DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { closing.Close(); CompleteRun(); Exit(); }))
         {
             closing.Close();
+            CompleteRun();
             Exit();
         }
     }
