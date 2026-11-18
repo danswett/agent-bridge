@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AgentBridge.Host.Core;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Protocol;
 using Xunit;
@@ -7,6 +8,74 @@ using Xunit;
 public sealed partial class ReplyTests
 {
     string InboxPath => Path.Combine(folder, "ha-connector.json.inbox");
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failed_sending_publication_keeps_never_attempted_work_retryable(bool restart)
+    {
+        var startedBeforeInvocation = false;
+        outcome = _ =>
+        {
+            startedBeforeInvocation = new DurableInbox(InboxPath).Find(Node, "before-send")?.StartedAt is not null;
+            return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
+        };
+        await using (var c = await Ready())
+        {
+            c.Observe(ha.SendFromCard(Node, "never attempted", rid: "before-send"));
+            ha.PublishFailsFor = (_, value) => value == "Sending...";
+            await Pass(c);
+
+            var pending = new DurableInbox(InboxPath).Peek(Node);
+            Assert.NotNull(pending);
+            Assert.Null(pending.StartedAt);
+            Assert.Empty(replied);
+            ha.PublishFailsFor = null;
+            if (!restart)
+            {
+                await Pass(c);
+                await c.DeliveredAsync();
+                await Pass(c);
+            }
+        }
+        if (restart)
+        {
+            await using var c = Connector();
+            await Pass(c);
+            await c.DeliveredAsync();
+            await Pass(c);
+        }
+
+        Assert.True(startedBeforeInvocation);
+        Assert.Equal("never attempted", Assert.Single(replied).Text);
+        Assert.Null(new DurableInbox(InboxPath).Peek(Node));
+        Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    public async Task Incomplete_discovery_after_restart_never_expires_accepted_replies()
+    {
+        await using (var c = await Ready())
+        {
+            c.Observe(ha.SendFromCard(Node, "keep through discovery hold", rid: "held"));
+        }
+        sessions.End(A);
+        sessions.Held = new DiscoveryHeld("incomplete", [AgentKind.Copilot]);
+        await using var restarted = Connector();
+        await Pass(restarted);
+        await Pass(restarted);
+        await Pass(restarted);
+
+        Assert.NotNull(new DurableInbox(InboxPath).Peek(Node));
+        Assert.Empty(replied);
+        sessions.Held = null;
+        Idle();
+        await Pass(restarted);
+        await restarted.DeliveredAsync();
+        await Pass(restarted);
+        Assert.Equal("keep through discovery hold", Assert.Single(replied).Text);
+        Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
+    }
 
     [Fact]
     public async Task Different_rids_with_the_same_stamp_have_distinct_durable_deliveries()
