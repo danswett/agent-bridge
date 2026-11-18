@@ -399,9 +399,9 @@ overflow holds discovery for the affected agent until a slot is freed, without
 evicting a live row or silently allowing an omitted session to resume.
 `owner`, `pr` and `finished` carry explicit evidence:
 unknown is not confirmed none or false. Idle does not mean work-finished. Once discovery
-observes a session ended, removal bypasses upsert coalescing and quiet-session holding;
-list/get and the next subscription exclude it immediately. A discovery hold is not
-evidence that a session ended.
+observes a session ended, removal bypasses upsert coalescing and quiet-session holding,
+even while discovery for that agent is held; list/get and the next subscription exclude
+the ended generation immediately. A discovery hold alone is not evidence that a session ended.
 
 This cut emits `owner`, `pr` and `finished` as `{ "state": "unknown" }` on every
 host-bound row; discovering known values or confirmed none/false is out of scope.
