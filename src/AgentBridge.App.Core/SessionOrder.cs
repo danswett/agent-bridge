@@ -79,6 +79,7 @@ public sealed class SessionOrder
         this.time = time ?? TimeProvider.System;
         state = Load(path, out var usable);
         Usable = usable;
+        if (!usable) { state.Sort = SessionSort.Recent; }
     }
 
     public static string KeyOf(string machine, string session) => $"{machine}\n{session}";
@@ -318,16 +319,18 @@ public sealed class SessionOrder
     void Save()
     {
         seenDirty = false;
-        if (!Usable || path is null) { return; }
+        if (path is null) { return; }
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(state, Json));
+            Usable = true;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             // An order that can't be kept would be lost at the next start, so the list says Most
-            // recent rather than pretend.
+            // recent rather than pretend. Recovery enables Your order without selecting it.
+            state.Sort = SessionSort.Recent;
             Usable = false;
         }
     }

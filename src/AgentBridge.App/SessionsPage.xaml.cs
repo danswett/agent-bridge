@@ -588,7 +588,11 @@ public sealed partial class SessionsPage : UserControl
         for (var i = 0; i < MainViewModel.SortChoices.Count; i++)
         {
             var index = i;
-            var item = new RadioMenuFlyoutItem { Text = MainViewModel.SortChoices[i], GroupName = "Sort", IsChecked = viewModel.SortIndex == i };
+            var item = new RadioMenuFlyoutItem
+            {
+                Text = MainViewModel.SortChoices[i], GroupName = "Sort",
+                IsChecked = viewModel.SortIndex == i, IsEnabled = viewModel.CanSort(i),
+            };
             item.Click += (_, _) => viewModel.SortIndex = index;
             SortMenu.Items.Add(item);
         }

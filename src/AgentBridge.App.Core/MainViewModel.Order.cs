@@ -11,6 +11,9 @@ public sealed partial class MainViewModel
     public static IReadOnlyList<string> SortChoices { get; } = ["Your order", "Most recent", "Machine"];
 
     public SessionOrder Order { get; }
+    public bool CanSort(int index) => index >= 0 && index < SortChoices.Count
+        && (index != (int)SessionSort.Yours || Order.Usable);
+
     // The sort the picker was last told of: a failed save anywhere (a pin, a drop, a host's list)
     // turns the list to Most recent, and the next arrangement says so.
     SessionSort toldSort;
@@ -22,7 +25,7 @@ public sealed partial class MainViewModel
         get => (int)Order.Sort;
         set
         {
-            if (value < 0 || value >= SortChoices.Count) { return; }
+            if (!CanSort(value)) { return; }
             Order.Sort = (SessionSort)value;
             Rearrange(chosen: true);
             toldSort = Order.Sort;
