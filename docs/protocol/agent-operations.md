@@ -2,11 +2,41 @@
 
 Operations an agent calls on the local pipe after `agent.hello`, on its own credential. Each is refused with a readable `refused: ...` reason when the connection has no agent credential or the credential's scope is too low.
 
+Relay reply recovery isolates malformed entries and storage failures instead of
+preventing relay attachment. Unstarted replies expire after two minutes; an
+expired or ordinary refused entry can age out of the bounded dedupe history.
+Unconfirmed attempts remain pinned and are never automatically retyped.
+Different sessions dispatch independently; one session's replies remain serial.
+Recovery starts in the background after relay attachment and wakes on source or
+presence changes. A missing sender presence defers rather than rejects queued
+Lite work. Dispatch requires Idle with no question and rechecks the original
+signed envelope and current authorization. Rate/replay refusals precede admission.
+
 | Operation | Scope | What it does |
 | --- | --- | --- |
 | `agent.send` | read+reply | Sends text to one session; see [local-pipe.md](local-pipe.md#agentsend-ap5-lite). |
 | `fleet.list` | read | Lists the sessions and online/offline machines of the agent's own account, with optional machine display names. |
 | `fleet.find` | read | Finds one session of the agent's own account by exact name, with optional machine display names; answers `unverified` until records are signed. |
+
+## Durable relay reply receipts
+
+With `homeAssistant.durableReplyIngress` enabled, relay `session.reply` and
+`agent.lite.send` results add `"reply_ack":{"rid":"<request UUID>"}` after a
+successful durable enqueue. This is a receipt of queued work, **not proof of
+delivery**; the existing outcome/status fields still describe delivery.
+The receipt contains only the request ID, never reply text. Repeating a retained
+request ID returns its receipt without dispatching the reply a second time.
+An append failure emits no receipt. Setting the switch to `false` preserves the
+legacy direct path and omits the field. Older readers ignore this additive field.
+Capacity refusals and retired nodes emit no receipt: neither admitted the reply.
+A capacity refusal is retryable (`busy` for Lite), but a busy response **with**
+the receipt means the work is already queued. Accepted work that is later refused
+still returns its receipt, including on duplicate-rid retries.
+Capacity-refused rids may retry admission when space returns; current
+authorization and rate limits still apply. An occupied session returns `Busy`
+(`refused`, code `busy` for Lite) promptly with its durable queued receipt.
+There is no separate `reply_ack` event. The shared `reply-ack.json` vectors cover
+present, absent, capacity-refused, retired and duplicate receipts on both routes.
 
 ## `fleet.list`
 

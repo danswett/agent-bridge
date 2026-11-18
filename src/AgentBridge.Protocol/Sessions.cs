@@ -837,9 +837,13 @@ public sealed record ReplyRequest
     public Func<bool>? StillCurrent { get; init; }
 }
 
+public readonly record struct ReplyAck([property: JsonPropertyName("rid")] string Rid);
+
 // The same outcomes as an answer, read the same way.
 public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
 {
+    [JsonPropertyName("reply_ack"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ReplyAck? ReplyAck { get; init; }
     // The mode actually used; absent from an older host means Steer.
     public ReplyMode? Mode { get; init; }
     public ReplyStage? Stage { get; init; }
@@ -849,8 +853,8 @@ public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
     [JsonIgnore]
     public ReplyRefusal Refusal { get; init; }
     // Refusal is advice to callers, not part of the result's identity.
-    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Mode == other.Mode && Stage == other.Stage && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments);
-    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments);
+    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Mode == other.Mode && Stage == other.Stage && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments) && Equals(ReplyAck, other.ReplyAck);
+    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments, ReplyAck);
 }
 
 public enum ReplyRefusal { Other, Asking, ComposerUnverified, Busy }

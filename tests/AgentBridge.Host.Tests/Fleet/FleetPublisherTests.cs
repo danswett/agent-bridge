@@ -325,7 +325,8 @@ public sealed class FleetPublisherTests
         public SessionProcess? ProcessOf(string id) => Binding(id);
         public DiscoveryHeld? Held { get; set; }
         public long Revision => 0;
-        public event EventHandler<SessionChange>? Changed { add { } remove { } }
+        public event EventHandler<SessionChange>? Changed;
+        public void Signal() => Changed?.Invoke(this, new(SessionChangeKind.Upserted, Sessions[0].Id, Sessions[0], 1));
         public IReadOnlyList<Session> Snapshot() => Sessions;
         public SessionList List(string? cursor = null) => new(Snapshot(), 0);
         public Session? Get(string id) => Sessions.Find(s => s.Id == id);

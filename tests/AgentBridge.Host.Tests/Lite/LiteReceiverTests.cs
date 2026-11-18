@@ -51,11 +51,11 @@ public class LiteReceiverTests
         }
 
         public void Dispose() => Key.Dispose();
-        public JsonElement Request(string text = "hello", string? id = null, string? machine = null, string? add = null, string? target = null, string? signedText = null)
+        public JsonElement Request(string text = "hello", string? id = null, string? machine = null, string? add = null, string? target = null, string? signedText = null, string session = "agent-b2")
         {
             var sender = new LiteSender(Account, machine ?? Peer, add ?? Codec.Base64Url(SHA256.HashData(PeerStatic)), "agent-a1",
                 Codec.Base64Url(new byte[12]), Codec.Base64Url(new byte[16]), "copilot", "agent-bridge");
-            var sealedBytes = LiteProfile.Seal(sender, new LiteTarget(target ?? Self, "agent-b2", Codec.Base64Url(new byte[12])), id ?? Id("1"),
+            var sealedBytes = LiteProfile.Seal(sender, new LiteTarget(target ?? Self, session, Codec.Base64Url(new byte[12])), id ?? Id("1"),
                 Encoding.UTF8.GetBytes(signedText ?? text), Time.GetUtcNow().ToUnixTimeSeconds(), new EcdsaEnvelopeSigner(Key));
             return JsonSerializer.SerializeToElement(new { envelope = Codec.Base64Url(sealedBytes), text, killEpoch = 0 });
         }
@@ -65,11 +65,88 @@ public class LiteReceiverTests
 
     static string Id(string n) => new Guid(int.Parse(n), 0, 0, new byte[8]).ToString("D");
 
+    [Theory]
+    [InlineData("mode")]
+    [InlineData("peer")]
+    [InlineData("expiry")]
+    [InlineData("presence")]
+    [InlineData("rate")]
+    public async Task Busy_admission_waits_for_presence_and_reauthorizes_the_original_envelope(string changed)
+    {
+        using var r = new Rig();
+        var folder = Directory.CreateTempSubdirectory("lite-recovery-").FullName;
+        try
+        {
+            var source = new FleetPublisherTests.Source();
+            source.Sessions = [source.Sessions[0] with { Status = AgentBridge.Protocol.SessionStatus.Working }];
+            var service = new AgentBridge.Host.SessionService(source,
+                new AgentBridge.Protocol.MachineInfo("fixture", "fixture", "test", "0")) { LiteReceiver = r.Receiver };
+            var allowed = true; var present = true;
+            var path = Path.Combine(folder, "replies.inbox");
+            service.ConfigureRelayInbox(path, (_, _) => true, _ => allowed, _ => present);
+            var node = AgentBridge.HomeAssistant.HaContract.NodeId(source.Sessions[0].Id);
+            Refused(await r.Send(r.Request(session: node)), LiteReceiver.Busy);
+            if (changed == "rate")
+            {
+                for (var n = 2; n <= 6; n++) { Refused(await r.Send(r.Request(id: Id(n.ToString()), session: node)), LiteReceiver.Busy); }
+                Refused(await r.Send(r.Request(id: Id("7"), session: node)), LiteReceiver.Rate);
+                using var snapshot = JsonDocument.Parse(File.ReadAllText(path));
+                Assert.Equal(6, snapshot.RootElement.GetProperty("Messages").GetArrayLength());
+            }
+            if (changed == "mode") { r.Mode.On = false; }
+            if (changed == "peer") { allowed = false; }
+            if (changed == "expiry") { r.Time.Advance(TimeSpan.FromSeconds(121)); }
+            source.Sessions[0] = source.Sessions[0] with { Status = AgentBridge.Protocol.SessionStatus.Idle };
+            present = false;
+            await service.RelayInbox!.RecoverAsync([node]);
+            Assert.Equal(0, r.Deliver.Calls);
+            present = true;
+            await service.RelayInbox.RecoverAsync([node]);
+            Assert.Equal(changed == "presence" ? 1 : changed == "rate" ? 6 : 0, r.Deliver.Calls);
+        }
+        finally { Directory.Delete(folder, true); }
+    }
+
+    [Fact]
+    public async Task A_missing_target_session_is_refused_before_any_delivery()
+    {
+        using var r = new Rig();
+        Assert.True(Codec.TryBase64Url(r.Request().GetProperty("envelope").GetString()!, out var bytes));
+        var envelope = Envelope.Parse(bytes);
+        var body = envelope.Body with { Target = envelope.Body.Target with { Session = null } };
+        var malformed = Envelope.Encode(body.Encode(), envelope.Signature);
+        Assert.Equal("refused", (await r.Send(JsonSerializer.SerializeToElement(new { envelope = Codec.Base64Url(malformed), text = "hello" }))).Status);
+        Assert.Equal(0, r.Deliver.Calls);
+    }
+
     static void Refused(LiteAck ack, string code)
     {
         Assert.Equal("refused", ack.Status);
         Assert.Equal(code, ack.Code);
         Assert.Equal(7, ack.KillEpoch);
+    }
+
+    [Fact]
+    public async Task Durable_recovery_reauthorizes_the_signed_Lite_request_instead_of_replaying_raw_text()
+    {
+        using var r = new Rig();
+        var folder = Directory.CreateTempSubdirectory("lite-inbox-").FullName;
+        try
+        {
+            var service = new AgentBridge.Host.SessionService(new FleetPublisherTests.Source(),
+                new AgentBridge.Protocol.MachineInfo("fixture", "fixture", "test", "test")) { LiteReceiver = r.Receiver };
+            service.ConfigureRelayInbox(Path.Combine(folder, "replies.json"), (_, _) => true, _ => true);
+            using var stopped = new CancellationTokenSource();
+            stopped.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                r.Receiver.ReceiveAsync(r.Channel, r.Request(), stopped.Token));
+            Assert.Equal(0, r.Deliver.Calls);
+            r.Mode.On = false;
+            await service.RelayInbox!.RecoverAsync(["agent-b2"]);
+            Assert.Equal(0, r.Deliver.Calls);
+            Assert.Contains("\"Outcome\":\"refused\"", File.ReadAllText(Path.Combine(folder, "replies.json")));
+        }
+        finally { Directory.Delete(folder, true); }
     }
 
     [Fact]

@@ -739,6 +739,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
         name: fleetNames.Get, log: Log, sign: fleetTrust.Sign);
     var loadService = new LoadService(source, () => load.Current, () => settings.LoadEnabled, Log);
+    RelayClient? replyRelay = null;
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         LoadEnabled = () => settings.LoadEnabled,
@@ -760,6 +761,14 @@ async Task<int> ServeAsync(HostHandover handover)
         LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)),         new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteDeliver),
     };
     Log(settings.LoadStatus);
+    if (settings.HomeAssistant.DurableReplyIngress)
+    {
+        service.ConfigureRelayInbox(Path.Combine(identity.Folder, "relay-replies.inbox"),
+            (peer, account) => account == identity.Account?.AccountId && trustedPeers.HasRole(peer, TrustedPeerStore.Person),
+            c => replyRelay is { } live && c.Account == live.AccountId && c.Self == live.DeviceId &&
+                live.Presence.Any(p => p.Id == c.PeerId && p.Kind == "host") && trustedPeers.HasRole(c.PeerId, TrustedPeerStore.Host),
+            c => replyRelay?.Presence.Any(p => p.Id == c.PeerId && p.Kind == "host") == true);
+    }
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
     var inspector = new SystemProcessInspector();
@@ -975,6 +984,7 @@ async Task<int> ServeAsync(HostHandover handover)
         connection = current;
         int? endedWith = null;
         string? endedWhy = null;
+        Task replyRecovery = Task.CompletedTask;
         try
         {
             control.SetRelay(RelayState.Connecting, reconnects > 0 ? $"reconnecting (attempt {reconnects})" : null);
@@ -990,6 +1000,7 @@ async Task<int> ServeAsync(HostHandover handover)
                 EarlyOps = [Ops.Hello],
             };
             trustedPeers.Attach(hub);
+            replyRelay = relay;
             hub.Accepted += ch => Log($"channel from {HostConfigFile.CleanName(ch.PeerName)} ({HostConfigFile.CleanName(ch.PeerKind)}, {ch.PeerId[..8]})");
             hub.Rejected += (peer, e) => Log($"rejected a frame from {peer[..Math.Min(8, peer.Length)]}: {e.Message}");
             push?.Attach(new RelayPushSender(relay));
@@ -1002,6 +1013,7 @@ async Task<int> ServeAsync(HostHandover handover)
             escapedApprovals.Attach(relay);
             updates.Attach(relay);
             manage.Attach(relay);
+            replyRecovery = Task.Run(() => service.RunRelayRecoveryAsync(current.Token, relay));
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff.Reset();
@@ -1052,6 +1064,9 @@ async Task<int> ServeAsync(HostHandover handover)
         }
         finally
         {
+            current.Cancel();
+            await replyRecovery;
+            replyRelay = null;
             connection = null;
             trustedPeers.Attach(null);
             relayBlobs.Attach(null);
