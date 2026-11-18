@@ -122,7 +122,7 @@ public sealed class StopService : ISessionStopper
         this.options = options;
         this.log = log ?? (_ => { });
         this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
-        requests = new OutcomeMemory<StopResult>(options.Time, options.RememberFor, this.gate, Busy);
+        requests = new OutcomeMemory<StopResult>(options.Time, options.RememberFor, this.gate, Busy, allowExclusion: true);
     }
 
     public bool Available => options.PlatformSupported && probe.Recent() is null;
@@ -203,7 +203,7 @@ public sealed class StopService : ISessionStopper
             return Refused("the machine couldn't end the session");
         }
 
-        if (!gate.TryClaim(session.Id, key)) { return Busy(); }
+        if (!gate.TryClaim(session.Id, key, allowExclusion: true)) { return Busy(); }
         StopResult result;
         try
         {
@@ -260,6 +260,8 @@ public sealed class StopService : ISessionStopper
             try { await gate.WaitToTypeAsync(deadline.Token); ownsTyping = true; }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested)
             { log($"end of {Short(session.Id)} exhausted its typing budget; continuing without typing"); }
+            catch (InvalidOperationException e)
+            { log($"end of {Short(session.Id)} cannot type; continuing to termination: {e.Message}"); }
             try
             {
                 if (probe.Active() is { } active) { return Refused(active); }
@@ -285,10 +287,10 @@ public sealed class StopService : ISessionStopper
                     catch (Exception e)
                     {
                         pendingWorker = e is InjectorWorkerException worker ? worker.Exited : Task.FromException(e);
-                        log($"end of {Short(session.Id)} waits for injector quiescence: {e.Message}");
-                        return Failed("the injector's exit could not be confirmed; the session was not terminated");
+                        log($"end of {Short(session.Id)} retains its injector fence while terminating: {e.Message}");
+                        typing = new InjectionResult(InjectionStatus.Interrupted, e.Message);
                     }
-                    typed = typing.Status != InjectionStatus.NothingTyped;
+                    typed = pendingWorker is null && typing.Status != InjectionStatus.NothingTyped;
                     log($"typed /exit into {Short(session.Id)} (pid {pid}) -> {typing.Status} {typing.Detail}");
                 }
                 else if (ownsTyping)

@@ -720,9 +720,9 @@ card keeps while it asks (`Get-DaemonCardSummary`).
 * What the button holds when the connector first reads it is not a press; a session asking a
   question can be ended like any other.
 
-The graceful budget covers typing admission and `/exit`; an occupied slot skips typing
-and proceeds to termination. A failed injector must prove exit before its typing fence
-and PID handle are released.
+The graceful budget covers typing admission and `/exit`; a blocked typing slot or departure
+exclusion skips typing and forces termination. Injector errors also force termination, while
+the typing fence and PID handle remain held until the worker's exit is proven.
 
 Pre-Ending hypotheses for [2910](https://github.com/danswett/agent-bridge/issues/2910),
 not established incident causes:

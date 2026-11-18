@@ -227,7 +227,7 @@ public sealed class WorkerInjector : IConsoleInjector
             {
                 ended = true;
                 var exited = await EndAsync(process);
-                return Cancelled(wrote, e, exited);
+                return Cancelled(e, exited);
             }
             await errors;
 
@@ -265,11 +265,11 @@ public sealed class WorkerInjector : IConsoleInjector
         }
     }
 
-    internal static InjectionResult Cancelled(bool wrote, Exception error, Task exited)
+    internal static InjectionResult Cancelled(Exception error, Task exited)
     {
         if (!exited.IsCompletedSuccessfully) { throw new InjectorWorkerException(error, exited); }
-        const string detail = "the injector was cancelled and its worker has exited";
-        return wrote ? Interrupted(detail) : Nothing(detail);
+        // A cancelled read can leave a flushed writing announcement buffered and unread.
+        return Interrupted("the injector was cancelled and its worker has exited");
     }
 
     // The worker may still be sending keys: end it, and wait a moment for proof. The proof is its

@@ -55,12 +55,14 @@ public sealed class DeliveryGate
     bool IsUncertain => WorkerUncertain() || uncertain;
 
     // Admission must precede OutcomeMemory's Task.Run, not just the later session claim.
-    public IDisposable? TryEnterDelivery()
+    public IDisposable? TryEnterDelivery() => TryEnterDelivery(false);
+
+    internal IDisposable? TryEnterDelivery(bool allowExclusion)
     {
         lock (state)
         {
             Expire();
-            if (exclusion is not null || stopping is not null) { return null; }
+            if ((!allowExclusion && exclusion is not null) || stopping is not null) { return null; }
             deliveries++;
             return new Delivery(this);
         }
@@ -265,12 +267,14 @@ public sealed class DeliveryGate
     }
 
     // Takes the session for this request, or false while another request holds it.
-    public bool TryClaim(string sessionId, Guid request)
+    public bool TryClaim(string sessionId, Guid request) => TryClaim(sessionId, request, false);
+
+    internal bool TryClaim(string sessionId, Guid request, bool allowExclusion)
     {
         lock (state)
         {
             Expire();
-            return exclusion is null && sessions.TryAdd(sessionId, request);
+            return (allowExclusion || exclusion is null) && sessions.TryAdd(sessionId, request);
         }
     }
 
@@ -307,7 +311,7 @@ public sealed class DeliveryGate
 // pending, or settled) and starts nothing. Settled outcomes are forgotten after RememberFor;
 // the contract promises at least 10 minutes.
 internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, DeliveryGate? deliveryGate = null, Func<T>? blocked = null,
-    Func<Guid, (bool Known, T Value)>? remembered = null, Func<Guid, T, object?, T>? remember = null)
+    Func<Guid, (bool Known, T Value)>? remembered = null, Func<Guid, T, object?, T>? remember = null, bool allowExclusion = false)
 {
     readonly Lock gate = new();
     readonly Dictionary<Guid, Entry> requests = [];
@@ -390,7 +394,7 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
                 if (!repeat && remembered is not null) { prior = remembered(key); }
                 if (!prior.Known)
                 {
-                    if (!repeat && deliveryGate is not null && (delivery = deliveryGate.TryEnterDelivery()) is null)
+                    if (!repeat && deliveryGate is not null && (delivery = deliveryGate.TryEnterDelivery(allowExclusion)) is null)
                     {
                         // Never remembered: nothing was admitted or typed, and a receipt would refuse the
                         // same request for RememberFor even after a stop that did not happen.

@@ -32,15 +32,21 @@ public sealed class DeliveryQuietTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Cancellation_requires_exit_proof_and_only_announced_writes_are_interrupted(bool wrote)
+    public async Task Cancellation_with_buffered_unread_announcements_is_never_safe_to_retry(bool wrote)
     {
+        using var output = new StringReader("writing 1\nwriting 2\n");
+        if (wrote) { Assert.Equal("writing 1", await output.ReadLineAsync()); }
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => output.ReadLineAsync(cancel.Token).AsTask());
         var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var cancelled = new OperationCanceledException();
-        var unknown = Assert.Throws<InjectorWorkerException>(() => WorkerInjector.Cancelled(wrote, cancelled, exited.Task));
+        var cancelled = new OperationCanceledException(cancel.Token);
+        var unknown = Assert.Throws<InjectorWorkerException>(() => WorkerInjector.Cancelled(cancelled, exited.Task));
         Assert.Same(exited.Task, unknown.Exited);
         exited.SetResult();
-        Assert.Equal(wrote ? InjectionStatus.Interrupted : InjectionStatus.NothingTyped,
-            WorkerInjector.Cancelled(wrote, cancelled, exited.Task).Status);
+        Assert.Equal(InjectionStatus.Interrupted,
+            WorkerInjector.Cancelled(cancelled, exited.Task).Status);
+        Assert.Equal(wrote ? "writing 2" : "writing 1", await output.ReadLineAsync());
     }
 
     [Fact]
