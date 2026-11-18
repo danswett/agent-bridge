@@ -34,11 +34,12 @@ public static class SlotPreparation
             ?? throw new PackageMismatchException("Slot preparation refused: package bytes do not match the release digest.");
         using var zip = new ZipArchive(held, ZipArchiveMode.Read);
         var (files, manifestIdentity, runtime, bundledHostw) = Payload(zip, version, releaseIdentity);
-        if (Directory.Exists(destination))
+        Prepared Winner()
         {
             Validate(destination, files, runtime, bundledHostw);
             return new(relative, version, digest, manifestIdentity);
         }
+        if (Directory.Exists(destination)) { return Winner(); }
         if (File.Exists(destination)) { throw new InvalidDataException("A file already occupies the slot path."); }
         var slots = Path.GetDirectoryName(destination)!;
         NoLinks(slots);
@@ -52,14 +53,15 @@ public static class SlotPreparation
                 var target = Path.Combine(staging, name);
                 NoLinks(target);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                using var input = entry.Open();
+                using var input = new PayloadStream(entry);
                 using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None);
                 input.CopyTo(output);
                 output.Flush(flushToDisk: true);
             }
             Validate(staging, files, runtime, bundledHostw);
             NoLinks(destination);
-            Directory.Move(staging, destination); // No replacement, including a concurrent preparation.
+            try { Directory.Move(staging, destination); }
+            catch (IOException) when (Directory.Exists(destination)) { return Winner(); }
             return new(relative, version, digest, manifestIdentity);
         }
         finally
@@ -71,10 +73,15 @@ public static class SlotPreparation
     static (Dictionary<string, ZipArchiveEntry> Files, string Identity, string Runtime, bool BundledHostw) Payload(ZipArchive zip, string version, Func<string, string?> releaseIdentity)
     {
         const string prefix = "lib/app/";
+        if (zip.Entries.Count > 10000) { throw new InvalidDataException("Slot archive exceeds the entry limit."); }
+        long expanded = 0;
         var files = new Dictionary<string, ZipArchiveEntry>(StringComparer.OrdinalIgnoreCase);
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in zip.Entries)
         {
+            if (entry.Length < 0 || entry.Length > 512L * 1024 * 1024 || expanded > 1024L * 1024 * 1024 - entry.Length)
+            { throw new InvalidDataException("Slot archive exceeds the expanded size limits."); }
+            expanded += entry.Length;
             var path = entry.FullName.TrimEnd('/');
             if (!SafeRelative(path) || !names.Add(path)
                 || (entry.ExternalAttributes & (int)FileAttributes.ReparsePoint) != 0
@@ -88,7 +95,7 @@ public static class SlotPreparation
         foreach (var required in Required.Where(n => !bundledHostw || !hostwSidecars.Contains(n))) { Require(files, required); }
         var manifests = zip.Entries.Where(e => !e.FullName.Contains('/') && e.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase)).ToArray();
         if (manifests.Length != 1) { throw new InvalidDataException("Slot package requires its release manifest."); }
-        using var manifest = manifests[0].Open();
+        using var manifest = new PayloadStream(manifests[0]);
         var metadata = XDocument.Load(manifest).Root?.Elements().SingleOrDefault(e => e.Name.LocalName == "metadata");
         if (metadata?.Elements().SingleOrDefault(e => e.Name.LocalName == "id")?.Value != "AgentBridgeApp"
             || metadata?.Elements().SingleOrDefault(e => e.Name.LocalName == "version")?.Value is not { } actualVersion
@@ -98,7 +105,7 @@ public static class SlotPreparation
         foreach (var executable in new[] { "AgentBridge", "agent-bridge-host", "agent-bridge-hostw" })
         {
             if (executable == "agent-bridge-hostw" && bundledHostw) { continue; } // Its embedded closure is mandatory after extraction.
-            using var stream = files[executable + ".deps.json"].Open();
+            using var stream = new PayloadStream(files[executable + ".deps.json"]);
             using var deps = JsonDocument.Parse(stream);
             var target = deps.RootElement.GetProperty("runtimeTarget").GetProperty("name").GetString()!;
             if ((!target.EndsWith("/win-x64", StringComparison.Ordinal) && !target.EndsWith("/win-arm64", StringComparison.Ordinal))
@@ -138,8 +145,8 @@ public static class SlotPreparation
 
     internal static bool SafeRelative(string path) => path.Length > 0 && !path.Contains('\\')
         && path.Split('/').All(p => p.Length > 0 && p is not "." and not ".." && !p.EndsWith('.')
-            && !p.EndsWith(' ') && !p.Any(c => c < 32 || "<>:\"|?*".Contains(c))
-            && !Regex.IsMatch(p, @"\A(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|\z)", RegexOptions.IgnoreCase));
+            && !p.EndsWith(' ') && !p.Any(c => c < 32 || "<>:\"|?*~".Contains(c))
+            && !Regex.IsMatch(p, @"\A(?:CON(?:IN\$|OUT\$)?|PRN|AUX|NUL|(?:COM|LPT)[0-9\u00B9\u00B2\u00B3])(?:\.|\z)", RegexOptions.IgnoreCase));
 
     static void Validate(string directory, Dictionary<string, ZipArchiveEntry> expected, string runtime, bool bundledHostw)
     {
@@ -151,12 +158,17 @@ public static class SlotPreparation
             foreach (var path in Directory.EnumerateFileSystemEntries(folder))
             {
                 NoLinks(path); // Check before descending: recursive enumeration would follow a junction.
-                if (Directory.Exists(path)) { pending.Push(path); continue; }
                 var name = Path.GetRelativePath(directory, path);
+                if (Directory.Exists(path))
+                {
+                    if (!expected.Keys.Any(n => n.StartsWith(name + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+                    { throw new InvalidDataException($"Existing slot has an unexpected directory: {name}"); }
+                    pending.Push(path); continue;
+                }
                 if (!expected.TryGetValue(name, out var entry))
                 { throw new InvalidDataException($"Existing slot has an unexpected file: {name}"); }
                 using var actual = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                using var source = entry.Open();
+                using var source = new PayloadStream(entry);
                 var digest = new PackageDigest(PackageDigest.Sha256, Convert.ToHexString(SHA256.HashData(source)));
                 if (actual.Length != entry.Length || !digest.Matches(actual))
                 { throw new InvalidDataException($"Slot payload differs from the verified package: {name}"); }
@@ -165,6 +177,32 @@ public static class SlotPreparation
             }
         }
         if (count != expected.Count) { throw new InvalidDataException("Slot payload is incomplete."); }
+    }
+
+    sealed class PayloadStream(ZipArchiveEntry entry) : Stream
+    {
+        readonly Stream source = entry.Open();
+        long remaining = entry.Length;
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+        public override int Read(Span<byte> buffer)
+        {
+            if (buffer.IsEmpty) { return 0; }
+            var read = source.Read(buffer[..(int)Math.Min(buffer.Length, remaining + 1)]);
+            if (read > remaining || read == 0 && remaining != 0)
+            { throw new InvalidDataException("Slot archive content differs from its declared size."); }
+            remaining -= read;
+            return read;
+        }
+        protected override void Dispose(bool disposing) { if (disposing) { source.Dispose(); } base.Dispose(disposing); }
+        public override bool CanRead => source.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length { get; } = entry.Length;
+        public override long Position { get => Length - remaining; set => throw new NotSupportedException(); }
+        public override void Flush() => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     static void NoLinks(string path)
