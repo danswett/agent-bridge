@@ -18,6 +18,15 @@ Verified. Replay, another host/target, stripped delivery, key-write success and
 hooks/provider confirmation cannot qualify. No caller supplies a Verified flag.
 The older design below does not authorize an idle-Enter fallback or capability table.
 
+## Inactive qualification authority (A-ii-2a)
+The host-only grant kernel accepts one approval id once, bound to exact SHA,
+disposable VM/run/host identities and at most 60 minutes. Only trusted owner
+approval or SRE may issue; only SRE CLI on that disposable run may consume by CAS.
+Every transition requires an atomic append and durable flush through the Fleet
+journal adapter; revocation never erases history. Missing adapters refuse.
+This slice supplies only fake adapters in tests: no CLI verb, owner approval UI,
+Fleet store writer, qualification keys or live run is enabled.
+
 ## Problem and cause
 Copilot CLI joins steers pending mid-turn with `\n\n` into one user turn (6 of 692 turns in one
 transcript). The host types bare text (`HaReplies.cs:26`) and only Lite and `RetryEpisode` set
