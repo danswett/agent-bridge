@@ -4444,11 +4444,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         time.Advance(TimeSpan.FromMinutes(2));
         updater.DownloadFails = null;
+        updater.CheckFails = new IOException("the feed is offline");
         await auto.Ask(UpdateAskKind.Install, Press);
         await auto.Ask(UpdateAskKind.Install, Press);
         await auto.TickAsync();
 
         Assert.Equal(2, updater.Downloads);
+        Assert.Equal(1, updater.Checks);
         Assert.Equal("0.2.0", shared.Ready);
         Assert.Equal((UpdatePhase.Waiting, Press), (auto.State.Phase, auto.State.Request));
         Assert.False(updater.Applied);
@@ -4550,16 +4552,16 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
-    public async Task A_download_that_failed_is_not_tried_again_for_a_while_however_often_a_device_presses()
+    public async Task A_download_that_failed_is_not_tried_again_for_a_while_however_often_a_device_checks()
     {
         prefs = prefs with { AutoUpdate = false };
         updater.DownloadFails = new IOException("the connection was reset");
         await StartAsync();
-        await AskedAsync(UpdateAskKind.Install);
+        await AskedAsync(UpdateAskKind.Check);
         Assert.Equal(1, updater.Downloads);
 
         time.Advance(TimeSpan.FromMinutes(2));
-        await AskedAsync(UpdateAskKind.Install, "9b8c7d6e-5f40-4321-8abc-def012345678");
+        await AskedAsync(UpdateAskKind.Check, "9b8c7d6e-5f40-4321-8abc-def012345678");
         Assert.Equal(1, updater.Downloads);
         Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
         Assert.Contains("trying again soon", auto.State.Last.Reason);
