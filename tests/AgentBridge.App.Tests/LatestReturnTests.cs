@@ -6,6 +6,41 @@ namespace AgentBridge.App.Tests;
 public sealed class LatestReturnTests
 {
     [Fact]
+    public void Jump_pins_until_released_and_only_another_jump_rearms_it()
+    {
+        var hatch = new LatestHatch();
+        hatch.Jump();
+        Assert.True(hatch.AtEnd(false));
+        hatch.Release();
+        Assert.False(hatch.AtEnd(true));
+        hatch.Jump();
+        Assert.True(hatch.AtEnd(false));
+    }
+
+    [Theory]
+    [InlineData(600, 900, 500, 600)]
+    [InlineData(600, 800, null, 600)]
+    [InlineData(600, 400, null, 400)]
+    public void A_released_hatch_without_a_visible_row_keeps_its_numeric_offset(
+        double offset, double extent, double? previousExtent, double expected)
+    {
+        var hatch = new LatestHatch();
+        hatch.Jump();
+        hatch.Release();
+        Assert.Equal(expected, hatch.RestoreOffset(offset, extent, previousExtent));
+    }
+
+    [Fact]
+    public void Before_jump_the_existing_automatic_follow_and_prepend_compensation_are_unchanged()
+    {
+        var hatch = new LatestHatch();
+        hatch.Release();
+        Assert.True(hatch.AtEnd(true));
+        Assert.False(hatch.AtEnd(false));
+        Assert.Equal(900, hatch.RestoreOffset(600, 900, 600));
+    }
+
+    [Fact]
     public void The_latest_input_receipt_for_the_exact_view_is_accepted()
     {
         var gate = new LatestReceiptGate(Guid.NewGuid());

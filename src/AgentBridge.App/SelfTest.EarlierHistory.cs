@@ -70,6 +70,7 @@ static partial class SelfTest
                 check(history.Turns.Count == count && after is not null && top is { } y && Math.Abs(after.TransformToVisual(scroll).TransformPoint(default).Y - y) <= 1,
                     $"{(button ? "Load earlier messages" : "scrolling near the top")} adds twenty earlier messages and keeps the first visible turn in place");
             }
+            await JumpLatest(view, check);
             await Page(true, 40);
             await Page(false, 60);
             check(history.Turns.Select(t => t.Id).Distinct().Count() == history.Turns.Count, "earlier pages never duplicate a turn");
