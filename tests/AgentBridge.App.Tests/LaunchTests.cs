@@ -63,6 +63,70 @@ public sealed class LaunchTests : IAsyncLifetime
 
     static Choice Pick(IReadOnlyList<Choice> list, string value) => list.Single(c => c.Value == value);
 
+    async Task AgentLaunchSwitch(bool? enabled, string state = "ok")
+    {
+        host.On("host.agentSettings.status", _ => new { state, settings = new Dictionary<string, object> { ["agents.launch.enabled"] = new { value = enabled } } });
+        await launch.RefreshAsync();
+    }
+
+    [Theory]
+    [InlineData(false, "ok")]
+    [InlineData(null, "ok")]
+    [InlineData(true, "unreadable")]
+    [InlineData(true, "refused")]
+    public async Task LaunchViewModel_hides_the_tick_without_a_readable_enabled_switch(bool? enabled, string state)
+    {
+        await AgentLaunchSwitch(enabled, state);
+        Assert.False(launch.ShowMayStartAgents);
+        ui.Post(() => launch.MayStartAgents = true);
+        Assert.False(launch.MayStartAgents);
+        Assert.False(JsonSerializer.SerializeToElement(launch.Settings(), ProtocolJson.Options).TryGetProperty("agentScope", out _));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LaunchViewModel_sends_scope_only_when_ticked_and_resets_after_a_launch(bool ticked)
+    {
+        await AgentLaunchSwitch(true);
+        Assert.True(launch.ShowMayStartAgents);
+        Assert.False(launch.MayStartAgents);
+        ui.Post(() => { launch.MayStartAgents = ticked; launch.Launch(); });
+        await Wait.UntilAsync(() => launch.State == "started", "the launch result");
+        var sent = Assert.Single(Sent());
+        Assert.Equal(ticked, sent.TryGetProperty("agentScope", out var scope));
+        if (ticked) { Assert.Equal(AgentProtocol.ScopeReadReplyLaunch, scope.GetString()); }
+        Assert.False(launch.MayStartAgents);
+    }
+
+    [Fact]
+    public async Task LaunchViewModel_drops_a_tick_when_the_switch_is_disabled_or_a_resume_is_picked()
+    {
+        await AgentLaunchSwitch(true);
+        ui.Post(() => launch.MayStartAgents = true);
+        await AgentLaunchSwitch(false);
+        Assert.False(launch.MayStartAgents);
+        await AgentLaunchSwitch(true);
+        Assert.False(launch.MayStartAgents);
+        ui.Post(() => { launch.MayStartAgents = true; launch.Resume = Pick(launch.Resumes, "old-1"); });
+        Assert.False(launch.ShowMayStartAgents);
+        Assert.False(launch.MayStartAgents);
+        Assert.False(JsonSerializer.SerializeToElement(launch.Settings(), ProtocolJson.Options).TryGetProperty("agentScope", out _));
+    }
+
+    [Fact]
+    public async Task LaunchViewModel_retrying_a_failed_launch_as_a_new_request_does_not_regrant_scope()
+    {
+        await AgentLaunchSwitch(true);
+        outcome = _ => new LaunchResult(LaunchOutcome.Failed, "the agent exited");
+        ui.Post(() => { launch.MayStartAgents = true; launch.Launch(); });
+        await Wait.UntilAsync(() => launch.State == "failed", "the failed launch");
+        Assert.False(launch.MayStartAgents);
+        ui.Post(launch.Resend);
+        await Wait.UntilAsync(() => Sent().Length == 2, "the retry");
+        Assert.False(Sent()[1].TryGetProperty("agentScope", out _));
+    }
+
     [Fact]
     public async Task A_launch_sends_every_setting_and_the_whole_prompt_then_opens_the_new_sessions_card()
     {
