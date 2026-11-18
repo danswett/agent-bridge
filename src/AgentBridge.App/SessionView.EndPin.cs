@@ -42,7 +42,7 @@ public sealed partial class SessionView
     {
         anchoring = to;
         anchorAt = to;
-        scroll.ChangeView(null, to, null, disableAnimation: true);
+        if (!scroll.ChangeView(null, to, null, disableAnimation: true)) { anchoring = null; }
     }
 }
 
