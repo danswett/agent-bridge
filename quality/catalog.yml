@@ -241,6 +241,19 @@ suites:
     baseline: { tests: 609, seconds: 30 }
     status: exists
 
+  - id: session-reaper
+    validation_plan: native
+    kind: component
+    ring: 0
+    select: affected
+    security_sensitive: true
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    triggers: [src/AgentBridge.Host/Reaping/**, tests/AgentBridge.Host.Tests/SessionReaper*]
+    command: dotnet test tests/AgentBridge.Host.Tests -c Release -m:1 --filter "FullyQualifiedName~SessionReaper"
+    where: ci.yml product
+    status: exists
+
   - id: hooks
     validation_plan: native
     kind: unit
