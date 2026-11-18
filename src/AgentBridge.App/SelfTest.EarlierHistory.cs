@@ -106,7 +106,7 @@ static partial class SelfTest
             check(history.Turns.Select(t => t.Id).Distinct().Count() == history.Turns.Count, "earlier pages never duplicate a turn");
             lock (requests) { check(requests.SequenceEqual(new string?[] { null, "60", "40" }), "the button and scrolling use consecutive pages of the same history"); }
             var line = ById<TextBlock>(view, "HistoryLine")!;
-            var retry = Find<Button>(view).Single(b => b.Content is "Try again");
+            var retry = (Button)view.FindName("HistoryRetry");
             check(line.Visibility == Visibility.Collapsed && retry.Visibility == Visibility.Collapsed,
                 "shows neither a start row nor Try again while the host still has earlier messages");
 
