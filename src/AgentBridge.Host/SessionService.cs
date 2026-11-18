@@ -19,7 +19,7 @@ namespace AgentBridge.Host;
 // push.* ops, which register a device for notifications, go to the
 // PushNotifier, usage.* to the UsageService, and launch.options and session.launch to the
 // launcher (docs/protocol/v1-launch.md).
-public sealed class SessionService
+public sealed partial class SessionService
 {
     readonly ISessionSource source;
     readonly MachineInfo machine;
@@ -50,6 +50,7 @@ public sealed class SessionService
     // may have arrived takes the session back from an agent at once, as one typed at the machine.
     public SessionDrivers? Drivers { get; init; }
     public TimeProvider Time { get; init; } = TimeProvider.System;
+    public IWorkStateClearance? FleetStopClearance { get; init; }
     public Fleet.FleetNames? FleetNames { get; init; }
     // Shared by hello and the relay load handlers; only the composition reads host settings.
     public Func<bool> LoadEnabled { get; init; } = () => true;

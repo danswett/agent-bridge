@@ -16,6 +16,7 @@ public sealed record AgentCredential(string Id, string Session, string LaunchId,
     string Kind = "session", string? Principal = null)
 {
     public bool FleetLaunch { get; init; }
+    public bool FleetStop { get; init; }
     // Record construction only; minting and persisting a script token are separate operations.
     public static AgentCredential Script(string id, string machine, string name, DateTimeOffset issuedAt, TimeSpan? lifetime = null)
     {
@@ -101,6 +102,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     internal AgentLaunchGate LaunchGate { get; }
     internal FleetLaunchGrant FleetGrant { get; }
     internal bool IsScriptConnection(IProtocolChannel channel) => connections.TryGetValue(channel, out var c) && c.Script;
+    internal string? ScriptAuditPrincipalOf(IProtocolChannel channel) => connections.TryGetValue(channel, out var c) && c.Script ? c.Principal : null;
 
     public int Count { get { lock (gate) { return records.Count; } } }
 
@@ -476,7 +478,9 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         }
     }
 
-    internal void SetFleetLaunch(string name, bool enabled)
+    internal void SetFleetLaunch(string name, bool enabled) => SetFleetGrant(name, enabled, stop: false);
+    internal void SetFleetStop(string name, bool enabled) => SetFleetGrant(name, enabled, stop: true);
+    void SetFleetGrant(string name, bool enabled, bool stop)
     {
         lock (gate)
         {
@@ -484,9 +488,10 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             var matches = records.FindAll(r => r.Credential.Kind == "script"
                 && r.Credential.Principal == $"script:{machine}/{name}" && r.Credential.ExpiresAt > time.GetUtcNow());
             if (matches.Count == 0) { throw new InvalidOperationException("no live script credential exists for that name"); }
-            if (enabled && FleetGrant.CheckGrant(matches[0].Credential with { FleetLaunch = true }) is { } why)
+            if (!stop && enabled && FleetGrant.CheckGrant(matches[0].Credential with { FleetLaunch = true }) is { } why)
             { throw new InvalidOperationException($"refused: {why}"); }
-            foreach (var r in matches) { records[records.IndexOf(r)] = r with { Credential = r.Credential with { FleetLaunch = enabled } }; }
+            foreach (var r in matches) { records[records.IndexOf(r)] = r with { Credential = stop
+                ? r.Credential with { FleetStop = enabled } : r.Credential with { FleetLaunch = enabled } }; }
             try { Save(); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
@@ -536,7 +541,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             {
                 if (r?.Credential is not { } c || r.Hash is not { Length: 64 } || !IsHex(r.Hash) || c.Id is not { Length: > 0 } || !ids.Add(c.Id)
                     || !AgentProtocol.Scopes.Contains(c.Scope, StringComparer.Ordinal) || c.Chain is null
-                    || !(c.Kind == "session" ? !c.FleetLaunch && ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
+                    || !(c.Kind == "session" ? !c.FleetLaunch && !c.FleetStop && ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
                 {
                     throw new JsonException("invalid credential record");
                 }

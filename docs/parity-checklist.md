@@ -34,6 +34,14 @@ the row in parity.md section N whose first cell starts with those words. CI chec
 
 The checks live in `ChecklistTests`.
 
+## Agent-stop parity
+
+An agent ends a session that an agent started:
+[host authorization gate](host-stop.md#sre-agent-stopping),
+[acceptance](https://github.com/danswett/agent-bridge/issues/2741).
+Focused `FleetProvenanceTests`, `WorkStateClearanceTests` and `StopFlowTests.Fleet_stop`
+cover this with fake processes; live disposable-VM rehearsal remains separate.
+
 ## What runs where
 
 The rehearsal needs **two** disposable machines.

@@ -762,7 +762,7 @@ are listed separately, off, each with its warning. Until a host is in roster
 | `session.answer`: an approval (Copilot permission, Claude permission, Codex approval) | **Never** | Not in the action set (§4.3), and refused on the pipe for agent connections (`LocalApi.cs:44-47`'s rule kept) |
 | `session.answer`: an `ask_user` or `AskUserQuestion` form | **No in v1** (Q3) | As above. Decision 1 lists read, reply and launch only |
 | `launch.trust.answer` (folder trust, Bypass Permissions warning) | **Never** | Relay person-device only (v1-launch.md:216-219), and not in the action set |
-| `session.stop` | **No in v1** (Q12) | Not in the action set |
+| `session.stop` | SRE controller only, for verified agent-fleet launches (Q12) | Exact-node provenance and work-clearance gate; never ordinary agent scope |
 | `attachment.*` | **No in v1** | Not in the action set |
 | `update.*`, `push.*`, `host.*`, `machine.forget`, `pairing.*`, roster ops, settings | **Never** | Not in the action set. Pipe management ops are already refused inside agent sessions |
 
@@ -1751,7 +1751,7 @@ Nothing is built before #55 and AP5 (AP11, §11.2).
    * **The residual (H2):** shown once, directly under it, and never folded away: "Members read
      instruction files and issue comments. Text there can steer them."
    * **Then, in smaller type:** "They can send each other messages. They can't approve anything,
-     trust folders, answer forms or stop sessions."
+     trust folders, answer forms or stop sessions through group permission (the separate SRE gate is Q12)."
    * **Members:** one row per session, showing its verified label (§6.3), machine and agent; an
      **Allow all** badge where it applies; its current taint at that moment; and a checkbox, with
      the accessible name "Include *title* on *machine*".
@@ -3757,8 +3757,12 @@ Each has a recommendation. None is decided by this note.
 11. **Q11. Use the trusted-peer floor (#407) as an interim for cross-machine agent messaging?**
     **Recommended: no.** Decision 4 says wait for the roster, and the floor is for disposable
     evaluation (host-config.md:145-148). It may host AP5's tests on disposable hosts only.
-12. **Q12. May an agent stop a session?** **Recommended: not in v1** (decision 1). Revisit
-    allowing a session to stop sessions *it launched*, which is the useful case.
+12. **Q12. May an agent stop a session?** **Yes, through the separately host-granted SRE
+    controller, only when host launch provenance proves an agent fleet launch.** This
+    [parity correction](https://github.com/danswett/agent-bridge/issues/2741) supersedes
+    the earlier blanket prohibition, not approval/trust restrictions. Person-started,
+    unknown, held/private and unpushed/open-PR work is refused; exact nodes and fresh
+    host clearance are required ([host gate](../host-stop.md#sre-agent-stopping)).
 13. **Q13. Read scope within the account.** **Recommended:** the same `Session` a person's device
     gets (decision 2: "any session"), minus `inbound.exclude`. Cross-account uses the projection
     (§7.4).
