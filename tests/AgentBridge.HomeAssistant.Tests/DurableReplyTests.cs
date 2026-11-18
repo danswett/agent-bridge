@@ -38,6 +38,41 @@ public sealed partial class ReplyTests
     }
 
     [Fact]
+    public async Task A_terminal_only_question_refuses_and_removes_a_queued_reply_instead_of_delivering_it_later()
+    {
+        await using var c = await Ready();
+        c.Observe(ha.SendFromCard(Node, "queued before question", rid: "terminal-queued"));
+        Idle(question: Pick() with { AnswerAtMachine = true });
+        await Pass(c);
+
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        Assert.Null(new DurableInbox(InboxPath).Peek(Node));
+        await CardCloses(c);
+        Assert.Empty(replied);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_interrupted_rid_retried_during_a_question_keeps_its_unconfirmed_outcome(bool terminal)
+    {
+        await using (var first = await Ready())
+        {
+            first.Observe(ha.SendFromCard(Node, "possibly submitted", rid: "interrupted-question"));
+            new DurableInbox(InboxPath).Start(Node, "interrupted-question", time.GetUtcNow());
+        }
+        Idle(question: Pick() with { AnswerAtMachine = terminal });
+        await using var restarted = Connector();
+        await Pass(restarted);
+        await Do(restarted, ha.SendFromCard(Node, "retry", driver: "agent", rid: "interrupted-question"));
+
+        Assert.Equal("unconfirmed", Ack.GetProperty("outcome").GetString());
+        Assert.Null(new DurableInbox(InboxPath).Peek(Node));
+        await CardCloses(restarted);
+        Assert.Empty(replied);
+    }
+
+    [Fact]
     public async Task A_session_ending_while_the_host_is_down_does_not_leave_pending_entries_using_inbox_capacity()
     {
         await using (var first = await Ready())
@@ -55,6 +90,20 @@ public sealed partial class ReplyTests
         Assert.Null(new DurableInbox(InboxPath).Peek(Node));
         Assert.Empty(JsonNode.Parse(File.ReadAllText(InboxPath))!["Messages"]!.AsArray());
         Assert.Empty(replied);
+    }
+
+    [Fact]
+    public async Task A_transiently_absent_published_session_keeps_its_queued_reply()
+    {
+        await using var c = await Ready();
+        c.Observe(ha.SendFromCard(Node, "survives discovery gap", rid: "gap"));
+        sessions.End(A);
+        await Pass(c);
+        Assert.NotNull(new DurableInbox(InboxPath).Peek(Node));
+        Idle();
+        for (var n = 0; n < 3; n++) { await Pass(c); await c.DeliveredAsync(); }
+
+        Assert.Equal("survives discovery gap", Assert.Single(replied).Text);
     }
 
     [Theory]
