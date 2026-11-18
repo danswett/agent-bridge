@@ -7,7 +7,7 @@ namespace AgentBridge.Host;
 
 public static partial class LocalApi
 {
-    static async Task<LaunchResult> LaunchAgentAsync(SessionService sessions, AgentCredentials credentials,
+    static async Task<LaunchResult> LaunchAgentAsync(SessionService? sessions, AgentCredentials credentials,
         AgentCredential caller, IProtocolChannel channel, JsonElement data, AgentAuditLog? audit,
         RefusalAudits refusals, Action<string>? log)
     {
@@ -31,7 +31,7 @@ public static partial class LocalApi
         var request = data.Deserialize<LaunchRequest>(ProtocolJson.Options)!;
         if (!Guid.TryParseExact(request.Request, "D", out _)) { return Denied("request must be a UUID"); }
         if (request.Agent is null) { return Denied("an agent launch requires an explicit agent"); }
-        if (sessions.AgentLauncher is not { } launcher) { return Denied("the agent launch service is unavailable"); }
+        if (sessions?.AgentLauncher is not { } launcher) { return Denied("the agent launch service is unavailable"); }
         var options = await launcher.OptionsAsync();
         var gate = credentials.LaunchGate;
         var callerCheck = new AgentLaunchCallerCheck(audit, refusals);
