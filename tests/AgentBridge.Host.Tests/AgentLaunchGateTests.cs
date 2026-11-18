@@ -85,13 +85,13 @@ public sealed class AgentLaunchGateTests : IDisposable
         var now = DateTimeOffset.UtcNow;
         var gate = new AgentLaunchGate(folder, () => now);
         Write(Config(DefaultLimits));
-        for (var i = 0; i < 3; i++) { Assert.True(gate.CheckLaunch("a", $"r{i}", "hash").Allowed); }
+        for (var i = 0; i < 3; i++) { Assert.True(gate.CheckLaunch("a", $"r{i}", "hash").Allowed); gate.LaunchFinished("a", $"r{i}"); }
         now = now.AddSeconds(10);
         var own = gate.CheckLaunch("a", "fourth", "hash");
         Assert.False(own.Allowed);
         Assert.Equal("rate-limited", own.Reason);
         Assert.Equal(3590, own.RetryAfterSeconds);
-        for (var i = 0; i < 7; i++) { Assert.True(gate.CheckLaunch($"o{i}", "r", "hash").Allowed); }
+        for (var i = 0; i < 7; i++) { Assert.True(gate.CheckLaunch($"o{i}", "r", "hash").Allowed); gate.LaunchFinished($"o{i}", "r"); }
         var machine = gate.CheckLaunch("another", "eleventh", "hash");
         Assert.False(machine.Allowed);
         Assert.Equal("rate-limited", machine.Reason);

@@ -181,7 +181,7 @@ const READS = {
   Activity: { read: readActivity },
   Subagent: { read: readSubagent },
   // attention (#800) is read from the PWA's own slice of it on; until then the status beside it is shown.
-  Session: { read: readSession, unread: ['attention'] },
+  Session: { read: readSession, unread: ['attention', 'transcript_bytes', 'transcript_bytes_unavailable', 'transcript_observation'] },
   DiscoveryHeld: { read: readDiscoveryHeld },
   // As listAll pages through it: the cursor it reads is the one it sends for the next page.
   SessionList: {
@@ -486,6 +486,7 @@ const NOT_REPLAYED = {
   ManageState: 'the PWA does not manage machines yet (#801)',
   ManageResult: 'the PWA does not manage machines yet (#801)',
   Attention: 'read within Session once the PWA shows attention (#800); until then Session leaves it unread',
+  TranscriptObservation: 'metadata for coordinator census, not displayed by the PWA (#2739)',
   // The PWA shows what a reboot took once Design's spec lands (#780, client slice); until then
   // it ignores machine.restore and reads a restored push as a question (title and body only).
   RestoreNotice: 'the PWA does not read machine.restore yet (#780)',

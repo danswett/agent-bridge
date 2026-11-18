@@ -194,6 +194,31 @@ public sealed class AgentAdoptionPipeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_persons_cli_revoke_removes_launch_scope_and_refuses_the_sessions_next_launch()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var token = store.Mint(Session, "launch1", Environment.ProcessId, Started, AgentProtocol.ScopeReadReplyLaunch);
+        await using var agent = await LocalClient.ConnectAsync(LocalEndpoint.For(root));
+        await agent.CallAsync(AgentProtocol.Hello, new AgentHelloRequest { Token = token });
+        var ancestry = new ProcessAncestry([new PeerProcess(Environment.ProcessId, Started, "fixture")], true);
+        Assert.NotNull(store.Check(token, ancestry).Accepted);
+        Assert.Equal(4, await AgentCommands.RunAsync(["agents", "revoke", Session], root, () => true, TextWriter.Null, TextWriter.Null));
+        Assert.NotNull(store.Check(token, ancestry).Accepted);
+
+        callers.Kind = CallerKind.HostCli;
+        var output = new StringWriter();
+        var error = new StringWriter();
+        Assert.Equal(0, await AgentCommands.RunAsync(["agents", "revoke", Session], root, () => false, output, error));
+        Assert.Contains("no longer acts", output.ToString());
+        Assert.Equal("", error.ToString());
+        Assert.Null(store.Check(token, ancestry).Accepted);
+        callers.Kind = CallerKind.Agent;
+        var refusal = await Assert.ThrowsAsync<HostErrorException>(() =>
+            agent.CallAsync(LaunchProtocol.Launch, new LaunchRequest { Request = Guid.NewGuid().ToString("D") }));
+        Assert.Contains("for the person", refusal.Message);
+    }
+
+    [Fact]
     public async Task The_cli_treats_an_absent_revocation_as_a_successful_no_op()
     {
         if (!OperatingSystem.IsWindows()) { return; }

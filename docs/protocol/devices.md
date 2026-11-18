@@ -222,6 +222,11 @@ opening existing hostSign custody. It neither provisions nor repairs keys, write
 the roster, nor contacts a relay. Refusals are content-free codes (`no-switch`,
 `missing-key`, `account`, `generation`, `not-pinned`, `invalid-descriptor`,
 `attempt-already-open`); absent, unreadable and wrong-tier keys all use `missing-key`.
+Custody opens and signs outside the reader lock; the account, generation and switch
+are checked again before publication. Same-instance attempts are serialized.
+The key loader consumes the exact privately validated reference and encrypted-key
+bytes without reopening either file. Expected custody/provider failures use
+`missing-key`, without retaining an exception or an opened attempt.
 The descriptor carries only public device fields and the hostSign binding proof.
 The existing person-approver exchange is the sole add path; descriptor equality
 also covers `hostSign`, `hostSignAlg` and `hostSignProof`. Status is `enrolled` only
@@ -725,8 +730,8 @@ The later snapshot extension must retain the exact signed collection, identity,
 frontier, set, expiry and consumed-challenge replay state atomically alongside
 the 2b-1 clock/replay state, within its existing 256 KiB limit; full or failed
 storage refuses, without evicting live replay records or changing the pin.
-This is a future reviewed schema, not permission to append fields to today's v1
-snapshot or overwrite it with an older schema. Keep capability-request replay
+The storage-only v2 schema below supplies this extension; challenge handling and
+verification remain separate. Never overwrite it with an older schema. Keep capability-request replay
 distinct from person-command execution replay: collecting evidence consumes no
 person command and authorizes nothing. Keep `acceptHostSign: false`.
 Retain consumed `(request, nonce, consent, expiresAt)` records until durable
@@ -744,6 +749,27 @@ Evidence cannot carry to another account, generation, genesis, frontier or set.
 Whole-snapshot restoration has the 2b-1 anti-rollback residual; no repair by deletion.
 Unsigned support fields in commands are refused by strict parsing; settings and
 environment values never participate in this decision.
+
+**Snapshot v2 storage (#2381 part A).** Successful commits migrate v1 to v2;
+loading v1 alone never writes. V2 emits `v`, `account`, `generation`, `genesis`,
+`heads`, `acceptHostSign`, `highWater`, `floor`, `highestIssuedAt`, `requests`,
+`capHighestIssuedAt`, `consumed`, `evidence` in that order. The first ten retain
+their meanings and `acceptHostSign` remains false. V1 binaries refuse v2 without
+repair. Unknown, duplicate, missing or future-version fields refuse.
+`consumed` has at most 32 records with exactly `request`, `nonce`, `consent`,
+`issuedAt`, `expiresAt`; request and nonce are independently unique. The separate
+512-person-command replay set is unchanged. Inserts prune only strictly after
+expiry plus 120 seconds; full live stores refuse `consumed-full`, duplicates
+refuse `replay`. Clock marks only ratchet; a supplied clock regression raises the
+floor to at least the highest capability issue time and does not prune records.
+`evidence` is null or exactly `collection`, `frontier`, `verifiers`, `expiresAt`.
+Collection is canonical base64url of up to 132,096 exact bytes; digests are 32
+bytes. V1 migration starts with empty consumed records and null capability mark
+and evidence. Internal `ConsumeCapability(record, now)` establishes durable clock
+state; `StoreEvidence(evidence)` requires an existing snapshot, and `ReadEvidence()`
+reloads it without restoring a challenge. Both writers use the same private
+256-KiB atomic commit and file lock. This storage API verifies no signatures,
+issues no challenge, authorizes no command and does not enable a transition.
 
 **Normative design vectors.** These are requirements for the later executable
 C#/PWA vectors, not a claim that today's parsers implement the new schemas.
