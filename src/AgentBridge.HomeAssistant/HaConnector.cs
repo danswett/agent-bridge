@@ -26,6 +26,8 @@ public sealed record HaConnectorOptions
     // Where sessions waiting to be retired are remembered across a restart. None in tests that
     // do not need it.
     public string? StateFile { get; init; }
+    // False leaves the saved inbox untouched and uses the legacy in-memory reply path.
+    public bool DurableReplyIngress { get; init; } = true;
     public TimeSpan Tick { get; init; } = TimeSpan.FromSeconds(1);
     // How often the Detailed activity switch and the dashboard are read: the daemon's reconcile.
     public TimeSpan Reconcile { get; init; } = TimeSpan.FromSeconds(15);
@@ -303,6 +305,8 @@ public sealed partial class HaConnector : IAsyncDisposable
         this.updates = updates;
         this.answer = answer;
         this.reply = reply;
+        inbox = reply is not null && options.ConsumeAnswers && options.DurableReplyIngress && options.StateFile is { } state
+            ? new DurableInbox(state + ".inbox") : null;
         stopper = stop;
         // Every write asks first (design G5): a pass can run long (each request may take its
         // timeout), and agent-ha-bridge starting part-way through must stop the rest of it, not
@@ -703,6 +707,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             allDirty = false;
         }
         var live = source.Snapshot().ToDictionary(s => s.Id, StringComparer.Ordinal);
+        inbox?.ForgetExcept(live.Keys.Concat(underWay.Keys).Select(HaContract.NodeId).ToHashSet(StringComparer.Ordinal));
         List<string> work;
         List<(string Id, string Node)> gone;
         lock (gate)

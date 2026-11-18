@@ -171,21 +171,101 @@ public sealed class DurableInboxTests : IDisposable
         Assert.Null(new DurableInbox(Pathname).Peek("one"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Full_queues_persist_refused_rids_without_displacing_accepted_replies(bool totalLimit)
+    {
+        var messages = Enumerable.Range(0, totalLimit ? 1000 : 100)
+            .Select(n => new InboxMessage(totalLimit ? "node" + n / 100 : "node0", "r" + n,
+                "sender", "message", Now, null)).ToList();
+        File.WriteAllText(Pathname, JsonSerializer.Serialize(new { Version = 1, Messages = messages }));
+        var inbox = new DurableInbox(Pathname);
+        var node = totalLimit ? "overflow" : "node0";
+        var refused = inbox.Enqueue(node, "overflow", "sender", "private overflow", Now);
+
+        Assert.Equal("refused", refused.Outcome);
+        Assert.NotNull(refused.DeliveredAt);
+        Assert.Empty(refused.Payload);
+        Assert.DoesNotContain("private overflow", File.ReadAllText(Pathname));
+        var saved = JsonDocument.Parse(File.ReadAllText(Pathname)).RootElement.GetProperty("Messages")
+            .Deserialize<List<InboxMessage>>()!;
+        Assert.All(messages, m => Assert.Contains(m, saved));
+        inbox.Deliver("node0", "r0", Now);
+        inbox.Deliver("node0", "r1", Now);
+        inbox = new DurableInbox(Pathname);
+        Assert.Equal(refused, inbox.Enqueue(node, "overflow", "changed", "retry", Now.AddMinutes(1)));
+        Assert.Null(inbox.Enqueue(node, "new", "sender", "new", Now).DeliveredAt);
+        Assert.Equal("r2", inbox.Peek("node0")!.Rid);
+    }
+
     [Fact]
-    public void Inbox_caps_reject_full_queues_and_prune_delivered_entries()
+    public void Absence_requires_three_consecutive_passes_and_presence_resets_the_guard()
     {
         var inbox = new DurableInbox(Pathname);
-        for (var n = 0; n < 100; n++) { inbox.Enqueue("node0", "r" + n, "sender", "message", Now); }
-        Assert.Throws<InvalidOperationException>(() => inbox.Enqueue("node0", "overflow", "sender", "message", Now));
+        inbox.Enqueue("one", "a", "sender", "pending", Now);
+        inbox.Enqueue("two", "b", "sender", "delivered", Now);
+        inbox.Deliver("two", "b", Now);
+        IReadOnlySet<string> both = new HashSet<string> { "one", "two" };
+        IReadOnlySet<string> none = new HashSet<string>();
 
-        for (var node = 1; node < 10; node++)
+        inbox.ForgetExcept(none);
+        inbox.ForgetExcept(none);
+        Assert.NotNull(inbox.Peek("one"));
+        Assert.NotNull(inbox.Find("two", "b"));
+        inbox.ForgetExcept(both);
+        inbox.ForgetExcept(none);
+        inbox.ForgetExcept(none);
+        Assert.NotNull(inbox.Peek("one"));
+        Assert.NotNull(inbox.Find("two", "b"));
+        inbox.ForgetExcept(none);
+        Assert.Null(inbox.Peek("one"));
+        Assert.Null(inbox.Find("two", "b"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Migration_preserves_v1_and_the_v2_fence_refuses_missing_or_rolled_back_state(bool rollback)
+    {
+        var legacy = """{"Version":1,"Messages":[]}""";
+        File.WriteAllText(Pathname, legacy);
+        var inbox = new DurableInbox(Pathname);
+        inbox.Enqueue("one", "a", "sender", "pending", Now);
+        Assert.Equal(legacy, File.ReadAllText(Pathname + ".v1"));
+        Assert.True(File.Exists(Pathname + ".v2"));
+        var snapshot = JsonDocument.Parse(File.ReadAllText(Pathname)).RootElement;
+        Assert.Equal(2, snapshot.GetProperty("Version").GetInt32());
+        Assert.Empty(snapshot.GetProperty("Retired").EnumerateArray());
+        if (rollback) { File.WriteAllText(Pathname, legacy); }
+        else { File.Delete(Pathname); }
+
+        if (rollback) { Assert.Throws<InvalidDataException>(() => new DurableInbox(Pathname).Peek("one")); }
+        else { Assert.Throws<FileNotFoundException>(() => new DurableInbox(Pathname).Peek("one")); }
+    }
+
+    [Theory]
+    [InlineData("""{"Version":2,"Messages":[],"Retired":[{"Node":"one","At":"2026-11-16T00:00:00Z","Resolution":0}]}""", true)]
+    [InlineData("""{"Version":2,"Messages":[{"Node":"one","Rid":"a","Sender":"s","Payload":"p","Attempt":1}],"Retired":[]}""", false)]
+    public void The_C2_reader_preserves_recovery_or_retirement_data_when_refusing_or_saving(string snapshot, bool retired)
+    {
+        File.WriteAllText(Pathname, snapshot);
+
+        var inbox = new DurableInbox(Pathname);
+        var added = inbox.Enqueue("one", "b", "sender", "new", Now);
+        if (retired)
         {
-            for (var n = 0; n < 100; n++) { inbox.Enqueue("node" + node, "r" + n, "sender", "message", Now); }
+            Assert.Equal("refused", added.Outcome);
+            Assert.Equal(snapshot, File.ReadAllText(Pathname));
         }
-        Assert.Throws<InvalidOperationException>(() => inbox.Enqueue("overflow", "full", "sender", "message", Now));
-        inbox.Deliver("node0", "r0", Now);
-        Assert.Equal("full", inbox.Enqueue("overflow", "full", "sender", "message", Now).Rid);
-        Assert.Equal("r1", inbox.Peek("node0")!.Rid);
+        else
+        {
+            Assert.Null(added.DeliveredAt);
+            Assert.Equal(1, new DurableInbox(Pathname).Find("one", "a")!.Attempt);
+            Assert.Equal("p", inbox.Find("one", "a")!.Payload);
+            Assert.Empty(JsonDocument.Parse(File.ReadAllText(Pathname)).RootElement.GetProperty("Retired").EnumerateArray());
+        }
+        Assert.True(File.Exists(Pathname + ".v2"));
     }
 
     [Fact]
