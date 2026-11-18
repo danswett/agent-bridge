@@ -96,7 +96,7 @@ public sealed partial class SessionView
         };
         scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); ReleasePin(); };
         scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
-        HookConversationPointer(scroll);
+        HookConversationInput(scroll);
         // Take the view only when focus actually asks to scroll out of it, not on every Tab.
         ConversationHeader.BringIntoViewRequested += FocusScroll;
         ConversationFooter.BringIntoViewRequested += FocusScroll;

@@ -90,7 +90,7 @@ namespace AgentBridge.App
         double? keyTarget = null;
         double anchorAt;
 
-        public SessionView() => HookConversationPointer(Scroller);
+        public SessionView() => HookConversationInput(Scroller);
         public Microsoft.UI.Xaml.Controls.ScrollViewer Scroller => ConversationScroll!;
         public bool Pinned => pinEnd;
         public bool IsScrolling => scrolling;

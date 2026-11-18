@@ -80,7 +80,7 @@ public sealed partial class SessionView
         var line = history is null ? null : HistoryDraw.Line(history.State, rows.Count, !string.IsNullOrEmpty(Card?.UserMessage), history.Start);
         var scroll = ConversationScroll;
         // Measured before the rows change: the pane collapsing under the view must not read as scrolled back.
-        var atEnd = pinEnd || !panning && !scrolling && keyTarget is null && scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
+        var atEnd = HistoryAtEnd();
         var offset = scroll?.VerticalOffset ?? 0;
         var reading = atEnd ? null : ReadingHistory();
         var changed = HistoryRowSync.Apply(historyShown, rows);

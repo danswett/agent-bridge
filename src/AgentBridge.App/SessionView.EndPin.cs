@@ -1,3 +1,4 @@
+using AgentBridge.App.Core;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -8,8 +9,10 @@ namespace AgentBridge.App;
 
 public sealed partial class SessionView
 {
-    void HookConversationPointer(ScrollViewer scroll)
+    void HookConversationInput(ScrollViewer scroll)
     {
+        // Question navigation and UIA ScrollIntoView own their destination, even without focus.
+        scroll.BringIntoViewRequested += (_, _) => ReleasePin();
         scroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, _) => ReleasePin()), true);
         // Scrollbar parts handle their presses; release before their first ViewChanged or layout.
         scroll.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
@@ -29,6 +32,9 @@ public sealed partial class SessionView
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
     internal void ReleasePin() { pinEnd = false; anchoring = null; pinReleases++; }
+
+    bool HistoryAtEnd() => pinEnd || !panning && !scrolling && keyTarget is null
+        && ConversationScroll is { ScrollableHeight: > 0 } scroll && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
 
     // Older turns can finish measuring after KeepPlace restored an earlier end. Follow the
     // measured end on layout and final view changes, including while an older target is pending.
