@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Relay;
 
@@ -24,7 +25,7 @@ public static class RosterFields
     public static readonly TimeSpan HeartbeatWindow = TimeSpan.FromSeconds(60);
 
     static readonly HashSet<string> RecordMembers = ["v", "machine", "epoch", "seq", "at", "truncated", "total", "sessions", "sig"];
-    static readonly HashSet<string> SessionMembers = ["id", "node", "name", "state", "since"];
+    static readonly HashSet<string> SessionMembers = ["id", "node", "name", "state", "since", .. SessionEvidence.Members];
     static readonly HashSet<string> States = ["working", "waiting", "idle", "ending"];
 
     // Null when the record is acceptable, else the reason; epoch, seq and at come back for ordering.
@@ -74,6 +75,9 @@ public static class RosterFields
             || !node.StartsWith("agent_bridge_", StringComparison.Ordinal) || !IsHex16(node["agent_bridge_".Length..])) { return false; }
         if (!Is(s.GetProperty("state"), JsonValueKind.String) || !States.Contains(s.GetProperty("state").GetString()!)) { return false; }
         if (!TryTime(s.GetProperty("since"), out _)) { return false; }
+        try { _ = SessionEvidence.Read(s); }
+        catch (InvalidDataException) { return false; }
+        catch (InvalidOperationException) { return false; }
         // Printable ASCII only: a name is display text from an untrusted source.
         return !seen.Contains("name") || (Is(s.GetProperty("name"), JsonValueKind.String)
             && s.GetProperty("name").GetString() is { Length: > 0 and <= MaxNameLength } name && name.All(c => c is >= ' ' and <= '~'));
