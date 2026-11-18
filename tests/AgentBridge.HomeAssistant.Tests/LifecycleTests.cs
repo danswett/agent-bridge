@@ -8,8 +8,8 @@ using Xunit;
 // ending, a restart, and taking a machine over from agent-ha-bridge's daemon.
 public sealed class LifecycleTests : IDisposable
 {
-    const string Machine = "DSWETT-DEV-VM1";
-    const string Slug = "dswett_dev_vm1";
+    const string Machine = "machine-a";
+    const string Slug = "machine_a";
     const string A = "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20";
     const string B = "c1a2b3c4-d5e6-4f70-8a91-b2c3d4e5f607";
     static readonly string NodeA = HaContract.NodeId(A);
@@ -528,7 +528,7 @@ public sealed class LifecycleTests : IDisposable
     [Fact]
     public async Task The_orphan_sweep_takes_unlisted_sessions_and_leaves_another_machines_alone()
     {
-        const string Other = "dswett_home";
+        const string Other = "machine_b";
         const string Theirs = "9f8e7d6c-5b4a-4321-8765-0123456789ab";
         const string Orphan = "0a1b2c3d-4e5f-4607-8899-aabbccddeeff";
         var theirs = HaContract.NodeId(Theirs);

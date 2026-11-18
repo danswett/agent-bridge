@@ -23,7 +23,7 @@ const inOrder = async (page, ...texts) => {
 
 // The host holds only turn A, with a prompt and nothing stored yet, so what is drawn is what activity said.
 async function start(page) {
-  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+  await page.goto('?demo=1&static=1&signin=1&name=host-a#/sessions');
   await page.waitForSelector('html[data-demo-ready]');
   await page.evaluate((ID) => {
     window.agentBridgeDemo.host.historyTurns.set(ID, [{ id: `${ID}-turn-1`, at: new Date(Date.now() - 60000).toISOString(), prompt: { text: 'Prompt A', from: 'person' }, parts: [], partsMore: 0, truncated: false, unreadable: false }]);

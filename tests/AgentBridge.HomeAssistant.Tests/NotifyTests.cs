@@ -10,7 +10,7 @@ using Xunit;
 // what a tap delivers to the host.
 public sealed class NotifyTests : IDisposable
 {
-    const string Machine = "DSWETT-DEV-VM1";
+    const string Machine = "machine-a";
     const string A = "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20";
     const string B = "7a000000-0000-4000-8000-0000000000bb";
     const string Phone = "notify.mobile_app_phone";

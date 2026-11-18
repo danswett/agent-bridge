@@ -6,10 +6,10 @@ using Xunit;
 
 // Every name, topic and payload the connector publishes, against what agent-ha-bridge's own
 // functions published for the same inputs (Fixtures/ha-contract.json). A difference here is a
-// card that stops drawing on the dashboard DSWETT-HOME generates.
+// card that stops drawing on the dashboard the bridge generates.
 public class ContractTests
 {
-    const string Machine = "DSWETT-DEV-VM1";
+    static readonly string Machine = Contract.Text("machine.machineName");
     static string Slug => Contract.Text("machine.slug");
     static string SessionId => Contract.Text("session.sessionId");
     static string Node => Contract.Text("session.node");
