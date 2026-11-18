@@ -40,6 +40,16 @@ Failures retain their step and structured error type/code, never exception messa
 B2 supplies the native adapter and closed packaging; B3 supplies private staging and
 the app/launcher cutover. This layer alone changes no production apply path.
 
+### B2: native evidence adapter and build closure
+
+The adapter pins the original process handle before checking its UTC creation time,
+and owns the real apply handle through its exit wait. A nonzero updater exit alone
+cannot disprove a surviving elevated worker; it stays unknown, never retry authority.
+The [pinned manifest parser](https://github.com/velopack/velopack/blob/92d6a1c91716729d449034df5c50307dcce39493/src/lib-rust/src/bundle.rs)
+uses namespaced NuGet metadata. Read `current\sq.version` anew under the package lock
+and check package identity, main executable and release identity before respawn.
+Native starts remain injectable for in-process tests; no native binary is run locally.
+
 ## C/D: approved design basis, not activation proof
 
 Use immutable `root\slots\<release-identity>-<package-digest>` payloads. One validated
