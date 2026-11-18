@@ -727,6 +727,7 @@ the typing fence and PID handle remain held until the worker's exit is proven.
 Held-descendant evidence and a bounded tree-control adapter are prepared separately.
 The adapter caps each collection pass at 64 handles and 250 ms, retains lost-ancestry
 uncertainty and can terminate its verified root despite incomplete snapshots.
+Exit verification shares the remaining wait deadline across at most three collections.
 It is not yet activated in the Windows Stop path.
 
 Pre-Ending hypotheses for [2910](https://github.com/danswett/agent-bridge/issues/2910),

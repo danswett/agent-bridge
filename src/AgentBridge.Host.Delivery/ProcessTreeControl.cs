@@ -40,13 +40,17 @@ internal sealed class ProcessTreeControl(Func<int, DateTimeOffset, HeldOpen> ope
 
         bool Unknown(Failure kind, string why) { failure = kind; problem = why; return false; }
 
-        public bool Collect()
+        public bool Collect(TimeSpan? remaining = null)
         {
             if (lostAncestry || failure is Failure.Identity or Failure.Limit) { return false; }
             failure = Failure.None;
             problem = null;
             var began = owner.Time.GetTimestamp();
-            bool Allowed() => owner.Time.GetElapsedTime(began) < Budget;
+            bool Allowed()
+            {
+                var elapsed = owner.Time.GetElapsedTime(began);
+                return elapsed < Budget && (remaining is null || elapsed <= remaining);
+            }
             bool Limit() => Unknown(Failure.Limit, "the process tree exceeded its handle, descendant or collection-time limit");
             if (owner.Evidence.Capture(Allowed) is not { } map)
             {
@@ -104,9 +108,10 @@ internal sealed class ProcessTreeControl(Func<int, DateTimeOffset, HeldOpen> ope
         {
             waitProblem = null;
             var began = owner.Time.GetTimestamp();
-            for (var pass = 0; pass < 3; pass++)
+            // One initial collection and at most two post-wait rescans share this deadline.
+            for (var pass = 0; pass < 2; pass++)
             {
-                if (!Collect())
+                if (pass == 0 && !Collect(timeout - owner.Time.GetElapsedTime(began)))
                 {
                     if (terminating)
                     {
@@ -123,10 +128,10 @@ internal sealed class ProcessTreeControl(Func<int, DateTimeOffset, HeldOpen> ope
                     { waitProblem = "a verified process is still running"; return false; }
                 }
                 var count = held.Count;
-                if (!Collect()) { return false; }
-                if (held.Count == count) { return true; }
+                if (!Collect(timeout - owner.Time.GetElapsedTime(began))) { return false; }
+                if (held.Count == count && owner.Time.GetElapsedTime(began) <= timeout) { return true; }
             }
-            waitProblem = "the process tree kept changing while its exit was being verified";
+            waitProblem = "the process-tree exit deadline or rescan limit was reached";
             return false;
         }
 
