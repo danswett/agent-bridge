@@ -1,0 +1,38 @@
+name: Stall alarm
+
+on:
+  schedule:
+    - cron: '7,17,27,37,47,57 * * * *'
+  workflow_run: # zizmor: ignore[dangerous-triggers] -- checks out main only, never event code
+    workflows: [Merge rule]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stall-alarm
+  cancel-in-progress: false
+
+jobs:
+  alarm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      statuses: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Evaluate and publish the one ops issue
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          MENTIONS: ${{ vars.STALL_ALARM_MAIN_GREEN_MENTION }} ${{ vars.STALL_ALARM_CHIEF_MENTION }}
+        run: ./quality/stall-alarm.ps1 -Repository $env:REPOSITORY -Mentions $env:MENTIONS
