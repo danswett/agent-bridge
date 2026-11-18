@@ -48,8 +48,8 @@ attempts per agent; they may be lowered, never made unlimited. The gate reads ch
 on its next check and records `rate-limited` refusals with the retry delay and caps in
 force. Watch refusal counts and retry delays in the launch audit before and after a
 change. Refusal audit records share the pipe's per-principal windowing: 60 per hour,
-then counted summaries at most once a minute. Live limits, idle ending, restart durability
-and temporary raises are C2 work, not guarantees of this staged readback.
+then counted summaries at most once a minute. Production live-capacity settlement remains L2;
+idle ending and temporary raises are separate work.
 
 ## Credentialed local agent launches (#2774)
 
@@ -59,8 +59,19 @@ raw request fields, configured extra arguments, caller depth/adoption, and appro
 workspace labels before reserving the existing hourly/live gate. Durable launch intent
 precedes dispatch, which rechecks credential liveness, policy and arguments before starting.
 Refusals are audited; missing audit evidence fails closed. Read-only credentials and person
-launches retain their existing paths. This wiring does not add restart-durable caps or an
-idle-ending loop; unresolved/live reservations remain conservative.
+launches retain their existing paths. Launch remains disabled by default; there is no
+idle-ending loop, and unresolved/live reservations remain conservative.
+The L1 ledger now atomically persists request bindings, attempts, live reservations and
+hourly charges under the private profile, with one cross-process admission lock.
+Missing or damaged committed state, or legacy agent-launch evidence without a ledger,
+fails closed as `capRebuilding: needs-person`.
+An initialization marker outside the ledger directory prevents deletion of that whole
+directory from becoming first use. UUID request keys are canonical. Charged requests,
+including completed ones, retain debit identities cross-checked against both hourly
+ledgers; unattributable legacy completed debits fail closed rather than reset capacity.
+Expired debits remain explicitly expired across clock rollback and restart without
+releasing their live reservations or resurrecting hourly charges.
+Restarts and elapsed time never free a live slot; production evidence consumers remain L2.
 Proven prestart refusals and busy outcomes release only their own hourly and live
 reservation; request memory and the separate attempt budget are retained.
 
