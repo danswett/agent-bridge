@@ -735,11 +735,12 @@ static partial class SelfTest
             .FirstOrDefault(d => AutomationProperties.GetAutomationId(d) == "FeedbackDialog");
         async Task Unavailable(string from)
         {
-            var opened = await Until(() => Dialog() is { } d && ById<TextBox>(d, "FeedbackPreview") is { Text.Length: > 0 }, TimeSpan.FromSeconds(15));
+            var opened = await Until(() => Dialog() is { } d && ById<TextBlock>(d, "FeedbackStatus")?.Text == AgentBridge.App.Core.FeedbackSendViewModel.OrdinaryUnavailableText, TimeSpan.FromSeconds(15));
             var dialog = Dialog();
             check(opened && dialog is { Title: "Send feedback", IsPrimaryButtonEnabled: false, PrimaryButtonText: "Send", SecondaryButtonText: "" }
-                && ById<TextBlock>(dialog, "FeedbackStatus")?.Text == AgentBridge.App.Core.Feedback.FeedbackSenderFactory.UnavailableText,
-                $"previews feedback but disables Send while unavailable, from {from}");
+                && ById<TextBox>(dialog, "FeedbackPreview") is null
+                && ById<TextBlock>(dialog, "FeedbackStatus")?.Text == AgentBridge.App.Core.FeedbackSendViewModel.OrdinaryUnavailableText,
+                $"disables ordinary feedback without collecting a preview, from {from}");
             dialog?.Hide();
             check(await Until(() => Dialog() is null && !window.FeedbackOpen, TimeSpan.FromSeconds(5)), $"closes the feedback dialog opened from {from}");
         }

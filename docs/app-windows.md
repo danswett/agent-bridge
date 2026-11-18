@@ -52,9 +52,10 @@ before requesting an upload slot; preview and upload remain the exact same bytes
 Accept is single-use; dismiss drops only the snapshot, leaving the active run marker intact.
 An unavailable feedback sender still permits a redacted preview, but never a send.
 After the window loads, an unclean previous run opens the shared feedback dialog once;
-clean runs, demos and self-tests do not. Settings and the tray use that same dialog.
-Recovery has no optional note; ordinary feedback still does.
-The included-item list and exact redacted preview appear before Send becomes available.
+clean runs, demos and self-tests do not. Settings and the tray open an explicitly disabled
+ordinary feedback view: no diagnostic collection, preview, Send or retry, even when a recipient
+and relay are available. Sender refresh cannot enable that view. No optional note is offered.
+Recovery's included-item list and exact redacted preview appear before Send becomes available.
 Feedback still needs the existing configured recipient and accepting relay; no plaintext fallback exists.
 
 ## Decisions

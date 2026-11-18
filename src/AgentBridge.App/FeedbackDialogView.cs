@@ -17,31 +17,32 @@ static class FeedbackDialogView
         using var cancel = new CancellationTokenSource();
         var status = new TextBlock { TextWrapping = TextWrapping.Wrap };
         AutomationProperties.SetAutomationId(status, "FeedbackStatus");
-        var sender = senders.TryCreate();
+        var request = offer?.Previous is { } previous
+            ? await sources.RecoveryRequestAsync(previous, "", null, cancel.Token)
+            : new FeedbackRequest();
+        var sender = request.Recovery is null ? null : senders.TryCreate();
         var send = new FeedbackSendViewModel(sender, new QueueDispatcher(DispatcherQueue.GetForCurrentThread()), announce: (_, urgent) =>
         {
             AutomationProperties.SetLiveSetting(status, urgent ? AutomationLiveSetting.Assertive : AutomationLiveSetting.Polite);
             FrameworkElementAutomationPeer.CreatePeerForElement(status)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
-        });
-        var request = offer?.Previous is { } previous
-            ? await sources.RecoveryRequestAsync(previous, "", null, cancel.Token)
-            : new FeedbackRequest();
+        }, allowSending: request.Recovery is not null);
         var source = new FeedbackBundleSource(sources);
-        var note = new TextBox { Header = "Optional note", AcceptsReturn = true, MaxLength = FeedbackLimits.MaxNoteChars };
         var preview = new TextBox { Header = "Report preview", IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 240 };
         AutomationProperties.SetAutomationId(preview, "FeedbackPreview");
         var included = new StackPanel { Spacing = 4 };
         var body = new StackPanel { Spacing = 12 };
         body.Children.Add(new TextBlock
         {
-            Text = offer is null ? "Review what will be sent. Session turns and screenshots are not attached."
+            Text = request.Recovery is null ? "Feedback uploads are currently limited to structured recovery reports."
                 : "The app closed unexpectedly. Only structured recovery metadata is included, not diagnostic text, names or session identifiers. Nothing is sent unless you choose Send report.",
             TextWrapping = TextWrapping.Wrap,
         });
-        if (offer is null) { body.Children.Add(note); }
-        body.Children.Add(new TextBlock { Text = "What's included" });
-        body.Children.Add(included);
-        body.Children.Add(preview);
+        if (request.Recovery is not null)
+        {
+            body.Children.Add(new TextBlock { Text = "What's included" });
+            body.Children.Add(included);
+            body.Children.Add(preview);
+        }
         body.Children.Add(status);
         dialog.Content = new ScrollViewer { Content = body, MaxHeight = 520 };
         dialog.Title = offer is null ? "Send feedback" : "Recovered from an unexpected exit";
@@ -57,7 +58,6 @@ static class FeedbackDialogView
             status.Text = send.State == FeedbackSendState.Ready && !send.CanSend ? FeedbackSenderFactory.UnavailableText : send.Message;
             dialog.IsPrimaryButtonEnabled = previewReady && (send.CanSend || send.CanRetry);
             dialog.PrimaryButtonText = send.CanRetry ? send.RetryLabel : offer is null ? "Send" : "Send report";
-            note.IsEnabled = !send.IsSending && send.State != FeedbackSendState.Sent;
             if (send.State == FeedbackSendState.Sent) { dialog.CloseButtonText = "Close"; }
         }
         async Task Gather()
@@ -70,7 +70,7 @@ static class FeedbackDialogView
             included.Children.Clear();
             try
             {
-                var bundle = await send.PrepareAsync(source, request with { Note = note.Text }, current.Token);
+                var bundle = await send.PrepareAsync(source, request, current.Token);
                 if (bundle is null || send.IsClosed) { return; }
                 foreach (var item in bundle.Items)
                 {
@@ -89,12 +89,12 @@ static class FeedbackDialogView
             Update();
         }
         send.PropertyChanged += (_, _) => Update();
-        note.TextChanged += (_, _) => _ = Gather();
         dialog.Opened += (_, _) => { shown = true; _ = Gather(); };
         dialog.Closed += (_, _) => { cancel.Cancel(); send.Close(); };
         dialog.PrimaryButtonClick += async (_, e) =>
         {
             e.Cancel = true;
+            if (request.Recovery is null) { return; }
             dialog.IsPrimaryButtonEnabled = false;
             send.RefreshSender(senders.TryCreate());
             if (send.CanRetry) { await send.RetryAsync(); }
@@ -106,7 +106,7 @@ static class FeedbackDialogView
         retryTimer.Tick += (_, _) => { send.RefreshSender(senders.TryCreate()); send.RefreshRetry(); };
         try
         {
-            retryTimer.Start();
+            if (request.Recovery is not null) { retryTimer.Start(); }
             await dialog.ShowAsync();
         }
         finally
