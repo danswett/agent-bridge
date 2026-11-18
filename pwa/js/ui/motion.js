@@ -94,7 +94,7 @@ export function stopTravel(el) {
 
 // What the motions drew, by entry, as Animation.id: the tests read them back.
 function run(el, keyframes, entry, t, options = {}) {
-  if (!el?.isConnected || typeof el.animate !== 'function' || !(t.duration > 0)) { return null; }
+  if (!el?.isConnected || el.ownerDocument?.visibilityState === 'hidden' || typeof el.animate !== 'function' || !(t.duration > 0)) { return null; }
   try {
     const a = el.animate(keyframes, { duration: t.duration, easing: t.easing, fill: 'backwards', ...options });
     a.id = `ab-motion-${entry}`;
@@ -168,7 +168,29 @@ export function watchDisclosures(doc = globalThis.document) {
 // choices or a toggle: their release changes what is selected, which shows at once.
 export const PRESSABLE = '.button, .icon-button, .row-main, .nav-item, .view-tab, .machine-tab, .row-menu-item';
 
+function watchVisibility(doc) {
+  const paused = new Set();
+  const changed = () => {
+    const hidden = doc.visibilityState === 'hidden';
+    // CSS also covers animations created while hidden, including pseudo-elements.
+    doc.documentElement.toggleAttribute('data-motion-hidden', hidden);
+    if (hidden) {
+      for (const a of doc.getAnimations()) {
+        if (a.playState === 'running') { a.pause(); paused.add(a); }
+      }
+    } else {
+      for (const a of paused) {
+        if (a.playState === 'paused' && a.effect?.target?.isConnected) { a.play(); }
+      }
+      paused.clear();
+    }
+  };
+  doc.addEventListener('visibilitychange', changed);
+  changed();
+}
+
 export function watchPresses(doc = globalThis.document) {
+  watchVisibility(doc);
   const timers = new WeakMap();
   let pressed = null;
   doc.addEventListener('pointerdown', (e) => {

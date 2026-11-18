@@ -25,6 +25,7 @@ import { ago } from './time.js';
 import { ASK, ALLOW_ALL, MAX_PROMPT, TRUST, checkLaunch } from '../launch.js';
 import { LaunchFollow, sameQuestion, samePrompt } from '../launch-follow.js';
 import { LINGER_READ_MS } from './receipt.js';
+import { whileVisible } from './ticker.js';
 
 export const APPROVE_HINT = 'agent-bridge-host workspace add <folder>';
 export const RESUMABLE_INCOMPLETE_NOTE = "Some sessions weren't checked in time. Reload choices to try again.";
@@ -195,6 +196,7 @@ export class LaunchPanel {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    this.#stopProbes();
     clearTimeout(this.#busyTimer);
     clearTimeout(this.#trustGoneTimer);
     this.#busyTimer = null;
@@ -381,15 +383,14 @@ export class LaunchPanel {
   #armProbes() {
     if (!this.#others.length) { this.#stopProbes(); return; }
     if (this.#probeTimer) { return; }
-    this.#probeTimer = setTimeout(() => {
-      this.#probeTimer = null;
+    this.#probeTimer = whileVisible(() => {
+      if (!this.#others.length) { this.#stopProbes(); return; }
       for (const o of this.#others) { this.#probe(o.hostId, o.load, true); }
-      this.#armProbes();
     }, Math.max(LaunchPanel.recheckMs, 250));
   }
 
   #stopProbes() {
-    clearTimeout(this.#probeTimer);
+    this.#probeTimer?.stop();
     this.#probeTimer = null;
     this.#others = [];
   }
@@ -977,7 +978,7 @@ export class LaunchPanel {
     if (!wanted()) { return; }
     if (!globalThis.document?.hidden && this.jump(id, hostId)) { return; }
     const until = Date.now() + 15000;
-    this.#jumpTimer = setInterval(() => {
+    this.#jumpTimer = whileVisible(() => {
       if (!wanted() || Date.now() > until) { this.#cancelJump(); return; }
       if (globalThis.document?.hidden) { return; }
       if (this.jump(id, hostId)) { this.#cancelJump(); }
@@ -985,7 +986,7 @@ export class LaunchPanel {
   }
 
   #cancelJump() {
-    if (this.#jumpTimer !== null) { clearInterval(this.#jumpTimer); }
+    this.#jumpTimer?.stop();
     this.#jumpTimer = null;
   }
 
