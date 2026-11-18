@@ -14,7 +14,7 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     // never the newest. Refusing new ones once full lost what the newest records said, which are the
     // ones a page shows: a permission's outcome, and whose a call was, so a delegate's approval read
     // as the main agent's (review of #686). What the session knows is kept apart, never dropped.
-    const int Keep = 4096;
+    internal const int Keep = 4096;
 
     // The main agent's own delegates, by id, with their names: those this read saw start, and those
     // the session lists now (its subagents with no parent), whose starts may be on an older page.

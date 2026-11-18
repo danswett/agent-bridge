@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using AgentBridge.Host.Core.Conversation;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Core.Parsing;
@@ -79,6 +80,8 @@ internal sealed class BackgroundWork
     readonly Dictionary<string, TaskCall> _calls = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> _callAgents = new(StringComparer.Ordinal);
     readonly Queue<string> _callOrder = new();
+    readonly Dictionary<string, string> _historyCallAgents = new(StringComparer.Ordinal);
+    readonly Queue<string> _historyCallOrder = new();
     readonly Dictionary<string, DateTimeOffset?> _shells = new(StringComparer.Ordinal);
     long _order;
 
@@ -89,7 +92,7 @@ internal sealed class BackgroundWork
     // Moves when who made a call may have changed (CallOwners), which no client sees.
     public int CallsVersion { get; private set; }
 
-    // Every id held, for checking that a long session cannot grow it without bound.
+    // Live ids held; history's separately bounded call owners do not count here.
     internal int Tracked => _agents.Count + _agentByCall.Count + _calls.Count + _shells.Count + _callAgents.Count;
 
     public void Clear()
@@ -99,6 +102,8 @@ internal sealed class BackgroundWork
         _calls.Clear();
         _callAgents.Clear();
         _callOrder.Clear();
+        _historyCallAgents.Clear();
+        _historyCallOrder.Clear();
         _shells.Clear();
         Version++;
     }
@@ -425,11 +430,16 @@ internal sealed class BackgroundWork
     }
 
     // A delegate's tool call whose start only the skim saw: a permission prompt for it in the
-    // window is still that delegate's. Only the latest few are kept, as a prompt follows its
-    // call at once.
+    // window is still that delegate's. Live lookup keeps only the latest few, as a prompt
+    // follows its call at once; history can start on the next turn, after many later calls.
     public void RememberCall(string? callId, string agentId)
     {
         if (callId is null) { return; }
+        if (_historyCallAgents.TryAdd(callId, agentId))
+        {
+            _historyCallOrder.Enqueue(callId);
+            if (_historyCallAgents.Count > HistoryContext.Keep) { _historyCallAgents.Remove(_historyCallOrder.Dequeue()); }
+        }
         if (!_callAgents.ContainsKey(callId) && _callAgents.Count >= KeepCalls) { _callAgents.Remove(_callOrder.Dequeue()); }
         if (_callAgents.TryAdd(callId, agentId))
         {
@@ -603,7 +613,7 @@ internal sealed class BackgroundWork
     // reads the same whether that turn is on its page or not (found in review of #292).
     public Dictionary<string, string> CallOwners()
     {
-        var owners = new Dictionary<string, string>(_callAgents, StringComparer.Ordinal);
+        var owners = new Dictionary<string, string>(_historyCallAgents, StringComparer.Ordinal);
         foreach (var (call, task) in _calls)
         {
             if (task.Parent is { } starter) { owners.TryAdd(call, starter); }
