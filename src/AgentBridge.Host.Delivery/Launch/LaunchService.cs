@@ -43,6 +43,7 @@ public interface ISessionLauncher
     IReadOnlyList<Started> LaunchedProcesses() => [];
 
     bool LaunchedSession(string session, SessionProcess? process) => false;
+    // Advisory display metadata only; not authority for stopping or admitting a grant.
     string? RoleOf(string session, SessionProcess? process) => null;
 
     // launch.trust.answer, for a person whose signed command the caller has checked: answers a
@@ -845,7 +846,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // Everything a launch was settled on before it starts.
     sealed record Plan(Launcher Launcher, string Executable, string Directory, string? Workspace, WorkspaceConfig? Isolated, ResumeEntry? Resume,
-        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null, string? Role = null);
+        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null, string? Role = null, string? SessionRole = null);
 
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
@@ -1060,7 +1061,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         var allowAll = (r.Permissions ?? Config.Permissions) == LaunchProtocol.AllowAll;
 
         return (new Plan(launcher, resolved.Executables[launcher.Id], directory, workspace?.Label, workspace?.Isolate == true ? workspace : null, resume, where,
-            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer, r.Role), null);
+            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer, r.Role, r.SessionRole), null);
     }
 
     // No account checker is a refusal, not a pass: production always wires one, and a launch must
@@ -1290,7 +1291,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 if (auditRegistered is null) { return Refused("the launch audit could not be written durably"); }
             }
             // A crash before registration must not turn an unbound launch into an adoptable process.
-            provenance.Preparing(key, sessionId, fleet ? "fleet" : null, plan.Role);
+            provenance.Preparing(key, sessionId, fleet ? "fleet" : null, plan.SessionRole);
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)

@@ -248,7 +248,8 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         return new
         {
             sessions = machines.SelectMany(m => m.Sessions.Select(s => new FleetListSession(
-                m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name, SessionRoles.Known(s.Role)))).ToList(),
+                m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name,
+                m.Online && m.Verified ? SessionRoles.Known(s.Role) : null))).ToList(),
             machines = machines.OrderBy(m => m.Id, StringComparer.Ordinal).Select(m => new FleetListMachine(
                 m.Id, m.Online ? "online" : "offline", m.Name, m.LastSeen, m.Online && m.HasRegistryRecord && !m.Truncated)).ToList(),
         };

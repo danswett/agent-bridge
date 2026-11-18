@@ -89,12 +89,12 @@ internal sealed class LaunchProvenance
         }
     }
 
+    // Same-user-writable provenance is advisory display data, never stop authorization.
     public string? RoleOf(string session, SessionProcess? process)
     {
         lock (gate)
         {
-            Check();
-            if (process is not { Id: > 0, StartedAt: not null }) { return null; }
+            if (unavailable || process is not { Id: > 0, StartedAt: not null }) { return null; }
             var matches = origins.Values.Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (matches.Any(o => o.Process is null)) { return null; }
             var roles = matches.Where(o => o.Process == process).Select(o => SessionRoles.Known(o.Role)).Distinct().ToArray();

@@ -144,6 +144,37 @@ public sealed class FleetFindTests : IDisposable
     }
 
     [Theory]
+    [InlineData("one-shot", true)]
+    [InlineData("unknown", false)]
+    [InlineData("", false)]
+    public void Registry_roles_reject_unknown_values(string role, bool valid)
+    {
+        var hex = new string('a', 16);
+        var record = Body(new
+        {
+            v = 1, machine = "fixture", epoch = hex, seq = 1, at = Started, truncated = false,
+            sessions = new[] { new { id = hex, node = "agent_bridge_" + hex, state = "idle", since = Started, role } },
+        });
+        Assert.Equal(valid, RosterFields.Check(record, "fixture", out _, out _, out _) is null);
+    }
+
+    [Theory]
+    [InlineData(true, true, "one-shot", true)]
+    [InlineData(false, true, "one-shot", false)]
+    [InlineData(true, false, "one-shot", false)]
+    [InlineData(false, false, "one-shot", false)]
+    [InlineData(true, true, "unknown", false)]
+    [InlineData(true, true, null, false)]
+    public async Task Fleet_list_omits_roles_unless_known_verified_and_online(bool verified, bool online, string? role, bool exposed)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var machine = new FleetMachine("fixture", online,
+            [new FleetSession("node", null, "idle", Started, Role: role)], Verified: verified);
+        var list = JsonSerializer.SerializeToElement(await Op(machine).HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { })), Web);
+        Assert.Equal(exposed, Assert.Single(list.GetProperty("sessions").EnumerateArray()).TryGetProperty("role", out _));
+    }
+
+    [Theory]
     [InlineData(false, "notFound")]
     [InlineData(true, "found")]
     public async Task A_name_in_another_account_cannot_be_selected_or_create_ambiguity_by_spoofing_the_scope(bool ownMatch, string expected)

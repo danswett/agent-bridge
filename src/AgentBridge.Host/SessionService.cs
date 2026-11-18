@@ -345,7 +345,7 @@ public sealed class SessionService
                 await old.StopAsync();
             }
             if (!channel.IsOpen) { throw new IOException("the channel is closed"); }
-            var feed = new Feed(source.Subscribe(since), request.Patch == true, state, Time, QuietInterval, request.Handles == true);
+            var feed = new Feed(source.Subscribe(since), request.Patch == true, state, Time, QuietInterval, request.Handles == true, WithRole);
             state.Feed = feed;
             FeedCreated?.Invoke(feed);
             // The snapshot waits until the response has gone (ChannelReply), so the client
@@ -800,7 +800,7 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data,
     static string? String(JsonElement data, string name) =>
         data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    internal sealed class Feed(SessionSubscription subscription, bool patch, Subscriber state, TimeProvider time, TimeSpan quiet, bool useHandles = false)
+    internal sealed class Feed(SessionSubscription subscription, bool patch, Subscriber state, TimeProvider time, TimeSpan quiet, bool useHandles = false, Func<Session, Session>? project = null)
     {
         // Put in the subscription's own queue, so what was held goes in order with everything else:
         // Tick when the quiet interval is up, Refocused when the client shows another session.
@@ -957,6 +957,7 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data,
 
         async Task SendAsync(IProtocolChannel channel, SessionEvent ev, Action<string> log)
         {
+            if (ev.Data is Session s && project is not null) { ev = ev with { Data = project(s) }; }
             var (name, data, id, json) = Shape(ev);
             if (name is null) { return; }
             try
