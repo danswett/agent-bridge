@@ -523,7 +523,7 @@ public sealed class ReplyService : ISessionReplier
             if (stillCurrent is null && result.Status == InjectionStatus.Interrupted
                 && !result.Detail.Contains("console closed", StringComparison.Ordinal))
             {
-                await ClearCopilotAsync(session, target, transcript, words, result);
+                await ClearCopilotAsync(session, target, transcript, from, words, result);
             }
         }
         finally { gate.DoneTyping(); }
@@ -547,7 +547,7 @@ public sealed class ReplyService : ISessionReplier
         static Attempt Done(ReplyResult r) => new(r, null);
     }
 
-    async Task ClearCopilotAsync(Session session, AgentProcess process, string transcript, string words, InjectionResult write)
+    async Task ClearCopilotAsync(Session session, AgentProcess process, string transcript, long from, string words, InjectionResult write)
     {
         if (process.StartedAt is null || write.EnterWritten != false
             || write.TextWritten is not { } length || length <= 0 || length > words.Length) return;
@@ -561,9 +561,12 @@ public sealed class ReplyService : ISessionReplier
             {
                 if (Proceed() is not null) return;
                 var (_, _, _, box) = await InputBoxAsync(process.Id, cleanup.Token);
+                // Empty means the paste is gone; later identical text belongs to the person.
+                if (box is { Main: true, Complete: true, Content.Length: 0 } or { Working: true }) return;
                 if (box is { Main: true, Complete: true, Shell: false, Working: false, Vim: not CopilotVimMode.Normal, Content.Length: > 0 })
                 {
-                    if (!Matches(box.Content)) return;
+                    // Row boundaries cannot distinguish hard newlines from soft wraps.
+                    if (box.Lines != 1 || box.Content != owned.Trim(' ')) return;
                     var footer = box.Rows[^1].Row + 1;
                     // Still inside the original typing slot: one guarded clear, never Enter.
                     var plan = new KeyPlan([new("\u0005\u0015", false, 0, 0, box.Rows,
@@ -588,19 +591,10 @@ public sealed class ReplyService : ISessionReplier
             && probe.Active() is null && guard.Refuse(process.Id) is null && LaunchHeld?.Invoke(session.Id) is null
             && source.Get(session.Id) is { Agent: AgentKind.Copilot, Status: SessionStatus.Idle, Question: null } live && live.ProcessId == process.Id
             && inputs.TryGetValue(transcript, out var input)
-            && (input.Read() is { Readable: true, Asking: false, Resumed: false } || NotYetWritten(transcript, live))
+            // Any transcript advance relinquishes ownership, including before the worker's keys.
+            && (input.Read() is { Readable: true, Asking: false, Resumed: false } latest && latest.ScannedTo == from
+                || from == 0 && NotYetWritten(transcript, live))
                 ? null : "failed reply cleanup is no longer safe";
-
-        bool Matches(string content)
-        {
-            var remaining = owned.Trim(' ');
-            foreach (var line in content.Split('\n'))
-            {
-                if (!remaining.StartsWith(line, StringComparison.Ordinal)) return false;
-                remaining = remaining[line.Length..].TrimStart(' ');
-            }
-            return remaining.Length == 0;
-        }
     }
 
     // Why a reply to a Copilot session with no transcript yet must wait, or null when its window

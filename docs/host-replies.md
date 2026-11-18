@@ -22,10 +22,16 @@ one session at once.
 Existing working/busy admission stays; no host queue or new-ID deduplication.
 A failed paste gets at most one Ctrl+E, Ctrl+U clear, never Enter, only with native
 count/hash proof that Enter was not written and an identical complete, anchored,
-idle input outside shell/vim-normal mode. Process, transcript, G5 and worker
+idle, single-row input outside shell/vim-normal mode. Multiline input is ambiguous
+(hard newline or soft wrap), so cleanup ends without keys. An anchored empty box
+or any transcript advance after the pre-injection boundary ends cleanup permanently,
+including on the final worker check; retyping the same prefix cannot revive it.
+Process, transcript, G5 and worker
 screen guards are rechecked inside the original typing admission, bounded by
 submit patience/shutdown. Edited drafts, dialogs or unknown evidence stay untouched;
 no ownership or keys survive its uncertain receipt. Logs never contain reply text.
+The cleanup key sequence has fake-injector regression coverage only; there is no
+live-CLI proof yet.
 
 Ported from agent-ha-bridge (`hooks/decision-inject.ps1`, `Send-CopilotSessionPrompt`):
 the words as one burst, 300 ms, then a submit key of its own. The CLI takes a burst
