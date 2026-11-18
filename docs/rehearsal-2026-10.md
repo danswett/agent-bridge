@@ -2,14 +2,14 @@
 
 *Archived here from the coordinator's notes on 2026-11-01. Current state: [status.md](status.md).*
 
-31 October 2026 (Pacific). This covers run 2 on VM01 and Phase G on the Azure VM-M (runs g1 and g2), with run 1 for comparison. The checklist is `docs/parity-checklist.md`. Corrections from these runs are in PR #156.
+31 October 2026 (Pacific). This covers run 2 on host-a and Phase G on the Azure VM-M (runs g1 and g2), with run 1 for comparison. The checklist is `docs/parity-checklist.md`. Corrections from these runs are in PR #156.
 
 ## Where each run happened
 
 | Run | VM-M | Install under test | Result (steps recorded) |
 |---|---|---|---|
-| 1 | VM01 (Hyper-V), as adminuser, no snapshots | p5 dev builds | 72 pass, 9 fail, 4 manual (85) |
-| 2 | VM01, as standard user `rehearsal`, with a second user (adminuser) running agents | 0.1.583, then 0.1.595 through the app's own updater | See below; recorded on VM01 (`C:\rehearsal\backup-vm01\evidence-run2.zip`) |
+| 1 | host-a (Hyper-V), as adminuser, no snapshots | p5 dev builds | 72 pass, 9 fail, 4 manual (85) |
+| 2 | host-a, as standard user `rehearsal`, with a second user (adminuser) running agents | 0.1.583, then 0.1.595 through the app's own updater | See below; `evidence-run2.zip` in the historical backup directory on the rehearsal host |
 | g1 | Azure `rehearsal-m`, single standard user, from snapshot S1 | 0.1.611 | 55 pass, 5 fail, 1 manual (61) |
 | g2 | Same VM, after restoring S1 (G-01) | 0.1.611, reinstalled | 42 pass, 3 fail, 1 manual (46) |
 
@@ -19,7 +19,7 @@ In every run, VM-W (Azure) held the disposable Home Assistant and the PWA, and a
 
 These are the steps that decide whether a machine can be moved over and back.
 
-| Check | Run 2 (VM01) | g1 | g2 |
+| Check | Run 2 (host-a) | g1 | g2 |
 |---|---|---|---|
 | B-08: the snapshot restores byte for byte | n/a (no snapshot) | pass | pass |
 | C-01 to C-03: the app installs read-only; five minutes beside a live session change nothing | pass | pass | pass |
@@ -45,7 +45,7 @@ With those keys removed, `settings.json` matches the baseline hash exactly (88f6
 
 **F-05 in g2.** The first P1, typed 28 s after F-01 restarted agent-ha-bridge's daemon, found no fresh heartbeat. The hook gave the fixed safe reply and the question stayed at the terminal, which is agent-ha-bridge's own hook contract. A repeat a minute later passed. The checklist now says to wait for a fresh heartbeat.
 
-## Run 2 (VM01, two users)
+## Run 2 (host-a, two users)
 
 - **Passed:** E1-11, E2-03/04/06/07/08/09, E3-01/03/05, E4-01/02/02b/02c/03/04/05/06/06c/07 (Claude half), E5-01/02, E6-01/02/03/05/06, E8-02/03, E9-01/02, E10-01/02, and on the iPhone C-04, E2-01 and E4-06b. The self-update from GitHub releases (0.1.583 to 0.1.595) worked.
 - **Failed:**
@@ -56,7 +56,7 @@ With those keys removed, `settings.json` matches the baseline hash exactly (88f6
 
 ## Phase G (Azure, single user)
 
-- **g1 passed:** all the steps moved from VM01 (E1-11, E3-04 with its expected manual exit, E4-07/07b, E5-04/04b, E12-03, E8-02), and E6-01 and E6-04.
+- **g1 passed:** all the steps moved from host-a (E1-11, E3-04 with its expected manual exit, E4-07/07b, E5-04/04b, E12-03, E8-02), and E6-01 and E6-04.
 - **E2-05** fails here too (#146), so it isn't a two-user effect.
 - **E6-07 failed, and showed two new bugs, both fixed in #155:**
   - **#153:** npm's node loader. A hand-started Copilot or Codex kept every finished worktree, and every launch and host restart held discovery for 2 minutes.
@@ -81,7 +81,7 @@ With those keys removed, `settings.json` matches the baseline hash exactly (88f6
 ## Housekeeping
 
 - Both Azure VMs are deallocated. Their disks and snapshots (S0, S1) remain.
-- VM01 is back with adminuser. `C:\Users\rehearsal` is still there, because the deleted user's registry hive stays loaded until a reboot. The folder-trust delegate will reboot VM01; the follow-up commands are in `C:\rehearsal\backup-vm01\RESTORE.txt`.
+- The rehearsal host is back with adminuser. `C:\Users\rehearsal` is still there, because the deleted user's registry hive stays loaded until a reboot. The folder-trust delegate will reboot it; the follow-up commands are in `RESTORE.txt` in the historical backup directory.
 
 ## Verdict
 
@@ -103,4 +103,4 @@ Before migrating a real machine:
 Still to do, but not blocking a supervised migration:
 - the UX issues #146, #149 and #150;
 - the push-tap check (E18-04), never run;
-- Phase G's two-user cases, which were covered on VM01 only.
+- Phase G's two-user cases, which were covered on host-a only.

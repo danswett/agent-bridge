@@ -17,7 +17,7 @@ A machine is **online** while it is in the relay's presence list, as before. `he
 `machine` gains two fields:
 
 ```json
-{ "id": "53d1997f…", "name": "DSWETT-DEV-VM1", "os": "windows", "hostVersion": "0.1.0", "dev": true, "sessions": 3 }
+{ "id": "53d1997f…", "name": "host-a", "os": "windows", "hostVersion": "0.1.0", "dev": true, "sessions": 3 }
 ```
 
 | Field | Type | Notes |
