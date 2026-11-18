@@ -19,8 +19,18 @@ public class QuarantineExpiryTests
     public void Quarantines_in_test_sources_have_not_expired()
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
-        foreach (var file in Directory.EnumerateFiles(Path.Combine(root, "tests"), "*.cs", SearchOption.AllDirectories))
+        var files = Directory.EnumerateFiles(Path.Combine(root, "tests"), "*.cs", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(root, "pwa", "test"), "*.spec.mjs", SearchOption.AllDirectories));
+        foreach (var file in files)
             Check(File.ReadAllText(file), DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public void Expiry_checks_are_selected_even_for_unrelated_product_changes()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var selector = new Selector(Catalog.Load(Path.Combine(root, "quality", "catalog.yml")), ProjectGraph.Load(root));
+        Assert.Contains("quality-tool", Fixture.Ids(selector.Select(["src/AgentBridge.Hooks/HookParser.cs"], ring: 0)));
     }
 
     [Fact]
