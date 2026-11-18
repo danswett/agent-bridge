@@ -20,7 +20,10 @@ public sealed partial class SessionView
         scroll.BringIntoViewRequested += (_, e) =>
         {
             var top = e.TargetElement.TransformToVisual(scroll).TransformPoint(new Point(e.TargetRect.X, e.TargetRect.Y)).Y;
-            if (ConversationKeyboard.WhollyInView(top, e.TargetRect.Height, scroll.ViewportHeight)) { return; }
+            // Nearest-edge navigation also leaves a target spanning both viewport edges still.
+            if (double.IsNaN(e.VerticalAlignmentRatio) && e.VerticalOffset == 0
+                && (ConversationKeyboard.WhollyInView(top, e.TargetRect.Height, scroll.ViewportHeight)
+                    || top <= 0 && top + e.TargetRect.Height >= scroll.ViewportHeight)) { return; }
             ReleasePin();
             navigationPending = true;
         };

@@ -34,7 +34,7 @@ public sealed class ConversationEndPinTests
         if (hold == "ended") { view.FollowState.PointerLeft(7); }
         view.DrainForProbe();
         view.Follow();
-        Assert.Contains(view.Scroller.ScrollableHeight, view.Scroller.Targets);
+        Assert.Equal([view.Scroller.ScrollableHeight], view.Scroller.Targets);
     }
 
     [Fact]
