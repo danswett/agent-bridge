@@ -6,13 +6,13 @@
     "generator": "tools/ha-contract/Export-HaContract.ps1",
     "note": "Recorded by running agent-ha-bridge's own functions with a recording transport. Regenerate; do not edit by hand."
   },
-  "machine": "DSWETT-DEV-VM1",
+  "machine": "machine-a",
   "helper": {
-    "id": "agent_bridge_dswett_dev_vm1_detailed_activity",
-    "name": "Agent Bridge dswett dev vm1 Detailed Activity",
-    "displayName": "Detailed activity (DSWETT-DEV-VM1)",
+    "id": "agent_bridge_machine_a_detailed_activity",
+    "name": "Agent Bridge machine a Detailed Activity",
+    "displayName": "Detailed activity (machine-a)",
     "legacyId": "agent_bridge_detailed_activity",
-    "entityId": "input_boolean.agent_bridge_dswett_dev_vm1_detailed_activity",
+    "entityId": "input_boolean.agent_bridge_machine_a_detailed_activity",
     "icon": "mdi:brain"
   },
   "helperCases": {
@@ -24,15 +24,15 @@
         },
         {
           "icon": "mdi:brain",
-          "name": "Agent Bridge dswett dev vm1 Detailed Activity",
+          "name": "Agent Bridge machine a Detailed Activity",
           "type": "input_boolean/create"
         },
         {
           "type": "config/entity_registry/list"
         },
         {
-          "entity_id": "input_boolean.agent_bridge_dswett_dev_vm1_detailed_activity",
-          "name": "Detailed activity (DSWETT-DEV-VM1)",
+          "entity_id": "input_boolean.agent_bridge_machine_a_detailed_activity",
+          "name": "Detailed activity (machine-a)",
           "type": "config/entity_registry/update"
         }
       ]
@@ -58,8 +58,8 @@
           "type": "config/entity_registry/list"
         },
         {
-          "entity_id": "input_boolean.agent_bridge_dswett_dev_vm1_detailed_activity",
-          "name": "Detailed activity (DSWETT-DEV-VM1)",
+          "entity_id": "input_boolean.agent_bridge_machine_a_detailed_activity",
+          "name": "Detailed activity (machine-a)",
           "type": "config/entity_registry/update"
         }
       ]
@@ -83,11 +83,11 @@
         },
         {
           "icon": "mdi:brain",
-          "name": "Agent Bridge dswett dev vm1 Detailed Activity",
+          "name": "Agent Bridge machine a Detailed Activity",
           "type": "input_boolean/create"
         },
         {
-          "input_boolean_id": "agent_bridge_dswett_dev_vm1_detailed_activity_2",
+          "input_boolean_id": "agent_bridge_machine_a_detailed_activity_2",
           "type": "input_boolean/delete"
         }
       ]
@@ -100,7 +100,7 @@
         },
         {
           "icon": "mdi:brain",
-          "name": "Agent Bridge dswett dev vm1 Detailed Activity",
+          "name": "Agent Bridge machine a Detailed Activity",
           "type": "input_boolean/create"
         }
       ]
@@ -127,34 +127,34 @@
   },
   "rebuild": [
     {
-      "topic": "homeassistant/binary_sensor/agent_bridge_dswett_dev_vm1/online/config",
+      "topic": "homeassistant/binary_sensor/agent_bridge_machine_a/online/config",
       "retain": true,
       "qos": 1,
       "json": false,
       "payload": ""
     },
     {
-      "topic": "homeassistant/binary_sensor/agent_bridge_dswett_dev_vm1/online/config",
+      "topic": "homeassistant/binary_sensor/agent_bridge_machine_a/online/config",
       "retain": true,
       "qos": 1,
       "json": true,
       "payload": {
         "device": {
           "identifiers": [
-            "agent_bridge_dswett_dev_vm1"
+            "agent_bridge_machine_a"
           ],
           "manufacturer": "AI CLI bridge",
-          "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          "name": "AI Agent Bridge (machine-a)"
         },
         "device_class": "connectivity",
         "expire_after": 180,
-        "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/online/attr",
+        "json_attributes_topic": "copilot/cli/machine/machine_a/online/attr",
         "name": "Online",
-        "object_id": "agent_bridge_dswett_dev_vm1_online",
+        "object_id": "agent_bridge_machine_a_online",
         "payload_off": "offline",
         "payload_on": "online",
-        "state_topic": "copilot/cli/machine/dswett_dev_vm1/online/state",
-        "unique_id": "agent_bridge_dswett_dev_vm1_online"
+        "state_topic": "copilot/cli/machine/machine_a/online/state",
+        "unique_id": "agent_bridge_machine_a_online"
       }
     }
   ],
@@ -251,7 +251,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       },
       {
@@ -280,7 +280,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       },
       {
@@ -309,7 +309,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       },
       {
@@ -338,7 +338,7 @@
         "pinned": false,
         "beat": false,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has ignored 3 rebuilds; leaving it alone rather than flapping it. Nothing is reaching it from copilot/cli/machine/dswett_dev_vm1/online/state - check that the beat still carries a changing payload, then the broker and Home Assistant's MQTT integration."
+          "binary_sensor.agent_bridge_machine_a_online has ignored 3 rebuilds; leaving it alone rather than flapping it. Nothing is reaching it from copilot/cli/machine/machine_a/online/state - check that the beat still carries a changing payload, then the broker and Home Assistant's MQTT integration."
         ]
       },
       {
@@ -450,7 +450,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       },
       {
@@ -479,7 +479,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       }
     ],
@@ -721,7 +721,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       },
       {
@@ -750,7 +750,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       },
       {
@@ -797,7 +797,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       },
       {
@@ -826,7 +826,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       },
       {
@@ -855,7 +855,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       },
       {
@@ -884,7 +884,7 @@
         "pinned": false,
         "beat": false,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has ignored 3 rebuilds; leaving it alone rather than flapping it. Nothing is reaching it from copilot/cli/machine/dswett_dev_vm1/online/state - check that the beat still carries a changing payload, then the broker and Home Assistant's MQTT integration."
+          "binary_sensor.agent_bridge_machine_a_online has ignored 3 rebuilds; leaving it alone rather than flapping it. Nothing is reaching it from copilot/cli/machine/machine_a/online/state - check that the beat still carries a changing payload, then the broker and Home Assistant's MQTT integration."
         ]
       },
       {
@@ -933,7 +933,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       },
       {
@@ -971,7 +971,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       },
       {
@@ -1000,7 +1000,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it"
         ]
       },
       {
@@ -1029,7 +1029,7 @@
         "pinned": false,
         "beat": false,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has ignored 3 rebuilds; leaving it alone rather than flapping it. Nothing is reaching it from copilot/cli/machine/dswett_dev_vm1/online/state - check that the beat still carries a changing payload, then the broker and Home Assistant's MQTT integration."
+          "binary_sensor.agent_bridge_machine_a_online has ignored 3 rebuilds; leaving it alone rather than flapping it. Nothing is reaching it from copilot/cli/machine/machine_a/online/state - check that the beat still carries a changing payload, then the broker and Home Assistant's MQTT integration."
         ]
       },
       {
@@ -1087,7 +1087,7 @@
         "pinned": true,
         "beat": true,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 10920s; rebuilding it"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 10920s; rebuilding it"
         ]
       }
     ],
@@ -1127,8 +1127,8 @@
         "pinned": true,
         "beat": false,
         "logs": [
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it",
-          "binary_sensor.agent_bridge_dswett_dev_vm1_online did not come back after the rebuild; trying again next beat"
+          "binary_sensor.agent_bridge_machine_a_online has taken no beat for 180s; rebuilding it",
+          "binary_sensor.agent_bridge_machine_a_online did not come back after the rebuild; trying again next beat"
         ]
       },
       {
