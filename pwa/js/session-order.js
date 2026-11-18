@@ -207,13 +207,13 @@ export class SessionOrder {
   }
 
   // entries: [{ hostId, session }], every live session shown. nameOf(hostId): a machine's name,
-  // for the Machine sort. shows(hostId): whether a machine is shown, for the Ended group.
+  // for the Machine sort.
   // settled(hostId): whether a machine has sent its whole list (sessions.synced). Its sessions
   // are placed only then, all together, newest first: a snapshot arrives one session at a time,
   // and placing each as it came would put them in reverse, depending on how the frames batched.
   // Until then they show at the top, newest first.
-  // Returns { pinned, sessions, ended }: the first two are entries, in order; ended is
-  // [{ hostId, session, endedAt }], the most recently ended first.
+  // Returns { pinned, sessions, ended }: live entries in the first two; ended stays empty
+  // for legacy callers.
   arrange(entries, { nameOf = () => '', shows = () => true, settled = () => true } = {}) {
     this.#place(entries.filter((e) => settled(e.hostId)), entries);
     const s = this.#state;

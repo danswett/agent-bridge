@@ -2186,10 +2186,10 @@ test('search hides rows without fading copies of them, and a session that ends f
   await page.locator('#search').fill('');
   await expect(page.locator('.session').filter({ visible: true })).toHaveCount(others);
   expect(await fades()).toBe(before);
-  // Gone, it is listed under Ended, which has no card of its own to fade.
+  // Removal fades the row once, without retaining an archive.
   await page.evaluate(() => window.agentBridgeDemo.remove('demo-hidden'));
   await expect(row(page, 'demo-hidden')).toHaveCount(0);
-  await expect(page.locator('.ended[data-id="demo-hidden"]')).toHaveCount(1);
+  await expect(page.locator('.ended-group')).toHaveCount(0);
   expect(await fades()).toBe(before + 1);
   await upsert(page, CODEX, { updatedAt: later(2000) });
   await upsert(page, CODEX, { updatedAt: later(3000) });

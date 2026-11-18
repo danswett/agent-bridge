@@ -137,10 +137,9 @@ public sealed class SessionOrder
     }
 
     // entries: every live session shown. nameOf(machine): a machine's name, for the Machine sort.
-    // shows(machine): whether a machine is shown, for the Ended group. settled(machine): whether a
-    // machine has sent its whole list. Its sessions are placed only then, all together, newest
-    // first: a snapshot arrives one session at a time, and placing each as it came would put them
-    // in reverse. Until then they show at the top, newest first.
+    // settled(machine): whether a machine has sent its whole list. Its sessions are placed only
+    // then, all together, newest first: a snapshot arrives one session at a time, and placing
+    // each as it came would put them in reverse. Until then they show at the top, newest first.
     public Arrangement Arrange(IReadOnlyList<OrderEntry> entries, Func<string, string?>? nameOf = null, Func<string, bool>? shows = null, Func<string, bool>? settled = null)
     {
         foreach (var e in entries) { Observe(e.Machine, e.Session, snapshot: settled?.Invoke(e.Machine) == false); }
