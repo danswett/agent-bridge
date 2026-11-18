@@ -57,20 +57,24 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
             var seq = ++sequence;
             var at = clock.GetUtcNow();
             JsonElement record;
+            // Reserve the maximum P-256 DER/base64url signature plus its JSON member.
+            var budget = 16 * 1024 - (sign is null ? 0 : 105);
             while (true)
             {
                 record = JsonSerializer.SerializeToElement(new
                 {
                     v = 1, machine, epoch, seq, at, truncated, total, sessions,
                 }, ProtocolJson.Options);
-                record = sign?.Invoke(record) ?? record;
-                if (Encoding.UTF8.GetByteCount(record.GetRawText()) <= 16 * 1024) { break; }
+                if (Encoding.UTF8.GetByteCount(record.GetRawText()) <= budget) { break; }
                 if (sessions.Count == 0) { throw new InvalidDataException("registry publication exceeds the 16 KiB record limit"); }
-                // Fit the completed signed record, dropping the least-recent state change first.
+                // Drop the least-recent state change before signing the final record.
                 sessions.RemoveAt(sessions.Count - 1);
                 truncated = true;
                 total = usable.Length;
             }
+            record = sign?.Invoke(record) ?? record;
+            if (Encoding.UTF8.GetByteCount(record.GetRawText()) > 16 * 1024)
+            { throw new InvalidDataException("signed registry publication exceeds the 16 KiB record limit"); }
             var started = clock.GetTimestamp();
             await put(record, ct);
             lastSent = started;
