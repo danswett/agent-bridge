@@ -22,6 +22,7 @@ public static class HostOps
     public const string AgentsSignIn = "host.agents.signIn";
 
     public const string Status = "host.status";
+    public const string Diagnostics = "host.diagnostics";
     // Answers with the status, then sends a host.status event whenever it changes.
     public const string Subscribe = "host.subscribe";
     public const string StatusEvent = "host.status";

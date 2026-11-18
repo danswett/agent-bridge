@@ -165,6 +165,16 @@ ancestry is read only in part, is anything else of the user's. An agent that sta
 detached from itself gets past this as it could past the app's check; restarting is the only
 host-management op it gains.
 
+## Efficiency counters (`host.diagnostics`)
+
+Pipe only, local app or host CLI only, freshly classified on every call; agents,
+script credentials and untraceable callers are refused and logged. No subscription
+or background sampler is started. The result contains cumulative `timers` keyed by
+fixed component role, each with `created` and `fired`, plus process-wide
+`allocatedBytes`, `gen0Collections`, `gen1Collections` and `gen2Collections`.
+Counts reset on host restart; read twice to calculate deltas. Only timers using
+the composition's counting provider are included, not framework-internal timers.
+
 ## Person-set fleet names (`session.rename`, #1777)
 
 | Op | Data | Result |

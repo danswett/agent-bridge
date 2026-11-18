@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.Host.Core.Diagnostics;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -18,10 +19,10 @@ public static class LocalApi
     // What an agent's hello offers: reading only.
     static readonly HashSet<string> AgentCapabilities = [Capabilities.SessionsRead, UsageProtocol.Capability];
 
-    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null, AgentAuditLog? audit = null, TimeProvider? auditTime = null) =>
-        Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System));
+    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null, AgentAuditLog? audit = null, TimeProvider? auditTime = null, CountingTimeProvider? meter = null) =>
+        Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), meter);
 
-    static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
+    static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals, CountingTimeProvider? meter) => async (channel, op, data) =>
     {
         if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
         {
@@ -130,6 +131,13 @@ public static class LocalApi
         }
         if (op.StartsWith("host.", StringComparison.Ordinal))
         {
+            if (op == HostOps.Diagnostics)
+            {
+                var diagnosticsCaller = callers.Classify(channel, fresh: true);
+                if (channel is not LocalChannel || diagnosticsCaller.Kind is not (CallerKind.App or CallerKind.HostCli))
+                { throw Refuse(op, diagnosticsCaller, "host diagnostics are for the app or host command line", log); }
+                return meter?.Snapshot() ?? throw new InvalidOperationException("host diagnostics meter is not configured");
+            }
             if (!Reads.Contains(op) && callers.Classify(channel, fresh: true) is { Kind: not CallerKind.App } caller
                 && !(caller.Kind == CallerKind.HostCli && op == HostOps.Restart))
             {

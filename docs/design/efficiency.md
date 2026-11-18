@@ -402,7 +402,7 @@ file): two model families read every changed file whole.
 |---|---|---|---|---|---|
 | 1 | Baseline harness: a measuring tool that attaches to a process and writes `agent-bridge.efficiency/1` (CPU, threads, wakeups, memory, control process, quiet check). Tests with a synthetic idle and a synthetic busy child | 350 | none | #2294 | 2F (new project file) |
 | 2 | #2283: `KeepAwakeService` awaits to the due time; no scheduler when off or not a Dev Box; prompt stop | 150 | none (in flight) | #2283 | 2F |
-| 3a | Host meter: a counting `TimeProvider` (timers created and fired, per owner), allocated bytes and GC counts, in the host's composition; read over the local pipe's diagnostics | 300 | 1 | none yet | 2F |
+| 3a | Host meter: a counting `TimeProvider` (timers created and fired, per owner), allocated bytes and GC counts, in the host's composition; read over the local pipe's diagnostics | 300 | 1 | [#2305](https://github.com/danswett/agent-bridge/issues/2305) | 2F |
 | 3b | App meter: the same counting `TimeProvider`, allocation and GC counts in the desktop app's composition, readable by slice 1's tool | 150 | 3a | none yet | 1F |
 | 3c | Network meter: bytes and messages per endpoint role in the host and the app, keepalive frames counted apart | 350 | 3a, 3b | none yet | 2F (the wire) |
 | 3d | Active-session driver: the scripted agent and attached viewer of §2.1, reused by slice 12e's cycles | 300 | 1 | none yet | 1F |
@@ -434,6 +434,11 @@ file): two model families read every changed file whole.
 | 12g | Nightly idle budget on the lab VM (ring 3), full form with the rolling-median check, the failure issue, and the report row; the only input to the ratchet | 300 | 4, 12a1, owner approval of §3 | none yet | 2F (CI) |
 | 12h | Memory soak on the lab VM: nightly 2 h and weekly 24 h, the long-horizon check behind 12e and 12f | 250 | 12g | none yet | 2F (CI) |
 | 12i | Nightly active-session scenario (§2.1) against §3's per-session network row, median of 5, and its report row | 250 | 3d, 12g | none yet | 2F (CI) |
+
+Slice 3a uses the real system clock in host composition, with fixed component roles
+and no background sampling. The local-only [`host.diagnostics`](../protocol/local-pipe.md#efficiency-counters-hostdiagnostics)
+snapshot supplies cumulative timer, allocation and GC counts; it does not run the
+baseline or change any timer schedule.
 
 **Order.** 1 and 2 start now, in parallel; 9a can start once 1 lands, and 9b after it. Then 3a to
 3d, then 4 (baseline, building on #2295's host audit). Then the host fixes 5, 6 and 7a to 7d in

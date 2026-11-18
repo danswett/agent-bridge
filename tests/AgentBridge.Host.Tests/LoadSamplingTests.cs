@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Diagnostics;
 using AgentBridge.Host.Core.Load;
 using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
@@ -42,8 +43,11 @@ public sealed class LoadSamplingTests
         {
             LoadEnabled = false, HomeAssistant = HostSettings.Default.HomeAssistant with { Enabled = ha },
         };
-        await using var sampler = HostLoadSampling.Create(settings, source, new Table(), clock);
+        var meter = new CountingTimeProvider(clock);
+        await using var sampler = HostLoadSampling.Create(settings, source, new Table(), meter.ForOwner("process-load"));
         sampler.Start();
         Assert.Equal(TimeSpan.FromSeconds(seconds), await clock.Armed.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30)));
+        await sampler.DisposeAsync();
+        Assert.Equal(1, meter.Snapshot().Timers["process-load"].Created);
     }
 }
