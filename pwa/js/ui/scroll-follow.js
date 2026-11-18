@@ -44,6 +44,8 @@ export class ScrollFollow {
   #unreadMarker = null;
   #unreadTurns = [];
   #knownTurns = new Set();
+  #unreadAnnounce = null;
+  #announcedTurns = new Set();
 
   constructor(element, { input = element, content = () => element.children, scroll = (fn) => fn(), visible = () => element.getClientRects().length > 0, canFollow = () => true, canDefer = () => true, onFollow = () => {} } = {}) {
     Object.assign(this, { element, content, scroll, visible, canFollow, canDefer, onFollow });
@@ -156,7 +158,8 @@ export class ScrollFollow {
     if (!this.#pending.size) { return { ...snapshot, turns: head }; }
     if (!this.#tail) {
       const view = new HistoryView();
-      this.#tail = { view, root: h('div', { class: 'stream' }, view.element) };
+      this.#unreadAnnounce = h('span', { class: 'sr-only conversation-unread-announce', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' });
+      this.#tail = { view, root: h('div', { class: 'stream' }, this.#unreadAnnounce, view.element) };
       this.#tail.root.style.marginBlockStart = 'var(--ab-space-6)';
       this.element.append(this.#tail.root);
     }
@@ -186,6 +189,14 @@ export class ScrollFollow {
     }
     this.#unreadButton.textContent = `${this.#unreadTurns.length} new \u00b7 Jump to first unread`;
     this.#unreadButton.disabled = !this.#unreadMarker;
+    const fresh = this.#unreadTurns.filter((t) => !this.#announcedTurns.has(t.id));
+    if (fresh.length) {
+      for (const t of fresh) { this.#announcedTurns.add(t.id); }
+      const turn = fresh.at(-1);
+      const automatic = ['scheduled', 'notification'].includes(turn.kind) || ['schedule', 'notification'].includes(turn.prompt?.from);
+      const count = this.#unreadTurns.length;
+      this.#unreadAnnounce.textContent = `${automatic ? 'Scheduled run replied' : 'New reply'}. ${count} new ${count === 1 ? 'reply' : 'replies'}.`;
+    }
   }
 
   #clearUnread() {
@@ -194,6 +205,8 @@ export class ScrollFollow {
     this.#unreadButton?.remove();
     this.#unreadButton = null;
     this.#unreadTurns = [];
+    this.#announcedTurns.clear();
+    if (this.#unreadAnnounce) { this.#unreadAnnounce.textContent = ''; }
   }
 
   get questionHost() { return this.#pending.size ? this.#tail?.root : null; }

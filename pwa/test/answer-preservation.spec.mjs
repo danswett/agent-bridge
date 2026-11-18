@@ -46,8 +46,16 @@ test('installed phone keeps all four replies in turn order and announces deferre
   const held = await pane.evaluate((el) => el.scrollTop);
   const announce = view.locator('.conversation-unread-announce');
   await say(page, 13, 3, null, 'scheduled');
+  await expect(announce).toHaveText('');
   await say(page, 13, 3, 'Scheduled reply', 'scheduled');
   await expect(announce).toHaveText('Scheduled run replied. 1 new reply.');
+  await announce.evaluate((el) => {
+    el.dataset.changes = '0';
+    new MutationObserver(() => { el.dataset.changes = String(Number(el.dataset.changes) + 1); })
+      .observe(el, { childList: true, subtree: true, characterData: true });
+  });
+  await say(page, 13, 4, 'Scheduled reply, completed', 'scheduled');
+  await expect(announce).toHaveAttribute('data-changes', '0');
   await say(page, 14, 8, 'Notification reply', 'notification');
   await expect(announce).toHaveText('Scheduled run replied. 2 new replies.');
   await say(page, 15, 10, 'Fourth reply');
@@ -55,7 +63,7 @@ test('installed phone keeps all four replies in turn order and announces deferre
   await expect(announce).toHaveAttribute('aria-live', 'polite');
   await expect(announce).toHaveAttribute('role', 'status');
   expect(await pane.evaluate((el) => el.scrollTop)).toBe(held);
-  const replies = [ANSWER, 'Scheduled reply', 'Notification reply', 'Fourth reply'];
+  const replies = [ANSWER, 'Scheduled reply, completed', 'Notification reply', 'Fourth reply'];
   const text = await pane.innerText();
   for (const [i, reply] of replies.entries()) {
     const shown = pane.locator('.response, .history-reply').filter({ hasText: reply });
