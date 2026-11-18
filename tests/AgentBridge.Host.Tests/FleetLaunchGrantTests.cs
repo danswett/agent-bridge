@@ -56,8 +56,8 @@ public sealed class FleetLaunchGrantTests : IDisposable
     public void Unreadable_profile_disk_space_refuses_grants_launches_and_dispatch(bool unauthorized)
     {
         Config();
-        var grant = new FleetLaunchGrant(folder, () => throw unauthorized
-            ? new UnauthorizedAccessException("fixture") : new IOException("fixture"));
+        var grant = new FleetLaunchGrant(folder, () => throw (unauthorized
+            ? new UnauthorizedAccessException("fixture") : new IOException("fixture")));
         Assert.Equal("diskUnavailable", grant.DiskProblem);
         Assert.Contains("diskUnavailable", grant.CheckGrant(Script));
         Assert.Contains("diskUnavailable", grant.CheckLaunch(Script, Outside, Request));
