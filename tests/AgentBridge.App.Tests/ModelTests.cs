@@ -1112,6 +1112,51 @@ public sealed class WordsTests
     }
 
     [Theory]
+    [InlineData(@"C:\projects\working\feature-folder", 25, @"C:\…\feature-folder")]
+    [InlineData("C:/projects/working/feature-folder", 25, "C:/…/feature-folder")]
+    [InlineData(@"C:\projects\working\feature-folder\", 25, @"C:\…\feature-folder\")]
+    [InlineData(@"C:\projects\working\leaf", 5, "…leaf")]
+    [InlineData(@"C:\projects\working\leaf", 4, "leaf")]
+    public void A_folder_middle_cut_keeps_whole_folder_names(string path, int most, string expected)
+    {
+        Assert.Equal(expected, Words.MiddleByFolder(path, most));
+    }
+
+    [Theory]
+    [InlineData(@"C:\projects\an-extraordinarily-long-folder-name", 16)]
+    [InlineData("one-extraordinarily-long-folder-name", 12)]
+    public void A_folder_name_that_cannot_fit_uses_the_character_middle_cut(string path, int most)
+    {
+        Assert.Equal(Words.Middle(path, most), Words.MiddleByFolder(path, most));
+    }
+
+    [Theory]
+    [InlineData(@"C:\leaf", 20)]
+    [InlineData(@"C:\leaf", 7)]
+    [InlineData("", 10)]
+    [InlineData(null, 10)]
+    public void A_folder_that_already_fits_is_unchanged(string? path, int most)
+    {
+        Assert.Equal(path ?? "", Words.MiddleByFolder(path, most));
+    }
+
+    [Theory]
+    [InlineData(@"C:\projects\working\leaf", 0)]
+    [InlineData(@"C:\projects\working\leaf", 1)]
+    [InlineData(@"C:\projects\working\leaf", 3)]
+    [InlineData(@"C:\projects\working\leaf", 6)]
+    [InlineData(@"C:\projects\working\leaf", 13)]
+    [InlineData(@"C:\projects\working\leaf", 22)]
+    [InlineData("C:\\projects\\\U0001F4C1\\working\\leaf", 14)]
+    public void A_folder_middle_cut_stays_within_its_budget_without_half_a_character(string path, int most)
+    {
+        var cut = Words.MiddleByFolder(path, most);
+        Assert.True(cut.Length <= most);
+        Assert.DoesNotContain(cut.EnumerateRunes(), r => r == System.Text.Rune.ReplacementChar);
+        if (most >= Words.LastSegment(path).Length) { Assert.EndsWith(Words.LastSegment(path), cut); }
+    }
+
+    [Theory]
     // The head's cut would fall between an emoji's two halves.
     [InlineData("C:\\\U0001F4C1\\some-long-folder\\file.txt", 9, "C:\\\u2026.txt")]
     // The tail's.
