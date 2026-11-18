@@ -91,7 +91,7 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task A_clear_scan_followed_by_a_stalled_final_probe_uses_the_remaining_deadline_and_can_be_quit(bool quitting)
+    public async Task A_changed_probe_gets_a_fresh_scan_deadline_and_can_be_quit(bool quitting)
     {
         var clock = new FakeTimeProvider(Make.T0);
         var manager = Manager(clock);
@@ -107,7 +107,7 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             if (quitting) { manager.Quit(TimeSpan.FromSeconds(1), _ => { }); }
-            else { clock.Advance(TimeSpan.FromSeconds(30)); }
+            else { clock.Advance(InstallationFiles.ReleaseWait); }
             if (quitting) { await Assert.ThrowsAnyAsync<OperationCanceledException>(() => update.WaitAsync(TimeSpan.FromSeconds(5))); }
             else { await Assert.ThrowsAsync<UpdateBlockedException>(() => update.WaitAsync(TimeSpan.FromSeconds(5))); }
             Assert.False(begun);

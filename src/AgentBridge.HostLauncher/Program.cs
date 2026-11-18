@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.ComponentModel;
 using AgentBridge.HostLauncher;
 
+if (CoordinatorMode.Requested(args)) return await CoordinatorMode.RunAsync(args);
+
 // agent-bridge-hostw: starts agent-bridge-host beside it with no console window and waits for
 // it, returning its exit code. The logon task runs this, so nothing flashes on screen at
 // sign-in. A host that crashed is started again a few times (HostSupervisor, #106); one that

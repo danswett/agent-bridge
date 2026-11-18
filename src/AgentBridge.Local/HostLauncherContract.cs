@@ -1,8 +1,6 @@
 namespace AgentBridge.Local;
 
-// Between agent-bridge-hostw (the logon task's launcher) and the host it runs (#106). Compiled
-// into both, so neither can drift: the launcher has no other dependency, and keeps its copy to
-// itself.
+// Shared by the host and the launcher's self-contained bundle, so neither can drift (#106).
 #if AGENT_BRIDGE_HOSTW
 internal
 #else
