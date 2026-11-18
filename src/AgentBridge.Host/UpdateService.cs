@@ -265,6 +265,25 @@ public sealed class UpdateService
                 _ = channel.Closed.ContinueWith(_ => Gone(channel), TaskScheduler.Default);
             }
             reported = UpdateProtocol.Fit(report.State);
+            // An app's successful restart/check alone does not establish a converged installation.
+            var appRelease = UpdateVersions.Identity(reported.Current);
+            var hostRelease = UpdateVersions.Identity(HostVersion);
+            if (reported.Installer && reported.Current is { Length: > 0 } appVersion
+                && appRelease is not null && hostRelease is not null
+                && !string.Equals(appRelease, hostRelease, StringComparison.OrdinalIgnoreCase)
+                && reported.Last is { Outcome: UpdateOutcome.Updated or UpdateOutcome.Current } last)
+            {
+                reported = reported with
+                {
+                    Last = last with
+                    {
+                        Outcome = UpdateOutcome.Failed,
+                        Code = "version-skew",
+                        Step = "host-version",
+                        Reason = $"the app is on {appVersion} but the host is on {HostVersion}; the update has not converged",
+                    },
+                };
+            }
             if (reported.Back is { } back && (back.To != HostVersion || back.To != reported.Current))
             {
                 reported = reported with { Back = null };

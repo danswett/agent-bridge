@@ -2212,7 +2212,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Contains(log, l => l.Contains("does not answer on its pipe", StringComparison.Ordinal) && l.Contains("not starting it", StringComparison.Ordinal));
     }
 
-    // VM2's case (#800): the host alive, the app's link to it stuck in an attempt that never ends.
+    // node-b's case (#800): the host alive, the app's link to it stuck in an attempt that never ends.
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_link_stuck_while_its_host_answers_is_made_again_before_the_update_is_refused_again()
@@ -2401,7 +2401,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal((2, 2), (updater.Checks, github.Requests));
     }
 
-    // #800: VM2's app lost its link to a live host and sat on an old release for ~20 h, one log
+    // #800: node-b's app lost its link to a live host and sat on an old release for ~20 h, one log
     // line saying so. Since #516 nothing is forced, but the owner is told, once a day.
     [Fact]
     [Trait("Category", "Network")]

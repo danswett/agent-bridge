@@ -117,6 +117,18 @@ public sealed class HaAuthGuard
     public static string FileFor(string profileFolder) =>
         Path.Combine(Path.GetDirectoryName(Path.GetFullPath(profileFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) ?? profileFolder, FileName);
 
+    // A warning must not reset or repair the record before the person consents.
+    public static int? RemainingAttempts(string profileFolder)
+    {
+        try
+        {
+            var recorded = Parse(File.ReadAllText(FileFor(profileFolder)));
+            return recorded is null || recorded.Lost is not null ? null : Math.Max(0, MaxRejections - recorded.Strikes);
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return MaxRejections; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
     // Raised when what Problem says may have changed.
     public event Action? Changed;
 
@@ -181,7 +193,8 @@ public sealed class HaAuthGuard
     // its own even when the same one was refused before. The address's count is kept. With the
     // record lost, this is the person's say-so for one attempt (Granted). False when it could not
     // be recorded: kept only by this process, it would end with it (ha token set exits at once).
-    public bool Forget(HaCredential credential)
+    // singleAttempt also stops the explicitly authorized token after its first rejection.
+    public bool Forget(HaCredential credential, bool singleAttempt = false)
     {
         var now = time.GetUtcNow();
         bool recorded;
@@ -189,7 +202,7 @@ public sealed class HaAuthGuard
         {
             Mutate(s =>
             {
-                if (s.Lost is not null) { ServerOf(s, credential, now).Credentials[credential.Id] = new Cred { Granted = true }; }
+                if (singleAttempt || s.Lost is not null) { ServerOf(s, credential, now).Credentials[credential.Id] = new Cred { Granted = true }; }
                 else if (s.Servers.TryGetValue(credential.Server, out var server)) { server.Credentials.Remove(credential.Id); }
             });
             recorded = path is null || !unavailable;
@@ -482,7 +495,7 @@ public sealed class HaAuthGuard
                     // limit, that is every token refused so far, not only this one.
                     // With the record lost, how often it was refused before is not known: the one
                     // attempt a person allowed is all it gets.
-                    if (c.Rejections >= MaxRejections || s.Lost is not null) { c.Stopped = true; }
+                    if (c.Granted || c.Rejections >= MaxRejections || s.Lost is not null) { c.Stopped = true; }
                     if (s.Strikes >= MaxRejections)
                     {
                         foreach (var refused in s.Servers.Values.SelectMany(x => x.Credentials.Values).Where(x => x.Rejections > 0)) { refused.Stopped = true; }
@@ -527,6 +540,7 @@ public sealed class HaAuthGuard
                 // a refusal recorded since this one was let go may be the later of the two, and is
                 // left for an answer that comes after it to clear.
                 if (s.Refusals != seen.Refusals) { return; }
+                cr.Granted = false;
                 cr.Rejections = 0;
                 cr.RejectedAt = null;
                 cr.Stopped = false;

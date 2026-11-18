@@ -41,3 +41,26 @@ The same dependency-free fixture assertions can run directly with
 `replacement`, `readonly`, `no-survivors`, `partial`, `ambiguous`, `metric-values`, `entrypoint`).
 Only `entrypoint` uses a real 10 ms window; injected tests never sleep. The AST guard rejects named mutation commands,
 `Invoke-Expression` and dynamic call operators; it is a guard, not a proof.
+
+## Active-session driver (#2758)
+
+Dot-source `quality/efficiency-active-session.ps1` and call
+`Invoke-EfficiencyActiveSession` with `-WriteTranscript`, `-SendHook`,
+`-AskAndAnswer`, `-AttachViewer` scriptblocks and a `-CancellationToken`.
+The caller supplies disposable test-session adapters, never a live owner session:
+write one transcript line per call, send one hook event per call, and ask and answer
+one scripted question per call. `AttachViewer` attaches the scenario's viewer and
+returns an `IDisposable` lease that detaches it. Callbacks run synchronously, must
+return promptly (or honor the caller's token), and propagate failures.
+
+The driver emits at 2 s, 6 s and 60 s intervals respectively, starting after
+attachment, and repeats until cancelled. Run one driver per active session (one or
+three in the 20-session fixture). It collects no metrics and changes no product
+behavior. Deadlines use a monotonic clock; the default wait is cancellation-aware
+and creates no timer or background job. Cancellation and callback failure both
+dispose the viewer attachment. The caller owns the token source and session.
+There is no persistent state: the driver lives only in the invoking process.
+
+Tests: `dotnet test tests/AgentBridge.Quality.Tests -c Release --filter FullyQualifiedName~EfficiencyActiveSessionTests`.
+The scripted rates use a stepping fake clock; cancellation also exercises the
+production wait. Later memory/network gates supply their own adapters and sampling.

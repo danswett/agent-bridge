@@ -138,3 +138,5 @@ export async function launchSession(host, ledger, options = {}) {
 }
 
 export const getLaunchOptions = (host) => host.request('launch.options', {});
+
+export const readUsage = (host) => host.request('usage.get', {});

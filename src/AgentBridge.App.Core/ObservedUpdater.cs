@@ -1,5 +1,5 @@
-using AgentBridge.Protocol;
 using AgentBridge.Host.Core.Updates;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
@@ -89,6 +89,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
     public int? GitHubRemaining => inner.GitHubRemaining;
     public DateTimeOffset? GitHubQuotaAt => inner.GitHubQuotaAt;
     public DateTimeOffset? DiscoveredAt => inner.DiscoveredAt;
+    public HaltPolicySnapshot? HaltPolicy => inner.HaltPolicy;
     public UpdatePhase Phase => Volatile.Read(ref downloads) > 0 ? UpdatePhase.Downloading : Volatile.Read(ref checks) > 0 ? UpdatePhase.Checking : UpdatePhase.Idle;
     public int? Progress { get; private set; }
     public long? Bytes { get; private set; }

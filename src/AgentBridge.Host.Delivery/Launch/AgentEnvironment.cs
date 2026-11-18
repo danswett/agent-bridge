@@ -5,7 +5,7 @@ namespace AgentBridge.Host.Delivery.Launch;
 public static class AgentEnvironment
 {
     public static Dictionary<string, string?> For(string copilotHome, string claudeHome,
-        string codexHome, bool? claudeConfigDirExplicit, string? path = null)
+        string codexHome, bool? claudeConfigDirExplicit, string? path = null, Uri? homeAssistantBaseUrl = null)
     {
         var environment = new Dictionary<string, string?>();
         var inherited = SessionSourceOptions.ForCurrentUser();
@@ -15,6 +15,12 @@ public static class AgentEnvironment
         else if (!Folders.Same(claudeHome, inherited.ClaudeHome)) { environment["CLAUDE_CONFIG_DIR"] = claudeHome; }
         if (!Folders.Same(codexHome, inherited.CodexHome)) { environment["CODEX_HOME"] = codexHome; }
         if (path is not null) { environment["PATH"] = path; }
+        if (homeAssistantBaseUrl is not null)
+        {
+            var baseUrl = homeAssistantBaseUrl.AbsoluteUri.TrimEnd('/');
+            if (baseUrl.EndsWith("/api", StringComparison.Ordinal)) { baseUrl = baseUrl[..^4]; }
+            environment["AGENT_HA_URL"] = baseUrl + "/api";
+        }
         return environment;
     }
 }

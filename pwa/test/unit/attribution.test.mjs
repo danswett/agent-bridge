@@ -239,8 +239,8 @@ test('read aloud, a name loses its semicolons and sentence stops too, but not a 
 });
 
 test('read aloud, a name loses its commas and those drawn like it, one space for each run', () => {
-  assert.equal(aloud('x, idle, DEV-VM2'), 'x idle DEV-VM2');
-  assert.equal(aloud('x\uff0cidle\u3001DEV-VM2'), 'x idle DEV-VM2');
+  assert.equal(aloud('x, idle, Machine B'), 'x idle Machine B');
+  assert.equal(aloud('x\uff0cidle\u3001Machine B'), 'x idle Machine B');
   assert.equal(aloud('Read  logs'), 'Read  logs');
   assert.equal(aloud(''), '');
 });

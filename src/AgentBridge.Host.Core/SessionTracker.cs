@@ -12,6 +12,9 @@ internal sealed class SessionTracker
 {
     readonly SessionSourceOptions _options;
     readonly TimeProvider _time;
+    readonly string? _hostId;
+    (long? Bytes, string? Unavailable)? _transcriptSize;
+    TranscriptObservation? _transcriptObservation;
     readonly SessionState _state = new();
     readonly TranscriptParser _parser;
     TranscriptTail? _tail;
@@ -39,10 +42,11 @@ internal sealed class SessionTracker
     // when it could not (not working, or already showing another attention).
     (SessionStatus Effective, DateTimeOffset? LastEvent, bool Background, IReadOnlyList<Subagent>? Subagents, int? More)? _stall;
 
-    public SessionTracker(DiscoveredSession discovered, SessionSourceOptions options, TimeProvider time)
+    public SessionTracker(DiscoveredSession discovered, SessionSourceOptions options, TimeProvider time, string? hostId = null)
     {
         _options = options;
         _time = time;
+        _hostId = hostId;
         Discovered = discovered;
         _firstSeen = time.GetUtcNow();
         _parser = discovered.Agent switch
@@ -66,7 +70,18 @@ internal sealed class SessionTracker
         // rebuilt and re-serialised every session, changed or not: about 35 MB/min of the host's
         // allocation (#608).
         var changed = _built is null || discovered != Discovered;
+        var pathChanged = discovered.TranscriptPath != Discovered.TranscriptPath;
         Discovered = discovered;
+        if (_hostId is not null)
+        {
+            var size = TranscriptFileSize.Read(discovered.TranscriptPath);
+            if (_transcriptSize != size || pathChanged)
+            {
+                _transcriptSize = size;
+                _transcriptObservation = new(_time.GetUtcNow(), "file-size", _hostId);
+                changed = true;
+            }
+        }
         if (discovered.TranscriptPath is { } path)
         {
             if (_tail is null || !string.Equals(_tail.Path, path, StringComparison.Ordinal))
@@ -202,7 +217,7 @@ internal sealed class SessionTracker
         var pending = _state.Asking;
         // Status precedence (docs/design/subagents.md §4): the session's own question wins over
         // a sub-agent's (rule 1, "question wins"), and a sub-agent's makes it waiting too (rule 2).
-        var question = pending.LastOrDefault(q => q.Agent is null) ?? (pending.Count > 0 ? pending[^1] : null);
+        var question = _state.ShownQuestion;
         // Copilot asks a permission for each of a batch of parallel tool calls at once, and its
         // one dialog shows them one at a time; seen answered at the machine in the order asked
         // (#690). Listing the newest offered Approve once for a request the screen was not
@@ -342,6 +357,9 @@ internal sealed class SessionTracker
             StartedAt = ws?.CreatedAt ?? _state.StartedAt,
             UpdatedAt = _state.UpdatedAt ?? reg?.Updated ?? ws?.UpdatedAt ?? _firstSeen,
             ProcessId = d.ProcessId,
+            TranscriptBytes = _transcriptSize?.Bytes,
+            TranscriptBytesUnavailable = _transcriptSize?.Unavailable,
+            TranscriptObservation = _transcriptObservation,
             Question = question,
             WaitingOn = question?.Agent,
             Subagents = subagents,
