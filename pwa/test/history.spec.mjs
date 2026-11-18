@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test';
 import { open, view } from './nav.mjs';
 
 test('earlier turns are drawn above the latest exchange, which is drawn once', async ({ page }) => {
-  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+  await page.goto('?demo=1&static=1&signin=1&name=host-a#/sessions');
   await page.waitForSelector('html[data-demo-ready]');
   await open(page, 'signin-1');
   const v = view(page, 'signin-1');
@@ -19,7 +19,7 @@ test('earlier turns are drawn above the latest exchange, which is drawn once', a
 });
 
 test('an earlier prompt an agent sent is collapsed with its title and a preview, and opens on Show prompt', async ({ page }) => {
-  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+  await page.goto('?demo=1&static=1&signin=1&name=host-a#/sessions');
   await page.waitForSelector('html[data-demo-ready]');
   await open(page, 'error-quota');
   const turn = view(page, 'error-quota').locator('.history-turn').first();
