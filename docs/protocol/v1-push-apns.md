@@ -32,6 +32,8 @@ current account; with pinning enabled, its full authenticated key must have a
 current person grant. Caller identity fields never substitute for that key.
 Registrations replace by channel device/target, persist separately from browser
 subscriptions, and are cleared on account change or loss of the person grant.
+An in-flight enrollment stays bound to its starting account generation: switching
+accounts discards it, even if the host switches back before enrollment completes.
 Native storage is independently bounded to 16 registrations, evicting the oldest
 other registration. Unsubscribe affects only the caller's device/target.
 List entries reuse `PushDevice`, with

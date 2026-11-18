@@ -161,6 +161,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     readonly HashSet<string> groupAlertOwed = new(StringComparer.Ordinal);
     readonly SemaphoreSlim wake = new(0);
     IPushSender? sender;
+    long accountGeneration;
     // A sender whose connection failed a push: nothing more is tried on it, and the next
     // Attach (a new connection) sends what it could not.
     IPushSender? broken;
@@ -313,6 +314,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         {
             if (store.Account != next.AccountId)
             {
+                Interlocked.Increment(ref accountGeneration);
                 var dropped = store.Bind(next.AccountId);
                 if (dropped > 0) { log($"signed in to another account: dropped {dropped} push subscription(s)"); }
                 outbox.Clear();
@@ -425,6 +427,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         // Push goes straight to a device, around the relay's account boundary, so the host
         // keeps it itself: only a device of the account this host is signed in to, which that
         // account's relay connection lists, may register, list or remove.
+        var generation = Volatile.Read(ref accountGeneration);
         var account = store.Account;
         if (account is null || peer.AccountId != account || !peer.InAccount)
         {
@@ -445,6 +448,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                     var name = Clean(request.Device) ?? Clean(peer.Name) ?? "device";
                     lock (gate)
                     {
+                        RequireRegistrationAccount(generation, peer.AccountId);
                         if (trust?.Enabled == true && store.Get(peer.Device)?.Grant != grant) { Forget(peer.Device); }
                         store.Put(new PushSubscriber(peer.Device, name, request.Endpoint, request.Keys.P256dh, request.Keys.Auth, request.App, time.GetUtcNow(), grant));
                     }
@@ -471,6 +475,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                     var name = Clean(request.Device) ?? Clean(peer.Name) ?? "device";
                     lock (gate)
                     {
+                        RequireRegistrationAccount(generation, peer.AccountId);
                         store.PutApns(new ApnsRegistration(peer.Device, name, target, token, keyId, keys.P256dh, keys.Auth, time.GetUtcNow(), grant));
                     }
                     log($"APNs registration from {name} ({peer.Device[..Math.Min(8, peer.Device.Length)]}) for {target}; {store.ApnsCount} in all");
@@ -489,6 +494,15 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                 return new PushListResult([.. store.AllApns.Select(s => new PushDevice(s.Device, s.Name, $"apns:{s.Target}", s.Since, s.Device == peer.Device))]);
             default:
                 return new PushListResult([.. store.All.Select(s => new PushDevice(s.Device, s.Name, ServiceOf(s.Endpoint), s.Since, s.Device == peer.Device))]);
+        }
+    }
+
+    // Called under gate: switching away and back still invalidates work from the old binding.
+    void RequireRegistrationAccount(long generation, string account)
+    {
+        if (generation != accountGeneration || account != store.Account)
+        {
+            throw new InvalidOperationException("push registration discarded because the account changed");
         }
     }
 
