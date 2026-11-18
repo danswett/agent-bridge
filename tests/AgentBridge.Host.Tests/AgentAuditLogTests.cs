@@ -203,6 +203,19 @@ public sealed class AgentAuditLogTests : IDisposable
     }
 
     [Fact]
+    public void O150_bootstrap_must_not_bless_a_deleted_marked_stream_anchor()
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Append(Entry()));
+        File.Delete(Path.Combine(Audit, "launches.head"));
+        File.Delete(Path.Combine(Audit, "agents.head"));
+        Assert.False(Log().Append(entry));
+        Assert.True(Log().Bootstrap());
+        Assert.False(Log().Append(entry));
+    }
+
+    [Fact]
     public void A_failed_first_launch_anchor_never_becomes_replay_proof_or_a_second_refusal()
     {
         Assert.True(Log().Append(Entry()));

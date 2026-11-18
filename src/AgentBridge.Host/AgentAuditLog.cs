@@ -234,7 +234,8 @@ public sealed class AgentAuditLog
                 try
                 {
                     using var doc = JsonDocument.Parse(raw);
-                    if (doc.RootElement.TryGetProperty("previousTailIncomplete", out var incomplete) && incomplete.GetBoolean())
+                    if (HasWorktreeRefusalGrant(doc.RootElement)
+                        || doc.RootElement.TryGetProperty("previousTailIncomplete", out var incomplete) && incomplete.GetBoolean())
                     { fault = "audit-incomplete"; }
                 }
                 catch (JsonException) { fault = "audit-incomplete"; }
@@ -243,6 +244,10 @@ public sealed class AgentAuditLog
         }
         foreach (var (launch, fault) in candidates) { WriteHead(folder, launch, null, LastGateSequence(folder, launch), fault, adopted: true); }
     }
+
+    static bool HasWorktreeRefusalGrant(JsonElement row) =>
+        row.TryGetProperty("grant", out var grant) && grant.ValueKind == JsonValueKind.String
+        && grant.GetString() == WorktreeRefusalGrant;
 
     static (bool Intact, bool LegacyPrefix) VerifyProfile(string profile, bool launch, Action<string> log,
         bool synchronize = false, bool chainOnly = false)
@@ -363,8 +368,7 @@ public sealed class AgentAuditLog
             {
                 var row = JsonSerializer.Deserialize<JsonElement>(raw, Json);
                 return row.TryGetProperty("gate", out var gate) && gate.ValueKind != JsonValueKind.Null
-                    || row.TryGetProperty("grant", out var grant) && grant.ValueKind == JsonValueKind.String
-                    && grant.GetString() == WorktreeRefusalGrant;
+                    || HasWorktreeRefusalGrant(row);
             }))
             { return "audit-incomplete"; }
             return VerifyProfile(profile, launch, log, chainOnly: true).Intact ? fault
