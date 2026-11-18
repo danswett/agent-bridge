@@ -1,12 +1,15 @@
 namespace AgentBridge.Host;
 
 public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Sequence, string Phase, string Path,
-    string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null)
+    string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null,
+    GateRunEnrollment? Enrollment = null)
 {
     internal bool Valid(string action, string? target, string outcome) =>
         V == 1 && Operation != Guid.Empty && (Run != Guid.Empty || action is ("session.launch" or "session.answer" or "session.stop") && Phase != "control") && Sequence > 0
         && Phase is "intent" or "terminal" or "control" && Path is "relay" or "local" or "legacy-ha"
         && ActorKind is "person-client" or "agent" or "ha-component"
+        && (Enrollment is null || Phase == "control" && action == "gate.start" && outcome == "prepared" && Enrollment.Valid())
+        && (action != "gate.start" || outcome != "prepared" || Enrollment is not null && Path == "relay" && ActorKind == "person-client")
         && (LaunchBinding is null || action == "session.launch" && LaunchBinding.Length == 64 && LaunchBinding.All(char.IsAsciiHexDigit))
         && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled" or "forced"
         && (Phase == "control" ? target == "profile" && (action is "gate.start" or "gate.pause" or "gate.reset" or "gate.seal")

@@ -9,7 +9,7 @@ using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 [Trait("Category", "Network")]
-public sealed class RemoteAuthorizationTests : IAsyncLifetime
+public sealed partial class RemoteAuthorizationTests : IAsyncLifetime
 {
     const string SessionId = "88888888-8888-4888-8888-888888888888";
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
@@ -104,6 +104,67 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Assert.False(response.GetProperty("ok").GetBoolean());
         Assert.Contains("only a request UUID", response.GetProperty("error").GetString());
         Assert.False(Directory.Exists(profile));
+    }
+
+    sealed class GateEnrollmentFixture : IGateRunEnrollmentProvider
+    {
+        internal GateRunEnrollment? Value = new(Enumerable.Range(0, 4).Select(_ => new GateRunParticipant(
+            Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "1.0", new string('a', 64), new string('b', 64))).ToArray(),
+            Guid.NewGuid(), 17, new string('c', 64));
+        public GateRunEnrollment? Read() => Value;
+    }
+
+    async Task<(SecureChannel Channel, AgentAuditLog Audit, GateEnrollmentFixture Enrollment)> GateAsync(TimeProvider? clock = null)
+    {
+        var enrollment = new GateEnrollmentFixture();
+        authorization.Dispose();
+        authorization = new RemoteAuthorization(true, store, time, enrollment);
+        authorization.Attach(host.Hub);
+        var audit = new AgentAuditLog(Path.Combine(fixture.Root, "gate"), clock ?? time);
+        host.Hub.Handler = authorization.Handler(service, audit);
+        var peer = await PeerAsync();
+        Pin(peer, TrustedPeerStore.Person);
+        return (await peer.Hub.OpenAsync(host.Id, Patience), audit, enrollment);
+    }
+
+    [Fact]
+    public async Task Gate_start_writes_one_host_bound_begin_marker_and_reuses_it_after_restart()
+    {
+        var (channel, audit, enrollment) = await GateAsync();
+        var request = Guid.NewGuid();
+        var reply = Result(await channel.RequestAsync("gate.start", new { request }, Patience));
+        var run = reply.GetProperty("run").GetGuid();
+        Assert.NotEqual(Guid.Empty, run);
+        Assert.NotEqual(request, run);
+        Assert.True(reply.GetProperty("held").GetBoolean());
+        var restarted = new AgentAuditLog(audit.Profile, time);
+        host.Hub.Handler = authorization.Handler(service, restarted);
+        Assert.Equal(run, Result(await channel.RequestAsync("gate.start", new { request }, Patience)).GetProperty("run").GetGuid());
+        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+        var begin = Assert.Single(rows);
+        Assert.True(complete);
+        Assert.Equal("prepared", begin.Outcome);
+        Assert.Equal("relay", begin.Gate!.Path);
+        Assert.Equal("person-client", begin.Gate.ActorKind);
+        Assert.Equal(enrollment.Value!.Recorder, begin.Gate.Enrollment!.Recorder);
+        Assert.Equal(enrollment.Value.Participants, begin.Gate.Enrollment.Participants);
+        Assert.Null(restarted.ControlWriterRun);
+        var other = await PeerAsync();
+        Pin(other, TrustedPeerStore.Person);
+        var otherChannel = await other.Hub.OpenAsync(host.Id, Patience);
+        Assert.False((await otherChannel.RequestAsync("gate.start", new { request }, Patience)).GetProperty("ok").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData(false), InlineData(true)]
+    public async Task Gate_start_refuses_incomplete_enrollment_or_an_unwritable_audit(bool unwritable)
+    {
+        var (channel, audit, enrollment) = await GateAsync();
+        if (unwritable) { File.WriteAllText(audit.Profile, "not a directory"); }
+        else { enrollment.Value = enrollment.Value! with { Participants = enrollment.Value.Participants.Take(3).ToArray() }; }
+        Assert.False((await channel.RequestAsync("gate.start", new { request = Guid.NewGuid() }, Patience)).GetProperty("ok").GetBoolean());
+        Assert.Null(audit.ControlWriterRun);
+        Assert.False(Directory.Exists(audit.Profile));
     }
 
     [Theory]
