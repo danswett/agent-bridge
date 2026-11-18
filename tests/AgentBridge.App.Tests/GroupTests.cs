@@ -156,6 +156,29 @@ public sealed class GroupTests : IDisposable
     }
 
     [Fact]
+    public void The_final_flush_keeps_subday_listing_times_across_a_reload()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var order = new SessionOrder(FilePath, clock);
+        var id = order.Groups.Create("Work");
+        order.Arrange([E("a")]);
+        order.Groups.SetGroup(K("a"), id);
+        var before = System.IO.File.ReadAllText(FilePath);
+        clock.Advance(TimeSpan.FromHours(23));
+        order.Arrange([E("a")]);
+        order.Flush(includeListings: false);
+        Assert.Equal(before, System.IO.File.ReadAllText(FilePath));
+        order.Flush();
+        order = new SessionOrder(FilePath, clock);
+        clock.Advance(TimeSpan.FromDays(30) - TimeSpan.FromHours(23) + TimeSpan.FromTicks(1));
+        order.Arrange([]);
+        Assert.Equal(id, order.Groups.GroupOf(K("a")));
+        clock.Advance(TimeSpan.FromHours(23));
+        order.Arrange([]);
+        Assert.Null(order.Groups.GroupOf(K("a")));
+    }
+
+    [Fact]
     public void Listing_stamps_save_at_most_once_per_day_rather_than_on_every_arrangement()
     {
         var clock = new FakeTimeProvider(Make.T0);
