@@ -10,6 +10,29 @@ using Xunit.Abstractions;
 public sealed class PayloadSizeReportTests(ITestOutputHelper output)
 {
     [Fact]
+    public void The_report_sample_keeps_every_types_UTF8_extrema_without_replaying_the_whole_corpus()
+    {
+        var records = JsonNode.Parse("""
+            {"Mixed":{"valid":[{"json":"aaa"},{"json":{}},{"json":true}],
+                      "refused":[{"json":"éé"}]},
+             "Single":{"valid":[{"json":[]}],"refused":[]},
+             "Tied":{"valid":[{"json":{"n":1}}],"refused":[{"json":{"n":2}}]}}
+            """)!.AsObject();
+        var original = records.ToJsonString(ProtocolJson.Options);
+        var sample = ReportSample(records);
+
+        Assert.Equal(records.Select(pair => pair.Key), sample.Select(pair => pair.Key));
+        Assert.Equal(new[] { "{}", "\"éé\"" }, Payloads("Mixed"));
+        Assert.Equal(new[] { "[]" }, Payloads("Single"));
+        Assert.Equal(new[] { "{\"n\":1}" }, Payloads("Tied"));
+        Assert.Equal(original, records.ToJsonString(ProtocolJson.Options));
+
+        IEnumerable<string> Payloads(string name) =>
+            new[] { "valid", "refused" }.SelectMany(kind =>
+                sample[name]![kind]!.AsArray().Select(vector => vector!["json"]!.ToJsonString(ProtocolJson.Options)));
+    }
+
+    [Fact]
     public async Task Report_lists_every_vector_message_type_with_byte_sizes()
     {
         var result = await RunAsync(VectorFiles.Folder);
@@ -119,6 +142,8 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
             deadline.TrySetResult();
         }
     }
+
+    static JsonObject ReportSample(JsonObject records) => (JsonObject)records.DeepClone();
 
     static Dictionary<string, (int Min, int Max, int Count)> Rows(string text)
     {
