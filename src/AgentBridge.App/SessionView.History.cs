@@ -193,7 +193,8 @@ public sealed partial class SessionView
         {
             if (session != shownHistory || releases != pinReleases || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
-            if (latestHatch.Used) { anchor = null; }
+            // Prepends keep the reading anchor; ordinary arrivals keep the numeric offset.
+            if (latestHatch.Pinned || latestHatch.Used && earlierExtent is null) { anchor = null; }
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : latestHatch.RestoreOffset(offset, scroll.ScrollableHeight, earlierExtent);
             if (!atEnd && !pinEnd && reading is { } kept)
             {

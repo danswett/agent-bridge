@@ -59,6 +59,13 @@ static partial class SelfTest
             await Still(scroll);
             check(Math.Abs(scroll.VerticalOffset - offset) <= 1.5,
                 "latest: after release with no visible stored row, an arrival keeps the numeric offset");
+            scroll.ChangeView(null, scroll.ScrollableHeight, null, disableAnimation: true);
+            await Still(scroll);
+            history.AddLive(StoredTurn(9003));
+            await Task.Delay(500);
+            await Still(scroll);
+            check(scroll.ScrollableHeight - scroll.VerticalOffset <= 1.5,
+                "latest: returning to the end after release follows the next stored turn");
         }
         finally { view.Card = original; }
     }

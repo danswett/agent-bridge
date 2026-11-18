@@ -6,22 +6,41 @@ namespace AgentBridge.App.Tests;
 public sealed class LatestReturnTests
 {
     [Fact]
-    public void Jump_pins_until_released_and_only_another_jump_rearms_it()
+    public void Jump_pins_until_released_and_can_be_explicitly_rearmed()
     {
         var hatch = new LatestHatch();
         hatch.Jump();
         Assert.True(hatch.AtEnd(false));
         hatch.Release();
-        Assert.False(hatch.AtEnd(true));
+        Assert.False(hatch.Pinned);
+        Assert.False(hatch.AtEnd(false));
         hatch.Jump();
         Assert.True(hatch.AtEnd(false));
     }
 
+    [Fact]
+    public void Released_hatch_still_follows_when_back_at_bottom()
+    {
+        var h = new LatestHatch();
+        h.Jump();
+        h.Release();
+        Assert.True(h.AtEnd(true));
+    }
+
+    [Fact]
+    public void Released_hatch_compensates_prepend()
+    {
+        var h = new LatestHatch();
+        h.Jump();
+        h.Release();
+        Assert.Equal(700, h.RestoreOffset(600, 900, 800));
+    }
+
     [Theory]
-    [InlineData(600d, 900d, 500d, 600d)]
+    [InlineData(600d, 1200d, 900d, 900d)]
     [InlineData(600d, 800d, null, 600d)]
     [InlineData(600d, 400d, null, 400d)]
-    public void A_released_hatch_without_a_visible_row_keeps_its_numeric_offset(
+    public void A_released_hatch_keeps_its_offset_or_compensates_a_prepend_without_a_visible_row(
         double offset, double extent, double? previousExtent, double expected)
     {
         var hatch = new LatestHatch();

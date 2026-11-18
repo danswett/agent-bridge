@@ -7,9 +7,9 @@ public sealed class LatestHatch
 
     public void Jump() => Used = Pinned = true;
     public void Release() => Pinned = false;
-    public bool AtEnd(bool automatic) => Used ? Pinned : automatic;
+    public bool AtEnd(bool automatic) => Pinned || automatic;
     public double RestoreOffset(double offset, double extent, double? previousExtent) =>
-        Math.Clamp(offset + (!Used && previousExtent is { } previous ? extent - previous : 0), 0, extent);
+        Math.Clamp(offset + (previousExtent is { } previous ? extent - previous : 0), 0, extent);
 }
 
 public readonly record struct LatestInputReceipt(Guid ViewId, long Sequence, double Offset, double Extent);
