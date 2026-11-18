@@ -187,7 +187,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             // Kept aside, in case a removal in this or a later offer needs it as evidence.
             if (body.Op != EntryOp.Remove || overCap)
             {
-                if (existing is not null) { return new(e.Hash, Verdict.Refused, reason ?? Invalid.Evidence); }
+                if (existing is { } held) { return !_candidate[held] ? new(e.Hash, Verdict.Duplicate) : new(e.Hash, Verdict.Refused, reason ?? Invalid.Evidence); }
                 if (_refusedCandidates.Count >= 2 * EvidenceCap) { return new(e.Hash, Verdict.Refused, reason ?? Invalid.Evidence); }
                 var c = Commit(e, parents, before, facts, candidate: true);
                 _candidate.Set(c.Index);

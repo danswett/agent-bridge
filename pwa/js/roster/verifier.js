@@ -160,7 +160,7 @@ export class RosterVerifier {
     if (overCap || candidateParent) {
       // Kept aside, in case a removal in this or a later offer needs it as evidence.
       if (body.op !== 'remove' || overCap) {
-        if (known !== null) return refused(reason ?? INVALID.evidence);
+        if (known !== null) return !this.#candidate.has(known) ? { hash: e.hash, verdict: VERDICT.duplicate } : refused(reason ?? INVALID.evidence);
         if (this.#refusedCandidates.size >= 2 * EVIDENCE_TOTAL) return refused(reason ?? INVALID.evidence);
         const c = this.#commit(e, parents, before, facts, true);
         this.#candidate.set(c.index);
