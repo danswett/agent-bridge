@@ -177,6 +177,23 @@ public sealed class AutoRetryTests
         Assert.Empty(h.Requests);
     }
 
+    [Theory]
+    [InlineData("abort")]
+    [InlineData("session.shutdown")]
+    [InlineData("session.resume")]
+    [InlineData("human")]
+    public async Task Unprojected_withdrawals_at_the_real_final_effect_prevent_auto_retry(string change)
+    {
+        await using var h = new Harness(realReply: true);
+        await h.Error(Empty);
+        await h.Watch.TickAsync();
+        h.BeforeKeys = () => h.Unprojected(change);
+        h.F.Time.Advance(TimeSpan.FromSeconds(30));
+        await h.Watch.TickAsync();
+        Assert.Equal(0, h.Keys);
+        Assert.Single(h.Requests);
+    }
+
     [Fact]
     public void Auto_retry_starts_only_after_the_second_startup_Stop_check_and_Serving()
     {
@@ -284,6 +301,12 @@ public sealed class AutoRetryTests
         {
             Fixture.Append(events, Copilot.Event("abort", new { reason = "user_initiated" }, at++));
             await Source.RefreshAsync();
+        }
+        public Task Unprojected(string change)
+        {
+            Fixture.Append(events, change == "human" ? Copilot.User("stop retrying", at++)
+                : Copilot.Event(change, new { reason = "user_initiated" }, at++));
+            return Task.CompletedTask;
         }
         public async Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
         {
