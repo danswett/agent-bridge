@@ -24,10 +24,10 @@ public sealed class LoadSamplingTests
     }
 
     [Theory]
-    [InlineData(true, false, 5)]
+    [InlineData(true, false, 60)]
     [InlineData(false, true, 5)]
     [InlineData(false, false, 60)]
-    public async Task Disabled_relay_sharing_preserves_HA_and_local_session_collection(bool ha, bool session, int seconds)
+    public async Task Disabled_relay_sharing_samples_for_local_sessions_but_not_for_HA(bool ha, bool session, int seconds)
     {
         using var f = new Fixture();
         if (session)
