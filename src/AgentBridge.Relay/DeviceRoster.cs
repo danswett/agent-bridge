@@ -234,9 +234,11 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         // Entries set aside over a budget or cap: a later removal in this append may need them as
         // evidence, and then they are kept with it, ahead of it.
         var aside = new List<(int Index, Entry Entry, bool Size)>();
+        var pendingAtVerifier = new List<Entry>();
+        var verifierDirty = false;
         foreach (var (index, entry) in parsed)
         {
-            if (aside.Count > 0)
+            if (aside.Count > 0 || verifierDirty)
             {
                 // Size-refused entries must not affect later entries unless they are ancestors.
                 var needed = new HashSet<string>(entry.Body.Prev.Select(h => Codec.Base64Url(h)));
@@ -247,11 +249,20 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
                         needed.UnionWith(a.Entry.Body.Prev.Select(h => Codec.Base64Url(h)));
                     }
                 }
-                verifier = new RosterVerifier(accountId, generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
-                verifier.Offer(replay);
-                verifier.Offer(aside.Where(a => !a.Size || needed.Contains(Codec.Base64Url(a.Entry.Hash))).Select(a => a.Entry));
+                var pending = aside.Where(a => !a.Size || needed.Contains(Codec.Base64Url(a.Entry.Hash))).Select(a => a.Entry).ToList();
+                // A refusal before Commit leaves the same validated state and pending ancestors.
+                if (verifierDirty || !pending.SequenceEqual(pendingAtVerifier))
+                {
+                    verifier = new RosterVerifier(accountId, generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
+                    verifier.Offer(replay);
+                    verifier.Offer(pending);
+                    pendingAtVerifier = pending;
+                    verifierDirty = false;
+                }
             }
+            var beforeCount = verifier.Graph.Count;
             var offered = verifier.Offer(entry)[0];
+            verifierDirty = verifier.Graph.Count != beforeCount;
             var verdict = offered.Verdict.ToString().ToLowerInvariant();
             results[index] = new Result(Codec.Base64Url(offered.Hash), verdict, offered.Reason);
             if (offered.Verdict is Verdict.Accepted or Verdict.Quarantined)
@@ -289,6 +300,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
                 replay.AddRange(evidence.Select(a => a.Entry));
                 replay.Add(entry);
                 changed = true;
+                verifierDirty = false;
             }
             else if (offered.Verdict == Verdict.Refused && verifier.Graph.Find(entry.Hash) is not null)
             {
