@@ -31,11 +31,11 @@ public sealed class AuditIncompleteRetentionTests : LaunchFlowFixture
             clock.Advance(TimeSpan.FromDays(1));
             Assert.True(Writer().Append(entry with { Gate = null }));
         }
-        Assert.False(File.Exists(Path.Combine(folder, original)));
-        Assert.InRange(Directory.GetFiles(folder, "agents-*.jsonl").Length, 1, AgentAuditLog.KeepDays);
+        Assert.True(File.Exists(Path.Combine(folder, original)));
+        Assert.Equal(AgentAuditLog.KeepDays + 2, Directory.GetFiles(folder, "agents-*.jsonl").Length);
         Assert.Equal("audit-incomplete", JsonNode.Parse(File.ReadAllText(head))!["fault"]!.GetValue<string>());
         var report = GateAuditProjection.Read(profile, run);
-        Assert.True(report.Invalidated);
+        Assert.False(report.Invalidated);
         Assert.Contains("audit-incomplete", report.IncompleteReasons);
         Assert.False(Writer().Verify().Intact);
         var launch = await GateLaunchAudit.LaunchAsync(Launcher(Config()),
