@@ -556,6 +556,7 @@ public sealed class AnswerService : ISessionAnswerer
         {
             if (!options.PlatformSupported) { return Refused("answering is not supported on this platform yet; answer at the machine"); }
             if (probe.Active() is { } active) { return Refused(active); }
+            if (request.DispatchAllowed?.Invoke() == false) { return Refused("the answer is no longer authorized"); }
             var session = source.GetForDelivery(request.Id);
             if (session is null) { return Stale("the session has ended"); }
             if (session.Question is not { } question || question.Id != request.Question) { return Stale("the session is no longer asking that question"); }
@@ -710,6 +711,7 @@ public sealed class AnswerService : ISessionAnswerer
         string? Asked()
         {
             if (probe.Active() is { } active) { return active; }
+            if (request.DispatchAllowed?.Invoke() == false) { return "the answer is no longer authorized"; }
             if (source.GetForDelivery(session.Id)?.Question is not { } listed || listed.Id != question.Id) { return "the session is no longer asking that question"; }
             if (listed.AnswerAtMachine == true) { return AtMachine(session.Agent, listed); }
             if (asked is null) { return "the question was not found in the session's transcript"; }
@@ -751,6 +753,7 @@ public sealed class AnswerService : ISessionAnswerer
             // Immediately before typing: agent-ha-bridge again, then the question itself, by
             // its tool call id in the transcript, never by how recent anything looks.
             if (probe.Active() is { } active) { return Refused(active); }
+            if (request.DispatchAllowed?.Invoke() == false) { return Refused("the answer is no longer authorized"); }
             if (source.Get(session.Id)?.Question is not { } listed || listed.Id != question.Id) { return Stale("the session is no longer asking that question"); }
             // Marked for the machine while this waited for the slot (a delegate's question opened
             // beside it, say): as it would have been refused on arrival (Trust's #510 re-review).
@@ -1676,6 +1679,7 @@ public sealed class AnswerService : ISessionAnswerer
         try
         {
             if (probe.Active() is { } active) { return Refused(active); }
+            if (request.DispatchAllowed?.Invoke() == false) { return Refused("the answer is no longer authorized"); }
             if (source.Get(session.Id)?.Question is not { } listed || listed.Id != question.Id) { return Stale("the session is no longer asking for that permission"); }
             // The confirmation again, as things are now: a device approved no longer, or a policy
             // changed, stops it here, before any key.
@@ -1798,6 +1802,7 @@ public sealed class AnswerService : ISessionAnswerer
         try
         {
             if (probe.Active() is { } active) { return Refused(active); }
+            if (request.DispatchAllowed?.Invoke() == false) { return Refused("the answer is no longer authorized"); }
             if (source.Get(session.Id)?.Question?.Id != question.Id) { return Stale("the session is no longer asking that question"); }
             var call = ClaudeTranscript.Find(transcript, question.Id);
             if (!call.Readable) { return Refused("the session's transcript could not be read, so nothing is typed; answer at the machine"); }
@@ -1919,6 +1924,7 @@ public sealed class AnswerService : ISessionAnswerer
         try
         {
             if (probe.Active() is { } active) { return Refused(active); }
+            if (request.DispatchAllowed?.Invoke() == false) { return Refused("the answer is no longer authorized"); }
             if (options.CodexApprovalsUnsettled?.Invoke(registration) is { } unsettled) { return Refused(unsettled); }
             if (source.Get(session.Id)?.Question?.Id != question.Id) { return Stale("the session is no longer asking for that approval"); }
             var marker = ApprovalMarkerRead.Read(registration, session.Id);

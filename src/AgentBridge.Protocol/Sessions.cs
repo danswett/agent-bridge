@@ -758,6 +758,8 @@ public sealed record SessionRemoved([property: Strict(Strictness.Identity)] stri
 // this answer, which makes a resend return the first outcome instead of typing again.
 public sealed record AnswerRequest
 {
+    [JsonIgnore]
+    public Func<bool>? DispatchAllowed { get; init; }
     public required string Id { get; init; }
     public required string Question { get; init; }
     public required string Request { get; init; }
@@ -823,6 +825,8 @@ public enum ReplyIntent { Unknown, Steer, Queueable, IdleOnly }
 // same device sent first (Attachments.cs); with any, the text may be blank.
 public sealed record ReplyRequest
 {
+    [JsonIgnore]
+    public Func<Task<bool>>? DispatchAllowed { get; init; }
     public required string Id { get; init; }
     public required string Request { get; init; }
     public string? Text { get; init; }

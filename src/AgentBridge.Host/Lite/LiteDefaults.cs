@@ -6,7 +6,7 @@ namespace AgentBridge.Host.Lite;
 // Stand-ins until L5 (delivery) and L2b (pinned peers) merge.
 public sealed class NoLiteDelivery : ILiteDeliver
 {
-    public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) =>
+    public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct, Func<bool>? dispatchAllowed = null) =>
         Task.FromResult(new LiteDelivery(false, "notReplyTarget"));
 }
 

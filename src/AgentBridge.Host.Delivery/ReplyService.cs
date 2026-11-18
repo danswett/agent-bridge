@@ -241,6 +241,7 @@ public sealed class ReplyService : ISessionReplier
         {
             if (!options.PlatformSupported) { return Refused("replying is not supported on this platform yet; reply at the machine"); }
             if (probe.Active() is { } active) { return Refused(active); }
+            if (request.DispatchAllowed is { } allowed && !await allowed()) { return Refused("the reply is no longer authorized"); }
             if (Replies.Check(request) is { } invalid) { return Refused(invalid); }
             var refs = request.Attachments ?? [];
             if (refs.Count > 0 && attachments is null) { return Refused("this host does not take attachments; send the text alone, or attach at the machine"); }
@@ -265,8 +266,8 @@ public sealed class ReplyService : ISessionReplier
                     if (problem is not null) { return Refused(problem); }
                 }
                 var outcome = session.Agent == AgentKind.Copilot
-                    ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent)
-                    : await AgentAsync(session, request.Text ?? "", claim, timeline);
+                    ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request.DispatchAllowed)
+                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.DispatchAllowed);
                 keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result; }
                 typed = outcome.Typed!;
@@ -374,7 +375,7 @@ public sealed class ReplyService : ISessionReplier
     // KeysWent: some or all of the reply may have reached the session, whatever the result.
     sealed record Attempt(ReplyResult? Result, Typed? Typed, bool KeysWent = false);
 
-    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle, Func<bool>? stillCurrent)
+    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle, Func<bool>? stillCurrent, Func<Task<bool>>? dispatchAllowed)
     {
         // The session id names a folder; only the agent's own id shape is accepted.
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Done(Refused("the session's id is not a Copilot session id")); }
@@ -421,6 +422,7 @@ public sealed class ReplyService : ISessionReplier
         try
         {
             if (stillCurrent is not null && !stillCurrent()) { return Done(Stale(retryChangedReason)); }
+            if (dispatchAllowed is not null && !await dispatchAllowed()) { return Done(Refused("the reply is no longer authorized")); }
             if (probe.Active() is { } active) { return Done(Refused(active)); }
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
@@ -512,6 +514,7 @@ public sealed class ReplyService : ISessionReplier
                 if (FinalEffect() is { } changed) { return Done(Stale(changed)); }
             }
 
+            if (dispatchAllowed is not null && !await dispatchAllowed()) { return Done(Refused("the reply is no longer authorized")); }
             timeline.InjectStart();
             try { result = await injector.InjectAsync(pid, keys); }
             catch (Exception e)
@@ -584,7 +587,7 @@ public sealed class ReplyService : ISessionReplier
     // (Composer). Then, as Confirm-DaemonClaudeSubmit did, an Enter the agent took as part of a
     // paste (Claude absorbs it; Codex makes it a new line, seen live) is pressed again, at most
     // twice, and only while the box on screen still holds exactly this reply.
-    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline)
+    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, Func<Task<bool>>? dispatchAllowed)
     {
         var agent = session.Agent;
         var name = agent == AgentKind.Claude ? "Claude" : "Codex";
@@ -617,6 +620,7 @@ public sealed class ReplyService : ISessionReplier
         bool working;
         try
         {
+            if (dispatchAllowed is not null && !await dispatchAllowed()) { return Done(Refused("the reply is no longer authorized")); }
             if (probe.Active() is { } active) { return Done(Refused(active)); }
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
@@ -650,6 +654,7 @@ public sealed class ReplyService : ISessionReplier
             }
             // The agent only appends, and a line still being written at this point is not a
             // prompt typed now: reading from here, it does not parse.
+            if (dispatchAllowed is not null && !await dispatchAllowed()) { return Done(Refused("the reply is no longer authorized")); }
             from = Jsonl.Length(transcript);
             result = new InjectionResult(InjectionStatus.Typed, "ok");
             foreach (var send in plan.Sends)
