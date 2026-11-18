@@ -77,3 +77,24 @@ for (const scenario of vectors.scenarios) {
     assert.deepEqual(state, scenario.state);
   });
 }
+
+test('storage evidence is a non-applying candidate and survives canonical replay', async () => {
+  const scenario = vectors.scenarios.find((s) => s.name === 'line');
+  const v = new RosterVerifier(vectors.account, vectors.generation, () => 0);
+  const wrappers = [];
+  for (const item of scenario.entries) {
+    const wrapper = JSON.stringify({ ...JSON.parse(item.wrapper), ...(item.label === scenario.entries.at(-1).label ? { evidence: true } : {}) });
+    const e = await parseEntry(utf8(wrapper));
+    wrappers.push(e.canonical);
+    const [result] = await v.offer([e]);
+    if (item === scenario.entries.at(-1)) {
+      assert.equal(result.verdict, 'refused');
+      assert.equal(result.reason, 'cap');
+      assert.equal(v.holds(e.hash), false);
+      assert.equal(JSON.parse(e.canonical).evidence, true);
+    }
+  }
+  const replay = new RosterVerifier(vectors.account, vectors.generation, () => 0);
+  await replay.offer(await Promise.all(wrappers.map((w) => parseEntry(utf8(w)))));
+  assert.deepEqual(replay.heads, v.heads);
+});

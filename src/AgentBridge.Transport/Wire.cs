@@ -71,7 +71,9 @@ public static class Wire
     // flag (all other callers), is held to max and throws FrameTooLargeException past it. Whether
     // a frame is a roster reply is decided from its first bytes once it passes max, never by
     // draining first.
-    public static async Task<(WebSocketMessageType Type, byte[] Data)?> ReceiveAsync(WebSocket ws, int max, int maxText, CancellationToken ct, bool discardOversizeText)
+    // The relay can instead allow a bounded canonical roster-append prefix, without draining.
+    // Its caller checks the complete JSON type before dispatch (a duplicate t must not bypass max).
+    public static async Task<(WebSocketMessageType Type, byte[] Data)?> ReceiveAsync(WebSocket ws, int max, int maxText, CancellationToken ct, bool discardOversizeText, bool allowRosterAppend = false)
     {
         var buffer = new byte[16 * 1024];
         using var ms = new MemoryStream();
@@ -90,14 +92,14 @@ public static class Wire
                 continue;
             }
             var isText = r.MessageType == WebSocketMessageType.Text;
-            if (isText && discardOversizeText && !roster && ms.Length + r.Count > max)
+            if (isText && (discardOversizeText || allowRosterAppend) && !roster && ms.Length + r.Count > max)
             {
-                roster = StartsRoster(ms, buffer, r.Count);
+                roster = StartsRoster(ms, buffer, r.Count, allowRosterAppend);
             }
             var limit = isText && roster ? maxText : max;
             if (ms.Length + r.Count > limit)
             {
-                if (!isText || !roster) { throw new FrameTooLargeException(); }
+                if (!isText || !roster || !discardOversizeText) { throw new FrameTooLargeException(); }
                 discarding = true;
                 ms.SetLength(0);
                 if (total > MaxRosterDrain) { throw new FrameTooLargeException(); }
@@ -108,13 +110,13 @@ public static class Wire
         return (r.MessageType, ms.ToArray());
     }
 
-    static bool StartsRoster(MemoryStream held, byte[] chunk, int count)
+    static bool StartsRoster(MemoryStream held, byte[] chunk, int count, bool append)
     {
         var head = new byte[Math.Min(256, held.Length + count)];
         var fromHeld = (int)Math.Min(head.Length, held.Length);
         Array.Copy(held.GetBuffer(), head, fromHeld);
         Array.Copy(chunk, 0, head, fromHeld, head.Length - fromHeld);
-        return head.AsSpan().StartsWith("{\"t\":\"roster\""u8);
+        return head.AsSpan().StartsWith(append ? "{\"t\":\"roster-append\""u8 : "{\"t\":\"roster\""u8);
     }
 
     public const int MaxRosterFrame = 6 * 224 * 1024;

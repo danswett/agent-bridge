@@ -83,6 +83,14 @@ The wrapper has `body` and `sig`, and optionally `cosig` and `uv`. `uv` has `by`
 sender and forwarder emits it **canonically**: members in that order, no insignificant
 whitespace. A receiver accepts a wrapper with whitespace and forwards it canonically.
 
+The optional final wrapper member `evidence` is only `true` (`type` for non-booleans,
+`value` for false), checked last. This unsigned, non-authority hint forces a fully
+validated entry down the cap-candidate path: it never applies or adopts a branch.
+Only an eligible removal can retain it as evidence. Forwarders preserve it, including
+in stored logs and client replay; signed body bytes and hashes are unchanged.
+Wrappers without it and the verifier's 4,096-entry limit are unchanged. Older parsers
+refuse the new member rather than applying evidence as an ordinary entry.
+
 **Size** is measured over fixed content: the body bytes, the decoded signatures, and each
 assertion's decoded parts. A `remove` is at most **46 KiB** (47,104 bytes); any other entry at most
 **8 KiB** (8,192). Over either is `size`, on every path.
@@ -118,7 +126,7 @@ object with the same name after unescaping (`duplicate-member`). The syntax is c
 whole input first; then each member in document order: its name, whether it repeats one, and
 then its value. Names and enumerated values are case-sensitive.
 
-**The wrapper:** an object (`type`); no member but the four (`unknown-member`); `body`, then
+**The wrapper:** an object (`type`); no member but the five above (`unknown-member`); `body`, then
 `sig`, present (`missing-member`); `body`'s base64url; `sig`'s, then its DER and low-S; the same
 for `cosig`; `uv` an object with only `by` and `cosigner`, and not empty (`value`), each assertion
 with exactly its three members and minimal DER. Then the size against 46 KiB; then the body;
@@ -498,15 +506,21 @@ Both messages are text frames from an admitted device of any kind, counted again
 * An entry over a signer's budget or a cap is refused for now. A later removal in the same append that needs it as evidence (§3.3) brings it in: it is kept, ahead of the removal, and its result becomes `accepted` with reason `evidence`. So send such ancestors and the removal in one append, parent first.
 * `roster-get` is `{"error":"unavailable"}` too when the store cannot be reached. A stored log that does not decode or rebuild is never added to: an append says `unavailable`. So does an append that finds more than four others waiting on the account, and a request while the connection already has two roster requests running. Offering only entries already kept answers `duplicate` without replaying the log.
 * The log is bounded at 224 KiB stored, including JSON encoding. Ordinary entries are refused
-  `cap` above **120,918 serialized bytes**, reserving **108,458 bytes** for one maximum 46 KiB
+  `cap` above **120,788 serialized bytes**, reserving **108,588 bytes** for one maximum 46 KiB
   removal and at most **four** maximum 8 KiB ancestors. The reserve includes base64url expansion,
   optional signatures/presence proofs, JSON escaping and five array commas, not only decoded
-  content sizes: `F(s) = 386 + floor((4*s + 18)/3)` stored bytes per maximum wrapper, so the
+  content sizes: `F(s) = 412 + floor((4*s + 18)/3)` stored bytes per maximum wrapper, so the
   reserve is `F(47104) + 4*F(8192) + 5`. More than four unpersisted evidence ancestors, or any over 8 KiB, refuses the
   removal with `removal-ancestry-cap`; the ancestors stay refused. Storage-cap evidence obeys
   the verifier's same eligibility rules (§3.3), including no evidence for self-removals and only
   the target's or its non-kept subtree's signed ancestors. An ineligible combination refuses
   the removal `evidence` and leaves its ancestors refused without spending the reserve.
+  Storage-cap ancestors retain `evidence:true`; their removal can be `quarantined`
+  through those parents but still applies under the normal removal rule.
+  A canonical `{"t":"roster-append",...}` request may use **108,844 bytes**
+  (the reserved serialized budget plus 256 envelope bytes). The receiver checks the
+  complete message type before dispatch; other text and binary limits stay unchanged,
+  and an append over this bound closes with `frame-too-large`, never truncates.
   Unrelated ordinary entries cannot use the reserve.
   Removals and eligible evidence may use the full hard cap; an entry that exceeds remaining
   hard-cap space is still refused `cap`. This is a bounded N=4 guarantee, not an unlimited
