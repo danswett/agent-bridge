@@ -15,7 +15,7 @@ public sealed class ProcessTreeEvidenceTests
         {
             if (id == 102 && rig.Nodes[id].Parent == 101) { rig.Nodes[id] = new TreeNode(900, TreeRig.T0.AddMinutes(1)); }
         };
-        var proof = evidence.Child(root, TreeRig.T0, 102, discovery);
+        var proof = evidence.Child(root, 102, discovery);
         using var child = proof.Process;
         child?.Terminate();
         Assert.Empty(rig.Terminated);
@@ -38,7 +38,7 @@ public sealed class ProcessTreeEvidenceTests
             rig.Nodes.Add(103, new TreeNode(102, TreeRig.T0.AddSeconds(2)));
             rig.Nodes[id].Running = false;
         };
-        var proof = evidence.Child(root, TreeRig.T0, 102, discovery);
+        var proof = evidence.Child(root, 102, discovery);
         Assert.False(proof.Unrelated);
         Assert.NotNull(proof.Problem);
         Assert.Null(proof.Process);
@@ -57,7 +57,7 @@ public sealed class ProcessTreeEvidenceTests
         var discovery = evidence.Capture()!;
         if (snapshot) { rig.AfterOpen = id => { if (id == 102) { rig.SnapshotError = 5; } }; }
         else { rig.BeforeOpen = id => { if (id == 102) { rig.Nodes[id].Started = rig.Nodes[id].Started.AddTicks(1); } }; }
-        var proof = evidence.Child(root, TreeRig.T0, 102, discovery);
+        var proof = evidence.Child(root, 102, discovery);
         using var child = proof.Process;
         Assert.Null(child);
         Assert.NotNull(proof.Problem);
@@ -70,7 +70,7 @@ public sealed class ProcessTreeEvidenceTests
         var rig = new TreeRig();
         using var root = rig.OpenRoot();
         var evidence = rig.Evidence();
-        var proof = evidence.Child(root, TreeRig.T0, 102, evidence.Capture()!);
+        var proof = evidence.Child(root, 102, evidence.Capture()!);
         Assert.Null(proof.Problem);
         Assert.Equal(TreeRig.T0.AddSeconds(1), proof.Started);
         Assert.Equal(2, rig.Handles);
@@ -88,7 +88,7 @@ public sealed class ProcessTreeEvidenceTests
         rig.Nodes[102].Refusal = reason;
         using var root = rig.OpenRoot();
         var evidence = rig.Evidence();
-        var proof = evidence.Child(root, TreeRig.T0, 102, evidence.Capture()!);
+        var proof = evidence.Child(root, 102, evidence.Capture()!);
         Assert.Null(proof.Process);
         Assert.Equal(reason, proof.Problem);
         Assert.Equal(1, rig.Handles);

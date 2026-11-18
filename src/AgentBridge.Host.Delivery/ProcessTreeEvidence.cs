@@ -13,13 +13,16 @@ internal sealed class ProcessTreeSnapshot
     public static ProcessTreeSnapshot? Read(ProcessTreeScan scan, Func<bool>? allowed = null)
     {
         var map = new Dictionary<int, int>();
-        scan((id, parent) =>
+        var valid = true;
+        var error = scan((id, parent) =>
         {
-            if (allowed?.Invoke() == false) { return false; }
-            map[id] = parent;
-            return true;
+            valid &= allowed?.Invoke() != false && id >= 0 && parent >= 0 && map.TryAdd(id, parent);
+            return valid;
         });
-        return new(map);
+        // Only ERROR_NO_MORE_FILES proves that enumeration ended rather than failed.
+        if (error != 18 || !valid || allowed?.Invoke() == false) { return null; }
+        var result = new ProcessTreeSnapshot(map);
+        return allowed?.Invoke() == false ? null : result;
     }
 }
 
@@ -31,18 +34,29 @@ internal sealed class ProcessTreeEvidence(
     public ProcessTreeSnapshot? Capture(Func<bool>? allowed = null) => ProcessTreeSnapshot.Read(scan, allowed);
     static ChildIdentity Unknown(string why) => new(null, default, why);
 
-    public ChildIdentity Child(IHeldProcess parent, DateTimeOffset parentStarted, int id,
+    public ChildIdentity Child(IHeldProcess parent, int id,
         ProcessTreeSnapshot discovery, Func<bool>? allowed = null)
     {
+        if (parent.StartedAt is not { } parentStarted) { return Unknown("the held parent's creation time is not known"); }
+        if (allowed?.Invoke() == false) { return Unknown("the process-tree evidence budget was exhausted"); }
         if (!discovery.HasParent(id, parent.Id)) { return Unknown("the descendant's parent edge is not known"); }
         if (created(id) is not { } at) { return Unknown("the descendant's creation time is not known"); }
         if (at < parentStarted) { return new(null, at, null, Unrelated: true); }
         var opened = open(id, at);
         if (opened.Process is not { } held)
         {
-            if (opened.Gone && !discovery.Children(id).Any()) { return new(null, at, null, Unrelated: true); }
             return Unknown(opened.Refusal ?? "a descendant changed while its identity was verified");
         }
-        return new(held, at, null);
+        var keep = false;
+        try
+        {
+            if (held.Id != id || held.StartedAt != at) { return Unknown("the held descendant's creation time changed"); }
+            // The handle pins the child identity before fresh ancestry is accepted.
+            if (Capture(allowed) is not { } current || !current.HasParent(id, parent.Id))
+            { return Unknown("the held descendant's parent edge could not be verified"); }
+            keep = true;
+            return new(held, at, null);
+        }
+        finally { if (!keep) { held.Dispose(); } }
     }
 }
