@@ -130,10 +130,10 @@ public sealed class SessionRegistry(TimeProvider time)
     // snapshot: erase its sessions, retaining only offline metadata and the replay watermark.
     public List<(string Machine, string Json, DateTimeOffset LastSeen, bool Fresh)> Read(string account)
     {
-        var now = time.GetUtcNow();
         return [.. held.Where(h => h.Key.Account == account).Select(h =>
         {
-            var age = now - h.Value.ReceivedAt;
+            // Capture the held snapshot before sampling time, not a read-wide timestamp a Put can overtake.
+            var age = time.GetUtcNow() - h.Value.ReceivedAt;
             var fresh = h.Value.Json != "null" && age >= TimeSpan.Zero && age <= RosterFields.HeartbeatWindow;
             // JSON null is a tombstone: a clock rewind cannot revive an erased payload.
             if (!fresh && h.Value.Json != "null") { held.TryUpdate(h.Key, h.Value with { Json = "null" }, h.Value); }

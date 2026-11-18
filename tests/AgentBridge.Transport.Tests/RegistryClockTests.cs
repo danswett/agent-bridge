@@ -15,6 +15,29 @@ public sealed class RegistryClockTests
     });
 
     [Fact]
+    public void A_publication_after_the_read_samples_time_is_not_erased_as_a_clock_rewind()
+    {
+        var clock = new Clock();
+        var registry = new SessionRegistry(clock);
+        var original = Record(1);
+        var replacement = Record(2);
+        Assert.Null(registry.Put("account", "fixture", original));
+        clock.BeforeReturn = () =>
+        {
+            clock.Now = Initial.AddTicks(1);
+            Assert.Null(registry.Put("account", "fixture", replacement));
+        };
+
+        var overlapping = Assert.Single(registry.Read("account"));
+        Assert.True(overlapping.Fresh);
+        Assert.Contains(overlapping.Json, new[] { original.GetRawText(), replacement.GetRawText() });
+        var published = Assert.Single(registry.Read("account"));
+        Assert.True(published.Fresh);
+        Assert.Equal(replacement.GetRawText(), published.Json);
+        Assert.Equal(Initial.AddTicks(1), published.LastSeen);
+    }
+
+    [Fact]
     public void A_clock_rewind_expires_the_payload_and_clock_recovery_cannot_resurrect_it()
     {
         var clock = new Clock();
@@ -77,9 +100,13 @@ public sealed class RegistryClockTests
     {
         public DateTimeOffset Now { get; set; } = Initial;
         public Barrier? Readers { get; set; }
+        public Action? BeforeReturn { get; set; }
         public override DateTimeOffset GetUtcNow()
         {
             var now = Now;
+            var beforeReturn = BeforeReturn;
+            BeforeReturn = null;
+            beforeReturn?.Invoke();
             if (Readers is { } readers && !readers.SignalAndWait(TimeSpan.FromSeconds(10))) { throw new TimeoutException("Concurrent registry readers did not rendezvous"); }
             return now;
         }
