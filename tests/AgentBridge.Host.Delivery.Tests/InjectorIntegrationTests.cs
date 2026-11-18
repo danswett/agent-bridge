@@ -59,28 +59,91 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
 
     // Starts the echo program in a console of its own (CREATE_NEW_CONSOLE), hidden, and waits
     // for it to say it is reading. With exitOn, it exits once that line is typed and entered.
-    Echo StartEcho(string? exitOn = null, IReadOnlyList<string>? show = null)
+    Echo StartEcho(string? exitOn = null, IReadOnlyList<string>? show = null, Func<string, nint, string?>? readiness = null)
     {
-        var log = Path.Combine(root, $"echo-{Guid.NewGuid():N}.log");
-        var exe = Path.Combine(AppContext.BaseDirectory, "agent-bridge-console-echo.exe");
-        var info = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>(), Flags = 1 /* STARTF_USESHOWWINDOW */, ShowWindow = 0 /* SW_HIDE */ };
-        var command = new StringBuilder($"\"{exe}\" \"{log}\"{(exitOn is null ? "" : $" --exit-on \"{exitOn}\"")}");
-        if (show is not null)
+        readiness ??= (log, handle) => EchoReady(log, handle);
+        var failures = new List<string>();
+        for (var attempt = 1; attempt <= 2; attempt++)
         {
-            var screen = Path.Combine(root, $"screen-{Guid.NewGuid():N}.txt");
-            File.WriteAllText(screen, string.Join("\n", show), new UTF8Encoding(false));
-            command.Append($" --show \"{screen}\"");
+            var log = Path.Combine(root, $"echo-{Guid.NewGuid():N}.log");
+            var exe = Path.Combine(AppContext.BaseDirectory, "agent-bridge-console-echo.exe");
+            var info = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>(), Flags = 1 /* STARTF_USESHOWWINDOW */, ShowWindow = 0 /* SW_HIDE */ };
+            var command = new StringBuilder($"\"{exe}\" \"{log}\"{(exitOn is null ? "" : $" --exit-on \"{exitOn}\"")}");
+            if (show is not null)
+            {
+                var screen = Path.Combine(root, $"screen-{Guid.NewGuid():N}.txt");
+                File.WriteAllText(screen, string.Join("\n", show), new UTF8Encoding(false));
+                command.Append($" --show \"{screen}\"");
+            }
+            Assert.True(CreateProcessW(null, command, 0, 0, false, 0x10 /* CREATE_NEW_CONSOLE */, 0, null, ref info, out var process), $"CreateProcess {Marshal.GetLastWin32Error()}");
+            CloseHandle(process.Thread);
+            started.Add(process.Process);
+            if (readiness(log, process.Process) is { } ready)
+            {
+                var parts = ready.Split(' ');
+                return new Echo(process.ProcessId, nint.Parse(parts[2], CultureInfo.InvariantCulture), log);
+            }
+            Assert.True(GetExitCodeProcess(process.Process, out var code), "could not read echo exit code");
+            var state = WaitForSingleObject(process.Process, 0) == 0 ? $"exit code {code} (0x{code:X8})" : $"still running (exit code {code})";
+            failures.Add($"attempt {attempt}: {state}");
+            output.WriteLine(failures[^1]);
+            // No test keys have been sent yet. Stop only this owned echo before starting afresh.
+            TerminateProcess(process.Process, 1);
+            Assert.Equal(0u, WaitForSingleObject(process.Process, 5000));
         }
-        Assert.True(CreateProcessW(null, command, 0, 0, false, 0x10 /* CREATE_NEW_CONSOLE */, 0, null, ref info, out var process), $"CreateProcess {Marshal.GetLastWin32Error()}");
-        CloseHandle(process.Thread);
-        started.Add(process.Process);
-        var ready = WaitFor(log, lines => lines.FirstOrDefault(l => l.StartsWith("ready ", StringComparison.Ordinal)));
-        var parts = ready.Split(' ');
-        return new Echo(process.ProcessId, nint.Parse(parts[2], CultureInfo.InvariantCulture), log);
+        throw new Xunit.Sdk.XunitException($"echo did not become ready after two starts; {string.Join("; ", failures)}");
+    }
+
+    string? EchoReady(string log, nint handle, int seconds = 60)
+    {
+        try { return WaitFor(log, lines => lines.FirstOrDefault(l => l.StartsWith("ready ", StringComparison.Ordinal)), seconds, process: handle); }
+        catch (Xunit.Sdk.TrueException e) { output.WriteLine(e.Message); return null; }
+    }
+
+    [WindowsFact]
+    public void An_echo_that_misses_startup_readiness_is_stopped_before_one_fresh_start()
+    {
+        var attempts = 0;
+        nint first = 0;
+        string? firstLog = null;
+        var echo = StartEcho(readiness: (log, handle) =>
+        {
+            if (++attempts == 1) { first = handle; firstLog = log; return null; }
+            Assert.Equal(0u, WaitForSingleObject(first, 0));
+            Assert.NotEqual(firstLog, log);
+            return WaitFor(log, lines => lines.FirstOrDefault(l => l.StartsWith("ready ", StringComparison.Ordinal)));
+        });
+
+        Assert.Equal(2, attempts);
+        Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+    }
+
+    [WindowsTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Two_echo_startup_misses_fail_with_each_process_state_and_no_third_start(bool exits)
+    {
+        var attempts = 0;
+        var failure = Assert.Throws<Xunit.Sdk.XunitException>(() => StartEcho(readiness: (_, handle) =>
+        {
+            attempts++;
+            if (exits)
+            {
+                Assert.True(TerminateProcess(handle, 42));
+                Assert.Equal(0u, WaitForSingleObject(handle, 5000));
+            }
+            return EchoReady(Path.Combine(root, "missing-ready.log"), handle, seconds: 0);
+        }));
+
+        Assert.Equal(2, attempts);
+        Assert.Contains("attempt 1", failure.Message);
+        Assert.Contains("attempt 2", failure.Message);
+        Assert.Contains(exits ? "exit code 42" : "still running", failure.Message);
+        Assert.All(started, handle => Assert.Equal(0u, WaitForSingleObject(handle, 0)));
     }
 
     // 60 s, not 15: a loaded windows-11-arm runner took 11 s for a lone Escape key (#1379).
-    static T WaitFor<T>(string log, Func<string[], T?> found, int seconds = 60)
+    static T WaitFor<T>(string log, Func<string[], T?> found, int seconds = 60, nint process = 0)
     {
         var deadline = Stopwatch.StartNew();
         while (true)
@@ -93,6 +156,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
             }
             catch (FileNotFoundException) { }
             if (found(lines) is { } result) { return result; }
+            Assert.True(process == 0 || WaitForSingleObject(process, 0) != 0, $"echo exited before readiness; the echo log held: {string.Join(" / ", lines)}");
             Assert.True(deadline.Elapsed < TimeSpan.FromSeconds(seconds), $"timed out; the echo log held: {string.Join(" / ", lines)}");
             Thread.Sleep(50);
         }

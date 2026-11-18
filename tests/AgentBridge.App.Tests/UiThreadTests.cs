@@ -77,11 +77,12 @@ public sealed class UiThreadTests
     }
 
     [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(0)]
-    [InlineData(-1)]
-    public async Task Collections_wait_for_the_configured_number_of_UI_threads(int threads)
+    [InlineData(1, false)]
+    [InlineData(2, false)]
+    [InlineData(0, false)]
+    [InlineData(-1, false)]
+    [InlineData(0, true)]
+    public async Task Collections_wait_for_the_configured_number_of_UI_threads(int threads, bool holdCallerPosts)
     {
         var assembly = new TestAssembly(Reflector.Wrap(typeof(UiThreadTests).Assembly));
         var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -93,9 +94,19 @@ public sealed class UiThreadTests
         options.SetValue("xunit.execution.MaxParallelThreads", threads);
         options.SetValue("xunit.execution.SynchronousMessageReporting", true);
         using var runner = new CountingRunner(assembly, cases, sink, options, attempted);
-        var run = runner.RunAsync();
+        var caller = SynchronizationContext.Current!;
+        var held = new HeldPosts(caller);
+        Task<RunSummary> run;
         try
         {
+            if (holdCallerPosts) { SynchronizationContext.SetSynchronizationContext(held); }
+            run = runner.RunCollectionsAsync();
+        }
+        finally { SynchronizationContext.SetSynchronizationContext(caller); }
+        try
+        {
+            if (holdCallerPosts)
+                Assert.True(attempted.Task.IsCompleted, "collection admission must not wait for the caller's post queue");
             await attempted.Task.WaitAsync(FakeHost.Patience);
             var limit = threads == 0 ? Environment.ProcessorCount : threads;
             var expected = limit < 0 ? cases.Length : Math.Min(limit, cases.Length);
@@ -104,6 +115,7 @@ public sealed class UiThreadTests
         }
         finally
         {
+            held.Release();
             released.TrySetResult();
             var summary = await run.WaitAsync(FakeHost.Patience);
             Assert.Equal(0, runner.ActiveCollectionCount);
@@ -171,12 +183,51 @@ public sealed class UiThreadTests
         }
     }
 
+    sealed class HeldPosts(SynchronizationContext caller) : SynchronizationContext
+    {
+        readonly Queue<(SendOrPostCallback Callback, object? State)> posts = new();
+        bool released;
+
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            lock (posts)
+            {
+                if (!released) { posts.Enqueue((d, state)); return; }
+            }
+            caller.Post(d, state);
+        }
+
+        public void Release()
+        {
+            lock (posts)
+            {
+                released = true;
+                while (posts.TryDequeue(out var post))
+                    caller.Post(post.Callback, post.State);
+            }
+        }
+    }
+
     sealed class CountingRunner(ITestAssembly assembly, IXunitTestCase[] cases, IMessageSink sink,
         ITestFrameworkExecutionOptions options, TaskCompletionSource attempted)
         : UiTestFramework.AssemblyRunner(assembly, cases, sink, sink, options)
     {
         int count;
         readonly int total = cases.Length;
+
+        public async Task<RunSummary> RunCollectionsAsync()
+        {
+            using var bus = new SynchronousMessageBus(ExecutionMessageSink, false);
+            using var cancel = new CancellationTokenSource();
+            // Exercise admission itself, not xunit's nested assembly scheduler on the caller's UI.
+            var runs = TestCases.Select(testCase =>
+                RunTestCollectionAsync(bus, testCase.TestMethod.TestClass.TestCollection, [testCase], cancel));
+            var summaries = await Task.WhenAll(runs);
+            var summary = new RunSummary();
+            foreach (var collection in summaries)
+                summary.Aggregate(collection);
+            return summary;
+        }
 
         public Task<RunSummary> RunCollectionAsync(WaitingCase testCase, IMessageBus bus, CancellationTokenSource cancel) =>
             base.RunTestCollectionAsync(bus, testCase.TestMethod.TestClass.TestCollection, [testCase], cancel);
