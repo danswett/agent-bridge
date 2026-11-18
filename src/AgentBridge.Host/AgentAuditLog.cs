@@ -76,8 +76,8 @@ public sealed class AgentAuditLog
                 { WriteHead(folder, false, head, head.Sequence, "coverage-break"); }
             }
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        { log("gate control could not persist its coverage fault"); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        { log($"gate control could not persist its coverage fault: {e.GetType().Name}"); }
     }
     GateRunContext? controlWriterRun;
     internal GateRunContext? ControlWriterRun

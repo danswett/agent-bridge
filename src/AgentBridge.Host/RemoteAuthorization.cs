@@ -95,7 +95,7 @@ public sealed class RemoteAuthorization : IDisposable
             if (sessions.ReadOnly?.Invoke() is { } readOnly) { throw new InvalidOperationException(readOnly); }
             launchAudit?.RunPause.ValidateClock();
             if (op is "gate.pause" or "gate.resume")
-            { return (launchAudit ?? throw new InvalidOperationException("gate control refused: audit unavailable")).RunPause.Control(
+            { return await (launchAudit ?? throw new InvalidOperationException("gate control refused: audit unavailable")).RunPause.Control(
                 $"person:{channel.PeerId}", data, channel.Closed, op == "gate.resume"); }
             if (op != "gate.start") { throw new InvalidOperationException("gate lifecycle control is unavailable"); }
             return GateRunPreparation.Prepare(launchAudit ?? throw new InvalidOperationException("gate control refused: audit unavailable"),
