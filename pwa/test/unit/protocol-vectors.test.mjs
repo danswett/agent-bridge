@@ -39,6 +39,16 @@ import { signCommand } from '../../js/transfer.js';
 
 const pwa = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const folder = path.join(pwa, '..', 'docs', 'protocol', 'vectors');
+test('display titles preserve visible Unicode and reject malformed values', () => {
+  for (const title of ['Shared \u65e5\u672c\u8a9e', 'x'.repeat(120)]) {
+    assert.equal(readSession({ id: 'session', title: 'Agent title', displayTitle: title }).displayTitle, title);
+  }
+  for (const title of [null, 7, '', 'x'.repeat(121), 'bad\nname', 'bad\u200bname']) {
+    const read = readSession({ id: 'session', title: 'Agent title', displayTitle: title });
+    assert.equal(read.displayTitle, null);
+    assert.equal(read.title, 'Agent title');
+  }
+});
 const load = (name) => JSON.parse(readFileSync(path.join(folder, name), 'utf8'));
 const SIGNED = 'signed-command.json';
 // Recorded sessions patched as a host sends them: not records, replayed on their own below.

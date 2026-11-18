@@ -95,6 +95,17 @@ public class PatchReplayTests(ITestOutputHelper output)
                 new JsonObject { ["seq"] = 2, ["synced"] = new JsonObject { ["revision"] = 1, ["handles"] = new JsonObject { ["s1"] = 1 } } },
                 new JsonObject { ["seq"] = 3, ["patch"] = JsonSerializer.SerializeToNode(SessionPatches.Next(before, 1, after, 2, handle: 1), ProtocolJson.Options), ["session"] = after }),
         });
+        var title = new JsonObject { ["id"] = "s1", ["title"] = "Agent title" };
+        var named = (JsonObject)title.DeepClone();
+        named["displayTitle"] = "Shared title";
+        sequences.Add(new JsonObject
+        {
+            ["name"] = "display-title-set-and-cleared", ["recording"] = "synthetic",
+            ["events"] = new JsonArray(
+                new JsonObject { ["seq"] = 1, ["upsert"] = title.DeepClone() },
+                new JsonObject { ["seq"] = 2, ["patch"] = JsonSerializer.SerializeToNode(SessionPatches.Diff(title, 1, named, 2), ProtocolJson.Options), ["session"] = named.DeepClone() },
+                new JsonObject { ["seq"] = 3, ["patch"] = JsonSerializer.SerializeToNode(SessionPatches.Diff(named, 2, title, 3), ProtocolJson.Options), ["session"] = title.DeepClone() }),
+        });
         return new JsonObject
         {
             ["about"] = "Recorded sessions as a subscriber that asked for patches is sent them, a change every 250 ms at most: the snapshot's upsert, then session.patch events, each with the session the client then holds.",

@@ -6080,6 +6080,50 @@
           }
         }
       ]
+    },
+    {
+      "name": "display-title-set-and-cleared",
+      "recording": "synthetic",
+      "events": [
+        {
+          "seq": 1,
+          "upsert": {
+            "id": "s1",
+            "title": "Agent title"
+          }
+        },
+        {
+          "seq": 2,
+          "patch": {
+            "id": "s1",
+            "base": 1,
+            "revision": 2,
+            "set": {
+              "displayTitle": "Shared title"
+            }
+          },
+          "session": {
+            "id": "s1",
+            "title": "Agent title",
+            "displayTitle": "Shared title"
+          }
+        },
+        {
+          "seq": 3,
+          "patch": {
+            "id": "s1",
+            "base": 2,
+            "revision": 3,
+            "set": {
+              "displayTitle": null
+            }
+          },
+          "session": {
+            "id": "s1",
+            "title": "Agent title"
+          }
+        }
+      ]
     }
   ]
 }
