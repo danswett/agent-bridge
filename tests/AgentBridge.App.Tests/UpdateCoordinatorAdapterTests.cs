@@ -35,7 +35,7 @@ public sealed class UpdateCoordinatorAdapterTests : IDisposable
     void WriteManifest(string version, string id = "AgentBridgeApp") =>
         File.WriteAllText(Manifest, $"<package xmlns=\"urn:nuspec\"><metadata><id>{id}</id><version>{version}</version><mainExe>AgentBridge.exe</mainExe></metadata></package>");
 
-    UpdateCoordinatorAdapter Adapter() => new(new UpdateCoordinatorRequest(root, Packages, Package, Digest,
+    UpdateCoordinatorAdapter Adapter(MemoryStream? pin = null) => new(new UpdateCoordinatorRequest(root, Packages, Package, Digest,
         "AgentBridgeApp", Target, ["--background", "--profile", "two words"], 11, 123),
         _ => original, info =>
         {
@@ -46,7 +46,48 @@ public sealed class UpdateCoordinatorAdapterTests : IDisposable
                 return worker;
             }
             return new Child(33);
-        }, time, _ => new MemoryStream());
+        }, time, _ => pin ?? new MemoryStream());
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Observation_cancellation_keeps_real_apply_custody_until_exit(bool deadline)
+    {
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        worker.Wait = exited.Task;
+        using var cancel = new CancellationTokenSource();
+        using var pin = new MemoryStream();
+        var adapter = Adapter(pin);
+        var run = adapter.RunAsync(cancel.Token);
+        await worker.WaitStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            Assert.False(worker.WaitCancellation.CanBeCanceled);
+            if (deadline)
+            {
+                time.Advance(TimeSpan.FromMinutes(10));
+                Assert.Equal(UpdateApplyEnd.Unknown, (await run.WaitAsync(TimeSpan.FromSeconds(5))).End);
+            }
+            else
+            {
+                cancel.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+            }
+            Assert.False(worker.Disposed);
+            Assert.True(pin.CanRead);
+            Assert.Throws<IOException>(() => File.OpenWrite(Package).Dispose());
+            Assert.Throws<InvalidOperationException>(() => { _ = adapter.RunAsync(); });
+        }
+        finally
+        {
+            exited.TrySetResult();
+            try { await run.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (OperationCanceledException) { }
+            await adapter.Ownership.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.True(worker.Disposed);
+        Assert.False(pin.CanRead);
+    }
 
     [Fact]
     public async Task Actual_apply_completion_precedes_the_fresh_manifest_and_profile_respawn()
@@ -201,9 +242,11 @@ public sealed class UpdateCoordinatorAdapterTests : IDisposable
         public int ExitCode { get; set; }
         public Task Wait { get; set; } = Task.CompletedTask;
         public bool Disposed { get; private set; }
+        public CancellationToken WaitCancellation { get; private set; }
         public TaskCompletionSource WaitStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task WaitForExitAsync(CancellationToken cancel)
         {
+            WaitCancellation = cancel;
             WaitStarted.TrySetResult();
             return Wait.WaitAsync(cancel);
         }

@@ -22,9 +22,18 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
     const string AppExe = "AgentBridge.exe";
     readonly Func<int, IUpdateCoordinatorProcess?> opener = open ?? Open;
     readonly Func<ProcessStartInfo, IUpdateCoordinatorProcess> starter = start ?? Start;
+    int running;
     public int? ApplyProcessId { get; private set; }
+    public Task Ownership { get; private set; } = Task.CompletedTask;
 
-    public async Task<UpdateApplyResult> RunAsync(CancellationToken cancel = default)
+    public Task<UpdateApplyResult> RunAsync(CancellationToken cancel = default)
+    {
+        if (Interlocked.CompareExchange(ref running, 1, 0) != 0)
+            throw new InvalidOperationException("coordinator still owns an unfinished operation");
+        return RunOwnedAsync(cancel);
+    }
+
+    async Task<UpdateApplyResult> RunOwnedAsync(CancellationToken cancel)
     {
         ApplyProcessId = null;
         Task<UpdateApplyEvidence>? observation = null;
@@ -54,8 +63,7 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
             using var child = starter(ApplyStart());
             ApplyProcessId = child.Id;
             applyStep = "apply-completion";
-            await child.WaitForExitAsync(ct).ConfigureAwait(false);
-            ct.ThrowIfCancellationRequested();
+            await child.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
             var exit = child.ExitCode;
             // A failing parent may have timed out waiting for an elevated worker.
             return new(exit == 0 ? true : null, exit, null, generation);
@@ -65,9 +73,18 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
             () => new FileStream(Path.Combine(request.Packages, ".velopack_lock"),
                 FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None),
             ReadVersion, () => { using var app = starter(AppStart()); }, time);
-        var result = await flow.RunAsync(request.TargetVersion, cancel).ConfigureAwait(false);
-        return result.Step == "apply-completion" && result.ErrorType is not null
-            ? result with { Step = applyStep } : result;
+        try
+        {
+            var result = await flow.RunAsync(request.TargetVersion, cancel).ConfigureAwait(false);
+            return result.Step == "apply-completion" && result.ErrorType is not null
+                ? result with { Step = applyStep } : result;
+        }
+        finally
+        {
+            Ownership = Task.WhenAll(observation ?? Task.CompletedTask, flow.RespawnFinished);
+            _ = Ownership.ContinueWith(_ => Volatile.Write(ref running, 0), CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
     }
 
     ProcessStartInfo ApplyStart()
