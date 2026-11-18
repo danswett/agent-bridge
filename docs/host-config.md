@@ -53,8 +53,17 @@ Each run atomically writes `<profile>/reaper/receipts/<run-id>.json` with schema
 run ID, machine, UTC time, mode, `ended` and `kept` (each with a reason), and a
 `problem` for unavailable evidence. I/O failures are logged and permit no ending.
 SRE approves a specific first dry-run file and SHA256, not a generic live flag.
-The existing `session.stop` adapter follows in the next stack cut; this cut
-always writes dry-run receipts even when live is requested.
+Live requires explicit `live: true`, an approved dry-run filename and SHA256,
+fresh evidence and the host's current read-only/G5 guards. Each target first
+consumes a permanent local `<profile>/reaper/intents/<sha256-session-id>` file;
+uncertain outcomes are never retried, even across host restarts.
+The host calls its existing `session.stop` service once, never auto-confirms a
+second press, and reports ended only when that service confirms it.
+Native transcript tools/background work and questions are used, not idle as a
+proxy. No canonical custody/holds or completion/open-PR producer exists yet:
+these remain UNKNOWN, so current native sessions stay KEEP even in live mode.
+Git queries are gated behind the other safety proofs and use one fetch per
+worktree per cycle, with no tracking requirement or F7 credential.
 
 
 ```jsonc

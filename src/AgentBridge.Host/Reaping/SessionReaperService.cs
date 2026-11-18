@@ -40,15 +40,13 @@ public sealed partial class SessionReaperService : IAsyncDisposable
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2), clock);
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct, stop.Token, timeout.Token);
             var receipt = new SessionReaperReceipt(1, Guid.NewGuid().ToString("N"), machine, clock.GetUtcNow(), "dry-run", [], []);
+            ReaperSnapshot? snapshot = null; SessionReaperSettings? config = null;
             try
             {
-                var config = settings();
+                config = settings();
                 if (pendingRead is { IsCompleted: false }) { throw new InvalidOperationException("previous read still pending"); }
-                pendingRead = read(limit.Token);
-                var snapshot = await pendingRead.WaitAsync(limit.Token);
-                if (snapshot.Machine != machine) { throw new InvalidDataException("wrong machine"); }
-                snapshot = snapshot with { IsVm = config.MachineId == machine ? config.IsVm : null,
-                    OwnerLaptop = config.MachineId == machine ? config.OwnerLaptop : null };
+                ResetEvidence?.Invoke();
+                snapshot = Bind(await ReadEvidenceAsync(limit.Token), config);
                 receipt = receipt with
                 {
                     Kept = SessionReaperPolicy.Plan(snapshot, clock.GetUtcNow(), config.ProtectedIds, config.ProtectedNames)
@@ -60,14 +58,30 @@ public sealed partial class SessionReaperService : IAsyncDisposable
                 receipt = receipt with { Problem = $"evidence unavailable ({e.GetType().Name}); all sessions kept" };
                 log($"session reaper: {receipt.Problem}");
             }
-            try { WriteReceipt(receipt); }
+            try
+            {
+                WriteReceipt(receipt);
+                if (receipt.Problem is null && snapshot is not null && config is not null)
+                    receipt = await EndApprovedAsync(receipt, snapshot, config, limit.Token);
+            }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             { log($"session reaper receipt unavailable ({e.GetType().Name}); no ending permitted"); throw; }
             log($"session reaper {receipt.Mode}: ended={receipt.Ended.Count} kept={receipt.Kept.Count}; receipt={receipt.Id}.json");
             Completed?.Invoke(receipt);
             return receipt;
         }
+
         finally { gate.Release(); }
+    }
+
+    ReaperSnapshot Bind(ReaperSnapshot snapshot, SessionReaperSettings config) => snapshot.Machine != machine
+        ? throw new InvalidDataException("wrong machine")
+        : snapshot with { IsVm = config.MachineId == machine ? config.IsVm : null, OwnerLaptop = config.MachineId == machine ? config.OwnerLaptop : null };
+    async Task<ReaperSnapshot> ReadEvidenceAsync(CancellationToken ct)
+    {
+        if (pendingRead is { IsCompleted: false }) { throw new InvalidOperationException("previous read still pending"); }
+        pendingRead = Task.Run(() => read(ct), CancellationToken.None);
+        return await pendingRead.WaitAsync(ct);
     }
 
     async Task LoopAsync()
