@@ -144,7 +144,7 @@ public sealed record EntryBody(
 
     // The relay's account id: 1 to 128 UTF-8 bytes with no control character.
     internal static string ParseAccount(string account) =>
-        account.Length > 0 && StrictJson.Utf8Bytes(account) <= MaxAccountBytes && !StrictJson.HasControl(account)
+        account.Length > 0 && StrictJson.IsWellFormed(account) && StrictJson.Utf8Bytes(account) <= MaxAccountBytes && !StrictJson.HasControl(account)
             ? account : throw new RosterFormatException(Refusal.Account, "body.account");
 
     internal static string DeviceId(JsonElement e, string what)

@@ -5,7 +5,7 @@ import { RosterFormatError, REFUSAL } from './refusal.js';
 import { base64Url, fromBase64Url, tryBase64Url, isId, hex, compare, equal } from './codec.js';
 import { frame, utf8, sha256, LABEL } from './framing.js';
 import { point, verify, checkRosterSignature } from './p256.js';
-import { parseStrict, members, object, string, bool, integer, scalars, utf8Bytes, hasControl } from './strict-json.js';
+import { parseStrict, members, object, string, bool, integer, scalars, utf8Bytes, hasControl, isWellFormed } from './strict-json.js';
 
 export const MAX_BYTES = 8 * 1024;
 export const MAX_REMOVE_BYTES = 46 * 1024;
@@ -145,7 +145,7 @@ export const hostKeyBinding = (account, generation, dh) => frame(utf8(LABEL.host
 export async function parseHostDescriptor(bytes, account, generation) {
   const node = parseStrict(bytes, 'device');
   if (typeof account !== 'string' || typeof generation !== 'string') throw new RosterFormatError(REFUSAL.type, 'descriptor context');
-  if (account.length === 0 || utf8Bytes(account) > MAX_ACCOUNT_BYTES || hasControl(account)) throw new RosterFormatError(REFUSAL.account, 'descriptor account');
+  if (account.length === 0 || !isWellFormed(account) || utf8Bytes(account) > MAX_ACCOUNT_BYTES || hasControl(account)) throw new RosterFormatError(REFUSAL.account, 'descriptor account');
   if (!isId(generation)) throw new RosterFormatError(REFUSAL.id, 'descriptor generation');
   return parseDevice(node, 2, account, generation);
 }
