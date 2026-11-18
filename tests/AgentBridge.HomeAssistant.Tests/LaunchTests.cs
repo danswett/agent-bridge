@@ -254,6 +254,56 @@ public sealed class LaunchTests : IDisposable
         finally { pending.Release(); await c.DeliveredAsync(); }
     }
 
+    [Fact]
+    public async Task A_retained_completed_request_is_not_relaunched_after_the_handled_window_rolls_over()
+    {
+        const string id = "req-cutf-0300";
+        var pending = new PendingStarts(id);
+        answer = pending.Launch;
+        await using var c = await Ready();
+        try
+        {
+            await Submit(c, id); await pending.Entered(id);
+            for (var i = 0; i < 55; i++)
+            {
+                await Submit(c, $"req-cutf-03{i + 1:00}", new JsonObject { ["workspace"] = "not offered" });
+            }
+            await Complete(c, pending, id);
+            var completed = Outcome().ToJsonString();
+            await Submit(c, id);
+            await c.DeliveredAsync();
+            await Pass(c, 0.01);
+            Assert.Single(launched);
+            Assert.Equal(completed, Outcome().ToJsonString());
+        }
+        finally { pending.Release(); await c.DeliveredAsync(); }
+    }
+
+    [Theory]
+    [InlineData("person", 0)]
+    [InlineData("person", 61)]
+    [InlineData(AgentUser, 0)]
+    [InlineData(AgentUser, 61)]
+    public async Task A_handled_payload_that_cannot_be_cleared_explains_each_ignored_press(string user, int age)
+    {
+        const string id = "req-cutf-0400";
+        await using var c = await Ready();
+        Payload(new JsonObject { ["request"] = id });
+        await Launch(c, AgentUser);
+        ha.PublishFailsFor = (topic, payload) => topic == HaContract.PromptPayloadTopic(Slug) && payload == "{}";
+        Payload(new JsonObject { ["request"] = id });
+        ha.Now = ha.Now.AddSeconds(age);
+        for (var i = 0; i < 2; i++)
+        {
+            await ha.PublishAsync(HaContract.LaunchResultTopic(Slug), "", true);
+            await Launch(c, user);
+            Assert.Single(launched);
+            Assert.Contains("already handled", Note, StringComparison.Ordinal);
+            Assert.Contains("clear the prompt payload", Note, StringComparison.Ordinal);
+            Assert.Contains(id, ha.Retained[HaContract.PromptPayloadTopic(Slug)], StringComparison.Ordinal);
+        }
+    }
+
     static IReadOnlyList<Published> Recorded(string name, bool withTransfer = false) =>
         [.. Loaded.Value[name]!.AsArray().Select(p => Published.FromFixture(p!.AsObject())).Where(p => withTransfer || !p.Topic.Contains("/transfer_request/", StringComparison.Ordinal))];
 
