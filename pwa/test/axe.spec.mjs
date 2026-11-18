@@ -126,7 +126,11 @@ for (const layout of LAYOUTS) {
       const words = await scan(page, { include: '.machine.selected', rules: ['color-contrast'] });
       expect(words.failed).toEqual([]);
       const checked = await page.evaluate((targets) => targets.map((t) => document.querySelector(t)?.className ?? ''), words.passed);
-      for (const part of ['machine-state', 'machine-update-check', 'machine-update-install']) {
+      await selected.locator('.machine-update-menu').click();
+      const menuWords = await scan(page, { include: '.machine.selected .row-menu', rules: ['color-contrast'] });
+      expect(menuWords.failed).toEqual([]);
+      expect(menuWords.passed.length).toBeGreaterThan(0);
+      for (const part of ['machine-state', 'machine-update-menu', 'machine-update-install']) {
         expect(checked.some((c) => c.split(' ').includes(part)), `${part} is checked`).toBe(true);
       }
     });
