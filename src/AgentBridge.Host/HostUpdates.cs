@@ -46,7 +46,19 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
     // The installed package decides the channel, and so the feed (releases.<channel>.json) a check
     // reads: x64's `win` or Arm64's `win-arm64` (build/app-channels.ps1). Nothing here names one,
     // so a copy is only ever offered its own architecture. A test hands in the package's place.
-    IVelopackLocator Locator() => locator ?? VelopackLocator.CreateDefaultForPlatform();
+    IVelopackLocator Locator() => locator ?? (OperatingSystem.IsWindows()
+        ? SlotVelopackLocator.Create() : VelopackLocator.CreateDefaultForPlatform());
+
+    void RefuseAtomicNativeApply()
+    {
+        var copy = Locator();
+        if (copy.RootAppDir is not { } root) { return; }
+        var helper = copy.AppContentDir is { } content ? Path.Combine(content, "agent-bridge-hostw.exe") : null;
+        if (File.Exists(Path.Combine(root, "active-slot.json")) || File.Exists(Path.Combine(root, "stable-entry.json"))
+            || helper is not null && File.Exists(helper)
+                && System.Diagnostics.FileVersionInfo.GetVersionInfo(helper).FileDescription?.Contains(" [slot-apply-v1] ", StringComparison.Ordinal) == true)
+            throw new InvalidOperationException("Atomic updates must be installed from the app; native apply is disabled.");
+    }
 
     // The app's feed.txt: a folder or URL holding releases.<channel>.json, for a test VM or a private
     // channel. Absent is GitHub; one that is there but cannot be read is an error, as in the app,
@@ -159,6 +171,7 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
 
     public void ApplyAndRestart(UpdateRelease release)
     {
+        RefuseAtomicNativeApply();
         if (prepareStop is not null) { throw new InvalidOperationException("this update must acquire the delivery stop fence asynchronously"); }
         var found = Of(release);
         if (!found.Downloaded) { throw new InvalidOperationException($"{release.Version} has not been downloaded here"); }
@@ -169,6 +182,7 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
 
     public async Task ApplyAndRestartAsync(UpdateRelease release)
     {
+        RefuseAtomicNativeApply();
         var found = Of(release);
         if (!found.Downloaded) { throw new InvalidOperationException($"{release.Version} has not been downloaded here"); }
         var prepared = prepareStop is not null ? await prepareStop() : null;

@@ -157,6 +157,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     }
 
     public bool ReportsDownloadFacts => true;
+    public bool KeepsHostRunning => true;
     public Task DownloadAsync(Action<int> progress) => DownloadAsync(progress, (_, _) => { });
     public async Task DownloadAsync(Action<int> progress, Action<long, long?> bytes)
     {
@@ -188,6 +189,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     // Settings may have replaced the one the person chose while the host stopped (r4487830884).
     public void ApplyAndRestart(string version, Action? handedOverTo = null)
     {
+        if (LifecycleGuard.Refusal() is { } refusal) { throw new InvalidOperationException($"Update refused: {refusal}."); }
         if (Ready is not { } ready) { throw new InvalidOperationException("no downloaded update to install; check for updates again"); }
         if (ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded ({ready} is); nothing was installed"); }
         var release = pending?.TargetFullRelease ?? local ?? throw new InvalidOperationException("no downloaded update to install; check for updates again");
@@ -210,7 +212,12 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         var request = new UpdateCoordinatorRequest(root, packages, file, digest, id, version,
             ["--background", "--profile", profile], self.Id, self.StartTime.ToUniversalTime().Ticks);
         handedOver = new CoordinatorHandoff(Path.Combine(profileFolder, "app-update-coordinator"), CoordinatorHandoff.RuntimeTarget)
-            .Prepare(request, Path.Combine(AppContext.BaseDirectory, "agent-bridge-hostw.exe"));
+            .Prepare(request, Path.Combine(AppContext.BaseDirectory, "agent-bridge-hostw.exe"), requireSlotApply: true);
+        new SlotMigration(root, CoordinatorHandoff.RuntimeTarget).Prepare(
+            Path.Combine(handedOver.Directory, "target.nupkg"), version, digest);
+        App.ManagerFor(profile).MigrateStableLaunchers();
+        var signIn = new RunKey(Path.Combine(root, "AgentBridge.exe"));
+        if (signIn.Enabled) { signIn.Set(true); }
         var start = new ProcessStartInfo(handedOver.ImagePath)
         {
             UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = handedOver.Directory

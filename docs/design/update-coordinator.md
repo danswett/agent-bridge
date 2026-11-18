@@ -106,3 +106,65 @@ intact until the stable launchers and pointer are validated; never delete or ren
 a live legacy directory. Rollback switches the pointer, not payload bytes. Velopack's
 legacy `current` contract must not silently remain authoritative after activation.
 These are prerequisites, not implemented guarantees or permission to wire activation.
+
+### D1: disabled pointer primitive
+
+`SlotPointer` is not wired to production. It revalidates the cached package and
+entire prepared payload while retaining read-only leases, then publishes a bounded
+pointer by same-directory rename (first publication) or Windows `ReplaceFileW`
+through `File.Replace`. Readers retain one pointer generation and payload leases;
+replacement does not invalidate their old slot. Rollback revalidates the previous
+slot and replaces only the pointer. Faults before publication leave the old pointer
+or absent-pointer legacy layout unchanged. Payload/legacy directories never move.
+Recovery loads strict bounded pointer metadata without resolving the damaged
+current payload; only its destination is revalidated and pinned. Reads fail closed.
+Directory ancestry is checked, not handle-pinned; the existing same-user ancestor
+rename race remains. Power-loss directory durability is not claimed. D2/D3 must
+prove stable routing and migration before enabling production activation.
+
+### D2: stable entry protocol, no deployment or activation
+
+The closed hostw bundle supports root `AgentBridge.exe` and
+`agent-bridge-hostw.exe` aliases. Root copies resolve once and retain the selected
+slot through the child lifetime; payload copies keep their ordinary roles.
+Missing pointer means trusted legacy `current`; invalid pointer fails closed.
+The native slot-entry-v1 marker gates compatibility, never image trust.
+Host registrations select the root helper only after it exists; build folders
+and unmigrated installs are unchanged. D2 deploys no aliases and publishes no
+pointer. D3 must install verified aliases before its single activation commit.
+
+### D3a: recoverable bootstrap preparation, no publication
+
+`SlotMigration` has no production caller yet. It caches the verified target,
+prepares/revalidates its slot, and requires a closed bundle plus slot-entry-v1.
+An immutable `stable-entry.json` retains the first bootstrap's verified package
+provenance; later targets do not overwrite running root images. Both root aliases
+are checksum-bound copies, with repeat/interrupted preparation safe while legacy
+`current` stays intact. A missing pointer still routes to legacy. No pointer is
+published here; D3b/D3c must complete locator/coordinator and non-stopping handover
+before enabling activation. Existing ancestry/power-loss limitations remain.
+
+### D3b: slot-aware completion and installed identity, disabled
+
+The adapter accepts an explicit managed-apply operation, records the pointer
+rather than a fictional native process, and retains one fresh verified snapshot
+through version confirmation and respawn. The default production factory still
+uses native apply. `SlotVelopackLocator` is also not wired yet: it preserves the
+legacy installation's package/channel identity but reports the running immutable
+slot's own version/content, never the latest pointer's version. D3c must wire both
+with non-stopping caller behavior and the single publication point.
+
+### D3c: atomic migration enabled
+
+Atomic `slot-apply-v1` requires verified current/target helpers and stable entries;
+unsupported downgrades never fall back to native apply. Under the package writer
+lock, preparation caches SHA-256 slots (after verifying either feed checksum),
+then atomically publishes `active-slot.json`. Pre-commit failure/cancellation
+preserves the prior authority and legacy payloads. Version confirmation binds the
+verified package digest; one retained snapshot supplies respawn even on republish.
+Before handoff, stable aliases and enabled task/existing Run registrations are
+prepared without starting/stopping hosts. The app preserves hosts and consent/
+read-only checks, bypassing legacy file-replacement and departure gates. Running
+slots report their own version. Host-side native install refuses this layout;
+E owns convergence. Quality owns two-family review and native VM/survival proof;
+focused managed tests do not establish native or power-loss durability.

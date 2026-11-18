@@ -25,7 +25,7 @@ public sealed class CoordinatorHandoff
         this.metadata = metadata;
     }
 
-    public Copy Prepare(UpdateCoordinatorRequest request, string sourceImage)
+    public Copy Prepare(UpdateCoordinatorRequest request, string sourceImage, bool requireSlotApply = false)
     {
         var root = Full(request.Root);
         var packages = Full(request.Packages);
@@ -48,6 +48,7 @@ public sealed class CoordinatorHandoff
         using var source = File.Open(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read);
         var imageDigest = new PackageDigest(PackageDigest.Sha256, Convert.ToHexString(SHA256.HashData(source)));
         CoordinatorImage.RequireV1(source, metadata);
+        if (requireSlotApply) { CoordinatorImage.RequireSlotApplyV1(source, metadata); }
         HostwBundle.Verify(source, imageDigest, runtimeTarget);
         var info = new UpdateCoordinatorHandoff(request with
         {
@@ -68,6 +69,7 @@ public sealed class CoordinatorHandoff
                 ?? throw new PackageMismatchException("helper-copy: staged helper differs from the retained installed image.");
             HostwBundle.Verify(image, imageDigest, runtimeTarget);
             CoordinatorImage.RequireV1(image, metadata);
+            if (requireSlotApply) { CoordinatorImage.RequireSlotApplyV1(image, metadata); }
             CopyNew(package, targetPath);
             target = DownloadMark.Hold(targetPath, request.Digest)
                 ?? throw new PackageMismatchException("package-copy: staged target differs from its verified checksum.");

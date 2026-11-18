@@ -70,6 +70,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public string Source { get; set; } = "";
         public Action? OnDownload;
         public bool ReportsDownloadFacts { get; set; }
+        public bool KeepsHostRunning { get; set; }
         public Action<Action<int>, Action<long, long?>>? DownloadWithBytes;
         public TaskCompletionSource? DownloadGate;
         public string? InstalledVersion { get; set; } = "0.1.0";
@@ -2660,6 +2661,45 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(4242, othersAskedFor);
         Assert.Empty(host.Sent(HostOps.Stop));
         Assert.Equal("0.2.0", auto.Ready);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task Atomic_updates_ignore_legacy_file_holders_and_other_profiles_without_stopping_or_restarting_the_host(bool failure)
+    {
+        updater.KeepsHostRunning = true;
+        shared = new ObservedUpdater(updater, time);
+        await StartAsync();
+        await auto.TickAsync();
+        othersProbe = () => throw new InvalidOperationException("must not enumerate legacy package processes");
+        preflight = () => throw new InvalidOperationException("must not probe files that are not being replaced");
+        updater.OnApply = () => Assert.Empty(host.Sent(HostOps.Stop));
+        if (failure) { updater.ApplyFails = new IOException("injected activation failure"); }
+
+        var result = await auto.RestartToUpdateAsync();
+
+        if (failure) { Assert.Contains("injected activation failure", result); }
+        else { Assert.Null(result); Assert.True(updater.Applied); }
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Empty(tasks.Ran);
+        Assert.False(manager.UpdateUnderWay);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Atomic_Update_now_does_not_spend_a_host_departure_or_stop_the_host()
+    {
+        updater.KeepsHostRunning = true;
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        host.On(HostOps.UpdateDepart, _ => throw new InvalidOperationException("must not depart"));
+        await NowAsync(accept: OneTurn);
+        Assert.True(updater.Applied);
+        Assert.Empty(Departed());
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal(Press, prefs.UpdateRequest);
     }
 
     [Fact]

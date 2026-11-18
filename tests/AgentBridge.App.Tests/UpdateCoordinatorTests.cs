@@ -15,7 +15,7 @@ public sealed class UpdateCoordinatorTests
     string? active = Target;
     Exception? readError, respawnError;
     bool stale;
-    Action? respawning;
+    Action? respawning, reading;
 
     UpdateCoordinator Coordinator(Func<IDisposable>? acquire = null) => new(
         ct => { steps.Add("wait-app"); return appExited.Task.WaitAsync(ct); },
@@ -29,6 +29,7 @@ public sealed class UpdateCoordinatorTests
         () =>
         {
             steps.Add("fresh-version");
+            reading?.Invoke();
             if (readError is not null) throw readError;
             return active;
         },
@@ -39,6 +40,33 @@ public sealed class UpdateCoordinatorTests
             if (respawnError is not null) throw respawnError;
         },
         time);
+
+    [Fact]
+    public async Task A_fresh_slot_resolution_still_in_flight_is_owned_after_observation_times_out()
+    {
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        reading = () => { entered.SetResult(); Assert.True(release.Wait(TimeSpan.FromSeconds(5))); };
+        appExited.SetResult();
+        applied.SetResult(new(true, 0, Target));
+        var coordinator = Coordinator();
+        var run = Task.Run(() => coordinator.RunAsync(Target));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            time.Advance(TimeSpan.FromMinutes(10));
+            Assert.Equal(UpdateApplyEnd.Unknown, (await run.WaitAsync(TimeSpan.FromSeconds(1))).End);
+            Assert.False(coordinator.ObservationFinished.IsCompleted);
+            Assert.DoesNotContain("respawn", steps);
+        }
+        finally
+        {
+            release.Set();
+            try { await coordinator.ObservationFinished.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (OperationCanceledException) { }
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
 
     [Fact]
     public async Task Respawn_waits_for_the_original_app_then_real_apply_then_a_fresh_manifest_under_the_lock()

@@ -27,6 +27,7 @@ public static class Program
         // hook, waiting up to 10 s for that host, took 4-15 s in Velopack's log on one machine (11
         // of 49 killed at its 15 s limit). The restarted app starts the host, once (App.StartHostAsync).
         VelopackApp.Build()
+            .SetLocator(AgentBridge.Host.SlotVelopackLocator.Create())
             .SetAutoApplyOnStartup(false)
             .OnBeforeUpdateFastCallback(_ => Lifecycle.BeforeUpdate())
             .OnBeforeUninstallFastCallback(_ => Lifecycle.BeforeUninstall())

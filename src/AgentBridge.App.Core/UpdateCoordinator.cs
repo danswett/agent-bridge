@@ -13,6 +13,7 @@ public sealed class UpdateCoordinator(
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
     public Task RespawnFinished { get; private set; } = Task.CompletedTask;
+    public Task ObservationFinished { get; private set; } = Task.CompletedTask;
 
     public async Task<UpdateApplyResult> RunAsync(string targetVersion, CancellationToken cancel = default)
     {
@@ -20,7 +21,7 @@ public sealed class UpdateCoordinator(
         var custody = new LockCustody();
         var step = "app-exit";
         var began = clock.GetTimestamp();
-        var completion = new UpdateApplyCompletion(async (generation, ct) =>
+        async Task<UpdateApplyEvidence> Observe(Guid generation, CancellationToken ct)
         {
             appExit ??= waitForApp(ct);
             await appExit.WaitAsync(ct).ConfigureAwait(false);
@@ -39,6 +40,12 @@ public sealed class UpdateCoordinator(
             var active = readActiveVersion();
             ct.ThrowIfCancellationRequested();
             return evidence with { ActiveVersion = active };
+        }
+        var completion = new UpdateApplyCompletion((generation, ct) =>
+        {
+            var work = Observe(generation, ct);
+            ObservationFinished = work;
+            return work;
         }, clock);
 
         UpdateApplyResult Failure(UpdateApplyResult previous, string failedStep, Exception error) =>
