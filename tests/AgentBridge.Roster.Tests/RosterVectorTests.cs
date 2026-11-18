@@ -484,6 +484,45 @@ public sealed class RosterVectorTests
         Assert.True(stale.Count == 0, "docs/protocol/vectors/roster.json is not what the roster library gives; with UPDATE_PROTOCOL_VECTORS=1 this test writes it.");
     }
 
+    [Fact]
+    public void Shared_v3_vectors_replay_the_first_parser_verdict_without_changing_legacy_entries()
+    {
+        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(VectorFiles.Folder, "roster.json")))!;
+        var shared = root["capSignV3"];
+        Assert.NotNull(shared);
+        foreach (var (name, vector) in shared["vectors"]!.AsObject())
+        {
+            var wrapper = vector!["wrapper"];
+            var bytes = Encoding.UTF8.GetBytes((wrapper ?? vector["body"])!.GetValue<string>());
+            var error = Record.Exception(() =>
+            {
+                var body = wrapper is null ? EntryBody.Parse(bytes) : Entry.Parse(bytes).Body;
+                Assert.Equal(3, body.Version);
+                Assert.NotNull(body.Device?.CapSign);
+            });
+            var expected = vector["result"]!.GetValue<string>();
+            if (expected == "valid") { Assert.Null(error); }
+            else
+            {
+                Assert.True(error is RosterFormatException, $"{name}: expected {expected}, got {error}");
+                Assert.Equal(expected, ((RosterFormatException)error!).Code);
+            }
+        }
+        foreach (var vector in root["entries"]!["valid"]!.AsArray())
+        {
+            var entry = Entry.Parse(Encoding.UTF8.GetBytes(vector!["wrapper"]!.GetValue<string>()));
+            Assert.Contains(entry.Body.Version, new[] { 1, 2 });
+            Assert.Equal(vector["hash"]!.GetValue<string>(), Codec.Base64Url(entry.Hash));
+            Assert.Equal((vector["canonical"] ?? vector["wrapper"])!.GetValue<string>(), entry.Canonical());
+        }
+        foreach (var vector in root["entries"]!["refused"]!.AsArray())
+        {
+            var bytes = vector!["wrapperHex"] is { } hex ? Convert.FromHexString(hex.GetValue<string>())
+                : Encoding.UTF8.GetBytes(vector["wrapper"]!.GetValue<string>());
+            Assert.Equal(vector["code"]!.GetValue<string>(), Assert.Throws<RosterFormatException>(() => Entry.Parse(bytes)).Code);
+        }
+    }
+
     static JsonObject Generate()
     {
         var keys = new JsonObject();
