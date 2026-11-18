@@ -113,36 +113,31 @@ test('the restart cap keeps Update usable and sends Update when idle without a c
 
   await expect(sheetOf(page)).toHaveCount(0);
   await expect(rowOf(page)).toContainText(/updates when its sessions are quiet/i);
-  const log = await page.evaluate(() => window.agentBridgeDemo.updateLog);
-  expect(log).toHaveLength(1);
-  expect(log[0].op).toBe('update.install');
-  expect(log[0].now).not.toBe(true);
+  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog))
+    .toEqual([{ op: 'update.install', request: expect.stringMatching(UUID) }]);
 });
 
 test('a failed download offers Try again now and sends one install press', async ({ page }) => {
   await openDemo(page);
-  await setUpdate(page, { last: { outcome: 'failed', step: 'downloading', at: new Date().toISOString() } });
+  await setUpdate(page, { last: { outcome: 'failed', step: 'downloading', to: '0.2.0', at: new Date().toISOString() } });
   const retry = updateOf(page).getByRole('button', { name: 'Try again now', exact: true });
 
   await expect(retry).toBeEnabled();
   await retry.click();
 
-  const log = await page.evaluate(() => window.agentBridgeDemo.updateLog);
-  expect(log).toHaveLength(1);
-  expect(log[0].op).toBe('update.install');
+  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog))
+    .toEqual([{ op: 'update.install', request: expect.stringMatching(UUID) }]);
 });
 
 test('a failed download retries without signing even when Update now is offered', async ({ page }) => {
   await openDemo(page, '&updateNow=1');
-  await setUpdate(page, { last: { outcome: 'failed', step: 'downloading', at: new Date().toISOString() } });
+  await setUpdate(page, { last: { outcome: 'failed', step: 'downloading', to: '0.2.0', at: new Date().toISOString() } });
   const block = updateOf(page);
   await expect(block.locator('.machine-update-now')).toHaveCount(0);
   await block.getByRole('button', { name: 'Try again now', exact: true }).click();
   await expect(sheetOf(page)).toHaveCount(0);
-  const log = await page.evaluate(() => window.agentBridgeDemo.updateLog);
-  expect(log).toHaveLength(1);
-  expect(log[0]).toMatchObject({ op: 'update.install', request: expect.stringMatching(UUID) });
-  expect(log[0].now).not.toBe(true);
+  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog))
+    .toEqual([{ op: 'update.install', request: expect.stringMatching(UUID) }]);
 });
 
 test('a restart cap shows quiet wording before the press, never a deadline or an allowance', async ({ page }) => {

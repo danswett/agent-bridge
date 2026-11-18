@@ -412,7 +412,7 @@ test('a missing update state clears its capped note before the card returns with
 });
 
 test('only an explicit settled download failure offers a retry, never a held check or an unknown step', () => {
-  const failed = { ...found, last: { outcome: 'failed', step: 'downloading' } };
+  const failed = { ...found, last: { outcome: 'failed', step: 'downloading', to: found.available } };
   assert.ok(canRetryDownload(readUpdateState(failed)));
   for (const change of [
     { installer: false }, { available: null }, { phase: 'downloading' }, { phase: 'waiting' },
@@ -422,6 +422,26 @@ test('only an explicit settled download failure offers a retry, never a held che
   ]) {
     assert.equal(canRetryDownload(readUpdateState({ ...failed, ...change })), false);
   }
+});
+
+test('a recovered download retains its facts and no longer offers a retry', () => {
+  for (const bytes of [0, 42, 2 ** 53]) {
+    const state = readUpdateState({ ...found, bytes, total: bytes, downloaded: true, last: { outcome: 'failed', step: 'downloading', to: found.available } });
+    assert.deepEqual([state.bytes, state.total, state.downloaded], [bytes, bytes, true]);
+    assert.equal(canRetryDownload(state), false);
+  }
+  for (const bytes of [-1, 1.5, '42', Infinity, 2 ** 63]) {
+    const state = readUpdateState({ bytes, total: bytes });
+    assert.deepEqual([state.bytes, state.total, state.downloaded], [null, null, null]);
+  }
+});
+
+test('a download retry stays bound to its failed release', () => {
+  const last = { outcome: 'failed', step: 'downloading', to: found.available };
+  for (const change of [{ available: '0.6.0' }, { last: { ...last, to: null } }]) {
+    assert.equal(canRetryDownload(readUpdateState({ ...found, last, ...change })), false);
+  }
+  assert.equal(canRetryDownload(readUpdateState({ ...found, last, downloaded: false })), true);
 });
 
 test('cap fallback is single flight without a signing key and preserves a refused install result', async () => {
