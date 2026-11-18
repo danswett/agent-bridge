@@ -114,8 +114,9 @@ public sealed partial class RemoteAuthorizationTests : IAsyncLifetime
             Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "1.0", new string('a', 64), new string('b', 64))).ToArray(),
             Guid.NewGuid(), 17, new string('c', 64));
         internal Action? BeforeRead;
+        internal Action? BeforeNotification;
         public GateRunEnrollment? Read() { BeforeRead?.Invoke(); return Value; }
-        internal void Change(GateRunEnrollment? value) { Value = value; Changed?.Invoke(); }
+        internal void Change(GateRunEnrollment? value) { Value = value; BeforeNotification?.Invoke(); Changed?.Invoke(); }
     }
 
     async Task<(SecureChannel Channel, AgentAuditLog Audit, GateEnrollmentFixture Enrollment)> GateAsync(TimeProvider? clock = null)
