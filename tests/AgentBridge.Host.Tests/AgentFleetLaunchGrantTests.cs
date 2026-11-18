@@ -135,15 +135,21 @@ public sealed class AgentFleetLaunchGrantTests : IAsyncLifetime
         await Assert.ThrowsAsync<HostErrorException>(() => Call(new { action = "revoke", grant = id }));
     }
 
-    [Fact]
-    public async Task Expiry_is_observed_on_the_next_read_and_an_expired_issue_is_refused()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task Expiry_is_observed_and_expiry_without_a_persistable_future_is_refused(int ticks)
     {
+        time.Advance(TimeSpan.FromTicks(1));
         var request = Issue();
         await Call(request);
         time.Advance(TimeSpan.FromHours(1));
         Assert.Equal("expired", (await Call(new { action = "read" })).GetProperty("state").GetString());
         await Assert.ThrowsAsync<HostErrorException>(() => Call(request));
+        await Assert.ThrowsAsync<HostErrorException>(() => Call(new { action = "issue", scope = "session.launch",
+            role = "fleet", principal = "fleet-launcher", expiresAt = time.GetUtcNow().AddTicks(ticks).ToString("O") }));
         Assert.Equal("expired", (await Call(new { action = "read" })).GetProperty("state").GetString());
+        Assert.Equal("active", (await Call(Issue())).GetProperty("state").GetString());
     }
 
     [Theory]

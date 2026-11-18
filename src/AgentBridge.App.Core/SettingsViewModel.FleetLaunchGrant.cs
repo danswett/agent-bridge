@@ -1,4 +1,6 @@
+using System.Text.Json;
 using AgentBridge.Local;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
@@ -17,7 +19,7 @@ public sealed partial class SettingsViewModel
     public Task FleetLaunchGrantAsync(string action) => RunAsync(async () =>
     {
         if (!HostRunning || !host.Can(HostOps.FleetLaunchGrant)) { throw new InvalidOperationException("This host does not offer fleet-launch grants."); }
-        var instance = host.HostInstance;
+        var instance = host.HostInstance ?? throw new InvalidOperationException("The host instance is not known yet.");
         object request = action switch
         {
             "read" => new { action },
@@ -26,7 +28,9 @@ public sealed partial class SettingsViewModel
             _ => throw new InvalidOperationException("Read the existing grant before revoking it."),
         };
         fleetGrant = null;
-        var result = await host.CallAsync<AgentFleetLaunchGrantState>(HostOps.FleetLaunchGrant, request);
+        var result = (await host.CallAsync(HostOps.FleetLaunchGrant, request, null,
+            knownHost: true, onlyTo: instance, out _)).Deserialize<AgentFleetLaunchGrantState>(ProtocolJson.Options)
+            ?? throw new HostErrorException($"{HostOps.FleetLaunchGrant} returned nothing");
         if (instance != host.HostInstance) { throw new HostRestartedException(); }
         fleetGrant = result;
         fleetGrantHost = instance;

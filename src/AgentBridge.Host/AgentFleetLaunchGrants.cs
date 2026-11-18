@@ -15,7 +15,7 @@ internal static class AgentFleetLaunchGrants
         if (!Fields(data, "action", "principal", "scope", "role", "expiresAt", "grant"))
         { throw Refused("invalid fleet-launch grant request"); }
         var current = Read(folder, time);
-        var now = time.GetUtcNow();
+        var now = AtWirePrecision(time.GetUtcNow());
         AgentFleetLaunchGrant next;
         switch (Text(data, "action"))
         {
@@ -25,10 +25,10 @@ internal static class AgentFleetLaunchGrants
                     || Text(data, "role") != "fleet")
                 { throw Refused("only session.launch for the fleet-launcher principal and fleet roles may be granted"); }
                 if (!data.TryGetProperty("expiresAt", out var expiry) || expiry.ValueKind != JsonValueKind.String
-                    || !expiry.TryGetDateTimeOffset(out var until) || until <= now)
+                    || !expiry.TryGetDateTimeOffset(out var until) || AtWirePrecision(until) <= now)
                 { throw Refused("a future expiresAt timestamp is required"); }
                 if (current.State == "active") { throw Refused("revoke the active fleet-launch grant before issuing another"); }
-                next = new(Guid.NewGuid().ToString("D"), "fleet-launcher", "session.launch", "fleet", now, until);
+                next = new(Guid.NewGuid().ToString("D"), "fleet-launcher", "session.launch", "fleet", now, AtWirePrecision(until));
                 break;
             case "revoke" when Fields(data, "action", "grant"):
                 if (current.Grant is not { } grant || Text(data, "grant") != grant.Id)
@@ -67,6 +67,8 @@ internal static class AgentFleetLaunchGrants
 
     static AgentFleetLaunchGrantState State(AgentFleetLaunchGrant grant, DateTimeOffset now) =>
         new(grant.RevokedAt is not null ? "revoked" : grant.ExpiresAt <= now ? "expired" : "active", grant);
+    static DateTimeOffset AtWirePrecision(DateTimeOffset value) =>
+        DateTimeOffset.FromUnixTimeMilliseconds(value.ToUnixTimeMilliseconds());
     static string? Text(JsonElement data, string name) =>
         data.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     static bool Fields(JsonElement data, params string[] allowed) => data.ValueKind == JsonValueKind.Object
