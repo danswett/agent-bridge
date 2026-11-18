@@ -85,10 +85,11 @@ public class ReplyTests
     {
         var request = Reply("go on");
         Assert.Equal(JsonSerializer.Serialize(request, ProtocolJson.Options),
-            JsonSerializer.Serialize(request with { RequireIdle = true, StillCurrent = () => false }, ProtocolJson.Options));
+            JsonSerializer.Serialize(request with { RequireIdle = true, StillCurrent = () => false, RetryFailureId = "host-only" }, ProtocolJson.Options));
         var read = JsonSerializer.Deserialize<ReplyRequest>(
-            """{"id":"s1","request":"r","text":"go on","requireIdle":true,"stillCurrent":{"forged":true}}""", ProtocolJson.Options)!;
+            """{"id":"s1","request":"r","text":"go on","requireIdle":true,"stillCurrent":{"forged":true},"retryFailureId":"forged"}""", ProtocolJson.Options)!;
         Assert.False(read.RequireIdle);
         Assert.Null(read.StillCurrent);
+        Assert.Null(read.RetryFailureId);
     }
 }

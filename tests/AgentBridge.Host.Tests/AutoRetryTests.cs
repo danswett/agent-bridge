@@ -195,12 +195,14 @@ public sealed class AutoRetryTests
     }
 
     [Theory]
-    [InlineData(null, 0)]
-    [InlineData("helper", 1)]
-    public async Task Only_a_main_turn_start_withdraws_retry_in_a_wide_input_box(string? agentId, int keys)
+    [InlineData(null, 0, false)]
+    [InlineData("helper", 1, false)]
+    [InlineData(null, 0, true)]
+    [InlineData("helper", 1, true)]
+    public async Task Only_a_main_turn_start_withdraws_retry_in_a_wide_input_box(string? agentId, int keys, bool crlf)
     {
         await using var h = new Harness(realReply: true) { Wide = true };
-        await h.Error(Empty);
+        await h.Error(Empty, crlf);
         await h.Watch.TickAsync();
         h.BeforeKeys = () => h.Unprojected("assistant.turn_start", agentId);
         h.F.Time.Advance(TimeSpan.FromSeconds(30));
@@ -305,16 +307,16 @@ public sealed class AutoRetryTests
                 new ReplyOptions { CopilotHome = F.CopilotHome, PlatformSupported = true, PreRead = false, Time = F.Time });
             Watch = new(Source, this, () => Enabled, F.Time, Log.Add, _ => Held, serving);
         }
-        public async Task Error(string error)
+        public async Task Error(string error, bool crlf = false)
         {
             if (error == "trust") { Held = true; error = Empty; }
             Fixture.Append(events, Copilot.User("continue", at++), Copilot.TurnStart(at++));
-            Fixture.Append(events, error switch
+            Fixture.Append(events, (error switch
             {
                 "form" => Copilot.ToolStart("q", "ask_user", new { message = "Which?", requestedSchema = new { properties = new { pick = new { type = "boolean" } } } }, at++),
                 "permission" => Copilot.Event("permission.requested", new { requestId = "r", permissionRequest = new { kind = "shell" } }, at++),
                 _ => Copilot.Event("session.error", JsonSerializer.Deserialize<JsonElement>(error), at++),
-            });
+            }) + (crlf ? "\r" : ""));
             await Source.RefreshAsync();
         }
         public bool Available => true;

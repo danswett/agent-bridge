@@ -7,7 +7,7 @@ namespace AgentBridge.Host.Delivery;
 
 internal enum RetryReason { Auto, Owner }
 internal enum RetryStop { None, Changed, Ineligible, Expired, Exhausted, Cancelled, Failed }
-internal sealed record RetryObservation(JsonElement Error, DateTimeOffset ErrorAt, SessionProcess Process, long ActivityVersion, bool CanReply, bool? Retryable = null);
+internal sealed record RetryObservation(JsonElement Error, DateTimeOffset ErrorAt, SessionProcess Process, long ActivityVersion, bool CanReply, bool? Retryable = null, string? FailureId = null);
 internal sealed record RetryAttempt(int Number, DateTimeOffset At, RetryReason Reason, AnswerOutcome? Outcome);
 
 internal sealed class RetryEpisode
@@ -80,6 +80,7 @@ internal sealed class RetryEpisode
             {
                 Id = session.ToString("D"), Request = request.ToString("D"), Text = "continue", RequireIdle = true,
                 StillCurrent = () => Current(index + 1, cancellation),
+                RetryFailureId = current?.FailureId,
             }, cancellationToken: cancellation).ConfigureAwait(false);
             lock (sync)
             {

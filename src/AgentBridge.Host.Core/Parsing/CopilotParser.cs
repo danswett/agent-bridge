@@ -205,7 +205,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 if (AgentErrors.Copilot(data, Json.Time(e, "timestamp") ?? Time.GetUtcNow()) is { } failure)
                 {
                     _turnError = failure.Message;
-                    Failed(failure);
+                    Failed(failure with { RetryFailureId = failure.AutoRetryable ? RecordId : null });
                 }
                 break;
             case "assistant.turn_start" when !IsSubagent(e):
@@ -619,7 +619,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     _turnError = attention.Message;
                     S.FailTurn(at);
                     _inAssistantTurn = false;
-                    Failed(attention);
+                    Failed(attention with { RetryFailureId = attention.AutoRetryable ? RecordId : null });
                     _turnAskedForTools = false;
                     break;
                 }

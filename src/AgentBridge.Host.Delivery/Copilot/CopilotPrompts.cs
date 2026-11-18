@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.Host.Core.Conversation;
 using AgentBridge.Host.Core.Parsing;
 
 namespace AgentBridge.Host.Delivery.Copilot;
@@ -10,6 +11,7 @@ public sealed record CopilotInputState(bool Readable, bool Asking, long ScannedT
 {
     internal long RetryGeneration { get; init; }
     internal bool Retryable { get; init; }
+    internal string? RetryFailureId { get; init; }
 }
 
 // A prompt the person gave: a main-agent user.message with no other source, the offset its
@@ -45,6 +47,7 @@ public sealed class CopilotInput(string path)
     long scannedTo;
     long retryGeneration;
     bool retryable;
+    string? retryFailureId;
 
     public string Path => path;
 
@@ -61,6 +64,7 @@ public sealed class CopilotInput(string path)
                 scannedTo = 0;
                 retryGeneration++;
                 retryable = false;
+                retryFailureId = null;
             }
             if (Jsonl.Lines(path, scannedTo, skipFirst: false, Line) is not { } to)
             {
@@ -70,7 +74,7 @@ public sealed class CopilotInput(string path)
             scannedTo = to;
             var fresh = asks.Count > 0 || permissions.Count > 0;
             return new CopilotInputState(true, fresh || stale.Count > 0, scannedTo, Resumed: !fresh && stale.Count > 0)
-                { RetryGeneration = retryGeneration, Retryable = retryable };
+                { RetryGeneration = retryGeneration, Retryable = retryable, RetryFailureId = retryFailureId };
         }
     }
 
@@ -79,21 +83,24 @@ public sealed class CopilotInput(string path)
 
     void Line(ReadOnlySpan<byte> bytes, long start)
     {
-        var ask = bytes.IndexOf("\"type\":\"tool.execution_start\""u8) >= 0 && bytes.IndexOf("\"ask_user\""u8) >= 0;
-        var permission = bytes.IndexOf("\"type\":\"permission."u8) >= 0;
-        var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0;
-        var answer = (asks.Count > 0 || stale.Count > 0) && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
-        var typed = bytes.IndexOf("\"type\":\"user.message\""u8) >= 0;
-        var failure = bytes.IndexOf("\"type\":\"session.error\""u8) >= 0;
-        if (!ask && !permission && !ending && !answer && !typed && !failure) { return; }
+        var ask = bytes.IndexOf("\"tool.execution_start\""u8) >= 0 && bytes.IndexOf("\"ask_user\""u8) >= 0;
+        var permission = bytes.IndexOf("\"permission."u8) >= 0;
+        var ending = bytes.IndexOf("\"abort\""u8) >= 0 || bytes.IndexOf("\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"session.resume\""u8) >= 0;
+        var answer = (asks.Count > 0 || stale.Count > 0) && (bytes.IndexOf("\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"human_response.recorded\""u8) >= 0);
+        var typed = bytes.IndexOf("\"user.message\""u8) >= 0;
+        var failure = bytes.IndexOf("\"session.error\""u8) >= 0;
+        var starting = bytes.IndexOf("\"assistant.turn_start\""u8) >= 0;
+        if (!ask && !permission && !ending && !answer && !typed && !failure && !starting) { return; }
         if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
         using (e.Doc)
         {
             var data = e.Data;
-            if (e.AgentId is null && e.Type is ("abort" or "session.shutdown" or "session.resume" or "user.message" or "session.error"))
+            if (e.AgentId is null && e.Type is ("abort" or "session.shutdown" or "session.resume" or "user.message" or "session.error" or "assistant.turn_start"))
             {
                 retryGeneration++;
                 retryable = e.Type == "session.error" && CopilotTurnErrors.CanRetry(data);
+                // TranscriptTail removes a CR before hashing the same record.
+                retryFailureId = retryable ? TurnIds.Of(bytes.Length > 0 && bytes[^1] == '\r' ? bytes[..^1] : bytes) : null;
             }
             switch (e.Type)
             {

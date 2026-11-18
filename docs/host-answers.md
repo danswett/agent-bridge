@@ -78,6 +78,10 @@ Retry delivery also binds the transcript's main-event generation and retryabilit
 re-read inside the injector's final-effect callback. An abort, shutdown, resume,
 new prompt or changed failure withdraws that retry even before SessionSource
 projects the new transcript records. Ordinary replies keep their existing rules.
+The admitted failure's canonical transcript-record identity travels on host-only,
+JSON-ignored state from parser to delivery; the first read cannot adopt a replacement
+failure, even at the same timestamp. Main-agent turn starts also withdraw retry
+eligibility, including before the session projection catches up; delegate starts do not.
 `sessions.autoRetry` defaults on and is read fresh, including at the final-effect
 fence. False, malformed config, read-only delivery, G5, questions, permission/trust
 prompts, auth, quota (including 402), and unrecognized failures never auto-send.

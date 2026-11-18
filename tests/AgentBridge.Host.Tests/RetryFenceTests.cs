@@ -117,7 +117,8 @@ public sealed class RetryFenceTests
             var s = source.Get(Id);
             return s is null || source.ProcessOf(Id) is not { } process ? null
                 : new(JsonSerializer.Deserialize<JsonElement>(Empty), f.Time.GetUtcNow(), process, source.Revision,
-                    s.Status == SessionStatus.Idle && s.Question is null && s.Attention?.Kind == AttentionKind.Error);
+                    s.Status == SessionStatus.Idle && s.Question is null && s.Attention?.Kind == AttentionKind.Error,
+                    FailureId: s.Attention?.RetryFailureId);
         }
         public async Task Change(string change, CancellationTokenSource? cancel = null)
         {
