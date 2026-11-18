@@ -1142,6 +1142,14 @@ separate, explicit step ([migration.md](migration.md)).
 
 ## The app
 
+**Native named-field forms** ([row 17, #2400](https://github.com/danswett/agent-bridge/issues/2400)):
+changed field limits rebuild the form even when its question id stays the same.
+Previously typed words remain on the card, not selected for the changed question;
+new answers are checked against the new limits. Equal constraints read again from
+JSON keep the existing controls and draft. Focused five-field model tests cover
+named choice, boolean, Unicode text, number and multi-select values and local
+refusals; live client/transcript acceptance remains separate.
+
 **Closed-question projection** (#1329, model slice): `HistoryDraw.Rows` can opt in to
 mixed response/question items with a per-session closed-record cache and the current
 question's id. It retains the latest 20 records in host order, including the latest
