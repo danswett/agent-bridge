@@ -410,7 +410,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      minutes. Each `pwa-ui` leg, `pwa-e2e` and `spikes-linux` downloads and offline-installs
      Playwright's system packages through `.github/actions/playwright-system-packages`.
      Update attempts have a 60-second bound; downloads get 180 seconds per attempt,
-     independently of cache state. An Azure timeout switches to the runner's Canonical fallback,
+     on cache misses. An Azure timeout switches to the runner's Canonical fallback,
      `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
      100 kB/s, and main run 41952998347 `pwa-e2e`). Before updating apt, a five-second Azure
      DNS probe switches immediately if lookup fails; an Azure DNS error during update or
@@ -419,20 +419,21 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      Updates get an initial attempt plus three retries with 15/30/60-second backoff for
      classified network errors and HTTP 429; this also admits transient errors from the
      runner's existing `https://packages.microsoft.com/` feed, only during updates.
-     Exhausted throttling or Microsoft-feed errors fail closed, even with cached debs,
+     Exhausted throttling or Microsoft-feed errors fail closed on the cold path,
      without switching Ubuntu mirrors. Mixed signature, hash, lock or other fatal errors
      still fail immediately. Canonical gets the same bounded network
      retries, then fails loudly with the attempt log; it never switches back to Azure.
-     A non-forced debs cache hit uses 20-second update attempts within a two-minute whole-update
-     budget. Only classified network exhaustion or a timeout without other errors warns
-     and skips the network download, then requires `apt-get install --no-download`;
-     offline install failure is fatal, without a network fallback. After failed updates only,
-     the hit restores its matching signed indexes with sudo before installing; successful
-     updates keep their fresh indexes. Debs without indexes count as a miss. The versioned
-     paired key includes the runner image, Playwright lockfile and browsers. Only successful
+     A non-forced debs cache hit restores matching signed indexes and debs before any DNS
+     probe or update. Apt's `--print-uris` with SHA256 and an empty planning archive directory
+     supplies every required archive's expected size and hash without downloading. Each
+     required deb must match before `apt-get install --no-download`; missing archives,
+     integrity or installation failures are fatal, without a network fallback.
+     Debs without indexes count as a miss. The versioned paired key includes runner OS,
+     architecture, image version, the exact dry-run package-list hash and ref. Restore keys
+     allow other refs' accessible entries only for that same image and package list. Only successful
      cold runs save indexes and debs, on any ref; PR entries are scoped to that PR, and main
-     must seed its own entry. Cold seeding needs one successful Ubuntu update. Failed-update
-     restoration is proven offline; hosted proof needs a real failed update meeting a hit.
+     must seed its own entry. Cold seeding needs one successful Ubuntu update. Offline cache
+     use is covered by command fakes; hosted cache-hit proof is still required.
      The four subsequent browser
      installs omit `--with-deps`, so they cannot trigger another apt update.
      Missing, corrupt or unrecognized errors fail at once, even alongside network errors

@@ -42,10 +42,17 @@ EOF
 # download that finishes prints APT_GETS, apt's "Get:" lines for what it fetched, if set.
 cat > "$work/bin/apt-get" <<'EOF'
 #!/usr/bin/env bash
+if [ "$1" = -o ] && [[ "$2" == Dir::Cache::archives=* ]]; then
+  plan=${2#Dir::Cache::archives=}
+  compgen -G "$plan/*.deb" > /dev/null && exit 99
+  shift 2
+fi
 echo "$*" >> "$APT_LOG"
 case "$*" in
   *--print-uris*)
+    [ -n "${plan:-}" ] || exit 99
     [ -z "${APT_VERIFY_ERROR:-}" ] || { echo "$APT_VERIFY_ERROR" >&2; exit 100; }
+    if [ -n "${APT_VERIFY_URI:-}" ]; then printf '%s\n' "$APT_VERIFY_URI"; exit 0; fi
     hash=$(printf 'valid deb\n' | sha256sum); hash=${hash%% *}
     printf "'https://archive.ubuntu.com/cached.deb' cached.deb 10 SHA256:%s\n" "$hash"
     exit 0 ;;
@@ -122,7 +129,7 @@ reset() {
   unset APT_ERROR APT_FAIL_COUNT APT_AZURE_ONLY APT_DOWNLOAD_TIMEOUTS
   unset APT_DNS_EXIT APT_DNS_OUTPUT APT_UPDATE_ERROR APT_UPDATE_FAIL_COUNT
   unset DEBS_CACHE_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
-  unset APT_VERIFY_ERROR
+  unset APT_VERIFY_ERROR APT_VERIFY_URI
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
 # download.sh is given CHECK_BROWSERS, chromium and webkit unless set.
@@ -353,8 +360,13 @@ check "a restored cache verifies hashes and installs offline without DNS, update
 [ ! -s "$TIMEOUT_LOG" ] && [ "$(cat "$PLAYWRIGHT_APT_LISTS/cache_InRelease")" = cached-signature ] \
   || { echo "FAIL: an offline hit probed DNS or failed to restore its signed snapshot"; failures=$((failures + 1)); }
 reset "$canonical"; export DEBS_CACHE_HIT=true
-printf 'corrupt deb\n' > "$HOME/.cache/playwright-apt-debs/cached.deb"
+printf 'evil! deb\n' > "$HOME/.cache/playwright-apt-debs/cached.deb"
 check "a corrupt cached deb fails before installation without a network fallback" 1 "$verify" "$canonical"
+for uri in "'https://archive.ubuntu.com/cached.deb' missing.deb 10 SHA256:$(printf '0%.0s' {1..64})" \
+  "'https://archive.ubuntu.com/cached.deb' cached.deb 10 MD5Sum:1234"; do
+  reset "$canonical"; export DEBS_CACHE_HIT=true APT_VERIFY_URI="$uri"
+  check "a missing cached archive or weak digest fails closed without network" 1 "$verify" "$canonical"
+done
 reset "$canonical"; export DEBS_CACHE_HIT=true
 export APT_VERIFY_ERROR='E: The following signatures could not be verified'
 check "an apt verification error on a hit fails without downloading or installing" 100 "$verify" "$canonical"
@@ -376,7 +388,7 @@ for hit in false true; do
   reset "$canonical"; export DEBS_CACHE_HIT="$hit" APT_DOWNLOAD_TIMEOUTS=2
   [ "$hit" != true ] || rm "$HOME/.cache/playwright-apt-lists/cache_Packages"
   unset PLAYWRIGHT_APT_LIMIT
-  check "a cache hit of $hit gives slow downloads their own three-minute attempts and recovers on the third" \
+  check "an incomplete cache ($hit) retains three-minute downloads and recovers on attempt three" \
     0 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$canonical"
   [ "$(grep -c -- '^--kill-after=30s 180s apt-get install .*--download-only' "$TIMEOUT_LOG")" = 3 ] &&
     [ "$(cat "$SLEEP_LOG")" = $'5\n20' ] \
@@ -388,19 +400,19 @@ done
 reset "$canonical"; export DEBS_CACHE_HIT=true APT_DOWNLOAD_TIMEOUTS=3
 rm "$HOME/.cache/playwright-apt-lists/cache_Packages"
 unset PLAYWRIGHT_APT_LIMIT
-check "three download timeouts remain fatal on a cache hit without installing or saving" \
+check "three download timeouts remain fatal on an incomplete cache without installing or saving" \
   124 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$canonical"
 grep -q '^::error::apt download failed (exit 124)' "$work/out" && [ ! -s "$GITHUB_OUTPUT" ] \
   || { echo "FAIL: exhausted downloads did not fail loudly without authorizing a cache save"; failures=$((failures + 1)); }
 export PLAYWRIGHT_APT_LIMIT=1s
 reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_DNS_EXIT=1 APT_EXPECT_INDEX=cached
 export APT_UPDATE_ERROR="E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Temporary failure resolving 'archive.ubuntu.com'"
-check "a cache hit survives exhausted update DNS failures only by completing the offline install" \
+check "a cache hit avoids broken DNS and completes the verified offline install" \
   0 "$(printf '%s\n%s' "$verify" "$cached")" "$azure" "$canonical"
 [ ! -s "$TIMEOUT_LOG" ] \
   || { echo "FAIL: cached packages attempted network access"; failures=$((failures + 1)); }
 [ "$(cat "$PLAYWRIGHT_APT_LISTS/cache_InRelease" 2>/dev/null)" = cached-signature ] && [ ! -s "$GITHUB_OUTPUT" ] \
-  || { echo "FAIL: failed-update recovery did not restore the signed snapshot without saving"; failures=$((failures + 1)); }
+  || { echo "FAIL: offline restoration did not preserve the signed snapshot without saving"; failures=$((failures + 1)); }
 reset "$canonical"; export DEBS_CACHE_HIT=true APT_UPDATE_ERROR='E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Connection failed'
 rm "$HOME/.cache/playwright-apt-lists/cache_Packages" "$HOME/.cache/playwright-apt-lists/cache_InRelease"
 check "a debs hit without cached lists is a miss and cannot mask a failed update" 100 "$(printf 'update\nupdate\nupdate\nupdate')" "$canonical"
@@ -410,7 +422,7 @@ export APT_UPDATE_ERROR="E: Failed to fetch https://archive.ubuntu.com/ubuntu/di
 check "without a cache hit exhausted update DNS failures remain fatal" \
   100 "$(printf 'update\nupdate\nupdate\nupdate')" "$canonical"
 reset "$canonical"; export DEBS_CACHE_HIT=true APT_TIMEOUT_EXIT=124 APT_EXPECT_INDEX=cached
-check "a cache hit survives four update timeouts only by completing the offline install" \
+check "a cache hit avoids update timeouts and completes the verified offline install" \
   0 "$(printf '%s\n%s' "$verify" "$cached")" "$canonical"
 reset "$canonical"; export DEBS_CACHE_HIT=true APT_UPDATE_SLOW=all PLAYWRIGHT_APT_UPDATE_BUDGET=3 PLAYWRIGHT_APT_LIMIT=30s
 budget_start=$SECONDS; code=0
@@ -419,7 +431,7 @@ if [ "$code" -eq 0 ] && [ "$((SECONDS - budget_start))" -le 8 ] &&
   [ "$(cat "$APT_LOG")" = "$(printf '%s\n%s' "$verify" "$cached")" ] && [ ! -s "$TIMEOUT_LOG" ]; then
   echo "ok: a cache hit avoids the entire update phase"
 else
-  echo "FAIL: the whole-update deadline did not preserve the mandatory offline install"; cat "$work/out"; failures=$((failures + 1))
+  echo "FAIL: the offline hit attempted an update or omitted installation"; cat "$work/out"; failures=$((failures + 1))
 fi
 export PLAYWRIGHT_APT_LIMIT=1s
 for fatal in 'Hash Sum mismatch' 'The following signatures could not be verified' 'Unable to locate package missing' 'Could not get lock /var/lib/apt/lists/lock'; do
@@ -432,7 +444,7 @@ export APT_UPDATE_ERROR='W: GPG error: https://archive.ubuntu.com noble InReleas
 check "a cache hit cannot ignore an exit-zero signature warning" 100 update "$canonical"
 reset "$canonical"; export DEBS_CACHE_HIT=true APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Unable to fetch some archives'
 export APT_UPDATE_ERROR='E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Connection failed'
-check "offline install failure after a cache-hit update warning is fatal without network fallback" \
+check "offline install failure on a hit is fatal without network fallback" \
   100 "$(printf '%s\n%s' "$verify" "$cached")" "$canonical"
 reset "$azure" "$canonical"; export APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Sub-process /usr/bin/dpkg returned an error code (1)'
 check "an offline install failure after downloading packages fails the step" \
