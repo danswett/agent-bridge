@@ -6,7 +6,7 @@
     "generator": "tools/ha-contract/Export-HaContract.ps1",
     "note": "Recorded by running agent-ha-bridge's own functions with a recording transport. Regenerate; do not edit by hand."
   },
-  "machine": "DSWETT-DEV-VM1",
+  "machine": "machine-a",
   "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20",
   "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
   "defaults": {
@@ -85,7 +85,7 @@
           "interruption-level": "time-sensitive",
           "notification_icon": "mdi:chat-question",
           "notification_icon_color": "#FFFFFF",
-          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "subtitle": "machine-a - waiting on you",
           "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
           "url": "/agent-decisions/decision"
         },
@@ -199,7 +199,7 @@
           "interruption-level": "time-sensitive",
           "notification_icon": "mdi:chat-question",
           "notification_icon_color": "#FFFFFF",
-          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "subtitle": "machine-a - waiting on you",
           "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
           "url": "/agent-decisions/decision"
         },
@@ -276,7 +276,7 @@
           "interruption-level": "time-sensitive",
           "notification_icon": "mdi:chat-question",
           "notification_icon_color": "#FFFFFF",
-          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "subtitle": "machine-a - waiting on you",
           "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
           "url": "/agent-decisions/decision"
         },
@@ -331,7 +331,7 @@
           "interruption-level": "time-sensitive",
           "notification_icon": "mdi:chat-question",
           "notification_icon_color": "#FFFFFF",
-          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "subtitle": "machine-a - waiting on you",
           "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
           "url": "/agent-decisions/decision"
         },
@@ -379,7 +379,7 @@
           "interruption-level": "time-sensitive",
           "notification_icon": "mdi:chat-question",
           "notification_icon_color": "#FFFFFF",
-          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "subtitle": "machine-a - waiting on you",
           "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
           "url": "/agent-decisions/decision"
         },
@@ -427,7 +427,7 @@
           "interruption-level": "time-sensitive",
           "notification_icon": "mdi:chat-question",
           "notification_icon_color": "#FFFFFF",
-          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "subtitle": "machine-a - waiting on you",
           "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
           "url": "/agent-decisions/decision"
         },
@@ -462,7 +462,7 @@
           "interruption-level": "time-sensitive",
           "notification_icon": "mdi:chat-question",
           "notification_icon_color": "#FFFFFF",
-          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "subtitle": "machine-a - waiting on you",
           "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
           "url": "/agent-decisions/decision"
         },
@@ -510,7 +510,7 @@
           "interruption-level": "time-sensitive",
           "notification_icon": "mdi:chat-question",
           "notification_icon_color": "#FFFFFF",
-          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "subtitle": "machine-a - waiting on you",
           "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
           "url": "/agent-decisions/decision"
         },
@@ -579,7 +579,7 @@
           "interruption-level": "time-sensitive",
           "notification_icon": "mdi:chat-question",
           "notification_icon_color": "#FFFFFF",
-          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "subtitle": "machine-a - waiting on you",
           "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
           "url": "/agent-decisions/decision"
         },
@@ -618,7 +618,7 @@
           "interruption-level": "time-sensitive",
           "notification_icon": "mdi:chat-question",
           "notification_icon_color": "#FFFFFF",
-          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "subtitle": "machine-a - waiting on you",
           "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
           "url": "/agent-decisions/decision"
         },

@@ -8,7 +8,7 @@
   },
   "sessionId": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20",
   "sessionName": "Copilot: Fixture session",
-  "machine": "DSWETT-DEV-VM1",
+  "machine": "machine-a",
   "constants": {
     "separator": " + ",
     "emptyLabel": "(none)",
@@ -47,7 +47,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:comment-question-outline",
@@ -83,7 +83,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -113,7 +113,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -143,7 +143,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -173,7 +173,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -203,7 +203,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -233,7 +233,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -263,7 +263,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -293,7 +293,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -323,7 +323,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -353,7 +353,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -383,7 +383,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -413,7 +413,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -494,7 +494,7 @@
             "choices": [],
             "decision_id": "decision-1",
             "field_count": 0,
-            "machine": "DSWETT-DEV-VM1",
+            "machine": "machine-a",
             "mode": "freeform",
             "multi_field": false,
             "question": "What should the release be called?",
@@ -535,7 +535,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:comment-question-outline",
@@ -574,7 +574,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -604,7 +604,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -634,7 +634,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -664,7 +664,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -694,7 +694,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -724,7 +724,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -754,7 +754,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -784,7 +784,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -814,7 +814,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -844,7 +844,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -874,7 +874,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -904,7 +904,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -989,7 +989,7 @@
             ],
             "decision_id": "decision-1",
             "field_count": 0,
-            "machine": "DSWETT-DEV-VM1",
+            "machine": "machine-a",
             "mode": "multiple_choice",
             "multi_field": false,
             "question": "Codex wants to run:\n\ngit push",
@@ -1027,7 +1027,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:comment-question-outline",
@@ -1063,7 +1063,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1093,7 +1093,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1123,7 +1123,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1153,7 +1153,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1183,7 +1183,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1213,7 +1213,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1243,7 +1243,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1273,7 +1273,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1303,7 +1303,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1333,7 +1333,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1363,7 +1363,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1393,7 +1393,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1474,7 +1474,7 @@
             "choices": [],
             "decision_id": "decision-1",
             "field_count": 0,
-            "machine": "DSWETT-DEV-VM1",
+            "machine": "machine-a",
             "mode": "freeform",
             "multi_field": false,
             "question": "QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ\n\n_(truncated - see terminal)_",
@@ -1532,7 +1532,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:comment-question-outline",
@@ -1569,7 +1569,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1601,7 +1601,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1631,7 +1631,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1661,7 +1661,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1691,7 +1691,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1721,7 +1721,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1751,7 +1751,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1781,7 +1781,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1811,7 +1811,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1841,7 +1841,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1871,7 +1871,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1901,7 +1901,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -1986,7 +1986,7 @@
             "decision_id": "decision-1",
             "field_1_label": "Release",
             "field_count": 1,
-            "machine": "DSWETT-DEV-VM1",
+            "machine": "machine-a",
             "mode": "multiple_choice",
             "multi_field": true,
             "question": "Cut the release now?",
@@ -2045,7 +2045,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:comment-question-outline",
@@ -2082,7 +2082,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2114,7 +2114,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2144,7 +2144,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2174,7 +2174,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2204,7 +2204,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2234,7 +2234,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2264,7 +2264,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2294,7 +2294,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2324,7 +2324,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2354,7 +2354,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2384,7 +2384,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2414,7 +2414,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2499,7 +2499,7 @@
             "decision_id": "decision-1",
             "field_1_label": "Push now",
             "field_count": 1,
-            "machine": "DSWETT-DEV-VM1",
+            "machine": "machine-a",
             "mode": "multiple_choice",
             "multi_field": true,
             "question": "Push the branch?",
@@ -2549,7 +2549,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:comment-question-outline",
@@ -2586,7 +2586,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2616,7 +2616,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2646,7 +2646,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2676,7 +2676,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2706,7 +2706,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2736,7 +2736,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2766,7 +2766,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2796,7 +2796,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2826,7 +2826,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2856,7 +2856,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2886,7 +2886,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2916,7 +2916,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -2998,7 +2998,7 @@
             "decision_id": "decision-1",
             "field_1_label": "Name",
             "field_count": 1,
-            "machine": "DSWETT-DEV-VM1",
+            "machine": "machine-a",
             "mode": "multiple_choice",
             "multi_field": true,
             "question": "What should it be called?",
@@ -3099,7 +3099,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:comment-question-outline",
@@ -3136,7 +3136,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3168,7 +3168,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3200,7 +3200,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3246,7 +3246,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3300,7 +3300,7 @@
             "field_3_separator": " + ",
             "field_4_label": "Anything else?",
             "field_count": 4,
-            "machine": "DSWETT-DEV-VM1",
+            "machine": "machine-a",
             "mode": "multiple_choice",
             "multi_field": true,
             "question": "Set up the repository\n\n*Type **Anything else?** in the Reply box, choose the rest above, then press **Send** beside the box - only it carries what you typed. Nothing to add? Press **Send answer**.*",
@@ -3373,7 +3373,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:comment-question-outline",
@@ -3410,7 +3410,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3567,7 +3567,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3597,7 +3597,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3627,7 +3627,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3657,7 +3657,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3687,7 +3687,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3759,7 +3759,7 @@
             ],
             "field_1_separator": " + ",
             "field_count": 1,
-            "machine": "DSWETT-DEV-VM1",
+            "machine": "machine-a",
             "mode": "multiple_choice",
             "multi_field": true,
             "question": "Which follow-ups?",
@@ -3820,7 +3820,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:comment-question-outline",
@@ -3857,7 +3857,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3896,7 +3896,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3926,7 +3926,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3956,7 +3956,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -3986,7 +3986,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -4016,7 +4016,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -4046,7 +4046,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -4076,7 +4076,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -4106,7 +4106,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -4136,7 +4136,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -4166,7 +4166,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -4196,7 +4196,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -4290,7 +4290,7 @@
             ],
             "field_1_separator": " + ",
             "field_count": 1,
-            "machine": "DSWETT-DEV-VM1",
+            "machine": "machine-a",
             "mode": "multiple_choice",
             "multi_field": true,
             "question": "Which picks?",
@@ -4348,7 +4348,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:comment-question-outline",
@@ -4385,7 +4385,7 @@
                 "agent_bridge_6fcbab0c1d2e4f50"
               ],
               "manufacturer": "AI CLI bridge",
-              "model": "DSWETT-DEV-VM1",
+              "model": "machine-a",
               "name": "Copilot: Fixture session"
             },
             "icon": "mdi:form-select",
@@ -4430,7 +4430,7 @@
             ],
             "field_1_separator": " + ",
             "field_count": 1,
-            "machine": "DSWETT-DEV-VM1",
+            "machine": "machine-a",
             "mode": "multiple_choice",
             "multi_field": true,
             "question": "Any extras?",
@@ -4461,7 +4461,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:comment-question-outline",
@@ -4504,7 +4504,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -4534,7 +4534,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -4564,7 +4564,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -4594,7 +4594,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -4646,7 +4646,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:comment-question-outline",
@@ -4691,7 +4691,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:comment-question-outline",
@@ -4734,7 +4734,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -4764,7 +4764,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -4794,7 +4794,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -4824,7 +4824,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -4854,7 +4854,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -4884,7 +4884,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -4914,7 +4914,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -4944,7 +4944,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -4974,7 +4974,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -5004,7 +5004,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -5034,7 +5034,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
@@ -5064,7 +5064,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Fixture session"
           },
           "icon": "mdi:form-select",
