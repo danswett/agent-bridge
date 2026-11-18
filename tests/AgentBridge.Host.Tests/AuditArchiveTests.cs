@@ -112,4 +112,20 @@ public sealed class AuditArchiveTests : IDisposable
             Assert.Equal(1, report.Totals.Sum(t => t.Successes));
         });
     }
+
+    [Fact]
+    public void Incomplete_replay_cannot_hide_run_records_from_retention()
+    {
+        Assert.True(Writer().Append(Ordinary()));
+        var file = Path.Combine(Audit, "agents-2026-11-01.jsonl");
+        File.AppendAllText(file, "{\"gate\":");
+        Pair(false);
+        Assert.False(GateAuditProjection.Load(profile).Complete);
+        var before = File.ReadAllBytes(file);
+        clock.Advance(TimeSpan.FromDays(1));
+        Assert.True(Writer(before.Length).Append(Ordinary()));
+        Assert.True(File.Exists(file));
+        Assert.Equal(before, File.ReadAllBytes(file));
+        Assert.Contains("coverage-break", GateAuditProjection.Read(profile, run).IncompleteReasons);
+    }
 }
