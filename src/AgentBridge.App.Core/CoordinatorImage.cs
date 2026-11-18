@@ -25,7 +25,8 @@ internal static class CoordinatorImage
             var resource = pe.PEHeaders.PEHeader?.ResourceTableDirectory
                 ?? throw Bad("Missing PE header.");
             if (resource.RelativeVirtualAddress == 0 && resource.Size == 0) return null;
-            if (resource.RelativeVirtualAddress <= 0 || resource.Size < 16 || resource.Size > 1024 * 1024)
+            // Native apphost resources include icons; retain the bundle verifier's section ceiling.
+            if (resource.RelativeVirtualAddress <= 0 || resource.Size < 16 || resource.Size > 16 * 1024 * 1024)
                 throw Bad("Invalid resource directory.");
             var bytes = pe.GetSectionData(resource.RelativeVirtualAddress).GetContent(0, resource.Size).ToArray();
             var visited = new HashSet<int>();
