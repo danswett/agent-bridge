@@ -373,9 +373,9 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
 ### Updates: Velopack, one version for app and host
 
 **Completion evidence** ([updater follow-up](https://github.com/danswett/agent-bridge/issues/2869)):
-`UpdateApplyCompletion` is a platform-neutral observer seam, not yet wired to apply or
-respawn. Its adapter must track the actual apply operation, including delegated workers,
-and freshly read the active installation's normalized version. A launcher exit, target
+`UpdateApplyCompletion` is wired through the staged current-helper coordinator.
+Its adapter tracks the actual apply operation, including delegated workers,
+and freshly reads the active installation's normalized version. A launcher exit, target
 files appearing, or a cached locator version does not establish worker completion.
 Each run supplies a new operation generation; evidence with another (or no) generation
 is `Unknown`. Adapters must bind it to that operation's actual process, never re-tag a
@@ -391,6 +391,10 @@ not the updater. The asynchronous probe must return promptly and cancel only its
 Results retain the operation step, target/observed versions, actual exit/native error
 code when available, offset-bearing observation time and monotonic elapsed time,
 without copying exception messages or inventing holder PID/path evidence.
+Production always persists one bounded, flushed `coordinator-result.json` in the
+private handoff directory. Failed/Unknown diagnostics label the recorded PID/path
+as the **updater process**, never a lock holder. Only Completed authorizes respawn;
+no result here authorizes automatic retry.
 
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published

@@ -71,16 +71,16 @@ internal static class CoordinatorMode
             {
                 step = "coordinator-run";
                 result = await adapter.RunAsync().ConfigureAwait(false);
-                var payload = JsonSerializer.SerializeToNode(result)!.AsObject();
-                payload["ApplyProcessId"] = adapter.ApplyProcessId;
-                payload["ApplyPath"] = Path.Combine(root, "Update.exe");
-                PrivateFolder.WriteNew(resultPath, JsonSerializer.SerializeToUtf8Bytes(payload));
+                step = "observation-report";
+                new UpdateApplyObserver(resultPath).Report(result, adapter.ApplyProcessId, Path.Combine(root, "Update.exe"));
                 report?.Invoke(result);
             }
             finally
             {
+                var previousStep = step;
                 step = "ownership-drain";
                 await adapter.Ownership.ConfigureAwait(false);
+                step = previousStep;
             }
             return result.End == UpdateApplyEnd.Completed ? 0 : 4;
         }
