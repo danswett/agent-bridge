@@ -66,6 +66,113 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Assert.Equal("the peer role does not allow this operation", response.GetProperty("error").GetString());
     }
 
+    [Fact]
+    public async Task Display_title_changes_from_either_transport_reach_every_client_and_a_later_snapshot()
+    {
+        await source.DisposeAsync();
+        var displayTitles = new SessionDisplayTitles(fixture.Root);
+        source = new SessionSource(fixture.Options(stateFile: Path.Combine(fixture.Root, "sessions-listed.json")),
+            fixture.Processes, TimeProvider.System, presentation: displayTitles.Apply);
+        await source.RefreshAsync();
+        service = new SessionService(source, new MachineInfo(host.Id, "Fixture", "windows", "0.1.0"))
+        { DisplayTitles = displayTitles };
+        host.Hub.Handler = authorization.Handler(service);
+        var b = await PeerAsync("pwa");
+        var c = await PeerAsync("phone");
+        Pin(b, TrustedPeerStore.Person);
+        Pin(c, TrustedPeerStore.Person);
+        var bChannel = await b.Hub.OpenAsync(host.Id, Patience);
+        var cChannel = await c.Hub.OpenAsync(host.Id, Patience);
+        var local = new DisplayTitleChannel();
+        var control = new HostControl(new HostControlOptions
+        {
+            Profile = "test", Folder = fixture.Root, Version = "0.1.0",
+            Machine = new("host", "Fixture", "windows", "0.1.0"), Running = new(false),
+            SignIn = (_, _, _) => throw new NotSupportedException(), SignedIn = (_, _) => { },
+            Stop = () => { }, Restart = () => { },
+        });
+        var pipe = LocalApi.Handler(service, control, new FixedCallerGuard(new Caller(CallerKind.App, "app")));
+        var localFeed = Assert.IsType<ChannelReply>(await pipe(local, Ops.SessionsSubscribe, Json(new { }))).Then(local);
+        Result(await bChannel.RequestAsync(Ops.SessionsSubscribe, new { }, Patience));
+        Result(await cChannel.RequestAsync(Ops.SessionsSubscribe, new { }, Patience));
+        await HostWait.UntilAsync(() => service.Subscribers == 3, "three display-title feeds", Patience);
+        async Task LocalTitle(string? expected)
+        {
+            using var timeout = new CancellationTokenSource(Patience);
+            while (true)
+            {
+                var session = await local.Upserts.Reader.ReadAsync(timeout.Token);
+                var title = session.TryGetProperty("displayTitle", out var value) ? value.GetString() : null;
+                if (title == expected) { return; }
+            }
+        }
+        async Task RemoteTitle(SecureChannel channel, string? expected)
+        {
+            using var timeout = new CancellationTokenSource(Patience);
+            while (true)
+            {
+                var e = await channel.Events.ReadAsync(timeout.Token);
+                if (e.Name != Events.SessionUpsert) { continue; }
+                var title = e.Data.TryGetProperty("displayTitle", out var value) ? value.GetString() : null;
+                if (title == expected) { return; }
+            }
+        }
+        Assert.NotNull(await pipe(local, "session.title", Json(new { id = SessionId, title = "From A" })));
+        await Task.WhenAll(LocalTitle("From A"), RemoteTitle(bChannel, "From A"), RemoteTitle(cChannel, "From A"));
+        Result(await bChannel.RequestAsync("session.title", new { id = SessionId, title = "From B" }, Patience));
+        await RemoteTitle(cChannel, "From B");
+        await LocalTitle("From B");
+        await b.Hub.CloseAsync(bChannel);
+        bChannel = await b.Hub.OpenAsync(host.Id, Patience);
+        var reconnected = Result(await bChannel.RequestAsync(Ops.SessionGet, new { id = SessionId }, Patience));
+        Assert.Equal("From B", reconnected.GetProperty("displayTitle").GetString());
+        Result(await bChannel.RequestAsync(Ops.SessionsSubscribe, new { }, Patience));
+        Result(await cChannel.RequestAsync("session.title", new { id = SessionId, title = "" }, Patience));
+        await Task.WhenAll(LocalTitle(null), RemoteTitle(bChannel, null), RemoteTitle(cChannel, null));
+        var d = await PeerAsync("app");
+        Pin(d, TrustedPeerStore.Person);
+        var dChannel = await d.Hub.OpenAsync(host.Id, Patience);
+        var page = Result(await dChannel.RequestAsync(Ops.SessionsList, new { }, Patience));
+        var current = Assert.Single(page.GetProperty("sessions").EnumerateArray());
+        Assert.False(current.TryGetProperty("displayTitle", out _));
+        Assert.Equal("Read without taking over", current.GetProperty("title").GetString());
+        local.Closing.TrySetResult();
+        await localFeed.WaitAsync(Patience);
+    }
+
+    [Theory]
+    [InlineData(true, TrustedPeerStore.Service)]
+    [InlineData(true, TrustedPeerStore.Host)]
+    [InlineData(false, TrustedPeerStore.Person)]
+    [InlineData(false, TrustedPeerStore.Service)]
+    public async Task Display_title_changes_require_a_current_person_pin_even_when_pinning_is_disabled(bool enabled, string role)
+    {
+        using var policy = new RemoteAuthorization(enabled, store, time);
+        policy.Attach(host.Hub);
+        host.Hub.Handler = policy.Handler(service);
+        var peer = await PeerAsync("app");
+        Pin(peer, role);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        await DeniedAsync(channel, "session.title");
+        Assert.False(File.Exists(Path.Combine(fixture.Root, "display-titles.json")));
+    }
+
+    sealed class DisplayTitleChannel : IProtocolChannel
+    {
+        public string PeerId => "local-person";
+        public string PeerName => "Fixture";
+        public string PeerKind => "local";
+        public bool IsOpen => !Closing.Task.IsCompleted;
+        public TaskCompletionSource Closing { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task Closed => Closing.Task;
+        public System.Threading.Channels.Channel<JsonElement> Upserts { get; } = System.Threading.Channels.Channel.CreateUnbounded<JsonElement>();
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default)
+        {
+            if (name == Events.SessionUpsert) { Upserts.Writer.TryWrite(JsonSerializer.SerializeToElement(data, ProtocolJson.Options)); }
+            return Task.FromResult(0L);
+        }
+    }
+
     [Theory]
     [InlineData(true, TrustedPeerStore.Person, false, "Steer")]
     [InlineData(true, TrustedPeerStore.Person, true, "Steer")]

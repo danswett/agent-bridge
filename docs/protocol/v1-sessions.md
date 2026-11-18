@@ -260,6 +260,18 @@ This changes only the host-owned fleet-name setting, not `Session.title`.
 See [local-pipe.md](local-pipe.md#person-set-fleet-names-sessionrename-1777) for the exact CLI
 commands, ASCII filter, storage and remaining #1777 work. No registry name is published by this slice.
 
+### `session.title`
+
+Request: `{ "id": "<listed session id>", "title": "<display title>" }`.
+Result after durable saving: `{ "id", "displayTitle" }`; empty/blank clears, returning explicit null.
+Nonempty titles are visible plain text, at most 120 Unicode code points; ordinary spaces are allowed.
+Missing/wrong-type fields, unknown sessions and invalid titles fail without writing.
+Only a freshly classified local app/host CLI without an agent/script credential, or a relay
+device with a current person pin, may call it. Host/service peers and pinning-off are refused.
+It changes only `displayTitle` and advances `updatedAt`, not agent `title`, fleet names or authority.
+Normal upserts/patches reach every subscriber; reconnect snapshots and host restarts retain it.
+A session's name is identical on every device; renaming on any device changes it everywhere.
+
 ### `hello`
 
 Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says changes (below). Result:

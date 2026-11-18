@@ -51,6 +51,7 @@ public sealed class SessionService
     public SessionDrivers? Drivers { get; init; }
     public TimeProvider Time { get; init; } = TimeProvider.System;
     public Fleet.FleetNames? FleetNames { get; init; }
+    public SessionDisplayTitles? DisplayTitles { get; init; }
     // Shared by hello and the relay load handlers; only the composition reads host settings.
     public Func<bool> LoadEnabled { get; init; } = () => true;
     public LoadService? Load { get; init; }
@@ -59,6 +60,19 @@ public sealed class SessionService
         new Fleet.FleetNameEnrollment(source,
             FleetNames ?? throw new InvalidOperationException("refused: fleet-name storage is not available on this host"),
             machine.Id, roster, Time, log).RenameAsync(data, closed);
+
+    async Task<object> TitleAsync(JsonElement data)
+    {
+        var id = String(data, "id");
+        var title = String(data, "title");
+        if (string.IsNullOrEmpty(id) || title is null) { throw new ArgumentException("session.title needs an id and title"); }
+        var session = source.Get(id) ?? throw new ArgumentException("session is not listed");
+        var store = DisplayTitles ?? throw new InvalidOperationException("refused: display-title storage is not available on this host");
+        var now = Time.GetUtcNow();
+        store.Set(id, title, now > session.UpdatedAt ? now : session.UpdatedAt.AddMilliseconds(1));
+        await source.RefreshPresentationAsync(id);
+        return new JsonObject { ["id"] = id, ["displayTitle"] = store.Get(id) };
+    }
 
     internal SessionProcess? ProcessForAdoption(string session)
     {
@@ -237,6 +251,8 @@ public sealed class SessionService
                 return Attach(channel, op, data);
             case Ops.SessionStop:
                 return await StopAsync(channel, data, actionAudit);
+            case Ops.SessionTitle:
+                return await TitleAsync(data);
             case AgentSignIn.Start:
                 return SignInEntrypointApproved && SignIn is not null ? SignIn.Start(channel, data)
                     : new { outcome = "refused", reason = "agent sign-in is not enabled" };

@@ -29,6 +29,7 @@ public sealed partial class FleetNamesTests : IAsyncLifetime
     SessionService MakeService() => new(source, new MachineInfo("host", "Fixture", "windows", "0.1.0"))
     {
         FleetNames = new AgentBridge.Host.Fleet.FleetNames(fixture.Root),
+        DisplayTitles = displayTitles,
         Time = fixture.Time,
     };
 

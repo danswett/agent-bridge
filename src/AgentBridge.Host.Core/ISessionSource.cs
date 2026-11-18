@@ -91,6 +91,9 @@ public interface ISessionSource : IAsyncDisposable
     // show it does nothing.
     Task SetEndingAsync(string id, bool ending) => Task.CompletedTask;
 
+    // Reapply host-held presentation without rereading possibly unavailable agent files.
+    Task RefreshPresentationAsync(string id) => throw new NotSupportedException("this source cannot refresh session presentation");
+
     // Host-owned recovery state, conditional on the same auth failure. A new generation
     // takes ownership; callbacks from an older flow cannot overwrite it or clear attention.
     Task SetSignInRecoveryAsync(string id, DateTimeOffset errorAt, string generation, RecoveryState state, bool begin = false, CancellationToken cancellationToken = default) => Task.CompletedTask;
