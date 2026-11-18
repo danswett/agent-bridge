@@ -10,6 +10,21 @@ status card did both through Home Assistant). Implemented by `AgentBridge.Relay`
 Everything here is relay text control messages, outside any channel, as for the blob store
 ([blobs.md](blobs.md)). Nothing about a session is in it.
 
+## Sealed account records (store core only)
+
+`AccountRecordService` reuses `IRosterStore` at `records/<account>/<kind>/<id>`.
+The authenticated account id is 1-20 ASCII digits; kind is `order`, `marker`, `keywrap`,
+`manifest`, or `fleet` (reserved for Fleet); id is `[a-z0-9-]{1,32}`.
+The opaque body is at most 65536 bytes. A 24-byte relay header precedes it: ASCII `ABR1`,
+big-endian version (int64), size (int32), and UTC Unix milliseconds (int64).
+Version 0 means absent; a successful ETag compare-and-set increments it. A lost race
+returns `conflict` and the current version; storage/corrupt metadata returns `unavailable`,
+never a partial body. Oversize returns `too-large`; invalid names return `bad-request`.
+Admission defaults to `needs-device-approval` for every read and write. No frames or routes
+expose this service yet; quota and rate limits follow in later slices. The sealed-body
+schema remains separate: [roaming design, S2](../design/session-order-roaming.md#10-slices).
+Logs contain byte counts only, never record/account/device ids, body bytes or storage errors.
+
 ## What is recorded, and by whom
 
 * **Hosts only.** When a socket of kind `host` is admitted, the relay records the device id
