@@ -170,24 +170,28 @@ public sealed class ConversationEndPinTests
     }
 
     [Theory]
-    [InlineData("release")]
-    [InlineData("cancel")]
-    [InlineData("capture lost")]
-    public void History_cannot_repin_between_a_scrollbar_press_and_its_release_or_cancel(string end)
+    [InlineData("release", false)]
+    [InlineData("cancel", false)]
+    [InlineData("capture lost", false)]
+    [InlineData("capture lost", true)]
+    public void History_cannot_repin_between_a_scrollbar_press_and_its_release_or_cancel(string end, bool contact)
     {
         var view = new SessionView();
         view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
         var bar = new Microsoft.UI.Xaml.Controls.Primitives.ScrollBar { Parent = view.Scroller };
         view.Scroller.Press(new Microsoft.UI.Xaml.UIElement { Parent = bar }, pointer: 7);
+        if (contact) { view.FollowState.Pressed(7); }
         Assert.False(view.HistoryEnd);
         view.Scrolling();
         view.StopScrolling();
-        view.Scroller.EndGesture(end, pointer: 8);
+        view.Scroller.EndGesture(end, pointer: 8, contact);
         Assert.False(view.HistoryEnd);
         view.Follow();
         Assert.Empty(view.Scroller.Targets);
-        view.Scroller.EndGesture(end, pointer: 7);
+        view.Scroller.EndGesture(end, pointer: 7, contact);
+        new Microsoft.UI.Xaml.Controls.ScrollViewer().EndGesture("release", pointer: 7);
         Assert.True(view.HistoryEnd);
+        Assert.False(view.FollowState.Held);
     }
 
     [Fact]

@@ -51,13 +51,14 @@ public sealed partial class SessionView
         }), true);
         scroll.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler((_, e) => EndScrollbarGesture(e.Pointer.PointerId)), true);
         scroll.AddHandler(UIElement.PointerCanceledEvent, new PointerEventHandler((_, e) => EndScrollbarGesture(e.Pointer.PointerId)), true);
-        scroll.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler((_, e) =>
-        {
-            if (!e.Pointer.IsInContact) { EndScrollbarGesture(e.Pointer.PointerId); }
-        }), true);
+        // A release outside this window may never arrive after capture is lost.
+        scroll.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler((_, e) => EndScrollbarGesture(e.Pointer.PointerId)), true);
     }
 
-    void EndScrollbarGesture(uint pointer) => scrollbarPointers.Remove(pointer);
+    void EndScrollbarGesture(uint pointer)
+    {
+        if (scrollbarPointers.Remove(pointer)) { follow.Released(pointer); }
+    }
     void ResetScrollbarGestures() => scrollbarPointers.Clear();
     // A final event can belong to a correction queued before this navigation request.
     void CompleteNavigation() { if (navigationPending?.Invoke() == false) { navigationPending = null; } }
