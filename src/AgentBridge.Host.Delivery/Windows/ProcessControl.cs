@@ -18,11 +18,12 @@ namespace AgentBridge.Host.Delivery.Windows;
 [SupportedOSPlatform("windows")]
 public sealed class WindowsProcessControl : IProcessControl
 {
-    readonly Func<int, DateTimeOffset, HeldOpen> openProcess;
+    readonly IProcessControl processControl;
     public WindowsProcessControl() : this(OpenSingle, WindowsAgentStarter.ScanParents, WindowsAgentStarter.CreatedAt) { }
     internal WindowsProcessControl(Func<int, DateTimeOffset, HeldOpen> open, ProcessTreeScan scan,
-        Func<int, DateTimeOffset?> created, TimeProvider? time = null) { openProcess = open; }
-    public HeldOpen Open(int processId, DateTimeOffset startedAt) => openProcess(processId, startedAt);
+        Func<int, DateTimeOffset?> created, TimeProvider? time = null)
+    { processControl = new ProcessTreeControl(open, new ProcessTreeEvidence(open, scan, created), time); }
+    public HeldOpen Open(int processId, DateTimeOffset startedAt) => processControl.Open(processId, startedAt);
 
     static HeldOpen OpenSingle(int processId, DateTimeOffset startedAt)
     {

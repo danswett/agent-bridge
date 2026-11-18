@@ -875,8 +875,9 @@ public sealed class StopFlowTests : IAsyncLifetime
         // A reply to another session holds the one typing turn.
         _ = ch.RequestAsync(Ops.SessionReply, new { id = Other, request = Guid.NewGuid().ToString(), text = "hello" });
         await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
+        gate.TypingQueued = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var stopping = StopAsync(ch);
-        await HostWait.UntilAsync(() => Volatile.Read(ref control.Opens) == 2, "the stop to wait for the typing turn", Patience);
+        await gate.TypingQueued.Task.WaitAsync(Patience);
         await WorkingAsync();
         release.SetResult();
 
@@ -899,11 +900,12 @@ public sealed class StopFlowTests : IAsyncLifetime
         Serve(stopper);
         var ch = await OpenAsync();
         await gate.WaitToTypeAsync();
+        gate.TypingQueued = new(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<Outcome> stopping;
         try
         {
             stopping = StopAsync(ch);
-            await HostWait.UntilAsync(() => Volatile.Read(ref control.Opens) == 2, "the stop to wait for the typing turn", Patience);
+            await gate.TypingQueued.Task.WaitAsync(Patience);
             switch (state)
             {
                 case "unreadable": File.Delete(events); break;
@@ -1016,7 +1018,7 @@ public sealed class StopFlowTests : IAsyncLifetime
     [Fact]
     public async Task A_stop_that_fails_part_way_says_fixed_words_with_check_at_the_machine_and_keeps_the_exceptions_text_in_the_log()
     {
-        control.ThrowOnOpen = (2, new InvalidOperationException("SECRET-C:\\Users\\x\\denied.dll"));
+        control.ThrowOnWait = new InvalidOperationException("SECRET-C:\\Users\\x\\denied.dll");
         var ch = await OpenAsync();
 
         var result = await StopAsync(ch);
@@ -1196,8 +1198,8 @@ public sealed class StopFlowTests : IAsyncLifetime
         public bool TerminateWorks = true;
         public string TerminateError = "the host could not terminate the session's process (denied)";
         public int Opens;
-        // Open's nth call throws: the first is the press's check, the second the one that ends it.
         public (int Call, Exception Error)? ThrowOnOpen;
+        public Exception? ThrowOnWait;
 
         public void Run(AgentKind agent, int pid, DateTimeOffset started)
         {
@@ -1229,7 +1231,11 @@ public sealed class StopFlowTests : IAsyncLifetime
         {
             public int Id => pid;
 
-            public async Task<bool> WaitForExitAsync(TimeSpan timeout) => await Task.WhenAny(gone, Task.Delay(timeout)) == gone;
+            public async Task<bool> WaitForExitAsync(TimeSpan timeout)
+            {
+                if (control.ThrowOnWait is { } error) { throw error; }
+                return await Task.WhenAny(gone, Task.Delay(timeout)) == gone;
+            }
 
             public string? Terminate()
             {

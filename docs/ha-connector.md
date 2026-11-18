@@ -724,11 +724,13 @@ The graceful budget covers typing admission and `/exit`; a blocked typing slot o
 exclusion skips typing and forces termination. Injector errors also force termination, while
 the typing fence and PID handle remain held until the worker's exit is proven.
 
-Held-descendant evidence and a bounded tree-control adapter are prepared separately.
-The adapter caps each collection pass at 64 handles and 250 ms, retains lost-ancestry
-uncertainty and can terminate its verified root despite incomplete snapshots.
-Exit verification shares the remaining wait deadline across at most three collections.
-It is not yet activated in the Windows Stop path.
+Windows Stop holds the verified root and descendant identities from preflight through exit.
+Descendant owner, elevation, creation time and fresh parent edges are checked before typing
+or confirmation. Collection is capped at 64 handles and 250 ms per pass; exit verification
+shares one remaining wait deadline across at most three collections. Incomplete evidence
+skips typing and still terminates the verified root, but reports Failed/partial, never Ended.
+Observed ancestry loss survives confirmation and retries for the same process identity.
+Ended requires shared exit proof for the complete verified tree, not just its root.
 
 Pre-Ending hypotheses for [2910](https://github.com/danswett/agent-bridge/issues/2910),
 not established incident causes:

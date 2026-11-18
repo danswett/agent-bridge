@@ -79,7 +79,7 @@ public sealed class StopOptions
 //     session.stop. An otherwise idle session ends on one press.
 //   * Graceful first: /exit typed into the agent's console, as a reply would be, so the CLI
 //     writes its transcript and releases its lock, and the session stays resumable. If it is
-//     still running after Grace, the process alone is terminated, never its tree.
+//     still running after Grace, the verified process and descendants are terminated.
 //   * Never the wrong process: the process discovery bound the session to, by id and start
 //     time, must be the one running under that id now, both when arming and when
 //     confirming, and is held open by handle from then until it has gone, so its id cannot
@@ -105,9 +105,29 @@ public sealed class StopService : ISessionStopper
     // First presses waiting for their second, by session. Several can be waiting at once (two
     // devices pressed), and any one of them confirms.
     readonly Dictionary<string, List<Arm>> arms = new(StringComparer.Ordinal);
+    readonly Dictionary<(AgentKind Agent, int Pid, DateTimeOffset Started), (string? Problem, long Version)> treeProblems = [];
+    long treeProblemVersion;
     readonly System.Collections.Concurrent.ConcurrentDictionary<IHeldProcess, byte> uncertainProcesses = new();
 
     sealed record Arm(string Token, int ProcessId, DateTimeOffset StartedAt, DateTimeOffset At);
+
+    sealed class ProcessLease : IDisposable
+    {
+        public IHeldProcess? Process;
+        public IHeldProcess Take() => Interlocked.Exchange(ref Process, null) ?? throw new InvalidOperationException("the preflight process was not held");
+        public void Dispose() => Interlocked.Exchange(ref Process, null)?.Dispose();
+    }
+
+    // Confirmation and retries must not erase a lineage loss observed by an earlier press.
+    string? RememberTreeProblem(Session session, IHeldProcess held, DateTimeOffset startedAt, string? problem)
+    {
+        var identity = (session.Agent, held.Id, held.StartedAt ?? startedAt);
+        lock (armsGate)
+        {
+            if (problem is not null) { treeProblems[identity] = (problem, ++treeProblemVersion); }
+            return treeProblems.GetValueOrDefault(identity).Problem;
+        }
+    }
 
     // Test-only compatibility overload; production must pass the shared gate explicitly.
     internal StopService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, IConsoleInjector injector,
@@ -155,10 +175,12 @@ public sealed class StopService : ISessionStopper
 
     async Task<StopResult> EndAsync(StopRequest request, Guid key, Func<int, DateTimeOffset, bool>? beforeDispatch)
     {
+        using var preflight = new ProcessLease();
         Session session;
         int processId;
         DateTimeOffset startedAt;
         var confirmed = false;
+        string? treeProblem = null;
         try
         {
             if (!options.PlatformSupported) { return Refused("ending sessions is not supported on this platform yet; end it at the machine"); }
@@ -176,16 +198,27 @@ public sealed class StopService : ISessionStopper
             // the id could not be told from this one.
             if (bound.StartedAt is not { } started) { return Refused("the host cannot read when the session's process started, so it cannot tell it from another; end it at the machine"); }
             startedAt = started;
-            if (processes.GetAgentProcesses(session.Agent).FirstOrDefault(p => p.Id == processId) is not { StartedAt: { } now } || !Same(now, startedAt))
+            long seenTreeVersion;
+            lock (armsGate) { seenTreeVersion = treeProblemVersion; }
+            var live = processes.GetAgentProcesses(session.Agent);
+            if (live.FirstOrDefault(p => p.Id == processId) is not { StartedAt: { } now } || !Same(now, startedAt))
             {
                 return Stale("the session's process has ended");
             }
 
             // Refused on the first press, not after the person has confirmed.
             var check = control.Open(processId, startedAt);
-            check.Process?.Dispose();
+            preflight.Process = check.Process;
             if (check.Refusal is { } refusal) { return Refused(refusal); }
             if (check.Gone) { return Stale("the session's process has ended"); }
+            lock (armsGate)
+            {
+                // A snapshot must not erase uncertainty recorded after that snapshot began.
+                foreach (var identity in treeProblems.Where(i => i.Value.Version <= seenTreeVersion && i.Key.Agent == session.Agent &&
+                    !live.Any(p => p.Id == i.Key.Pid && p.StartedAt is { } at && Same(at, i.Key.Started))).Select(i => i.Key).ToArray())
+                { treeProblems.Remove(identity); }
+            }
+            if (check.Process is { } held) { treeProblem = RememberTreeProblem(session, held, startedAt, held.ExitProblem); }
             // Another press is ending it already.
             if (session.Status == SessionStatus.Ending) { return Busy(); }
 
@@ -210,7 +243,7 @@ public sealed class StopService : ISessionStopper
         StopResult result;
         try
         {
-            try { result = await EndProcessAsync(session, processId, startedAt, confirmed, beforeDispatch); }
+            try { result = await EndProcessAsync(session, preflight.Take(), processId, startedAt, confirmed, beforeDispatch, treeProblem); }
             catch (Exception e)
             {
                 log($"end of {Short(session.Id)} (pid {processId}) failed part way: {e.Message}");
@@ -247,20 +280,21 @@ public sealed class StopService : ISessionStopper
     // that was idle when it arrived is checked again once the typing turn is taken, which can
     // be a while if another session is being typed into: a session that has started working
     // or asking meanwhile needs a second press like any other.
-    async Task<StopResult> EndProcessAsync(Session session, int pid, DateTimeOffset startedAt, bool confirmed, Func<int, DateTimeOffset, bool>? beforeDispatch)
+    async Task<StopResult> EndProcessAsync(Session session, IHeldProcess held, int pid, DateTimeOffset startedAt, bool confirmed,
+        Func<int, DateTimeOffset, bool>? beforeDispatch, string? treeProblem)
     {
-        var opened = control.Open(pid, startedAt);
-        if (opened.Refusal is { } refusal) { return Refused(refusal); }
-        // Gone between the press and now: what the press asked for has happened.
-        if (opened.Process is not { } held) { return Ended(false); }
         Task? pendingWorker = null;
-        var began = Environment.TickCount64;
-        using var deadline = new CancellationTokenSource(options.Grace);
         try
         {
+            var began = Environment.TickCount64;
+            using var deadline = new CancellationTokenSource(options.Grace);
             var typed = false;
             var ownsTyping = false;
-            try { await gate.WaitToTypeAsync(deadline.Token); ownsTyping = true; }
+            try
+            {
+                if (treeProblem is null) { await gate.WaitToTypeAsync(deadline.Token); ownsTyping = true; }
+                else { log($"end of {Short(session.Id)} cannot verify tree exit and skips typing: {treeProblem}"); }
+            }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested)
             { log($"end of {Short(session.Id)} exhausted its typing budget; continuing without typing"); }
             catch (InvalidOperationException e)
@@ -317,10 +351,15 @@ public sealed class StopService : ISessionStopper
             }
             var refused = held.Terminate();
             if (refused is not null) { log($"end of {Short(session.Id)} (pid {pid}) could not terminate: {refused}"); }
-            if (await held.WaitForExitAsync(options.TerminateWait))
+            if (await held.WaitForExitAsync(options.TerminateWait) && treeProblem is null)
             {
                 log($"ended {Short(session.Id)}: {(typed ? $"did not exit within {options.Grace.TotalSeconds:0} s; " : "")}terminated pid {pid}");
                 return Ended(true);
+            }
+            if ((treeProblem ?? held.ExitProblem) is { } problem)
+            {
+                log($"end of {Short(session.Id)} (pid {pid}) could not verify tree exit after termination: {problem}");
+                return Failed("the machine couldn't verify that the whole session ended; check at the machine");
             }
             return Failed(refused is not null
                 ? "the machine couldn't end the session"
@@ -328,6 +367,7 @@ public sealed class StopService : ISessionStopper
         }
         finally
         {
+            RememberTreeProblem(session, held, startedAt, held.ExitProblem);
             if (pendingWorker is null) { held.Dispose(); }
             else
             {

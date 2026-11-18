@@ -79,10 +79,13 @@ public sealed class ProcessTreeStopTests
     }
 
     [Theory]
-    [InlineData("reused")]
-    [InlineData("vanished")]
-    [InlineData("older")]
-    public async Task Stop_preserves_preflight_race_uncertainty_until_the_final_outcome(string race)
+    [InlineData("reused", false)]
+    [InlineData("vanished", false)]
+    [InlineData("older", false)]
+    [InlineData("reused", true)]
+    [InlineData("vanished", true)]
+    [InlineData("older", true)]
+    public async Task Stop_preserves_preflight_race_uncertainty_until_the_final_outcome(string race, bool working)
     {
         var rig = new TreeRig();
         rig.Nodes.Remove(103);
@@ -101,11 +104,19 @@ public sealed class ProcessTreeStopTests
         if (race == "reused") { rig.BeforeCreated = Change; }
         else if (race == "vanished") { rig.BeforeOpen = Change; }
         else { rig.Nodes[102].Started = TreeRig.T0.AddSeconds(-1); rig.AfterCreated = Change; }
-        await Run(rig, false, async (stopper, keys, request, source, logs) =>
+        await Run(rig, working, async (stopper, keys, request, source, logs) =>
         {
+            if (working)
+            {
+                var first = await stopper.StopAsync(request);
+                Assert.Equal(StopOutcome.Confirm, first.Outcome);
+                Assert.Empty(rig.Terminated);
+                request = request with { Request = Guid.NewGuid().ToString("D"), Confirm = first.Confirm };
+            }
             var result = await stopper.StopAsync(request);
             Assert.True(raced);
             Assert.Equal(StopOutcome.Failed, result.Outcome);
+            Assert.Equal(result, await stopper.StopAsync(request));
             Assert.False(rig.Nodes[101].Running);
             Assert.True(rig.Nodes[race == "reused" ? 102 : 103].Running);
             Assert.DoesNotContain(102, rig.Terminated);
