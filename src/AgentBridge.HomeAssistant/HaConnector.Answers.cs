@@ -692,6 +692,7 @@ public sealed partial class HaConnector
     async Task CardAsync(string sessionId, Published p, IReadOnlyList<(long Seq, HaTrigger Hit)> seen, DateTimeOffset now, CancellationToken ct)
     {
         var armed = p.Armed;
+        if (armed is not null) { await QueueAtQuestionAsync(sessionId, p, seen, ct); }
         if (armed is null && ServesReplies)
         {
             await ReplyAsync(sessionId, p, seen, now, ct);
@@ -699,7 +700,7 @@ public sealed partial class HaConnector
         }
         if (armed is null || armed.Plan.TerminalOnly || armed.Settled)
         {
-            if (seen.Count > 0) { await UnservedAsync(p, seen[^1].Hit, ct); }
+            if (seen.Count > 0 && !p.Reply.IsHandled(seen[^1].Hit.State.State)) { await UnservedAsync(p, seen[^1].Hit, ct); }
             return;
         }
         // Armed again for what it says now on a later pass: what was given looking at what it said
@@ -857,6 +858,7 @@ public sealed partial class HaConnector
     {
         if (armed.PayloadBaseline.Kind == "unknown") { return false; }
         var current = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
+        if (p.Reply.IsHandled(current.Value)) { return false; }
         if (!Changed(armed.PayloadBaseline, current) || !IsStamp(current.Value) || current.Value == armed.UsedStamp) { return false; }
         if (current.Snapshot is not { Attributes.ValueKind: JsonValueKind.Object } state) { return false; }
         var tag = Str(state.Attributes, "decision_id");
@@ -887,6 +889,7 @@ public sealed partial class HaConnector
         foreach (var (key, value) in extra) { detail[key] = value?.DeepClone(); }
         if (p.Reply.Ack is { } ack) { detail["reply_ack"] = ack.DeepClone(); }
         else { detail.Remove("reply_ack"); }
+        detail["reply_queue_count"] = QueueCount(p.SessionId);
         // A card that no longer asks for a second press of End session does not take one: the
         // next press is a first press again, so nothing ends on a question nobody can see.
         // Before publishing, as a publish that half-succeeds can still replace the question. (A
@@ -1209,6 +1212,7 @@ public sealed partial class HaConnector
         // An image cannot be typed into a prompt; replies with attachments are a later stage.
         if (HasAttachments(state)) { return null; }
         var a = state.Attributes;
+        if (Str(a, "driver") == "agent" && string.IsNullOrEmpty(Str(a, "decision_id"))) { return null; }
         if (a.TryGetProperty("decision_id", out var tag) && tag.ValueKind == JsonValueKind.String && tag.GetString() is { Length: > 0 } taggedFor
             && taggedFor != armed.Question.Id)
         {

@@ -560,7 +560,7 @@ the same service calls.
 **Request id and acknowledgement.** A sender may add `rid` (1 to 64 letters, digits, `-`, `_`, `.`;
 anything else is ignored) and `sender` (a name, at most 64 characters). The host then publishes
 `reply_ack` `{rid, outcome, at, sender?, duplicate?}` in the session's activity attributes in the same
-update as `Reply sent` / `Reply NOT sent`. `outcome` is `delivered`, `unconfirmed` or `refused`. The ack
+update as `Reply sent` / `Reply NOT sent`. `outcome` is `queued`, `delivered`, `unconfirmed` or `refused`. The ack
 stays until a newer one replaces it, so a sender that finds another rid there knows its message was
 swapped or lost and sends again. A rid seen before (the last 50 per session) is not delivered again; the
 host re-acks it with `duplicate: true`. A `refused` rid is forgotten, so the same rid may be retried.
@@ -569,13 +569,28 @@ the cards neither empties it nor loses the rid of a delivery still running; a re
 is still dropped. When a session ends for good its history is dropped with its card (after any
 delivery still running for it finishes); a session that comes back under the same id starts empty.
 `sender` loses control, format and unassigned characters, whitespace is collapsed,
-and the cut at 64 never splits a character. A reply that arrives while a question card is open
-(single choice or field slots) is refused, never queued: the host acks `refused` with the sender's rid,
-logs `refused a reply to <node> from <sender>` and types nothing, so the sender retries after the card
-closes. A reply already waiting when a question opens is refused the same way (#1634).
-Publishes without a `rid` behave as before.
+and the cut at 64 never splits a character. Untagged agent replies carrying a valid `rid` now
+wait durably while a question is open ([#3204](https://github.com/danswett/agent-bridge/issues/3204)).
+The host acknowledges `queued` only after saving, and exposes `reply_queue_count` on the activity
+sensor. At most 16 messages wait per session; the store's 100-per-session/1000-total entry caps
+also apply, with completed receipts pruned first. Overflow refuses with `queue full`, never
+replacing accepted messages. Each payload is limited to 64 KiB. Owner answers remain separate
+and take priority: nothing drains until the question disappears from the host's session view.
+Then accepted messages go through the existing reply delivery, FIFO, one at a time.
+Human replies and agent publishes without a valid `rid` retain the existing question refusal.
+Question-tagged publishes are never queued.
 
-**Durable inbox foundation.** `DurableInbox` is an internal, not-yet-connected store: it
+The host reuses `DurableInbox` at `<StateFile>.inbox`, alongside its existing connector state,
+without protocol or relay changes. Pending messages survive a host restart; payloads are cleared
+at dispatch and receipts survive within the store's retention caps. Before terminal delivery,
+the host durably marks the entry `unconfirmed`. A crash across typing cannot prove whether
+the terminal consumed the message: it is **not automatically replayed**, and a retry gets
+`unconfirmed`, not a false delivery claim. Normal completed delivery is once per retained rid.
+Missing, corrupt or unwritable storage refuses queueing. This is host-local session state:
+stopping that host stops delivery; losing its state loses its queued messages, not an automatic
+handoff to another machine. This change does not install or migrate a running host.
+
+**Durable inbox foundation.** `DurableInbox` is the internal store used by the host queue above: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,
 and returns the original entry on a matching rid retry, even if a retry is restamped. It keeps
 at most 100 entries per node and 1000 total; when full, it prunes the oldest delivered entries
@@ -586,10 +601,10 @@ For #2780 integration, deduplication lasts only while that metadata is retained 
 delivered rid is accepted as new and may be delivered again; this is not permanent deduplication.
 Load and save remove this inbox's GUID-named crash-leftover temporary files under its lock,
 so obsolete copies cannot retain payloads after a later delivery.
-Power-loss durability is not established. It does not change the live reply path, publish acks,
-or provide native receipt. A later slice must provide an access-controlled storage directory,
-one dispatcher per node (a peek does not reserve a message), and reconcile the crash window
-between typing and recording delivery before enabling it.
+Power-loss durability is not established. The connector serializes dispatch through its passes
+and uses its existing state directory; native receipt and a distributed inbox remain later work.
+The host's pre-dispatch uncertainty record closes automatic replay, not the terminal's
+fundamental typing/receipt atomicity gap.
 
 **`tools/agents/reply-session.ps1`** is the in-repo sender. It posts the payload with a rid, waits
 for the reply sensor to show its own stamp (there is one slot per node, so rapid sends can overwrite

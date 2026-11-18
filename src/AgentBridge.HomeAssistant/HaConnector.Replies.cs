@@ -220,6 +220,7 @@ public sealed partial class HaConnector
         if (done.Rid is { } rid)
         {
             var outcome = result.Outcome switch { AnswerOutcome.Delivered => "delivered", AnswerOutcome.Unconfirmed => "unconfirmed", _ => "refused" };
+            InboxOutcome(done.SessionId, rid, outcome);
             if (outcome == "refused") { p.Reply.ForgetRid(rid); }
             else if (p.Reply.Rids.ContainsKey(rid)) { p.Reply.Rids[rid] = outcome; }
             p.Reply.Ack = MakeAck(rid, done.Sender, outcome);
@@ -342,6 +343,7 @@ public sealed partial class HaConnector
         }
         if (underWay.ContainsKey(sessionId)) { return; }
         p.Reply.ReadAgain = false;
+        if (await DrainInboxAsync(sessionId, p, ct)) { p.Reply.ReadAgain = true; return; }
         while (p.Reply.Waiting.Count > 0)
         {
             var next = p.Reply.Waiting[0];
@@ -369,9 +371,9 @@ public sealed partial class HaConnector
     // Send-DaemonCardPayload: one publish from the reply card, unless it was read before. Says
     // whether it was nothing to send, taken without a delivery (refused, or words for a question),
     // or is being delivered.
-    async Task<CardRead> CardReplyAsync(string sessionId, Published p, HaState state, CancellationToken ct)
+    async Task<CardRead> CardReplyAsync(string sessionId, Published p, HaState state, CancellationToken ct, bool queued = false)
     {
-        if (!IsStamp(state.State) || p.Reply.IsHandled(state.State)) { return CardRead.Nothing; }
+        if (!IsStamp(state.State) || (!queued && p.Reply.IsHandled(state.State))) { return CardRead.Nothing; }
         var stamp = state.State;
         var a = state.Attributes;
         var attributes = a.ValueKind == JsonValueKind.Object;
@@ -412,6 +414,13 @@ public sealed partial class HaConnector
         }
         var rid = attributes ? CleanRid(Str(a, "rid")) : null;
         var sender = attributes ? CleanSender(Str(a, "sender")) : null;
+        if (!queued && rid is not null && inbox.FirstOrDefault(i => i.Node == sessionId && i.Rid == rid) is { } accepted)
+        {
+            p.Reply.Ack = MakeAck(rid, sender, InboxStatus(accepted), duplicate: true);
+            await TransientAsync(p, "Duplicate reply dropped", [], ct);
+            p.Reply.Handle(stamp);
+            return CardRead.Taken;
+        }
         // A message delivered twice is dropped: nothing is typed again, and the sender is told
         // what came of the first. While the first is still going in, its own outcome will say.
         if (rid is not null && p.Reply.Rids.TryGetValue(rid, out var prior))

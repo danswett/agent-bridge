@@ -111,6 +111,7 @@ public sealed partial class ReplyTests
                 await Do(c, ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
             }
         }
+
         await using (var c = Connector())
         {
             await Pass(c);
@@ -126,6 +127,72 @@ public sealed partial class ReplyTests
             await Do(c, ha.SendFromCard(Node, "duplicate", driver: "agent", rid: "r-1"));
             Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
             Assert.Equal(["message 1", "message 2", "message 3"], replied.Select(r => r.Text));
+        }
+    }
+
+    [Fact]
+    public async Task A_burst_in_one_pass_keeps_all_three_messages_and_the_owner_can_still_answer()
+    {
+        await using var c = await Asking();
+        for (var n = 1; n <= 3; n++)
+        {
+            c.Observe(ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
+        }
+        c.Observe(ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        c.Observe(ha.Press(SessionEntities.Submit(Node)));
+        await Pass(c);
+        Assert.Single(answered);
+        Assert.Empty(replied);
+        Assert.Equal(3, Detail.GetProperty("reply_queue_count").GetInt32());
+        await CardCloses(c);
+        for (var n = 0; n < 3; n++) { await c.DeliveredAsync(); await Pass(c); }
+        Assert.Equal(["message 1", "message 2", "message 3"], replied.Select(r => r.Text));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Unwritable_or_corrupt_storage_never_acknowledges_a_durable_queue(bool corrupt)
+    {
+        Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, "ha-connector.json.inbox");
+        if (corrupt) { File.WriteAllText(path, "{broken"); }
+        else { Directory.CreateDirectory(path); }
+        await using var c = await Asking();
+        await Do(c, ha.SendFromCard(Node, "first", driver: "agent", rid: "r-1"));
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        Assert.Contains("queue unavailable", Detail.GetProperty("error").GetString());
+        Assert.Equal(0, Detail.GetProperty("reply_queue_count").GetInt32());
+        await CardCloses(c);
+        Assert.Empty(replied);
+    }
+
+    [Fact]
+    public async Task A_restart_during_dispatch_reports_uncertainty_and_never_automatically_retypes()
+    {
+        var sent = new TaskCompletionSource<ReplyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = _ => sent.Task;
+        var c = await Asking();
+        var disposed = false;
+        try
+        {
+            await Do(c, ha.SendFromCard(Node, "first", driver: "agent", rid: "r-1"));
+            Idle(turn: 2);
+            await Pass(c);
+            await Pass(c, 20);
+            await c.DisposeAsync();
+            disposed = true;
+            await using var restarted = Connector();
+            await Pass(restarted);
+            await Do(restarted, ha.SendFromCard(Node, "duplicate", driver: "agent", rid: "r-1"));
+            Assert.Equal("unconfirmed", Ack.GetProperty("outcome").GetString());
+            Assert.True(replied.Count <= 1);
+        }
+        finally
+        {
+            sent.TrySetResult(new ReplyResult(AnswerOutcome.Delivered));
+            await c.DeliveredAsync();
+            if (!disposed) { await c.DisposeAsync(); }
         }
     }
 
@@ -148,16 +215,32 @@ public sealed partial class ReplyTests
         Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
     }
 
-    [Fact]
-    public async Task A_session_that_ends_with_a_refused_message_never_receives_it()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("agent")]
+    public async Task A_session_that_ends_with_a_waiting_message_never_receives_it(string? driver)
     {
         await using var c = await Asking();
-        await Do(c, ha.SendFromCard(Node, "too late", rid: "r-end"));
+        await Do(c, ha.SendFromCard(Node, "too late", driver: driver, rid: "r-end"));
         sessions.End(A);
         await Pass(c, 20);
         await c.DeliveredAsync();
         Assert.Empty(replied);
         Assert.Empty(answered);
+    }
+
+    [Fact]
+    public async Task A_queued_reply_refused_by_delivery_can_be_retried_with_the_same_id()
+    {
+        await using var c = await Asking();
+        await Do(c, ha.SendFromCard(Node, "first", driver: "agent", rid: "r-1"));
+        outcome = _ => Task.FromResult(new ReplyResult(AnswerOutcome.Refused, "nothing typed"));
+        await CardCloses(c);
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        outcome = _ => Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
+        await Do(c, ha.SendFromCard(Node, "first", driver: "agent", rid: "r-1"));
+        Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
+        Assert.Equal(2, replied.Count);
     }
 
     [Fact]
