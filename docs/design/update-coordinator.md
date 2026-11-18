@@ -43,7 +43,7 @@ the app/launcher cutover. This layer alone changes no production apply path.
 ### B2: native evidence adapter and build closure
 
 Pin the [Velopack 1.2.161 image](https://github.com/velopack/velopack/blob/92d6a1c91716729d449034df5c50307dcce39493/src/bins/build.rs)
-read-only through observed exit; missing or other native release metadata is unknown.
+read-only through real exit; missing or other native release metadata is unknown.
 The adapter pins the original process handle before checking its UTC creation time,
 and owns the real apply handle through its exit wait. A nonzero updater exit alone
 cannot disprove a surviving elevated worker; it stays unknown, never retry authority.
@@ -51,6 +51,13 @@ The [pinned manifest parser](https://github.com/velopack/velopack/blob/92d6a1c91
 uses namespaced NuGet metadata. Read `current\sq.version` anew under the package lock
 and check package identity, main executable and release identity before respawn.
 Native starts remain injectable for in-process tests; no native binary is run locally.
+
+Observation cancellation does not release the updater pin, package custody or real
+process handle: the owned noncancellable exit wait retains them until actual exit.
+The future B3 entry point must drain adapter `Ownership` before exiting, including
+late native respawn completion/errors. Respawn observation uses the same deadline
+and releases the package lock on timeout/cancellation. An entered native start
+cannot be revoked: its late outcome stays unknown, never retry authority.
 
 ## C/D: approved design basis, not activation proof
 
