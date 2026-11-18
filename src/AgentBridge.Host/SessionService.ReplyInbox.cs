@@ -23,7 +23,7 @@ public sealed partial class SessionService
             // Reverify the original signature, lifetime, mode, peers and target gates on recovery.
             var result = await LiteReceiver.ReceiveAsync(channel, data, ct, fromInbox: true);
             return new(result.Status == "delivered" ? AnswerOutcome.Delivered : AnswerOutcome.Refused, result.Code);
-        });
+        }, log);
         if (LiteReceiver is not null) { LiteReceiver.Inbox = RelayInbox; }
     }
 }

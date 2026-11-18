@@ -23,11 +23,13 @@ internal sealed class DurableInbox
     static readonly JsonSerializerOptions Json = new() { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow };
     readonly string path;
     readonly Action<string, string> moveSnapshot;
+    readonly bool pinRefused;
     readonly Dictionary<string, int> absent = new(StringComparer.Ordinal);
 
-    public DurableInbox(string path, Action<string, string>? moveSnapshot = null)
+    public DurableInbox(string path, Action<string, string>? moveSnapshot = null, bool pinRefused = true)
     {
         this.path = Path.GetFullPath(path);
+        this.pinRefused = pinRefused;
         this.moveSnapshot = moveSnapshot ?? ((source, destination) => File.Move(source, destination, overwrite: true));
     }
 
@@ -136,7 +138,7 @@ internal sealed class DurableInbox
         if (state.Messages.RemoveAll(m => m.Node == node && (rid is null || m.Rid == rid) && !Pinned(m)) > 0) { Save(state); }
     }
 
-    static bool Pinned(InboxMessage m) => m.Outcome is "unconfirmed" or "refused" ||
+    bool Pinned(InboxMessage m) => m.Outcome == "unconfirmed" || (pinRefused && m.Outcome == "refused") ||
         (m.StartedAt is not null && m.DeliveredAt is null) || m.ConsumedTokens is { Count: > 0 };
 
     static bool TrimCapacityRefusals(List<InboxMessage> messages, DateTimeOffset at)

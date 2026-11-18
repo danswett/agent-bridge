@@ -2,6 +2,12 @@
 
 Operations an agent calls on the local pipe after `agent.hello`, on its own credential. Each is refused with a readable `refused: ...` reason when the connection has no agent credential or the credential's scope is too low.
 
+Relay reply recovery isolates malformed entries and storage failures instead of
+preventing relay attachment. Unstarted replies expire after two minutes; an
+expired or ordinary refused entry can age out of the bounded dedupe history.
+Unconfirmed attempts remain pinned and are never automatically retyped.
+Different sessions dispatch independently; one session's replies remain serial.
+
 | Operation | Scope | What it does |
 | --- | --- | --- |
 | `agent.send` | read+reply | Sends text to one session; see [local-pipe.md](local-pipe.md#agentsend-ap5-lite). |
