@@ -9,6 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageDownload Include="vpk" Version="[1.2.161]" />
+    <AssemblyMetadata Include="VpkPackageRoot" Value="$(NuGetPackageRoot)" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="9.10.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
