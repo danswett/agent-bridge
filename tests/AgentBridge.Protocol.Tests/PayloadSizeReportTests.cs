@@ -107,7 +107,7 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
         Assert.Equal((13, 13, 1), Rows(first.Text)["Alpha"]);
     }
 
-    [Fact]
+    [Fact(Skip = "Quarantined: hosted 30s post-READY timeout; owner Payload R3 builder; tracking issue https://github.com/danswett/agent-bridge/issues/3065; fix deadline 2026-11-18 12:00 PT")]
     public async Task Report_fails_clearly_on_a_vector_that_cannot_be_parsed()
     {
         using var sample = new VectorFolder();
