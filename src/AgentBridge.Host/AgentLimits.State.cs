@@ -5,7 +5,8 @@ public sealed partial class AgentLimits
     internal sealed record SavedHit(DateTimeOffset At, Guid? Charge);
     internal sealed record SavedWindow(string Origin, SavedHit[] Hits);
     internal sealed record SavedLive(string? Session, DateTimeOffset? IdleSince, bool PersonTyped, Guid Charge);
-    internal sealed record SavedRequest(string Origin, string Request, string Hash, DateTimeOffset At, SavedLive? Live, Guid? Charge = null);
+    internal sealed record SavedRequest(string Origin, string Request, string Hash, DateTimeOffset At, SavedLive? Live,
+        Guid? Charge = null, bool DebitExpired = false);
     internal sealed record SavedLaunchState(int V, SavedRequest[] Requests, SavedWindow[] Origins,
         SavedWindow[] Attempts, SavedHit[] Machine, DateTimeOffset Last);
 
@@ -17,16 +18,20 @@ public sealed partial class AgentLimits
             var tags = new Dictionary<object, Guid>(ReferenceEqualityComparer.Instance);
             foreach (var request in launchRequests.Values)
             { if (request.Charge is { } charge) { tags.Add(charge, Guid.NewGuid()); } }
+            // Retained debit evidence, not a clock that can roll back, determines expiry.
+            var machine = machineLaunches.Snapshot(now, tags);
+            var active = machine.Select(h => h.Charge).ToHashSet();
             var requests = launchRequests.Select(p =>
             {
                 var live = liveLaunches.GetValueOrDefault(p.Key);
                 return new SavedRequest(p.Key.Origin, p.Key.Request, p.Value.Hash, p.Value.At,
                     live is null ? null : new(live.Session, live.IdleSince, live.PersonTyped, tags[live.Charge!]),
-                    p.Value.Charge is { } charge ? tags[charge] : null);
+                    p.Value.Charge is { } charge ? tags[charge] : null,
+                    p.Value.Charge is { } debit && !active.Contains(tags[debit]));
             }).ToArray();
             SavedWindow[] Windows(Dictionary<string, Window> windows) =>
                 windows.Select(p => new SavedWindow(p.Key, p.Value.Snapshot(now, tags))).ToArray();
-            return new(1, requests, Windows(originLaunches), Windows(launchAttempts), machineLaunches.Snapshot(now, tags), now);
+            return new(1, requests, Windows(originLaunches), Windows(launchAttempts), machine, now);
         }
     }
 
@@ -42,6 +47,7 @@ public sealed partial class AgentLimits
         var charged = requests.Where(r => r.Charge is not null).ToArray();
         var live = requests.Where(r => r.Live is not null).ToArray();
         if (requests.Select(r => (r.Origin, r.Request)).Distinct().Count() != requests.Length
+            || requests.Any(r => r.DebitExpired && r.Charge is null)
             || charged.Any(r => r.Charge == Guid.Empty) || charged.Select(r => r.Charge).Distinct().Count() != charged.Length
             || live.Any(r => r.Live!.Charge != r.Charge)
             || live.Where(r => r.Live!.Session is not null).GroupBy(r => r.Live!.Session).Any(g => g.Count() > 1))
@@ -61,7 +67,7 @@ public sealed partial class AgentLimits
         bool Match(SavedHit[] hits, SavedRequest[] expected) => hits.Length == expected.Length
             && hits.Select(h => h.Charge).Distinct().Count() == hits.Length
             && hits.All(h => h.Charge is { } tag && expected.Any(r => r.Charge == tag && r.At == h.At));
-        var current = charged.Where(r => state.Last - r.At < Hour).ToArray();
+        var current = charged.Where(r => !r.DebitExpired && state.Last - r.At < Hour).ToArray();
         if (!Match(state.Machine, current)
             || state.Origins.Any(w => !Match(w.Hits, current.Where(r => r.Origin == w.Origin).ToArray()))
             || current.Any(r => !state.Origins.Any(w => w.Origin == r.Origin))
