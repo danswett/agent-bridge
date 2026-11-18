@@ -84,36 +84,60 @@ public sealed class SessionReaperLiveTests : IAsyncLifetime
 
     internal sealed class FakeGit(string folder) : ICommandRunner
     {
-        public int Fetches; public bool Dirty; public string Mode = "";
+        public int Fetches, TrackingRefWrites; public bool Dirty; public string Mode = "";
         bool pruned;
+        string destination = "refs/remotes/origin/";
         public Task<CommandResult> RunAsync(string program, IReadOnlyList<string> args, TimeSpan timeout, CancellationToken cancellationToken = default)
         {
             Assert.DoesNotContain("@{upstream}", args);
+            Assert.DoesNotContain("config", args);
             var fetching = args.Contains("fetch");
-            if (fetching) { Fetches++; pruned = args.Contains("--prune"); }
+            if (fetching)
+            {
+                Fetches++; pruned = args.Contains("--prune");
+                var refspec = args.FirstOrDefault(arg => arg.StartsWith("+refs/heads/*:", StringComparison.Ordinal));
+                destination = refspec?.Split(':')[1].TrimEnd('*') ?? "refs/remotes/origin/";
+                if (destination.StartsWith("refs/remotes/", StringComparison.Ordinal) || !args.Contains("--refmap=")) { TrackingRefWrites++; }
+            }
             if (fetching && (Mode == "absent" || Mode is "different" or "mixed" or "foreign" or "alias" or "none"
-                && !args.Any(arg => arg.EndsWith("refs/heads/*:refs/remotes/origin/*", StringComparison.Ordinal)))
+                && !args.Any(arg => arg.StartsWith("+refs/heads/*:", StringComparison.Ordinal)))
                 || args.Contains("merge-base") && Mode == "diverged")
                 return Task.FromResult(new CommandResult(true, false, 1, ""));
-            if (args.Contains("--contains"))
+            if (args.Any(arg => arg.StartsWith("--contains", StringComparison.Ordinal)))
             {
+                var prefix = args.Contains("for-each-ref") ? destination : "refs/remotes/origin/";
                 var branches = Mode switch
                 {
                     "foreign" => "refs/remotes/elsewhere/published\t",
-                    "alias" => "refs/remotes/origin/HEAD\trefs/remotes/elsewhere/published\nrefs/remotes/origin/alias\trefs/remotes/elsewhere/published",
+                    "alias" => $"{prefix}HEAD\trefs/remotes/elsewhere/published\n{prefix}alias\trefs/remotes/elsewhere/published",
                     "none" => "",
                     "deleted" when pruned => "",
-                    "mixed" => "refs/remotes/elsewhere/published\t\nrefs/remotes/origin/HEAD\trefs/remotes/origin/published\nrefs/remotes/origin/published\t",
-                    _ => "refs/remotes/origin/published\t",
+                    "mixed" => $"refs/remotes/elsewhere/published\t\n{prefix}HEAD\t{prefix}published\n{prefix}published\t",
+                    _ => $"{prefix}published\t",
                 };
+                if (args.Contains("for-each-ref") && !destination.StartsWith(args[^1], StringComparison.Ordinal)) { branches = ""; }
                 return Task.FromResult(new CommandResult(true, false, 0, branches));
             }
             var text = args.Contains("--absolute-git-dir") ? folder : args.Contains("symbolic-ref") ? "fixture"
                 : args.Contains("--porcelain=v1") ? Dirty ? "?? private" : "" : args.Contains("stash") && Mode == "stash" ? new('a', 40)
                 : args.Contains("stash") || args.Contains("fetch") || args.Contains("merge-base") ? ""
-                : args.Any(arg => arg.StartsWith("refs/remotes/", StringComparison.Ordinal)) ? new('b', 40) : new string('a', 40);
+                : args.Any(arg => arg.StartsWith(destination, StringComparison.Ordinal)) ? new('b', 40) : new string('a', 40);
             return Task.FromResult(new CommandResult(true, false, 0, text));
         }
+    }
+
+    [Theory]
+    [InlineData("main-only")]
+    [InlineData("different")]
+    public async Task Main_only_fetchspec_needs_no_tracking_refs_or_config_changes_and_fetches_private_heads_once(string mode)
+    {
+        File.WriteAllText(Path.Combine(folder, ".git"), "fixture");
+        var runner = new FakeGit(folder) { Mode = mode };
+        var git = new SessionReaperGit(runner, log.Add);
+        Assert.True((await git.ReadAsync(folder, default))!.Contained);
+        Assert.True((await git.ReadAsync(folder, default))!.Contained);
+        Assert.Equal(1, runner.Fetches);
+        Assert.Equal(0, runner.TrackingRefWrites);
     }
 
     [Theory]

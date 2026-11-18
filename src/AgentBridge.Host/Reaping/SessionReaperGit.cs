@@ -5,6 +5,7 @@ namespace AgentBridge.Host.Reaping;
 
 public sealed class SessionReaperGit(ICommandRunner runner, Action<string> log)
 {
+    const string OriginProofs = "refs/slipgates/session-reaper/origin/";
     readonly Dictionary<string, bool> fetched = new(StringComparer.OrdinalIgnoreCase);
     public void Reset() => fetched.Clear();
     public async Task<ReaperGit?> ReadAsync(string path, CancellationToken ct)
@@ -33,15 +34,15 @@ public sealed class SessionReaperGit(ICommandRunner runner, Action<string> log)
             if (!fetched.TryGetValue(path, out var succeeded))
             {
                 fetched.Add(path, false);
-                await Git("fetch", "--prune", "--no-auto-maintenance", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
-                    "origin", "+refs/heads/*:refs/remotes/origin/*");
+                await Git("fetch", "--atomic", "--prune", "--no-auto-maintenance", "--no-tags", "--no-recurse-submodules",
+                    "--no-write-fetch-head", "--refmap=", "origin", $"+refs/heads/*:{OriginProofs}*");
                 fetched[path] = true;
             }
             else if (!succeeded) { throw new IOException("origin fetch failed this cycle"); }
-            var branches = await Git("branch", "--remotes", "--contains", head, "--format=%(refname)%09%(symref)");
+            var branches = await Git("for-each-ref", "--contains=" + head, "--format=%(refname)%09%(symref)", OriginProofs);
             var containing = branches.Split('\n').Select(line => line.TrimEnd('\r').Split('\t'))
-                .Where(parts => parts.Length == 2 && parts[1] == "" && parts[0] != "refs/remotes/origin/HEAD"
-                    && parts[0].StartsWith("refs/remotes/origin/", StringComparison.Ordinal))
+                .Where(parts => parts.Length == 2 && parts[1] == ""
+                    && parts[0].StartsWith(OriginProofs, StringComparison.Ordinal))
                 .Select(parts => parts[0]).FirstOrDefault();
             if (containing is null) { throw new InvalidDataException("no containing origin branch"); }
             var remote = await Git("rev-parse", "--verify", containing);

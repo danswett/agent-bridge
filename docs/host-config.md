@@ -74,7 +74,11 @@ builder; no separate completion/PR field is required. The final stop guard
 rechecks the hold marker, protected lists, tools/questions and unchanged native
 activity, refusing changed evidence.
 Git queries are gated behind the other safety proofs and use one fetch per
-worktree per cycle, pruning deleted remote branches. Failed fetches stay UNKNOWN
+worktree per cycle. An explicit all-heads refspec fetches atomically into the
+private `refs/slipgates/session-reaper/origin/*` namespace, pruning deleted heads.
+This works with a main-only configured fetchspec and no existing tracking refs.
+The empty `--refmap=` prevents opportunistic normal tracking-ref updates;
+repository config is never changed. Failed fetches stay UNKNOWN
 for that cycle without retrying or trusting stale tracking refs. No F7 credential
 is used.
 
