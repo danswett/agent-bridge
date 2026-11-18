@@ -55,6 +55,65 @@ public class DriverTests
     }
 
     [Fact]
+    public void An_answer_invalidates_a_prompt_still_awaiting_its_text_without_changing_the_driver()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.Observe(At(1, SessionStatus.Idle, "first"), Fixture.T0, drivers.Arm);
+        d.ArmDriver(SessionDrivers.Agent, Fixture.T0, "Original sender");
+        d.Observe(At(1, SessionStatus.Working, "first"), Fixture.T0, drivers.Arm);
+
+        d.Answered(SessionDrivers.Agent, "Later driver");
+        d.Observe(At(1, SessionStatus.Working, "the agent's prompt"), Fixture.T0, drivers.Arm);
+
+        Assert.False(d.PromptSender.IsAgent);
+        Assert.Null(d.PromptSender.Label);
+        Assert.Equal((DriverKind.Agent, "Later driver"), d.Shown);
+        d.Answered(SessionDrivers.Human);
+        Assert.False(d.PromptSender.IsAgent);
+    }
+
+    [Fact]
+    public void Reviewer_probe_an_answer_cannot_remove_the_awaited_prompts_word_match()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.Observe(At(1, SessionStatus.Idle, "first"), Fixture.T0, drivers.Arm, "k1", 1);
+        d.ArmDriver(SessionDrivers.Agent, Fixture.T0, "Original sender", words: "original prompt");
+        d.Observe(At(1, SessionStatus.Working, "first"), Fixture.T0, drivers.Arm, "k1", 2);
+        d.Answered(SessionDrivers.Agent, "Later driver");
+        d.Observe(At(1, SessionStatus.Working, "different prompt"), Fixture.T0, drivers.Arm, "k2", 2);
+        Assert.False(d.PromptSender.IsAgent);
+    }
+
+    [Fact]
+    public async Task Reviewer_probe_codex_answer_does_not_label_a_mismatching_prompt()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var rollout = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, rollout, updated: Fixture.T0);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(rollout,
+            Codex.Line("session_meta", new { id = Id, timestamp = Copilot.At(0), cwd = "/work/codex" }, 0),
+            Codex.Event(new { type = "task_started" }, 1),
+            Codex.Event(new { type = "user_message", message = "first" }, 1),
+            Codex.Event(new { type = "task_complete", last_agent_message = "Done." }, 2));
+        await using var source = f.Source(drivers: drivers);
+        await source.RefreshAsync();
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), "Original sender", words: "original prompt");
+        Fixture.Append(rollout, Codex.Event(new { type = "task_started" }, 10));
+        await source.RefreshAsync();
+        drivers.For(Id).Answered(SessionDrivers.Agent, "Later driver");
+        Fixture.Append(rollout, Codex.Event(new { type = "user_message", message = "different prompt" }, 11));
+        await source.RefreshAsync();
+        var live = source.Get(Id)!;
+        var history = await source.HistoryAsync(Id, null, 20);
+        var rec = Assert.Single(history.Turns!, t => t.Prompt?.Text == "different prompt").Prompt!;
+        Assert.Equal(((string?)null, (string?)null), (live.Activity.UserMessageLabel, rec.Label));
+    }
+
+    [Fact]
     public void Restoring_an_arm_invalidates_the_prompt_awaiting_the_replaced_word_match()
     {
         var drivers = new SessionDrivers();
