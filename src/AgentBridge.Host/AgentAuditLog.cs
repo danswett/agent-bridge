@@ -360,7 +360,12 @@ public sealed class AgentAuditLog
             var folder = Path.Combine(profile, FolderName);
             var fault = HeadFault(folder, launch);
             if (ReadHead(folder, launch) is null && Files(folder, launch).SelectMany(File.ReadLines).Any(raw =>
-                JsonSerializer.Deserialize<JsonElement>(raw, Json).TryGetProperty("gate", out var gate) && gate.ValueKind != JsonValueKind.Null))
+            {
+                var row = JsonSerializer.Deserialize<JsonElement>(raw, Json);
+                return row.TryGetProperty("gate", out var gate) && gate.ValueKind != JsonValueKind.Null
+                    || row.TryGetProperty("grant", out var grant) && grant.ValueKind == JsonValueKind.String
+                    && grant.GetString() == WorktreeRefusalGrant;
+            }))
             { return "audit-incomplete"; }
             return VerifyProfile(profile, launch, log, chainOnly: true).Intact ? fault
                 : ReadHead(folder, launch) is null ? "audit-incomplete" : "coverage-break";

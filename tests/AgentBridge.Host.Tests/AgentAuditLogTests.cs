@@ -220,6 +220,24 @@ public sealed class AgentAuditLogTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void Later_appends_cannot_bless_a_lost_worktree_refusal_anchor(bool bothAnchors, bool markedAppend)
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Append(Entry()));
+        File.Delete(Path.Combine(Audit, "launches.head"));
+        if (bothAnchors) { File.Delete(Path.Combine(Audit, "agents.head")); }
+        Log().Append(entry with { Request = Guid.NewGuid().ToString("D"), Grant = markedAppend ? entry.Grant : null });
+        var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        var before = File.ReadAllBytes(file);
+        Assert.False(Log().Append(entry));
+        Assert.Equal(before, File.ReadAllBytes(file));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void UUID_casing_does_not_duplicate_a_worktree_refusal_and_new_records_are_canonical(bool uppercaseFirst)
