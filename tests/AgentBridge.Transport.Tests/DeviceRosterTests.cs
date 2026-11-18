@@ -278,6 +278,37 @@ public class DeviceRosterTests
     }
 
     [Fact]
+    public async Task Two_removals_never_promote_an_unrelated_child_of_storage_refused_evidence()
+    {
+        var (w, store, roster) = await FullOrdinaryLog();
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        w.Rename("A", "B", "addB", "addB", "ancestor");
+        var ancestor = Padded(w["A"], Entry.MaxBytes, parent);
+        w.Rename("child", "G", "G", "addB", "unrelated");
+        var child = Padded(w["child"], Entry.MaxBytes, ancestor);
+        w.Remove("first", "G", "addB", "addB");
+        var first = Padded(w["first"], Entry.MaxRemoveBytes, ancestor);
+        w.Remove("second", "G", "fill0", "addB");
+        var body = JsonNode.Parse(w["second"].Body)!;
+        body["target"]!["add"] = Codec.Base64Url(Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[2])).Hash);
+        var second = Padded(w["second"] with { Body = RosterFixture.Bytes(body) }, 1024, parent);
+        var result = await roster.AppendAsync(RosterFixture.Account,
+            [ancestor.Canonical(), child.Canonical(), first.Canonical(), second.Canonical()]);
+        Assert.Equal(("accepted", Invalid.Evidence), (result![0].Verdict, result[0].Reason));
+        Assert.Equal(("refused", Invalid.Evidence), (result[1].Verdict, result[1].Reason));
+        Assert.Equal("quarantined", result[2].Verdict);
+        Assert.Equal("accepted", result[3].Verdict);
+        var snapshot = (await Make(w, store).GetAsync(RosterFixture.Account))!;
+        Assert.Equal(before.Entries.Count + 3, snapshot.Entries.Count);
+        var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
+        Assert.True(replay.Holds(first.Hash));
+        Assert.True(replay.Holds(second.Hash));
+        Assert.Null(replay.Graph.Find(child.Hash));
+    }
+
+    [Fact]
     public async Task Storage_cap_merge_evidence_never_adopts_an_unrelated_branch_even_after_replay()
     {
         var (w, store, roster) = await FullOrdinaryLog();
