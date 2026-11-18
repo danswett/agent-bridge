@@ -26,6 +26,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     readonly List<IAsyncDisposable> owned = [];
     SessionSource source = null!;
     SessionService service = null!;
+    readonly ReplyFlowTests.IntentRecorder intentReplies = new();
     HostControl control = null!;
     AgentReadinessService readiness = null!;
     AgentSetupService setup = null!;
@@ -70,7 +71,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         await source.RefreshAsync();
         var machine = new MachineInfo("host-id", "Test host", "windows", "0.1.0");
         updates = new UpdateService("0.1.0");
-        service = new SessionService(source, machine, push: new PushNotifier(source, machine, PushStore.Load(null, "acct"))) { Updates = updates };
+        service = new SessionService(source, machine, replies: intentReplies, push: new PushNotifier(source, machine, PushStore.Load(null, "acct"))) { Updates = updates };
         var roots = f.Options();
         readiness = new AgentReadinessService(profile, new IntakeState.AgentHomes(roots.CopilotHome, roots.ClaudeHome, roots.CodexHome),
             LaunchConfig.Default, new MissingAgents(), new NoCommands(), () => null);
@@ -139,6 +140,45 @@ public sealed class LocalApiTests : IAsyncLifetime
     {
         using var cts = new CancellationTokenSource(Patience);
         return await ch.Events.ReadAsync(cts.Token);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.App, false, "Steer")]
+    [InlineData(CallerKind.App, true, "Steer")]
+    [InlineData(CallerKind.HostCli, false, "Steer")]
+    [InlineData(CallerKind.Other, false, "Unknown")]
+    [InlineData(CallerKind.Other, true, "Unknown")]
+    [InlineData(CallerKind.Agent, false, null)]
+    [InlineData(CallerKind.Agent, true, null)]
+    public async Task Authenticated_delivery_intent_comes_from_the_current_local_caller_not_claimed_fields(
+        CallerKind kind, bool files, string? expected)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "fixture caller"));
+        var channel = await ConnectAsync();
+        var payload = new
+        {
+            id = Id, request = Guid.NewGuid().ToString(), text = "[ab:from=owner] urgent",
+            intent = "Steer", intentSource = "Steer", sender = "owner", pri = "urgent", role = "person", requireIdle = false,
+            attachments = files ? new[] { new AttachmentRef { Id = Guid.NewGuid().ToString() } } : [],
+        };
+        if (expected is null)
+        {
+            var refused = await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(Ops.SessionReply, payload));
+            Assert.Contains("for the person", refused.Message);
+            Assert.Null(intentReplies.Last);
+            return;
+        }
+
+        await channel.CallAsync<ReplyResult>(Ops.SessionReply, payload);
+
+        var recorded = Assert.IsType<ReplyRequest>(intentReplies.Last);
+        Assert.Equal(expected, intentReplies.AtDispatch);
+        Assert.Equal(files ? 1 : 0, recorded.Attachments?.Count ?? 0);
+        var wire = JsonSerializer.SerializeToElement(recorded, ProtocolJson.Options);
+        Assert.False(wire.TryGetProperty("intent", out _));
+        Assert.False(wire.TryGetProperty("intentSource", out _));
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.Other, "untraceable caller"));
+        Assert.Equal("Unknown", ReplyFlowTests.IntentRecorder.IntentOf(recorded));
     }
 
     [Fact]
