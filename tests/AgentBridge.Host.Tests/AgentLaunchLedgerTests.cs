@@ -55,6 +55,26 @@ public sealed class AgentLaunchLedgerTests : IDisposable
     }
 
     [Theory]
+    [InlineData(90)]
+    [InlineData(150)]
+    public void Rollback_cannot_resurrect_an_expired_debit_or_persist_an_unrestorable_live_ledger(int rollbackMinutes)
+    {
+        var now = time.GetUtcNow();
+        AgentLaunchGate Current() => new(folder, () => now, time);
+        Assert.True(Current().CheckLaunch("a", "first", "hash").Allowed);
+        Current().LaunchStarted("a", "first", "session");
+        now += TimeSpan.FromHours(2);
+        Assert.True(Current().CheckLaunch("a", "first", "hash").Duplicate);
+        now -= TimeSpan.FromMinutes(rollbackMinutes);
+        Assert.True(Current().CheckLaunch("a", "first", "hash").Duplicate);
+        Assert.True(Current().CheckLaunch("a", "first", "hash").Duplicate);
+        Assert.StartsWith("live-limit:", Current().CheckLaunch("b", "held", "hash").Reason);
+        Assert.True(Current().SessionEnded("session"));
+        Assert.False(Current().SessionEnded("session"));
+        Assert.True(Current().CheckLaunch("b", "after-exit", "hash").Allowed);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void A_damaged_or_missing_committed_ledger_fails_closed_instead_of_resetting_caps(bool missing)
