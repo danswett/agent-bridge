@@ -396,10 +396,12 @@ These reads use the host's in-memory live source, also used by its fleet registr
 publisher, without Home Assistant reads or a separate roster store. Every `Session`
 is scoped to `hello.machine.id`.
 `owner`, `pr` and `finished` carry explicit evidence:
-unknown is not confirmed none or false. Idle does not mean work-finished. Once discovery
-observes a session ended, removal bypasses upsert coalescing and quiet-session holding;
-list/get and the next subscription exclude it immediately. A discovery hold is not
-evidence that a session ended.
+unknown is not confirmed none or false. Idle does not mean work-finished. Removal bypasses
+upsert coalescing and quiet-session holding once discovery drops a row; list/get and new
+subscriptions then exclude it. This slice retains missing rows while their agent's discovery
+is held, even with positive ended evidence. The
+[lifecycle child](https://github.com/danswett/agent-bridge/pull/3202) adds ended-over-hold
+removal. A discovery hold alone is not evidence that a session ended.
 
 This cut emits `owner`, `pr` and `finished` as `{ "state": "unknown" }` on every
 host-bound row; discovering known values or confirmed none/false is out of scope.
