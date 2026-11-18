@@ -5,8 +5,8 @@ using Microsoft.UI.Dispatching;
 
 namespace AgentBridge.App;
 
-// What the command line asked for. Velopack's own hook arguments are not ours: Program runs
-// Velopack first, which handles and exits on those.
+// What the command line asked for. Velopack's own hook arguments are not ours: they are
+// ignored here, then Velopack handles and exits on them before the UI starts.
 sealed record AppOptions
 {
     public string Profile { get; init; } = "default";

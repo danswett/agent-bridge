@@ -384,7 +384,9 @@ controls consume that same contract; this extraction does not disable or remove 
   `%LOCALAPPDATA%\AgentBridge`: that is the host's data root (device keys, accounts,
   config, logs), and Velopack deletes its install folder on uninstall.
 * `OnBeforeUpdateFastCallback` (the old version, before files are replaced) stops the host
-  over the pipe and waits for its process to exit, so nothing in `current\` is locked. Every
+  for the command line's `--profile` over the pipe and waits for its process to exit, so
+  nothing in `current\` is locked. The profile is resolved before Velopack dispatches either
+  lifecycle hook; when omitted, it remains `default`, as on a normal app start. Every
   update the app starts has stopped the host already, after waiting for its usage probes (below),
   so the hook finds it stopped and begins nothing. One it finds running (an update the app did
   not start) is stopped only if its usage probes are done within 6 s. Velopack gives this hook
@@ -411,11 +413,14 @@ controls consume that same contract; this extraction does not disable or remove 
   starts the host once.
   The app also stops the host itself before it hands an update to `Update.exe`, and starts it on
   launch if it is not running.
-* `OnBeforeUninstallFastCallback` stops the host and attempts bounded cleanup of only the
-  default profile's owned agent hooks and instruction blocks, using its saved agent homes.
+* `OnBeforeUninstallFastCallback` uses that same selected profile's manager to stop its host,
+  attempt bounded cleanup of its owned agent hooks and instruction blocks using its saved
+  agent homes, and remove its host logon task.
   It never uninstalls a CLI, signs out an account or takes over migrated/unowned hooks.
   Failure is logged and recovery data remains; reinstall and use Settings to repair.
   Private hook binaries/runtime and profile data are retained for existing sessions.
+  Run-entry and toast-registration isolation for a second installation are separate work
+  ([profile isolation, slice B](https://github.com/danswett/agent-bridge/issues/914#issuecomment-6972251913)).
 * Feed: GitHub Releases of `danswett/agent-bridge` (pre-releases included unless turned
   off; every merge to main publishes one, below), or a folder or URL holding
   `releases.<channel>.json` (`releases.win.json` for x64, `releases.win-arm64.json` for Arm64) in

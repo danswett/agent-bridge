@@ -13,6 +13,9 @@ public static class Program
     {
         AppDomain.CurrentDomain.UnhandledException += (_, e) => CrashLog.Write(e.ExceptionObject as Exception);
 
+        // Hooks can exit inside Run(), so capture their profile before Velopack dispatches them.
+        var options = AppOptions.Parse(args);
+
         // First: Velopack starts the installed exe with hook arguments on install, update and
         // uninstall, and Run() handles those and exits. The host lives in the app's folder, so
         // it is stopped before an update replaces the folder and started by the new version;
@@ -28,11 +31,10 @@ public static class Program
         // of 49 killed at its 15 s limit). The restarted app starts the host, once (App.StartHostAsync).
         VelopackApp.Build()
             .SetAutoApplyOnStartup(false)
-            .OnBeforeUpdateFastCallback(_ => Lifecycle.BeforeUpdate())
-            .OnBeforeUninstallFastCallback(_ => Lifecycle.BeforeUninstall())
+            .OnBeforeUpdateFastCallback(_ => Lifecycle.BeforeUpdate(options.Profile))
+            .OnBeforeUninstallFastCallback(_ => Lifecycle.BeforeUninstall(options.Profile))
             .Run();
 
-        var options = AppOptions.Parse(args);
         if (options.LiveListReplay) { Paths.DiagnosticRoot = Path.Combine(Path.GetDirectoryName(options.SelfTest!)!, "live-list-logs"); }
         if (options.SelfTest is not null) { SelfTestTrace.Start(); }
 
@@ -123,7 +125,7 @@ static class Lifecycle
 {
     public static bool Installed => new VelopackUpdater(() => false, InlineDispatcher.Instance, "default").InstalledVersion is not null;
 
-    static HostManager Manager() => App.ManagerFor("default");
+    static HostManager Manager(string profile) => App.ManagerFor(profile);
 
     // Inside an agent session the hooks do nothing to the host (LifecycleGuard), and say so in
     // the app's log.
@@ -147,14 +149,14 @@ static class Lifecycle
     // they took (HostManager.StopAndApplyAsync), so nothing is begun here. One started otherwise
     // finds it running: it is stopped only if its probes are done within HookProbeWait; if not, it
     // is left to Velopack, which ends it with the package (docs/app-windows.md says what that leaves).
-    public static void BeforeUpdate() => StopForHook("update");
+    public static void BeforeUpdate(string profile) => StopForHook("update", profile);
 
-    static void StopForHook(string what)
+    static void StopForHook(string what, string profile)
     {
         if (Refused(what)) { return; }
         try
         {
-            var stop = Manager().StopWithinAsync(HookProbeWait);
+            var stop = Manager(profile).StopWithinAsync(HookProbeWait);
             if (!stop.Wait(HookWait)) { AppLog.Write($"{what}: the host had not stopped after {HookWait.TotalSeconds:0} s, and Velopack ends it"); }
             else if (stop.Result is { } busy) { AppLog.Write($"{what}: the host was left running, and Velopack ends it: {busy}"); }
         }
@@ -165,10 +167,10 @@ static class Lifecycle
     // the app's Run entry, toast registration and the host's logon marker (#780). The host's profile
     // (key, account, config) stays, like any app's data, so reinstalling picks up where it was;
     // docs/app-windows.md.
-    public static void BeforeUninstall()
+    public static void BeforeUninstall(string profile)
     {
         if (Refused("uninstall")) { return; }
-        var manager = Manager();
+        var manager = Manager(profile);
         // Velopack terminates this callback after 30 seconds; reserve time for registration cleanup.
         // The stop waits for a busy usage probe (#238) only within those 12 s: past them it is not
         // stopped, its hooks are left alone, and Velopack ends it with the package. Not StopWithinAsync:
