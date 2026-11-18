@@ -34,7 +34,7 @@ public sealed partial class SessionView
     {
         UnwatchHistory();
         history = Card?.Stored;
-        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; openPrompts.Clear(); historyVisible = 1; }
+        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; latestHatch = new(); pinEnd = true; openPrompts.Clear(); historyVisible = 1; }
         if (history is null) { ShowHistory(); return; }
         history.Changed += OnHistoryChanged;
         ShowHistory();
@@ -80,7 +80,7 @@ public sealed partial class SessionView
         var line = history is null ? null : HistoryDraw.Line(history.State, rows.Count, !string.IsNullOrEmpty(Card?.UserMessage), history.Start);
         var scroll = ConversationScroll;
         // Measured before the rows change: the pane collapsing under the view must not read as scrolled back.
-        var atEnd = pinEnd || !panning && !scrolling && keyTarget is null && scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
+        var atEnd = latestHatch.AtEnd(pinEnd || !panning && !scrolling && keyTarget is null && scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack);
         var offset = scroll?.VerticalOffset ?? 0;
         var reading = atEnd ? null : ReadingHistory();
         var changed = HistoryRowSync.Apply(historyShown, rows);
@@ -136,7 +136,7 @@ public sealed partial class SessionView
         var from = Math.Max(0, end - 2);
         var rows = HistoryDraw.Rows(turns.Skip(from).Take(end - from).ToArray(), null, openPrompts);
         var scroll = ConversationScroll;
-        var atEnd = pinEnd || scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
+        var atEnd = latestHatch.AtEnd(pinEnd || scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack);
         var offset = scroll?.VerticalOffset ?? 0;
         var extent = scroll?.ScrollableHeight ?? 0;
         var reading = atEnd ? null : ReadingHistory();
@@ -180,7 +180,7 @@ public sealed partial class SessionView
     void OnHistoryEarlier(object sender, RoutedEventArgs e) => LoadEarlier();
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
-    internal void ReleasePin() { pinEnd = false; anchoring = null; pinReleases++; }
+    internal void ReleasePin() { latestHatch.Release(); pinEnd = false; anchoring = null; pinReleases++; }
 
     // Content changed in the conversation can reflow it, so the place is put back once layout has settled:
     // the end if pinned, else the stored turn's screen position through a prepend (#1593).
@@ -193,7 +193,8 @@ public sealed partial class SessionView
         {
             if (session != shownHistory || releases != pinReleases || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
-            var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset + (earlierExtent is { } extent ? scroll.ScrollableHeight - extent : 0), scroll.ScrollableHeight);
+            if (latestHatch.Used) { anchor = null; }
+            var target = atEnd || pinEnd ? scroll.ScrollableHeight : latestHatch.RestoreOffset(offset, scroll.ScrollableHeight, earlierExtent);
             if (!atEnd && !pinEnd && reading is { } kept)
             {
                 var index = historyShown.ToList().FindIndex(r => r.Id == kept.Id);
@@ -203,7 +204,7 @@ public sealed partial class SessionView
                     target = Math.Clamp(scroll.VerticalOffset + Top(row, scroll) - kept.Top, 0, scroll.ScrollableHeight);
                 }
             }
-            var off = reading is not null || atEnd || pinEnd ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
+            var off = reading is not null || atEnd || pinEnd || latestHatch.Used ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
             if (off) { Anchoring(scroll, target); }
         }
         // Compensate a prepend before input can land between insertion and correction.

@@ -79,6 +79,7 @@ public sealed partial class SessionView
     {
         if (ConversationScroll is not null || Shallowest<ScrollViewer>(ConversationList) is not { } scroll) { return; }
         ConversationScroll = scroll;
+        HookLatest(scroll);
         scroll.ViewChanged += (_, e) =>
         {
             follow.Scrolled(scroll.VerticalOffset, scroll.ScrollableHeight);
@@ -399,6 +400,7 @@ public sealed partial class SessionView
     void TakeAnchor()
     {
         anchor = null;
+        if (latestHatch.Pinned) { return; }
         if (ConversationScroll is not { } scroll || ConversationList.ItemsPanelRoot is not ItemsStackPanel panel || panel.FirstVisibleIndex < 0) { return; }
         var realised = new List<(int, double, double)>();
         for (var i = panel.FirstVisibleIndex; i <= Math.Min(panel.FirstVisibleIndex + 1, blocks.Count - 1); i++)
@@ -423,6 +425,7 @@ public sealed partial class SessionView
     // the person pans or a scroll is under way, nor while a correction of ours is on its way.
     void OnConversationLaidOut(object? sender, object e)
     {
+        PinLatest();
         if (pinEnd) { return; }
         if (panning || scrolling || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
             || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }

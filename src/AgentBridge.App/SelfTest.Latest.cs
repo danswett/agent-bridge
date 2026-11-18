@@ -38,7 +38,8 @@ static partial class SelfTest
             view.Card = card;
             if (card.Stored is not { } history || ConversationScroller(view) is not { } scroll)
             { check(false, "latest: has history and a conversation scroller"); return; }
-            await Until(() => history.State != HistoryLoad.Loading && scroll.ScrollableHeight > 500, TimeSpan.FromSeconds(5));
+            if (!await Until(() => history.State != HistoryLoad.Loading && scroll.ScrollableHeight > 500, TimeSpan.FromSeconds(5)))
+            { check(false, "latest: lays out a reply taller than the viewport"); return; }
             view.ReleasePin();
             scroll.ChangeView(null, 100, null, disableAnimation: true);
             await Still(scroll);

@@ -18,9 +18,9 @@ public sealed class LatestReturnTests
     }
 
     [Theory]
-    [InlineData(600, 900, 500, 600)]
-    [InlineData(600, 800, null, 600)]
-    [InlineData(600, 400, null, 400)]
+    [InlineData(600d, 900d, 500d, 600d)]
+    [InlineData(600d, 800d, null, 600d)]
+    [InlineData(600d, 400d, null, 400d)]
     public void A_released_hatch_without_a_visible_row_keeps_its_numeric_offset(
         double offset, double extent, double? previousExtent, double expected)
     {
