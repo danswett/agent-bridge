@@ -14,9 +14,10 @@ internal sealed class RelayReplyInbox(string path, Func<RelayReplyInbox.Entry, C
     public async Task<ReplyResult> ReceiveAsync(string node, string rid, Entry entry, CancellationToken ct = default)
     {
         if (!Guid.TryParse(rid, out var request)) { throw new ArgumentException("A reply request UUID is required."); }
+        var ack = new ReplyAck(rid);
         rid = request.ToString("N");
         inbox.Enqueue(node, rid, entry.Peer, JsonSerializer.Serialize(entry), DateTimeOffset.UtcNow);
-        return await DrainAsync(node, rid, ct);
+        return (await DrainAsync(node, rid, ct)) with { ReplyAck = ack };
     }
 
     public async Task RecoverAsync(IEnumerable<string> nodes, CancellationToken ct = default)

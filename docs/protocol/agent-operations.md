@@ -8,6 +8,19 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 | `fleet.list` | read | Lists the sessions and online/offline machines of the agent's own account, with optional machine display names. |
 | `fleet.find` | read | Finds one session of the agent's own account by exact name, with optional machine display names; answers `unverified` until records are signed. |
 
+## Durable relay reply receipts
+
+With `homeAssistant.durableReplyIngress` enabled, relay `session.reply` and
+`agent.lite.send` results add `"reply_ack":{"rid":"<request UUID>"}` after a
+successful durable enqueue. This is a receipt of queued work, **not proof of
+delivery**; the existing outcome/status fields still describe delivery.
+The receipt contains only the request ID, never reply text. Repeating a retained
+request ID returns its receipt without dispatching the reply a second time.
+An append failure emits no receipt. Setting the switch to `false` preserves the
+legacy direct path and omits the field. Older readers ignore this additive field.
+There is no separate `reply_ack` event. The shared `reply-ack.json` vectors cover
+present, absent and duplicate receipts on both routes.
+
 ## `fleet.list`
 
 ```json
