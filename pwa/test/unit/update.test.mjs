@@ -11,9 +11,105 @@ import { P256KeyPair } from '../../js/noise-p256.js';
 import { deviceIdOf } from '../../js/identity.js';
 import { fromUtf8 } from '../../js/bytes.js';
 import { fromBase64url } from '../../js/blobs.js';
+import * as updates from '../../js/update.js';
 
 const NOW = Date.parse('2026-11-02T18:00:00.000Z');
 const found = readUpdateState({ current: '0.4.0', installer: true, available: '0.5.0', checkedAt: '2026-11-02T17:55:00.000Z', phase: 'idle' });
+
+const departure = { to: '0.1.123', at: new Date(NOW).toISOString(), backBy: new Date(NOW + 180000).toISOString() };
+const progressState = (extra = {}) => readUpdateState({ installer: true, current: '0.1.122', available: '0.1.123', ...extra });
+
+test('each state appears at its time', (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: NOW });
+  const fleet = fakeFleet(() => {});
+  const control = new UpdateControl({ fleet });
+  t.after(() => control.clear());
+  const show = (extra, online = true) => {
+    fleet.states.set('a', progressState(extra));
+    return control.card('a', online);
+  };
+  assert.equal(show({ phase: 'downloading', bytes: 12, total: 100 }).text, 'Downloading \u00b7 12 / 100 bytes');
+  assert.equal(show({ downloaded: true }).state, 'ready');
+  assert.equal(show({ installing: departure.at }).text, 'Installing');
+  assert.equal(show({ leaving: departure }).text, 'Installing');
+  let changes = 0;
+  control.onChange(() => changes++);
+  assert.equal(control.card('a', false).text, 'Restarting');
+  t.mock.timers.tick(179999);
+  assert.equal(control.card('a', false).state, 'restarting');
+  t.mock.timers.tick(1);
+  assert.ok(changes > 0);
+  assert.equal(control.card('a', false).state, 'slow');
+  t.mock.timers.tick(420000);
+  const failed = control.card('a', false);
+  assert.equal(failed.state, 'didNotComeBack');
+  assert.equal(failed.text, 'Did not come back after 10 minutes');
+  assert.ok(failed.action && failed.step === 'Restarting');
+  const back = { from: '0.1.122', to: '0.1.123', at: new Date().toISOString(), request: 'r' };
+  assert.notEqual(show({ current: back.to, request: 'other', back })?.state, 'back');
+  assert.equal(show({ current: back.to, request: 'r', back }).text, 'Back online');
+  t.mock.timers.tick(599999);
+  assert.equal(control.card('a', true).state, 'back');
+  t.mock.timers.tick(1);
+  assert.equal(control.card('a', true), null);
+});
+
+for (const [step, word] of [
+  ['downloading', 'Downloading'], ['installing', 'Installing'], ['restarting', 'Restarting'],
+  ['host-start', 'Starting bridge'], ['host-version', 'Checking bridge version'], ['future-step', null],
+]) {
+  test(`each failure row names its step and one action: ${step}`, (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: NOW });
+    const fleet = fakeFleet(() => {});
+    fleet.states.set('a', progressState({ last: { outcome: 'failed', step, to: '0.1.123', at: departure.at } }));
+    const control = new UpdateControl({ fleet });
+    t.after(() => control.clear());
+    const card = control.card('a', true);
+    assert.equal(card.step, word);
+    assert.equal(typeof card.action, 'string');
+    assert.ok(card.action.length > 0);
+    t.mock.timers.tick(86400000);
+    assert.equal(control.card('a', true).state, 'failed');
+    control.dismissCard('a');
+    assert.equal(control.card('a', true), null);
+  });
+}
+
+test('a host last replaces an inference', () => {
+  const state = progressState({ leaving: departure });
+  assert.equal(updates.updateCard(state, { online: false, now: NOW + 600000 }).state, 'didNotComeBack');
+  state.last = { outcome: 'failed', step: 'host-start', at: new Date(NOW + 600001).toISOString() };
+  assert.equal(updates.updateCard(state, { online: false, now: NOW + 600002 }).state, 'failed');
+});
+
+test('no leaving takes the 90 s path and an old UpdateState round-trips unchanged', () => {
+  const old = progressState({ phase: 'installing', requestNow: true });
+  assert.deepEqual(readUpdateState(JSON.parse(JSON.stringify(old))), old);
+  let clock = NOW;
+  const control = new UpdateControl({ fleet: { update: () => old }, now: () => clock });
+  assert.equal(control.restarting('a', true), true);
+  assert.equal(control.restarting('a', false), true);
+  clock += 90000;
+  assert.equal(control.restarting('a', false), false);
+  assert.equal(updates.updateCard(old, { online: false, now: clock }), null);
+  control.clear();
+});
+
+test('release link uses the fixed prefix with a validated tag', () => {
+  for (const tag of ['v0.1.123', '0.1.123', 'v0.1.9223372036854775807', 'v0.1.01', 'v0.1.9223372036854775808', 'v0.1.123/evil', 'https://evil.invalid', 'v0.1.123\n']) {
+    const card = updates.updateCard(progressState({ last: { outcome: 'failed', to: tag, at: departure.at } }), { now: NOW });
+    const valid = ['v0.1.123', '0.1.123', 'v0.1.9223372036854775807'].includes(tag);
+    assert.equal(card.href, valid ? `https://github.com/danswett/agent-bridge/releases/tag/${tag.startsWith('v') ? tag : `v${tag}`}` : null);
+  }
+});
+
+test('hostile host string never reaches card text and unknown facts stay absent', () => {
+  const hostile = '<img src=x onerror=alert(1)>\u0000\u202e';
+  const state = progressState({ bytes: -1, total: '100', downloaded: 'true', installing: hostile, leaving: { to: hostile, at: hostile }, back: [],
+    last: { outcome: 'failed', reason: hostile, step: hostile, to: hostile, at: departure.at } });
+  assert.deepEqual([state.bytes, state.total, state.downloaded, state.installing, state.leaving, state.back, state.last.step], Array(7).fill(null));
+  assert.ok(!JSON.stringify(updates.updateCard(state, { now: NOW })).includes(hostile));
+});
 
 test('a new-app held check still offers only Check now in an already installed PWA', () => {
   const raw = JSON.parse(readFileSync(new URL('../../../tests/fixtures/updates/held-check.json', import.meta.url), 'utf8'));
