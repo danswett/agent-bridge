@@ -38,6 +38,7 @@ public sealed class O302ParentProbeTests
         int at = 3598;
         public int Keys, Requests;
         public Action? BeforeKeys;
+        public bool Available => true;
 
         public Harness()
         {
