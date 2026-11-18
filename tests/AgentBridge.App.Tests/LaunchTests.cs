@@ -128,6 +128,31 @@ public sealed class LaunchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task LaunchViewModel_leaving_the_page_discards_the_tick()
+    {
+        await AgentLaunchSwitch(true);
+        ui.Post(() => { launch.MayStartAgents = true; launch.Closed(); });
+        Assert.False(launch.ShowMayStartAgents);
+        Assert.False(launch.MayStartAgents);
+        ui.Post(launch.Opened);
+        await Wait.UntilAsync(() => launch.ShowMayStartAgents, "fresh settings after reopening");
+        Assert.False(launch.MayStartAgents);
+    }
+
+    [Fact]
+    public async Task LaunchViewModel_disconnecting_hides_and_discards_the_tick_and_notifies_the_view()
+    {
+        await AgentLaunchSwitch(true);
+        var hidden = false;
+        launch.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(LaunchViewModel.ShowMayStartAgents) && !launch.ShowMayStartAgents) { hidden = true; } };
+        ui.Post(() => launch.MayStartAgents = true);
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected && hidden, "the disconnected tick to disappear");
+        Assert.False(launch.MayStartAgents);
+        Assert.False(JsonSerializer.SerializeToElement(launch.Settings(), ProtocolJson.Options).TryGetProperty("agentScope", out _));
+    }
+
+    [Fact]
     public async Task A_launch_sends_every_setting_and_the_whole_prompt_then_opens_the_new_sessions_card()
     {
         var opened = new List<string>();

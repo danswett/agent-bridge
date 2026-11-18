@@ -150,6 +150,10 @@
                         ItemTemplate="{StaticResource ChoiceTemplate}"
                         ItemsSource="{x:Bind ViewModel.PermissionChoices}" SelectedItem="{x:Bind ViewModel.Permissions, Mode=OneWay}"
                         SelectionChanged="OnPicked" />
+                    <CheckBox
+                        Content="May start agents" AutomationProperties.AutomationId="LaunchMayStartAgents"
+                        IsChecked="{x:Bind ViewModel.MayStartAgents, Mode=TwoWay}"
+                        Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMayStartAgents), Mode=OneWay}" />
                     <TextBox
                         Header="First message"
                         AutomationProperties.AutomationId="LaunchPrompt"

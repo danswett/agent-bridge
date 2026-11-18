@@ -50,6 +50,8 @@ public sealed partial class LaunchViewModel : Observable
     bool filling;
     string scope = "";
     bool permissionsSet;
+    bool agentLaunchEnabled, mayStartAgents;
+    long agentLaunchConnection;
     string? handled;
     // Every machine's launches are followed, not only the one on screen: one pressed before
     // switching machines still opens its session when it starts.
@@ -144,6 +146,7 @@ public sealed partial class LaunchViewModel : Observable
     // names, their sessions) is offered or kept picked, and an answer still on its way is dropped.
     void OnAccountChanged()
     {
+        MayStartAgents = false;
         sources = [];
         sourcesKnown = false;
         sourcesRun++;
@@ -251,6 +254,13 @@ public sealed partial class LaunchViewModel : Observable
     public bool ShowModel { get; private set; }
     public bool ShowEffort { get; private set; }
     public bool ShowContext { get; private set; }
+    public bool ShowMayStartAgents => shown && ShowForm && !loading && machine is { IsLocal: true, Host.State: LinkState.Connected } m
+        && agentLaunchEnabled && m.Host.ConnectionNumber == agentLaunchConnection && resume?.Value == "";
+    public bool MayStartAgents
+    {
+        get => ShowMayStartAgents && mayStartAgents;
+        set => Set(ref mayStartAgents, value && ShowMayStartAgents);
+    }
     // Kept for a machine shown only for its questions too: nothing else lists them again there, so
     // one answered at the machine, or a listing that failed, would stay until the page was left.
     public bool ShowReload => options is not null || error is not null;
@@ -349,6 +359,8 @@ public sealed partial class LaunchViewModel : Observable
 
     void Target(Machine? next)
     {
+        agentLaunchEnabled = false;
+        MayStartAgents = false;
         // Saved even after a failed reload, when the picks are still in place though not shown.
         if (machine is { } was && new[] { resume, agent, workspace, profile, model, effort, context, permissions }.Any(c => c is not null))
         {
@@ -397,6 +409,7 @@ public sealed partial class LaunchViewModel : Observable
     public void Closed()
     {
         shown = false;
+        MayStartAgents = false;
         StopBusy();
     }
 
@@ -405,6 +418,9 @@ public sealed partial class LaunchViewModel : Observable
         var m = machine;
         if (m is null) { return; }
         var load = ++loads;
+        var connection = m.Host.ConnectionNumber;
+        agentLaunchEnabled = false;
+        MayStartAgents = false;
         loading = true;
         error = null;
         Draw();
@@ -415,6 +431,7 @@ public sealed partial class LaunchViewModel : Observable
         string? failed = null;
         try { got = Known(await m.Host.ReadAsync<LaunchOptions>(LaunchProtocol.Options, timeout: OptionsTimeout)); }
         catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or JsonException) { failed = e.Message; }
+        var enabled = m.IsLocal && got is not null && await ReadAgentLaunchAsync(m);
         // This machine's pipe lists its folder-trust questions read-only: whether this app may
         // answer one is its host's word through the relay.
         var trust = m.IsLocal ? await LocalTrustAsync(got) : null;
@@ -424,6 +441,8 @@ public sealed partial class LaunchViewModel : Observable
             if (load == loads && m == machine)
             {
                 loading = false;
+                agentLaunchConnection = connection;
+                agentLaunchEnabled = enabled && connection == m.Host.ConnectionNumber;
                 localTrust = trust;
                 // A reload that fails says so, rather than leaving choices that may be out of date.
                 if (got is not null) { options = got; Listed(m, load); } else { options = null; error = failed; }
@@ -433,6 +452,24 @@ public sealed partial class LaunchViewModel : Observable
             done.SetResult();
         });
         await done.Task;
+    }
+
+    static async Task<bool> ReadAgentLaunchAsync(Machine m)
+    {
+        try
+        {
+            var status = await m.Host.CallAsync("host.agentSettings.status");
+            if (status.ValueKind == JsonValueKind.Object
+                && status.TryGetProperty("state", out var state) && state.ValueKind == JsonValueKind.String && state.GetString() == "ok"
+                && status.TryGetProperty("settings", out var settings) && settings.ValueKind == JsonValueKind.Object
+                && settings.TryGetProperty("agents.launch.enabled", out var entry) && entry.ValueKind == JsonValueKind.Object
+                && entry.TryGetProperty("value", out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            { return value.GetBoolean(); }
+            m.Host.Log("May start agents unavailable: host settings status is unreadable or malformed.");
+        }
+        catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or JsonException)
+        { m.Host.Log($"May start agents unavailable: {e.Message}"); }
+        return false;
     }
 
     async Task SourcesAsync(Machine m, int load)
@@ -634,6 +671,7 @@ public sealed partial class LaunchViewModel : Observable
             Request = "",
             Agent = agent?.Value,
             Permissions = permissions?.Value,
+            AgentScope = MayStartAgents ? AgentProtocol.ScopeReadReplyLaunch : null,
             Resume = resumed?.Id,
             Workspace = resumed is null ? workspace?.Value : null,
             Profile = a?.Profiles is not null ? profile?.Value : null,
@@ -712,6 +750,7 @@ public sealed partial class LaunchViewModel : Observable
         // Held (the machine went offline under the page, #269): nothing went, so there is nothing to
         // confirm.
         if (sent.Outcome == Deliveries.Held) { SetProblem($"Not launched: {Sentence(sent.Reason ?? "the machine is offline")}"); return; }
+        MayStartAgents = false;
         // Submit returns its first snapshot; the delivery may already have moved on (no connection:
         // waiting), and that newer state is the one to show.
         last = m.Deliveries.Get(Key) is { } now && now.Request == sent.Request ? now : sent;
@@ -723,6 +762,7 @@ public sealed partial class LaunchViewModel : Observable
         if (!ShowResend || lastMachine is not { } m || last is not { Payload: LaunchRequest launch } e || lastVia is not { } via) { return; }
         if (e.State == DeliveryState.Done)
         {
+            launch = launch with { AgentScope = null };
             // A new request: a transfer's command was spent on the last one, so it is signed again.
             if (launch.Transfer is not null)
             {
@@ -793,7 +833,8 @@ public sealed partial class LaunchViewModel : Observable
             Raise(nameof(StatusText));
             Raise(nameof(StatusTone));
         }
-        foreach (var p in new[] { nameof(CanLaunch), nameof(ShowResend), nameof(ShowOpen), nameof(State) }) { Raise(p); }
+        if (!ShowMayStartAgents) { MayStartAgents = false; }
+        foreach (var p in new[] { nameof(CanLaunch), nameof(ShowResend), nameof(ShowOpen), nameof(State), nameof(ShowMayStartAgents), nameof(MayStartAgents) }) { Raise(p); }
         DrawTrust();
     }
 
