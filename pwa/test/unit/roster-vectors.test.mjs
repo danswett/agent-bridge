@@ -9,7 +9,7 @@ import { RosterFormatError } from '../../js/roster/refusal.js';
 import { base64Url, tryBase64Url, fromBase64Url, fromHex, hex } from '../../js/roster/codec.js';
 import { frame, utf8 } from '../../js/roster/framing.js';
 import { point, checkRosterSignature, verify, fromRaw } from '../../js/roster/p256.js';
-import { parseEntry, parseHostDescriptor, deviceId, fingerprint, signedBy, signedByCosigner, presenceChallenge, isUtc } from '../../js/roster/entry.js';
+import { parseEntry, parseHostDescriptor, hostKeyBinding, deviceId, fingerprint, signedBy, signedByCosigner, presenceChallenge, isUtc } from '../../js/roster/entry.js';
 import { checkAssertion } from '../../js/roster/webauthn.js';
 import * as enrollment from '../../js/roster/enrollment.js';
 
@@ -145,6 +145,38 @@ test('standalone descriptor parsing keeps strict JSON, host-only schema and cont
     hostBody.account, hostBody.generation)), 'version');
   assert.equal(await refusal(parseHostDescriptor(bytes, '', hostBody.generation)), 'account');
   assert.equal(await refusal(parseHostDescriptor(bytes, hostBody.account, 'not-a-generation')), 'id');
+});
+
+async function descriptorForAccount(account) {
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const hostSign = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
+  const proof = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey,
+    hostKeyBinding(account, hostBody.generation, b64(hostBody.device.dh)));
+  return descriptorBytes({ ...hostBody.device, hostSign: base64Url(hostSign),
+    hostSignProof: base64Url(fromRaw(new Uint8Array(proof))) });
+}
+
+test('standalone descriptors refuse unpaired account surrogates instead of accepting replacement aliases', async (t) => {
+  for (const [name, account] of [
+    ['lone high', '\ud800'], ['lone low', '\udfff'],
+    ['embedded high', 'a\udbffz'], ['embedded low', 'a\udc00z'],
+    ['two highs', '\ud800\udbff'], ['reversed pair', '\udc00\ud800'],
+    ['pair then lone high', '\ud800\udc00\ud800'],
+  ]) {
+    await t.test(name, async () => {
+      const replacement = new TextDecoder().decode(utf8(account));
+      const bytes = await descriptorForAccount(replacement);
+      assert.equal((await parseHostDescriptor(bytes, replacement, hostBody.generation)).kind, 'host');
+      assert.equal(await refusal(parseHostDescriptor(bytes, account, hostBody.generation)), 'account');
+    });
+  }
+});
+
+test('standalone descriptors preserve BMP scalars, replacement characters and valid surrogate pairs', async () => {
+  for (const account of ['account', 'a\ud7ff\ue000\ufffdz', 'a\ud800\udc00z', 'a\udbff\udfffz', '\ud83d\ude00'.repeat(32)]) {
+    const bytes = await descriptorForAccount(account);
+    assert.equal((await parseHostDescriptor(bytes, account, hostBody.generation)).kind, 'host');
+  }
 });
 
 test('a presence assertion passes or fails each check as the library\'s does', async () => {

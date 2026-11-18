@@ -18,6 +18,33 @@ public sealed class RosterEncodingTests
         return add with { Body = Bytes(body) };
     }
 
+    [Theory]
+    [InlineData(0xd800)]
+    [InlineData(0xdbff)]
+    [InlineData(0xdc00)]
+    [InlineData(0xdfff)]
+    public void Host_key_binding_refuses_accounts_with_unpaired_surrogates(int codeUnit)
+    {
+        var surrogate = new string((char)codeUnit, 1);
+        foreach (var account in new[] { surrogate, "a" + surrogate + "z", "\ud800\udc00" + surrogate })
+        {
+            Assert.Equal(Refusal.Account, Code(() => EntryBody.ParseAccount(account)));
+            Assert.Equal(Refusal.Account, Code(() => HostKey.Binding(account, Generation, Host1.Public)));
+        }
+    }
+
+    [Theory]
+    [InlineData("account")]
+    [InlineData("a\ud7ff\ue000\ufffdz")]
+    [InlineData("a\ud800\udc00z")]
+    [InlineData("a\udbff\udfffz")]
+    public void Host_key_binding_preserves_valid_account_scalars(string account)
+    {
+        Assert.Equal(account, EntryBody.ParseAccount(account));
+        Assert.Equal(Framing.F(Framing.Label(Framing.HostKeyBindingLabel), Encoding.UTF8.GetBytes(account),
+            Encoding.UTF8.GetBytes(Generation), Host1.Public), HostKey.Binding(account, Generation, Host1.Public));
+    }
+
     [Fact]
     public void A_name_of_64_scalars_is_accepted_at_256_bytes_and_one_scalar_more_is_refused()
     {
