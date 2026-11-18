@@ -1,9 +1,114 @@
 #Requires -Version 7.4
-param([ValidateSet('elapsed', 'exit', 'replacement', 'readonly', 'no-survivors', 'partial', 'ambiguous', 'metric-values', 'entrypoint')][string] $Scenario)
+param([ValidateSet('elapsed', 'exit', 'replacement', 'readonly', 'no-survivors', 'partial', 'ambiguous', 'metric-values', 'entrypoint',
+    'memory-growth', 'memory-cache', 'memory-control', 'memory-spin', 'memory-steady', 'memory-boundary',
+    'memory-missing', 'memory-replacement', 'memory-retry', 'memory-invalid')][string] $Scenario)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'efficiency-baseline.ps1')
 function Assert($Condition, [string] $Reason) { if (-not $Condition) { throw $Reason } }
+if ($Scenario -like 'memory-*') {
+    function New-MemoryRun([double] $FirstMb = 100, [double] $LastMb = 104) {
+        return @{
+            processIdentity = '42/start'; controlIdentity = '43/start'
+            samples = @(foreach ($i in 0..9) {
+                $mb = if ($i -lt 3) { $FirstMb } else { $LastMb }
+                @{ privateBytes = $mb * 1MB; workingSetBytes = $mb * 1MB; controlPrivateBytes = 10MB }
+            })
+        }
+    }
+    $args = @{
+        Run = New-MemoryRun; Rerun = New-MemoryRun 104 108
+        GrowthCeilingBytes = 3MB; SteadyPrivateCeilingBytes = 200MB
+        SteadyWorkingSetCeilingBytes = 200MB; Margin = 0.25
+    }
+    switch ($Scenario) {
+        'memory-growth' {
+            # Outliers must not replace the first/last-three medians.
+            $args.Run.samples[0].privateBytes = 180MB
+            $args.Run.samples[9].privateBytes = 20MB
+            $r = Get-EfficiencyMemoryVerdict @args
+            Assert ($r.verdict -eq 'fail' -and $r.reason -eq 'growth' -and $r.growthBytes -eq 4MB -and $r.rerunUsed) 'Persistent median growth did not fail.'
+        }
+        'memory-cache' {
+            $args.Rerun = New-MemoryRun 104 104
+            $r = Get-EfficiencyMemoryVerdict @args
+            Assert ($r.verdict -eq 'pass' -and $r.growthBytes -eq 0 -and $r.rerunUsed) 'One-time cache did not pass.'
+        }
+        'memory-control' {
+            foreach ($phase in $args.Run, $args.Rerun) { $phase.samples[4].controlPrivateBytes = 12MB }
+            $r = Get-EfficiencyMemoryVerdict @args
+            Assert ($r.verdict -eq 'not measured' -and $r.reason -eq 'control' -and $r.rerunUsed) 'Moving control was accepted.'
+        }
+        'memory-spin' {
+            $args.Run = New-MemoryRun 100 131
+            $args.Rerun = New-MemoryRun 131 131
+            $r = Get-EfficiencyMemoryVerdict @args
+            Assert ($r.verdict -eq 'fail' -and $r.reason -eq 'growth' -and -not $r.rerunUsed) 'Extreme growth used a rerun.'
+        }
+        'memory-steady' {
+            foreach ($metric in 'privateBytes', 'workingSetBytes') {
+                $args.Run = New-MemoryRun 100 100; $args.Rerun = New-MemoryRun 100 100
+                foreach ($phase in $args.Run, $args.Rerun) {
+                    foreach ($sample in $phase.samples) { $sample[$metric] = 251MB }
+                }
+                $r = Get-EfficiencyMemoryVerdict @args
+                Assert ($r.verdict -eq 'fail' -and $r.reason -eq 'steady') "Steady $metric above margin passed."
+                $args.Rerun = New-MemoryRun 100 100
+                Assert ((Get-EfficiencyMemoryVerdict @args).verdict -eq 'pass') 'Transient steady excess failed.'
+            }
+        }
+        'memory-boundary' {
+            $args.Run = New-MemoryRun 247 250; $args.Remove('Rerun')
+            $args.Run.samples[9].controlPrivateBytes = 11MB
+            $r = Get-EfficiencyMemoryVerdict @args
+            Assert ($r.verdict -eq 'pass' -and -not $r.rerunUsed) 'Exact ceilings or control boundary failed.'
+            $args.Run = New-MemoryRun 100 130
+            $args.Rerun = New-MemoryRun 130 130
+            Assert ((Get-EfficiencyMemoryVerdict @args).verdict -eq 'pass') 'Exactly ten times the ceiling failed without rerun.'
+        }
+        'memory-missing' {
+            foreach ($bad in 'count', 'null', 'negative', 'nan', 'field') {
+                $phase = New-MemoryRun
+                switch ($bad) {
+                    'count' { $phase.samples = @($phase.samples | Select-Object -First 9) }
+                    'null' { $phase.samples[4] = $null }
+                    'negative' { $phase.samples[4].privateBytes = -1 }
+                    'nan' { $phase.samples[4].privateBytes = [double]::NaN }
+                    'field' { $phase.samples[4].Remove('workingSetBytes') }
+                }
+                $args.Run = $phase; $args.Rerun = $phase
+                $r = Get-EfficiencyMemoryVerdict @args
+                Assert ($r.verdict -eq 'not measured' -and $r.reason -eq 'samples') "Invalid $bad sample passed."
+            }
+        }
+        'memory-replacement' {
+            foreach ($identity in 'processIdentity', 'controlIdentity') {
+                $args.Rerun = New-MemoryRun 104 104; $args.Rerun[$identity] = 'replacement/start'
+                $r = Get-EfficiencyMemoryVerdict @args
+                Assert ($r.verdict -eq 'not measured' -and $r.reason -eq 'identity') 'A replacement process passed.'
+            }
+        }
+        'memory-retry' {
+            $args.Remove('Rerun')
+            $r = Get-EfficiencyMemoryVerdict @args
+            Assert ($r.verdict -eq 'not measured' -and $r.reason -eq 'rerun required') 'Missing rerun passed.'
+            $args.Run.samples[0] = $null; $args.Rerun = New-MemoryRun 104 104
+            $r = Get-EfficiencyMemoryVerdict @args
+            Assert ($r.verdict -eq 'pass' -and $r.rerunUsed) 'Valid retry of missing sample failed.'
+            $args.Rerun = New-MemoryRun 100 131
+            Assert ((Get-EfficiencyMemoryVerdict @args).verdict -eq 'fail') 'Growth on the only retry passed.'
+        }
+        'memory-invalid' {
+            foreach ($value in -1, ([double]::NaN), ([double]::PositiveInfinity)) {
+                $args.Margin = $value; $rejected = $false
+                try { $null = Get-EfficiencyMemoryVerdict @args } catch [Management.Automation.ParameterBindingException] { $rejected = $true }
+                Assert $rejected 'Invalid margin was not rejected.'
+            }
+        }
+    }
+    Write-Output "PASS: $Scenario"
+    return
+}
 function Test-ReadOnlyCommands($Ast) {
     return -not @($Ast.FindAll({ param($a) $a -is [Management.Automation.Language.CommandAst] }, $true) | Where-Object {
         $_.GetCommandName() -match '^(Stop-Process|taskkill|Restart-.*|Debug-Process|Enter-PSHostProcess|Invoke-Expression|iex)$' -or
