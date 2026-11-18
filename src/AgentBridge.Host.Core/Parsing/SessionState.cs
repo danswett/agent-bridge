@@ -61,6 +61,7 @@ internal sealed class SessionState
     public bool UncountedTurn;
     public int Compactions;
     public bool Seen;
+    public bool AskStateComplete = true;
 
     public SessionStatus Status = SessionStatus.Idle;
     public DateTimeOffset? StatusSince;
@@ -137,6 +138,7 @@ internal sealed class SessionState
         AgentTitle = null; UserMessage = null; UserMessageFrom = null; UserMessageLabel = null; UserMessageKey = null; TurnId = null; ResponseTurn = null; Response = null; Reasoning = null; Model = null; Effort = null; Context = null;
         ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
         LastReplyAt = null;
+        AskStateComplete = true;
         Notice = null;
         Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null; LastEventAt = null;
         Prompts = 0; LastPromptAt = null; Compactions = 0; Seen = false; UncountedTurn = false;

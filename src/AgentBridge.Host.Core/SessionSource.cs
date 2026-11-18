@@ -163,7 +163,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         {
             lock (_gate)
             {
-                return Sorted().Select(e => e.FleetObservation is { } observation
+                return Sorted().Select(e => e.FleetObservation is { } observation && observation.Process == ProcessOf(e.ListForm.Id)
                     ? observation with { Session = e.ListForm } : new FleetSessionSnapshot(e.ListForm, ProcessOf(e.ListForm.Id))).ToArray();
             }
         }
@@ -510,10 +510,11 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             if (!tracker.ReadSucceeded) { continue; }
             var state = tracker.State;
             var question = entry.ListForm.Question;
-            var kind = !state.Seen ? null : entry.ListForm.Attention is not null ? "unknown" : question is null ? "none"
+            var asksKnown = state.Seen && state.AskStateComplete;
+            var kind = !asksKnown ? null : entry.ListForm.Attention is not null ? "unknown" : question is null ? "none"
                 : state.Permissions.ContainsKey(question.Id) ? "permission" : question.Kind == QuestionKind.Approval ? "approval" : "question";
             entry.FleetObservation = new(entry.ListForm, ProcessOf(discovered.Id), _time.GetUtcNow(),
-                state.Seen ? state.Asking.Count : null, kind, state.LastReplyAt);
+                asksKnown ? state.Asking.Count : null, kind, state.LastReplyAt);
         }
         if (unread.Count > 0) { (held, release) = (WithUnread(held, unread), true); }
         if (release) { SetHeld(held); }
