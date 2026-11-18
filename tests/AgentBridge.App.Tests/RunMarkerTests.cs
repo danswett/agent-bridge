@@ -44,6 +44,59 @@ public sealed class RunMarkerTests : IDisposable
         Assert.Equal(clock.GetUtcNow(), RunMarker.ReadPrevious(folder).StartedAt);
     }
 
+    [Fact]
+    public void Concurrent_instances_do_not_recover_or_overwrite_a_running_instances_crash()
+    {
+        var first = RunMarker.Start(folder, "first", clock);
+        RunMarker? second = null;
+        try
+        {
+            first.RecordCrash(new InvalidOperationException());
+            second = RunMarker.Start(folder, "second", clock);
+            Assert.False(second.Previous.Unclean);
+            Assert.False(RunMarker.ReadPrevious(folder).Unclean);
+            second.Complete();
+            Assert.IsAssignableFrom<IDisposable>(first).Dispose();
+            Assert.Contains(nameof(InvalidOperationException), RunMarker.ReadPrevious(folder).Crash);
+        }
+        finally { (first as object as IDisposable)?.Dispose(); (second as object as IDisposable)?.Dispose(); }
+    }
+
+    [Fact]
+    public void Completing_one_instance_cannot_delete_another_instances_record()
+    {
+        var first = RunMarker.Start(folder, "first", clock);
+        var second = RunMarker.Start(folder, "second", clock);
+        try
+        {
+            first.Complete();
+            Assert.Single(Directory.GetFiles(folder, "run-marker*.json"));
+            Assert.IsAssignableFrom<IDisposable>(second).Dispose();
+            Assert.Equal("second", RunMarker.ReadPrevious(folder).Version);
+        }
+        finally { (first as object as IDisposable)?.Dispose(); (second as object as IDisposable)?.Dispose(); }
+    }
+
+    [Fact]
+    public void Startup_recovers_abandoned_evidence_but_leaves_the_running_instance_owned()
+    {
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "run-marker.abandoned.json"),
+            System.Text.Json.JsonSerializer.Serialize(new PreviousRun(true, "abandoned", clock.GetUtcNow())));
+        clock.Advance(TimeSpan.FromMinutes(1));
+        var live = RunMarker.Start(folder, "live", clock);
+        RunMarker? next = null;
+        try
+        {
+            next = RunMarker.Start(folder, "next", clock);
+            Assert.Equal("abandoned", next.Previous.Version);
+            next.Complete();
+            Assert.IsAssignableFrom<IDisposable>(live).Dispose();
+            Assert.Equal("live", RunMarker.ReadPrevious(folder).Version);
+        }
+        finally { (live as object as IDisposable)?.Dispose(); (next as object as IDisposable)?.Dispose(); }
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("{broken")]
