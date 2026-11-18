@@ -2,8 +2,7 @@ using AgentBridge.HomeAssistant;
 using AgentBridge.Protocol;
 using Xunit;
 
-// #1634: a message sent while a question card is open was dropped with no word to the sender. It is
-// now refused loudly with the sender's own request id, and never queued: the sender retries.
+// Agent messages wait for the owner question; they never become its answer.
 public sealed partial class ReplyTests
 {
     static readonly Field Choice = new()
@@ -35,22 +34,29 @@ public sealed partial class ReplyTests
     }
 
     [Fact]
-    public async Task Three_rapid_sends_while_a_question_is_open_are_each_refused_to_their_sender_and_none_is_lost_silently()
+    public async Task Three_agent_messages_wait_durably_for_the_owner_answer_then_deliver_once_in_order()
     {
         await using var c = await Asking();
 
         foreach (var n in new[] { 1, 2, 3 })
         {
-            await Do(c, ha.SendFromCard(Node, "message " + n, rid: "r-" + n, sender: "SG Builder"));
-            Assert.Equal("Reply NOT sent", Activity);
+            await Do(c, ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n, sender: "SG Builder"));
             Assert.Equal("r-" + n, Ack.GetProperty("rid").GetString());
-            Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+            Assert.Equal("queued", Ack.GetProperty("outcome").GetString());
+            Assert.Equal(n, Detail.GetProperty("reply_queue_count").GetInt32());
         }
 
-        Assert.Contains(log, m => m.Contains("refused a reply", StringComparison.Ordinal) && m.Contains("SG Builder", StringComparison.Ordinal));
-        await CardCloses(c);
         Assert.Empty(replied);
-        Assert.Empty(answered);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+        Assert.Empty(replied);
+        await CardCloses(c);
+        for (var n = 0; n < 3; n++) { await c.DeliveredAsync(); await Pass(c); }
+        Assert.Equal(["message 1", "message 2", "message 3"], replied.Select(r => r.Text));
+        await Do(c, ha.SendFromCard(Node, "message 1", driver: "agent", rid: "r-1"));
+        Assert.Equal(3, replied.Count);
+        Assert.Equal(0, Detail.GetProperty("reply_queue_count").GetInt32());
     }
 
     [Fact]
@@ -71,12 +77,56 @@ public sealed partial class ReplyTests
         Assert.False(Detail.TryGetProperty("reply_ack", out _));
         ha.States[current.EntityId] = current.State;
         await Do(c, current);
-        Assert.True(Detail.TryGetProperty("reply_ack", out _), "The complete payload must receive its own refusal acknowledgement.");
+        Assert.True(Detail.TryGetProperty("reply_ack", out _), "The complete payload must receive its own acknowledgement.");
         Assert.Equal("r-current", Ack.GetProperty("rid").GetString());
-        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        Assert.Equal("queued", Ack.GetProperty("outcome").GetString());
         await CardCloses(c);
-        Assert.Empty(replied);
+        Assert.Equal("current message", Assert.Single(replied).Text);
         Assert.Empty(answered);
+    }
+
+    [Fact]
+    public async Task A_full_agent_queue_refuses_without_overwriting_accepted_messages()
+    {
+        await using var c = await Asking();
+        for (var n = 0; n < 17; n++)
+        {
+            await Do(c, ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
+        }
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        Assert.Contains("queue full", Detail.GetProperty("error").GetString());
+        Assert.Equal(16, Detail.GetProperty("reply_queue_count").GetInt32());
+        await CardCloses(c);
+        for (var n = 0; n < 16; n++) { await c.DeliveredAsync(); await Pass(c); }
+        Assert.Equal(Enumerable.Range(0, 16).Select(n => "message " + n), replied.Select(r => r.Text));
+    }
+
+    [Fact]
+    public async Task A_restart_preserves_the_queue_order_and_deduplicates_before_and_after_delivery()
+    {
+        await using (var c = await Asking())
+        {
+            for (var n = 1; n <= 3; n++)
+            {
+                await Do(c, ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
+            }
+        }
+        await using (var c = Connector())
+        {
+            await Pass(c);
+            await Do(c, ha.SendFromCard(Node, "duplicate", driver: "agent", rid: "r-1"));
+            Assert.Equal("queued", Ack.GetProperty("outcome").GetString());
+            Assert.Equal(3, Detail.GetProperty("reply_queue_count").GetInt32());
+            await CardCloses(c);
+            for (var n = 0; n < 3; n++) { await c.DeliveredAsync(); await Pass(c); }
+        }
+        await using (var c = Connector())
+        {
+            await Pass(c);
+            await Do(c, ha.SendFromCard(Node, "duplicate", driver: "agent", rid: "r-1"));
+            Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
+            Assert.Equal(["message 1", "message 2", "message 3"], replied.Select(r => r.Text));
+        }
     }
 
     [Theory]
