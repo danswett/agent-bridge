@@ -4,7 +4,7 @@
 # Needs AGENT_HA_URL (the Home Assistant API address, ending /api) and AGENT_HA_AGENT_TOKEN in the environment.
 # Each message carries a request id (rid). The host acknowledges it in the node's activity attributes (reply_ack), and this script
 # prints 'sent' only once the host says 'delivered' for its own rid. There is one reply slot per node, so a send that is overwritten
-# by another never gets its ack and is reported, never printed as sent. Nothing is queued: a refusal is final until the sender retries.
+# by another never gets its ack and is reported, never printed as sent. A queued ack is not delivery; keep waiting for the outcome.
 # Exit codes: 0 delivered; 1 not delivered (bad input, no token, Home Assistant unreachable); 2 the host could not confirm
 # the typing (it MAY have been delivered: check before resending), or the rid repeats one it already handled; 3 the host refused it or gave no outcome in time (retry);
 # 4 the reply is stuck in the session's input box (#150): the host refused because text is already typed there, or it typed
@@ -124,6 +124,7 @@ try {
         exit 2
       }
       switch ($ack.Outcome) {
+        'queued' { }
         'delivered' { $delivered = $true }
         'unconfirmed' {
           # The host typed it, but its Enter never went (the box changed first): not sent, and its words now block every

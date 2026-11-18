@@ -99,7 +99,11 @@ public sealed partial class HaConnector
     {
         if (LaunchHit(hit) || UpdateHit(hit)) { return; }
         if (MixedReplyPayload(hit.EntityId, hit.State)) { return; }
-        hits.Enqueue((Interlocked.Increment(ref hitSeq), hit));
+        lock (gate)
+        {
+            if (StoreInbox(hit)) { return; }
+            hits.Enqueue((Interlocked.Increment(ref hitSeq), hit));
+        }
     }
 
     // The entities a watch should cover: every published session's controls.
@@ -246,7 +250,7 @@ public sealed partial class HaConnector
             var waiting = p.Reply.Waiting.Count;
             foreach (var w in p.Reply.Waiting)
             {
-                p.Reply.Handle(w.State);
+                p.Reply.Handle(w);
                 if (w.Attributes is { ValueKind: JsonValueKind.Object } wa && CleanRid(Str(wa, "rid")) is { } wrid) { p.Reply.Ack = MakeAck(wrid, CleanSender(Str(wa, "sender")), "refused"); }
             }
             p.Reply.Waiting.Clear();
@@ -597,6 +601,7 @@ public sealed partial class HaConnector
     {
         if (!ServesAnswers || !options.ConsumeAnswers) { hits.Clear(); taps.Clear(); return; }
         await TapsAsync(now, ct);
+        await InboxReceiptsAsync(ct);
         await RepliesDoneAsync(now, ct);
         await StopsDoneAsync(now, ct);
         await StopLapsesAsync(now, ct);
@@ -697,6 +702,7 @@ public sealed partial class HaConnector
             await ReplyAsync(sessionId, p, seen, now, ct);
             return;
         }
+        if (armed is not null) { await RefuseInboxAtQuestionAsync(p, ct); }
         if (armed is null || armed.Plan.TerminalOnly || armed.Settled)
         {
             if (seen.Count > 0) { await UnservedAsync(p, seen[^1].Hit, ct); }
@@ -708,7 +714,7 @@ public sealed partial class HaConnector
         // A question that takes no typed answer takes no words from the reply card: said, not left unanswered (#1634).
         // An agent's words are never an owner's answer: only a payload naming this very question is (#1636).
         if (await RefuseReplyAtQuestionAsync(p, armed, ct)) { return; }
-        var since = seen.Where(h => h.Seq > armed.Boundary && !(h.Hit.EntityId == SessionEntities.ReplyPayload(p.Node) && p.Reply.IsHandled(h.Hit.State.State))).Select(h => h.Hit).ToList();
+        var since = seen.Where(h => h.Seq > armed.Boundary && !(h.Hit.EntityId == SessionEntities.ReplyPayload(p.Node) && p.Reply.IsHandled(h.Hit.State))).Select(h => h.Hit).ToList();
         var outcome = await ReadAnswerAsync(sessionId, p, armed, since, ct);
         if (outcome is null) { return; }
         if (outcome.Notice is { } notice)
@@ -829,15 +835,20 @@ public sealed partial class HaConnector
             words = box.Present && !string.IsNullOrWhiteSpace(box.Value) ? box.Value : null;
         }
         if (string.IsNullOrWhiteSpace(words)) { return; }
-        var key = hit.EntityId + "|" + hit.State.State;
+        var key = hit.EntityId + "|" + hit.State.State + "|" + CleanRid(Str(hit.State.Attributes, "rid"));
         if (p.ToldUnserved == key) { return; }
         p.ToldUnserved = key;
         // The sender's request id gets its outcome, so a sender that waits for it is told rather than left to guess.
         string? sender = null;
         if (hit.EntityId == SessionEntities.ReplyPayload(p.Node) && hit.State.Attributes is { ValueKind: JsonValueKind.Object } at)
         {
+            p.Reply.Handle(hit.State);
             sender = CleanSender(Str(at, "sender"));
-            if (CleanRid(Str(at, "rid")) is { } rid) { p.Reply.Ack = MakeAck(rid, sender, "refused"); }
+            if (CleanRid(Str(at, "rid")) is { } rid)
+            {
+                var prior = inbox?.Find(p.Node, rid);
+                p.Reply.Ack = MakeAck(rid, sender, prior is null ? "refused" : InboxOutcome(prior));
+            }
         }
         log($"Home Assistant connector refused a reply to {p.Node} from {sender ?? "an unnamed sender"}: " + (ServesReplies ? "the session is waiting on a question" : "replies from the dashboard are not served here"));
         // With the host's reply delivery, a reply waits for no question: this one is being
@@ -864,7 +875,7 @@ public sealed partial class HaConnector
         var takesNoWords = ServesReplies && (armed.Plan.UsesFieldSlots || armed.Plan.AnswerOnTap) && !armed.Plan.TakesTypedAnswer;
         // Words tagged for a question are that question's own. An agent's are also refused when untagged or tagged for another card.
         if (tag is { Length: > 0 } ? !(fromAgent && tag != armed.Question.Id) : !(takesNoWords || fromAgent)) { return false; }
-        p.Reply.Handle(current.Value);
+        p.Reply.Handle(state);
         await UnservedAsync(p, new HaTrigger(SessionEntities.ReplyPayload(p.Node), state), ct);
                 return true;
     }
