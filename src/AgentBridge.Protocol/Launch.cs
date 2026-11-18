@@ -121,6 +121,8 @@ public static partial class LaunchProtocol
 // context asks for the agent's own default, over the machine's.
 public sealed record LaunchRequest
 {
+    [JsonIgnore]
+    public Func<bool>? DispatchAllowed { get; init; }
     public required string Request { get; init; }
     public string? Agent { get; init; }
     public string? Workspace { get; init; }

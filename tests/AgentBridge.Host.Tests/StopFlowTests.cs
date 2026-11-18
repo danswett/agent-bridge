@@ -78,7 +78,7 @@ public sealed class StopFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    StopService Stopper(bool platform = true, int graceMs = 600) => new(source, f.Processes, probe, injector, control, new StopOptions
+    StopService Stopper(bool platform = true, int graceMs = 600, IAgentHaBridgeProbe? liveProbe = null) => new(source, f.Processes, liveProbe ?? probe, injector, control, new StopOptions
     {
         CopilotHome = f.CopilotHome,
         PlatformSupported = platform,
@@ -86,6 +86,20 @@ public sealed class StopFlowTests : IAsyncLifetime
         TerminateWait = TimeSpan.FromMilliseconds(600),
         Time = clock,
     }, log: logged.Enqueue, gate: gate);
+
+    [Fact]
+    public async Task Gate_dispatch_revalidates_the_local_stop_caller_after_admission_before_ending()
+    {
+        var caller = new LaunchGateAuditTests.GateDispatchCallerGuard();
+        var stopper = Stopper(liveProbe: new LaunchGateAuditTests.GateDispatchProbe(() => caller.Kind = CallerKind.Agent));
+        var audit = new AgentAuditLog(Path.Combine(f.Root, "gate"), clock, admission: gate);
+        host.Hub.Handler = LocalApi.Handler(new SessionService(source,
+            new MachineInfo("fixture", "Fixture", "windows", "0.1.0"), stops: stopper), null!, caller, audit: audit);
+        var result = await StopAsync(await OpenAsync());
+        Assert.Equal("refused", result.Outcome_);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+    }
 
     ReplyService Replier() => new(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
     {

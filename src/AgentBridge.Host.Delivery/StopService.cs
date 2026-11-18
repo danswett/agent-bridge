@@ -140,7 +140,17 @@ public sealed class StopService : ISessionStopper
         Action? onReplay = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => EndAsync(request, key, beforeDispatch), result =>
+        async Task<StopResult> Dispatch()
+        {
+            var allowed = true;
+            var result = await EndAsync(request, key, (pid, at) =>
+            {
+                allowed = request.DispatchAllowed?.Invoke() != false;
+                return allowed && (beforeDispatch?.Invoke(pid, at) ?? true);
+            });
+            return allowed ? result : Refused("the stop is no longer authorized");
+        }
+        return requests.Once(key, Dispatch, result =>
             log($"end {key.ToString()[..8]} for {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Forced == true ? " (terminated)" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"),
             owner: (principal, request.Id), foreign: () =>
             {
@@ -159,6 +169,7 @@ public sealed class StopService : ISessionStopper
         {
             if (!options.PlatformSupported) { return Refused("ending sessions is not supported on this platform yet; end it at the machine"); }
             if (probe.Active() is { } active) { return Refused(active); }
+            if (request.DispatchAllowed?.Invoke() == false) { return Refused("the stop is no longer authorized"); }
             if (Stops.Check(request) is { } invalid) { return Refused(invalid); }
             if (source.Get(request.Id) is not { } found) { return Stale("the session has ended"); }
             session = found;

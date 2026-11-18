@@ -32,7 +32,7 @@ public sealed class AgentLiteDeliveryTests
         int reads;
         public readonly List<ReplyRequest> Typed = []; public readonly List<string> Log = [];
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches = new();
-        public LiteDeliver Build() => new([
+        public IReadOnlyList<IReplyTargetGate> Gates() => [
             new ForcedAskGate(Launches),
             new AllowlistedAllTargetsGate(Launches, () => new AgentMessagingSettings
             {
@@ -40,7 +40,8 @@ public sealed class AgentLiteDeliveryTests
                 AllowAllTargets = AllowAllTargets,
                 AllowAllTargetSessions = AllowAllTargetSessions
             })
-        ], this, this, this, Log.Add, Clock);
+        ];
+        public LiteDeliver Build() => new(Gates(), this, this, this, Log.Add, Clock);
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public IReadOnlyList<Session> Snapshot() => []; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -75,6 +76,30 @@ public sealed class AgentLiteDeliveryTests
     }
 
     static Task<LiteDelivery> Send(Fixture f, string text = "hi") => f.Build().DeliverAsync(Envelope(text), text, default);
+    [Theory]
+    [InlineData(false), InlineData(true)]
+    public async Task Gate_pause_review_rechecks_lite_target_authority_after_queued_admission(bool remoteOff)
+    {
+        using var home = new global::Fixture();
+        var events = home.CopilotSession(Target, 42);
+        global::Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        home.Processes.Run(AgentKind.Copilot, 42);
+        var f = new Fixture { AllowAllTargets = true, AllowAllTargetSessions = [Target] };
+        f.Launch(LaunchProtocol.AllowAll);
+        f.OnInject = plan => global::Fixture.Append(events, Copilot.User(plan.Sends[0].Text, 4));
+        var gate = new DeliveryGate();
+        var replier = new ReplyService(gate, f, home.Processes, new NoBridge(), new NoGuard(), f,
+            new ReplyOptions { CopilotHome = home.CopilotHome, PlatformSupported = true, PreRead = false });
+        var deliver = new LiteDeliver(f.Gates(), f, replier, f, f.Log.Add);
+        using var pause = gate.PauseAdmission();
+        var queued = deliver.DeliverAsync(Envelope("hi"), "hi", default);
+        Assert.False(queued.IsCompleted);
+        if (remoteOff) { f.Remote = AgentMessagingSettings.Off; } else { f.AllowAllTargetSessions = []; }
+        pause.Dispose();
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await queued.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Empty(f.Plans);
+    }
+
     [Fact]
     public async Task Script_delivery_is_labelled_and_logged_as_a_script_never_an_agent()
     {

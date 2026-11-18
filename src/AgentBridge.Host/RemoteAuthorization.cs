@@ -95,7 +95,7 @@ public sealed class RemoteAuthorization : IDisposable
             if (sessions.ReadOnly?.Invoke() is { } readOnly) { throw new InvalidOperationException(readOnly); }
             launchAudit?.RunPause.ValidateClock();
             if (op is "gate.pause" or "gate.resume")
-            { return (launchAudit ?? throw new InvalidOperationException("gate control refused: audit unavailable")).RunPause.Control(
+            { return await (launchAudit ?? throw new InvalidOperationException("gate control refused: audit unavailable")).RunPause.Control(
                 $"person:{channel.PeerId}", data, channel.Closed, op == "gate.resume"); }
             if (op == "gate.reset")
             { return GateRunPreparation.Reset(launchAudit ?? throw new InvalidOperationException("gate control refused: audit unavailable"),
@@ -120,8 +120,9 @@ public sealed class RemoteAuthorization : IDisposable
         if (!operations.Contains(op)) { throw new InvalidOperationException("the peer role does not allow this operation"); }
         ReplyIntent ReplyIntentNow() => !channel.Closed.IsCompleted && Store.Current(lease, channel.Relay.AccountId)
             ? ReplyIntent.Steer : ReplyIntent.Unknown;
+        bool DispatchAllowed() => channel.IsOpen && Store.Current(lease, channel.Relay.AccountId);
         return await sessions.HandleAsync(channel, op, data, hello => Shape(channel, hello), op == Ops.SessionStop ? launchAudit : audit, ingress,
-            replyIntent: op == Ops.SessionReply && lease.Role == TrustedPeerStore.Person ? ReplyIntentNow : null);
+            replyIntent: op == Ops.SessionReply && lease.Role == TrustedPeerStore.Person ? ReplyIntentNow : null, dispatchAllowed: DispatchAllowed);
     };
 
     // What the peer's role lets its hello say. Also what hello.changed compares at each later look

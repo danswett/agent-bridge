@@ -212,7 +212,7 @@ public sealed class SessionService
         HandleAsync(channel, op, data, shape, null);
 
     internal async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape,
-        AgentAuditLog? actionAudit, GateLaunchIngress? launchIngress = null, Func<ReplyIntent>? replyIntent = null)
+        AgentAuditLog? actionAudit, GateLaunchIngress? launchIngress = null, Func<ReplyIntent>? replyIntent = null, Func<bool>? dispatchAllowed = null)
     {
         switch (op)
         {
@@ -230,13 +230,13 @@ public sealed class SessionService
                     return hello;
                 }
             case Ops.SessionAnswer:
-                return await AnswerAsync(channel, data, actionAudit);
+                return await AnswerAsync(channel, data, actionAudit, dispatchAllowed);
             case Ops.SessionReply:
-                return await ReplyAsync(channel, data, replyIntent);
+                return await ReplyAsync(channel, data, replyIntent, dispatchAllowed);
             case Ops.AttachmentStart or Ops.AttachmentChunk or Ops.AttachmentDiscard when attachments is not null:
                 return Attach(channel, op, data);
             case Ops.SessionStop:
-                return await StopAsync(channel, data, actionAudit);
+                return await StopAsync(channel, data, actionAudit, dispatchAllowed);
             case AgentSignIn.Start:
                 return SignInEntrypointApproved && SignIn is not null ? SignIn.Start(channel, data)
                     : new { outcome = "refused", reason = "agent sign-in is not enabled" };
@@ -259,13 +259,13 @@ public sealed class SessionService
                 var options = await launcher.OptionsAsync();
                 return options.Trust is null ? options : options with { Trust = [.. options.Trust.Select(q => ForPeer(channel, q))] };
             case LaunchProtocol.Launch when launcher is not null:
-                return await LaunchAsync(channel, data, actionAudit, launchIngress);
+                return await LaunchAsync(channel, data, actionAudit, launchIngress, dispatchAllowed);
             // Host to host, through the relay only: another machine of the account asking for a
             // session with a command a person's device signed.
             case TransferProtocol.Op when transfers is not null && channel is SecureChannel secure:
                 return await transfers.ServeAsync(secure, data);
             case Lite.LiteReceiver.Op when LiteReceiver is not null && channel is SecureChannel secure:
-                return await LiteReceiver.ServeAsync(secure, data, CancellationToken.None);
+                return await LiteReceiver.ServeAsync(secure, data, CancellationToken.None, dispatchAllowed);
             // A person's device through the relay, with a command it signed. Never this machine's
             // pipe, which agents and the MCP server reach, nor the Home Assistant connector.
             case TrustProtocol.Answer when TrustAnswers is not null && channel is SecureChannel secure:
@@ -458,17 +458,18 @@ public sealed class SessionService
         public int FocusCount;
     }
 
-    async Task<AnswerResult> AnswerAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit)
+    async Task<AnswerResult> AnswerAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit, Func<bool>? dispatchAllowed)
     {
         // A request without an id, question or request UUID fails as a request; anything
         // that can be read gets an outcome.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.answer needs an id, a question and a request"); }
         var request = data.Deserialize<AnswerRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.answer needs an id, a question and a request");
+        request = request with { DispatchAllowed = dispatchAllowed };
         var (watch, progress) = Watch(request.Progress);
         if (answers is null) { return new AnswerResult(AnswerOutcome.Refused, "this host does not take answers; answer at the machine"); }
         Action<AnswerOutcome>? Prepare(Guid operation, Session session, Question question)
         {
-            if (AnswerGate(session, question, operation, "person-client") is not { } gate) { return null; }
+            if (dispatchAllowed?.Invoke() == false || AnswerGate(session, question, operation, "person-client") is not { } gate) { return null; }
             var intent = new AgentAuditEntry("local", gate.Operation.ToString(), "person:local", [], Ops.SessionAnswer,
                 gate.Incarnation.ToString(), "attempted", Gate: gate);
             if (audit is not { } writer || !writer.Append(intent)) { return null; }
@@ -698,13 +699,13 @@ public sealed class SessionService
         return offered;
     }
 
-    async Task<ReplyResult> ReplyAsync(IProtocolChannel channel, JsonElement data, Func<ReplyIntent>? intent)
+    async Task<ReplyResult> ReplyAsync(IProtocolChannel channel, JsonElement data, Func<ReplyIntent>? intent, Func<bool>? dispatchAllowed)
     {
         // As for answers: a request without an id or request UUID fails as a request, and
         // anything that can be read gets an outcome.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.reply needs an id, a request and text"); }
         var request = data.Deserialize<ReplyRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.reply needs an id, a request and text");
-        request = request with { IntentSource = intent };
+        request = request with { IntentSource = intent, DispatchAllowed = dispatchAllowed is null ? null : () => Task.FromResult(dispatchAllowed()) };
         var (watch, progress) = Watch(request.Progress);
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);
@@ -734,12 +735,13 @@ public sealed class SessionService
         };
     }
 
-    async Task<StopResult> StopAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit)
+    async Task<StopResult> StopAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit, Func<bool>? dispatchAllowed)
     {
         // As for answers: a request without an id or request UUID fails as a request, and
         // anything that can be read gets an outcome.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.stop needs an id and a request"); }
         var request = data.Deserialize<StopRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.stop needs an id and a request");
+        request = request with { DispatchAllowed = dispatchAllowed };
         if (stops is null) { return new StopResult(StopOutcome.Refused, "this host does not end sessions; end it at the machine"); }
         return stops is StopService audited && audit is not null
             ? await StopAudit.StopAsync(audited, source, audit, request, Direct(channel) ? "local" : "relay",
@@ -747,13 +749,14 @@ public sealed class SessionService
             : await stops.StopAsync(request);
     }
 
-async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit, GateLaunchIngress? ingress)
+    async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit, GateLaunchIngress? ingress, Func<bool>? dispatchAllowed)
     {
         // As for answers: a request without a request UUID fails as a request, and anything
         // that can be read gets an outcome. The whole request is bounded, prompt and all.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.launch needs a request"); }
         if (System.Text.Encoding.UTF8.GetByteCount(data.GetRawText()) > LaunchProtocol.MaxRequest) { throw new ArgumentException($"session.launch is larger than {LaunchProtocol.MaxRequest / 1024} KiB"); }
         var request = data.Deserialize<LaunchRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.launch needs a request");
+        request = request with { DispatchAllowed = dispatchAllowed };
         // A transfer is asked for by a device through the relay, which signs it; this machine's
         // own app has no key the other machine knows.
         if (request.Transfer is not null && (channel is not SecureChannel || transfers is null))

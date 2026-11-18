@@ -9,6 +9,65 @@ public sealed partial class RemoteAuthorizationTests
 {
     [Theory]
     [InlineData(false), InlineData(true)]
+    public async Task Gate_pause_review_replayed_requests_do_not_recreate_or_release_a_later_barrier(bool resume)
+    {
+        var clock = new FakeTimeProvider(time.GetUtcNow());
+        var (channel, audit, _) = await GateAsync(clock);
+        var run = Result(await channel.RequestAsync("gate.start", new { request = Guid.NewGuid() }, Patience)).GetProperty("run").GetGuid();
+        var pause = Guid.NewGuid(); var release = Guid.NewGuid();
+        Result(await channel.RequestAsync("gate.pause", new { request = pause, run }, Patience));
+        Result(await channel.RequestAsync("gate.resume", new { request = release, run }, Patience));
+        clock.Advance(TimeSpan.FromMinutes(1));
+        if (resume) { Result(await channel.RequestAsync("gate.pause", new { request = Guid.NewGuid(), run }, Patience)); }
+        var count = GateAuditProjection.Load(audit.Profile).Rows.Count;
+        await channel.RequestAsync(resume ? "gate.resume" : "gate.pause", new { request = resume ? release : pause, run }, Patience);
+        Assert.Equal(count, GateAuditProjection.Load(audit.Profile).Rows.Count);
+        Assert.Equal(!resume, audit.Admission.WaitForAdmissionAsync().IsCompleted);
+    }
+
+    [Fact]
+    public async Task Gate_pause_review_malformed_checkpoint_does_not_escape_its_timeout_callback()
+    {
+        var clock = new FakeTimeProvider(time.GetUtcNow());
+        var (channel, audit, _) = await GateAsync(clock);
+        var run = Result(await channel.RequestAsync("gate.start", new { request = Guid.NewGuid() }, Patience)).GetProperty("run").GetGuid();
+        Result(await channel.RequestAsync("gate.pause", new { request = Guid.NewGuid(), run }, Patience));
+        File.WriteAllText(Path.Combine(audit.Profile, AgentAuditLog.FolderName, "agents.head"), "{");
+        Assert.Null(Record.Exception(() => clock.Advance(TimeSpan.FromMinutes(5))));
+        Assert.True(audit.Admission.WaitForAdmissionAsync().IsCompleted);
+        Assert.Null(audit.ControlWriterRun);
+        Assert.False(GateAuditProjection.Load(audit.Profile).Complete);
+    }
+
+    [Theory]
+    [InlineData(false), InlineData(true)]
+    public async Task Gate_pause_review_acknowledgment_waits_for_drain_and_refuses_an_expired_barrier(bool expires)
+    {
+        var clock = new FakeTimeProvider(time.GetUtcNow());
+        var (channel, audit, _) = await GateAsync(clock);
+        var run = Result(await channel.RequestAsync("gate.start", new { request = Guid.NewGuid() }, Patience)).GetProperty("run").GetGuid();
+        using var admitted = audit.Admission.TryEnterDelivery();
+        Assert.NotNull(admitted);
+        var handler = authorization.Handler(service, audit);
+        var request = Guid.NewGuid();
+        async Task<Task<JsonElement>> Pending()
+        {
+            var arrived = new TaskCompletionSource<Task<object?>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            host.Hub.Handler = (peer, op, data) => { var task = handler(peer, op, data); arrived.TrySetResult(task); return task; };
+            var response = channel.RequestAsync("gate.pause", new { request, run }, Patience);
+            Assert.False((await arrived.Task.WaitAsync(Patience)).IsCompleted);
+            return response;
+        }
+        var first = await Pending(); var duplicate = await Pending();
+        if (expires) { clock.Advance(TimeSpan.FromMinutes(5)); }
+        admitted.Dispose();
+        Assert.Equal(!expires, (await first).GetProperty("ok").GetBoolean());
+        Assert.Equal(!expires, (await duplicate).GetProperty("ok").GetBoolean());
+        Assert.Equal(expires, GateAuditProjection.Read(audit.Profile, run).Invalidated);
+    }
+
+    [Theory]
+    [InlineData(false), InlineData(true)]
     public async Task Gate_pause_queues_actions_without_extending_deadline_and_rechecks_authority(bool revoked)
     {
         var clock = new FakeTimeProvider(time.GetUtcNow());

@@ -25,14 +25,15 @@ public class LiteReceiverTests
     }
     sealed class Peers(LitePeer? peer) : ILitePeers
     {
-        public bool TryFind(string deviceId, out LitePeer found) { found = peer!; return peer is not null && peer.DeviceId == deviceId; }
-        public IReadOnlyList<LitePeer> All() => peer is null ? [] : [peer];
+        public LitePeer? Current = peer;
+        public bool TryFind(string deviceId, out LitePeer found) { found = Current!; return Current is not null && Current.DeviceId == deviceId; }
+        public IReadOnlyList<LitePeer> All() => Current is null ? [] : [Current];
     }
     sealed class Deliver(LiteDelivery result) : ILiteDeliver
     {
         public int Calls;
         public string? Text;
-        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) { Calls++; Text = text; return Task.FromResult(result); }
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct, Func<bool>? dispatchAllowed = null) { Calls++; Text = text; return Task.FromResult(result); }
     }
     sealed class Rig : IDisposable
     {
@@ -40,6 +41,7 @@ public class LiteReceiverTests
         public readonly Mode Mode = new();
         public readonly FakeTimeProvider Time = new(Start);
         public readonly Deliver Deliver;
+        public readonly Peers Peers;
         public readonly LiteReceiver Receiver;
         public LiteChannel Channel = new(Peer, "host", PeerStatic, Self, Account, true);
         public Rig(LiteDelivery? delivery = null, bool knownPeer = true, ILiteDeliver? custom = null)
@@ -47,7 +49,8 @@ public class LiteReceiverTests
             Deliver = new(delivery ?? new LiteDelivery(true, null));
             var q = Key.ExportParameters(false).Q;
             var peer = knownPeer ? new LitePeer(Peer, [0x04, .. q.X!, .. q.Y!], "peer") : null;
-            Receiver = new(Mode, new Peers(peer), custom ?? Deliver, Time);
+            Peers = new(peer);
+            Receiver = new(Mode, Peers, custom ?? Deliver, Time);
         }
 
         public void Dispose() => Key.Dispose();
@@ -94,9 +97,41 @@ public class LiteReceiverTests
         Assert.Equal("", (await r.Send(JsonSerializer.SerializeToElement(new[] { 1 }))).Request);
     }
 
+    sealed class QueuedDelivery : ILiteDeliver
+    {
+        internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource Released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct, Func<bool>? dispatchAllowed = null)
+        {
+            Entered.SetResult();
+            await Released.Task.WaitAsync(ct);
+            return dispatchAllowed?.Invoke() == true ? new(true, null) : new(false, LiteCodes.NotReplyTarget);
+        }
+    }
+
+    [Theory]
+    [InlineData("mode", LiteReceiver.Off)]
+    [InlineData("peer", LiteReceiver.NotPeer)]
+    [InlineData("caller", LiteReceiver.NotPeer)]
+    [InlineData("expiry", Refusal.Lifetime)]
+    public async Task Queued_delivery_rechecks_live_peer_mode_caller_and_envelope_lifetime(string changed, string code)
+    {
+        var delivery = new QueuedDelivery();
+        using var r = new Rig(custom: delivery);
+        var allowed = true;
+        var pending = r.Receiver.ReceiveAsync(r.Channel, r.Request(), default, () => allowed);
+        await delivery.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (changed == "mode") { r.Mode.On = false; }
+        if (changed == "peer") { r.Peers.Current = null; }
+        if (changed == "caller") { allowed = false; }
+        if (changed == "expiry") { r.Time.Advance(TimeSpan.FromSeconds(121)); }
+        delivery.Released.SetResult();
+        Refused(await pending.WaitAsync(TimeSpan.FromSeconds(5)), code);
+    }
+
     sealed class Cancelling(CancellationToken? caller = null) : ILiteDeliver
     {
-        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) => throw new OperationCanceledException(caller ?? default);
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct, Func<bool>? dispatchAllowed = null) => throw new OperationCanceledException(caller ?? default);
     }
 
     [Fact]

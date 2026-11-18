@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -27,6 +28,19 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
         request, agent = "copilot", workspace = "App", prompt = "private gate prompt",
         run = Guid.NewGuid(), path = "relay", actorKind = "ha-component",
     });
+
+    [Fact]
+    public async Task Gate_dispatch_revalidates_the_local_launch_caller_after_admission_before_starting()
+    {
+        var caller = new GateDispatchCallerGuard();
+        var launcher = Launcher(Config(), gate: new GateDispatchProbe(() => caller.Kind = CallerKind.Agent));
+        var handler = LocalApi.Handler(new SessionService(source,
+            new MachineInfo("fixture", "Fixture", "windows", "0.1.0"), launcher: launcher), null!, caller,
+            audit: new AgentAuditLog(GateProfile, clock));
+        var result = Assert.IsType<LaunchResult>(await handler(new GateAuditChannel(), LaunchProtocol.Launch, GateLaunch(Guid.NewGuid())));
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Empty(starter.Specs);
+    }
 
     [Fact]
     public async Task A_fresh_launch_records_intent_before_start_and_one_confirmed_terminal()
@@ -61,6 +75,17 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
         Assert.Contains("missing-run-context", report.IncompleteReasons);
         Assert.Equal(0, report.Totals.Sum(total => total.Successes));
         Assert.DoesNotContain("private gate prompt", string.Join("\n", rows.Select(row => row.GetRawText())));
+    }
+
+    internal sealed class GateDispatchCallerGuard : ICallerGuard
+    {
+        internal CallerKind Kind = CallerKind.App;
+        public Caller Classify(IProtocolChannel channel, bool fresh = false) => new(Kind, "fixture");
+    }
+
+    internal sealed class GateDispatchProbe(Action change) : IAgentHaBridgeProbe
+    {
+        public string? Active() { change(); return null; }
     }
 
     [Fact]
