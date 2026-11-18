@@ -284,6 +284,8 @@ public sealed class StopService : ISessionStopper
         Func<int, DateTimeOffset, bool>? beforeDispatch, string? treeProblem)
     {
         Task? pendingWorker = null;
+        // A busy overlapping press can discover lineage loss after this press's preflight.
+        string? CurrentTreeProblem() => treeProblem = RememberTreeProblem(session, held, startedAt, held.ExitProblem) ?? treeProblem;
         try
         {
             var began = Environment.TickCount64;
@@ -299,6 +301,7 @@ public sealed class StopService : ISessionStopper
             { log($"end of {Short(session.Id)} exhausted its typing budget; continuing without typing"); }
             catch (InvalidOperationException e)
             { log($"end of {Short(session.Id)} cannot type; continuing to termination: {e.Message}"); }
+            CurrentTreeProblem();
             try
             {
                 if (probe.Active() is { } active) { return Refused(active); }
@@ -315,7 +318,7 @@ public sealed class StopService : ISessionStopper
                 }
                 if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
                 await SetEndingAsync(session.Id, true);
-                if (ownsTyping && !asking)
+                if (ownsTyping && treeProblem is null && !asking)
                 {
                     InjectionResult typing;
                     try { typing = await injector.InjectAsync(pid, ExitKeys, deadline.Token); }
@@ -330,6 +333,10 @@ public sealed class StopService : ISessionStopper
                     typed = pendingWorker is null && typing.Status != InjectionStatus.NothingTyped;
                     log($"typed /exit into {Short(session.Id)} (pid {pid}) -> {typing.Status} {typing.Detail}");
                 }
+                else if (ownsTyping && treeProblem is not null)
+                {
+                    log($"end of {Short(session.Id)} cannot verify tree exit and skips typing: {treeProblem}");
+                }
                 else if (ownsTyping)
                 {
                     log(notReady is not null
@@ -340,7 +347,7 @@ public sealed class StopService : ISessionStopper
             finally { if (ownsTyping && pendingWorker is null) { gate.DoneTyping(); } }
 
             var remaining = options.Grace - TimeSpan.FromMilliseconds(Environment.TickCount64 - began);
-            if (typed && await held.WaitForExitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero))
+            if (typed && await held.WaitForExitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero) && CurrentTreeProblem() is null)
             {
                 log($"ended {Short(session.Id)}: exited cleanly (pid {pid})");
                 return Ended(false);
@@ -351,12 +358,12 @@ public sealed class StopService : ISessionStopper
             }
             var refused = held.Terminate();
             if (refused is not null) { log($"end of {Short(session.Id)} (pid {pid}) could not terminate: {refused}"); }
-            if (await held.WaitForExitAsync(options.TerminateWait) && treeProblem is null)
+            if (await held.WaitForExitAsync(options.TerminateWait) && CurrentTreeProblem() is null)
             {
                 log($"ended {Short(session.Id)}: {(typed ? $"did not exit within {options.Grace.TotalSeconds:0} s; " : "")}terminated pid {pid}");
                 return Ended(true);
             }
-            if ((treeProblem ?? held.ExitProblem) is { } problem)
+            if (CurrentTreeProblem() is { } problem)
             {
                 log($"end of {Short(session.Id)} (pid {pid}) could not verify tree exit after termination: {problem}");
                 return Failed("the machine couldn't verify that the whole session ended; check at the machine");

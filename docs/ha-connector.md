@@ -730,6 +730,8 @@ or confirmation. Collection is capped at 64 handles and 250 ms per pass; exit ve
 shares one remaining wait deadline across at most three collections. Incomplete evidence
 skips typing and still terminates the verified root, but reports Failed/partial, never Ended.
 Observed ancestry loss survives confirmation and retries for the same process identity.
+An in-flight Stop merges uncertainty from overlapping presses after typing admission
+and rechecks it before reporting either graceful or forced success.
 Ended requires shared exit proof for the complete verified tree, not just its root.
 
 Pre-Ending hypotheses for [2910](https://github.com/danswett/agent-bridge/issues/2910),

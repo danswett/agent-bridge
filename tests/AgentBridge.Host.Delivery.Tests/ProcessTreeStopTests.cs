@@ -165,8 +165,65 @@ public sealed class ProcessTreeStopTests
         });
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task An_overlapping_press_cannot_leave_an_inflight_stop_with_stale_tree_certainty(bool duringTyping, bool gracefulExit)
+    {
+        var rig = new TreeRig();
+        rig.Nodes.Remove(102);
+        rig.Nodes.Remove(103);
+        var gate = new DeliveryGate { TypingQueued = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        if (!duringTyping) { await gate.WaitToTypeAsync(); }
+        await Run(rig, false, async (stopper, keys, request, source, logs) =>
+        {
+            async Task Overlap()
+            {
+                rig.Nodes.Add(102, new TreeNode(101, TreeRig.T0.AddSeconds(1)));
+                rig.BeforeOpen = id =>
+                {
+                    if (id != 102) { return; }
+                    rig.Nodes[102].Running = false;
+                    rig.Nodes.Add(103, new TreeNode(102, TreeRig.T0.AddSeconds(2)));
+                };
+                var overlap = await stopper.StopAsync(request with { Request = Guid.NewGuid().ToString("D") });
+                Assert.Equal(StopOutcome.Busy, overlap.Outcome);
+            }
+            if (duringTyping)
+            {
+                keys.BeforeInject = async () =>
+                {
+                    await Overlap();
+                    if (gracefulExit) { rig.Nodes[101].Running = false; }
+                };
+                keys.Status = gracefulExit ? InjectionStatus.Typed : InjectionStatus.NothingTyped;
+            }
+            var stopping = stopper.StopAsync(request);
+            if (!duringTyping)
+            {
+                try
+                {
+                    await gate.TypingQueued.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    await Overlap();
+                }
+                finally { gate.DoneTyping(); }
+            }
+            var result = await stopping.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(StopOutcome.Failed, result.Outcome);
+            Assert.Equal(result, await stopper.StopAsync(request));
+            Assert.Null(result.Forced);
+            Assert.False(rig.Nodes[101].Running);
+            Assert.True(rig.Nodes[103].Running);
+            Assert.Equal(duringTyping ? 1 : 0, keys.Calls);
+            Assert.Contains(logs, line => line.Contains("tree exit"));
+            Assert.Equal(0, rig.Handles);
+        }, gate: gate, grace: TimeSpan.FromSeconds(10));
+    }
+
     static async Task Run(TreeRig rig, bool working,
-        Func<StopService, Keys, StopRequest, ISessionSource, List<string>, Task> check, TimeProvider? time = null, Action<Fixture>? prepare = null)
+        Func<StopService, Keys, StopRequest, ISessionSource, List<string>, Task> check, TimeProvider? time = null, Action<Fixture>? prepare = null,
+        DeliveryGate? gate = null, TimeSpan? grace = null)
     {
         const string id = "77777777-7777-4777-8777-777777777777";
         using var f = new Fixture();
@@ -181,8 +238,8 @@ public sealed class ProcessTreeStopTests
         var keys = new Keys();
         var logs = new List<string>();
         var control = new WindowsProcessControl(rig.Open, rig.Scan, rig.Created, time ?? new FakeTimeProvider());
-        var stopper = new StopService(new DeliveryGate(), source, f.Processes, new NoBridge(), keys, control,
-            new StopOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, Grace = TimeSpan.FromSeconds(1), TerminateWait = TimeSpan.Zero }, logs.Add);
+        var stopper = new StopService(gate ?? new DeliveryGate(), source, f.Processes, new NoBridge(), keys, control,
+            new StopOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, Grace = grace ?? TimeSpan.FromSeconds(1), TerminateWait = TimeSpan.Zero }, logs.Add);
         await check(stopper, keys, new StopRequest { Id = id, Request = Guid.NewGuid().ToString("D") }, source, logs);
     }
 
@@ -190,7 +247,13 @@ public sealed class ProcessTreeStopTests
     sealed class Keys : IConsoleInjector
     {
         public int Calls;
-        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
-        { Calls++; return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, "offline fixture")); }
+        public Func<Task>? BeforeInject;
+        public InjectionStatus Status = InjectionStatus.NothingTyped;
+        public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            if (BeforeInject is not null) { await BeforeInject(); }
+            return new InjectionResult(Status, "offline fixture");
+        }
     }
 }
