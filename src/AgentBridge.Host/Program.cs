@@ -1123,7 +1123,8 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         Journal = journal,
         AgentWorktreeCheck = AgentLaunchWorktreeCheck.Check,
         AgentWorktreeRefusalAudit = (request, principal, reason) => audit.Append(
-            new("local", request.ToString("D"), principal, [], LaunchProtocol.Launch, "local", "refused", reason)),
+            new("local", request.ToString("D"), principal, [], LaunchProtocol.Launch, "local", "refused", reason)
+                { Grant = AgentAuditLog.WorktreeRefusalGrant }),
     }, Log, attachments, credentials: credentials, account: new CopilotLaunchAccount(launchHttp, log: Log));
     var why = !settings.Launch.Enabled ? "turned off (launch.enabled)" : starter.Unavailable() ?? probe.Active();
     var count = settings.Launch.Workspaces.Count;

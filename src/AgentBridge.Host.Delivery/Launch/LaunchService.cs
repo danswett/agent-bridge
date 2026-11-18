@@ -1097,7 +1097,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         try { recorded = options.AgentWorktreeRefusalAudit?.Invoke(key, principal, reason) == true; }
         catch (Exception e) { log($"launch {Short(key)}: refusal audit failed: {e.GetType().Name}"); }
         return Refused(recorded ? reason : $"{reason} auditUnwritable: the agent worktree refusal could not be recorded.")
-            with { RefusalAudited = recorded };
+            with { RefusalAudited = recorded, WorktreeRefusalReason = reason };
     }
 
     async Task<string?> DiscardWorktreeAsync(WorktreeResult made, Guid key)

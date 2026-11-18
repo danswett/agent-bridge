@@ -231,10 +231,10 @@ public static partial class LocalApi
         public Dictionary<string, (long At, int Written, int Suppressed, long Last)> Windows { get; } = new(StringComparer.Ordinal);
     }
 
-    static void AuditRefusal(AgentCredentials credentials, AgentCredential caller, string op, JsonElement data, AgentAuditLog? audit, string why, RefusalAudits refusals)
-        => AuditRefusal(credentials.PrincipalOf(caller), caller.Chain, op, data, audit, why, refusals);
+    static void AuditRefusal(AgentCredentials credentials, AgentCredential caller, string op, JsonElement data, AgentAuditLog? audit, string why, RefusalAudits refusals, string? grant = null)
+        => AuditRefusal(credentials.PrincipalOf(caller), caller.Chain, op, data, audit, why, refusals, grant);
 
-    internal static void AuditRefusal(string principal, string[] chain, string op, JsonElement data, AgentAuditLog? audit, string why, RefusalAudits refusals)
+    internal static void AuditRefusal(string principal, string[] chain, string op, JsonElement data, AgentAuditLog? audit, string why, RefusalAudits refusals, string? grant = null)
     {
         lock (refusals.Windows)
         {
@@ -260,9 +260,10 @@ public static partial class LocalApi
             var request = Guid.TryParse(Field("request"), out var r) ? r.ToString("D") : Guid.NewGuid().ToString("D");
             var target = op == LaunchProtocol.Launch ? "local" : Guid.TryParse(Field("id"), out var id) ? id.ToString("D") : "unknown";
             var reason = summary ? $"{state.Suppressed} additional launch or stop attempts were refused" : why;
-            var entry = new AgentAuditEntry("local", request, principal, chain, op, target, "refused", reason);
+            var replay = !summary && grant == AgentAuditLog.WorktreeRefusalGrant;
+            var entry = new AgentAuditEntry("local", request, principal, replay ? [] : chain, op, target, "refused", reason) { Grant = summary ? null : grant };
             bool written;
-            try { written = audit?.Append(entry, !summary && op == LaunchProtocol.Launch ? Field("prompt") : null) == true; }
+            try { written = audit?.Append(entry, !summary && !replay && op == LaunchProtocol.Launch ? Field("prompt") : null) == true; }
             catch (Exception) { throw AuditUnavailable(); }
             if (!written) { throw AuditUnavailable(); }
             refusals.Windows[principal] = (state.At, Math.Min(60, state.Written + 1), 0, now);

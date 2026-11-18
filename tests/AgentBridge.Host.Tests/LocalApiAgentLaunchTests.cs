@@ -412,6 +412,7 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
             var seed = Guid.NewGuid();
             Assert.True(audit.Append(new("local", seed.ToString(), "person:local", [], "session.stop", seed.ToString(), "reserved",
                 Gate: new(1, seed, Guid.NewGuid(), 0, "intent", "local", "person-client", seed, "none"))));
+            Assert.True(audit.Append(new("local", seed.ToString(), "person:local", [], LaunchProtocol.Launch, "local", "started")));
         }
         var calls = 0;
         bool? callbackResult = null;
@@ -426,19 +427,20 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
                 try
                 {
                     callbackResult = audit.Append(new("local", request.ToString("D"), principal, [],
-                        LaunchProtocol.Launch, "local", "refused", reason));
+                        LaunchProtocol.Launch, "local", "refused", reason) { Grant = "agent-worktree-refusal" });
                     return callbackResult.Value;
                 }
                 finally { if (failHeadWrite) { Directory.Delete(blocked); } }
             });
         var handle = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher),
             null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: credentials, audit: audit);
-        var body = JsonSerializer.SerializeToElement(new { request = Guid.NewGuid().ToString("D"), agent = "claude", workspace = "App", permissions = "ask" });
+        var body = JsonSerializer.SerializeToElement(new { request = Guid.NewGuid().ToString("D"), agent = "claude", workspace = "App", permissions = "ask", prompt = "worktree refusal fixture" });
         var result = Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch, body));
         Assert.Equal(LaunchOutcome.Refused, result.Outcome);
         Assert.Equal(1, calls);
         Assert.Equal(callbackWrites && !failHeadWrite, callbackResult == true);
         Assert.DoesNotContain("refusalAudited", JsonSerializer.Serialize(result, ProtocolJson.Options));
+        Assert.DoesNotContain("worktreeRefusalReason", JsonSerializer.Serialize(result with { WorktreeRefusalReason = "host-only" }, ProtocolJson.Options));
         Assert.Empty(starter.Specs);
         var rows = Directory.GetFiles(Path.Combine(f.Root, AgentAuditLog.FolderName), "launches-*.jsonl")
             .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line))
