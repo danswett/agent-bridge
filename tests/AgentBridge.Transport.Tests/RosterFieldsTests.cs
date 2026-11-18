@@ -23,35 +23,84 @@ public sealed class RosterFieldsTests
         }),
     };
 
-    sealed class Wirer
+    sealed class RegistryFrames(TimeProvider? clock = null)
     {
         readonly ConcurrentQueue<JsonElement> frames = new();
-        public Wirer(Device d) => d.Relay.Unhandled += frames.Enqueue;
+        readonly TimeProvider time = clock ?? TimeProvider.System;
 
-        async Task<List<JsonElement>> UntilAsync(Func<JsonElement, bool> done)
+        public void Receive(JsonElement frame) => frames.Enqueue(frame);
+
+        public async Task<List<JsonElement>> UntilAsync(Func<JsonElement, bool> done)
         {
             var got = new List<JsonElement>();
-            var end = DateTime.UtcNow.AddSeconds(10);
-            while (DateTime.UtcNow < end)
+            var end = time.GetUtcNow().AddSeconds(10);
+            while (time.GetUtcNow() < end)
             {
                 while (frames.TryDequeue(out var f)) { got.Add(f); if (done(f)) { return got; } }
-                await Task.Delay(20);
+                await Task.Delay(TimeSpan.FromMilliseconds(20), time);
             }
             throw new TimeoutException();
         }
+    }
+
+    sealed class Wirer
+    {
+        readonly RegistryFrames frames = new();
+        public Wirer(Device d) => d.Relay.Unhandled += frames.Receive;
 
         public async Task<string?> PutAsync(Device d, JsonNode record)
         {
             await d.Relay.SendRawAsync(JsonSerializer.SerializeToUtf8Bytes(new { t = "registry-put", id = 1, record }), System.Net.WebSockets.WebSocketMessageType.Text);
-            var r = (await UntilAsync(f => f.GetProperty("t").GetString() == "registry-result"))[^1];
+            var r = (await frames.UntilAsync(f => f.GetProperty("t").GetString() == "registry-result"))[^1];
             return r.GetProperty("error").GetString();
         }
 
         public async Task<List<JsonElement>> GetAsync(Device d)
         {
             await d.Relay.SendRawAsync(JsonSerializer.SerializeToUtf8Bytes(new { t = "registry-get", id = 2 }), System.Net.WebSockets.WebSocketMessageType.Text);
-            return await UntilAsync(f => f.TryGetProperty("known", out _) || f.TryGetProperty("error", out _));
+            return await frames.UntilAsync(f => f.TryGetProperty("known", out _) || f.TryGetProperty("error", out _));
         }
+    }
+
+    [Fact]
+    public async Task A_registry_reply_delivered_before_the_reader_resumes_is_not_lost_at_the_deadline()
+    {
+        var time = new FakeTimeProvider();
+        var frames = new RegistryFrames(time);
+        static bool Result(JsonElement f) => f.GetProperty("t").GetString() == "registry-result";
+        var accepted = JsonSerializer.SerializeToElement(new { t = "registry-result", id = 1, error = (string?)null });
+        var refused = JsonSerializer.SerializeToElement(new { t = "registry-result", id = 1, error = "bad-record" });
+
+        frames.Receive(accepted);
+        Assert.Null((await frames.UntilAsync(Result))[^1].GetProperty("error").GetString());
+        frames.Receive(JsonSerializer.SerializeToElement(new { t = "registry", id = 2, record = Record("machine") }));
+        frames.Receive(JsonSerializer.SerializeToElement(new { t = "registry", id = 2, known = Array.Empty<object>() }));
+        var snapshot = await frames.UntilAsync(f => f.TryGetProperty("known", out _));
+        Assert.Equal(2, snapshot.Count);
+        Assert.Equal("build", snapshot[0].GetProperty("record").GetProperty("sessions")[0].GetProperty("name").GetString());
+        frames.Receive(refused);
+        Assert.Equal("bad-record", (await frames.UntilAsync(Result))[^1].GetProperty("error").GetString());
+
+        var third = frames.UntilAsync(Result);
+        Assert.False(third.IsCompleted);
+        // The third reply is delivered before the waiting reader gets CPU again.
+        frames.Receive(refused);
+        time.Advance(TimeSpan.FromSeconds(10));
+
+        Assert.Equal("bad-record", (await third.WaitAsync(TimeSpan.FromSeconds(5)))[^1].GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task A_missing_registry_reply_still_times_out_after_ten_seconds()
+    {
+        var time = new FakeTimeProvider();
+        var frames = new RegistryFrames(time);
+        var pending = frames.UntilAsync(_ => true);
+        Assert.False(pending.IsCompleted);
+
+        time.Advance(TimeSpan.FromSeconds(10));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => pending.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
     [Fact]
