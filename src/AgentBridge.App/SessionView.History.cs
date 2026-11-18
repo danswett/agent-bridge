@@ -207,6 +207,7 @@ public sealed partial class SessionView
             }
             var off = reading is not null || atEnd || pinEnd || latestHatch.Used ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
             if (off) { Anchoring(scroll, target); }
+            TakeAnchor();
         }
         // Compensate a prepend before input can land between insertion and correction.
         if (earlierExtent is not null) { Restore(); }
