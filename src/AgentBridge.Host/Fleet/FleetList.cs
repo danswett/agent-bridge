@@ -17,7 +17,8 @@ public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSes
 
 public sealed record FleetSession(string Node, string? Name, string State, DateTimeOffset Since, string? Id = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Role = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Role = null,
+    [property: JsonIgnore] SessionEvidence? Evidence = null);
 
 public interface IFleetRoster
 {
@@ -85,7 +86,8 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
                     sessions.Add(new FleetSession(s.GetProperty("node").GetString()!, s.TryGetProperty("name", out var n) ? n.GetString() : null,
                         s.GetProperty("state").GetString()!, s.GetProperty("since").GetDateTimeOffset(), s.TryGetProperty("id", out var sid) ? sid.GetString() : null,
                         s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null,
-                        s.TryGetProperty("role", out var role) && role.ValueKind == JsonValueKind.String ? SessionRoles.Known(role.GetString()) : null));
+                        s.TryGetProperty("role", out var role) && role.ValueKind == JsonValueKind.String ? SessionRoles.Known(role.GetString()) : null,
+                        SessionEvidence.Read(s, futureAttention: true)));
                 }
             }
             machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name, LastSeen: LastSeen(f), HasRegistryRecord: hasRegistryRecord));
@@ -135,7 +137,11 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
 public sealed record FleetListSession(string Machine, string Node, string State, DateTimeOffset Since, long SecondsInState, bool MachineOnline,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Role = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Role = null,
+    [property: JsonIgnore] SessionEvidence? Evidence = null)
+{
+    [JsonExtensionData] public Dictionary<string, JsonElement>? EvidenceFields => Evidence?.Copy();
+}
 
 public sealed record FleetListMachine(string Machine, string State,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,
@@ -249,7 +255,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         {
             sessions = machines.SelectMany(m => m.Sessions.Select(s => new FleetListSession(
                 m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name,
-                m.Online && m.Verified ? SessionRoles.Known(s.Role) : null))).ToList(),
+                m.Online && m.Verified ? SessionRoles.Known(s.Role) : null, s.Evidence))).ToList(),
             machines = machines.OrderBy(m => m.Id, StringComparer.Ordinal).Select(m => new FleetListMachine(
                 m.Id, m.Online ? "online" : "offline", m.Name, m.LastSeen, m.Online && m.HasRegistryRecord && !m.Truncated)).ToList(),
         };

@@ -25,7 +25,7 @@ public static class RosterFields
     public static readonly TimeSpan HeartbeatWindow = TimeSpan.FromSeconds(60);
 
     static readonly HashSet<string> RecordMembers = ["v", "machine", "epoch", "seq", "at", "truncated", "total", "sessions", "sig"];
-    static readonly HashSet<string> SessionMembers = ["id", "node", "name", "state", "since", "role"];
+    static readonly HashSet<string> SessionMembers = ["id", "node", "name", "state", "since", "startedAt", "role", .. SessionEvidence.Members];
     static readonly HashSet<string> States = ["working", "waiting", "idle", "ending"];
 
     // Null when the record is acceptable, else the reason; epoch, seq and at come back for ordering.
@@ -50,10 +50,10 @@ public static class RosterFields
         if (!TryTime(record.GetProperty("at"), out at)) { return "bad-record"; }
         var truncated = record.GetProperty("truncated");
         if (truncated.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) { return "bad-record"; }
-        if (seen.Contains("total") && (!truncated.GetBoolean() || !Int(record.GetProperty("total"), out var total) || total <= MaxSessions)) { return "bad-record"; }
         if (seen.Contains("sig") && (!Is(record.GetProperty("sig"), JsonValueKind.String) || record.GetProperty("sig").GetString() is not { Length: > 0 and <= 256 } sig || !sig.All(IsBase64Url))) { return "bad-record"; }
         var sessions = record.GetProperty("sessions");
         if (sessions.ValueKind != JsonValueKind.Array || sessions.GetArrayLength() > MaxSessions) { return "bad-record"; }
+        if (seen.Contains("total") && (!truncated.GetBoolean() || !Int(record.GetProperty("total"), out var total) || total <= sessions.GetArrayLength())) { return "bad-record"; }
         foreach (var s in sessions.EnumerateArray())
         {
             if (!SessionOk(s)) { return "bad-record"; }
@@ -77,6 +77,13 @@ public static class RosterFields
         if (!TryTime(s.GetProperty("since"), out _)) { return false; }
         if (seen.Contains("role") && (s.GetProperty("role").ValueKind != JsonValueKind.String
             || SessionRoles.Known(s.GetProperty("role").GetString()) is null)) { return false; }
+        if (seen.Contains("startedAt") && (s.GetProperty("startedAt").ValueKind != JsonValueKind.String
+            || s.GetProperty("startedAt").GetString() is not { Length: 20 } started
+            || !DateTimeOffset.TryParseExact(started, "yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out _))) { return false; }
+        try { _ = SessionEvidence.Read(s); }
+        catch (InvalidDataException) { return false; }
+        catch (InvalidOperationException) { return false; }
         // Printable ASCII only: a name is display text from an untrusted source.
         return !seen.Contains("name") || (Is(s.GetProperty("name"), JsonValueKind.String)
             && s.GetProperty("name").GetString() is { Length: > 0 and <= MaxNameLength } name && name.All(c => c is >= ' ' and <= '~'));
