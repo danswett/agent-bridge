@@ -38,6 +38,95 @@ test.afterEach(async ({ page }) => {
   expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
 });
 
+test.describe('the reply keystroke path', () => {
+  test.use({ viewport: { width: 390, height: 664 } });
+
+  test.beforeEach(async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate(async () => {
+      const { ReplyBox } = await import('/js/ui/reply-view.js');
+      let changes = 0, fits = 0;
+      const service = { get: () => null, watch: () => () => {} };
+      const reply = new ReplyBox({ machineName: 'Fake', replying: { service, hostId: 'fake', sessionId: 'fake' }, onChange: () => changes++ });
+      document.body.append(reply.element);
+      reply.update({ status: 'idle' });
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      const settle = async () => { await frame(); await frame(); };
+      const fit = reply.fit.bind(reply);
+      reply.fit = (...args) => { fits++; return fit(...args); };
+      await settle();
+      window.__replyProbe = {
+        reply, settle,
+        async edit(text) {
+          changes = 0; fits = 0;
+          let encodes = 0;
+          const encode = TextEncoder.prototype.encode;
+          TextEncoder.prototype.encode = function (...args) { encodes++; return encode.apply(this, args); };
+          try {
+            reply.els.input.value = text;
+            reply.els.input.oninput({ isComposing: false });
+          } finally { TextEncoder.prototype.encode = encode; }
+          const synchronousFits = fits;
+          await settle();
+          return { encodes, changes, fits, synchronousFits };
+        },
+      };
+    });
+  });
+
+  test.afterEach(async ({ page }) => {
+    await page.evaluate(() => { window.__replyProbe?.reply.destroy(); });
+  });
+
+  test('a 60 KiB draft counts bytes only once and a same-row edit redraws no parent or layout', async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const p = window.__replyProbe;
+      p.reply.els.input.wrap = 'off';
+      await p.edit('x'.repeat(60 * 1024));
+      return p.edit(`${p.reply.text}y`);
+    });
+    expect(result.encodes).toBeLessThanOrEqual(1);
+    expect(result).toMatchObject({ changes: 0, fits: 0, synchronousFits: 0 });
+  });
+
+  test('short Unicode drafts need no encoding and byte warnings keep their exact thresholds', async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const p = window.__replyProbe, e = p.reply.els;
+      const small = await p.edit('界'.repeat(1024));
+      const smallNotice = e.bytes.textContent;
+      await p.edit('x'.repeat(12 * 1024));
+      const at = e.bytes.textContent;
+      await p.edit('x'.repeat(12 * 1024 + 1));
+      const above = e.bytes.textContent;
+      await p.edit('界'.repeat(5462));
+      const over = { text: e.bytes.textContent, invalid: e.input.getAttribute('aria-invalid') };
+      await p.edit('ready');
+      e.send.focus();
+      await p.edit(' ');
+      return { small, smallNotice, at, above, over, disabled: e.send.disabled, focused: document.activeElement === e.input, invalid: e.input.hasAttribute('aria-invalid') };
+    });
+    expect(result.small.encodes).toBe(0);
+    expect(result).toMatchObject({ smallNotice: '', at: '', above: '12.0 KiB of 16 KiB', over: { text: 'Too long: 16.0 KiB of 16 KiB', invalid: 'true' }, disabled: true, focused: true, invalid: false });
+  });
+
+  test('phone rows still grow and shrink, but never fit synchronously during input', async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const p = window.__replyProbe, e = p.reply.els;
+      await p.edit('one');
+      const one = e.input.getBoundingClientRect().height;
+      const grow = await p.edit('one\ntwo\nthree');
+      const three = e.input.getBoundingClientRect().height;
+      const shrink = await p.edit('one');
+      return { one, three, final: e.input.getBoundingClientRect().height, grow, shrink, hint: e.hint.hidden };
+    });
+    expect(result.three).toBeGreaterThan(result.one);
+    expect(result.final).toBe(result.one);
+    expect(result.grow.synchronousFits).toBe(0);
+    expect(result.shrink.synchronousFits).toBe(0);
+    expect(result.hint).toBe(true);
+  });
+});
+
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
