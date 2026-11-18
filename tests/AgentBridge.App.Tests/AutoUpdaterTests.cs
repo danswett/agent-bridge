@@ -1027,6 +1027,30 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_halt_added_while_the_host_stops_refuses_handover_and_brings_the_host_back()
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        await auto.TickAsync();
+        Departs(Committed);
+        var (stopAsked, letGo) = HeldStop();
+        var install = NowAsync();
+        await stopAsked;
+        testPolicy = new(new(3, "{\"v\":1,\"halted\":[\"0.2.0\"]}", ["0.2.0"]), time.GetUtcNow(), true);
+        letGo();
+        await install;
+
+        Assert.False(updater.Applied);
+        Assert.False(prefs.UpdateHandedOver);
+        Assert.Equal(UpdateOutcome.Refused, prefs.LastUpdate?.Outcome);
+        Assert.Equal("halted", prefs.LastUpdate?.Code);
+        Assert.Single(processes.Started);
+        Assert.False(manager.UpdateUnderWay);
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Complete, "the host back");
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Halt_policy_seven_hours_old_holds_automatic_install()
     {
         HaltPolicy(new(new(2, "{\"v\":1,\"halted\":[]}", []), time.GetUtcNow() - TimeSpan.FromHours(7), false));
