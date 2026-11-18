@@ -11,6 +11,7 @@ public sealed class UpdateCoordinator(
     TimeProvider? time = null)
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
+    public Task RespawnFinished { get; private set; } = Task.CompletedTask;
 
     public async Task<UpdateApplyResult> RunAsync(string targetVersion, CancellationToken cancel = default)
     {
@@ -29,6 +30,8 @@ public sealed class UpdateCoordinator(
             if (evidence.Generation != generation || evidence.WorkersFinished != true || evidence.ApplyExitCode != 0)
                 return evidence with { ActiveVersion = null };
             step = "package-lock";
+            await Task.Yield();
+            ct.ThrowIfCancellationRequested();
             custody.Take(acquirePackageLock(), ct);
             ct.ThrowIfCancellationRequested();
             step = "active-version";
@@ -55,21 +58,38 @@ public sealed class UpdateCoordinator(
             if (result.End == UpdateApplyEnd.Completed)
             {
                 cancel.ThrowIfCancellationRequested();
-                if (clock.GetElapsedTime(began) >= completion.Window)
-                    result = result with { End = UpdateApplyEnd.Unknown, Code = "timeout", Step = "respawn" };
+                var remaining = completion.Window - clock.GetElapsedTime(began);
+                if (remaining <= TimeSpan.Zero)
+                    result = result with { End = UpdateApplyEnd.Unknown, Code = "timeout" };
                 else
                 {
+                    using var deadline = new CancellationTokenSource(remaining, clock);
+                    using var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancel, deadline.Token);
+                    var token = waiting.Token;
                     try
                     {
-                        respawn();
-                        result = result with { Step = "respawn", At = clock.GetUtcNow(), Elapsed = clock.GetElapsedTime(began) };
+                        RespawnFinished = Task.Run(() =>
+                        {
+                            token.ThrowIfCancellationRequested();
+                            step = "respawn";
+                            respawn();
+                        });
+                        await RespawnFinished.WaitAsync(token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
+                        if (clock.GetElapsedTime(began) >= completion.Window)
+                            result = result with { End = UpdateApplyEnd.Unknown, Code = "timeout" };
+                    }
+                    catch (OperationCanceledException) when (!cancel.IsCancellationRequested && deadline.IsCancellationRequested)
+                    {
+                        result = result with { End = UpdateApplyEnd.Unknown, Code = "timeout" };
                     }
                     catch (Exception error)
                     {
                         cancel.ThrowIfCancellationRequested();
-                        result = Failure(result, "respawn", error);
+                        result = Failure(result, step, error);
                     }
                 }
+                result = result with { Step = step, At = clock.GetUtcNow(), Elapsed = clock.GetElapsedTime(began) };
             }
         }
         finally
@@ -77,7 +97,6 @@ public sealed class UpdateCoordinator(
             try { custody.Dispose(); }
             catch (Exception error)
             {
-                cancel.ThrowIfCancellationRequested();
                 releaseError = error;
             }
         }
