@@ -3,6 +3,7 @@
 // 760 with Conversation and Tools as tabs, and one column below with the session pushed over the
 // list and the browser's own back. What a row and a header say, and how their facts wrap.
 import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import { readFileSync } from 'node:fs';
 import { open, row, view } from './nav.mjs';
 
@@ -41,6 +42,61 @@ async function resize(page, width, height) {
 test.afterEach(async ({ page }) => {
   expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
 });
+
+for (const width of [390, 900, 1440]) {
+  test(`pane controls: at ${width} px only the width's control is exposed and the header stays accessible`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await openDemo(page);
+    const v = await open(page, CLAUDE);
+    const header = v.locator('.session-header');
+    await expect(header.getByRole('button', { name: 'Details', exact: true })).toHaveCount(width === 900 ? 1 : 0);
+    await expect(header.getByRole('button', { name: /^(Hide|Show) inspector$/ })).toHaveCount(width === 1440 ? 1 : 0);
+    if (width === 1440) {
+      const toggle = header.getByRole('button', { name: 'Hide inspector', exact: true });
+      await toggle.click();
+      await expect(toggle).toHaveAccessibleName('Show inspector');
+      await expect(v.locator('.inspector')).toBeHidden();
+      await expect(header.getByRole('button', { name: 'Details', exact: true })).toHaveCount(0);
+      await toggle.click();
+      await expect(toggle).toHaveAccessibleName('Hide inspector');
+    } else if (width === 390) {
+      await v.locator('.session-bar .more').click();
+      await page.getByRole('menuitem', { name: 'Details', exact: true }).click();
+      await expect(v.locator('.details .section-head')).toBeFocused();
+    }
+    const { violations } = await new AxeBuilder({ page })
+      .include('.session-view:not([hidden]) .session-head')
+      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22a', 'wcag22aa', 'best-practice'])
+      .analyze();
+    expect(violations).toEqual([]);
+  });
+}
+
+for (const state of ['shown', 'hidden']) {
+  test(`pane controls: focus follows the replacement across 1280 without changing the ${state} preference`, async ({ page }) => {
+    await page.addInitScript((value) => localStorage.setItem('agent-bridge.app.inspector', value), state);
+    await page.setViewportSize({ width: 900, height: 900 });
+    await openDemo(page);
+    const v = await open(page, CLAUDE);
+    const details = v.locator('.details-button');
+    const inspector = v.locator('.inspector-button');
+    await details.focus();
+    for (const width of [1280, 1279, 1440, 900]) {
+      await resize(page, width, 900);
+      await expect(width >= 1280 ? inspector : details).toBeFocused();
+      await expect(width >= 1280 ? details : inspector).toBeHidden();
+      if (width >= 1280) { await expect(inspector).toHaveAccessibleName(state === 'shown' ? 'Hide inspector' : 'Show inspector'); }
+      expect(await page.evaluate(() => localStorage.getItem('agent-bridge.app.inspector'))).toBe(state);
+      await expect(v.locator('.inspector')).toBeVisible({ visible: width >= 1280 && state === 'shown' });
+    }
+    await details.focus();
+    await page.keyboard.press('Tab');
+    await expect(details).not.toBeFocused();
+    await resize(page, 1440, 900);
+    await expect(inspector).not.toBeFocused();
+  });
+}
 
 test('at 1440 px three panes: the list at 320, the session, and the inspector at 336, side by side', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
