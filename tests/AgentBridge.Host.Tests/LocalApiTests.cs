@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Diagnostics;
 using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
@@ -10,6 +11,7 @@ using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // The host's local API end to end: fixture sessions read by the real SessionSource, served by
@@ -41,6 +43,8 @@ public sealed class LocalApiTests : IAsyncLifetime
     int restarts;
     // Who each connection is. The app, unless a test says otherwise.
     readonly Callers callers = new();
+    readonly FakeTimeProvider meterClock = new() { AutoAdvanceAmount = TimeSpan.FromTicks(1) };
+    readonly CountingTimeProvider meter;
     readonly List<string> logged = [];
     readonly List<bool> applied = [];
     Action<bool>? onApply;
@@ -57,6 +61,7 @@ public sealed class LocalApiTests : IAsyncLifetime
 
     public LocalApiTests()
     {
+        meter = new(meterClock);
         // Short: a Unix socket path must fit about 100 bytes, and the fixture's root is long.
         profile = Path.Combine(Path.GetTempPath(), "abh-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(profile);
@@ -113,7 +118,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             HoldProbes = () => { Interlocked.Increment(ref probeHolds); return probesFinishing; },
         });
         authorization = new RemoteAuthorization(false, new TrustedPeerStore(profile, hostKey.Public, () => "acct"));
-        server = LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(service, control, callers, m => { lock (logged) { logged.Add(m); } }, authorization));
+        server = LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(service, control, callers, m => { lock (logged) { logged.Add(m); } }, authorization, meter: meter));
         owned.Add(server);
     }
 
@@ -134,6 +139,49 @@ public sealed class LocalApiTests : IAsyncLifetime
         var ch = await LocalClient.ConnectAsync(LocalEndpoint.For(profile), Patience);
         owned.Add(ch);
         return ch;
+    }
+
+    [Theory]
+    [InlineData(CallerKind.App)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task Host_diagnostics_report_timer_allocation_and_gc_counts_over_the_pipe(CallerKind kind)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        using var timer = meter.ForOwner("fixture").CreateTimer(_ => { }, null, TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
+        meterClock.Advance(TimeSpan.FromSeconds(1));
+        var allocated = GC.GetTotalAllocatedBytes();
+        var counts = Enumerable.Range(0, 3).Select(GC.CollectionCount).ToArray();
+        var ch = await ConnectAsync();
+
+        var snapshot = await ch.CallAsync<EfficiencySnapshot>("host.diagnostics");
+
+        Assert.Equal(new TimerCounts(1, 1), snapshot.Timers["fixture"]);
+        Assert.True(snapshot.AllocatedBytes >= allocated);
+        Assert.True(snapshot.Gen0Collections >= counts[0]);
+        Assert.True(snapshot.Gen1Collections >= counts[1]);
+        Assert.True(snapshot.Gen2Collections >= counts[2]);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    public async Task Host_meter_is_not_available_to_unapproved_pipe_callers(CallerKind kind)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync("host.diagnostics"));
+        Assert.StartsWith("refused:", refused.Message);
+    }
+
+    [Fact]
+    public async Task Host_meter_rechecks_the_caller_on_an_already_open_pipe()
+    {
+        var ch = await ConnectAsync();
+        await ch.CallAsync<EfficiencySnapshot>("host.diagnostics");
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture caller"));
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync("host.diagnostics"));
+        Assert.StartsWith("refused:", refused.Message);
+        lock (logged) { Assert.Contains(logged, line => line.Contains("refused host.diagnostics")); }
     }
 
     static async Task<ChannelEvent> NextAsync(LocalChannel ch)
