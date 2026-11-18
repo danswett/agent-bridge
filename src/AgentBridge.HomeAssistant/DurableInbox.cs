@@ -58,13 +58,13 @@ internal sealed class DurableInbox
             return prior;
         }
         var full = false;
-        while (messages.Count(m => m.Node == node) >= MaxEntriesPerNode)
+        while (messages.Count(m => m.Node == node && !m.CapacityRefused) >= MaxEntriesPerNode)
         {
             var oldest = messages.FindIndex(m => m.Node == node && m.DeliveredAt is not null && !Pinned(m));
             if (oldest < 0) { full = true; break; }
             messages.RemoveAt(oldest);
         }
-        while (!full && messages.Count >= MaxEntries)
+        while (!full && messages.Count(m => !m.CapacityRefused) >= MaxEntries)
         {
             var oldest = messages.FindIndex(m => m.DeliveredAt is not null && !Pinned(m));
             if (oldest < 0) { full = true; break; }

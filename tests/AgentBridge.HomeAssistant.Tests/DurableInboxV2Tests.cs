@@ -160,6 +160,49 @@ public sealed class DurableInboxV2Tests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Admission_recovers_with_full_overflow_history_without_evicting_any_admitted_pin(bool total)
+    {
+        var limit = total ? 1000 : 100;
+        var admitted = Enumerable.Range(0, limit).Select(n => Message("admitted-" + n, node: "node" + n / 100)).ToList();
+        admitted[0] = Message("admitted-0", "refused", "node0");
+        admitted[1] = Message("admitted-1", "unconfirmed", "node0");
+        admitted[2] = Message("admitted-2", "delivered", "node0");
+        admitted[2]["ConsumedTokens"] = JsonSerializer.SerializeToNode(new[] { new InboxCleanupFence("token", 1, 1, "host", "process") });
+        var node = total ? "fresh" : "node0";
+        var history = Enumerable.Range(0, limit).Select(n => JsonSerializer.SerializeToNode(new InboxMessage(
+            total ? "overflow" + n / 100 : node, "refused-" + n, "sender", "", Now, Now,
+            Outcome: "refused", CapacityRefused: true))!.AsObject());
+        Write(2, admitted.Concat(history));
+        var inbox = new DurableInbox(Pathname);
+        inbox.Deliver("node0", "admitted-3", Now.AddSeconds(1));
+        inbox.Start("node0", "admitted-4", Now.AddSeconds(2), "active-host", "active-process");
+        var retained = JsonNode.Parse(File.ReadAllText(Pathname))!["Messages"]!.AsArray()
+            .Where(m => m!["Rid"]!.GetValue<string>() != "admitted-3").Select(m => m!.DeepClone()).ToArray();
+
+        var next = inbox.Enqueue(node, "next", "sender", "new work", Now.AddMinutes(1), out var duplicate);
+        Assert.False(duplicate);
+        Assert.Null(next.Outcome);
+        Assert.Null(next.DeliveredAt);
+        Assert.False(next.CapacityRefused);
+        inbox = new DurableInbox(Pathname);
+        Assert.Equal(next, inbox.Find(node, "next"));
+        Assert.Equal(total ? "next" : "admitted-4", inbox.Peek(node)!.Rid);
+        var saved = JsonNode.Parse(File.ReadAllText(Pathname))!["Messages"]!.AsArray();
+        Assert.Equal(limit, saved.Count(m => m!["CapacityRefused"]?.GetValue<bool>() == true));
+        Assert.Equal(limit, saved.Count(m => m!["CapacityRefused"]?.GetValue<bool>() != true));
+        var byIdentity = saved.ToDictionary(m => (m!["Node"]!.GetValue<string>(), m["Rid"]!.GetValue<string>()));
+        foreach (var m in retained)
+        {
+            Assert.True(JsonNode.DeepEquals(m, byIdentity[(m["Node"]!.GetValue<string>(), m["Rid"]!.GetValue<string>())]));
+        }
+        Assert.Equal("refused", inbox.Enqueue(total ? "overflow0" : node, "refused-0", "other", "retry",
+            Now.AddMinutes(2), out duplicate).Outcome);
+        Assert.True(duplicate);
+    }
+
     [Fact]
     public void Capacity_refusals_expire_after_a_day_without_renewal_or_expiring_admitted_fences()
     {

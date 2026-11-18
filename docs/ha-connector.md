@@ -592,13 +592,15 @@ No live HA, host management, authorization or 16 KiB publication limits change.
 **Durable inbox store.** `DurableInbox` is the reused internal store: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,
 and returns the original entry on a matching rid retry, even if a retry is restamped. It keeps
-100 entries per node and 1000 total before pruning the oldest unpinned delivered entries.
+100 admitted entries per node and 1000 total before pruning the oldest unpinned delivered entries.
 If only pending or pinned entries remain, overflow is saved as a payload-free `refused` tombstone before
 the connector acknowledges `Reply NOT sent` with that rid and sender; no accepted reply is
 displaced. New pre-admission overflow receipts are explicitly tagged `CapacityRefused`
 and retained separately within 100 per node and 1000 total, newest first, for less than
 24 hours. Every enqueue trims these receipts under the store lock using the host's
 observation time, before duplicate lookup and after insertion; retries do not renew age.
+Tagged never-admitted receipts do not consume either admission limit; their history
+has its own count/age bounds, so it cannot keep recovered admission capacity closed.
 Count/age eviction may let that never-admitted rid be admitted later if capacity opens.
 Admitted/uncertain replay fences are never displaced to make room for an overflow receipt.
 Legacy untagged refusals remain pinned because their pre-admission origin cannot be proved;
