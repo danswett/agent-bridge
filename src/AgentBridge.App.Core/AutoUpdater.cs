@@ -1528,9 +1528,9 @@ public sealed class AutoUpdater
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
                 if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
                 updater.ApplyConfirmed(to, allowedUnchecked || confirmedUnchecked, HandedOver(prefs, save));
-            }, waitForFiles: false, beforeApply: async () =>
+            }, waitForFiles: false, beforeApply: async ct =>
             {
-                await updater.RefreshHaltPolicyAsync();
+                await updater.RefreshHaltPolicyAsync(ct);
                 if (updater.Halted(to)) { throw new InstallRefusedException(ObservedUpdater.HaltedReason, "halted"); }
                 if (!updater.PolicyFresh && !allowedUnchecked && !confirmedUnchecked)
                 { throw new InstallRefusedException("bad-release protection is stale or unreadable", UpdateCode.PolicyUnreadable); }

@@ -18,14 +18,15 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
     HaltPolicySnapshot policy = new(null, null, false);
     bool policyRead;
 
-    internal async Task RefreshHaltPolicyAsync()
+    internal async Task RefreshHaltPolicyAsync(CancellationToken ct = default)
     {
-        await policyTurn.WaitAsync();
+        await policyTurn.WaitAsync(ct);
         var changed = false;
         try
         {
             var before = policy;
-            try { policy = ReadHaltPolicy is { } read ? await read() : inner.HaltPolicy ?? policy with { Fresh = false }; }
+            try { policy = ReadHaltPolicy is { } read ? await read().WaitAsync(ct) : inner.HaltPolicy ?? policy with { Fresh = false }; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or HttpRequestException
                 or System.Text.Json.JsonException or InvalidOperationException or ReleaseDiscoveryException
                 or FormatException or System.Security.Cryptography.CryptographicException or OperationCanceledException)
