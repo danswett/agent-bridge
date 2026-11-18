@@ -9,12 +9,14 @@ using AgentBridge.Protocol;
 using AgentBridge.Relay;
 using AgentBridge.Roster;
 using AgentBridge.Transport;
+using AgentBridge.Transport.Tests;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed class FleetFindSignedEndToEndTests : IDisposable
 {
     const string Name = "fixture-session";
+    const string WindowsReason = "fleet.find uses Windows agent credentials";
     static readonly JsonSerializerOptions Web = new(JsonSerializerDefaults.Web);
     readonly string root = Path.Combine(Path.GetTempPath(), "abfind-signed-" + Guid.NewGuid().ToString("N"));
     readonly AgentCredentials credentials;
@@ -69,23 +71,28 @@ public sealed class FleetFindSignedEndToEndTests : IDisposable
         try { Directory.Delete(root, true); } catch (IOException) { }
     }
 
-    [Fact]
+    [WindowsFact(WindowsReason)]
     public async Task A_fresh_record_signed_by_the_rostered_host_is_found_on_another_host()
     {
-        if (!OperatingSystem.IsWindows()) { return; }
         await CurrentRecordIsFound();
     }
 
-    [Theory]
-    [InlineData("altered")]
-    [InlineData("wrong-key")]
-    [InlineData("replayed")]
-    [InlineData("expired")]
-    public async Task An_invalid_record_cannot_supply_a_node_after_a_valid_lookup(string invalid)
+    [WindowsFact(WindowsReason)]
+    public Task An_altered_fresh_record_cannot_supply_a_node() => InvalidRecordCannotSupplyANode("altered");
+
+    [WindowsFact(WindowsReason)]
+    public Task A_wrong_key_record_cannot_supply_a_node() => InvalidRecordCannotSupplyANode("wrong-key");
+
+    [WindowsFact(WindowsReason)]
+    public Task A_replayed_record_cannot_supply_a_node() => InvalidRecordCannotSupplyANode("replayed");
+
+    [WindowsFact(WindowsReason)]
+    public Task An_expired_record_cannot_supply_a_node() => InvalidRecordCannotSupplyANode("expired");
+
+    async Task InvalidRecordCannotSupplyANode(string invalid)
     {
-        if (!OperatingSystem.IsWindows()) { return; }
-        var current = await CurrentRecordIsFound();
-        var altered = JsonNode.Parse(current.GetRawText())!.AsObject();
+        await CurrentRecordIsFound();
+        var altered = JsonNode.Parse(Record(3, World.Keys("A").Sign).GetRawText())!.AsObject();
         altered["sessions"]![0]!["state"] = "idle";
         var record = invalid switch
         {
