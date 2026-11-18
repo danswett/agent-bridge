@@ -30,14 +30,25 @@ public sealed class SlotLocatorTests : IDisposable
         Assert.Equal(Path.Combine(root, "packages"), locator.PackagesDir);
         Assert.Equal(entry, locator.ThisExeRelativePath);
         Assert.Same(process, locator.Process);
+        var updates = new VelopackHostUpdates(root, "default", () => throw new InvalidOperationException("must not stop"),
+            _ => { }, locator);
+        Assert.Contains("native apply is disabled", Assert.Throws<InvalidOperationException>(() =>
+            updates.ApplyAndRestart(new("0.1.201", null, null))).Message);
     }
 
-    [Fact]
+    [Theory]
+    [InlineData("bad-slot")]
+    [InlineData("0.1.200-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    [InlineData("0.1.200-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    public void A_malformed_slot_name_fails_closed_instead_of_becoming_an_uninstalled_native_copy()
+    public void A_malformed_slot_name_fails_closed_instead_of_becoming_an_uninstalled_native_copy(string name)
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var slot = Directory.CreateDirectory(Path.Combine(root, "slots", "bad-slot")).FullName;
+        var slot = Directory.CreateDirectory(Path.Combine(root, "slots", name)).FullName;
+        Directory.CreateDirectory(Path.Combine(root, "current"));
+        File.WriteAllText(Path.Combine(root, "Update.exe"), "fixture");
+        File.WriteAllText(Path.Combine(root, "current", "sq.version"),
+            "<package><metadata><id>AgentBridgeApp</id><version>0.1.100</version><mainExe>AgentBridge.exe</mainExe></metadata></package>");
         Assert.Throws<InvalidDataException>(() => SlotVelopackLocator.Create(new Process(Path.Combine(slot, "AgentBridge.exe"))));
     }
 

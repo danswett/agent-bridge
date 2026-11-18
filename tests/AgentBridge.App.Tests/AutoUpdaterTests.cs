@@ -2689,6 +2689,21 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task Atomic_Update_now_does_not_spend_a_host_departure_or_stop_the_host()
+    {
+        updater.KeepsHostRunning = true;
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        host.On(HostOps.UpdateDepart, _ => throw new InvalidOperationException("must not depart"));
+        await NowAsync(accept: OneTurn);
+        Assert.True(updater.Applied);
+        Assert.Empty(Departed());
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal(Press, prefs.UpdateRequest);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_release_replaced_since_it_was_downloaded_does_not_stop_the_host()
     {
         await StartAsync(null, Make.Session("s1", SessionStatus.Working));

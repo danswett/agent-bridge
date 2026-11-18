@@ -57,6 +57,34 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Stable_migration_retargets_only_enabled_profile_tasks_without_running_or_stopping_them()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var root = Directory.CreateDirectory(Path.Combine(app, "install")).FullName;
+        var current = Directory.CreateDirectory(Path.Combine(root, "current")).FullName;
+        File.WriteAllText(Path.Combine(root, "Update.exe"), "fixture");
+        File.WriteAllText(Path.Combine(current, OperatingSystem.IsWindows() ? "agent-bridge-host.exe" : "agent-bridge-host"), "");
+        File.WriteAllText(Path.Combine(current, OperatingSystem.IsWindows() ? "agent-bridge-hostw.exe" : "agent-bridge-hostw"), "");
+        Directory.CreateDirectory(Path.Combine(host.Folder, "other"));
+        Directory.CreateDirectory(Path.Combine(host.Folder, "disabled"));
+        var layout = new InstallLayout(current, host.Folder, "test");
+        var own = new HostManager(layout, tasks, processes, userId: "fixture", userSid: "fixture");
+        var other = new HostManager(layout with { Profile = "other" }, tasks, processes, userId: "fixture", userSid: "fixture");
+        own.SetStartAtSignIn(true);
+        other.SetStartAtSignIn(true);
+        var stable = Path.Combine(root, "agent-bridge-hostw.exe");
+        File.WriteAllText(stable, "verified fixture");
+
+        own.MigrateStableLaunchers();
+
+        Assert.Equal(2, tasks.Registered.Count);
+        Assert.All(tasks.Registered.Values, xml => Assert.Contains(stable, xml));
+        Assert.Empty(tasks.Ran);
+        Assert.Empty(tasks.Ended);
+        Assert.Empty(processes.Started);
+    }
+
+    [Fact]
     public async Task Uninstall_hook_cleanup_uses_this_apps_host_and_profile_without_guessing_agent_homes()
     {
         var commands = new CleanupCommands(new CommandResult(true, false, 0, "Owned hook cleanup finished.\n"));

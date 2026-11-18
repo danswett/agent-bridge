@@ -24,6 +24,7 @@ public interface IUpdater
     string? PendingNotes => null;
     Task DownloadAsync(Action<int> progress);
     bool ReportsDownloadFacts => false;
+    bool KeepsHostRunning => false;
     Task DownloadAsync(Action<int> progress, Action<long, long?> bytes) => DownloadAsync(progress);
     // The release downloaded and ready to apply: the one the last check found, once downloaded.
     // Null when a later check (or a change of feed) has found another since, or none.

@@ -22,7 +22,6 @@ public sealed class SlotVelopackLocator : WindowsVelopackLocator
         actual = process; this.content = content; this.entry = entry; this.version = version;
     }
 
-    // Not enabled by either app or host until D3c completes atomic migration.
     public static IVelopackLocator Create(IProcessImpl? process = null, IVelopackLogger? log = null)
     {
         log ??= new NullVelopackLogger();
@@ -33,7 +32,7 @@ public sealed class SlotVelopackLocator : WindowsVelopackLocator
             return new WindowsVelopackLocator(process, log);
         var name = content.Name;
         var dash = name.LastIndexOf('-');
-        if (dash <= 0 || name.Length - dash - 1 is not (40 or 64) || !name[(dash + 1)..].All(Uri.IsHexDigit)
+        if (dash <= 0 || name.Length - dash - 1 != 64 || !name[(dash + 1)..].All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')
             || !SemanticVersion.TryParse(name[..dash], out var version)
             || Path.GetFileName(path) is not ("AgentBridge.exe" or "agent-bridge-host.exe" or "agent-bridge-hostw.exe"))
             throw new InvalidDataException("Malformed running slot identity.");

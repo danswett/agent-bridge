@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Xml;
 using System.Xml.Linq;
 using AgentBridge.App.Core;
@@ -40,6 +41,7 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
         ApplyProcessId = null;
         Task<UpdateApplyEvidence>? observation = null;
         SlotPointer.Snapshot? active = null;
+        PackageDigest? appliedDigest = null;
         var applyStep = "apply-start";
         async Task WaitOriginal(CancellationToken ct)
         {
@@ -62,6 +64,7 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
             ct.ThrowIfCancellationRequested();
             if (slotApply is not null)
             {
+                appliedDigest = new(PackageDigest.Sha256, Convert.ToHexString(SHA256.HashData(package)));
                 applyStep = "slot-activation";
                 await slotApply(request, ct).ConfigureAwait(false);
                 return new(true, 0, null, generation);
@@ -85,6 +88,9 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
             {
                 if (slotApply is null) { return ReadVersion(); }
                 active = new SlotPointer(request.Root).Read() ?? throw new InvalidDataException("Missing activated slot.");
+                if (appliedDigest is null || active.Target.Slot.Digest.Algorithm != appliedDigest.Algorithm
+                    || !string.Equals(active.Target.Slot.Digest.Hex, appliedDigest.Hex, StringComparison.OrdinalIgnoreCase))
+                    throw new PackageMismatchException("Activated slot differs from the verified coordinator package.");
                 return active.Target.Slot.Version;
             }, () => { using var app = starter(AppStart(active)); }, time);
         try

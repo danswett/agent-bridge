@@ -153,3 +153,18 @@ uses native apply. `SlotVelopackLocator` is also not wired yet: it preserves the
 legacy installation's package/channel identity but reports the running immutable
 slot's own version/content, never the latest pointer's version. D3c must wire both
 with non-stopping caller behavior and the single publication point.
+
+### D3c: atomic migration enabled
+
+Atomic `slot-apply-v1` requires verified current/target helpers and stable entries;
+unsupported downgrades never fall back to native apply. Under the package writer
+lock, preparation caches SHA-256 slots (after verifying either feed checksum),
+then atomically publishes `active-slot.json`. Pre-commit failure/cancellation
+preserves the prior authority and legacy payloads. Version confirmation binds the
+verified package digest; one retained snapshot supplies respawn even on republish.
+Before handoff, stable aliases and enabled task/existing Run registrations are
+prepared without starting/stopping hosts. The app preserves hosts and consent/
+read-only checks, bypassing legacy file-replacement and departure gates. Running
+slots report their own version. Host-side native install refuses this layout;
+E owns convergence. Quality owns two-family review and native VM/survival proof;
+focused managed tests do not establish native or power-loss durability.

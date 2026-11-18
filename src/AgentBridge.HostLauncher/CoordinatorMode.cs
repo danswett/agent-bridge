@@ -15,7 +15,14 @@ internal static class CoordinatorMode
 
     internal static Task<int> RunAsync(string[] args) => RunAsync(args,
         Environment.ProcessPath ?? throw new InvalidDataException("coordinator-image-unavailable."),
-        CoordinatorHandoff.RuntimeTarget, request => new UpdateCoordinatorAdapter(request));
+        CoordinatorHandoff.RuntimeTarget, request => SlotAdapter(request, CoordinatorHandoff.RuntimeTarget));
+
+    internal static UpdateCoordinatorAdapter SlotAdapter(UpdateCoordinatorRequest request, string runtime,
+        Func<Stream, string?>? metadata = null, Func<int, IUpdateCoordinatorProcess?>? open = null,
+        Func<ProcessStartInfo, IUpdateCoordinatorProcess>? start = null) =>
+        new(request, open, start, slotApply: (apply, cancel) => Task.Run(() =>
+            new SlotMigration(apply.Root, runtime, metadata).Activate(apply.Package, apply.TargetVersion,
+                apply.Digest, cancel: cancel), CancellationToken.None));
 
     internal static async Task<int> RunAsync(string[] args, string imagePath, string runtimeTarget,
         Func<UpdateCoordinatorRequest, UpdateCoordinatorAdapter> factory,

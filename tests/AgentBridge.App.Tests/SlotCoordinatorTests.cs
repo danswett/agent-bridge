@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using AgentBridge.App.Core;
 using AgentBridge.HostLauncher;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed partial class SlotPreparationTests
@@ -38,6 +39,56 @@ public sealed partial class SlotPreparationTests
         Assert.Equal(Path.GetDirectoryName(start.FileName), start.WorkingDirectory);
         Assert.Equal(["--profile", "two words"], start.ArgumentList);
         Assert.Equal("legacy remains runnable", File.ReadAllText(legacy));
+    }
+
+    [Fact]
+    public async Task An_equal_version_from_a_different_package_cannot_authorize_managed_respawn()
+    {
+        LegacyFile();
+        var requested = PointerTarget("requested");
+        var different = PointerTarget("different");
+        var starts = 0;
+        var adapter = new UpdateCoordinatorAdapter(new(Root, Path.Combine(Root, "packages"),
+            Path.Combine(Root, requested.Package), requested.Slot.Digest, "AgentBridgeApp", requested.Slot.Version, [], 1, 1),
+            _ => null, _ => { starts++; return new SlotChild(); },
+            slotApply: (_, _) => { new SlotPointer(Root).Publish(different); return Task.CompletedTask; });
+
+        var result = await adapter.RunAsync();
+
+        await Assert.ThrowsAsync<PackageMismatchException>(() => adapter.Ownership);
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Equal("active-version", result.Step);
+        Assert.Equal(nameof(PackageMismatchException), result.ErrorType);
+        Assert.Equal(0, starts);
+    }
+
+    [Fact]
+    public async Task A_pointer_republished_mid_respawn_keeps_the_confirmed_generation()
+    {
+        LegacyFile();
+        var target = PointerTarget("confirmed");
+        var next = PointerTarget("superseding");
+        string? executable = null;
+        var adapter = new UpdateCoordinatorAdapter(new(Root, Path.Combine(Root, "packages"),
+            Path.Combine(Root, target.Package), target.Slot.Digest, "AgentBridgeApp", target.Slot.Version, [], 1, 1),
+            _ => null, info => { executable = info.FileName; return new SlotChild(); },
+            new RepublishClock(() => new SlotPointer(Root).Publish(next)),
+            slotApply: (_, _) => { new SlotPointer(Root).Publish(target); return Task.CompletedTask; });
+        Assert.Equal(UpdateApplyEnd.Completed, (await adapter.RunAsync()).End);
+        await adapter.Ownership;
+        Assert.Equal(Path.Combine(Root, target.Slot.RelativePath, "AgentBridge.exe"), executable);
+        using var active = new SlotPointer(Root).Read()!;
+        Assert.Equal(next, active.Target);
+    }
+
+    sealed class RepublishClock(Action publish) : FakeTimeProvider
+    {
+        int deadlines;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            if (++deadlines == 2) { publish(); }
+            return base.CreateTimer(callback, state, dueTime, period);
+        }
     }
 
     [Fact]

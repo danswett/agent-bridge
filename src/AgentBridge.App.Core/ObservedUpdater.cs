@@ -65,6 +65,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public bool? Downloaded => !inner.ReportsDownloadFacts ? null : Ready is not null ? true : Found is not null ? false : null;
 
     public string? InstalledVersion => inner.InstalledVersion;
+    public bool KeepsHostRunning => inner.KeepsHostRunning;
     public string? PendingNotes => inner.PendingNotes;
     public string? Ready => Offered(inner.Ready);
 

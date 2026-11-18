@@ -4,7 +4,6 @@ using AgentBridge.Local;
 
 namespace AgentBridge.App.Core;
 
-// D1 is deliberately not called by production launchers or update paths.
 public sealed class SlotPointer(string root)
 {
     public sealed record Target(SlotPreparation.Prepared Slot, string Package);

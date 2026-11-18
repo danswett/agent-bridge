@@ -50,7 +50,8 @@ static class Paths
     public static string? DiagnosticRoot { get; set; }
     public static string DataRoot => Identity.DefaultRoot;
     public static string AppData => DiagnosticRoot ?? Path.Combine(DataRoot, "app");
-    public static string Exe => Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "AgentBridge.exe");
+    public static string Exe => SlotEntry.StablePath(AppContext.BaseDirectory, "AgentBridge.exe")
+        ?? Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "AgentBridge.exe");
 }
 
 static class CrashLog

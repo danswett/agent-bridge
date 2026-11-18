@@ -14,7 +14,21 @@ public sealed class SlotMigration
     internal SlotMigration(string root, string runtime, Func<Stream, string?>? metadata)
     { this.root = Path.GetFullPath(root); this.runtime = runtime; this.metadata = metadata; }
 
-    // Preparation only. D3c owns the single pointer publication after every prerequisite succeeds.
+    public SlotPointer.Target Activate(string package, string version, PackageDigest digest,
+        Action? beforeCommit = null, CancellationToken cancel = default)
+    {
+        cancel.ThrowIfCancellationRequested();
+        var packages = Path.Combine(root, "packages");
+        SlotPreparation.NoLinks(packages);
+        Directory.CreateDirectory(packages);
+        var gate = Path.Combine(packages, ".velopack_lock");
+        SlotPreparation.NoLinks(gate);
+        using var writer = File.Open(gate, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var target = Prepare(package, version, digest);
+        new SlotPointer(root).Publish(target, () => { beforeCommit?.Invoke(); cancel.ThrowIfCancellationRequested(); });
+        return target;
+    }
+
     public SlotPointer.Target Prepare(string package, string version, PackageDigest digest, Action<string>? checkpoint = null)
     {
         if (digest is not { Hex: not null } || digest.Hex.Length != (digest.Algorithm switch
@@ -24,6 +38,7 @@ public sealed class SlotMigration
         SlotPreparation.NoLinks(package = Path.GetFullPath(package));
         using var source = DownloadMark.Hold(package, digest)
             ?? throw new PackageMismatchException("Migration package differs from the verified release.");
+        digest = new(PackageDigest.Sha256, Convert.ToHexString(SHA256.HashData(source)));
         var gate = Path.Combine(root, ".migration.lock");
         SlotPreparation.NoLinks(gate);
         using var writer = new FileStream(gate, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
@@ -76,7 +91,7 @@ public sealed class SlotMigration
         {
             var digest = new PackageDigest(PackageDigest.Sha256, Convert.ToHexString(SHA256.HashData(image)));
             HostwBundle.Verify(image, digest, runtime);
-            CoordinatorImage.RequireSlotEntryV1(image, metadata);
+            CoordinatorImage.RequireSlotApplyV1(image, metadata);
             image.Position = 0;
             return image;
         }

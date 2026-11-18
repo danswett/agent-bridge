@@ -4,15 +4,19 @@ using Xunit;
 
 public sealed partial class SlotPreparationTests
 {
-    [Fact]
-    public async Task The_production_slot_adapter_migrates_with_one_pointer_without_touching_held_legacy_files()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_production_slot_adapter_migrates_with_one_pointer_without_touching_held_legacy_files(bool sha1)
     {
         var legacy = MigrationLegacy();
         using var running = new FileStream(legacy, FileMode.Open, FileAccess.Read, FileShare.Read);
         var package = MigrationPackage("activated");
+        var feedDigest = sha1 ? new PackageDigest(PackageDigest.Sha1, Convert.ToHexString(
+            System.Security.Cryptography.SHA1.HashData(File.ReadAllBytes(package.File)))) : package.Digest;
         var starts = new List<string>();
         var adapter = CoordinatorMode.SlotAdapter(new(Root, Path.Combine(Root, "packages"), package.File,
-            package.Digest, "AgentBridgeApp", Version, ["--background"], 1, 1),
+            feedDigest, "AgentBridgeApp", Version, ["--background"], 1, 1),
             HostwBundleTests.Target, _ => EntryDescription, _ => null,
             info => { starts.Add(info.FileName); return new SlotChild(); });
 
@@ -56,6 +60,35 @@ public sealed partial class SlotPreparationTests
         Assert.Throws<IOException>(() => Migration().Activate(package.File, Version, package.Digest));
         Assert.False(File.Exists(PointerFile));
         Assert.False(File.Exists(Path.Combine(Root, "stable-entry.json")));
+    }
+
+    [Fact]
+    public void Cancellation_at_the_publication_boundary_leaves_legacy_authoritative()
+    {
+        var legacy = MigrationLegacy();
+        var package = MigrationPackage("cancelled");
+        using var cancel = new CancellationTokenSource();
+        Assert.Throws<OperationCanceledException>(() => Migration().Activate(package.File, Version, package.Digest,
+            cancel.Cancel, cancel.Token));
+        Assert.False(File.Exists(PointerFile));
+        Assert.Equal("legacy remains runnable", File.ReadAllText(legacy));
+    }
+
+    [Fact]
+    public void Non_stopping_handoff_refuses_an_old_current_helper_before_staging()
+    {
+        MigrationLegacy();
+        var package = MigrationPackage("handoff");
+        var packages = Directory.CreateDirectory(Path.Combine(Root, "packages")).FullName;
+        var cached = Path.Combine(packages, "verified.nupkg");
+        File.Copy(package.File, cached);
+        var helper = Path.Combine(Root, "current", "agent-bridge-hostw.exe");
+        File.WriteAllBytes(helper, HostwBundleTests.Bundle());
+        var folder = Path.Combine(temp, "handoff");
+        var handoff = new CoordinatorHandoff(folder, HostwBundleTests.Target, _ => "fixture [coordinator-v1]");
+        Assert.Throws<InvalidDataException>(() => handoff.Prepare(new(Root, packages, cached, package.Digest,
+            "AgentBridgeApp", Version, [], 1, 1), helper, requireSlotApply: true));
+        Assert.False(Directory.Exists(folder));
     }
 
     [Fact]

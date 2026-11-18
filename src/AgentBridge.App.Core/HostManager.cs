@@ -276,6 +276,19 @@ public sealed class HostManager
         else if (tasks.Exists(TaskName)) { tasks.Delete(TaskName); }
     }
 
+    public void MigrateStableLaunchers()
+    {
+        if (SlotEntry.StablePath(layout.AppFolder, "agent-bridge-hostw.exe") is null)
+            throw new InvalidDataException("Verified stable launcher has not been installed.");
+        foreach (var folder in OtherProfiles().Prepend(layout.ProfileFolder))
+        {
+            var profile = Path.GetFileName(folder);
+            if (!AgentBridge.Transport.Identity.IsValidProfile(profile)) { continue; }
+            var owner = new HostManager(layout with { Profile = profile }, tasks, processes, userId: userId, userSid: userSid);
+            if (owner.StartsAtSignIn) { owner.SetStartAtSignIn(true); }
+        }
+    }
+
     // Whether the host answers on its pipe now.
     public async Task<bool> IsRunningAsync(CancellationToken ct = default)
     {
@@ -532,13 +545,13 @@ public sealed class HostManager
     readonly object updating = new();
     Task? updateStop;
     Task? updateRestart;
-    bool installing;
+    bool installing, atomicApplying;
     bool quitting;
     // Quitting gives up an update's waits for usage probes (never the probes), so Quit can start
     // a host already stopped for the update within its own short wait.
     readonly CancellationTokenSource quit = new();
 
-    public bool UpdateUnderWay { get { lock (updating) { return updateStop is not null; } } }
+    public bool UpdateUnderWay { get { lock (updating) { return atomicApplying || updateStop is not null; } } }
 
     // Stops the host, then applies an update, which ends this process into the new version, whose
     // start brings the host back. Should applying throw, or the app begin quitting meanwhile, the
@@ -558,8 +571,22 @@ public sealed class HostManager
         }
     }
 
-    public async Task StopAndApplyAsync(Action begin, Action apply, Func<string?>? preflight = null, bool waitForFiles = true, InstallationFiles.Budget? fileBudget = null)
+    public async Task StopAndApplyAsync(Action begin, Action apply, Func<string?>? preflight = null, bool waitForFiles = true,
+        InstallationFiles.Budget? fileBudget = null, bool keepsHostRunning = false)
     {
+        if (keepsHostRunning)
+        {
+            lock (updating)
+            {
+                if (quitting) { throw new OperationCanceledException("the app is quitting"); }
+                if (installing) { throw new UpdateUnderWayException(); }
+                begin();
+                installing = atomicApplying = true;
+                try { apply(); }
+                finally { installing = atomicApplying = false; }
+            }
+            return;
+        }
         fileBudget ??= new InstallationFiles.Budget(Time);
         if (waitForFiles) { await WaitForInstallationFilesAsync(preflight, fileBudget: fileBudget); }
         await CheckInstallationFilesAsync(preflight, fileBudget);
