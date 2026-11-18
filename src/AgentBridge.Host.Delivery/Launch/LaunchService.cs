@@ -896,7 +896,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var (plan, problem) = Settle(request, resolved);
             if (plan is null) { return Refused(problem!); }
             var agentLaunch = fleet || peer.StartsWith("agent:", StringComparison.Ordinal);
-            plan = plan with { NoAskUser = request.AskUser == false || request.AskUser is null && agentLaunch };
+            plan = plan with { NoAskUser = agentLaunch || request.AskUser == false };
 
             Claim? claim = null;
             if (request.Attachments is { Count: > 0 } refs)

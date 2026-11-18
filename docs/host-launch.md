@@ -12,8 +12,11 @@ The host adds Copilot CLI `--no-ask-user` to every agent-originated Copilot or A
 launch by default, independently of role or permission mode. Authenticated `agent:`
 principals and fleet launches use this default; HA applies it when the press is from
 an agent user or carries a launch request id. Person-started launches are unchanged.
-Optional `askUser: true` suppresses this default flag; `false` explicitly disables
-questions. Claude and Codex receive no Copilot-only flag. This changes neither launch
+For non-person launches this is mandatory: `askUser: true` cannot re-enable owner
+forms, including reviewer, delegate and lead launches. Only a person-principal
+launch can use `askUser: true`; `false` explicitly disables questions. The flag
+precedes any configured `--` option separator. Claude and Codex receive no
+Copilot-only flag. This changes neither launch
 authority nor trust/permission handling, and never answers a prompt.
 
 For an HA-enabled receiving host, launches explicitly overlay `AGENT_HA_URL` with

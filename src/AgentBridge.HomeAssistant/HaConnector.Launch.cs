@@ -648,7 +648,7 @@ public sealed partial class HaConnector
     void Dispatch(LaunchRequest request, string? requestId, string pressed, string driver, string? principal, JsonObject? launched, Consumed? prompt)
     {
         // A request payload is an agent launch even when HA did not retain its user's identity.
-        if (request.AskUser is null && (driver == "agent" || requestId is not null)) { request = request with { AskUser = false }; }
+        if (driver == "agent" || requestId is not null) { request = request with { AskUser = false }; }
         launchBusy = true;
         launchInFlight = requestId;
         var cancel = replyStop.Token;

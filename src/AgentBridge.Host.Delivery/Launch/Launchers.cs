@@ -169,7 +169,11 @@ public static class Launchers
                 // flags already cover everything.
                 if (allowAll) { copilot.Add("--allow-all"); }
                 copilot.AddRange(extra);
-                if (noAskUser) { copilot.Add("--no-ask-user"); }
+                if (noAskUser)
+                {
+                    var separator = copilot.IndexOf("--");
+                    copilot.Insert(separator < 0 ? copilot.Count : separator, "--no-ask-user");
+                }
                 if (prompt.Length > 0) { copilot.AddRange(["-i", prompt]); }
                 if (launcher.Id == "agency")
                 {

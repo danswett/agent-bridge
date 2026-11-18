@@ -777,8 +777,9 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   the card, since it may carry a request with settings of its own.
   Copilot/Agency launches default to `--no-ask-user` when the press is from an agent
   user or carries a request id, without requiring a setting or role. The optional
-  text setting `settings.askUser: "true"` overrides that default; `"false"` explicitly
-  disables questions. Other nonempty values are refused. A person's card launch is
+  text setting `settings.askUser: "true"` cannot override it: agent presses and request
+  payloads always dispatch `askUser: false`. Other nonempty values besides `"true"`
+  and `"false"` are refused. A person's card launch without a request payload is
   unchanged. The protocol request carries `askUser` as a boolean, not text.
 - **Launch options (beyond agent-ha-bridge, #1142).** `sensor.agent_bridge_<machine>_launch_options`
   is read-only. Its state is a 12-character `version` (a hash of `default_agent` and the lists, so it
