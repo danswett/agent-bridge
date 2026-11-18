@@ -5,8 +5,8 @@ namespace AgentBridge.Host.Reaping;
 
 public sealed class SessionReaperGit(ICommandRunner runner, Action<string> log)
 {
-    readonly Dictionary<string, (string Branch, string Sha)> remotes = new(StringComparer.OrdinalIgnoreCase);
-    public void Reset() => remotes.Clear();
+    readonly Dictionary<string, bool> fetched = new(StringComparer.OrdinalIgnoreCase);
+    public void Reset() => fetched.Clear();
     public async Task<ReaperGit?> ReadAsync(string path, CancellationToken ct)
     {
         try
@@ -30,18 +30,25 @@ public sealed class SessionReaperGit(ICommandRunner runner, Action<string> log)
             var head = await Git("rev-parse", "--verify", "HEAD");
             if (await Git("status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none") != ""
                 || await Git("stash", "list", "--format=%H") != "") { throw new InvalidDataException("dirty or stashed"); }
-            if (!remotes.TryGetValue(path, out var remote))
+            if (!fetched.TryGetValue(path, out var succeeded))
             {
-                await Git("fetch", "--no-auto-maintenance", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
-                    "origin", $"refs/heads/{branch}:refs/remotes/origin/{branch}");
-                remote = (branch, await Git("rev-parse", "--verify", $"refs/remotes/origin/{branch}"));
-                remotes.Add(path, remote);
+                fetched.Add(path, false);
+                await Git("fetch", "--prune", "--no-auto-maintenance", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
+                    "origin", "+refs/heads/*:refs/remotes/origin/*");
+                fetched[path] = true;
             }
-            if (remote.Branch != branch) { throw new InvalidDataException("branch changed"); }
-            await Git("merge-base", "--is-ancestor", head, remote.Sha);
+            else if (!succeeded) { throw new IOException("origin fetch failed this cycle"); }
+            var branches = await Git("branch", "--remotes", "--contains", head, "--format=%(refname)%09%(symref)");
+            var containing = branches.Split('\n').Select(line => line.TrimEnd('\r').Split('\t'))
+                .Where(parts => parts.Length == 2 && parts[1] == "" && parts[0] != "refs/remotes/origin/HEAD"
+                    && parts[0].StartsWith("refs/remotes/origin/", StringComparison.Ordinal))
+                .Select(parts => parts[0]).FirstOrDefault();
+            if (containing is null) { throw new InvalidDataException("no containing origin branch"); }
+            var remote = await Git("rev-parse", "--verify", containing);
+            await Git("merge-base", "--is-ancestor", head, remote);
             if (await Git("rev-parse", "--verify", "HEAD") != head || await Git("symbolic-ref", "--quiet", "--short", "HEAD") != branch)
                 throw new InvalidDataException("git changed");
-            return new(true, true, true, false, head, remote.Sha, 0, 0);
+            return new(true, true, true, false, head, remote, 0, 0);
         }
         catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or OperationCanceledException)
         { log($"session reaper git proof unavailable ({e.GetType().Name}); KEEP"); return null; }

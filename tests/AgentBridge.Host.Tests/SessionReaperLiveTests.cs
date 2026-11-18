@@ -66,34 +66,81 @@ public sealed class SessionReaperLiveTests : IAsyncLifetime
         Assert.Contains(result.Kept, row => row.Reason.Contains("question"));
     }
 
-    [Fact]
-    public async Task Git_proves_same_name_remote_ancestry_without_tracking_and_rechecks_do_not_fetch_again()
+    [Theory]
+    [InlineData("different")]
+    [InlineData("mixed")]
+    public async Task Git_proves_any_origin_branch_without_tracking_or_same_name_and_fetches_once(string mode)
     {
         File.WriteAllText(Path.Combine(folder, ".git"), "fixture");
-        var runner = new FakeGit(folder);
+        var runner = new FakeGit(folder) { Mode = mode };
         var git = new SessionReaperGit(runner, log.Add);
         Assert.True((await git.ReadAsync(folder, default))!.Contained);
         Assert.True((await git.ReadAsync(folder, default))!.Contained);
         Assert.Equal(1, runner.Fetches);
         runner.Dirty = true;
         Assert.Null(await git.ReadAsync(folder, default));
+        Assert.Equal(1, runner.Fetches);
     }
 
     internal sealed class FakeGit(string folder) : ICommandRunner
     {
         public int Fetches; public bool Dirty; public string Mode = "";
+        bool pruned;
         public Task<CommandResult> RunAsync(string program, IReadOnlyList<string> args, TimeSpan timeout, CancellationToken cancellationToken = default)
         {
             Assert.DoesNotContain("@{upstream}", args);
-            if (args.Contains("fetch")) { Fetches++; }
-            if (args.Contains("fetch") && Mode == "absent" || args.Contains("merge-base") && Mode == "diverged")
+            var fetching = args.Contains("fetch");
+            if (fetching) { Fetches++; pruned = args.Contains("--prune"); }
+            if (fetching && (Mode == "absent" || Mode is "different" or "mixed" or "foreign" or "alias" or "none"
+                && !args.Any(arg => arg.EndsWith("refs/heads/*:refs/remotes/origin/*", StringComparison.Ordinal)))
+                || args.Contains("merge-base") && Mode == "diverged")
                 return Task.FromResult(new CommandResult(true, false, 1, ""));
+            if (args.Contains("--contains"))
+            {
+                var branches = Mode switch
+                {
+                    "foreign" => "refs/remotes/elsewhere/published\t",
+                    "alias" => "refs/remotes/origin/HEAD\trefs/remotes/elsewhere/published\nrefs/remotes/origin/alias\trefs/remotes/elsewhere/published",
+                    "none" => "",
+                    "deleted" when pruned => "",
+                    "mixed" => "refs/remotes/elsewhere/published\t\nrefs/remotes/origin/HEAD\trefs/remotes/origin/published\nrefs/remotes/origin/published\t",
+                    _ => "refs/remotes/origin/published\t",
+                };
+                return Task.FromResult(new CommandResult(true, false, 0, branches));
+            }
             var text = args.Contains("--absolute-git-dir") ? folder : args.Contains("symbolic-ref") ? "fixture"
                 : args.Contains("--porcelain=v1") ? Dirty ? "?? private" : "" : args.Contains("stash") && Mode == "stash" ? new('a', 40)
                 : args.Contains("stash") || args.Contains("fetch") || args.Contains("merge-base") ? ""
-                : args.Contains("refs/remotes/origin/fixture") ? new('b', 40) : new string('a', 40);
+                : args.Any(arg => arg.StartsWith("refs/remotes/", StringComparison.Ordinal)) ? new('b', 40) : new string('a', 40);
             return Task.FromResult(new CommandResult(true, false, 0, text));
         }
+    }
+
+    [Theory]
+    [InlineData("foreign")]
+    [InlineData("alias")]
+    [InlineData("none")]
+    [InlineData("deleted")]
+    public async Task Other_remotes_symbolic_aliases_and_deleted_tracking_refs_are_not_origin_branch_proof(string mode)
+    {
+        File.WriteAllText(Path.Combine(folder, ".git"), "fixture");
+        Assert.Null(await new SessionReaperGit(new FakeGit(folder) { Mode = mode }, log.Add).ReadAsync(folder, default));
+        Assert.NotEmpty(log);
+    }
+
+    [Fact]
+    public async Task Failed_fetch_stays_unknown_for_the_whole_cycle_instead_of_reusing_stale_refs_or_retrying()
+    {
+        File.WriteAllText(Path.Combine(folder, ".git"), "fixture");
+        var runner = new FakeGit(folder) { Mode = "absent" };
+        var git = new SessionReaperGit(runner, log.Add);
+        Assert.Null(await git.ReadAsync(folder, default));
+        runner.Mode = "";
+        Assert.Null(await git.ReadAsync(folder, default));
+        Assert.Equal(1, runner.Fetches);
+        git.Reset();
+        Assert.True((await git.ReadAsync(folder, default))!.Contained);
+        Assert.Equal(2, runner.Fetches);
     }
 
     [Theory]
@@ -102,10 +149,13 @@ public sealed class SessionReaperLiveTests : IAsyncLifetime
     [InlineData("stash")]
     [InlineData("operation")]
     [InlineData("index.lock")]
+    [InlineData("HEAD.lock")]
+    [InlineData("locked")]
     public async Task Missing_remote_unpublished_stash_and_mid_operation_proof_are_refused(string mode)
     {
         File.WriteAllText(Path.Combine(folder, ".git"), "fixture");
-        if (mode is "operation" or "index.lock") { File.WriteAllText(Path.Combine(folder, mode == "operation" ? "MERGE_HEAD" : mode), "fixture"); }
+        if (mode is "operation" or "index.lock" or "HEAD.lock" or "locked")
+            File.WriteAllText(Path.Combine(folder, mode == "operation" ? "MERGE_HEAD" : mode), "fixture");
         Assert.Null(await new SessionReaperGit(new FakeGit(folder) { Mode = mode }, log.Add).ReadAsync(folder, default));
         Assert.NotEmpty(log);
     }

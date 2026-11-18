@@ -47,7 +47,8 @@ sessions and other protected roles. A `.slipgates-hold` entry in a session's
 workspace is an explicit hold; the session or a lead may create it. Unreadable
 or missing workspaces have UNKNOWN hold state and stay KEEP.
 Builders require clean, unstashed, non-operation git state and HEAD contained in
-the fresh same-name origin branch; no tracking upstream is required. Reviewers
+any fresh `origin/*` branch; neither a same-name branch nor tracking upstream is
+required. Other remotes and symbolic aliases are not publication proof. Reviewers
 need explicit CLEAN, or NOT CLEAN at least 60 minutes old, and 60 idle minutes.
 The host reads the last own assistant message containing `VERDICT CLEAN` or
 `NOT CLEAN` from its conversation history, not prompts, tools or delegates.
@@ -73,7 +74,9 @@ builder; no separate completion/PR field is required. The final stop guard
 rechecks the hold marker, protected lists, tools/questions and unchanged native
 activity, refusing changed evidence.
 Git queries are gated behind the other safety proofs and use one fetch per
-worktree per cycle, with no tracking requirement or F7 credential.
+worktree per cycle, pruning deleted remote branches. Failed fetches stay UNKNOWN
+for that cycle without retrying or trusting stale tracking refs. No F7 credential
+is used.
 
 
 ```jsonc
