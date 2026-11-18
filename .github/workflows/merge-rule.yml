@@ -3,9 +3,9 @@ name: Merge rule
 # Posts the commit status `merge-rule` on each open pull request into main (AGENTS.md, "Pull
 # requests"; quality/README.md §4.9). Main's ruleset requires it beside quality-gate, so with
 # auto-merge on, GitHub merges a pull request only when this says success: main's CI green (or the
-# pull request labelled fixes-main), not a draft, no hold label, a Copilot review of the exact
-# head, CodeQL green, every other check and status on the head passed, and, when the change
-# touches a sensitive path, an independent review's receipt on the exact head.
+# pull request labelled fixes-main), not a draft, no hold label, CodeQL green, every other check
+# and status on the head passed, and the required authorized, distinct-family independent review
+# receipts on the exact head.
 #
 # The pull request under judgement must not be able to loosen its own gate (#487, Finding 1). So
 # every trigger here runs main's copy of this workflow, the job checks out main and builds main's
@@ -24,8 +24,11 @@ name: Merge rule
 #    earlier verdict until start or another judgement (the accepted P3 residual). A test keeps the list
 #    complete. That includes CI's push run on main
 #    starting and finishing, so every verdict follows main going red or green again (main_green).
-#  - check_suite: a check from an app other than GitHub Actions finished (code
-#    scanning's CodeQL). Actions' own suites start no check_suite workflow, hence workflow_run.
+#  - check_suite and check_run: a check from an app other than GitHub Actions finished (code
+#    scanning's CodeQL). Actions' own suites and runs start neither, hence workflow_run. A suite
+#    or run on main is admitted and sweeps every open pull request into main (--all), like main's
+#    CI finishing; one on another branch judges only its head (a suite) or sweeps (a run, whose
+#    payload names no head the workflow trusts).
 #  - schedule and workflow_dispatch: a backstop for anything the events missed. That includes
 #    Dependabot's: runs it triggers may get a read-only token, so their posts can fail (allowed
 #    below), and the next scheduled run posts instead.
@@ -48,6 +51,8 @@ on:
     types: [in_progress, completed]
   check_suite:
     types: [completed] # the only type Actions accepts here
+  check_run:
+    types: [completed]
   schedule:
     # Backstop only, every 30 minutes; the events above do the prompt work.
     # Same timer slowed, not a new timer. GitHub may run it later under load.
@@ -66,7 +71,6 @@ concurrency:
     merge-rule-admit-${{
       ((github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository
       || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push'))
-      && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
       && (github.event_name != 'status' || github.event.context != 'merge-rule'))
       && (github.event_name == 'schedule' && 'backstop'
       || github.event_name == 'workflow_dispatch' && 'dispatch'
@@ -112,8 +116,10 @@ jobs:
       || github.event.check_suite.head_branch != 'main' && github.event.check_suite.head_sha
       || github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_sha)
       && 'merge-rule-scoped-v1' || 'merge-rule-sweep-v1' }}
-    # Main's own runs and check suites (pushes, the weekly CodeQL, a dispatch on main) start no
-    # evaluation: no pull request's head is on main. But a push run of CI finishing on main does:
+    # Main's own workflow runs (pushes, the weekly CodeQL, a dispatch on main) start no
+    # evaluation: no pull request's head is on main. Its check suites and check runs do, as a
+    # sweep: CodeQL's finishing on main can change what every pull request waits on. A push run
+    # of CI finishing on main does too:
     # main going red fails every pull request (but a fixes-main one), and going green again frees
     # them (quality/merge-rule.yml, main_green). A start also re-judges a new run or re-run.
     # Every other start or completion does too, whatever its
@@ -122,7 +128,6 @@ jobs:
       !cancelled() && (github.event_name != 'schedule' || needs.backstop.outputs.proceed != 'false')
       && (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository
       || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push'))
-      && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
       && (github.event_name != 'status' || github.event.context != 'merge-rule')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -213,6 +218,7 @@ jobs:
               pull_request_target) [ -n "$PR_NUMBER" ] && scope=(--pr "$PR_NUMBER") ;;
               status) [ -n "$STATUS_SHA" ] && scope=(--sha "$STATUS_SHA") ;;
               check_suite) [ -n "$SUITE_SHA" ] && [ "$SUITE_BRANCH" != main ] && scope=(--sha "$SUITE_SHA") ;;
+              check_run) scope=(--all) ;;
               workflow_run) [ -n "$RUN_SHA" ] && [ "$RUN_BRANCH" != main ] && scope=(--sha "$RUN_SHA") ;;
             esac
           fi

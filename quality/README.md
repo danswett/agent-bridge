@@ -601,7 +601,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      nothing. Bot-only threads, which would still block the ruleset's 0-unresolved-threads
      requirement, are resolved with `quality/resolve-bot-threads.ps1`.
    - A pull request can't loosen its own gate (#487, Finding 1): every trigger
-     (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
+     (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`,
+     `check_run`, a
      30-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
      and builds main and reads the pull request only through the API. Each run judges every open
      pull request, one run at a time, so a run starting turns a head pending, a late red flips the

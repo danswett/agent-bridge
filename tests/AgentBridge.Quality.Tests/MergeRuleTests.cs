@@ -1283,8 +1283,10 @@ public class MergeRuleTests
     [InlineData("schedule", null, null, null, null, null, null, true)]
     [InlineData("workflow_dispatch", null, null, null, null, null, null, true)]
     [InlineData("pull_request_target", null, null, null, null, null, null, true)]
-    [InlineData("check_suite", null, null, "main", null, null, null, false)]
+    [InlineData("check_suite", null, null, "main", null, null, null, true)]
     [InlineData("check_suite", null, null, "topic", null, null, null, true)]
+    [InlineData("check_run", null, null, "main", null, null, null, true)]
+    [InlineData("check_run", null, null, "topic", null, null, null, true)]
     public void The_merge_rule_workflow_judges_again_when_CI_finishes_on_main(string eventName, string? action, string? workflow, string? branch, string? runEvent, string? headRepo, string? context, bool runs)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
@@ -1330,7 +1332,8 @@ public class MergeRuleTests
             github["github.event.check_suite.head_branch"] = branch;
             github["github.event.workflow_run.head_sha"] = eventName == "workflow_run" ? head : null;
             var sweep = eventName == "schedule" ? "backstop" : eventName == "workflow_dispatch" ? "dispatch"
-                : eventName == "workflow_run" && branch == "main" ? "sweep" : null;
+                : eventName == "workflow_run" && branch == "main" ? "sweep"
+                : eventName == "check_run" || eventName == "check_suite" && branch == "main" ? "sweep" : null;
             Assert.Equal(!runs ? "run-" + head : sweep ?? head,
                 IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
             var name = Scalar(job, "name");
