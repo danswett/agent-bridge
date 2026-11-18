@@ -109,7 +109,7 @@ public sealed class CoordinatorHandoffTests : IDisposable
     {
         var blocker = Path.Combine(home, "blocker");
         File.WriteAllText(blocker, "keep");
-        Assert.ThrowsAny<IOException>(() => new CoordinatorHandoff(Path.Combine(blocker, "child"),
+        Assert.Throws<InvalidDataException>(() => new CoordinatorHandoff(Path.Combine(blocker, "child"),
             HostwBundleTests.Target, _ => Supported).Prepare(Request(), Helper));
         Assert.Equal("keep", File.ReadAllText(blocker));
         Assert.False(Directory.Exists(Destination));
