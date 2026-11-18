@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AgentBridge.AgentEnvelope;
+using AgentBridge.Protocol;
 using Codec = AgentBridge.Roster.Codec;
 using AgentBridge.Transport;
 
@@ -40,9 +41,11 @@ public sealed class AgentLiteSender(
     public async Task<LiteOutcome> SendAsync(AgentCredential caller, LiteSendInput input, CancellationToken ct)
     {
         if (!mode.On) { return new LiteOutcome(LiteKind.Off, "off", ""); }
-        var request = Guid.NewGuid().ToString("D");
+        var request = input.Request ?? Guid.NewGuid().ToString("D");
         LiteOutcome Out(LiteKind kind, string? code) => new(kind, code, request);
 
+        if (!Guid.TryParse(request, out var rid)) { return Out(LiteKind.Refused, Malformed); }
+        request = rid.ToString("D");
         if (string.IsNullOrEmpty(input.Text) || input.Text.Length > LiteReceiver.MaxText || string.IsNullOrEmpty(input.Session)) { return Out(LiteKind.Refused, Malformed); }
         var data = Encoding.UTF8.GetBytes(input.Text);
         // Checked afresh, before anything is signed: a credential revoked or expired since the pipe call signs nothing.
@@ -84,7 +87,13 @@ public sealed class AgentLiteSender(
         {
             var ack = await link.SendAsync(peer.DeviceId, new { envelope = Codec.Base64Url(envelope), text = input.Text, killEpoch = mode.KillEpoch }, flight.Token);
             if (ack.KillEpoch > mode.KillEpoch) { mode.RaiseEpoch(ack.KillEpoch); }
-            if (ack.Request != request) { return Out(LiteKind.Unconfirmed, BadAck); }
+            if (!Guid.TryParse(ack.Request, out var echoed) || echoed != rid
+                || ack.Status is not ("delivered" or "refused")) { return Out(LiteKind.Unconfirmed, BadAck); }
+            if (ack.ReplyAck is { } receipt)
+            {
+                if (!Guid.TryParse(receipt.Rid, out var accepted) || accepted != rid) { return Out(LiteKind.Unconfirmed, BadAck); }
+                return Out(LiteKind.Queued, ack.Code) with { ReplyAck = new ReplyAck(request) };
+            }
             return ack.Status switch
             {
                 "delivered" => Out(LiteKind.Delivered, null),

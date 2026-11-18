@@ -312,20 +312,26 @@ code in the message:
 | `session` | the receiver's roster node id: `agent_bridge_` and exactly 16 lowercase hex digits | `badSession` |
 | `text` | not empty, not blank, no control characters except tab, CR and LF | `badText` |
 | `text` | at most 4096 characters (UTF-16 code units, not bytes) | `textTooLong` |
+| `request` | optional UUID for an explicit eligible retry; omit for a new message | `badRequest` |
 
 A body that isn't an object is refused with `badRequest`. The host hands the request to the AP5-lite
 sender, which answers
-`{ "outcome", "code", "request" }`:
+`{ "outcome", "code", "request", "reply_ack"? }`:
 
 | `outcome` | Meaning | Caller |
 |---|---|---|
 | `delivered` | the target host typed it into the session | done |
+| `queued` | a matching durable `reply_ack:{"rid":"<UUID>"}` was received, not delivery confirmation | never retry or fall back |
 | `refused` | the target refused; `code` is its reason (`notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, `rate`, ...). A rate refusal is outcome `refused` with code `rate`: it is final, with no Home Assistant fallback | fall back to Home Assistant on `notReplyTarget` or `busy` only |
 | `undeliverable` | no channel to the target; **the message was not queued anywhere** and is never retried | fall back to Home Assistant |
-| `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived | fall back to Home Assistant |
+| `unconfirmed` | sent, but no valid acknowledgement; it may or may not have arrived | never retry or fall back |
 | `off` | the mode is off, killed, or the peer isn't pinned; no channel was opened | fall back to Home Assistant |
 
-`request` is the sender's request id.
+`request` is the sender's request id. An eligible retry of a refusal without a
+receipt must supply the same UUID as `request`; there is no automatic resend.
+Queued work is never retried, even when its preserved `code` is `busy`.
+Malformed or mismatched receipt UUIDs yield `unconfirmed`, not `delivered`.
+With durable ingress disabled, receipts are absent and legacy outcomes remain.
 
 After caller and input validation, the host must append one audit **attempt** before calling
 the sender. An absent audit log, a false append or a thrown append raises the fixed error
@@ -335,7 +341,7 @@ audited in this slice. The record's `attempted` outcome is not delivery confirma
 attempt id is distinct from the sender's relay request id. Only text hash and byte length are
 recorded, never the text.
 
-Before replying, the host appends the terminal `delivered`, `refused`, `undeliverable`,
+Before replying, the host appends the local `queued`, `delivered`, `refused`, `undeliverable`,
 `unconfirmed` or `off` outcome with the same local attempt id, credential attribution,
 target and text hash/byte length. Free-form sender codes are not logged. If this append
 returns false or throws, the caller receives

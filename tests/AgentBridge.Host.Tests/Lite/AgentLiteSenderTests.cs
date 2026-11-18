@@ -1,9 +1,13 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using AgentBridge.AgentEnvelope;
 using AgentBridge.Host;
 using AgentBridge.Host.Lite;
+using AgentBridge.Local;
+using AgentBridge.Protocol;
 using AgentBridge.Transport;
+using Codec = AgentBridge.Roster.Codec;
 using Xunit;
 
 public class AgentLiteSenderTests
@@ -251,5 +255,133 @@ public class AgentLiteSenderTests
         var b = await r.Send();
         Assert.NotEqual(a.Request, b.Request);
         Assert.Equal(2, r.Link.Opened);
+    }
+
+    static string RequestOf(object request)
+    {
+        var wire = JsonSerializer.SerializeToElement(request);
+        Assert.True(Codec.TryBase64Url(wire.GetProperty("envelope").GetString()!, out var bytes));
+        return Envelope.Parse(bytes).Body.Request;
+    }
+
+    static void Receipt(object result, string request)
+    {
+        var receipt = JsonSerializer.SerializeToElement(result).GetProperty("reply_ack");
+        Assert.Equal(["rid"], receipt.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(Guid.Parse(request), Guid.Parse(receipt.GetProperty("rid").GetString()!));
+    }
+
+    [Theory]
+    [InlineData("refused", "busy")]
+    [InlineData("refused", "deliveryFailed")]
+    [InlineData("delivered", null)]
+    public async Task Durable_receipts_mean_queued_never_delivered_or_permission_to_resend(string status, string? code)
+    {
+        using var r = new Rig();
+        r.Link.Reply = (request, _) =>
+        {
+            var rid = RequestOf(request);
+            return Task.FromResult(new LiteAck(status, code, rid, 0)
+            { ReplyAck = new ReplyAck(Guid.Parse(rid).ToString("N").ToUpperInvariant()) });
+        };
+        var outcome = await r.Send();
+        Assert.Equal("Queued", outcome.Kind.ToString());
+        Assert.Equal(code, outcome.Code);
+        Receipt(outcome, outcome.Request);
+        Assert.Equal(1, r.Link.Opened);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not-a-uuid")]
+    [InlineData("00000000-0000-0000-0000-000000000000")]
+    public async Task Invalid_or_foreign_receipts_are_unconfirmed_without_a_resend(string receipt)
+    {
+        using var r = new Rig();
+        r.Link.Reply = (request, _) => Task.FromResult(new LiteAck("delivered", null, RequestOf(request), 0)
+        { ReplyAck = new ReplyAck(receipt) });
+        var outcome = await r.Send();
+        Assert.Equal((LiteKind.Unconfirmed, AgentLiteSender.BadAck), (outcome.Kind, outcome.Code));
+        Assert.False(JsonSerializer.SerializeToElement(outcome).TryGetProperty("reply_ack", out _));
+        Assert.Equal(1, r.Link.Opened);
+    }
+
+    [Theory]
+    [InlineData("delivered", "Delivered")]
+    [InlineData("refused", "Refused")]
+    [InlineData("unconfirmed", "Unconfirmed")]
+    public async Task Absent_receipts_preserve_legacy_outcomes_without_automatic_resends(string status, string expected)
+    {
+        using var r = new Rig();
+        r.Link.Reply = (request, _) => Task.FromResult(new LiteAck(status, null, RequestOf(request), 0));
+        var outcome = await r.Send();
+        Assert.Equal(expected, outcome.Kind.ToString());
+        Assert.False(JsonSerializer.SerializeToElement(outcome).TryGetProperty("reply_ack", out _));
+        Assert.Equal(1, r.Link.Opened);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_receipt_cannot_override_a_wrong_request_or_unknown_status(bool wrongRequest)
+    {
+        using var r = new Rig();
+        r.Link.Reply = (request, _) => Task.FromResult(new LiteAck(wrongRequest ? "delivered" : "unknown",
+            null, wrongRequest ? Guid.Empty.ToString("D") : RequestOf(request), 0)
+        { ReplyAck = new ReplyAck(RequestOf(request)) });
+        var outcome = await r.Send();
+        Assert.Equal((LiteKind.Unconfirmed, AgentLiteSender.BadAck), (outcome.Kind, outcome.Code));
+        Assert.Equal(1, r.Link.Opened);
+    }
+
+    [Fact]
+    public async Task Pipe_retries_keep_the_same_uuid_and_duplicate_receipts_stay_queued()
+    {
+        using var r = new Rig();
+        var folder = Directory.CreateTempSubdirectory("relay-sender-").FullName;
+        try
+        {
+            var credentials = new AgentCredentials(folder, Self);
+            var channel = new PipeChannel();
+            var token = credentials.Mint("s", "launch", 100, DateTimeOffset.UnixEpoch, AgentProtocol.ScopeRead);
+            credentials.Accept(channel, credentials.Check(token,
+                new ProcessAncestry([new PeerProcess(100, DateTimeOffset.UnixEpoch, "agent.exe")], true)).Accepted!);
+            var rid = Guid.NewGuid().ToString("D");
+            var seen = new List<string>();
+            r.Link.Reply = (request, _) =>
+            {
+                seen.Add(RequestOf(request));
+                return Task.FromResult(new LiteAck("refused", "busy", seen[^1], 0)
+                { ReplyAck = seen.Count == 1 ? null : new ReplyAck(seen[^1]) });
+            };
+            var sender = r.Sender();
+            var audit = new List<string>();
+            var body = JsonSerializer.SerializeToElement(new
+            { machine = Other, session = "agent_bridge_0123456789abcdef", text = "hello", request = rid });
+            async Task<LiteSendReply> Send() => Assert.IsType<LiteSendReply>(await LiteAgentSend.HandleAsync(
+                credentials, sender, channel, body, windows: true,
+                appendAttempt: (entry, _) => { audit.Add(entry.Outcome); return true; }));
+            Assert.Equal("refused", (await Send()).Outcome);
+            Assert.Equal(1, r.Link.Opened);
+            foreach (var _ in new[] { 1, 2 })
+            {
+                var reply = await Send();
+                Assert.Equal("queued", reply.Outcome);
+                Receipt(reply, rid);
+            }
+            Assert.Equal([rid, rid, rid], seen);
+            Assert.Equal(["attempted", "refused", "attempted", "queued", "attempted", "queued"], audit);
+        }
+        finally { Directory.Delete(folder, true); }
+    }
+
+    sealed class PipeChannel : IProtocolChannel
+    {
+        public string PeerId => "fixture";
+        public string PeerName => "fixture";
+        public string PeerKind => "fixture";
+        public bool IsOpen => true;
+        public Task Closed => Task.CompletedTask;
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
     }
 }

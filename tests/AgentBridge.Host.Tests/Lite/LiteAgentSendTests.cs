@@ -248,6 +248,19 @@ public sealed class LiteAgentSendTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(root, AgentAuditLog.FolderName)));
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("not-a-uuid")]
+    [InlineData(7)]
+    [InlineData(null)]
+    public async Task An_invalid_retry_uuid_is_refused_without_sending_or_auditing(object? request)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() => Send(hello, JsonSerializer.Serialize(new
+        { machine = "peer", session = Sess, text = "hello", request })));
+        Assert.Empty(sender.Calls);
+        Assert.False(Directory.Exists(Path.Combine(root, AgentAuditLog.FolderName)));
+    }
+
     [Fact]
     public async Task Tab_CR_and_LF_are_allowed_in_text()
     {

@@ -38,6 +38,16 @@ authorization and rate limits still apply. An occupied session returns `Busy`
 There is no separate `reply_ack` event. The shared `reply-ack.json` vectors cover
 present, absent, capacity-refused, retired and duplicate receipts on both routes.
 
+The Lite sender validates both acknowledgement UUIDs against its request, then
+returns local `agent.send` outcome `queued` with the rid-only `reply_ack`, never
+`delivered` from a receipt. It preserves the receiver's code but callers must not
+retry or fall back on queued work, including duplicate receipts. Malformed or
+mismatched acknowledgements are `unconfirmed`, never permission to resend.
+The sender does not automatically retry. For an eligible refusal without a
+receipt, a caller may explicitly reuse the returned UUID through optional
+`agent.send.request`; omitting it creates a new logical message. An `unconfirmed`
+outcome must never be retried or sent through a fallback transport.
+
 ## `fleet.list`
 
 ```json
