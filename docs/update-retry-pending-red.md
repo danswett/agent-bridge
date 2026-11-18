@@ -15,11 +15,18 @@ Existing TDD provenance is [RED 695355bc](https://github.com/danswett/agent-brid
 then [GREEN 26911876](https://github.com/danswett/agent-bridge/commit/269118761454ca8ec12a51637c12668211410815);
 this is a mechanical extraction, not a new failing-first cycle.
 
+Focused offline validation of the host-only cut, serial on CPU 1 at BelowNormal:
+5 C# retry/download-hold cases PASS; its existing 35 PWA update unit cases PASS;
+its existing 11 Chromium update cases PASS. The 11 WebKit cases could not launch:
+the installed browser executable is missing. This is not a WebKit PASS or hosted
+CI proof. No live or installed-host tests were run.
+
 All 67 admitted PWA RED lines are preserved, without assertion changes, in
 [pending RED head 1775ce959afb2a65d598a3c574951a98a6fdb667](https://github.com/danswett/agent-bridge/commit/1775ce959afb2a65d598a3c574951a98a6fdb667).
 Its entire `pwa/` tree matches the original PR head. Its 37 update unit cases
 remain 35 PASS / 2 FAIL; its three admitted Chromium cases remain RED:
 cap-to-idle, Try again now after a failed download, and the Check menu moves.
+The three browser failures were reproduced on the original byte-identical PWA tree.
 They are not skipped, weakened, counted as passing, or part of the host-only denominator.
 
 PWA implementation is explicitly deferred to the remaining issue 2280 work,
