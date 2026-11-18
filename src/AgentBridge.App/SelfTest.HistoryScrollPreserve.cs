@@ -16,6 +16,36 @@ static partial class SelfTest
         await CheckHistoryScrollPreserveCase(window, main, demo, check, 1146);
     }
 
+    static async Task CheckResponseBeforeLoaded(MainWindow window, SessionCardViewModel card, Action<bool, string> check)
+    {
+        var root = (Panel)window.RootElement;
+        var view = new SessionView { Card = card, Width = 600, Height = 400 };
+        var expected = MarkdownModel.Parse(card.Response).Select(b => new ConversationBlock(b).Text).ToArray();
+        check(!view.IsLoaded && expected.Length > 0, "response-before-loaded setup: assigns a nonempty card to a detached view");
+        root.Children.Add(view);
+        try
+        {
+            var loaded = await Until(() => view.IsLoaded, TimeSpan.FromSeconds(5));
+            var list = ById<ListView>(view, "Conversation");
+            check(loaded && list?.ItemsSource is not null
+                && list.Items.OfType<ConversationBlock>().Select(b => b.Text).SequenceEqual(expected),
+                "response-before-loaded: first attach binds every response block without a later card switch");
+            if (!loaded || list?.ItemsSource is not { } source) { return; }
+            root.Children.Remove(view);
+            var unloaded = await Until(() => !view.IsLoaded, TimeSpan.FromSeconds(5));
+            root.Children.Add(view);
+            loaded = await Until(() => view.IsLoaded, TimeSpan.FromSeconds(5));
+            check(unloaded && loaded && ReferenceEquals(source, list.ItemsSource)
+                && list.Items.OfType<ConversationBlock>().Select(b => b.Text).SequenceEqual(expected),
+                "response-before-loaded: reattaching the unchanged card keeps its bound source and blocks");
+        }
+        finally
+        {
+            root.Children.Remove(view);
+            view.Card = null;
+        }
+    }
+
     static async Task CheckHistoryScrollPreserveCase(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> report, int turns)
     {
         var trace = new List<string>();
@@ -60,6 +90,7 @@ static partial class SelfTest
             var received = await Until(() => main.AllCards.Any(c => c.Id == id), TimeSpan.FromSeconds(10));
             check(received, "scroll-preserve setup: receives the dedicated demo session");
             if (!received) { return; }
+            if (turns == 40) { await CheckResponseBeforeLoaded(window, main.AllCards.Single(c => c.Id == id), check); }
             window.ShowPage("sessions");
             Resize(window, 1000, 700);
             var view = await Choose(window, main, id, "Response");
