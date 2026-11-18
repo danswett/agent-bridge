@@ -223,6 +223,29 @@ public class DeviceRosterTests
     }
 
     [Fact]
+    public async Task Retrying_persisted_evidence_does_not_refuse_an_unrelated_removal()
+    {
+        var (w, store, roster) = await FullOrdinaryLog();
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        w.Rename("A", "B", "addB", "addB", "ancestor");
+        var ancestor = Padded(w["A"], Entry.MaxBytes, parent);
+        w.Remove("first", "G", "addB", "addB");
+        var first = Padded(w["first"], Entry.MaxRemoveBytes, ancestor);
+        var carried = await roster.AppendAsync(RosterFixture.Account, [ancestor.Canonical(), first.Canonical()]);
+        Assert.Equal(("accepted", Invalid.Evidence), (carried![0].Verdict, carried[0].Reason));
+        w.Remove("second", "G", "fill0", "addB");
+        var body = JsonNode.Parse(w["second"].Body)!;
+        body["target"]!["add"] = Codec.Base64Url(Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[2])).Hash);
+        var second = Padded(w["second"] with { Body = RosterFixture.Bytes(body) }, 1024, parent);
+        var result = await Make(w, store).AppendAsync(RosterFixture.Account, [ancestor.Canonical(), second.Canonical()]);
+        Assert.Equal(["duplicate", "accepted"], result!.Select(r => r.Verdict));
+        var snapshot = (await roster.GetAsync(RosterFixture.Account))!;
+        Assert.Equal(before.Entries.Count + 3, snapshot.Entries.Count);
+        Assert.Equal(second.Canonical(), snapshot.Entries[^1]);
+    }
+
+    [Fact]
     [Trait("Category", "Network")]
     public async Task Maximum_removal_and_four_ancestors_reach_the_roster_over_websocket()
     {
