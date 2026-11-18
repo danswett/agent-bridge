@@ -161,6 +161,32 @@ public sealed class RunMarkerTests : IDisposable
         finally { File.SetAttributes(old, FileAttributes.Normal); }
     }
 
+    [Fact]
+    public void Recovery_consumes_every_abandoned_record_only_after_a_durable_save_and_preserves_live_runs()
+    {
+        var live = Start("live");
+        var old = Path.Combine(folder, "run-marker.old.json");
+        var latest = Path.Combine(folder, "run-marker.latest.json");
+        var corrupt = Path.Combine(folder, "run-marker.corrupt.json");
+        File.WriteAllText(old, System.Text.Json.JsonSerializer.Serialize(new PreviousRun(true, "old", clock.GetUtcNow().AddMinutes(-1))));
+        File.WriteAllText(latest, System.Text.Json.JsonSerializer.Serialize(new PreviousRun(true, "latest", clock.GetUtcNow())));
+        File.WriteAllText(corrupt, "{broken");
+        RunMarker.WriteFileOverride = (_, _) => throw new IOException("Synthetic failed replacement");
+        try { Assert.Throws<IOException>(() => Start("failed")); }
+        finally { RunMarker.WriteFileOverride = null; }
+        Assert.All(new[] { old, latest, corrupt }, file => Assert.True(File.Exists(file)));
+        var recovered = Start("recovering");
+        Assert.Equal("latest", recovered.Previous.Version);
+        Assert.Equal(2, Directory.GetFiles(folder, "*.json").Length);
+        Assert.All(new[] { old, latest, corrupt }, file => Assert.False(File.Exists(file)));
+        recovered.Complete();
+        var next = Start("next");
+        Assert.False(next.Previous.Unclean);
+        next.Complete();
+        live.Dispose();
+        Assert.Equal("live", RunMarker.ReadPrevious(folder).Version);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("{broken")]
