@@ -167,7 +167,11 @@ $x = Run-Scenario @{ jobConclusion = 'timed_out'; extraJobs = @(@{ id = 9; name 
 Assert (-not $x.Result.Rerun -and $x.Reran -eq 0) 'a cancellation beside a Windows timeout refuses'
 $workflow = Get-Content (Join-Path $PSScriptRoot '..\.github\workflows\rerun-known-flakes.yml') -Raw
 Assert ($workflow -match "workflow_run.conclusion == 'timed_out'") 'the workflow also admits a timed-out CI conclusion'
-Assert ($workflow -match 'group: main-red-rerun-\$\{\{ github.event.workflow_run.id \}\}-\$\{\{ github.event.workflow_run.run_attempt \}\}') 'rerun handlers isolate each run and attempt from S1 and unrelated completions'
+$groupTemplate = [regex]::Match($workflow, '(?m)^\s+group:\s*(.+)$').Groups[1].Value.Trim()
+$groups = @(foreach ($completion in @(@{ id = 100; attempt = 1 }, @{ id = 100; attempt = 2 }, @{ id = 101; attempt = 1 })) {
+    $groupTemplate.Replace('${{ github.event.workflow_run.id }}', [string]$completion.id).Replace('${{ github.event.workflow_run.run_attempt }}', [string]$completion.attempt)
+})
+Assert (@($groups | Sort-Object -Unique).Count -eq 3 -and 'main-red-ci' -notin $groups) 'rerun handlers isolate each run and attempt from S1 and unrelated completions'
 
 foreach ($failureLog in '  Failed New.Real.Failure [1 s]', 'error CS1002: ; expected') {
     $x = Run-Scenario @{ log = $failureLog } -AutoRerun

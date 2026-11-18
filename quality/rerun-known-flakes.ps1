@@ -159,7 +159,7 @@ function Invoke-AutoRerun($Run, $Jobs, $FailedByJob, $Issues, [string]$Repositor
     if (-not $DryRun) {
         if ($passed) {
             $matched = Get-RerunDecision $original $Issues
-            foreach ($number in @($incident.number) + @($matched.Matched.Issue) | Sort-Object -Unique) {
+            foreach ($number in @($incident.number) + @($matched.Matched | ForEach-Object Issue) | Sort-Object -Unique) {
                 Invoke-Gh issue edit $number --repo $Repository --add-label flaky | Out-Null
             }
         }

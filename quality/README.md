@@ -903,6 +903,9 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   records `rerun-flake:` with original failures, even if S1 already closed it.
   Red records `rerun-failed:` with the actual test intersection for S3, never a
   third attempt. No polling, mentions, assignees or phone notification are added.
+  S2 serializes duplicate deliveries per run and attempt in its own concurrency
+  group: S1 and other completions cannot replace its pending handler. S1 evidence
+  is still recorded before dispatch; nameless or unfiled failures need no flake issue.
 - **Main-red detection** ([S1](https://github.com/danswett/agent-bridge/issues/3074)):
   `main-red.yml` handles completed main CI pushes without polling, using main's trusted script.
   Failure, timeout and startup failure open/update one Actions-authored `main-red` issue with
