@@ -3,8 +3,10 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host.Fleet;
+using AgentBridge.Protocol;
 using AgentBridge.Relay;
 using AgentBridge.Roster;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed class FleetRecordSigningTests
@@ -148,12 +150,78 @@ public sealed class FleetRecordSigningTests
     [Fact]
     public async Task The_record_budget_is_checked_after_the_signer_runs()
     {
+        var calls = 0;
         var publisher = new FleetPublisher(new FleetPublisherTests.Source(), "machine", sign: record =>
         {
+            calls++;
             var signed = JsonNode.Parse(record.GetRawText())!.AsObject();
             signed["sig"] = new string('a', 16 * 1024);
             return Element(signed);
         });
         await Assert.ThrowsAsync<InvalidDataException>(() => publisher.PublishAsync((record, ct) => throw new InvalidOperationException("oversize record reached transport")));
+        Assert.Equal(1, calls);
+    }
+
+    [Theory]
+    [InlineData(true, -1, 3)]
+    [InlineData(true, 0, 3)]
+    [InlineData(true, 1, 2)]
+    [InlineData(true, 105, 2)]
+    [InlineData(true, 106, 2)]
+    [InlineData(false, -1, 3)]
+    [InlineData(false, 0, 3)]
+    [InlineData(false, 1, 2)]
+    public async Task Entries_are_fitted_before_signing_once_at_the_record_and_signature_boundaries(bool signing, int excess, int count)
+    {
+        var source = new FleetPublisherTests.Source { Binding = _ => new(100, Fixture.T0) };
+        var clock = new FakeTimeProvider(Fixture.T0);
+        var displayName = new string('\u00e9', 64);
+        JsonElement baseline = default;
+        await new FleetPublisher(source, "", _ => displayName, clock).PublishAsync((record, _) =>
+        {
+            baseline = record;
+            return Task.CompletedTask;
+        });
+        var budget = RosterFields.MaxRecordBytes - (signing ? 105 : 0);
+        var machine = new string('m', budget + excess - Encoding.UTF8.GetByteCount(baseline.GetRawText()));
+        var calls = 0;
+        JsonElement Sign(JsonElement record)
+        {
+            calls++;
+            Assert.InRange(Encoding.UTF8.GetByteCount(record.GetRawText()), 1, budget);
+            Assert.Equal(count, record.GetProperty("sessions").GetArrayLength());
+            var signed = JsonNode.Parse(record.GetRawText())!.AsObject();
+            // A maximum-length P-256 DER signature needs 96 base64url bytes plus nine JSON bytes.
+            signed["sig"] = new string('a', 96);
+            return JsonSerializer.SerializeToElement(signed, ProtocolJson.Options);
+        }
+        var publisher = new FleetPublisher(source, machine, _ => displayName, clock, signing ? Sign : null);
+        Assert.True(await publisher.PublishAsync((record, _) =>
+        {
+            var bytes = Encoding.UTF8.GetByteCount(record.GetRawText());
+            Assert.InRange(bytes, 1, RosterFields.MaxRecordBytes);
+            if (excess <= 0) { Assert.Equal(RosterFields.MaxRecordBytes + excess, bytes); }
+            Assert.InRange(JsonSerializer.SerializeToUtf8Bytes(new { t = "registry-put", id = long.MinValue, record },
+                ProtocolJson.Options).Length, 1, RosterFields.MaxFrameBytes);
+            var entries = record.GetProperty("sessions");
+            Assert.Equal(count, entries.GetArrayLength());
+            Assert.Equal(source.Sessions.AsEnumerable().Reverse().Take(count).Select(s => s.Id[..16]),
+                entries.EnumerateArray().Select(s => s.GetProperty("id").GetString()));
+            Assert.Equal(count < source.Sessions.Count, record.GetProperty("truncated").GetBoolean());
+            if (count < source.Sessions.Count) { Assert.Equal(source.Sessions.Count, record.GetProperty("total").GetInt32()); }
+            return Task.CompletedTask;
+        }));
+        Assert.Equal(signing ? 1 : 0, calls);
+    }
+
+    [Fact]
+    public async Task An_irreducible_record_is_rejected_without_using_the_signer()
+    {
+        var calls = 0;
+        var publisher = new FleetPublisher(new FleetPublisherTests.Source(), new string('m', RosterFields.MaxRecordBytes),
+            sign: record => { calls++; return record; });
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            publisher.PublishAsync((_, _) => throw new InvalidOperationException("oversize record reached transport")));
+        Assert.Equal(0, calls);
     }
 }
