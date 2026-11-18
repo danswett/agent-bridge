@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AgentBridge.AgentEnvelope;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -14,6 +15,7 @@ public sealed record AgentCredential(string Id, string Session, string LaunchId,
     string Scope, int Depth, string[] Chain, DateTimeOffset IssuedAt, DateTimeOffset ExpiresAt,
     string Kind = "session", string? Principal = null)
 {
+    public bool FleetLaunch { get; init; }
     // Record construction only; minting and persisting a script token are separate operations.
     public static AgentCredential Script(string id, string machine, string name, DateTimeOffset issuedAt, TimeSpan? lifetime = null)
     {
@@ -80,10 +82,12 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     sealed record Saved(int Version, Record[] Records);
     readonly Func<int, DateTimeOffset, bool> rootAlive;
 
-    sealed record Connection(string CredentialId, string Principal);
+    sealed record Connection(string CredentialId, string Principal, bool Script);
 
     public AgentCredentials(string folder, string machine, TimeProvider? time = null, Action<string>? log = null, Func<int, DateTimeOffset, bool>? rootAlive = null)
     {
+        LaunchGate = new AgentLaunchGate(folder);
+        FleetGrant = new FleetLaunchGrant(folder);
         this.rootAlive = rootAlive ?? ((_, _) => true);
         path = Path.Combine(folder, FileName);
         this.machine = machine;
@@ -94,7 +98,13 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     public string? Problem { get { lock (gate) { return problem; } } }
 
+    internal AgentLaunchGate LaunchGate { get; }
+    internal FleetLaunchGrant FleetGrant { get; }
+    internal bool IsScriptConnection(IProtocolChannel channel) => connections.TryGetValue(channel, out var c) && c.Script;
+
     public int Count { get { lock (gate) { return records.Count; } } }
+
+    internal bool IsCredentialed(IProtocolChannel channel) => connections.TryGetValue(channel, out _);
 
     // The launch id an adopted session's credential carries: it was not launched by the host.
     public const string AdoptedLaunch = "adopted";
@@ -152,6 +162,13 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             string token;
             try { token = Mint(adoption.Session, AdoptedLaunch, adoption.RootPid, adoption.RootStartUtc, adoption.Scope); }
             catch (InvalidOperationException e) { return Declined(e.Message); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                records.RemoveAll(r => r.Credential.Session == adoption.Session);
+                pending.Remove(adoption);
+                Fault("could not save an adopted credential");
+                return Declined("the credential store is unavailable");
+            }
             pending.Remove(adoption);
             if (problem is not null) { return AgentClaimDecision.Refused($"the credential store is unavailable: {problem}"); }
             var issued = records.First(r => r.Credential.Session == adoption.Session).Credential;
@@ -173,7 +190,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         {
             var waiting = pending.RemoveAll(p => p.Session == session) > 0;
             if (waiting) { log($"agent credentials: adoption of session {session} withdrawn: {why}"); }
-            return Remove(r => r.Credential.Session == session, why) || waiting;
+            return Remove(r => r.Credential.Kind == "session" && r.Credential.Session == session, why) || waiting;
         }
     }
 
@@ -204,9 +221,10 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // A launch's token is issued before its process exists, so it is bound to none and answers to
     // nobody until Bind. Launched agents may read only: the agents policy (§5.1) widens that later.
     public string? Prepare(string session, string launchId) => Mint(session, launchId, 0, default, AgentProtocol.ScopeRead);
+    public string PrepareFleet(string session, string launchId) => Mint(session, launchId, 0, default, AgentProtocol.ScopeReadReply, depth: 1);
 
     // Called only by the person-authorized management path, never a remote/agent operation.
-    // No token is returned. Both hashes stand until caller verification can retire the old one.
+    // No token is returned. Both hashes stand until a successful fleet read retires the old one.
     public (AgentCredential Credential, string Path) MintScript(string name, TimeSpan? lifetime = null)
     {
         var now = time.GetUtcNow();
@@ -268,7 +286,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     {
         lock (gate)
         {
-            var i = records.FindIndex(r => r.Credential.LaunchId == launchId && r.Credential.RootPid == 0);
+            var i = records.FindIndex(r => r.Credential.Kind == "session" && r.Credential.LaunchId == launchId && r.Credential.RootPid == 0);
             if (i < 0) { return; }
             records[i] = records[i] with { Credential = records[i].Credential with { RootPid = processId, RootStartUtc = startedAt } };
             try { Save(); }
@@ -279,18 +297,18 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     public void Abandon(string launchId)
     {
-        lock (gate) { Remove(r => r.Credential.LaunchId == launchId && r.Credential.RootPid == 0, "its launch did not start"); }
+        lock (gate) { Remove(r => r.Credential.Kind == "session" && r.Credential.LaunchId == launchId && r.Credential.RootPid == 0, "its launch did not start"); }
     }
 
     // Whether this ancestry may hold this token. Every refusal says why, for the log.
-    public AgentHelloDecision Check(string? token, ProcessAncestry ancestry)
+    public AgentHelloDecision Check(string? token, ProcessAncestry ancestry, bool agentCaller = false)
     {
         var presented = token is { Length: AgentProtocol.TokenLength } && token.StartsWith(AgentProtocol.TokenPrefix, StringComparison.Ordinal) ? Hash(token) : null;
         var now = time.GetUtcNow();
         AgentCredential? match = null;
         lock (gate)
         {
-            if (problem is not null) { return AgentHelloDecision.Refused($"the credential store is unavailable: {problem}"); }
+            if (problem is not null) { return Refused($"the credential store is unavailable: {problem}"); }
             // Compares every record, so how long the answer takes doesn't say which one matched.
             foreach (var r in records)
             {
@@ -302,9 +320,22 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
                 match = null;
             }
         }
-        if (match is null) { return AgentHelloDecision.Refused("no live credential matches that token"); }
-        // S1 defines records only: do not open script authentication before its caller checks exist.
-        if (match.Kind == "script") { return Outside(match, "script caller verification is not available"); }
+        if (match is null) { return Refused("no live credential matches that token"); }
+        if (match.Kind == "script")
+        {
+            if (!ancestry.Complete || ancestry.Processes.Count == 0
+                || ancestry.Processes.Any(p => p.Id <= 0 || p.StartedAt is null || string.IsNullOrWhiteSpace(p.Image)))
+            { return Outside(match, "the script caller's ancestry could not be traced in full"); }
+            lock (gate)
+            {
+                var agents = records.Where(r => r.Credential.Kind == "session" && r.Credential.RootPid > 0)
+                    .Select(r => new KnownProcess(r.Credential.RootPid, r.Credential.RootStartUtc, "a credentialed session"))
+                    .Concat(pending.Select(p => new KnownProcess(p.RootPid, p.RootStartUtc, "an adopted session"))).ToArray();
+                if (agentCaller || AgentAncestry.Find(ancestry.Processes, agents) is not null)
+                { return Outside(match, "a script credential cannot be used inside an agent session"); }
+                return IsLive(match) ? new AgentHelloDecision(match, null) : Refused("no live credential matches that token");
+            }
+        }
         if (match.RootPid <= 0) { return Outside(match, "its launch has not started"); }
         if (!ancestry.Complete)
         {
@@ -339,17 +370,63 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     AgentHelloDecision Outside(AgentCredential credential, string why)
     {
-        log($"agent credentials: credential presented from outside its session ({why}); credential {credential.Id}");
+        log($"agent credentials: credential presented from outside its session ({why}); credential {credential.Id}; principal {PrincipalOf(credential)}");
         return AgentHelloDecision.Refused($"credential presented from outside its session: {why}");
+    }
+
+    AgentHelloDecision Refused(string why)
+    {
+        log($"agent credentials: refused agent.hello: {why}");
+        return AgentHelloDecision.Refused(why);
     }
 
     // Opens the agent connection a successful hello grants: from now on this channel is the
     // principal, for as long as its credential stands.
     public AgentHelloResult Accept(IProtocolChannel channel, AgentCredential credential)
     {
+        // A script connection cannot shed its read-only limit by authenticating again.
+        CheckScriptOperation(channel, AgentProtocol.Hello);
         var principal = PrincipalOf(credential);
-        connections.AddOrUpdate(channel, new Connection(credential.Id, principal));
-        return new AgentHelloResult(principal, credential.Scope);
+        connections.AddOrUpdate(channel, new Connection(credential.Id, principal, credential.Kind == "script"));
+        return new AgentHelloResult(principal, credential.Kind == "script" ? AgentProtocol.ScopeRead : credential.Scope);
+    }
+
+    // Keep the script restriction even after its record disappears: absence is never person authority.
+    internal void CheckScriptOperation(IProtocolChannel channel, string op, Action<string>? refusalLog = null)
+    {
+        if (!connections.TryGetValue(channel, out var c) || !c.Script) { return; }
+        var why = op is not (Fleet.FleetList.Op or Fleet.FleetList.FindOp)
+            ? "script connections may call only fleet.list and fleet.find"
+            : Of(channel) is null ? "the script credential is no longer live" : null;
+        if (why is null) { return; }
+        var line = $"refused {op} from {c.Principal}: {why}";
+        log($"agent credentials: {line}");
+        refusalLog?.Invoke($"local pipe: {line}");
+        throw new InvalidOperationException($"refused: {why}");
+    }
+
+    internal void CompleteFleetRead(AgentCredential caller, object result)
+    {
+        if (caller.Kind != "script") { return; }
+        // Size the full pipe response with the longest request id before committing rotation.
+        if (ProtocolJson.ByteCount(new { re = long.MinValue, ok = true, result }) > SecureChannel.MaxMessageBytes)
+        {
+            log($"agent credentials: refused fleet read from {PrincipalOf(caller)}: response too large");
+            throw new InvalidOperationException("refused: fleet response too large");
+        }
+        lock (gate)
+        {
+            if (!IsLive(caller))
+            {
+                log($"agent credentials: refused fleet read from {PrincipalOf(caller)}: the credential is no longer live");
+                throw new InvalidOperationException("refused: the script credential is no longer live");
+            }
+            // List order survives reload and distinguishes rotations minted at the same clock tick.
+            var newest = records.Last(r => r.Credential.Kind == "script" && r.Credential.Principal == caller.Principal);
+            if (newest.Credential.Id != caller.Id) { return; }
+            Remove(r => r.Credential.Kind == "script" && r.Credential.Principal == caller.Principal && r.Credential.Id != caller.Id, "rotated after a successful fleet read");
+            if (problem is not null) { throw new InvalidOperationException("refused: could not persist script credential rotation"); }
+        }
     }
 
     public string PrincipalOf(AgentCredential credential) =>
@@ -364,8 +441,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         if (!connections.TryGetValue(channel, out var c)) { return null; }
         var now = time.GetUtcNow();
         AgentCredential? found;
-        lock (gate) { found = records.Select(r => r.Credential).FirstOrDefault(x => x.Id == c.CredentialId && x.ExpiresAt > now); }
-        if (found is not null && !rootAlive(found.RootPid, found.RootStartUtc))
+        lock (gate) { found = problem is null ? records.Select(r => r.Credential).FirstOrDefault(x => x.Id == c.CredentialId && x.ExpiresAt > now) : null; }
+        if (found is { Kind: "session" } && !rootAlive(found.RootPid, found.RootStartUtc))
         {
             lock (gate) { Remove(r => r.Credential.Id == found.Id, "its session's process ended"); }
             return null;
@@ -377,13 +454,47 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     public bool IsLive(AgentCredential credential)
     {
         var now = time.GetUtcNow();
-        lock (gate) { if (!records.Any(r => r.Credential.Id == credential.Id && r.Credential.ExpiresAt > now)) { return false; } }
-        return rootAlive(credential.RootPid, credential.RootStartUtc);
+        lock (gate) { if (problem is not null || !records.Any(r => r.Credential.Id == credential.Id && r.Credential.ExpiresAt > now)) { return false; } }
+        return credential.Kind == "script" || rootAlive(credential.RootPid, credential.RootStartUtc);
     }
 
     public bool RevokeSession(string session, string why)
     {
-        lock (gate) { return Remove(r => r.Credential.Session == session, why); }
+        lock (gate) { return Remove(r => r.Credential.Kind == "session" && r.Credential.Session == session, why); }
+    }
+
+    public bool RevokeScript(string name)
+    {
+        if (!ValidScriptPart(name)) { throw new ArgumentException("invalid script name", nameof(name)); }
+        var principal = $"script:{machine}/{name}";
+        lock (gate)
+        {
+            if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
+            var removed = Remove(r => r.Credential.Kind == "script" && r.Credential.Principal == principal, "revoked by a person at this machine");
+            if (problem is not null) { throw new InvalidOperationException("could not save script revocation; the credential store is unavailable"); }
+            return removed;
+        }
+    }
+
+    internal void SetFleetLaunch(string name, bool enabled)
+    {
+        lock (gate)
+        {
+            if (problem is not null) { throw new InvalidOperationException("script credentials are unavailable"); }
+            var matches = records.FindAll(r => r.Credential.Kind == "script"
+                && r.Credential.Principal == $"script:{machine}/{name}" && r.Credential.ExpiresAt > time.GetUtcNow());
+            if (matches.Count == 0) { throw new InvalidOperationException("no live script credential exists for that name"); }
+            if (enabled && FleetGrant.CheckGrant(matches[0].Credential with { FleetLaunch = true }) is { } why)
+            { throw new InvalidOperationException($"refused: {why}"); }
+            foreach (var r in matches) { records[records.IndexOf(r)] = r with { Credential = r.Credential with { FleetLaunch = enabled } }; }
+            try { Save(); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Fault($"could not save the fleet grant: {e.Message}");
+                throw new InvalidOperationException("could not save the fleet grant; the credential store is unavailable", e);
+            }
+            if (problem is not null) { throw new InvalidOperationException("could not save the fleet grant"); }
+        }
     }
 
     // A session's process ended: whatever it held dies with it (§3.4 "Revocation").
@@ -404,7 +515,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         var gone = records.Where(r => which(r)).ToList();
         if (gone.Count == 0) { return false; }
         records.RemoveAll(which);
-        foreach (var r in gone) { log($"agent credentials: revoked {r.Credential.Id} for session {r.Credential.Session}: {why}"); }
+        foreach (var r in gone) { log($"agent credentials: revoked {r.Credential.Id} for {PrincipalOf(r.Credential)}: {why}"); }
         try { Save(); }
         catch (IOException e) { Fault($"could not save: {e.Message}"); }
         catch (UnauthorizedAccessException e) { Fault($"could not save: {e.Message}"); }
@@ -425,7 +536,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             {
                 if (r?.Credential is not { } c || r.Hash is not { Length: 64 } || !IsHex(r.Hash) || c.Id is not { Length: > 0 } || !ids.Add(c.Id)
                     || !AgentProtocol.Scopes.Contains(c.Scope, StringComparer.Ordinal) || c.Chain is null
-                    || !(c.Kind == "session" ? ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
+                    || !(c.Kind == "session" ? !c.FleetLaunch && ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
                 {
                     throw new JsonException("invalid credential record");
                 }
@@ -447,6 +558,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     void Save()
     {
+        if (problem is not null) { throw new IOException("the credential store is faulted; no changes were saved"); }
         var temp = path + ".tmp";
         File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(new Saved(1, [.. records]), Json));
         File.Move(temp, path, overwrite: true);
@@ -458,18 +570,15 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     internal static bool ValidScript(AgentCredential c, string machine)
     {
-        var prefix = $"script:{machine}/";
-        return ValidScriptPart(machine) && c.Principal is { Length: <= 128 } principal
-            && principal.StartsWith(prefix, StringComparison.Ordinal) && ValidScriptPart(principal[prefix.Length..])
+        return AgentPrincipal.ValidScriptIdentity(c.Principal, machine)
             && c.Session == "" && c.LaunchId == "" && c.RootPid == 0 && c.RootStartUtc == default
             && c.Scope == AgentProtocol.ScopeReadReply && c.Depth == 0 && c.Chain is { Length: 0 }
             && c.IssuedAt != default && c.ExpiresAt > c.IssuedAt
             && c.ExpiresAt - c.IssuedAt <= TimeSpan.FromDays(DefaultScriptDays);
     }
 
-    static bool ValidScriptPart(string? value) => value is { Length: > 0 and <= 64 } && value is not "." and not ".."
-        && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+    internal static bool ValidScriptPart(string? value) => AgentPrincipal.ValidScriptPart(value);
 
     // A session id is at most 36 characters (a UUID).
-    static bool ValidSession(string? s) => s is { Length: > 0 and <= 36 } && s.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
+    internal static bool ValidSession(string? s) => s is { Length: > 0 and <= 36 } && s.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
 }

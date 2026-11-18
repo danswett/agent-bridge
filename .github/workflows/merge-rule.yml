@@ -45,7 +45,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
   status:
   workflow_run: # zizmor: ignore[dangerous-triggers]
-    workflows: [Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
+    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
     types: [in_progress, completed]
   check_suite:
     types: [completed] # the only type Actions accepts here
@@ -60,6 +60,8 @@ permissions: {}
 # Coalesce cron, dispatch and main sweeps separately: a cron that yields must not displace main.
 # Skipped events must never displace either;
 # the event-table test keeps this eligibility condition identical to evaluate's if below.
+# PR actions share a slot: --pr reads current labels, draft, base and head, not event snapshots.
+# Only a new head cancels its own obsolete admission; the shared writer lock below is unchanged.
 concurrency:
   group: >-
     merge-rule-admit-${{
@@ -70,11 +72,12 @@ concurrency:
       && (github.event_name == 'schedule' && 'backstop'
       || github.event_name == 'workflow_dispatch' && 'dispatch'
       || vars.FLEET_MERGERULE == 'off' && 'sweep'
+      || github.event_name == 'pull_request_target' && github.event.pull_request.number
       || github.event.pull_request.head.sha || github.event.sha
       || github.event.check_suite.head_branch != 'main' && github.event.check_suite.head_sha
       || github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_sha
       || 'sweep') || github.run_id }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' && vars.FLEET_MERGERULE != 'off' }}
 
 jobs:
   backstop:
@@ -191,6 +194,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_RULE_POST_TOKEN: ${{ steps.app.outputs.token }}
+          ARM64_WAIVER: ${{ vars.ARM64_WAIVER }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           FAST: ${{ vars.FLEET_MERGERULE != 'off' }}
           EVENT: ${{ github.event_name }}

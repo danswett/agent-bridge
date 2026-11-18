@@ -67,6 +67,22 @@ for (const c of vectors.commands) {
   });
 }
 
+test('accept-host-sign preserves the exact received body and has only a machine target and nonce', () => {
+  const c = vectors.commands.find((c) => c.name === 'update');
+  const wrapper = JSON.parse(c.wrapper);
+  const body = JSON.parse(new TextDecoder().decode(b64(wrapper.body)));
+  body.action = 'accept-host-sign';
+  const bytes = utf8(JSON.stringify(body));
+  wrapper.body = base64Url(bytes);
+  const command = parsePersonCommand(utf8(JSON.stringify(wrapper)));
+  assert.deepEqual(command.bodyBytes, bytes);
+  assert.equal(command.body.action, 'accept-host-sign');
+  assert.deepEqual(command.body.target, { machine: c.context.host, session: null, question: null });
+  assert.deepEqual(command.body.nonce, b64(c.context.nonce));
+  assert.equal(command.body.to, null);
+  assert.equal(command.body.choice, null);
+});
+
 // A person whose sign key is a sibling host's hostSign, after probation, in both arrival orders.
 for (const k of vectors.collisions) {
   async function collided() {

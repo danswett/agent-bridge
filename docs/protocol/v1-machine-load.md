@@ -39,11 +39,24 @@ connection may hold one subscription, and `load.unsubscribe` `{}` ends it. `seq`
 | `state` | `"fresh"` \| `"partial"` \| `"stale"` \| `"unavailable"` | `partial`: some fields or sessions could not be read. `stale`: the figures are older than the host's own stale limit (`staleAfterMs`, in the record, so a client never guesses). `unavailable`: the sampler is not running or the OS gives nothing. Unknown is never sent as `0` |
 | `staleAfterMs` | number | How old `sampledAt` may be before the host calls it `stale` |
 | `cpu` | `{ percent, cores }`? | `percent` 0 to 100, **of the whole machine**: the counter delta over the interval divided by (cores x interval). `cores` are logical cores. Absent on the first sample or after a counter reset |
-| `memory` | `{ totalBytes, availableBytes, committedPercent }`? | `availableBytes` is what the OS says can be given out now. This, not the session sum, is headroom. `committedPercent` is committed memory, 0 to 100 |
+| `memory` | `{ totalBytes, availableBytes, committedPercent, usedPercent }`? | `availableBytes` is what the OS says can be given out now. This, not the session sum, is headroom. `committedPercent` is committed memory, 0 to 100; `usedPercent` is physical memory used, 0 to 100 |
 | `sessions` | SessionLoad[] | One per discovered session, at most 200. Over 200, keep the 200 with the most working set. The cap changes only `fresh` to `partial`; it preserves `partial`, `stale` and `unavailable`, including an unknown or missing state's `unavailable` fallback. Anything published beyond the channel is machine totals only: the Compliance clearance (#1150) covers totals, so `sessions` stays on the channel |
 | `unattributed` | `{ processes, workingSetBytes }`? | Processes the host started under a session root that no session now owns (for example children of an exited root) |
 
 Disk is not in this record: SRE ruled it out of this slice. A later contract adds it.
+
+The host derives optional `memory.usedPercent` once from the **same sample's validated**
+`totalBytes` and `availableBytes`: `(totalBytes - availableBytes) / totalBytes * 100`.
+It is present only when total is positive and available is between zero and total inclusive.
+Missing, invalid, zero-total or inverted byte pairs omit it, never substitute zero or
+`committedPercent`. Genuine all-free memory emits `0`; none-free emits `100`.
+The value retains binary64 precision without display rounding. Raw bytes, CPU, host freshness,
+session ordering, record caps and response/event envelope budgets are unchanged.
+
+This is an additive optional member: old readers ignore it, and old-shaped payloads still
+read without inventing it. Consumers adopting it use the host figure, with words-only output
+when absent and no client-side percentage fallback. Native/PWA consumer changes are separate
+bounded work; this producer extension does not change existing client rendering or feeds.
 
 ### SessionLoad
 
@@ -66,16 +79,21 @@ An unknown state reads as `unavailable`; an unknown agent or handle kind reads a
 
 ### Numerical wire policy
 
-Writers send finite percentages from 0 to 100 inclusive: `cpu.percent`, `cpuPercent` and
-`committedPercent`. Session CPU is a share of the whole machine, not a per-core percentage.
+Writers send finite percentages from 0 to 100 inclusive: `cpu.percent`, `cpuPercent`,
+`committedPercent` and `memory.usedPercent`. Session CPU is a share of the whole machine, not a per-core percentage.
 Percentages retain binary64 measurement precision, with no extra wire rounding; clients may
 format them for display without changing the reading.
 `processes` and `handles` are integers from 0 to 2147483647; `cores` is 1 to 2147483647.
 `ageMs`, `staleAfterMs` and every byte count are integers from 0 to 9007199254740991 inclusive
 (the largest exactly interoperable JavaScript integer). Fractional ages, counts and bytes are
 not sent. Unknown, nonfinite or out-of-domain figures are omitted, never clamped or zeroed.
-Record decoding checks representation and finiteness only, not these domain limits; the later
-host mapper enforces this writer policy. This record-only slice adds no host behavior.
+Record decoding checks representation and finiteness only, not these domain limits;
+the host mapper enforces this writer policy before serialization.
+
+The PWA record reader receives already-parsed JavaScript numbers. Beyond the writer's
+interoperable integer range, distinct Int64 tokens may become the same Number, and a
+value accepted by C# may be omitted by the PWA's representation guard. Lossless ingress
+is separate work; this slice does not relax that guard or alter the writer policy.
 
 Also not in v1 of this record: disk growth per session. Process I/O write bytes are not retained disk
 size and a recursive workspace scan per tick is not allowed, so the field is absent until a

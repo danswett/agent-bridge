@@ -8,6 +8,8 @@ namespace AgentBridge.Transport.Tests;
 
 // The relay's roster reply is one text frame that can pass the ordinary frame bound; a reply past
 // even its own bound must not cost the connection.
+// Keep both peers alive until the receive finishes: finalizing an unrooted sender can reset TCP
+// before the client consumes its queued frame, masking the frame-bound exception.
 public class WireTextBoundTests
 {
     static async Task<(WebSocket Server, WebSocket Client)> PairAsync()
@@ -34,7 +36,9 @@ public class WireTextBoundTests
     [Fact]
     public async Task A_text_frame_past_the_ordinary_bound_but_within_the_roster_bound_is_read_whole()
     {
-        var (server, client) = await PairAsync();
+        var pair = await PairAsync();
+        using var server = pair.Server;
+        using var client = pair.Client;
         var size = Wire.MaxFrame + 1000;
         var send = SendRosterAsync(server, size);
 
@@ -47,7 +51,9 @@ public class WireTextBoundTests
     [Fact]
     public async Task A_text_frame_past_the_roster_bound_is_dropped_and_the_next_frame_still_arrives()
     {
-        var (server, client) = await PairAsync();
+        var pair = await PairAsync();
+        using var server = pair.Server;
+        using var client = pair.Client;
         var send = Task.Run(async () =>
         {
             await SendRosterAsync(server, Wire.MaxRosterFrame + 1);
@@ -65,40 +71,68 @@ public class WireTextBoundTests
     [Fact]
     public async Task A_binary_frame_past_the_ordinary_bound_is_still_refused()
     {
-        var (server, client) = await PairAsync();
+        var pair = await PairAsync();
+        using var server = pair.Server;
+        using var client = pair.Client;
         var send = server.SendAsync(new byte[Wire.MaxFrame + 1], WebSocketMessageType.Binary, true, default);
 
         await Assert.ThrowsAsync<FrameTooLargeException>(() => Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default, discardOversizeText: true));
-        _ = send;
+        await send;
     }
 
     [Fact]
     public async Task The_plain_overload_still_refuses_a_text_frame_past_its_bound()
     {
-        var (server, client) = await PairAsync();
+        var pair = await PairAsync();
+        using var server = pair.Server;
+        using var client = pair.Client;
         var send = SendTextAsync(server, Wire.MaxFrame + 1, 'a');
 
         await Assert.ThrowsAsync<FrameTooLargeException>(() => Wire.ReceiveAsync(client, Wire.MaxFrame, default));
-        _ = send;
+        await send;
     }
 
     [Fact]
     public async Task An_oversized_text_frame_that_is_not_a_roster_reply_is_refused_not_drained()
     {
-        var (server, client) = await PairAsync();
+        var pair = await PairAsync();
+        using var server = pair.Server;
+        using var client = pair.Client;
         var send = SendTextAsync(server, Wire.MaxFrame + 1, 'a');
 
         await Assert.ThrowsAsync<FrameTooLargeException>(() => Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default, discardOversizeText: true));
-        _ = send;
+        await send;
     }
 
     [Fact]
     public async Task A_roster_reply_past_the_drain_cap_is_refused()
     {
-        var (server, client) = await PairAsync();
+        var pair = await PairAsync();
+        using var server = pair.Server;
+        using var client = pair.Client;
         var send = SendRosterAsync(server, Wire.MaxRosterDrain + 1);
 
         await Assert.ThrowsAsync<FrameTooLargeException>(() => Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default, discardOversizeText: true));
-        _ = send;
+        await send;
+    }
+
+    [Fact]
+    public async Task An_oversized_binary_frame_is_still_refused_after_garbage_collection()
+    {
+        var pair = await PairAsync();
+        using var server = pair.Server;
+        using var client = pair.Client;
+        var send = server.SendAsync(new byte[Wire.MaxFrame + 1], WebSocketMessageType.Binary, true, default);
+        await send.WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Yield();
+
+        for (var generation = 0; generation < 4; generation++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await Assert.ThrowsAsync<FrameTooLargeException>(() => Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, timeout.Token, discardOversizeText: true));
     }
 }

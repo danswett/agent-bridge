@@ -125,30 +125,32 @@ export function readUpdateState(raw) {
   };
 }
 
-// Product's secondary discovery detail (#927); quota is a past observation, not an allowance now.
+// Old hosts put a machine-local clock in this reason. Recognise the hold, never parse its time.
+const checkHoldReason = (s) => !s?.last?.code && ['failed', 'refused'].includes(s?.last?.outcome)
+  && (s.last.reason === 'checking again soon' || s.last.reason?.startsWith("the release feed's rate limit refused the check"));
+export const checkHeld = (s) => checkHoldReason(s) && !(Date.parse(s.checkedAt) > Date.parse(s.last.at));
+
+// The card's quiet age; historical source and quota are not an allowance to check now (#2187).
 export function updateDetails(s, now = Date.now()) {
   const age = (value) => {
     const at = timestamp(value);
     return at ? Math.max(0, Math.floor((now - Date.parse(at)) / 60000)) : null;
   };
   const words = (minutes) => minutes < 1 ? 'under a minute' : minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`;
-  const source = s?.checkSource === 'cdn' ? 'the release feed' : s?.checkSource === 'github' ? 'GitHub' : null;
   const checked = age(s?.checkedAt);
-  const remaining = quota(s?.gitHubRemaining);
-  const observed = age(s?.gitHubQuotaAt);
-  const lines = [];
-  if (source && checked !== null) { lines.push(`Update list from ${source}, ${words(checked)} old`); }
-  if (remaining !== null && observed !== null) {
-    lines.push(`When last asked, GitHub allowed ${remaining === 0 ? 'no more checks' : `${remaining} more check${remaining === 1 ? '' : 's'}`} (${words(observed)} ago)`);
+  if (checkHeld(s)) {
+    const when = checked === null ? 'Not checked yet' : checked < 1 ? 'Checked just now'
+      : `Checked ${checked} minute${checked === 1 ? '' : 's'} ago`;
+    return [`${when} \u00b7 checking again soon`];
   }
-  return lines;
+  return checked === null ? [] : [`Checked ${words(checked)} ago`];
 }
 
 // update.check's and update.install's result. An unknown outcome reads as refused.
 export function readUpdateCommandResult(raw) {
   const r = obj(raw) ?? {};
   const outcome = ['accepted', 'confirm'].includes(r.outcome) ? r.outcome : 'refused';
-  return { outcome, reason: str(r.reason), state: obj(r.state) ? readUpdateState(r.state) : null, code: code(r.code) };
+  return { outcome, reason: str(r.reason), state: obj(r.state) ? readUpdateState(r.state) : null, code: code(r.code), retryAt: timestamp(r.retryAt) };
 }
 
 // Something is going on that ends on its own: worth looking at again soon.
@@ -207,7 +209,7 @@ function nowWaiting(s) {
 // Why an Update now didn't happen, from its code, as a whole line: "Not updated: …" (v1-update.md
 // "What the person sees", with Creative's three on #1185). at: when Update now works again, for
 // restart-cap. An unknown code is "the machine refused it", never what the machine wrote.
-export function notUpdated(why, { at = null, failed = false } = {}) {
+export function notUpdated(why, { at = null, retryAt = null, failed = false } = {}) {
   if (failed) { return "Not updated: the update didn't take."; }
   switch (why) {
     case 'expired': return 'Not updated: not done within 15 minutes. Press Update now again.';
@@ -217,12 +219,15 @@ export function notUpdated(why, { at = null, failed = false } = {}) {
       const time = clockTime(at);
       return `Not updated: Update now has used its restarts for the last 6 hours; ${time ? `try after ${time}` : 'try again later'}.`;
     }
+    case 'rate-limited': {
+      const time = clockTime(retryAt);
+      return `Not updated yet. ${time ? `Try again after ${time}` : 'Try again in a few minutes'}.`;
+    }
     default: break;
   }
   const reasons = {
     'not-quiet': 'a message was being delivered there the whole time',
     changed: 'something changed on the machine; try again',
-    'rate-limited': 'too many presses just now; try again in a few minutes',
     busy: 'another update or restart is under way there',
     'sign-in': 'an agent sign-in is under way there',
     'announce-failed': "the bridge couldn't tell your devices it was restarting",
@@ -285,6 +290,7 @@ export function updateLine(s, now = Date.now()) {
 export function lastLine(s, now = Date.now(), { updateNow = false } = {}) {
   const l = s?.last;
   if (!l) { return null; }
+  if (!updateNow && checkHoldReason(s)) { return checkHeld(s) ? 'Checking again soon.' : null; }
   if (updateNow || l.code) {
     switch (l.outcome) {
       case 'updated': return `Updated to ${l.to ?? 'the new release'}.`;
@@ -294,7 +300,7 @@ export function lastLine(s, now = Date.now(), { updateNow = false } = {}) {
     }
   }
   switch (l.outcome) {
-    case 'updated': return `Updated from ${l.from ?? 'an older release'} to ${l.to ?? 'a newer one'} ${ago(l.at, now)}.`;
+    case 'updated': return `Updated to ${l.to ?? 'the new release'}.`;
     case 'current': return `Already up to date when asked ${ago(l.at, now)}.`;
     case 'refused': return `Not updated: ${sentence(l.reason ?? 'refused')}`;
     default: return `The update failed: ${sentence(l.reason ?? 'no reason given')}`;
@@ -408,7 +414,9 @@ export class UpdateControl {
       // The state as the press found it: older than an update.state that came meanwhile, which
       // it must not replace.
       if (result.state && this.fleet.update(id) === before) { this.fleet.noteUpdate(id, result.state); }
-      if (result.outcome === 'accepted') { this.fleet.watch?.(id); } else { this.#notes.set(id, line(result.reason ?? 'it refused')); }
+      if (result.outcome === 'accepted') { this.fleet.watch?.(id); } else {
+        this.#notes.set(id, result.code === 'rate-limited' ? notUpdated(result.code, { retryAt: result.retryAt }) : line(result.reason ?? 'it refused'));
+      }
     } catch (e) {
       this.#notes.set(id, `It did not take it: ${sentence(e?.message ?? 'the machine could not be reached')}`);
     } finally {
@@ -478,7 +486,7 @@ export class UpdateControl {
         this.#nowRequests = [...this.#nowRequests.slice(-31), request];
         this.fleet.watch?.(id);
       } else if (result.outcome === 'refused') {
-        this.#notes.set(id, notUpdated(result.code, { at: result.state?.updateNowAt ?? this.fleet.update(id)?.updateNowAt ?? null }));
+        this.#notes.set(id, notUpdated(result.code, { at: result.state?.updateNowAt ?? this.fleet.update(id)?.updateNowAt ?? null, retryAt: result.retryAt }));
       }
       return result;
     } catch (e) {

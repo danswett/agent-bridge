@@ -331,9 +331,11 @@ test.describe('on a phone', () => {
   test('the header\'s overflow menu holds Pin, Details and End session', async ({ page }) => {
     await openDemo(page);
     const v = await open(page, CODEX);
+    await expect(page.locator('#nav:not([hidden])')).toHaveCSS('display', 'none');
     await expect(v.locator('.pin')).toBeHidden();
     await v.getByRole('button', { name: 'More' }).tap();
     await expect(v.getByRole('menuitem')).toHaveText(['Pin', 'Details', 'End session']);
+    await expect(v.getByRole('menu')).toBeInViewport({ ratio: 1 });
     await v.getByRole('menuitem', { name: 'Pin' }).tap();
     await expect(row(page, CODEX)).toHaveAttribute('data-pinned', 'true');
     await v.getByRole('button', { name: 'More' }).tap();

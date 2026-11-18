@@ -15,11 +15,15 @@ public sealed class RelayBlobs : IBlobSource, IDisposable
 
     public void Attach(RelayClient? connection) => Volatile.Write(ref relay, connection);
 
-    public long MaxBytes => Volatile.Read(ref relay) is { BlobMaxBytes: > 0 } r ? BlobFormat.MaxPlain(r.BlobMaxBytes) : 0;
+    static long Limit(RelayClient? connection) => connection is { BlobMaxBytes: > 0 } r
+        ? Math.Min(AttachmentLimits.BlobBytes, BlobFormat.MaxPlain(r.BlobMaxBytes)) : 0;
+
+    public long MaxBytes => Limit(Volatile.Read(ref relay));
 
     public async Task FetchAsync(BlobRef blob, long size, Stream output, Action<long> progress, CancellationToken cancellationToken)
     {
         var r = Volatile.Read(ref relay) ?? throw new IOException("the host is not connected to the relay");
+        if (size > Limit(r)) { throw new BlobRefusedException("too-large"); }
         var key = BlobFormat.FromBase64Url(blob.Key) ?? throw new InvalidDataException("the blob's key is not base64url");
         // A whole 100 MB fetch is seconds on a desktop's link; the bound stops a stalled
         // transfer from holding a fetch slot for ever.

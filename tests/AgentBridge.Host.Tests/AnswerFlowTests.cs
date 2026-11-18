@@ -114,7 +114,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsApprove, offered);
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
 
         probe.Reason = null;
         Assert.Contains(Capabilities.SessionsAnswer, await CapabilitiesAsync(ch));
@@ -152,7 +152,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Serve(new UnsupportedPlatformAnswerer());
         var ch = await OpenAsync();
 
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal(("refused", true), (outcome, reason!.Contains("platform")));
 
@@ -1904,7 +1904,56 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
 
-    // A form taller than its window, as Copilot CLI drew one in a 120 by 30 console on VM3, read
+    [Theory]
+    [InlineData(80, false)]
+    [InlineData(120, false)]
+    [InlineData(200, false)]
+    [InlineData(80, true)]
+    public async Task A_three_field_long_title_colour_boolean_and_text_card_is_delivered_even_after_a_refusal(int columns, bool refuseFirst)
+    {
+        string[] titles =
+        [
+            "Which of these three colors would you prefer for the status indicator light today",
+            "Would you like this status indicator light to remain enabled while the machine is working on the next task in this session",
+            "Please describe anything else you would like us to know before we apply this status indicator preference to the current session",
+        ];
+        string[] names = ["colour", "enabled", "notes"];
+        var answer = new { colour = "Red", enabled = true, notes = "Test" };
+        await AskFieldsAsync(new
+        {
+            colour = new { type = "string", title = titles[0], @enum = new[] { "Red", "Green", "Blue" } },
+            enabled = new { type = "boolean", title = titles[1] },
+            notes = new { type = "string", title = titles[2] },
+        }, 3, answer, "Three preferences.");
+        var ch = await OpenAsync();
+        if (refuseFirst)
+        {
+            injector.Screen = () => ["The form is being redrawn"];
+            Assert.Equal("refused", (await AnswerAsync(ch, answer, question: "q2")).Outcome);
+            Assert.Empty(injector.Attempts);
+            Assert.Equal("q2", source.Get(Id)?.Question?.Id);
+        }
+        injector.Screen = () =>
+        {
+            var rows = FieldsScreen(names, message: "Three preferences.", labels: titles);
+            var at = Array.FindIndex(names, n => rows.Contains($"Field: {n}"));
+            if (at < 0) { return rows; }
+            var bar = Wrapped($"[{titles[at]}]", columns - 8).ToList();
+            var middle = bar.Count / 2;
+            bar[middle] = (at > 0 ? "\u2190 " : "") + bar[middle] + (at < 2 ? " \u2192" : "");
+            var heading = $" {titles[at]}{(at < 2 ? ":" : "")}";
+            return [.. rows.SelectMany(r => r == TabBar(titles, 0, false) ? bar.Select(l => " " + l)
+                : r == heading ? Wrapped(r.TrimStart(' '), columns - 4).Select(l => " " + l)
+                : r == rows[0] ? [new string('\u2500', columns - 2)] : new[] { r })];
+        };
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(3, Enters());
+    }
+
+    // A form taller than its window, as Copilot CLI drew one in a 120 by 30 console on node-c, read
     // with agent-bridge-injector --screen (#1123, #1193): a question of twelve long paragraphs
     // over a list, a Yes/No and a text field. Only the form's bottom shows, its rule on the last
     // row; its heading and top rule, and the first three paragraphs, are above the window.
@@ -2875,6 +2924,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [InlineData("unheaded")]
     public async Task Keys_are_held_only_to_the_form_at_the_field_they_are_for(string shows)
     {
+        // Exhaust the wrong-field recheck on the service's clock, not the channel request's wall-clock budget.
+        await using var clock = new PollClock();
+        Serve(Answerer(time: clock));
         var answer = new { first = "b", second = "c" };
         string[] names = ["first", "second"];
         await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } }, 2, answer);
@@ -3500,21 +3552,31 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains("resume=left resumes=3", await AttemptLineAsync());
     }
 
-    [Fact]
-    public async Task A_form_answered_afresh_that_stops_again_is_never_reset_a_second_time()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_form_answered_afresh_that_stops_again_is_never_reset_a_second_time(bool observeAfterResult)
     {
-        Serve(Answerer(resume: true));
+        await using var clock = new PollClock();
+        Serve(Answerer(time: clock, resume: true));
         await AskFieldsAsync(TwoLists, 2, TwoPicked);
         // Asked again, the form is stuck at its first field once more.
         var asked = false;
         injector.Screen = () => !Escaped() || asked ? Framed("Tell me", TwoNames, 0, ["Field: first", .. Input("")]) : new List<string> { "> " };
+        // Record the CLI's response before Esc completes, independently of the test observer.
+        injector.OnInjectAsync = async () =>
+        {
+            if (!IsEscape(injector.Plans[^1].Plan)) { return; }
+            Fixture.Append(events, Copilot.ToolDone("q2", second++), Copilot.ToolStart("q3", "ask_user", new { message = "Tell me", requestedSchema = new { properties = TwoLists } }, second++));
+            asked = true;
+            await source.RefreshAsync();
+        };
         var ch = await OpenAsync();
 
         var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+        // A loaded runner may not schedule the observer until the reset budget has elapsed.
+        if (observeAfterResult) { await answering; }
         await Wait.UntilAsync(() => Escaped(), "the Esc that resets the form", Patience);
-        Fixture.Append(events, Copilot.ToolDone("q2", second++), Copilot.ToolStart("q3", "ask_user", new { message = "Tell me", requestedSchema = new { properties = TwoLists } }, second++));
-        asked = true;
-        await source.RefreshAsync();
         var result = await answering;
 
         // One Esc; the question asked again gets its first field's keys and Enter, and then is
@@ -3643,31 +3705,43 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [InlineData(null, false)]
     [InlineData("Tell me", true)]
     public async Task A_reset_form_not_asked_again_the_same_retires_its_card_as_out_of_date_with_nothing_typed_after_the_Esc(string? other, bool reordered)
+        => await ResetFormAsync(other, reordered);
+
+    [Fact]
+    public async Task A_reset_form_is_retired_even_when_the_test_observes_progress_slowly()
+        => await ResetFormAsync(null, false, () => Thread.Sleep(200));
+
+    async Task ResetFormAsync(string? other, bool reordered, Action? beforeLook = null)
     {
-        var clock = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var clock = new PollClock();
         Serve(Answerer(time: clock, resume: true));
-        // A stalled test must not spend ResetWait before it records the session's response to Esc.
         Task UntilState(Func<bool> state, string what) => Wait.UntilAsync(() =>
         {
-            if (state()) { return true; }
-            clock.Advance(TimeSpan.FromMilliseconds(25));
+            // Model a test continuation scheduled infrequently on the loaded Arm runner.
+            beforeLook?.Invoke();
             return state();
         }, what, Patience);
         await AskFieldsAsync(TwoLists, 2, TwoPicked);
         var asked = false;
         injector.Screen = () => StuckScreen(() => asked);
+        // The CLI records Esc before its injection completes, so no reset budget races the test.
+        injector.OnInjectAsync = async () =>
+        {
+            if (!IsEscape(injector.Plans[^1].Plan)) { return; }
+            Assert.Empty(AfterEscape());
+            Fixture.Append(events, Copilot.ToolDone("q2", second++));
+            if (other is not null)
+            {
+                Fixture.Append(events, Copilot.ToolStart("q3", "ask_user", new { message = other, requestedSchema = new { properties = reordered ? TwoListsReordered : TwoLists } }, second++));
+                asked = true;
+            }
+            await source.RefreshAsync();
+        };
         var ch = await OpenAsync();
 
         var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
         await UntilState(() => Escaped(), "the Esc that resets the form");
         Assert.Empty(AfterEscape());
-        Fixture.Append(events, Copilot.ToolDone("q2", second++));
-        if (other is not null)
-        {
-            Fixture.Append(events, Copilot.ToolStart("q3", "ask_user", new { message = other, requestedSchema = new { properties = reordered ? TwoListsReordered : TwoLists } }, second++));
-            asked = true;
-        }
-        await source.RefreshAsync();
         await UntilState(() => answering.IsCompleted, "the reset form's out-of-date result");
         var result = await answering;
 
@@ -3839,6 +3913,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     {
         public readonly List<(int Pid, KeyPlan Plan)> Plans = [];
         public Action? OnInject;
+        public Func<Task>? OnInjectAsync;
         public Task Gate = Task.CompletedTask;
         public InjectionResult Result = new(InjectionStatus.Typed, "ok");
         // The session's screen as the CLI draws it, or null for a host that cannot read it.
@@ -3891,7 +3966,11 @@ public sealed class AnswerFlowTests : IAsyncLifetime
                 return new InjectionResult(InjectionStatus.NothingTyped, refusal);
             }
             lock (Plans) { Plans.Add((processId, plan)); At.Add(DateTime.UtcNow); }
-            if (Result.Status == InjectionStatus.Typed) { OnInject?.Invoke(); }
+            if (Result.Status == InjectionStatus.Typed)
+            {
+                OnInject?.Invoke();
+                if (OnInjectAsync is { } injected) { await injected(); }
+            }
             return Result;
         }
 

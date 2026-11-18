@@ -274,6 +274,11 @@ public static class MarkdownModel
                 case HeadingBlock h:
                     list.Add(new MdHeading(h.Level, Inlines(h.Inline)));
                     break;
+                // Match before Inlines flattens wrappers and merges runs: only one bare code span
+                // gets the existing code block renderer, Copy and hidden-character notes (#1433).
+                case ParagraphBlock { Inline.FirstChild: CodeInline code } when code.NextSibling is null:
+                    list.Add(new MdCode(code.Content, null));
+                    break;
                 case ParagraphBlock p:
                     list.Add(new MdParagraph(Inlines(p.Inline)));
                     break;

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json.Nodes;
 using AgentBridge.Roster;
 using Xunit;
 using static RosterFixture;
@@ -166,6 +167,33 @@ public sealed class EnrollmentExchangeTests
         var add = w.Entry("+B");
 
         Assert.False(n.Accepts(add, add.Body.Device!, w.Id("G")));
+    }
+
+    [Theory]
+    [InlineData("key")]
+    [InlineData("algorithm")]
+    [InlineData("proof")]
+    public void The_joiner_refuses_a_host_add_that_does_not_match_its_presented_signing_descriptor(string changed)
+    {
+        var (a, n) = Exchange(H, H);
+        Assert.Equal(CodeResult.Match, a.EnterCode1(n.Code1Shown!));
+        Assert.Equal(CodeResult.Match, n.EnterCode2(a.Code2Shown!));
+        var w = new World();
+        w.Genesis();
+        w.AddHostV2("+H", "G", "H", "G");
+        var body = JsonNode.Parse(w["+H"].Body)!;
+        body["approval"]!["transcript"] = Codec.Base64Url(a.TranscriptToSign!);
+        var bytes = Bytes(body);
+        var add = Entry.Parse(Encoding.UTF8.GetBytes(Entry.Canonical(bytes, World.Keys("G").Sign.Sign(Entry.SignedBy(bytes)))));
+        var own = add.Body.Device!;
+        Assert.True(n.Accepts(add, own, w.Id("G")));
+        var different = changed switch
+        {
+            "key" => own with { HostSign = World.Keys("I").Sign.Public },
+            "algorithm" => own with { HostSignAlg = null },
+            _ => own with { HostSignProof = null },
+        };
+        Assert.False(n.Accepts(add, different, w.Id("G")));
     }
 
     [Fact]

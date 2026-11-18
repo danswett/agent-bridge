@@ -72,6 +72,8 @@ public class SubagentTests
         // clients ignore them.
         node["activity"]!.AsObject().Remove("turn");
         node["activity"]!.AsObject().Remove("responseTurn");
+        node["activity"]!.AsObject().Remove("kind");
+        node["activity"]!.AsObject().Remove("notice");
         node["question"]?.AsObject().Remove("agent");
         return node;
     }
@@ -87,6 +89,9 @@ public class SubagentTests
         {
             var now = Legacy(await r.Through(second));
             var then = golden[second.ToString(CultureInfo.InvariantCulture)]!.DeepClone().AsObject();
+            Assert.NotNull(then["startedAt"]);
+            Assert.Null(now["startedAt"]);
+            then.Remove("startedAt");
             if (second == 84)
             {
                 // The one intended difference (#84): witness-logic's last turn asked for a tool,

@@ -29,8 +29,11 @@ clients restart paging without `before` and merge by turn id.
   bytes of text. Clients must read both forms.
 * **Clients ignore fields and enum values they don't know.** An unknown value reads as:
   `agent` → `unknown` (shown generically), `status` → `idle`, tool `status` → `done`,
-  question `kind` → `form`, field `type` → `text`, `driver` → `person`; an unknown `class` reads as absent. Hosts never remove or rename a field
-  within a protocol version.
+  question `kind` → `form`, field `type` → `text`, `driver` → `person`,
+  answer/reply `outcome` → `unconfirmed`, reply result `mode` → `steer`, reply result
+  `stage` → `typed`; an unknown `class` reads as absent. Unknown progress stages are
+  ignored. Request `mode` is strict, not subject to these result-side fallbacks.
+  Hosts never remove or rename a field within a protocol version.
 * Times are UTC with milliseconds and a `Z`, always in this exact form:
   `2026-10-28T04:22:43.182Z`. Clients can compare them as strings.
 * **Sizes are UTF-8 bytes of the JSON as sent.** No single message exceeds **48 KiB**, so
@@ -91,9 +94,9 @@ with the wrong type):
 | `Option` | | `value`, `label` |
 | `DiscoveryHeld` | `reason` | `agents` (whole) |
 | `SessionList`, `SessionsSynced`, `DiscoveryChanged` | | `discoveryHeld` |
-| `SessionsSynced` | `live` (whole) | |
+| `SessionsSynced` | `live`, `handles` (each whole) | |
 | `RestoreRunResult` | `sessions` (whole) | |
-| `SessionPatch` | `id`, `base`, `set`, `append`, `subagents` | |
+| `SessionPatch` | `id`, `handle`, `base`, `set`, `append`, `subagents` | |
 | `SubagentsPatch` | `set`, `remove`, `order` (each whole) | |
 | `session.remove` data | `id` | |
 | `UsageWindow` ([v1-usage.md](v1-usage.md)) | `percent` | |
@@ -227,8 +230,8 @@ and `pwa/test/unit/channels.test.mjs` count them. Interop vectors: [`vectors/noi
 
 ### Deflate
 
-Each message above is one Noise transport message whose plaintext is its JSON. From #603 a
-larger one may go deflated instead: the byte `0x01`, then the JSON as raw DEFLATE (RFC 1951, no
+Each message above is one Noise transport message whose plaintext is its JSON. From #603 one
+may go deflated instead: the byte `0x01`, then the JSON as raw DEFLATE (RFC 1951, no
 zlib header; `CompressionStream("deflate-raw")` in a browser). It is compressed first and then
 encrypted, each message on its own with no dictionary carried over from another. Session JSON
 deflates to well under half.
@@ -236,8 +239,8 @@ deflates to well under half.
 * A peer says it inflates in its handshake introduction, `"deflate": true`, beside `name` and
   `kind`. A message goes deflated only to a peer that said so. Older peers say nothing, and get
   JSON as before.
-* A sender deflates only messages of 512 bytes or more, and sends the deflated form only when it
-  is smaller.
+* A sender deflates only messages of 150 bytes or more (#2171; previously 512), and sends the
+  deflated form, including its marker, only when it is smaller. Smaller messages stay plain.
 * The limit on a message is unchanged: its JSON must fit one transport message, deflated or not.
   A receiver refuses one that inflates past that. It also refuses one that does not inflate at
   all, and either ends the channel, as a frame that fails to decrypt does.
@@ -306,10 +309,11 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
 | `sessions.history` | `session.history`: a session's earlier turns, a page at a time, for the conversation pane ([v1-history.md](v1-history.md)). Offered to a person's devices and the app; never to the HA connector or an agent on the pipe |
 | `sessions.patch` | `sessions.subscribe` takes `patch` and `since`: live changes as `session.patch`, only what changed ([Patches](#patches-sessionpatch)), and a reconnect to the same run of the host sent only the sessions that changed meanwhile ([Resuming](#resuming-without-a-snapshot)). Without it, or without asking, a client gets whole upserts and whole snapshots as before |
+| `sessions.handles` | With `patch: true`, `sessions.subscribe` also takes `handles: true`: the snapshot assigns small session handles and live patches can omit `id` |
 | `hello.changed` | `hello` takes `{ "changes": true }`, and the host then sends `hello.changed` on that channel when its `readOnly` or capabilities change ([Changes](#hello)). Without it, a client asks hello again to see a change |
 | `sessions.focus` | `sessions.focus`: the client says whether it is on screen and which session it shows. Live changes to the others then come together at most every 12 s, and a device on screen is not notified of finished turns ([sessions.focus](#sessionsfocus)). With `openQuestion` and `idleMs` it also says which question's card it shows and how long since the person's last input, and while the person uses a device the host holds back some pushes ([While the person uses a device](#while-the-person-uses-a-device-1190)). Without it, or until a client says, every change goes at once |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
-| `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
+| `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box. With `sessions.reply.queue`, the host honours reply `mode` and reports the mode actually used; offered only with `sessions.reply`, once queue delivery is implemented (#2468 slice 2) |
 | `sessions.progress` | `session.reply` and `session.answer` take `"progress": true`, and then report `received` and `typed` before their result, which carries `timings` ([Progress](#progress)). Offered with `sessions.reply` or `sessions.answer` |
 | `sessions.attach` | `attachment.start`, `attachment.chunk`, `attachment.discard`, and `attachments` on `session.reply` ([Attachments](#attachments)). Offered only with `sessions.reply`, by a host that can stage files for the agent. Without it a client offers no way to attach |
 | `sessions.attach.blob` | `attachment.start` takes a `blob`: files over 256 KiB, up to 100 MiB, through the relay's blob store ([Large files](#large-files-through-the-blob-store)). Offered with `sessions.attach` on a channel through a relay, while the host is connected to one that has a blob store. Without it a client keeps to 256 KiB |
@@ -412,6 +416,14 @@ ended before the new snapshot was taken would otherwise keep it on the list.
 
 #### Patches (`session.patch`)
 
+**Negotiated handles (#2323).** A client asks for `"handles": true` alongside `"patch": true` only when hello offers `sessions.handles`.
+For that subscriber, `sessions.synced` adds `"handles": { "<session id>": 1, ... }`, including unchanged live sessions on a resumed subscribe.
+Handles are distinct positive 32-bit integers, valid only on this subscription on this channel; each snapshot replaces the map. A map over the message budget is empty, with handles introduced on first whole patches instead.
+A patch then carries `"handle": 1` instead of `id`. A newly discovered session's first whole patch carries both `id` and `handle`,
+introducing the binding only after successful application; later patches omit `id`. A known handle must never name another id.
+An unknown handle without that whole-session introduction is dropped whole and the client subscribes again in full, as for a wrong `base`.
+Invalid or duplicate snapshot handles require a full subscribe. Old clients (including an old worker cache) never ask and keep ids; new clients against an old host never ask. No worker change is needed.
+
 A whole upsert is 1 to 40 KiB, sent again for any change: a sub-agent's status, a new
 `updatedAt`. Measured on 2026-11-03 (#597), a session idle for 40 s was upserted three times at
 21.7 KB, 16.6 KB of it `subagents` that had not changed. So a client that asked for `patch` gets
@@ -430,7 +442,8 @@ each live change as only what changed:
 
 | Field | Notes |
 |---|---|
-| `id` | The session |
+| `id` | The session; may be omitted when a negotiated `handle` names it |
+| `handle` | Optional negotiated session handle, scoped and introduced as above |
 | `base` | The `seq` of the event on this channel that last gave the client this session: an upsert of the snapshot, or an earlier patch. **Absent: the patch is the whole session**, applied to nothing, and it replaces whatever the client holds of it as an upsert would. A host sends the whole session when it has sent none of it on this subscription, and whenever that is smaller |
 | `revision` | Every change the host had made up to this revision has now been sent on this channel ([Resuming](#resuming-without-a-snapshot)). At most the host's `revision`, and lower while another session's change waits out its 250 ms. Absent from a host that cannot say |
 | `set` | A JSON merge patch ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)) of the session as an upsert carries it: an object merges into the field's object member by member, `null` removes a field, and anything else (a list included) replaces the field whole. Holds `subagents` only whole, or `null` |
@@ -464,15 +477,18 @@ its tool history moved, say). An `append` is used only where the old text is all
 start of the new: a `response` cut to its last 16 KiB has moved, and is `set`. Hosts choose
 freely between a patch and a whole session; a client applies either.
 
-**Measured wire cost (#1334).** `WireBytesTests` replays 40 s of changes through the real host to a
-subscriber that asked for `patch`, sent `sessions.focus` and negotiated deflate: one focused
+**Measured wire cost (#1334, #2171, #2323).** `WireBytesTests` replays 40 s of changes through the real host to a
+subscriber that asked for `patch` and `handles`, sent `sessions.focus` and negotiated deflate: one focused
 session changing every second and four quiet ones changing every 250 ms. It counts each event as
 the `MessageDeflate.Pack` length of its `{ev, seq, data}` envelope plus 42 bytes (16 AEAD tag, 9
-channel header, 17 relay data frame). Result: **13,140 bytes**, all 53 of them `session.patch`
-(none a whole upsert), against #597's goal of 5 KB, so the goal is **not met**: 8,020 bytes over.
-The focused session's 40 patches are about 9.5 KB of it, each a ~240-byte message that is too
-small for deflate (under 512 bytes) and carries 42 of overhead. The test's budget is 14,500 bytes
-(the measurement plus about 10%) so that a regression fails; it is not a claim that 5 KB is met.
+channel header, 17 relay data frame). With the 150-byte deflate floor, the result is **10,155
+bytes**, all 53 events `session.patch` (none a whole upsert). Lowering only the floor from 512
+bytes saves **2,985 bytes** from #1334's 13,140-byte baseline, closing 37.2% of the 8,020-byte gap
+to #597's 5,120-byte goal. The goal is **not met**: 5,035 bytes remain. The workload and patch
+JSON are unchanged. The test's budget drops from 14,500 to **11,200 bytes** (1,045 bytes, or
+10.3%, of margin). Negotiated handles lower the unchanged workload further to **9,606 bytes**
+(549 saved, 4,486 above the goal), still 53 patches and no whole upserts. The budget is now
+**10,600 bytes**, 994 bytes (10.3%) of margin. Snapshot maps and subscribe/focus requests are not counted; 5 KB is not met.
 
 #### Resuming without a snapshot
 
@@ -720,7 +736,7 @@ reads the session's record of that same question again, typing nothing: an answe
 since (submitted at the machine, or recorded late) comes back `delivered`, and from then on
 stays so, and one recorded differently comes back `recorded`. It never answers a newer
 question. A client may therefore send the same request again after a reconnect, within the
-10 minutes the host remembers it, to learn what came of a `typed` answer.
+15 minutes the host remembers it, to learn what came of a `typed` answer.
 
 Typing into a live session is a single writer's job, and the host serializes it: one
 answer or reply per session at a time (`busy` otherwise), checked against the transcript
@@ -965,10 +981,44 @@ the session is idle or still working. Request `data`:
 | Field | Notes |
 |---|---|
 | `id` | The session |
-| `request` | A fresh UUID per reply the person sends, with exactly `session.answer`'s semantics: every outcome is remembered for at least 10 minutes and returned for a repeat, which types nothing; a repeat of a reply still being delivered waits for it |
+| `request` | A fresh UUID per reply the person sends, with exactly `session.answer`'s semantics: every outcome is remembered for 15 minutes and returned for a repeat, which types nothing; a repeat of a reply still being delivered waits for it |
 | `text` | The prompt: at most 16 KiB of UTF-8. Not blank, unless the reply has attachments |
 | `attachments` | Optional. Files and images for the agent, in order: `[{ "id": "<attachment>" }]`, at most 10, each sent whole by **this device** with `attachment.start` and `attachment.chunk` first ([Attachments](#attachments)). Absent, `null` and `[]` mean none. A host without `sessions.attach` refuses a reply that has any |
+| `mode` | Optional: `queue` (a new turn after the running one) or `steer` (join the running turn). Absent or `null` means `steer`, today's behaviour; an unknown value or wrong type is a request error (`ok: false`, nothing typed), never defaulted. Agent senders using the extension below explicitly send `queue` unless marked urgent, then `steer`. A person's app or PWA reply stays `steer` by leaving it absent |
 | `progress` | Optional, as for `session.answer` ([Progress](#progress)) |
+
+**Compatibility (#2468).** These fields are additive within v1. A sender asks `hello`
+first. Without `sessions.reply.queue` it still sends `mode: "queue"` rather than lose
+the prompt, but reports "sent, not queued: this host steers" and records
+`honoured: false` locally; that record is not a wire field. It never claims `queued`
+from a working session alone. Older hosts ignore `mode`; older clients omit it.
+The result's `mode` is the mode actually used, not an echo: absent reads as `steer`,
+even if hello was stale. A host implementing queue delivery supplies it on every result.
+Slice 1 defines the contract and models only; hosts must not advertise queue support
+until the delivery path implements it.
+
+**Host-owned intent (#2568 A-i).** `ReplyRequest.Intent` is an in-process carrier,
+not a wire field or the requested `mode`. It defaults to `Unknown`. Only the host's
+current local App/HostCli classification or a current pinned-person relay lease
+produces `Steer`; disabled pinning is not person proof. The carrier rechecks that
+same ingress when read, so a revoked lease cannot be replaced by a later grant.
+Unclassified ingress and both HA reply adapters retain `Unknown`. Text, sender or
+driver labels, `pri=urgent`, a claimed role and `RequireIdle` cannot grant intent;
+neither the carrier nor its source delegate is serialized or accepted from JSON.
+This producer-only slice changes no key behavior and offers no queue capability.
+Capability qualification and the fail-closed submit consumer are separate slices.
+
+**Agent-sender version boundary.** Queue-reply extension **v1** (protocol 1 with
+`sessions.reply.queue`, [#2468](https://github.com/danswett/agent-bridge/issues/2468))
+supersedes the base-v1 agent rule "nothing queued; working-session reply refused
+`notIdle`" in [agent-principals §5.2 and Q35](../design/agent-principals.md#52-allowed-actions).
+This applies to authorized agent senders using the mode-capable `session.reply` path;
+all other agent guards remain. Hosts without that capability retain the old rule and
+may refuse `notIdle`; a sender reports that refusal, not delivery. AP5-lite (#1353)
+is a separate profile: its idle-only, no-queue/no-retry contract is unchanged.
+
+Some shipped clients still label `typed` plus `working` as Queued. That legacy UI
+is not queue evidence; updating those receipts belongs to later #2468 client work.
 
 **Line breaks become spaces.** Every control character, line breaks and tabs included,
 and the Unicode line and paragraph separators are typed as spaces, so a reply always
@@ -989,8 +1039,12 @@ and Claude Code strips the zero-width, filler, variation-selector and tag charac
 sends ([#448](https://github.com/danswett/agent-bridge/issues/448)). A reply of nothing but
 those characters, with no attachments, is `refused` as empty.
 
-Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`, with `timings` for a
-request that asked for progress, and optional `attachments`:
+Result: `{ "outcome", "reason", "mode", "stage"? }`, the outcomes of `session.answer`,
+with `timings` for a request that asked for progress, and optional `attachments`.
+`mode` is `queue` or `steer` (absent or unknown reads as `steer`).
+Hosts emit `stage` only on `unconfirmed`: `typed`, `recorded`, or `queued` below;
+unknown reads as `typed`, never as delivery. Tolerant records may retain a stage on
+another outcome; clients ignore it there rather than override the outcome.
 
 `attachments: [{ "id": "<client attachment UUID>", "ref": "@<staged absolute path>" }]`
 binds each attachment to exactly the reference token in the recorded prompt, in the
@@ -1010,16 +1064,80 @@ appear in the transcript; this field carries no file bytes or fetch authority.
 | `outcome` | Meaning | Typed? |
 |---|---|---|
 | `delivered` | The host typed the reply, and the agent's transcript then recorded a prompt from the person (not a subagent's, a scheduled one or any with another source) whose text is the reply as typed, whitespace runs aside, **with every attachment attached**. Each recorded prompt confirms one reply only | Yes |
-| `unconfirmed` | The host typed it but saw no such prompt: the agent recorded something else, or the reply without all its files, the session ended, or nothing came within the host's wait. A session that is working takes a prompt typed now at its next step (Copilot records it then, as `delivery: "steering"`), so a host waits for up to a minute. Never retried | Yes |
+| `unconfirmed` | The host typed it but saw no such prompt: the agent recorded something else, or the reply without all its files, the session ended, or nothing came within the wait below. Never automatically retried | Yes |
 | `stale` | The session has ended, or its process has | No |
 | `busy` | An answer or another reply to this session is being typed | No |
 | `refused` | The host will not type it: an invalid reply (above), **a question or permission prompt pending in the session** (the words would answer it, and Enter accept it; answer it first, at the machine for one marked `answerAtMachine`), a transcript the host cannot read to rule that out, an attachment the host does not hold (expired, removed, sent by another device, still arriving, or gone with an earlier reply) or cannot hand over, an elevated or otherwise unreachable session, an agent or platform without delivery yet, or agent-ha-bridge active for this user | No |
+
+#### Reply stages
+
+These are reply diagnostics (`ReplyStage`), not answer stages (`AnswerStage`).
+They never confirm delivery or authorize another typing attempt.
+
+| Unconfirmed `stage` | Evidence reached | May next reach, on the same admitted reply |
+|---|---|---|
+| `typed` | Keys went; no matching recorded prompt or queued screen hint yet | `queued`, `recorded`, or `delivered` |
+| `recorded` | The matching prompt is recorded, but not every required attachment is confirmed | `delivered` |
+| `queued` | Copilot's queued screen hint was seen, but the matching transcript record is still missing | `recorded` or `delivered` |
+
+A stage may stay unchanged. `typed` may go directly to `delivered`, including when
+Copilot takes the prompt before a queued row is seen. `recorded` never regresses to
+`queued`. Only transcript confirmation (and all attachments) makes the outcome
+`delivered`; a repeat rechecks evidence without typing again.
 
 Copilot CLI, Claude Code and Codex sessions take replies. A Claude Code or Codex reply is
 typed only into the agent's input box as its screen shows it, since without
 agent-ha-bridge's hooks a host cannot otherwise see their permission prompts and questions;
 it is `refused` when that box is not on screen, or for Codex already has words in it. Codex takes only
 images as attachments; a Codex reply with any other file is `refused`.
+
+**Queue confirmation contract (#2468 slice 2).** On a working Copilot session,
+`queue` types the text then Ctrl+Q under every existing input-box check, including
+the 80-column rule; `steer`
+keeps Enter. An idle session gets Enter and result `mode: "steer"`, with transcript
+`delivery: "idle"`. A working Claude Code session already queues on Enter and reports
+`mode: "queue"`; an idle Claude session reports `steer`. Its delivery path is
+unchanged. Codex keeps Enter and reports `mode: "steer"` even when `queue` was
+requested; a sender says it was not queued.
+
+For Copilot, a queued prompt seen in the turn row within 5 s of Ctrl+Q
+(`CopilotInputBox.TurnSigns`) permits interim `queued` progress. Its absence only
+withholds that progress: it never ends the transcript wait or decides the result.
+There is **no Enter fallback**. Only the matching transcript `user.message` with
+`delivery: "queued"` confirms a queued reply, with its attachments as above.
+Copilot may take it within those 5 s and yield `delivered` without a queued screen
+row; that rapid case still requires transcript `delivery: "queued"` and result
+`mode: "queue"`.
+
+The request's `mode` alone never proves which path was used:
+
+| Copilot path actually used | Matching transcript `delivery` | Result `mode` |
+|---|---|---|
+| Queue while working | `queued` | `queue` |
+| Enter while idle, including a request for `queue` | `idle` | `steer` |
+| Enter steering a working session | `steering` | `steer` |
+
+Only the first row confirms queueing. The other rows can confirm a reply on the
+actual `steer` path, never a selected queue path; `steering` never proves queued.
+
+The confirmation wait is 60 s from typing, extended while **the same turn that was
+running at typing** still runs, with a hard cap of 15 minutes from typing. A later
+turn does not extend it. A prompt recorded after 60 s within that wait is `delivered`,
+not `unconfirmed` just because the original turn ran long. At the cap, a queued screen
+hint without the matching transcript record gives `unconfirmed`, `stage: "queued"`;
+otherwise the evidence selects `typed` or `recorded` as in the reply stage table.
+`queued` is never a final outcome. A repeat of that unconfirmed request reads the
+transcript again, typing nothing, and becomes `delivered` when recorded, as for an
+unconfirmed answer, within the request-memory window. A final outcome or stage a
+client does not know is handled conservatively: unknown outcome is `unconfirmed`,
+unknown stage is `typed`; neither proves delivery.
+
+The confirmation cap starts at typing. The separate 15-minute request-memory
+window starts when the first outcome settles (including `unconfirmed`), not when
+typing starts. An in-flight request is not forgotten by that settled-outcome
+window; a repeat waits for the same attempt. Read-only rechecks do not restart
+the memory window. A full 15-minute confirmation wait therefore does not consume
+the 15-minute window for asking what came of it.
 
 A reply is never typed while the session is asking anything, which a host checks both in
 what it reports and, immediately before typing, in the transcript itself. The per-session
@@ -1029,7 +1147,7 @@ at once.
 
 ### Progress
 
-A reply to a working session can take a minute to settle, and a client that hears nothing
+A reply to a working session can take time to settle, and a client that hears nothing
 until then can only say "sending" ([#598](https://github.com/danswett/agent-bridge/issues/598)).
 So a host that offers `sessions.progress` reports how far a `session.reply` or
 `session.answer` has got, to a client that adds `"progress": true` to its `data`. Without
@@ -1047,14 +1165,15 @@ with the request's `re`, a `progress` object and **no `ok`**:
 | `stage` | When | A client shows |
 |---|---|---|
 | `received` | As soon as the host has the request, before any check (so a request refused at once still hears it) | Sent |
-| `typed` | Every key has gone, so the outcome will be `delivered` or `unconfirmed`. `working` is `true` when the session was working: the agent takes the prompt at its next step, as Copilot's `steering` | Typed, or Queued when `working` |
+| `typed` | Every key has gone, so the outcome will be `delivered` or `unconfirmed`. `working` is `true` when the session was working; this alone proves no queueing | Typed |
+| `queued` | The host saw Copilot's turn row show the prompt queued after Ctrl+Q. Interim progress only, never the final outcome | Queued |
 
 A client ignores a `stage` it doesn't know, and a progress frame never completes its
 request, whatever else it holds. A request refused before any key went hears only
 `received`. A repeat of a request still being delivered (the same `request` UUID) hears its
 own `received`, then the stages the first one has reached, at once, and the rest as they come;
-one sent after the outcome hears `received` and, if the keys went, `typed`. Nothing follows the
-response.
+one sent after the outcome hears `received` and, if the keys went, `typed`, then
+`queued` if that evidence was reached. Nothing follows the response.
 
 `timings` in the result: milliseconds after the host received the request, by the host's
 clock. Absent fields were not reached, or are not known. For a repeat, they count from the
@@ -1081,7 +1200,7 @@ blob store where the host offers `sessions.attach.blob`
 
 **What the agent is given (Copilot).** The host writes each file into a private folder
 (below) and types the reply as agent-ha-bridge does: `@<path>` for each file, in order,
-then the text, one line, then Enter: `@C:\…\attachments\9f2c…-screenshot.png What do you
+then the text, one line, then the submit key chosen by `mode`: `@C:\…\attachments\9f2c…-screenshot.png What do you
 see?`. Copilot CLI attaches a file a prompt mentions that way. A path can't hold
 whitespace (nothing quotes it), so a host whose folder has a space in its path refuses
 replies with attachments. The text rules above apply to the text alone, so a reply of
@@ -1192,8 +1311,10 @@ With `sessions.attach.blob`, a file over 256 KiB goes through the relay's blob s
    bytes the host has opened, for progress.
 
 A blob that does not open, does not match its SHA-256 or cannot be fetched fails the next
-`attachment.start` for it once, with the reason, and is dropped; the client seals and
-uploads it again under a new id. A host that has no relay with a blob store just then
+`attachment.start` for it once, with a fixed safe reason, and is dropped; the client seals
+and uploads it again under a new id. A reply naming the failed attachment is refused
+with that same safe reason, never blob-fetch exception text, paths or URLs.
+A host that has no relay with a blob store just then
 fails `attachment.start` with a `blob` and stops offering `sessions.attach.blob`.
 `attachment.chunk` for an attachment started with a `blob` fails.
 
@@ -1212,20 +1333,24 @@ Ends a session, as agent-ha-bridge's End session button does. Request `data`:
 | Field | Notes |
 |---|---|
 | `id` | The session |
-| `request` | A fresh UUID per press, with exactly `session.answer`'s semantics: every outcome is remembered for at least 10 minutes and returned for a repeat, which does nothing more; a repeat of a press still being acted on waits for it |
+| `request` | A fresh UUID per press, with exactly `session.answer`'s semantics: every outcome is remembered for 15 minutes and returned for a repeat, which does nothing more; a repeat of a press still being acted on waits for it |
 | `confirm` | Only on a second press: the token the first press's `confirm` outcome gave. At most 64 characters of `A–Z a–z 0–9 - _` |
 
-**Two presses when the session is not idle, enforced by the host.** A session that is
+**Two presses when the session is not safely idle, enforced by the host.** A session that is
 `working`, `waiting`, or `idle` with `activity.background` (delegating) has a turn or work in
-flight that ending it would throw away. The first press only arms: the host answers
-`confirm` with a token, and ends nothing. A second press within the window (10 s, measured on
+flight that ending it would throw away. An idle-reported session also needs two presses
+when its Copilot transcript cannot be read, its launch has not been seen ready, or an open
+question is seen only in the transcript (#2411, Product ruling 2 on #2396).
+The first press only arms: the host answers `confirm` with a token, and ends nothing.
+A second press within the window (10 s, measured on
 the host from when it armed) carrying that token ends it, if the session's process is still
 the very one the first press saw, by id and start time. Anything short of that (no token, a
 lapsed or unknown one, one from another session, a process that has been replaced) is
 another first press: a new `confirm` and token, and nothing ended. Every device and client
 can send `session.stop`, so this is the host's rule, never only a client's. An `idle` session
-with nothing in the background ends on one press; a token sent for one is ignored. The host
-checks the session again immediately before it acts, and one that has started working or
+with nothing in the background and none of those edge states ends on one press; a token
+sent for one is ignored. The host checks the session again immediately before it acts,
+and one that has started working or
 asking since the press arrived needs a second press after all (`confirm`). Several
 first presses can be waiting at once (two devices); any one confirms, and confirming spends
 them all.
@@ -1249,8 +1374,10 @@ A client treats an outcome it doesn't know as `failed`, never as `ended` or `con
 agent's own input, so the CLI writes its transcript and releases its lock, and the session
 stays resumable. If it has not exited within 12 s, the agent's process alone (never its
 tree) is terminated. A session asking anything, in what the host reports or in its
-transcript, is terminated without `/exit`, which would land in the question's input. From
-the moment it starts until the outcome, the session is upserted as `ending`, and the host
+transcript, is terminated without `/exit`, which would land in the question's input.
+An unreadable Copilot transcript or a launch not ready is treated as possibly asking:
+after the confirmed second press, the host terminates without typing `/exit`.
+From the moment it starts until the outcome, the session is upserted as `ending`, and the host
 holds it against answers and replies (`busy`), which share the per-session serialization.
 The terminal window or tab the agent ran in is left open: the person may have other work in
 it.
@@ -1790,6 +1917,9 @@ is for disposable evaluation, not production service enrollment.
 | `startedAt` | time? | |
 | `updatedAt` | time | When something a client shows last changed. Events that change nothing visible (hook runs, usage records, model internals) do **not** move it, so they never cause an upsert |
 | `processId` | number? | The agent's process, when known |
+| `transcript_bytes` | integer? | Session event-log file length in bytes, obtained from filesystem metadata only (#2739), never transcript contents or process memory. A measured empty file is zero; absence is unknown, never zero |
+| `transcript_bytes_unavailable` | string? | Instead of a size when metadata cannot be read: `path-unavailable`, `not-found`, `not-a-file`, `access-denied`, `io-error` or `invalid-path`. No local path or exception text |
+| `transcript_observation` | object? | With either result: `observed_at` (UTC time), `source: "file-size"`, `host_id` (this host's public machine id). Bound to this session's `id`. Optional for older hosts and identity-free local readers; clients may ignore all three fields |
 | `activity` | Activity | |
 | `question` | Question? | The question the agent is waiting on, if any |
 | `driver` | `"person"` \| `"agent"`? | Who drives the current turn ([Driver](#driver)). Absent means `person`, and a host sends it only as `agent`. A client that does not know a value reads it as `person` |
@@ -1801,6 +1931,11 @@ is for disposable evaluation, not production service enrollment.
 | `attention` | [Attention](#attention)? | **New (#800).** What is wrong with the session that `status` cannot say: its agent needs signing in again, its turn ended on an error, or it stopped responding. Absent when nothing is |
 | `class` | `"needsYou"` \| `"done"` \| `"fyi"`? | **New (#913).** The session's notification tier, which every client follows instead of its own rules: [Notification class](#notification-class-913). Absent from an older host; a client then keeps today's behaviour. A client that does not know a value reads it as absent |
 | `classSince` | time? | **New (#913).** When the session entered its present tier, the episode's start, which the 15-minute reminder counts from. Kept while `class` is unchanged (a further question does not move it); on a change of `class`, for `needsYou` the earliest of `question.askedAt`, `attention.since` and, after a crash, `restored.at`, otherwise `statusSince` ([Notification class](#notification-class-913)). Present with `class`. Never shown |
+
+The serving host samples transcript metadata on normal refreshes, resolving file links to their
+target metadata. Size, availability or path changes publish a new observation, including partial
+final lines and truncation. An unchanged result retains its last published observation time to avoid
+timestamp-only event churn. This adds no content reads, cap enforcement or census policy.
 
 **Status precedence** with sub-agents (first match wins): the session's own question
 (`waiting`); a sub-agent's question (`waiting`, with `waitingOn`); the main agent's turn
@@ -2095,15 +2230,28 @@ session left under an agent's control still says so while it is idle. It says so
   §5.5; the pipe refuses them anything but reading, #44), so today the only agent principal a host
   sees is a press, answer, reply or launch on its Home Assistant cards made by an account listed
   in `homeAssistant.agentUserIds` ([ha-connector.md](../ha-connector.md)), or a reply-card publish
-  that names `driver: agent`. `driverPrincipal` is then `homeassistant:<user id>` for the account
-  (absent for a publish, which names no account). Once agents have their own principal (#45), it
-  is set from theirs the same way.
+  that names `driver: agent`. `driverPrincipal` is `homeassistant:<user id>` for the account,
+  or the publish's cleaned, unverified `sender` display label (not proof of identity). Once agents
+  have their own principal (#45), it is set from theirs the same way.
 * It is kept in memory, as agent-ha-bridge keeps it: a host that restarts, and a session that goes
   and comes back, starts again as the person's.
 * A change of driver is something a client shows, so it moves `updatedAt` and sends an upsert. It
   is never trimmed by the session budget.
 
 ### Activity
+
+**Turn attribution (#2145).** `kind` optionally marks the current prompt as `user` or
+`scheduled`. `notice` optionally carries the latest system-notification turn in the
+[history Turn format](v1-history.md#turn), with its own `id`, `kind: notification`,
+prompt and latest nonempty response part. Its text never replaces `response`,
+`own.response` or `responseTurn`. Empty/tool-only messages leave notice text intact.
+A queued owner prompt changes `turn`, but the assistant cycle already running keeps
+its reply target until the next `assistant.turn_start`. Older clients ignore these
+additions. If the session budget cannot carry notice text, it retains the notice's
+id, time and kind with `truncated: true`; clients fetch that turn from stored history.
+After unread transcript bytes, an unattributed reply is carried separately as
+`notice.kind: unknown`, with its own record id and `truncated: true`, never guessed
+to be the owner's answer. The next known assistant cycle reestablishes attribution.
 
 | Field | Type | Notes |
 |---|---|---|

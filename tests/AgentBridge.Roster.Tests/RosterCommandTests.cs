@@ -13,6 +13,7 @@ public sealed class RosterCommandTests
     const string Now = "2026-11-04T12:00:00Z";
     const string Session = "5b0c8e9e-3f4a-4c55-9a1e-2d7f6b8c9d01";
     const string Request = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    const string AcceptHostSign = "accept-host-sign";
     static readonly byte[] HostNonce = SHA256.HashData("agent-bridge test host nonce"u8.ToArray());
     static readonly byte[] OtherNonce = SHA256.HashData("agent-bridge test other nonce"u8.ToArray());
     static readonly byte[] HeldReset = SHA256.HashData("agent-bridge test held reset"u8.ToArray());
@@ -121,7 +122,7 @@ public sealed class RosterCommandTests
         b["target"] = target;
         if (action == CommandAction.Transfer) { b["to"] = w.Id(to!); }
         if (action == CommandAction.FolderTrustAnswer) { b["choice"] = "once"; }
-        if (CommandAction.NeedsNonce(action)) { b["nonce"] = Codec.Base64Url(HostNonce); }
+        if (CommandAction.NeedsNonce(action) || action == AcceptHostSign) { b["nonce"] = Codec.Base64Url(HostNonce); }
         b["issuedAt"] = issued;
         b["expiresAt"] = expires;
         b["heads"] = Hashes([w[head].Hash]);
@@ -153,6 +154,27 @@ public sealed class RosterCommandTests
         Case("transfer-with-webauthn", "a WebAuthn device's transfer with its assertion for the command role", CommandAction.Transfer, "P"),
         Case("folder-trust-answer", "a folder-trust answer names its question and choice", CommandAction.FolderTrustAnswer, "A"),
         Case("forget", "forget carries no nonce", CommandAction.Forget, "A"),
+        Case("accept-host-sign", "a confirmed person's key authorizes this host's v2 command contract", AcceptHostSign, "A"),
+        Case("accept-host-sign-webauthn", "a confirmed person's WebAuthn assertion binds this command body", AcceptHostSign, "P"),
+        Case("accept-host-sign-without-presence", "a WebAuthn signer must prove presence", AcceptHostSign, "P", Invalid.Presence, uv: false),
+        Case("accept-host-sign-agent-principal", "an unrostered agent principal's key confers no person authority", AcceptHostSign, "Agent", Invalid.Signer),
+        Case("accept-host-sign-probation", "an active person on probation cannot authorize v2", AcceptHostSign, "N", Invalid.Probation),
+        Case("accept-host-sign-old-channel-nonce", "a valid command replayed onto a new channel has the old nonce", AcceptHostSign, "A", Invalid.Nonce, context: w => Context(w, AcceptHostSign, nonce: OtherNonce)),
+        Case("accept-host-sign-short-nonce", "the nonce must be exactly 32 bytes", AcceptHostSign, "A", edit: b => { b["nonce"] = Codec.Base64Url(new byte[31]); return b; }, refusal: Refusal.Length),
+        Case("accept-host-sign-missing-nonce", "the signed body must include a nonce", AcceptHostSign, "A", edit: b => { b.Remove("nonce"); return b; }, refusal: Refusal.Missing),
+        Case("accept-host-sign-extra-target", "the target names only a machine, never a session", AcceptHostSign, "A", edit: b => { b["target"]!["session"] = Session; return b; }, refusal: Refusal.Unknown),
+        Case("accept-host-sign-extra-body", "the body cannot carry a transfer destination", AcceptHostSign, "A", edit: b => { b["to"] = b["by"]!.DeepClone(); return b; }, refusal: Refusal.Unknown),
+        new("accept-host-sign-cosigner-only", "a cosignature alone cannot authorize a person command", w =>
+        {
+            var bytes = Bytes(CommandBody(w, AcceptHostSign, "A"));
+            var cosig = World.Keys("A").Sign.Sign(Entry.SignedByCosigner(bytes));
+            return $"{{\"body\":\"{Codec.Base64Url(bytes)}\",\"cosig\":\"{Codec.Base64Url(cosig)}\"}}";
+        }, w => Context(w, AcceptHostSign), Refusal: Refusal.Unknown),
+        new("accept-host-sign-wrong-framing", "an entry signature is not a person-command signature", w =>
+        {
+            var bytes = Bytes(CommandBody(w, AcceptHostSign, "A"));
+            return PersonCommand.Canonical(bytes, World.Keys("A").Sign.Sign(Entry.SignedBy(bytes)), null);
+        }, w => Context(w, AcceptHostSign), Invalid.Signature),
         Case("webauthn-without-assertion", "a WebAuthn device's command without its assertion", CommandAction.Update, "P", Invalid.Presence, uv: false),
         Case("key-device-with-assertion", "a key device's command carrying an assertion", CommandAction.Update, "A", Invalid.Presence, uv: true),
         Case("for-another-action", "a command for another action than the op asking", CommandAction.Update, "A", Invalid.Action, context: w => Context(w, CommandAction.Attest)),
@@ -302,6 +324,9 @@ public sealed class RosterCommandTests
     [
         Case("update-by-a-key-shared-with-a-host", "a person's update command signed with the key a sibling host holds as its hostSign, after probation", CommandAction.Update, "Q", Invalid.HostKey, signAs: "H", head: "cA"),
         Case("update-by-a-key-of-its-own", "another person's update command, in the same roster", CommandAction.Update, "A", head: "cA"),
+        Case("accept-host-sign-by-host-key", "a rostered v2 host signing with its hostSign is not a person", AcceptHostSign, "H", Invalid.Signer, head: "cA"),
+        Case("accept-host-sign-signed-with-host-key", "a person's command signed by hostSign fails its signature check", AcceptHostSign, "A", Invalid.Signature, signAs: "H", head: "cA"),
+        Case("accept-host-sign-shared-host-key", "a person's key shared with hostSign confers no authority after probation", AcceptHostSign, "Q", Invalid.HostKey, signAs: "H", head: "cA"),
     ];
 
     [Theory]

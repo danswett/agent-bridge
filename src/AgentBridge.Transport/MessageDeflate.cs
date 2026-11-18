@@ -14,8 +14,8 @@ namespace AgentBridge.Transport;
 public static class MessageDeflate
 {
     public const byte Marker = 0x01;
-    // Below this a message goes as it is: deflate would save a few bytes at best.
-    public const int MinBytes = 512;
+    // Small session patches benefit too; leave tiny control messages uncompressed.
+    public const int MinBytes = 150;
 
     // The message to send: deflated, or as it is where that is not smaller.
     public static byte[] Pack(byte[] plain)

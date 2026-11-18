@@ -12,6 +12,9 @@ internal sealed class SessionTracker
 {
     readonly SessionSourceOptions _options;
     readonly TimeProvider _time;
+    readonly string? _hostId;
+    (long? Bytes, string? Unavailable)? _transcriptSize;
+    TranscriptObservation? _transcriptObservation;
     readonly SessionState _state = new();
     readonly TranscriptParser _parser;
     TranscriptTail? _tail;
@@ -39,10 +42,11 @@ internal sealed class SessionTracker
     // when it could not (not working, or already showing another attention).
     (SessionStatus Effective, DateTimeOffset? LastEvent, bool Background, IReadOnlyList<Subagent>? Subagents, int? More)? _stall;
 
-    public SessionTracker(DiscoveredSession discovered, SessionSourceOptions options, TimeProvider time)
+    public SessionTracker(DiscoveredSession discovered, SessionSourceOptions options, TimeProvider time, string? hostId = null)
     {
         _options = options;
         _time = time;
+        _hostId = hostId;
         Discovered = discovered;
         _firstSeen = time.GetUtcNow();
         _parser = discovered.Agent switch
@@ -66,7 +70,18 @@ internal sealed class SessionTracker
         // rebuilt and re-serialised every session, changed or not: about 35 MB/min of the host's
         // allocation (#608).
         var changed = _built is null || discovered != Discovered;
+        var pathChanged = discovered.TranscriptPath != Discovered.TranscriptPath;
         Discovered = discovered;
+        if (_hostId is not null)
+        {
+            var size = TranscriptFileSize.Read(discovered.TranscriptPath);
+            if (_transcriptSize != size || pathChanged)
+            {
+                _transcriptSize = size;
+                _transcriptObservation = new(_time.GetUtcNow(), "file-size", _hostId);
+                changed = true;
+            }
+        }
         if (discovered.TranscriptPath is { } path)
         {
             if (_tail is null || !string.Equals(_tail.Path, path, StringComparison.Ordinal))
@@ -342,6 +357,9 @@ internal sealed class SessionTracker
             StartedAt = ws?.CreatedAt ?? _state.StartedAt,
             UpdatedAt = _state.UpdatedAt ?? reg?.Updated ?? ws?.UpdatedAt ?? _firstSeen,
             ProcessId = d.ProcessId,
+            TranscriptBytes = _transcriptSize?.Bytes,
+            TranscriptBytesUnavailable = _transcriptSize?.Unavailable,
+            TranscriptObservation = _transcriptObservation,
             Question = question,
             WaitingOn = question?.Agent,
             Subagents = subagents,
@@ -350,6 +368,8 @@ internal sealed class SessionTracker
                 : Stalled(effective, lastEvent, background, subagents, more, now),
             Activity = new Activity
             {
+                Kind = _state.UserMessageFrom == UserMessageFrom.Schedule ? TurnKind.Scheduled : TurnKind.User,
+                Notice = _state.Notice,
                 Response = response,
                 ResponseTruncated = responseCut ? true : null,
                 Reasoning = Limits.KeepEnd(_state.Reasoning, Limits.Reasoning).Text,
@@ -359,7 +379,7 @@ internal sealed class SessionTracker
                 UserMessageFrom = _state.UserMessage is null ? null : _state.UserMessageFrom,
                 UserMessageLabel = _state.UserMessage is null ? null : Limits.KeepStart(_state.UserMessageLabel, Limits.UserMessageLabel),
                 Turn = _state.TurnId,
-            ResponseTurn = (ownResponse ?? (source?.Response is null ? response : null)) is null ? null : _state.ResponseTurn,
+                ResponseTurn = (ownResponse ?? (source?.Response is null ? response : null)) is null ? null : _state.ResponseTurn,
                 TurnCount = _state.Seen ? Math.Max(0, _state.Prompts - (effective == SessionStatus.Idle || _state.UncountedTurn ? 0 : 1)) : null,
                 Compactions = _state.Seen ? _state.Compactions : null,
                 Background = Protocol.Background.Of(agents, shells),

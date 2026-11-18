@@ -31,9 +31,9 @@ public sealed class LocalApiLaunchStopAuditTests : IDisposable
 
     public void Dispose() => Directory.Delete(root, true);
 
-    Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(AgentAuditLog? audit, CallerKind kind = CallerKind.Agent) =>
+    Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(AgentAuditLog? audit, CallerKind kind = CallerKind.Agent, ICallerGuard? callers = null) =>
         LocalApi.Handler(new SessionService(null!, new MachineInfo("machine1", "Test", "windows", "0.1.0"),
-            launcher: actions, stops: actions), null!, new FixedCallerGuard(new Caller(kind, "fixture")), credentials: credentials, audit: audit, auditTime: clock);
+            launcher: actions, stops: actions), null!, callers ?? new FixedCallerGuard(new Caller(kind, "fixture")), credentials: credentials, audit: audit, auditTime: clock);
 
     static JsonElement Body() => JsonSerializer.SerializeToElement(new
     {
@@ -41,7 +41,7 @@ public sealed class LocalApiLaunchStopAuditTests : IDisposable
     });
 
     JsonElement Line(string op) => JsonSerializer.Deserialize<JsonElement>(Assert.Single(File.ReadAllLines(
-        Assert.Single(Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), op == LaunchProtocol.Launch ? "launches-*.jsonl" : "agents-*.jsonl")))));
+        Assert.Single(Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), op == LaunchProtocol.Launch ? "launches-*.jsonl" : "agents-*.jsonl"))).Skip(1)));
 
     [Theory]
     [InlineData(LaunchProtocol.Launch)]
@@ -92,7 +92,6 @@ public sealed class LocalApiLaunchStopAuditTests : IDisposable
 
     [Theory]
     [InlineData(CallerKind.App)]
-    [InlineData(CallerKind.Other)]
     [InlineData(CallerKind.HostCli)]
     public async Task Person_launches_and_stops_are_not_changed_or_written_to_the_agent_log(CallerKind kind)
     {
@@ -100,6 +99,49 @@ public sealed class LocalApiLaunchStopAuditTests : IDisposable
         Assert.Equal(LaunchOutcome.Started, Assert.IsType<LaunchResult>(await handler(channel, LaunchProtocol.Launch, Body())).Outcome);
         Assert.Equal(StopOutcome.Ended, Assert.IsType<StopResult>(await handler(channel, Ops.SessionStop, Body())).Outcome);
         Assert.Equal(2, actions.Calls);
+        Assert.False(Directory.Exists(Path.Combine(root, AgentAuditLog.FolderName)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_untraceable_launch_is_refused_with_a_fresh_caller_check_and_an_unattributed_audit(bool cachedPerson)
+    {
+        var caller = new UntraceableCaller(cachedPerson);
+        var handler = Handler(new AgentAuditLog(root), callers: caller);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, LaunchProtocol.Launch, Body()));
+
+        Assert.Contains("untraceableCaller", error.Message);
+        Assert.Contains("the app or the host's own command line", error.Message);
+        Assert.True(caller.Fresh);
+        Assert.Equal(0, actions.Calls);
+        var line = Line(LaunchProtocol.Launch);
+        Assert.Equal("unknown:local", line.GetProperty("principal").GetString());
+        Assert.Empty(line.GetProperty("chain").EnumerateArray());
+        Assert.Equal("refused", line.GetProperty("outcome").GetString());
+        Assert.Contains("untraceableCaller", line.GetProperty("reason").GetString());
+        Assert.DoesNotContain("private", line.GetRawText());
+        Assert.DoesNotContain("owner", line.GetRawText());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_untraceable_launch_stays_refused_when_the_audit_is_missing_or_unwritable(bool wired)
+    {
+        File.WriteAllText(Path.Combine(root, AgentAuditLog.FolderName), "blocked");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Handler(wired ? new AgentAuditLog(root) : null, CallerKind.Other)(channel, LaunchProtocol.Launch, Body()));
+
+        Assert.Contains("auditUnwritable", error.Message);
+        Assert.Equal(0, actions.Calls);
+    }
+
+    [Fact]
+    public async Task An_untraceable_callers_existing_stop_behavior_is_unchanged()
+    {
+        Assert.Equal(StopOutcome.Ended, Assert.IsType<StopResult>(await Handler(null, CallerKind.Other)(channel, Ops.SessionStop, Body())).Outcome);
+        Assert.Equal(1, actions.Calls);
         Assert.False(Directory.Exists(Path.Combine(root, AgentAuditLog.FolderName)));
     }
 
@@ -152,7 +194,7 @@ public sealed class LocalApiLaunchStopAuditTests : IDisposable
             Assert.Contains(Reason, error.Message);
         }
         JsonElement[] Rows() => Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), "*.jsonl")
-            .SelectMany(File.ReadAllLines).Select(s => JsonSerializer.Deserialize<JsonElement>(s)).ToArray();
+            .SelectMany(f => File.ReadAllLines(f).Skip(1)).Select(s => JsonSerializer.Deserialize<JsonElement>(s)).ToArray();
         await Task.WhenAll(Enumerable.Range(0, 60).Select(_ => Task.Run(() => Refused(channel, op))));
         Assert.Equal(60, Rows().Length);
         await Refused(channel, op);
@@ -204,10 +246,20 @@ public sealed class LocalApiLaunchStopAuditTests : IDisposable
         File.Delete(folder);
         Directory.Move(held, folder);
         await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, op, Body()));
-        var lines = File.ReadAllLines(Assert.Single(Directory.GetFiles(folder, "*.jsonl")));
+        var lines = File.ReadAllLines(Assert.Single(Directory.GetFiles(folder, "*.jsonl"))).Skip(1).ToArray();
         Assert.Equal(61, lines.Length);
         Assert.Equal("2 additional launch or stop attempts were refused", JsonSerializer.Deserialize<JsonElement>(lines[^1]).GetProperty("reason").GetString());
         Assert.Equal(0, actions.Calls);
+    }
+
+    sealed class UntraceableCaller(bool cachedPerson) : ICallerGuard
+    {
+        public bool Fresh { get; private set; }
+        public Caller Classify(IProtocolChannel channel, bool fresh = false)
+        {
+            Fresh |= fresh;
+            return new(cachedPerson && !fresh ? CallerKind.App : CallerKind.Other, "untraced fixture");
+        }
     }
 
     sealed class Actions : ISessionLauncher, ISessionStopper

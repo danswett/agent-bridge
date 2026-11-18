@@ -20,7 +20,7 @@ static partial class SelfTest
         await using var server = LocalServer.Start(LocalEndpoint.For(folder), async (_, op, data) =>
         {
             object? result = null;
-            if (op == Ops.Hello) { result = new HelloResult(1, new MachineInfo("earlier", "Test", "windows", "test"), [HistoryProtocol.Capability]); }
+            if (op == Ops.Hello) { result = new HelloResult(1, new MachineInfo("earlier", "Test", "windows", "test"), new[] { HistoryProtocol.Capability }); }
             if (op == HistoryProtocol.Op)
             {
                 var before = data.TryGetProperty("before", out var b) ? b.GetString() : null;
@@ -28,7 +28,7 @@ static partial class SelfTest
                 if (before is not null && Volatile.Read(ref pageHold) is { } hold) { await hold.Task.WaitAsync(TimeSpan.FromSeconds(10)); }
                 var end = before is null ? 80 : int.Parse(before);
                 var from = Math.Max(0, end - 20);
-                result = new HistoryResult { Turns = [.. Enumerable.Range(from + 1, end - from).Select(StoredTurn)], Before = from > 0 ? $"{from}" : null };
+                result = new HistoryResult { Turns = Enumerable.Range(from + 1, end - from).Select(StoredTurn).ToArray(), Before = from > 0 ? $"{from}" : null };
             }
             return result;
         });

@@ -1,0 +1,6 @@
+[
+  {"identity":"42/start","buildVersion":"0.1.fixture","cpuSeconds":2,"workingSetBytes":100,"privateBytes":200,"threads":[{"id":8,"identity":"8/start","cpuSeconds":1},{"id":9,"identity":"9/old","cpuSeconds":10}],"unavailable":{}},
+  {"identity":"42/start","buildVersion":"0.1.fixture","cpuSeconds":3,"workingSetBytes":200,"privateBytes":400,"threads":[],"unavailable":{}},
+  {"identity":"42/start","buildVersion":"0.1.fixture","cpuSeconds":4,"workingSetBytes":300,"privateBytes":600,"threads":[],"unavailable":{}},
+  {"identity":"42/start","buildVersion":"0.1.fixture","cpuSeconds":5,"workingSetBytes":400,"privateBytes":800,"threads":[{"id":8,"identity":"8/start","cpuSeconds":3},{"id":9,"identity":"9/new","cpuSeconds":20}],"unavailable":{}}
+]

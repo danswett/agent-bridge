@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\AgentBridge.HomeAssistant\AgentBridge.HomeAssistant.csproj" />
+    <Compile Include="..\AgentBridge.Host.Core.Tests\Fixture.cs" Link="Fixture.cs" />
   </ItemGroup>
 
   <ItemGroup>

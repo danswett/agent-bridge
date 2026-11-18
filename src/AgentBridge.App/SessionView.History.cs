@@ -25,6 +25,8 @@ public sealed partial class SessionView
     readonly Dictionary<string, HistoryDisclosure> openPrompts = [];
     double historyOffset;
     bool historyUp;
+    object? historyDrawKey;
+    IReadOnlyList<AgentBridge.Protocol.HistoryTurn> historyDrawn = [];
 
     // The session shown is another: its turns replace the last one's, and it opens at its end.
     // The same session shown again (the view re-attached) keeps what it has and does not scroll.
@@ -51,6 +53,7 @@ public sealed partial class SessionView
         if (historyFirstFrame is not null) { CompositionTarget.Rendering -= historyFirstFrame; historyFirstFrame = null; }
         if (history is not null) { history.Changed -= OnHistoryChanged; }
         history = null;
+        historyDrawKey = null;
     }
 
     // Raised on whichever thread finished the load.
@@ -59,13 +62,20 @@ public sealed partial class SessionView
     void ShowHistory()
     {
         var turns = history?.Turns ?? [];
+        var liveTurn = Card?.LiveTurn;
+        var key = (history, history?.State, history?.HasOlder, history?.Start, liveTurn, Card?.UserMessage);
+        var retained = turns.Where(t => t.Id != liveTurn).ToArray();
+        if (Equals(historyDrawKey, key) && historyDrawn.SequenceEqual(retained)) { return; }
+        historyDrawKey = key;
+        historyDrawn = retained;
         var from = Math.Max(0, turns.Count - historyVisible);
+        if (from > 0 && from == turns.Count - 1 && turns[^1].Id == liveTurn) { from--; }
         // A live arrival extends what is already drawn instead of dropping its oldest visible turn.
         if (rowsOf == shownHistory && historyShown.FirstOrDefault() is { } first)
         {
             for (var i = 0; i < from; i++) { if (turns[i].Id == first.Id) { from = i; break; } }
         }
-        var rows = HistoryDraw.Rows(turns.Skip(from).ToArray(), Card?.UserMessage, openPrompts);
+        var rows = HistoryDraw.Rows(turns.Skip(from).ToArray(), Card?.UserMessage, openPrompts, liveTurn: liveTurn);
         historyVisible = Math.Max(1, turns.Count - from);
         var line = history is null ? null : HistoryDraw.Line(history.State, rows.Count, !string.IsNullOrEmpty(Card?.UserMessage), history.Start);
         var scroll = ConversationScroll;
