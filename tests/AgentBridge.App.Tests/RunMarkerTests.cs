@@ -149,6 +149,7 @@ public sealed class RunMarkerTests : IDisposable
         {
             var recovered = Start("recovering");
             Assert.Equal("abandoned", recovered.Previous.Version);
+            Assert.Contains(nameof(UnauthorizedAccessException), Assert.Single(recovered.RecoveryWarnings));
             var file = Assert.Single(Directory.GetFiles(folder, "*.json"), file => file != old);
             using var competingOwner = UserLock.TryTake(file + ".lock");
             Assert.Null(competingOwner);

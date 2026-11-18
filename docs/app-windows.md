@@ -38,6 +38,8 @@ Each profile keeps owned `runs/<profile>/run-marker.<id>.json` records under `Pa
 (the demo uses `runs/demo`). A per-record lifetime file lease spans Windows sessions;
 startup captures only the latest abandoned run in `RunMarker.Previous`, never a running
 copy's evidence. Its recovered record is removed only after the new marker is durable.
+Recovery leases span selection, replacement and cleanup. Cleanup failures are returned
+as `RecoveryWarnings` and written to `app.log`; the new marker stays owned and usable.
 Empty/corrupt records count as unclean. Marker writes flush a
 same-directory temporary file before atomically replacing the old marker; failed writes
 preserve the old marker and remove the temporary file. Only an actual exit,

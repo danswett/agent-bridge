@@ -19,6 +19,7 @@ public sealed class RunMarker : IDisposable
     bool completed, disposed;
 
     public PreviousRun Previous { get; }
+    public IReadOnlyList<string> RecoveryWarnings { get; } = [];
 
     RunMarker(string dir, string version, TimeProvider clock)
     {
@@ -33,7 +34,14 @@ public sealed class RunMarker : IDisposable
         {
             Previous = ReadPrevious(dir, recoveredLeases, out var recovered);
             Save();
-            if (recovered is not null) { File.Delete(recovered); }
+            if (recovered is not null)
+            {
+                try { File.Delete(recovered); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    RecoveryWarnings = [$"Recovered run marker not removed: {error.GetType().Name}"];
+                }
+            }
             saved = true;
         }
         finally
