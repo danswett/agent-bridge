@@ -1,5 +1,6 @@
 using AgentBridge.App.Core;
 using AgentBridge.HostLauncher;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed partial class SlotPreparationTests
@@ -28,6 +29,46 @@ public sealed partial class SlotPreparationTests
         Assert.Equal(package.Digest, active.Target.Slot.Digest);
         Assert.Equal("legacy remains runnable", File.ReadAllText(legacy));
         Assert.Equal(PointerFile, adapter.ApplyPath);
+    }
+
+    [Fact]
+    public async Task The_automatic_path_retries_a_released_precommit_holder_without_losing_verified_package_custody()
+    {
+        var legacy = MigrationLegacy();
+        var package = MigrationPackage("retry");
+        var time = new RetryClock();
+        var starts = 0;
+        var held = true;
+        var packages = Directory.CreateDirectory(Path.Combine(Root, "packages")).FullName;
+        var adapter = CoordinatorMode.SlotAdapter(new(Root, packages, package.File,
+            package.Digest, "AgentBridgeApp", Version, [], 1, 1),
+            HostwBundleTests.Target, _ => held ? throw new IOException("fixture holder", unchecked((int)0x80070020))
+                : EntryDescription, _ => null,
+            _ => { starts++; return new SlotChild(); }, time);
+        var run = adapter.RunAsync();
+        await time.Backoff.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(File.Exists(PointerFile));
+        Assert.Equal(0, starts);
+        Assert.Throws<IOException>(() => File.OpenWrite(package.File).Dispose());
+
+        held = false;
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(UpdateApplyEnd.Completed, (await run.WaitAsync(TimeSpan.FromSeconds(5))).End);
+        await adapter.Ownership;
+        Assert.Equal(1, starts);
+        Assert.Equal("legacy remains runnable", File.ReadAllText(legacy));
+    }
+
+    sealed class RetryClock : FakeTimeProvider
+    {
+        public TaskCompletionSource Backoff { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            if (dueTime == TimeSpan.FromSeconds(1)) Backoff.TrySetResult();
+            return timer;
+        }
     }
 
     [Theory]

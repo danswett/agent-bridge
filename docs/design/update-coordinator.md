@@ -171,3 +171,21 @@ read-only checks, bypassing legacy file-replacement and departure gates. Running
 slots report their own version. Host-side native install refuses this layout;
 E owns convergence. Quality owns two-family review and native VM/survival proof;
 focused managed tests do not establish native or power-loss durability.
+
+### E: bounded automatic apply retry
+
+The adapter owns at most three known-failed apply attempts with one- then
+two-second backoff, draining each failed attempt before another starts. Only
+`Failed` / `exit-failed` at `apply-completion` with a known nonzero exit authorizes
+this path. Repeating the same step/code/exit stops; terminal results stay unchanged.
+Native nonzero launcher exits remain `Unknown` and never authorize retry.
+
+Managed activation separately retries only sharing/lock violations from a fully
+exited attempt before D3c's publication callback. Each attempt rechecks the same
+cached digest; the adapter retains package custody throughout. It stops on a
+repeated native error code or three attempts, with the same backoff. Once the
+publication callback is crossed, no exception permits retry. Cancellation, checksum
+refusal and all other failures propagate to the existing result/ownership path:
+no new interpretation of `Unknown`, `Failed` or `Completed`. Existing step,
+PID/path and timing reporting remains intact. Focused fake-clock/held-file tests
+are not native updater or live-host proof; that remains Quality-owned on Azure.

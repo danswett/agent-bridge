@@ -33,7 +33,26 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
     {
         if (Interlocked.CompareExchange(ref running, 1, 0) != 0)
             throw new InvalidOperationException("coordinator still owns an unfinished operation");
-        return RunOwnedAsync(cancel);
+        return RunRetriedAsync(cancel);
+    }
+
+    async Task<UpdateApplyResult> RunRetriedAsync(CancellationToken cancel)
+    {
+        try
+        {
+            return await new UpdateApplyRetry(async ct =>
+            {
+                var result = await RunOwnedAsync(ct).ConfigureAwait(false);
+                if (result.End == UpdateApplyEnd.Failed)
+                    await Ownership.WaitAsync(ct).ConfigureAwait(false);
+                return result;
+            }, time).RunAsync(cancel).ConfigureAwait(false);
+        }
+        finally
+        {
+            _ = Ownership.ContinueWith(_ => Volatile.Write(ref running, 0), CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
     }
 
     async Task<UpdateApplyResult> RunOwnedAsync(CancellationToken cancel)
@@ -110,7 +129,7 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
                     catch (OperationCanceledException) { } // The result already records observation timeout/cancellation.
                     await Task.WhenAll(observation ?? Task.CompletedTask, flow.RespawnFinished).ConfigureAwait(false);
                 }
-                finally { active?.Dispose(); Volatile.Write(ref running, 0); }
+                finally { active?.Dispose(); }
             }
         }
     }
