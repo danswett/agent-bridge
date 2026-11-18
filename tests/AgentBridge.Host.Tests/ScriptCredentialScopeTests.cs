@@ -53,6 +53,7 @@ public sealed class ScriptCredentialScopeTests : IDisposable
     [Theory]
     [InlineData("agent.send")]
     [InlineData("session.reply")]
+    [InlineData("session.stop")]
     [InlineData("session.launch")]
     [InlineData("session.answer")]
     [InlineData("host.config.set")]

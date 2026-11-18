@@ -22,5 +22,4 @@ public sealed partial class StopFlowTests
         Assert.Contains(rows, row => row.Outcome == "refused");
         Assert.DoesNotContain(rows, row => row.Outcome == "ended");
     }
-
 }

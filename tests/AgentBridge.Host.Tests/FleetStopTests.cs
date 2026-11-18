@@ -139,12 +139,15 @@ public sealed partial class StopFlowTests
         Assert.False(reopened.Of(connection)!.FleetLaunch);
         ScriptCredentialCommands.Handle(new StopScriptChannel(), "scripts.revoke-stop",
             JsonSerializer.SerializeToElement(new { name = "sre" }),
-            new FixedCallerGuard(new(CallerKind.HostCli, "fixture owner")), setup.Credentials, new AgentAuditLog(setup.Audit));
+            new FixedCallerGuard(new(CallerKind.HostCli, "fixture owner")), setup.Credentials, new AgentAuditLog(setup.Audit, clock));
         await Assert.ThrowsAsync<InvalidOperationException>(() => SendFleet(setup.Handler));
         Assert.Equal("script:fixture/sre", Assert.Single(GateAuditProjection.Load(setup.Audit).Rows, row => row.Action == Ops.SessionStop).Principal);
         var after = new AgentCredentials(setup.Audit, "fixture", clock);
         after.Accept(connection, granted);
         Assert.False(after.Of(connection)!.FleetStop);
+        setup.Credentials.RevokeScript("sre");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SendFleet(setup.Handler));
+        Assert.Equal(new[] { "script:fixture/sre", "script:fixture/sre" }, GateAuditProjection.Load(setup.Audit).Rows.Where(row => row.Action == Ops.SessionStop).Select(row => row.Principal));
         Assert.Empty(injector.Plans);
     }
 

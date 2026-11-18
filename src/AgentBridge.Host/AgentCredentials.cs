@@ -102,6 +102,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     internal AgentLaunchGate LaunchGate { get; }
     internal FleetLaunchGrant FleetGrant { get; }
     internal bool IsScriptConnection(IProtocolChannel channel) => connections.TryGetValue(channel, out var c) && c.Script;
+    internal string? ScriptAuditPrincipalOf(IProtocolChannel channel) => connections.TryGetValue(channel, out var c) && c.Script ? c.Principal : null;
 
     public int Count { get { lock (gate) { return records.Count; } } }
 

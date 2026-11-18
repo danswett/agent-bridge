@@ -23,6 +23,7 @@ durable fleet launch grant bound to the current process and positive
 held or private work. Missing, stale, future or changed evidence fails closed.
 The live `agents.enabled` switch, grant, origin, identity and clearance are rechecked after waits, before typing and
 before termination; the durable audit attributes the script principal as `agent`.
+Refusals use the bounded, sanitized agent audit and never earn stop success credit.
 Person stopping, confirmation, G5 and delivery fencing remain intact. Relay service
 and host roles still cannot stop; ordinary agent/session credentials gain no authority.
 

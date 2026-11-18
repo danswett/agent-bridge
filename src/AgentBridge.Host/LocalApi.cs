@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -23,10 +24,20 @@ public static class LocalApi
 
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
-        if (op == Ops.SessionStop && credentials?.IsScriptConnection(channel) == true)
+        if (op == Ops.SessionStop && credentials?.ScriptAuditPrincipalOf(channel) is { } scriptPrincipal)
         {
-            if (credentials.Of(channel)?.FleetStop != true) { credentials.CheckScriptOperation(channel, op, log); }
-            return await sessions.StopFleetAsync(channel, data, credentials, audit);
+            StopResult? result = null;
+            try
+            {
+                if (credentials.Of(channel)?.FleetStop != true) { credentials.CheckScriptOperation(channel, op, log); }
+                result = await sessions.StopFleetAsync(channel, data, credentials, audit);
+                return result;
+            }
+            finally
+            {
+                if (result is null || result.Outcome == StopOutcome.Refused)
+                { AuditRefusal(scriptPrincipal, [], op, data, audit, "fleet stop was refused", refusals); }
+            }
         }
         if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
         {
