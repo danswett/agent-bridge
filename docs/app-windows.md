@@ -1146,7 +1146,9 @@ separate, explicit step ([migration.md](migration.md)).
 changed field limits rebuild the form even when its question id stays the same.
 Previously typed words remain on the card, not selected for the changed question;
 new answers are checked against the new limits. Equal constraints read again from
-JSON keep the existing controls and draft. Focused five-field model tests cover
+JSON keep the existing controls and draft, including equivalent numeric spellings
+such as `5`, `5.0` and `5e0`. Undismissed typed drafts accumulate across question
+changes and removal until dismissed. Focused five-field model tests cover
 named choice, boolean, Unicode text, number and multi-select values and local
 refusals; live client/transcript acceptance remains separate.
 

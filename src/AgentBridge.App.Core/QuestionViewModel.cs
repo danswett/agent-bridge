@@ -590,9 +590,10 @@ public sealed partial class QuestionViewModel : Observable
         && SameConstraints(a.Constraints, b.Constraints)
         && (a.Options ?? []).SequenceEqual(b.Options ?? []);
 
-    // Numeric bounds are JsonElements: separate snapshots must compare by content, not identity.
+    // Numeric bounds compare exactly by value, independent of JSON spelling.
     static bool SameConstraints(FieldConstraints? a, FieldConstraints? b) =>
-        ReferenceEquals(a, b) || JsonSerializer.Serialize(a, ProtocolJson.Options) == JsonSerializer.Serialize(b, ProtocolJson.Options);
+        ReferenceEquals(a, b) || JsonElement.DeepEquals(
+            JsonSerializer.SerializeToElement(a, ProtocolJson.Options), JsonSerializer.SerializeToElement(b, ProtocolJson.Options));
 
     // Whether this client may answer, and if not, why (pwa/js/answers.js, answerability).
     public static (bool Ok, string? Why) Answerability(Question q, IReadOnlyList<string> capabilities, AgentKind agent)
