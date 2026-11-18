@@ -957,9 +957,14 @@ public sealed class AutoUpdater
         string? found;
         try
         {
+            // Retry the known download without making it depend on another feed check.
+            if (install is not null && updater.RetryAt is not null && updater.Found is { } retry)
+            {
+                found = retry;
+            }
             // A check a moment ago answers: its release, or its failure, unless one from Settings
             // has succeeded since.
-            if (lastCheckAt is { } at && lastCheckSource == updater.Source && now - at < CheckAgainAfter)
+            else if (lastCheckAt is { } at && lastCheckSource == updater.Source && now - at < CheckAgainAfter)
             {
                 if (lastCheckFailed is { } failed && !(updater.CheckedAt >= at)) { throw new InvalidOperationException(failed); }
                 found = updater.Found;
@@ -985,7 +990,7 @@ public sealed class AutoUpdater
                 // As of when it was asked: a press after that, a minute on, asks again.
                 (lastCheckAt, lastCheckFailed, lastCheckSource) = (now, null, from);
             }
-            // Not again for a while after it failed, from here or Settings (ObservedUpdater).
+            // An explicit Install retries once; Checks and background work keep the download hold.
             if (found is not null && updater.Ready != found) { await DownloadAsync(check, install); }
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
@@ -1016,7 +1021,7 @@ public sealed class AutoUpdater
     async Task DownloadAsync(string? check, string? install)
     {
         var to = updater.Found;
-        try { await updater.DownloadAsync(_ => { }); }
+        try { await updater.DownloadAsync(_ => { }, retryNow: install is not null); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
             Finish(ref checkRequest, check, UpdateOutcome.Failed, e.Message, to, step: "downloading");
