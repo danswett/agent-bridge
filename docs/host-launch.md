@@ -74,6 +74,8 @@ Marked refusals establish a launch anchor. Replay requires that healthy anchor t
 remain present; neither recovered torn evidence nor a missing first checkpoint is
 proof of an append-only lag, even if all current files end with a newline.
 Later appends preserve the missing-anchor fault instead of blessing a replacement checkpoint.
+Bootstrap also preserves that fault when both anchors are missing; marked streams cannot
+be adopted as healthy history.
 
 ## Dispatch facts seam (#2788)
 
