@@ -167,6 +167,161 @@ public sealed class SessionRosterFixtureTests
         Assert.InRange(ProtocolJson.ByteCount(list), 1, ProtocolJson.MaxMessageBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Removal_bypasses_both_a_queued_upsert_and_a_held_quiet_change(bool patch)
+    {
+        using var fixture = new Fixture();
+        var events = fixture.CopilotSession(Id, 100);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2));
+        fixture.Processes.Run(AgentKind.Copilot, 100);
+        var options = fixture.Options();
+        await using var source = new SessionSource(options, fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        var service = new SessionService(source, new MachineInfo("host-id", "Fixture host", "windows", "0.1.0"))
+            { Time = fixture.Time };
+        SessionService.Feed? captured = null;
+        service.FeedCreated += created => captured = (SessionService.Feed)created;
+        var channel = new CaptureChannel();
+        var reply = Assert.IsType<ChannelReply>(await service.HandleAsync(channel, Ops.SessionsSubscribe,
+            JsonSerializer.SerializeToElement(new { patch })));
+        var running = reply.Then(channel);
+        try
+        {
+            await channel.NextAsync();
+            await channel.NextAsync();
+            await service.HandleAsync(channel, Ops.SessionsFocus, JsonSerializer.SerializeToElement(new { visible = false }));
+            fixture.Time.Advance(TimeSpan.FromSeconds(1));
+            Fixture.Append(events, Copilot.Assistant("first", 3));
+            await source.RefreshAsync();
+            var first = await channel.NextAsync();
+            fixture.Time.Advance(options.CoalesceInterval);
+            Fixture.Append(events, Copilot.Assistant("quiet held", 4));
+            await source.RefreshAsync();
+            await HostWait.UntilAsync(() => captured!.Held == 1, "quiet roster change held", Patience);
+            Fixture.Append(events, Copilot.Assistant("coalesced", 5));
+            await source.RefreshAsync();
+            Assert.Equal("coalesced", source.Get(Id)!.Activity.Response);
+            var beforeRemoval = fixture.Time.GetUtcNow();
+            fixture.Processes.Exit(AgentKind.Copilot, 100);
+            await source.RefreshAsync();
+            var removed = await channel.NextAsync();
+            Assert.Equal((Events.SessionRemove, first.Seq + 1), (removed.Name, removed.Seq));
+            Assert.Equal(Id, removed.Data.GetProperty("id").GetString());
+            Assert.Equal(beforeRemoval, fixture.Time.GetUtcNow());
+            Assert.Equal(0, captured!.Held);
+            Assert.Empty(source.List().Sessions);
+            Assert.Null(source.Get(Id));
+            fixture.Time.Advance(service.QuietInterval + options.CoalesceInterval);
+            using var fresh = source.Subscribe();
+            Assert.Equal(0, fresh.Result.Count);
+            Assert.True(fresh.Events.TryRead(out var synced));
+            Assert.Equal(Events.SessionsSynced, synced!.Name);
+            Assert.False(fresh.Events.TryRead(out _));
+        }
+        finally
+        {
+            channel.Close();
+            await running.WaitAsync(Patience);
+        }
+    }
+
+    [Theory]
+    [InlineData("alive")]
+    [InlineData("unidentified")]
+    [InlineData("gone")]
+    [InlineData("pidless")]
+    public async Task Positive_ended_evidence_removes_a_session_even_while_another_process_holds_its_agent(string process)
+    {
+        using var fixture = new Fixture();
+        fixture.CodexRegistration(Id, 950, null);
+        fixture.Processes.Run(AgentKind.Codex, 950, "codex.exe");
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(SessionStatus.Working, source.Get(Id)!.Status);
+        using var subscription = source.Subscribe();
+        while (subscription.Events.TryRead(out _)) { }
+        fixture.Processes.RunUndated(AgentKind.Codex, 960, "codex.exe");
+        fixture.CodexRegistration(Id, process == "pidless" ? 0 : 950, null, status: "ended", ended: true);
+        if (process == "unidentified") { fixture.Processes.Unidentify(AgentKind.Codex, 950); }
+        if (process == "gone") { fixture.Processes.Exit(AgentKind.Codex, 950); }
+        await source.RefreshAsync();
+        Assert.NotNull(source.Held);
+        Assert.Null(source.Get(Id));
+        Assert.Empty(source.List().Sessions);
+        var changes = new List<SessionEvent>();
+        while (subscription.Events.TryRead(out var change)) { changes.Add(change); }
+        Assert.Equal(Id, Assert.IsType<SessionRemoved>(Assert.Single(changes, c => c.Name == Events.SessionRemove).Data).Id);
+    }
+
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("empty")]
+    [InlineData("corrupt")]
+    [InlineData("missing")]
+    public async Task A_host_roster_never_loads_or_rewrites_disk_membership_when_discovery_is_incomplete(string state)
+    {
+        using var fixture = new Fixture();
+        var path = Path.Combine(fixture.Root, "sessions-listed.json");
+        string? saved = state switch
+        {
+            "valid" => JsonSerializer.Serialize(new { sessions = new[] { new { id = Id, agent = "codex", pid = 950, processStartedAt = Fixture.T0.AddHours(-1) } } }),
+            "empty" => "",
+            "corrupt" => "{",
+            _ => null,
+        };
+        if (saved is not null) { File.WriteAllText(path, saved); }
+        fixture.CodexRegistration(Id, 950, null);
+        File.WriteAllText(Path.Combine(fixture.CodexRegistrations, Id + ".json"), "{");
+        fixture.Processes.Run(AgentKind.Codex, 950, "codex.exe");
+        await using var source = new SessionSource(fixture.Options(stateFile: path), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.NotNull(source.Held);
+        Assert.Empty(source.Snapshot());
+        Assert.Null(source.Get(Id));
+        Assert.Equal(saved, File.Exists(path) ? File.ReadAllText(path) : null);
+        using var subscription = source.Subscribe();
+        Assert.Equal(0, subscription.Result.Count);
+    }
+
+    [Fact]
+    public async Task An_ended_Claude_registration_cannot_be_readmitted_by_its_own_session_file_during_a_hold()
+    {
+        using var fixture = new Fixture();
+        fixture.ClaudeSessionFile(700, Id);
+        fixture.ClaudeRegistration(Id, 700, null);
+        fixture.Processes.Run(AgentKind.Claude, 700, "claude.exe");
+        fixture.ClaudeSessionFile(701, "99999999-9999-4999-8999-999999999999");
+        fixture.Processes.RunUndated(AgentKind.Claude, 701, "claude.exe");
+        fixture.Processes.Unidentify(AgentKind.Claude, 701);
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(Id, Assert.Single(source.List().Sessions).Id);
+        Assert.Contains("could not be read (pid 701)", source.Held!.Reason);
+        using var subscription = source.Subscribe();
+        while (subscription.Events.TryRead(out _)) { }
+        var path = Path.Combine(fixture.ClaudeRegistrations, Id + ".json");
+        var registration = JsonNode.Parse(File.ReadAllText(path))!;
+        registration["Ended"] = true;
+        File.WriteAllText(path, registration.ToJsonString());
+
+        await source.RefreshAsync();
+
+        var changes = new List<SessionEvent>();
+        while (subscription.Events.TryRead(out var change)) { changes.Add(change); }
+        Assert.Equal([Events.SessionRemove], changes.Select(c => c.Name));
+        Assert.Equal(Id, Assert.IsType<SessionRemoved>(changes[0].Data).Id);
+        Assert.Null(source.Get(Id));
+        Assert.Empty(source.List().Sessions);
+        Assert.NotNull(source.Held);
+        using var fresh = source.Subscribe();
+        Assert.Equal(0, fresh.Result.Count);
+        await source.RefreshAsync();
+        Assert.False(subscription.Events.TryRead(out _));
+        Assert.Null(source.Get(Id));
+    }
+
     static void AssertRow(JsonElement row, string machine)
     {
         Assert.Equal(machine, row.GetProperty("machine").GetString());
