@@ -119,7 +119,7 @@
           "name": "another-machine",
           "json": {
             "id": "00112233445566778899aabbccddeeff",
-            "name": "DEV-VM2"
+            "name": "node-b"
           }
         }
       ],
@@ -128,7 +128,7 @@
           "name": "wrong-type-id",
           "json": {
             "id": 42,
-            "name": "DEV-VM2"
+            "name": "node-b"
           },
           "refusedBy": "parse"
         }
@@ -184,7 +184,7 @@
             "slot": 2,
             "readBy": {
               "id": "00112233445566778899aabbccddeeff",
-              "name": "DEV-VM2"
+              "name": "node-b"
             }
           }
         },
