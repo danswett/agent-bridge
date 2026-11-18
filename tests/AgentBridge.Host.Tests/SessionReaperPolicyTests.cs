@@ -41,8 +41,6 @@ public sealed class SessionReaperPolicyTests
     [InlineData("hold")]
     [InlineData("private")]
     [InlineData("keep")]
-    [InlineData("pr")]
-    [InlineData("complete")]
     [InlineData("dirty")]
     [InlineData("stash")]
     [InlineData("operation")]
@@ -55,7 +53,6 @@ public sealed class SessionReaperPolicyTests
         {
             "tools" => row with { RunningTools = null }, "question" => row with { AskingQuestion = true },
             "hold" => row with { Held = null }, "private" => row with { Private = null }, "keep" => row with { Keep = null },
-            "pr" => row with { OpenOwnedPr = null }, "complete" => row with { WorkComplete = null },
             "dirty" => row with { Git = row.Git! with { Clean = false } },
             "stash" => row with { Git = row.Git! with { StashCount = 1 } },
             "operation" => row with { Git = row.Git! with { MidOperation = true } },
@@ -63,6 +60,20 @@ public sealed class SessionReaperPolicyTests
             _ => row with { At = Now.AddSeconds(1) },
         };
         Assert.False(Assert.Single(Plan(row)).Eligible);
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(null, true)]
+    [InlineData(false, false)]
+    [InlineData(false, null)]
+    public void Open_PR_incomplete_or_unknown_work_stays_even_when_fully_pushed(bool? openPr, bool? complete)
+    {
+        var row = Builder() with { OpenOwnedPr = openPr, WorkComplete = complete };
+        Assert.False(Assert.Single(Plan(row)).Eligible);
+        var reviewer = row with { Name = "SG Reviewer a", Role = ReaperRole.Reviewer,
+            Verdict = ReaperVerdict.Clean, VerdictAt = Now };
+        Assert.DoesNotContain(Plan(reviewer, reviewer with { Id = "b", Name = "SG Reviewer b" }), decision => decision.Eligible);
     }
 
     [Fact]

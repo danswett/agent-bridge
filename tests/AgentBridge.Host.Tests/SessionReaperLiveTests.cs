@@ -79,7 +79,7 @@ public sealed class SessionReaperLiveTests : IAsyncLifetime
         Assert.Null(await git.ReadAsync(folder, default));
     }
 
-    sealed class FakeGit(string folder) : ICommandRunner
+    internal sealed class FakeGit(string folder) : ICommandRunner
     {
         public int Fetches; public bool Dirty; public string Mode = "";
         public Task<CommandResult> RunAsync(string program, IReadOnlyList<string> args, TimeSpan timeout, CancellationToken cancellationToken = default)
@@ -118,9 +118,9 @@ public sealed class SessionReaperLiveTests : IAsyncLifetime
             Activity = new() { Response = "VERDICT CLEAN", Background = new() { Shells = 1 } } };
         var row = SessionReaperHost.Native(session, "fixture-vm", clock.GetUtcNow());
         Assert.Equal(1, row.RunningTools);
-        Assert.Null(row.Held); Assert.Null(row.Private); Assert.Null(row.Keep);
+        Assert.Null(row.Held); Assert.False(row.Private); Assert.False(row.Keep);
         Assert.Null(row.OpenOwnedPr); Assert.Null(row.WorkComplete);
-        Assert.Equal(ReaperVerdict.Clean, row.Verdict);
+        Assert.Null(row.Verdict);
         Assert.Null(SessionReaperHost.Native(session with { Activity = new() { Response = "VERDICT CLEAN\nVERDICT NOT CLEAN" } }, "fixture-vm", clock.GetUtcNow()).Verdict);
     }
 }

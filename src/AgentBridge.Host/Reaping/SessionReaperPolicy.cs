@@ -12,6 +12,7 @@ public sealed record ReaperSession(string Id, string Name, string Machine)
     public string? State { get; init; }
     public DateTimeOffset? At { get; init; }
     public DateTimeOffset? IdleSince { get; init; }
+    public DateTimeOffset? SourceUpdatedAt { get; init; }
     public int? RunningTools { get; init; }
     public bool? AskingQuestion { get; init; }
     public bool? Held { get; init; }
@@ -25,7 +26,10 @@ public sealed record ReaperSession(string Id, string Name, string Machine)
 }
 public sealed record ReaperSnapshot(string Machine, DateTimeOffset At, bool Complete, bool? IsVm,
     bool? OwnerLaptop, IReadOnlyList<ReaperSession> Sessions);
-public sealed record ReaperDecision(string Id, string Name, string Machine, ReaperRole? Role, bool Eligible, string Reason);
+public sealed record ReaperDecision(string Id, string Name, string Machine, ReaperRole? Role, bool Eligible, string Reason)
+{
+    public DateTimeOffset? SourceUpdatedAt { get; init; }
+}
 
 public static class SessionReaperPolicy
 {
@@ -49,7 +53,8 @@ public static class SessionReaperPolicy
             if (protectedIds?.Contains(row.Id) == true || protectedNames?.Contains(row.Name, StringComparer.OrdinalIgnoreCase) == true)
                 reason = "explicit preservation";
             if (reserved?.Contains(row.Id) == true) { reason = "local stop intent already recorded; never retry"; }
-            return new ReaperDecision(row.Id, row.Name, row.Machine, row.Role, reason == "eligible", reason);
+            return new ReaperDecision(row.Id, row.Name, row.Machine, row.Role, reason == "eligible", reason)
+                { SourceUpdatedAt = row.SourceUpdatedAt };
         }).ToArray();
         var reserve = rows.Where(row => row.Eligible && row.Role == ReaperRole.Reviewer).OrderBy(row => row.Id, StringComparer.Ordinal).FirstOrDefault();
         return rows.Select(row => row == reserve ? row with { Eligible = false, Reason = "local reviewer reserve (one)" } : row).ToArray();
