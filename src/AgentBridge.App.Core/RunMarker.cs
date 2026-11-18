@@ -118,9 +118,24 @@ public sealed class RunMarker : IDisposable
         }
     }
 
-    public static string DescribeCrash(Exception? error) => error is null ? "Unknown exception" :
-        Limit(FeedbackRedactor.Redact(error.GetType().FullName ?? "Exception") + "\n" +
-            FeedbackRedactor.Redact(new System.Diagnostics.StackTrace(error, fNeedFileInfo: false).ToString()), 8192);
+    public static string DescribeCrash(Exception? error)
+    {
+        if (error is null) { return "Unknown exception"; }
+        List<Exception> errors = [error];
+        for (var index = 0; index < errors.Count; index++)
+        {
+            if (errors[index] is AggregateException aggregate)
+            {
+                errors.AddRange(aggregate.InnerExceptions.Take(16 - errors.Count));
+            }
+            else if (errors[index].InnerException is { } inner && errors.Count < 16) { errors.Add(inner); }
+        }
+        // Share the bound so a long outer stack cannot hide every inner exception.
+        var entryLimit = (8192 - errors.Count + 1) / errors.Count;
+        return string.Join("\n", errors.Select(item => Limit(
+            FeedbackRedactor.Redact(item.GetType().FullName ?? "Exception") + "\n" +
+            FeedbackRedactor.Redact(new System.Diagnostics.StackTrace(item, fNeedFileInfo: false).ToString()), entryLimit)));
+    }
 
     public void Complete()
     {
