@@ -90,6 +90,8 @@ same in either order.
 
 S1w ports the pure merge to `src/AgentBridge.App.Core/OrderMerge.cs`. Both clients consume
 `tests/fixtures/order-merge.json`, including convergence, tombstones and forward-only markers.
+Live registers normalize missing values to null. JSON ties spell non-finite numbers as null,
+including nested values; row-key string conversion retains JavaScript's NaN and Infinity spelling.
 This adds no Windows UI, persistence or sync integration.
 
 G1 (#1614) keeps group-name and membership registers in the PWA's local order record, using that

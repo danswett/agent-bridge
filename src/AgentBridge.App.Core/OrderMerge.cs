@@ -12,7 +12,8 @@ public static class OrderMerge
     static JsonNode? Field(JsonNode? node, string key) => (node as JsonObject)?[key];
     static bool IsTrue(JsonNode? node) => node?.GetValueKind() == JsonValueKind.True;
     static string? Text(JsonNode? node) => node?.GetValueKind() == JsonValueKind.String ? node.GetValue<string>() : null;
-    static double Number(JsonNode node) => double.Parse(node.ToJsonString(), CultureInfo.InvariantCulture);
+    static double Number(JsonNode node) => node is JsonValue value && value.TryGetValue<double>(out var n)
+        ? n : double.Parse(node.ToJsonString(), CultureInfo.InvariantCulture);
     static bool SafeInteger(JsonNode? node) => node?.GetValueKind() == JsonValueKind.Number
         && Number(node) is var n && n >= 0 && n <= MaxSafeInteger && Math.Truncate(n) == n;
 
@@ -30,7 +31,7 @@ public static class OrderMerge
         if (tag is null || tag.Length % 2 != 0 || !tag.All(char.IsAsciiHexDigit) || !SafeInteger(counter)) return null;
         var result = new JsonObject { ["counter"] = Number(counter!), ["deviceTag"] = tag.ToLowerInvariant() };
         if (IsTrue(Field(node, "tombstone"))) result["tombstone"] = true;
-        else if (node is JsonObject map && map.ContainsKey("value")) result["value"] = map["value"]?.DeepClone();
+        else result["value"] = Field(node, "value")?.DeepClone();
         return result;
     }
 
@@ -140,6 +141,7 @@ public static class OrderMerge
     static string NumberText(JsonNode node)
     {
         var n = Number(node);
+        if (!double.IsFinite(n)) return n.ToString(CultureInfo.InvariantCulture);
         if (n == 0) return "0";
         var text = n.ToString("R", CultureInfo.InvariantCulture).ToLowerInvariant();
         var parts = text.Split('e');
@@ -164,7 +166,7 @@ public static class OrderMerge
             .Select(pair => Quote(pair.Key) + ":" + JsonText(pair.Value))) + "}",
         JsonArray array => "[" + string.Join(",", array.Select(JsonText)) + "]",
         _ when node.GetValueKind() == JsonValueKind.String => Quote(node.GetValue<string>()),
-        _ when node.GetValueKind() == JsonValueKind.Number => NumberText(node),
+        _ when node.GetValueKind() == JsonValueKind.Number => double.IsFinite(Number(node)) ? NumberText(node) : "null",
         _ => node.ToJsonString(),
     };
 
@@ -174,6 +176,7 @@ public static class OrderMerge
         JsonObject => "[object Object]",
         JsonArray array => string.Join(",", array.Select(JsString)),
         _ when node.GetValueKind() == JsonValueKind.String => node.GetValue<string>(),
+        _ when node.GetValueKind() == JsonValueKind.Number => NumberText(node),
         _ => JsonText(node),
     };
 }
