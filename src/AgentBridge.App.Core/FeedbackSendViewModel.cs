@@ -16,7 +16,7 @@ public sealed class FeedbackSendViewModel : Observable
     public const string GatheringText = "Gathering what's included…";
     public const string SendingText = "Sending…";
 
-    readonly IFeedbackSender sender;
+    readonly IFeedbackSender? sender;
     readonly IUiDispatcher ui;
     readonly Func<DateTimeOffset> now;
     readonly Action<string, bool>? announce;
@@ -35,7 +35,7 @@ public sealed class FeedbackSendViewModel : Observable
 
     // announce(speech, urgent) is the live-region hook, like Receipt's: urgent for a failure or refusal
     // (said assertively), polite otherwise. It is called on the UI for each change of the line.
-    public FeedbackSendViewModel(IFeedbackSender sender, IUiDispatcher? ui = null, Func<DateTimeOffset>? now = null, Action<string, bool>? announce = null)
+    public FeedbackSendViewModel(IFeedbackSender? sender, IUiDispatcher? ui = null, Func<DateTimeOffset>? now = null, Action<string, bool>? announce = null)
     {
         this.sender = sender;
         this.ui = ui ?? InlineDispatcher.Instance;
@@ -54,11 +54,11 @@ public sealed class FeedbackSendViewModel : Observable
 
     // First send only, once a bundle is gathered; after a failure the person uses Try again, and after
     // too large or refused they change the report, which gathers again (BeginGathering, then Ready).
-    public bool CanSend => !closed && bundle is not null && state == FeedbackSendState.Ready;
+    public bool CanSend => !closed && sender is not null && bundle is not null && state == FeedbackSendState.Ready;
 
     // What the sender said Try again does: Never hides it; Now and WhenOnline allow it; AfterDelay allows
     // it once RetryAt has passed. Nothing retries by itself; call RefreshRetry from a timer to update it.
-    public bool CanRetry => !closed && bundle is not null && state == FeedbackSendState.Failed && retry switch
+    public bool CanRetry => !closed && sender is not null && bundle is not null && state == FeedbackSendState.Failed && retry switch
     {
         FeedbackRetry.Now or FeedbackRetry.WhenOnline => true,
         FeedbackRetry.AfterDelay => retryAt is null || now() >= retryAt,
@@ -81,6 +81,30 @@ public sealed class FeedbackSendViewModel : Observable
     // What the person typed and the reviewed preview, held in memory only so Try again sends the same
     // report; there is no beta queue (#738), so nothing is written to disk and Close clears it.
     public FeedbackDraft Draft { get; } = new();
+
+    public async Task<FeedbackBundle?> PrepareAsync(IFeedbackBundleSource source, FeedbackRequest request, CancellationToken ct = default)
+    {
+        BeginGathering();
+        if (!IsGathering || closed) { return null; }
+        int mine;
+        lock (gate) { mine = generation; }
+        FeedbackGatherResult result;
+        try { result = await source.GatherAsync(request, null, ct); }
+        catch (TimeoutException)
+        {
+            if (Still(mine)) { GatherFailed(); }
+            return null;
+        }
+        if (!Still(mine)) { return null; }
+        if (result is FeedbackGatherResult.Ready ready)
+        {
+            Draft.ReviewedPreview = ready.Bundle.Text;
+            Ready(ready.Bundle);
+            return ready.Bundle;
+        }
+        if (result is FeedbackGatherResult.Refused refused) { GatherRefused(refused.Reason); }
+        return null;
+    }
 
     public void RefreshRetry() { Raise(nameof(CanRetry)); Raise(nameof(RetryHint)); }
 
@@ -179,6 +203,7 @@ public sealed class FeedbackSendViewModel : Observable
 
     async Task Run()
     {
+        if (sender is null) { return; }
         FeedbackBundle send;
         CancellationTokenSource cancel;
         int mine;

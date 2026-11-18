@@ -45,6 +45,12 @@ public sealed partial class AppFeedbackSources : IFeedbackSources
 
     public FeedbackEnvironment Environment() => environment();
 
+    public Task<FeedbackRequest> RecoveryRequestAsync(PreviousRun previous, string machine, string? sessionId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new FeedbackRequest { Recovery = new(previous, machine, sessionId, []) });
+    }
+
     public async Task<IReadOnlyList<FeedbackAgent>> DetectAgentsAsync(CancellationToken cancellationToken)
     {
         try

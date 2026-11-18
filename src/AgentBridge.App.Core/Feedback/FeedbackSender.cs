@@ -111,6 +111,8 @@ public sealed class FeedbackSender(IFeedbackUplink uplink, FeedbackRecipient? re
             using var doc = JsonDocument.Parse(text);
             // An S1 bundle is always an object; anything else could hide a screenshotPng the redactor skips.
             if (doc.RootElement.ValueKind != JsonValueKind.Object) { return true; }
+            if (doc.RootElement.EnumerateObject().Any(p => p.Name.Equals("recovery", StringComparison.OrdinalIgnoreCase))
+                && !RecoveryFeedback.IsAllowed(doc.RootElement)) { return true; }
             var scanned = WithoutStructuralIdAndRealScreenshot(doc.RootElement, text, bundleId);
             using var scannedDoc = JsonDocument.Parse(scanned);
             if (HasSensitiveJoinedClasses(scannedDoc.RootElement)) { return true; }

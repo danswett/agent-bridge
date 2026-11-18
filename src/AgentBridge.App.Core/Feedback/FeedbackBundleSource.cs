@@ -43,6 +43,13 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
 
     public async Task<FeedbackGatherResult> GatherAsync(FeedbackRequest request, IProgress<FeedbackGatherStage>? progress, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (request.Recovery is { } recovery)
+        {
+            var result = RecoveryFeedback.Build(recovery.Run, now());
+            progress?.Report(FeedbackGatherStage.Done);
+            return result;
+        }
         var note = request.Note ?? "";
         if (note.Length > FeedbackLimits.MaxNoteChars) { return new FeedbackGatherResult.Refused(FeedbackRefusalReason.NoteTooLong); }
         if (request.ScreenshotPng is { } shot)
