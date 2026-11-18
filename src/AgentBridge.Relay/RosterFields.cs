@@ -50,10 +50,10 @@ public static class RosterFields
         if (!TryTime(record.GetProperty("at"), out at)) { return "bad-record"; }
         var truncated = record.GetProperty("truncated");
         if (truncated.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) { return "bad-record"; }
-        if (seen.Contains("total") && (!truncated.GetBoolean() || !Int(record.GetProperty("total"), out var total) || total <= MaxSessions)) { return "bad-record"; }
         if (seen.Contains("sig") && (!Is(record.GetProperty("sig"), JsonValueKind.String) || record.GetProperty("sig").GetString() is not { Length: > 0 and <= 256 } sig || !sig.All(IsBase64Url))) { return "bad-record"; }
         var sessions = record.GetProperty("sessions");
         if (sessions.ValueKind != JsonValueKind.Array || sessions.GetArrayLength() > MaxSessions) { return "bad-record"; }
+        if (seen.Contains("total") && (!truncated.GetBoolean() || !Int(record.GetProperty("total"), out var total) || total <= sessions.GetArrayLength())) { return "bad-record"; }
         foreach (var s in sessions.EnumerateArray())
         {
             if (!SessionOk(s)) { return "bad-record"; }
@@ -75,7 +75,10 @@ public static class RosterFields
             || !node.StartsWith("agent_bridge_", StringComparison.Ordinal) || !IsHex16(node["agent_bridge_".Length..])) { return false; }
         if (!Is(s.GetProperty("state"), JsonValueKind.String) || !States.Contains(s.GetProperty("state").GetString()!)) { return false; }
         if (!TryTime(s.GetProperty("since"), out _)) { return false; }
-        if (seen.Contains("startedAt") && !TryTime(s.GetProperty("startedAt"), out _)) { return false; }
+        if (seen.Contains("startedAt") && (s.GetProperty("startedAt").ValueKind != JsonValueKind.String
+            || s.GetProperty("startedAt").GetString() is not { Length: 20 } started
+            || !DateTimeOffset.TryParseExact(started, "yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out _))) { return false; }
         try { _ = SessionEvidence.Read(s); }
         catch (InvalidDataException) { return false; }
         catch (InvalidOperationException) { return false; }

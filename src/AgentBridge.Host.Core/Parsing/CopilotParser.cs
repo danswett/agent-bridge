@@ -385,7 +385,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     void Prune()
     {
         if (S.Permissions.Count == 0) { return; }
-        foreach (var id in S.Permissions.Keys.Where(id => !S.Pending.Exists(q => q.Id == id)).ToList()) { S.Permissions.Remove(id); }
+        foreach (var id in S.Permissions.Keys.Where(id => !S.Pending.Contains(id)).ToList()) { S.Permissions.Remove(id); }
         foreach (var (request, id) in _permissionQuestion.Where(p => !S.Permissions.ContainsKey(p.Value)).ToList()) { _permissionQuestion.Remove(request); }
     }
 
@@ -597,7 +597,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "abort" or "session.shutdown" when sub:
                 {
                     var agent = Json.Str(e, "agentId");
-                    if (S.Pending.RemoveAll(q => q.Agent is { } a && (a == agent || S.Background.HasEnded(a))) == 0) { return false; }
+                    if (S.Pending.RemoveEnded(S.Background, agent) == 0) { return false; }
                     break;
                 }
             // A sub-agent that failed asks nothing any more either; its failure is written
@@ -605,7 +605,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "subagent.failed":
                 {
                     var agent = Json.Str(e, "agentId") is { Length: > 0 } a ? a : S.Background.AgentOf(Json.Str(data, "toolCallId"));
-                    if (agent is null || S.Pending.RemoveAll(q => q.Agent is { } p && (p == agent || S.Background.HasEnded(p))) == 0) { return false; }
+                    if (agent is null || S.Pending.RemoveEnded(S.Background, agent) == 0) { return false; }
                     break;
                 }
             case "session.shutdown" when !sub:
@@ -655,7 +655,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     // A task call returning ends its agent, failed or not, and whatever that
                     // agent was still asking is asked of no one: left pending, the session and
                     // the failed delegate read waiting.
-                    S.Pending.RemoveAll(q => q.Agent is { } a && S.Background.HasEnded(a));
+                    S.Pending.RemoveEnded(S.Background);
                     S.Activity(at);
                     break;
                 }

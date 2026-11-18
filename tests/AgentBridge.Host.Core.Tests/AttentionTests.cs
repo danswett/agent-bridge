@@ -3,14 +3,14 @@ using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 using Xunit;
 
-// session.attention from Copilot's own session.error records (#800). The sign-in failure is VM1's,
+// session.attention from Copilot's own session.error records (#800). The sign-in failure is node-a's,
 // captured read-only and redacted (#800, 2026-11-04): its data fields exactly as written there.
 public class AttentionTests
 {
     const string Id = "55555555-5555-4555-8555-555555555555";
-    const string Vm1Message = "Authorization error. Your credentials may be expired or invalid. [request-id redacted]";
+    const string SignInMessage = "Authorization error. Your credentials may be expired or invalid. [request-id redacted]";
 
-    static readonly object SignedOut = new { errorType = "authorization", message = Vm1Message, statusCode = 401, remediation = "sign_in" };
+    static readonly object SignedOut = new { errorType = "authorization", message = SignInMessage, statusCode = 401, remediation = "sign_in" };
 
     sealed class Session_ : IAsyncDisposable
     {
@@ -141,7 +141,7 @@ public class AttentionTests
         Assert.Equal(SessionStatus.Idle, session.Status);
     }
 
-    // VM1's Quality session (#800): signed out at 16:45:05.967, a turn_end at 16:50:55.495, and a
+    // node-a's Quality session (#800): signed out at 16:45:05.967, a turn_end at 16:50:55.495, and a
     // failed retry 51 ms later. A turn ending is no proof the agent can reach its model again.
     [Fact]
     public async Task A_turn_ending_between_two_sign_in_failures_leaves_the_session_needing_sign_in_since_the_second()
@@ -155,7 +155,7 @@ public class AttentionTests
         Assert.Equal(Fixture.T0.AddSeconds(11), session.Attention?.Since);
     }
 
-    // VM1's Migration session (#800): its 16:47:25 was a turn_end only. Nor do a prompt, a turn
+    // node-a's Migration session (#800): its 16:47:25 was a turn_end only. Nor do a prompt, a turn
     // starting, an empty message, the CLI's own turn-error notice or a reply dated no later than
     // the failure prove anything.
     public static TheoryData<string, string[]> NoProof => new()
@@ -180,12 +180,12 @@ public class AttentionTests
         Assert.True(session.Attention?.Kind == AttentionKind.SignInNeeded, what);
     }
 
-    // VM1's Quality session (#800, 6646932234), as event types and times only: signed out at
+    // node-a's Quality session (#800, 6646932234), as event types and times only: signed out at
     // 16:45:05.967, a turn_end at 16:50:55.495, signed out again at 16:50:55.546; restored by the
     // owner, its prompt at 16:57:44.130 ran a model call, a system message and usage before the
     // model's first message of its own, with a tool request, at 16:58:01.264. Only that clears it.
     [Fact]
-    public async Task Vm1s_quality_session_needs_sign_in_until_the_models_first_message_after_it_was_restored()
+    public async Task A_quality_session_needs_sign_in_until_the_models_first_message_after_it_was_restored()
     {
         await using var s = new Session_();
         await s.After(Copilot.User("Carry on", 1), Copilot.TurnStart(2), At(Error(SignedOut, 0), -349_579), At(Copilot.TurnEnd(0), -51), At(Error(SignedOut, 0), 0));
@@ -218,7 +218,7 @@ public class AttentionTests
         Assert.Null(after.Attention);
     }
 
-    // The later of VM1's two failures, as the fixture's times are taken from it.
+    // The later of node-a's two failures, as the fixture's times are taken from it.
     static readonly DateTimeOffset Failed = Fixture.T0.AddSeconds(400);
 
     static string At(string line, int ms)
@@ -407,7 +407,7 @@ public class AttentionTests
         Assert.Equal(SessionStatus.Working, session.Status);
     }
 
-    // Any one of VM1's three fields says sign-in, so a CLI that drops one still reads as it.
+    // Any one of node-a's three fields says sign-in, so a CLI that drops one still reads as it.
     [Theory]
     [InlineData("{\"remediation\":\"sign_in\"}")]
     [InlineData("{\"errorType\":\"authorization\"}")]
