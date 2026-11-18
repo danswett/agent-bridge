@@ -431,6 +431,60 @@ public sealed class SessionRosterFixtureTests
         Assert.Equal(250, source.Snapshot().Count);
     }
 
+    [Theory]
+    [InlineData(AgentKind.Claude, 700)]
+    [InlineData(AgentKind.Claude, 701)]
+    [InlineData(AgentKind.Codex, 700)]
+    [InlineData(AgentKind.Codex, 701)]
+    public async Task Native_successor_generation_supersedes_an_ended_registration(AgentKind agent, int successor)
+    {
+        using var f = new Fixture();
+        if (agent == AgentKind.Claude) { f.ClaudeRegistration(Id, 700, null); }
+        else { f.CodexRegistration(Id, 700, null); }
+        var root = agent == AgentKind.Claude ? f.ClaudeRegistrations : f.CodexRegistrations;
+        var path = Path.Combine(root, Id + ".json");
+        var registration = JsonNode.Parse(File.ReadAllText(path))!;
+        registration["Ended"] = true;
+        File.WriteAllText(path, registration.ToJsonString());
+        var birth = Fixture.T0.AddMinutes(5);
+        f.Processes.Run(agent, successor, agent == AgentKind.Claude ? "claude.exe" : "codex.exe", birth);
+        if (agent == AgentKind.Claude) { f.ClaudeSessionFile(successor, Id, birth); }
+        else { f.Processes.Holders[f.CodexLock(Id)] = [successor]; }
+        await using var source = new SessionSource(f.Options(), f.Processes, f.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(successor, Assert.Single(source.Snapshot()).ProcessId);
+        await source.RefreshAsync();
+        Assert.Equal(successor, Assert.Single(source.Snapshot()).ProcessId);
+        Assert.Null(source.Held);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_host_restart_keeps_resume_guard_but_not_roster_membership_for_an_unreadable_runtime(bool reused)
+    {
+        using var f = new Fixture();
+        Fixture.Append(f.CopilotSession(Id, null), Copilot.User("resumed", 1));
+        var command = $"node C:/npm/node_modules/@github/copilot/index.js --session-id {Id}";
+        f.Processes.Run(AgentKind.Copilot, 300, command);
+        var options = f.Options(stateFile: Path.Combine(f.Root, "sessions-listed.json"));
+        await using (var before = new SessionSource(options, f.Processes, f.Time, hostId: "host-id"))
+        {
+            await before.RefreshAsync();
+            Assert.Single(before.Snapshot());
+        }
+        f.Processes.Unidentify(AgentKind.Copilot, 300, reused ? Fixture.T0.AddMinutes(2) : null);
+        for (var restart = 0; restart < 2; restart++)
+        {
+            await using var after = new SessionSource(options, f.Processes, f.Time, hostId: "host-id");
+            await after.RefreshAsync();
+            await after.RefreshAsync();
+            Assert.Empty(after.Snapshot());
+            Assert.Equal(!reused, after.Held?.Agents.Contains(AgentKind.Copilot) == true);
+            Assert.Null(after.ProcessOf(Id));
+        }
+    }
+
     static void AssertRow(JsonElement row, string machine)
     {
         Assert.Equal(machine, row.GetProperty("machine").GetString());
