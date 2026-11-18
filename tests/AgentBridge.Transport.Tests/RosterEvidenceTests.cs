@@ -26,6 +26,7 @@ public sealed class RosterEvidenceTests
     [InlineData("""{"attention":{"kind":"unknown"}}""")]
     [InlineData("""{"observedAt":"2026-11-07T12:00:00Z","lastReplyAt":"2026-11-07T11:59:00Z","senderVerified":"unknown"}""")]
     [InlineData("""{"unsentLength":0,"senderVerified":false}""")]
+    [InlineData("""{"observedAt":"2026-11-07T12:00:00.1Z","lastReplyAt":"2026-11-07T12:00:00.1234567Z"}""")]
     public void Valid_optional_evidence_is_accepted(string evidence) => Assert.Null(Check(evidence));
 
     [Fact]
@@ -46,6 +47,8 @@ public sealed class RosterEvidenceTests
     [InlineData("""{"observedAt":null}""")]
     [InlineData("""{"observedAt":"2026-11-07T12:00:00+01:00"}""")]
     [InlineData("""{"lastReplyAt":"bad"}""")]
+    [InlineData("""{"observedAt":"2026-11-07T12:00:00.Z"}""")]
+    [InlineData("""{"lastReplyAt":"2026-11-07T12:00:00.Z"}""")]
     [InlineData("""{"senderVerified":"true"}""")]
     [InlineData("""{"provenance":{"source":"owner","sendMarker":true,"unsentHash":"private"}}""")]
     [InlineData("""{"provenance":{"source":"host-observed","sendMarker":"true"}}""")]

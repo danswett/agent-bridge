@@ -6,6 +6,12 @@ using Xunit;
 
 public sealed partial class FleetListTests
 {
+    [Theory]
+    [InlineData("observedAt")]
+    [InlineData("lastReplyAt")]
+    public void Dangling_fraction_fails_the_evidence_read(string field) =>
+        Assert.Throws<InvalidDataException>(() => SessionEvidence.Read(Body($$"""{"{{field}}":"2026-11-07T12:00:00.Z"}"""), futureAttention: true));
+
     async Task<JsonElement> EvidenceRow(string evidence)
     {
         var session = JsonNode.Parse("""{"node":"fixture","state":"idle","since":"2026-11-07T12:00:00Z"}""")!.AsObject();
