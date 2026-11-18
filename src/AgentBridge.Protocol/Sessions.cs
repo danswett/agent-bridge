@@ -374,10 +374,36 @@ public sealed record TranscriptObservation(
     string Source,
     [property: JsonPropertyName("host_id")] string HostId);
 
+[UnknownAs(SessionEvidenceState.Unknown)]
+public enum SessionEvidenceState { Unknown, Known, None }
+
+public sealed class SessionOwnerEvidence
+{
+    public SessionEvidenceState State { get; init; }
+    public string? Principal { get; init; }
+}
+
+public sealed class SessionPrEvidence
+{
+    public SessionEvidenceState State { get; init; }
+    public int? Number { get; init; }
+}
+
+public sealed class SessionFinishedEvidence
+{
+    public SessionEvidenceState State { get; init; }
+    public bool? Value { get; init; }
+}
+
 public sealed record Session
 {
     [Strict(Strictness.Identity)]
     public required string Id { get; init; }
+    [Strict(Strictness.Identity)]
+    public string? Machine { get; init; }
+    public SessionOwnerEvidence? Owner { get; init; }
+    public SessionPrEvidence? Pr { get; init; }
+    public SessionFinishedEvidence? Finished { get; init; }
     public required AgentKind Agent { get; init; }
     public string? Title { get; init; }
     public string? Cwd { get; init; }
