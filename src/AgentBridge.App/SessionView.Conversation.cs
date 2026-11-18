@@ -89,7 +89,7 @@ public sealed partial class SessionView
             scrolling = e.IsIntermediate;
             if (!e.IsIntermediate)
             {
-                anchoring = null; keyTarget = null; navigationPending = false;
+                anchoring = null; keyTarget = null; CompleteNavigation();
                 if (pinEnd) { DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FollowPinnedEnd); }
             }
             HistoryScrolled(e.IsIntermediate);

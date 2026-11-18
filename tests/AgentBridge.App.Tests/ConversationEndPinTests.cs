@@ -15,13 +15,16 @@ public sealed class ConversationEndPinTests
         Assert.True(view.HistoryEnd);
     }
 
-    [Fact]
-    public void A_held_pinned_prepend_waits_without_moving_or_inserting_rows()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_held_pinned_prepend_waits_without_moving_or_inserting_rows(bool heldBeforeFrame)
     {
         var view = new SessionView();
         view.PrepareHistoryForProbe();
+        if (heldBeforeFrame) { view.FollowState.PointerOver(7); }
         view.FirstFrameForProbe();
-        Assert.True(view.HistoryDrawing);
+        Assert.Equal(!heldBeforeFrame, view.HistoryDrawing);
         view.FollowState.PointerOver(7);
         view.FollowState.TouchDown(8);
         view.DrawEarlierForProbe();
@@ -43,16 +46,19 @@ public sealed class ConversationEndPinTests
     [InlineData("held")]
     [InlineData("unheld")]
     [InlineData("ended")]
-    public void Opening_another_session_places_its_end_even_with_an_inherited_hold(string hold)
+    [InlineData("navigation")]
+    public void Opening_another_session_places_its_end_despite_a_hold_unless_navigation_takes_over(string state)
     {
         var view = new SessionView();
         view.PrepareHistoryForProbe();
-        if (hold != "unheld") { view.FollowState.PointerOver(7); }
+        if (state != "unheld") { view.FollowState.PointerOver(7); }
         view.SwitchForProbe();
-        if (hold == "ended") { view.FollowState.PointerLeft(7); }
+        if (state == "ended") { view.FollowState.PointerLeft(7); }
+        if (state == "navigation") { view.Scroller.Wheel(); }
         view.DrainForProbe();
         view.Follow();
-        Assert.Equal([view.Scroller.ScrollableHeight], view.Scroller.Targets);
+        if (state == "navigation") { Assert.Empty(view.Scroller.Targets); }
+        else { Assert.Equal([view.Scroller.ScrollableHeight], view.Scroller.Targets); }
     }
 
     [Theory]
@@ -69,19 +75,6 @@ public sealed class ConversationEndPinTests
         Assert.Equal(still, view.HistoryEnd);
         view.DrawEarlierForProbe();
         Assert.Equal(still ? 2 : 1, view.ShownCount);
-    }
-
-    [Fact]
-    public void A_navigation_after_opening_cancels_the_queued_opening_end_placement()
-    {
-        var view = new SessionView();
-        view.PrepareHistoryForProbe();
-        view.FollowState.PointerOver(7);
-        view.SwitchForProbe();
-        view.Scroller.Wheel();
-        view.DrainForProbe();
-        view.Follow();
-        Assert.Empty(view.Scroller.Targets);
     }
 
     [Theory]
@@ -148,23 +141,25 @@ public sealed class ConversationEndPinTests
     }
 
     [Fact]
-    public void History_cannot_repin_navigation_before_its_first_view_change_even_when_a_hold_ends()
+    public void History_waits_for_requested_navigation_not_an_earlier_correction_even_when_a_hold_ends()
     {
         var view = new SessionView();
         view.PrepareHistoryForProbe();
+        view.Scroller.ScrollableHeight = 250;
+        view.Follow();
         view.FollowState.PointerOver(1);
         view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Parent = view.Scroller });
         Assert.False(view.HistoryEnd);
         view.FollowState.PointerLeft(1);
         Assert.False(view.HistoryEnd);
-        Assert.Empty(view.Scroller.Targets);
-        view.Scroller.VerticalOffset = 150;
+        Assert.Equal([250.0], view.Scroller.Targets);
+        view.Scroller.VerticalOffset = 250;
         view.StopScrolling();
         view.DrawEarlierForProbe();
         view.DrainForProbe();
         Assert.Equal(1, view.ShownCount);
-        Assert.Empty(view.Scroller.Targets);
-        view.Scroller.VerticalOffset = 50;
+        Assert.Equal([250.0], view.Scroller.Targets);
+        view.Scroller.VerticalOffset = 100;
         view.StopScrolling();
         Assert.False(view.HistoryEnd);
         view.DrawEarlierForProbe();

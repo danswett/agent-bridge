@@ -35,7 +35,7 @@ public sealed partial class SessionView
         UnwatchHistory();
         history = Card?.Stored;
         var opening = shownHistory != Card?.Id;
-        if (opening) { shownHistory = Card?.Id; pinEnd = true; navigationPending = false; openPrompts.Clear(); historyVisible = 1; }
+        if (opening) { shownHistory = Card?.Id; pinEnd = true; navigationPending = null; openPrompts.Clear(); historyVisible = 1; }
         if (history is not null) { history.Changed += OnHistoryChanged; }
         ShowHistory(opening);
         if (history is not null) { _ = history.LoadNewestAsync(); }
@@ -120,7 +120,7 @@ public sealed partial class SessionView
                     if (ConversationScroll is not { } s || pinEnd && s.VerticalOffset < s.ScrollableHeight - 1.5) { return; }
                     CompositionTarget.Rendering -= historyFirstFrame;
                     historyFirstFrame = null;
-                    historyDraw.Start();
+                    if (!follow.Held || !HistoryAtEnd()) { historyDraw.Start(); }
                 };
                 CompositionTarget.Rendering += historyFirstFrame;
             }
@@ -130,7 +130,8 @@ public sealed partial class SessionView
 
     void DrawEarlier()
     {
-        if (!IsLoaded || navigationPending || scrollbarPointers.Count > 0 || follow.Held && HistoryAtEnd() || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
+        if (follow.Held && HistoryAtEnd()) { historyDraw?.Stop(); return; }
+        if (!IsLoaded || navigationPending is not null || scrollbarPointers.Count > 0 || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
         var turns = history?.Turns ?? [];
         var first = historyShown.FirstOrDefault();
         var end = first is null ? turns.Count - 1 : 0;
@@ -188,7 +189,7 @@ public sealed partial class SessionView
     // Skipped if another session was opened, or the person took the view, meanwhile.
     void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null, double? earlierExtent = null, bool opening = false)
     {
-        if (navigationPending || scrollbarPointers.Count > 0) { return; }
+        if (navigationPending is not null || scrollbarPointers.Count > 0) { return; }
         var (session, releases) = (shownHistory, pinReleases);
         void Restore()
         {

@@ -1717,11 +1717,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   scrolls; once they scroll, a new reply never moves the view (#1635, #1646).
   An out-of-view question or block requested by a screen reader releases the Windows end pin
   too: later layout must not scroll that destination away, even before navigation first moves.
+  An unrelated final scroll event cannot end that custody before the requested target is reached.
   A held scrollbar owns the view from its press until release or cancellation, before its
   first movement as well as during the drag; history arriving meanwhile cannot restore the pin.
   End-following also waits while a finger is down or the pointer is over or pressed in the
   conversation, then follows the latest measured end when the last hold ends, if still pinned.
-  A held end-pinned view pauses older prepends too, so no prepend lacks its end correction.
+  A held end-pinned view stops the older-prepend timer until the last hold ends, so no prepend lacks its end correction.
   Opening another session still places its latest reply despite an inherited hold; subsequent
   scrolling or navigation cancels that queued placement. Unloading or replacing the session
   clears scrollbar custody. A nearest-edge bring request already spanning the viewport takes
