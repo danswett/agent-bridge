@@ -36,6 +36,7 @@ internal sealed class SessionState
     public bool OwnResponseCut;
     public string? OwnReasoning;
     public DateTimeOffset? OwnAt;
+    public DateTimeOffset? LastReplyAt;
     public string? Model;
     // The agent's own reported effort and context option ids; null is unknown.
     public string? Effort;
@@ -133,6 +134,7 @@ internal sealed class SessionState
         FirstUserMessage = null;
         AgentTitle = null; UserMessage = null; UserMessageFrom = null; UserMessageLabel = null; UserMessageKey = null; TurnId = null; ResponseTurn = null; Response = null; Reasoning = null; Model = null; Effort = null; Context = null;
         ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
+        LastReplyAt = null;
         Notice = null;
         Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null; LastEventAt = null;
         Prompts = 0; LastPromptAt = null; Compactions = 0; Seen = false; UncountedTurn = false;
@@ -185,6 +187,7 @@ internal sealed class SessionState
     {
         if (reasoning is not null) { Reasoning = OwnReasoning = reasoning; ReasoningBy = null; OwnAt = at ?? OwnAt; }
         if (content is not null) { Response = OwnResponse = content; OwnResponseCut = false; ResponseBy = null; OwnAt = at ?? OwnAt; ResponseTurn = TurnId; }
+        if (content is not null) { LastReplyAt = at; }
     }
 
     // What a sub-agent wrote: the latest text still, as on agent-ha-bridge's card, now

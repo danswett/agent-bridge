@@ -26,6 +26,7 @@ public sealed class RosterEvidenceTests
     [InlineData("""{"attention":{"kind":"unknown"}}""")]
     [InlineData("""{"observedAt":"2026-11-07T12:00:00Z","lastReplyAt":"2026-11-07T11:59:00Z","senderVerified":"unknown"}""")]
     [InlineData("""{"unsentLength":0,"senderVerified":false}""")]
+    [InlineData("""{"startedAt":"2026-11-07T12:00:00Z"}""")]
     public void Valid_optional_evidence_is_accepted(string evidence) => Assert.Null(Check(evidence));
 
     [Fact]
@@ -53,6 +54,8 @@ public sealed class RosterEvidenceTests
     [InlineData("""{"provenance":{}}""")]
     [InlineData("""{"attention":{"kind":"a-future-kind-that-is-more-than-thirty-two-characters"}}""")]
     [InlineData("""{"composerText":"private"}""")]
+    [InlineData("""{"startedAt":null}""")]
+    [InlineData("""{"startedAt":"bad"}""")]
     public void Malformed_unknown_or_private_evidence_is_a_bad_record(string evidence) =>
         Assert.Equal("bad-record", Check(evidence));
 }

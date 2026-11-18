@@ -37,6 +37,10 @@ public sealed class FleetProducerTests
         Assert.DoesNotContain("private-", row.GetRawText());
         Assert.False(row.TryGetProperty("senderVerified", out _));
         Assert.False(row.TryGetProperty("provenance", out _));
+        File.AppendAllLines(source.Files(Id)!.Transcript!, [
+            Copilot.Assistant("", 3, reasoning: "private-reasoning"), Copilot.Assistant("private-delegate", 4, agentId: "delegate")]);
+        await source.RefreshAsync();
+        Assert.Equal(Fixture.T0.AddSeconds(2), (await Publish(source, f.Time)).GetProperty("lastReplyAt").GetDateTimeOffset());
     }
 
     [Fact]
@@ -55,5 +59,103 @@ public sealed class FleetProducerTests
         Assert.False(row.TryGetProperty("lastReplyAt", out _));
         f.Time.Advance(TimeSpan.FromSeconds(61));
         Assert.True((await Publish(source, f.Time)).GetProperty("stale").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Composer_hash_is_host_keyed_stable_until_restart_and_only_evidence_reaches_the_roster()
+    {
+        using var f = new Fixture();
+        f.Processes.Run(AgentKind.Copilot, 101);
+        File.WriteAllText(f.CopilotSession(Id, 101), Copilot.User("private-question", 1));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        var screens = new Screens { Rows = Box("private-composer") };
+        using var capture = new FleetEvidenceCapture(screens, _ => true, f.Time);
+        var snapshot = Assert.Single(await source.FleetSnapshotAsync());
+        var first = (await capture.ReadAsync(snapshot))!.Copy();
+        var hash = first["unsentHash"].GetString();
+        Assert.Matches("^[0-9a-f]{64}$", hash!);
+        Assert.NotEqual(Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("private-composer"))), hash);
+        Assert.Equal(hash, (await capture.ReadAsync(snapshot))!.Copy()["unsentHash"].GetString());
+        using var restarted = new FleetEvidenceCapture(screens, _ => true, f.Time);
+        Assert.NotEqual(hash, (await restarted.ReadAsync(snapshot))!.Copy()["unsentHash"].GetString());
+        JsonElement record = default;
+        await new FleetPublisher(source, "fixture", time: f.Time, observe: capture.ReadAsync)
+            .PublishAsync((r, _) => { record = r.Clone(); return Task.CompletedTask; });
+        Assert.Null(RosterFields.Check(record, "fixture", out _, out _, out _));
+        var row = record.GetProperty("sessions")[0];
+        Assert.Equal("private-composer".Length, row.GetProperty("unsentLength").GetInt32());
+        Assert.Equal(hash, row.GetProperty("provenance").GetProperty("unsentHash").GetString());
+        Assert.False(row.GetProperty("provenance").TryGetProperty("sendMarker", out _));
+        Assert.False(row.TryGetProperty("senderVerified", out _));
+        Assert.DoesNotContain("private-", record.GetRawText());
+        screens.Rows = Box("changed");
+        Assert.NotEqual(hash, (await capture.ReadAsync(snapshot))!.Copy()["unsentHash"].GetString());
+        capture.Dispose();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => capture.ReadAsync(snapshot));
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("partial")]
+    [InlineData("shell")]
+    [InlineData("recycled")]
+    public async Task Unobservable_or_unbound_composer_never_gets_a_hash_or_provenance(string mode)
+    {
+        var screens = new Screens
+        {
+            Rows = mode == "missing" ? null : mode == "partial"
+            ? ["\u2503 private-partial", "\u2579\u2580\u2580", "Interactive"] : Box(mode == "shell" ? "Execute shell command" : "private-composer")
+        };
+        var calls = 0;
+        using var capture = new FleetEvidenceCapture(screens, _ => mode != "recycled" || ++calls == 1);
+        var snapshot = new FleetSessionSnapshot(FleetPublisherTests.NewSession(1), new(101, Fixture.T0));
+        var fields = (await capture.ReadAsync(snapshot))?.Copy() ?? [];
+        Assert.DoesNotContain("unsentLength", fields.Keys);
+        Assert.DoesNotContain("unsentHash", fields.Keys);
+        Assert.DoesNotContain("provenance", fields.Keys);
+    }
+
+    [Fact]
+    public async Task An_observed_empty_composer_is_zero_not_unknown_and_unrecognized_screens_stay_unknown()
+    {
+        var screens = new Screens { Rows = Box("") };
+        using var capture = new FleetEvidenceCapture(screens, _ => true);
+        var snapshot = new FleetSessionSnapshot(FleetPublisherTests.NewSession(1), new(101, Fixture.T0));
+        var fields = (await capture.ReadAsync(snapshot))!.Copy();
+        Assert.Equal(0, fields["unsentLength"].GetInt32());
+        Assert.False(fields.ContainsKey("unsentHash"));
+        screens.Rows = ["unrecognized screen"];
+        Assert.Equal("unknown", (await capture.ReadAsync(snapshot))!.Copy()["attention"].GetProperty("kind").GetString());
+    }
+
+    [Fact]
+    public async Task A_changed_session_binding_or_cancelled_read_never_publishes_composer_evidence()
+    {
+        var source = new FleetPublisherTests.Source();
+        SessionProcess binding = new(101, Fixture.T0);
+        source.Binding = _ => binding;
+        var sent = false;
+        var publisher = new FleetPublisher(source, "fixture", observe: (snapshot, ct) =>
+        {
+            binding = new(202, Fixture.T0);
+            return Task.FromResult<SessionEvidence?>(null);
+        });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => publisher.PublishAsync((_, _) => { sent = true; return Task.CompletedTask; }));
+        Assert.False(sent);
+        using var stop = new CancellationTokenSource();
+        var screens = new Screens { OnRead = () => { stop.Cancel(); return new ConsoleScreen(Box("private-composer"), null); } };
+        using var capture = new FleetEvidenceCapture(screens, _ => true);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            capture.ReadAsync(new(source.Sessions[0], binding), stop.Token));
+    }
+
+    static string[] Box(string content) => ["\u257B\u2584\u2584\u2584", "\u2503 " + content, "\u2579\u2580\u2580\u2580", " Interactive \u00B7 / commands \u00B7 @ files"];
+    sealed class Screens : IConsoleInjector
+    {
+        public IReadOnlyList<string>? Rows;
+        public Func<ConsoleScreen>? OnRead;
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) => Task.FromResult(OnRead?.Invoke() ?? new ConsoleScreen(Rows, null));
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default) => throw new InvalidOperationException("must never type");
     }
 }

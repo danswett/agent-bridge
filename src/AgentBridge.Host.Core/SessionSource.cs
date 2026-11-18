@@ -93,6 +93,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         // What the transcript says, before the ending override; what SetEndingAsync shows
         // again when a stop fails.
         public Session Full = null!;
+        public FleetSessionSnapshot? FleetObservation;
         // When the ending override last changed, which a client sees, so UpdatedAt never
         // goes back behind it.
         public DateTimeOffset? Touched;
@@ -153,6 +154,20 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     public IReadOnlyList<Session> Snapshot()
     {
         lock (_gate) { return [.. Sorted().Select(e => e.ListForm)]; }
+    }
+
+    public async Task<IReadOnlyList<FleetSessionSnapshot>> FleetSnapshotAsync(CancellationToken ct = default)
+    {
+        await _pass.WaitAsync(ct);
+        try
+        {
+            lock (_gate)
+            {
+                return Sorted().Select(e => e.FleetObservation is { } observation
+                    ? observation with { Session = e.ListForm } : new FleetSessionSnapshot(e.ListForm, ProcessOf(e.ListForm.Id))).ToArray();
+            }
+        }
+        finally { _pass.Release(); }
     }
 
     public SessionList List(string? cursor = null)
@@ -490,7 +505,14 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             {
                 if (_restoreMarks.TryGetValue(discovered.Id, out var read) && tracker.QuestionsFrom == read.Given.At) { read.Interrupted = tracker.InterruptedQuestions; }
             }
-            Commit(entry ?? new Entry(tracker), full);
+            entry ??= new Entry(tracker);
+            Commit(entry, full);
+            var state = tracker.State;
+            var question = entry.ListForm.Question;
+            var kind = !state.Seen ? null : entry.ListForm.Attention is not null ? "unknown" : question is null ? "none"
+                : state.Permissions.ContainsKey(question.Id) ? "permission" : question.Kind == QuestionKind.Approval ? "approval" : "question";
+            entry.FleetObservation = new(entry.ListForm, ProcessOf(discovered.Id), _time.GetUtcNow(),
+                state.Seen ? state.Asking.Count : null, kind, state.LastReplyAt);
         }
         if (unread.Count > 0) { (held, release) = (WithUnread(held, unread), true); }
         if (release) { SetHeld(held); }

@@ -18,6 +18,10 @@ public interface ISessionSource : IAsyncDisposable
     // All live sessions in list form (no history), most recently updated first.
     IReadOnlyList<Session> Snapshot();
 
+    // Fleet-only facts, never added to session.get, events or persisted session forms.
+    Task<IReadOnlyList<FleetSessionSnapshot>> FleetSnapshotAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<FleetSessionSnapshot>>([.. Snapshot().Select(s => new FleetSessionSnapshot(s, ProcessOf(s.Id)))]);
+
     // One sessions.list page: { sessions, revision, next? }. Pass the previous page's
     // Next to continue; null for the first page.
     SessionList List(string? cursor = null);
@@ -108,6 +112,9 @@ public interface ISessionSource : IAsyncDisposable
 }
 
 public sealed record SessionProcess(int Id, DateTimeOffset? StartedAt);
+
+public sealed record FleetSessionSnapshot(Session Session, SessionProcess? Process = null, DateTimeOffset? ObservedAt = null,
+    int? OpenAsks = null, string? Attention = null, DateTimeOffset? LastReplyAt = null);
 
 public enum SessionChangeKind { Upserted, Removed }
 

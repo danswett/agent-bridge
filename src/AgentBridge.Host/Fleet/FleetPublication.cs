@@ -19,11 +19,12 @@ public sealed class FleetPublication
     public event Action? Changed;
 
     public FleetPublication(ISessionSource source, string machine, bool share, Func<string, string?>? name = null,
-        TimeProvider? time = null, Action<string>? log = null, Func<JsonElement, JsonElement>? sign = null)
+        TimeProvider? time = null, Action<string>? log = null, Func<JsonElement, JsonElement>? sign = null,
+        Func<FleetSessionSnapshot, CancellationToken, Task<AgentBridge.Protocol.SessionEvidence?>>? observe = null)
     {
         this.source = source; this.share = share; this.log = log;
         clock = time ?? TimeProvider.System;
-        publisher = new FleetPublisher(source, machine, name, clock, sign);
+        publisher = new FleetPublisher(source, machine, name, clock, sign, observe);
     }
 
     public FleetPublicationStatus Status => Volatile.Read(ref status);
