@@ -99,7 +99,7 @@ public sealed class AgentLaunchWorktreeCheckTests : IDisposable
         var file = state is "modified" or "staged" ? "readme.txt" : state;
         File.AppendAllText(Path.Combine(tree, file), "changed\n");
         if (state == "staged") { Run(tree, "add", file); }
-        Assert.Contains("clean", Check());
+        Assert.Equal("Agent launches require a clean worktree, including untracked and ignored files.", Check());
     }
 
     [Theory]
