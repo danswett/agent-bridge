@@ -191,6 +191,8 @@ check() {
   fi
 }
 
+# Production never restores lists, so tampered/missing-InRelease, invalid-signature and size-mismatch
+# only guard against list promotion; the archive, tampered-Packages and live-* cases are the sensors.
 cache_auth_cases() {
   local damage hash size calls want
   for damage in tampered-InRelease tampered-Packages missing-InRelease invalid-signature size-mismatch archive-size missing-archive weak-digest live-signature live-missing live-Packages live-size; do
@@ -251,9 +253,23 @@ cache_ref_case() {
     echo "ok: a comma-bearing ref is hashed before entering the cache key"
   else echo "FAIL: a raw ref can break the cache key"; failures=$((failures + 1)); fi
 }
+# S2 then S4 share one runner (ci.yml spikes-linux), and apt trusts a size-matching archive unhashed.
+cache_copy_cases() {
+  reset "$canonical"; export DEBS_CACHE_HIT=true APT_VERIFY_URI='Reading package lists...'
+  check "a plan naming no archives copies no cached deb into apt's archives" 0 "$(printf 'update\n%s\n%s' "$verify" "$cached")" "$canonical"
+  [ ! -e "$PLAYWRIGHT_APT_ARCHIVES/cached.deb" ] || { echo "FAIL: an unplanned cached deb entered apt's archives"; failures=$((failures + 1)); }
+  reset "$canonical"; export DEBS_CACHE_HIT=true; printf 'evil! deb\n' > "$HOME/.cache/playwright-apt-debs/libgtk-4-1_9_amd64.deb"
+  check "only planned, verified cached debs enter apt's archives" 0 "$(printf 'update\n%s\n%s' "$verify" "$cached")" "$canonical"
+  [ ! -e "$PLAYWRIGHT_APT_ARCHIVES/libgtk-4-1_9_amd64.deb" ] || { echo "FAIL: an unverified cached deb entered apt's archives"; failures=$((failures + 1)); }
+  printf 'evil! deb\n' > "$HOME/.cache/playwright-apt-debs/cached.deb"; : > "$APT_LOG"
+  check "a later rejected cache leaves no unverified deb in apt's archives" 0 "$(printf 'update\n%s\n%s' "$verify" "$download")" "$canonical"
+  [ ! -e "$PLAYWRIGHT_APT_ARCHIVES/libgtk-4-1_9_amd64.deb" ] && [ "$(cat "$PLAYWRIGHT_APT_ARCHIVES/cached.deb")" = 'valid deb' ] ||
+    { echo "FAIL: a rejected cache left an unverified deb in apt's archives"; failures=$((failures + 1)); }
+}
 if [ "${1:-}" = --cache-auth ]; then
   cache_auth_cases
   cache_ref_case
+  cache_copy_cases
   echo "cache-auth: $failures failure(s)"
   [ "$failures" -eq 0 ]; exit
 fi
@@ -640,6 +656,7 @@ fi
 
 cache_auth_cases
 cache_ref_case
+cache_copy_cases
 if [ "$failures" -ne 0 ]; then
   echo "::error::$failures of download.sh's checks failed"; exit 1
 fi
