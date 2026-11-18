@@ -152,3 +152,4 @@ Assert ($workflow -match "workflow_run.conclusion == 'timed_out'") 'the workflow
 
 if ($script:failures) { "$($script:failures) failure(s)"; exit 1 }
 'rerun-known-flakes: all checks passed'
+& (Join-Path $PSScriptRoot 'test-quarantine-pr.ps1')
