@@ -192,10 +192,11 @@ public sealed class DurableInboxTests : IDisposable
             .Deserialize<List<InboxMessage>>()!;
         Assert.All(messages, m => Assert.Contains(m, saved));
         inbox.Deliver("node0", "r0", Now);
+        inbox.Deliver("node0", "r1", Now);
         inbox = new DurableInbox(Pathname);
         Assert.Equal(refused, inbox.Enqueue(node, "overflow", "changed", "retry", Now.AddMinutes(1)));
         Assert.Null(inbox.Enqueue(node, "new", "sender", "new", Now).DeliveredAt);
-        Assert.Equal("r1", inbox.Peek("node0")!.Rid);
+        Assert.Equal("r2", inbox.Peek("node0")!.Rid);
     }
 
     [Fact]
@@ -244,15 +245,27 @@ public sealed class DurableInboxTests : IDisposable
     }
 
     [Theory]
-    [InlineData("""{"Version":2,"Messages":[],"Retired":[{"Node":"one","At":"2026-11-16T00:00:00Z","Resolution":0}]}""", typeof(InvalidDataException))]
-    [InlineData("""{"Version":2,"Messages":[{"Node":"one","Rid":"a","Sender":"s","Payload":"p","Attempt":1}],"Retired":[]}""", typeof(JsonException))]
-    public void The_C1_reader_never_discards_C2_recovery_or_retirement_data(string snapshot, Type error)
+    [InlineData("""{"Version":2,"Messages":[],"Retired":[{"Node":"one","At":"2026-11-16T00:00:00Z","Resolution":0}]}""", true)]
+    [InlineData("""{"Version":2,"Messages":[{"Node":"one","Rid":"a","Sender":"s","Payload":"p","Attempt":1}],"Retired":[]}""", false)]
+    public void The_C2_reader_preserves_recovery_or_retirement_data_when_refusing_or_saving(string snapshot, bool retired)
     {
         File.WriteAllText(Pathname, snapshot);
 
-        Assert.Throws(error, () => new DurableInbox(Pathname).Enqueue("one", "b", "sender", "new", Now));
-        Assert.Equal(snapshot, File.ReadAllText(Pathname));
-        Assert.False(File.Exists(Pathname + ".v2"));
+        var inbox = new DurableInbox(Pathname);
+        var added = inbox.Enqueue("one", "b", "sender", "new", Now);
+        if (retired)
+        {
+            Assert.Equal("refused", added.Outcome);
+            Assert.Equal(snapshot, File.ReadAllText(Pathname));
+        }
+        else
+        {
+            Assert.Null(added.DeliveredAt);
+            Assert.Equal(1, new DurableInbox(Pathname).Find("one", "a")!.Attempt);
+            Assert.Equal("p", inbox.Find("one", "a")!.Payload);
+            Assert.Empty(JsonDocument.Parse(File.ReadAllText(Pathname)).RootElement.GetProperty("Retired").EnumerateArray());
+        }
+        Assert.True(File.Exists(Pathname + ".v2"));
     }
 
     [Fact]

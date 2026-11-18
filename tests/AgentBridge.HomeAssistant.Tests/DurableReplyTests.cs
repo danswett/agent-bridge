@@ -224,6 +224,7 @@ public sealed partial class ReplyTests
     [Theory]
     [InlineData(AnswerOutcome.Delivered, "delivered")]
     [InlineData(AnswerOutcome.Unconfirmed, "unconfirmed")]
+    [InlineData(AnswerOutcome.Refused, "refused")]
     public async Task A_completed_rid_is_not_delivered_again_after_restart(AnswerOutcome result, string expected)
     {
         outcome = _ => Task.FromResult(new ReplyResult(result));

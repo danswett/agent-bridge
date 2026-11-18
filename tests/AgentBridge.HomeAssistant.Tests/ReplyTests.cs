@@ -385,7 +385,7 @@ public sealed partial class ReplyTests : IDisposable
     }
 
     [Fact]
-    public async Task A_refused_rid_is_said_refused_and_may_be_sent_again()
+    public async Task A_refused_durable_rid_stays_refused_and_a_new_rid_can_be_sent()
     {
         outcome = _ => Task.FromResult(new ReplyResult(AnswerOutcome.Refused, "the console refused the keys"));
         await using var c = await Ready();
@@ -394,15 +394,13 @@ public sealed partial class ReplyTests : IDisposable
         sessions.Set(sessions.Get(A)! with { Title = "Renamed after the refusal" });
         await Pass(c);
         Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
-        var duringSend = new List<bool>();
-        outcome = _ =>
-        {
-            duringSend.Add(Detail.TryGetProperty("reply_ack", out var seen));
-            return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
-        };
+        outcome = _ => Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
         await Do(c, ha.SendFromCard(Node, "try", rid: "r-retry"));
 
-        Assert.Equal([false], duringSend);
+        Assert.Single(replied);
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        Assert.True(Ack.GetProperty("duplicate").GetBoolean());
+        await Do(c, ha.SendFromCard(Node, "try", rid: "r-new"));
         Assert.Equal(2, replied.Count);
         Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
         Assert.False(Ack.TryGetProperty("duplicate", out _));

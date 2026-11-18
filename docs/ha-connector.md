@@ -581,8 +581,7 @@ directory, before `queued` is acknowledged. Legacy publishes without a rid stay 
 The existing connector pass and per-session delivery fence provide one FIFO dispatcher per
 node; queued messages survive process restart and bypass the old 16-message memory limit.
 Each rid is acknowledged as queued, then with its delivery outcome; the sender waits through
-queued without calling it delivered. Delivery refusals may be retried; overflow refusals retain
-their rid and require a new rid after capacity frees. Terminal outcomes survive
+queued without calling it delivered. Final refused rids return their tombstone on retry. Terminal outcomes survive
 restart and are re-acknowledged on duplicate sends, without typing again.
 An attempt marker is persisted before calling delivery. A restart during an attempt reports
 `unconfirmed` and logs the interruption rather than risking duplicate typing; later queued
@@ -593,29 +592,62 @@ No live HA, host management, authorization or 16 KiB publication limits change.
 **Durable inbox store.** `DurableInbox` is the reused internal store: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,
 and returns the original entry on a matching rid retry, even if a retry is restamped. It keeps
-100 entries per node and 1000 total before pruning the oldest terminal entries. If only
-undelivered entries remain, overflow is saved as a payload-free `refused` tombstone before
+100 entries per node and 1000 total before pruning the oldest unpinned delivered entries.
+If only pending or pinned entries remain, overflow is saved as a payload-free `refused` tombstone before
 the connector acknowledges `Reply NOT sent` with that rid and sender; no accepted reply is
-displaced. One overflow tombstone may sit beyond a full node's cap (or the global cap);
-later enqueues prune terminal metadata before admitting more work. An unwritable store
+displaced. These pinned refusal records can exceed the admission caps; new requests are
+refused rather than evicting replay fences. Only unpinned delivered metadata is pruned.
+An unwritable store
 still fails explicitly and never acknowledges an outcome it could not persist. Delivery clears the payload while
 retaining rid metadata for deduplication; legacy senders get a generated rid and `legacy` sender.
-For #2780 integration, deduplication lasts only while that metadata is retained within the
+For ordinary delivered entries, deduplication lasts only while metadata is retained within the
 100-entry per-node and 1000-entry total caps, including pending entries. A retry of a pruned
-terminal rid is accepted as new and may be delivered again; this is not permanent deduplication.
+delivered rid is accepted as new and may be delivered again; this is not permanent deduplication.
 Automatic absence cleanup requires three consecutive connector passes without the node,
 including across card rebuilds; presence resets the guard. Restart resets absence counts
 conservatively. In-flight nodes count as present. Explicit per-rid delivery refusals are not
 absence cleanup.
-Refusal outcomes use C2's version-2 snapshot envelope with an empty retirement list.
+Refusal outcomes use C2's version-2 snapshot envelope, initially with an empty retirement list.
 Version-1 migration preserves the original, user-restricted `.v1` backup (which can retain
 legacy payloads) and writes the `.v2` downgrade fence; missing or rolled-back state fails
-closed after that fence. This C1 reader refuses C2-only recovery fields or retirement data
-rather than discarding them; the C2/C2b reader owns those extensions.
+closed after that fence. The C2/C2b reader retains its recovery fields and retirement data
+instead of replacing that state with C1's empty retirement list on save.
+The snapshot is published before its `.v2` marker. If interrupted between them, the
+next load validates the committed snapshot and repairs the missing marker; an
+interrupted first save cannot leave a marker fencing a never-created snapshot.
 Load and save remove this inbox's GUID-named crash-leftover temporary files under its lock,
 so obsolete copies cannot retain payloads after a later delivery.
 Power-loss durability is not established. A peek alone does not reserve a message; ingress
 serializes dispatch and persists the attempt marker before submitting it.
+
+**Schema v2 and durable fences (C2a).** A validated v1 snapshot is preserved as the protected
+`<StateFile>.inbox.v1` recovery copy, then migrated by flushed temporary write and atomic replace.
+FIFO order, existing outcomes and started-at markers survive; legacy started attempts receive
+attempt 1 without inventing cleanup proof. Unknown/malformed versions or migration/storage
+errors stop dispatch; no reader falls back to the recovery copy. Shipped v1 `Load` explicitly
+rejects `Version != 1`, including v2. A flushed `.v2` marker also makes this reader refuse
+restored v1 data or a missing current store; a failed commit after the marker holds for recovery.
+Rollback therefore holds dispatch unless the reader
+understands v2; never restore the pre-migration copy as a dispatchable store or downgrade fences.
+The recovery copy can contain old payloads; keep it under the same protected retention policy.
+
+Unconfirmed outcomes, started attempts and consumed cleanup tokens are durable pins, not
+#2808 fingerprint-cache entries: its eight/64/two-minute caps and expiry do not apply.
+Pins and final no-effect refusal tombstones override capacity pruning, `Forget` and
+`ForgetExcept`. Their horizon is the lifetime of the replayable node binding, not elapsed time;
+resending the same refused rid returns refusal, while a distinct rid is a distinct request.
+Full stores hold admission rather than evict replay protection.
+`ConsumeCleanup` durably consumes a token before any mutation; an ambiguous clear still spends
+it. Token, revision, attempt, host request and process incarnation remain correlated after restart.
+It grants no native cleanup proof and cannot authorize a second clear or Enter.
+
+Explicit `ResolveAndFence` is the reclaim boundary: only authoritative incarnation-end or
+operator resolution excluding old execution may call it, never cache expiry, a missing lookup,
+an absent session snapshot or an empty box. It atomically replaces all node entries/pins with
+one permanent retired-node fence outside message capacity. Every old or new rid on that binding
+then returns refusal; a new incarnation requires a newly bound node, never reopening the old one.
+Ordinary lifecycle `Forget` does not assert that authority. C2b still owns cleanup receipt
+completion, guarded requeue, native one-shot conformance and attachment-payload fingerprints.
 
 **`tools/agents/reply-session.ps1`** is the in-repo sender. It posts the payload with a rid, waits
 for the reply sensor to show its own stamp (there is one slot per node, so rapid sends can overwrite
