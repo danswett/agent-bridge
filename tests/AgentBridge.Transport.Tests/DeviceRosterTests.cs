@@ -13,10 +13,10 @@ namespace AgentBridge.Transport.Tests;
 // entries that are valid against its own copy, and never decides who may connect.
 public class DeviceRosterTests
 {
-    static DeviceRoster Make(World w, IRosterStore? store = null)
+    static DeviceRoster Make(World w, IRosterStore? store = null, TimeProvider? clock = null)
     {
         store ??= new MemoryRosterStore();
-        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch + w.Now);
+        var time = clock ?? new FakeTimeProvider(DateTimeOffset.UnixEpoch + w.Now);
         var options = new RelayOptions { TokenKey = Convert.ToBase64String(new byte[32]), Roster = { Time = time } };
         using var meters = new ServiceCollection().AddMetrics().BuildServiceProvider();
         var metrics = new RelayMetrics(meters.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => 0);
@@ -332,6 +332,35 @@ public class DeviceRosterTests
         var bad = Wire(w, "bad");
         var entry = Entry.Parse(Encoding.UTF8.GetBytes(bad[..^1] + ",\"evidence\":true}"));
         Assert.Equal(Invalid.Signature, w.Verifier("G", "addB").Offer(entry)[0].Reason);
+    }
+
+    [Fact]
+    public async Task Invalid_signatures_after_a_size_refusal_do_not_replay_unchanged_history()
+    {
+        var (w, store, roster) = await FullOrdinaryLog();
+        var before = (await roster.GetAsync(RosterFixture.Account))!;
+        var parent = Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[^1]));
+        var entries = new List<string>();
+        w.Rename("aside", "B", "addB", "addB", "aside");
+        entries.Add(Padded(w["aside"], Entry.MaxBytes, parent).Canonical());
+        for (var i = 0; i < 15; i++)
+        {
+            w.Rename($"bad{i}", "B", "addB", "addB", $"bad{i}", signAs: "Z");
+            entries.Add(Padded(w[$"bad{i}"], Entry.MaxBytes, parent).Canonical());
+        }
+        var clock = new CountingTime(w.Now);
+        var result = await Make(w, store, clock).AppendAsync(RosterFixture.Account, entries);
+        Assert.Equal(("refused", Invalid.Cap), (result![0].Verdict, result[0].Reason));
+        Assert.All(result.Skip(1), r => Assert.Equal(("refused", Invalid.Signature), (r.Verdict, r.Reason)));
+        // Each replay reads the clock once per accepted add; allow the initial replay and one rollback.
+        Assert.InRange(clock.Reads, 1, 2 * before.Entries.Count);
+        Assert.Equal(before.Entries, (await roster.GetAsync(RosterFixture.Account))!.Entries);
+    }
+
+    sealed class CountingTime(TimeSpan now) : TimeProvider
+    {
+        public int Reads { get; private set; }
+        public override DateTimeOffset GetUtcNow() { Reads++; return DateTimeOffset.UnixEpoch + now; }
     }
 
     [Fact]
