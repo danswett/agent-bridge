@@ -34,6 +34,7 @@
     <Project Path="tests/AgentBridge.Host.Core.Tests/AgentBridge.Host.Core.Tests.csproj" />
     <Project Path="tests/AgentBridge.Host.Delivery.Tests/AgentBridge.Host.Delivery.Tests.csproj" />
     <Project Path="tests/AgentBridge.Host.Tests/AgentBridge.Host.Tests.csproj" />
+    <Project Path="tests/AgentBridge.LaunchSettings.Tests/AgentBridge.LaunchSettings.Tests.csproj" />
     <Project Path="tests/AgentBridge.Local.Tests/AgentBridge.Local.Tests.csproj" />
     <Project Path="tests/AgentBridge.PerfHook/AgentBridge.PerfHook.csproj" />
     <Project Path="tests/AgentBridge.AgentEnvelope.Tests/AgentBridge.AgentEnvelope.Tests.csproj" />

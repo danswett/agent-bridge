@@ -241,6 +241,20 @@ suites:
     baseline: { tests: 609, seconds: 30 }
     status: exists
 
+  - id: launch-settings-paths
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    security_sensitive: true
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.LaunchSettings.Tests
+    triggers: [src/AgentBridge.Host/LaunchSettings.cs, src/AgentBridge.Host.Delivery/Launch/Folders.cs, src/AgentBridge.Local/LaunchFolders.cs]
+    command: dotnet test tests/AgentBridge.LaunchSettings.Tests -c Release
+    where: ci.yml product
+    status: exists
+
   - id: hooks
     validation_plan: native
     kind: unit
