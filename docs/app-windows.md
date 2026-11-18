@@ -1354,6 +1354,11 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   Before native capture, two distinct XAML rendering ticks and another UI dispatcher turn
   let a preceding update cycle finish even when the page is already idle; the self-test
   fails if that frame barrier cannot complete within 10 seconds.
+  The independent F24 canary restores focus with bring-into-view held on the focused
+  control (or a link's visual parent), below its scroller, through the next captured
+  frame; a window-root handler is too late to prevent scrolling. Missing-key diagnostics
+  retain the target sampled before each press, including a posted fallback
+  ([input-path follow-up](https://github.com/danswett/agent-bridge/issues/2540)).
   The dark page pass reopens each output PNG and checks a page-background pixel is opaque
   and no lighter, in sRGB relative luminance, than the platform's dark layer token's straight
   colour (the upper bound for that layer over dark Mica). Encoded white and transparent
