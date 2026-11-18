@@ -65,6 +65,54 @@ public sealed class LaunchHaEnvironmentFlowTests : LaunchFlowFixture
     }
 
     [Theory]
+    [InlineData("/api")]
+    [InlineData("/api/")]
+    public async Task An_HA_endpoint_with_an_api_suffix_is_not_given_a_second_one(string suffix)
+    {
+        var result = await HaLauncher(enabled: true, ConfiguredUrl.TrimEnd('/') + suffix).LaunchAsync(
+            new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        Assert.Equal(ConfiguredUrl.TrimEnd('/') + "/api", Assert.Single(starter.Specs).Environment![UrlVariable]);
+    }
+
+    [Theory]
+    [InlineData("https://endpoint.example/ha?query=fixture")]
+    [InlineData("https://endpoint.example/ha#fragment")]
+    [InlineData("https://fixture@endpoint.example/ha")]
+    public async Task An_HA_endpoint_with_a_query_fragment_or_userinfo_is_refused(string url)
+    {
+        var result = await HaLauncher(enabled: true, baseUrl: new Uri(url)).LaunchAsync(
+            new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Contains("reply path is not ready", result.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("homeAssistant.baseUrl", result.Reason, StringComparison.Ordinal);
+        Assert.Empty(starter.Specs);
+        Assert.DoesNotContain(url, string.Join('\n', logged) + result.Reason);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Credential_and_starter_failures_never_report_the_HA_endpoint_or_token(bool credentialFailure)
+    {
+        const string token = "synthetic-agent-principal";
+        var error = new IOException($"Could not use {ConfiguredUrl} with {token}");
+        if (!credentialFailure) { starter.Throws = error; }
+        var launcher = HaLauncher(enabled: true, ConfiguredUrl, credentialFailure ? error : null);
+
+        var result = await launcher.LaunchAsync(
+            new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        Assert.Equal(credentialFailure ? LaunchOutcome.Started : LaunchOutcome.Failed, result.Outcome);
+        Assert.Contains(logged, line => line.Contains(credentialFailure ? "no agent credential was issued" : "could not be started", StringComparison.Ordinal));
+        var reported = string.Join('\n', logged) + JsonSerializer.Serialize(result, ProtocolJson.Options);
+        Assert.DoesNotContain(ConfiguredUrl, reported);
+        Assert.DoesNotContain(token, reported);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("https://unrelated.example/api")]
     public async Task A_non_HA_launch_leaves_its_environment_unchanged(string? inherited)
@@ -82,9 +130,14 @@ public sealed class LaunchHaEnvironmentFlowTests : LaunchFlowFixture
         });
     }
 
-    LaunchService HaLauncher(bool enabled, string? url)
+    LaunchService HaLauncher(bool enabled, string? url, Exception? credentialError = null)
     {
         var (ha, _) = HaSettings.Read(JsonSerializer.SerializeToElement(new { enabled, baseUrl = url }));
+        return HaLauncher(ha.Enabled || ha.EnabledRequested, ha.BaseUrl, credentialError);
+    }
+
+    LaunchService HaLauncher(bool enabled, Uri? baseUrl, Exception? credentialError = null)
+    {
         var options = new LaunchServiceOptions
         {
             CopilotHome = f.CopilotHome,
@@ -92,21 +145,21 @@ public sealed class LaunchHaEnvironmentFlowTests : LaunchFlowFixture
             CodexHome = f.CodexHome,
             Config = Config(),
             PlatformSupported = true,
-            HomeAssistantEnabled = ha.Enabled || ha.EnabledRequested,
-            HomeAssistantBaseUrl = ha.BaseUrl,
+            HomeAssistantEnabled = enabled,
+            HomeAssistantBaseUrl = baseUrl,
             PollInterval = TimeSpan.FromMilliseconds(25),
             IsSystemDirectory = _ => false,
         };
         return new LaunchService(source, probe, screens, starter, locator, new AgencyCatalog(agency), options,
-            log: logged.Enqueue, credentials: new HaTestCredentials(), account: new HaTestAccount());
+            log: logged.Enqueue, credentials: new HaTestCredentials(credentialError), account: new HaTestAccount());
     }
 
     static string? ChildUrlEntry(StartSpec spec) => WindowsAgentStarter.EnvironmentBlock(spec.Environment!)
         .Split('\0').SingleOrDefault(e => e.StartsWith(UrlVariable + "=", StringComparison.OrdinalIgnoreCase));
 
-    sealed class HaTestCredentials : ILaunchCredentials
+    sealed class HaTestCredentials(Exception? error = null) : ILaunchCredentials
     {
-        public string? Prepare(string session, string launchId) => "synthetic-agent-principal";
+        public string? Prepare(string session, string launchId) => error is null ? "synthetic-agent-principal" : throw error;
         public void Bind(string launchId, int processId, DateTimeOffset startedAt) { }
         public void Abandon(string launchId) { }
     }
