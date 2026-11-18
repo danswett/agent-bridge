@@ -14,6 +14,29 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
+    # No run is required when dependency inputs are unchanged; existing runs still gate merges.
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      - '.github/dependabot.yml'
+      - '**/*proj'
+      - '**/*.props'
+      - '**/*.targets'
+      - '**/*.rsp'
+      - '**/*.sln'
+      - '**/*.slnx'
+      - '**/nuget.config'
+      - '**/NuGet.Config'
+      - '**/global.json'
+      - '**/packages.config'
+      - '**/packages.lock.json'
+      - '**/dotnet-tools.json'
+      - '**/package.json'
+      - '**/package-lock.json'
+      - '**/npm-shrinkwrap.json'
+      - '**/.npmrc'
+      - '**/Package.swift'
+      - '**/Package.resolved'
 
 permissions: {}
 
