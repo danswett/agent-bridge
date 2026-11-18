@@ -452,16 +452,16 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     keep (a text field's that is not a string, such as `5` or `true`, is blank once typed or
     shows as nothing (`Invisible.Blank`: `"\u200B"`, `"\u2800"`, `"\u0301"`), which the PWA
     leaves out of an answer, as the app does white space, holds half a surrogate pair, which they
-    send as U+FFFD, or is longer than one answer's text, 4 KiB; a number field's that is
+    send as U+FFFD, or is longer than one answer's text, 16 KiB; a number field's that is
     `null`, not plainly a number, or not held exactly) makes its question answered at the
     machine, rather than offered with every answer refused (#882, #921). So does a form whose
-    smallest answer is over 16 KiB in the largest envelope a host takes (a 256-character
+    smallest answer is over 18 KiB in the largest envelope a host takes (a 256-character
     session id): each pre-filled text or number default (a number as the number it holds,
     written the longer of the ways JavaScript and .NET write it, as the PWA and the app send
     it), every other default and every required field at its smallest
     (the shortest option, the fewest ticks, `true`, `0` or the number nearest 0 that its bounds,
     `multipleOf` and whole-number type allow, past an exclusive bound, or text
-    of its minimum length; past 4 KiB, which no answer's text can be, the form is answered at
+    of its minimum length; past 16 KiB, which no answer's text can be, the form is answered at
     the machine). Accepted as it is: required text that must match a `pattern` or
     `format` is counted at its minimum length, since a pattern is not solved for its shortest
     match. Such a form can be offered and its answer refused as too large; it fails closed,
@@ -855,9 +855,11 @@ In order, for every answer:
    refers to. A delete that fails fails closed: the claim no longer has words, so a retry is told
    only that nothing was typed again and is never read from them; the delete is tried again at
    every write, before every bound check and at every start, and until it succeeds the words
-   still count against the bounds. At most 32 answers' words are kept, 16 KiB each and 256 KiB in
-   all; an answer past a bound, or while the folder can be read by anyone else, is `refused`
-   before any key with `DeliveryReasons.CannotHoldAnswer` ("the machine can't keep this answer
+   still count against the bounds. At most 32 answers' words are kept, 18 KiB of serialized JSON
+   each and 256 KiB in all. Sizing and writing use the protocol's UTF-8 JSON escaping, so an
+   admitted 16 KiB text answer fits with its field names; the entry budget matches the 18 KiB
+   request budget. An answer past a bound, or while the folder can be read by anyone else, is
+   `refused` before any key with `DeliveryReasons.CannotHoldAnswer` ("the machine can't keep this answer
    safely until it's confirmed, so nothing was typed; answer at the machine"), and nothing kept is
    evicted or cut. Copilot permission prompts and Codex approvals are not read again, so they
    keep no words. The words go nowhere else: not to a log, an error message, a reply or the
