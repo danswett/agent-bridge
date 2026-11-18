@@ -182,7 +182,7 @@ public sealed class FleetListTests : IDisposable
         Assert.Equal("offline", offline.GetProperty("result").GetString());
         Assert.Equal("build-box", offline.GetProperty("machines")[0].GetProperty("machineName").GetString());
         Assert.False(offline.TryGetProperty("session", out _));
-        var stale = JsonSerializer.SerializeToElement(await op.HandleAsync(chan, Body("{}")), Web).GetProperty("sessions")[0];
+        var stale = JsonSerializer.SerializeToElement(await Op().HandleAsync(chan, Body("{}")), Web).GetProperty("sessions")[0];
         Assert.True(stale.GetProperty("stale").GetBoolean());
         Assert.False(stale.GetProperty("machineOnline").GetBoolean());
         roster.Machines = Frames(null);
