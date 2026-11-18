@@ -1119,6 +1119,23 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     static bool HeldTo(KeyPlan plan, string text) => plan.Sends[0].Expect is { } rows && rows.Any(r => r.Text.Contains(text, StringComparison.Ordinal));
 
+    [Theory]
+    [InlineData('x', 16 * 1024)]
+    [InlineData('\u754c', 3_000)]
+    public async Task Reply_sized_ASCII_and_multibyte_form_answers_reach_Copilot(char character, int count)
+    {
+        var text = new string(character, count);
+        var answer = new { diagnostics = text };
+        await AskFieldsAsync(new { diagnostics = new { type = "string" } }, 1, answer);
+        injector.Screen = () => FieldsScreen(["diagnostics"]);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Single(injector.Plans, p => p.Plan.Sends.Any(s => s.Text == text));
+    }
+
     [Fact]
     public async Task A_permission_prompt_opening_after_the_words_show_gets_no_Enter_and_the_answer_is_typed_not_recorded()
     {
