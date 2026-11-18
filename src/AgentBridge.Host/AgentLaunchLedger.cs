@@ -18,7 +18,15 @@ internal sealed class AgentLaunchLedger(string profile, Func<DateTimeOffset>? cl
     {
         var root = Path.Combine(profile, "launch-admissions");
         using var held = AgentAuditLog.Lock(root);
-        var existed = Directory.Exists(root);
+        var marker = Path.Combine(profile, "launch-admissions.initialized");
+        var initialized = File.Exists(marker);
+        var fresh = !Directory.Exists(root) && !initialized;
+        if (!initialized)
+        {
+            using var stamp = PrivateFolder.CreateNew(marker);
+            stamp.Write("v1\n"u8);
+            stamp.Flush(flushToDisk: true);
+        }
         PrivateFolder.Ensure(root, "the launch admission ledger", "no agent launch is admitted");
         var path = Path.Combine(root, "state.json");
         var limits = new AgentLimits(clock);
@@ -29,7 +37,7 @@ internal sealed class AgentLaunchLedger(string profile, Func<DateTimeOffset>? cl
             limits.RestoreLaunches(JsonSerializer.Deserialize<AgentLimits.SavedLaunchState>(file, Json)
                 ?? throw new InvalidDataException("Launch admission ledger is empty."));
         }
-        catch (FileNotFoundException) when (!existed)
+        catch (FileNotFoundException) when (fresh)
         {
             var (rows, complete) = GateAuditProjection.Load(profile);
             if (!complete || rows.Any(r => r.Action == "session.launch"

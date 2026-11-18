@@ -24,7 +24,7 @@ public sealed partial class AgentLimits
     readonly Dictionary<(string, string), Window> pairs = [];
     readonly Dictionary<string, Window> targets = [], originLaunches = [], reads = [];
     readonly Dictionary<string, Window> launchAttempts = [];
-    readonly Dictionary<(string Origin, string Request), (string Hash, DateTimeOffset At)> launchRequests = [];
+    readonly Dictionary<(string Origin, string Request), (string Hash, DateTimeOffset At, object? Charge)> launchRequests = [];
     readonly Dictionary<(string Origin, string Request), LiveLaunch> liveLaunches = [];
     readonly Window machineLaunches = new(Hour);
     DateTimeOffset? lastLaunchCheck;
@@ -48,6 +48,7 @@ public sealed partial class AgentLimits
     }
 
     static int Positive(int value) => value > 0 ? value : throw new ArgumentOutOfRangeException(nameof(value), "A limit must be at least 1.");
+    internal static string CanonicalRequest(string request) => Guid.TryParse(request, out var id) ? id.ToString("D") : request;
 
     public AgentLimitVerdict CheckMessage(string origin, string target)
     {
@@ -88,7 +89,7 @@ public sealed partial class AgentLimits
         lock (gate)
         {
             var now = LaunchTime();
-            var key = (origin, request);
+            var key = (origin, CanonicalRequest(request));
             var known = launchRequests.TryGetValue(key, out var remembered);
             if (known && remembered.Hash == requestSha256) { return new(false, "duplicate", 0, Duplicate: true); }
             // Never evict a live request to admit a flood of new ids.
@@ -102,10 +103,11 @@ public sealed partial class AgentLimits
             if (wait > 0) { return Refuse(wait); }
             attempts.Hit(now);
             if (known) { return new(false, "requestReused", 0); }
-            launchRequests.Add(key, (requestSha256, now));
+            launchRequests.Add(key, (requestSha256, now, null));
             if (reserveLive && liveLaunches.Count >= liveLimit) { return new(false, AgentLimitVerdict.LiveLimited, 0); }
-            var charge = reserveLive ? new object() : null;
+            var charge = new object();
             var result = CheckLaunch(origin, now, originLimit, machineLimit, charge);
+            if (result.Allowed) { launchRequests[key] = (requestSha256, now, charge); }
             if (reserveLive && result.Allowed) { liveLaunches.Add(key, new(Charge: charge)); }
             return result;
         }
@@ -116,7 +118,7 @@ public sealed partial class AgentLimits
         ArgumentException.ThrowIfNullOrWhiteSpace(session);
         lock (gate)
         {
-            var key = (origin, request);
+            var key = (origin, CanonicalRequest(request));
             if (!liveLaunches.TryGetValue(key, out var launch)
                 || launch.Session is { } existing && existing != session
                 || liveLaunches.Any(p => p.Key != key && p.Value.Session == session))
@@ -128,17 +130,20 @@ public sealed partial class AgentLimits
     // Neither an hourly-window expiry nor an unconfirmed start proves the process has exited.
     public bool LaunchFinished(string origin, string request)
     {
-        lock (gate) { return liveLaunches.Remove((origin, request)); }
+        lock (gate) { return liveLaunches.Remove((origin, CanonicalRequest(request))); }
     }
 
     internal bool LaunchRefused(string origin, string request)
     {
         lock (gate)
         {
-            if (!liveLaunches.TryGetValue((origin, request), out var launch) || launch.Session is not null) { return false; }
+            var key = (origin, CanonicalRequest(request));
+            if (!liveLaunches.TryGetValue(key, out var launch) || launch.Session is not null) { return false; }
             originLaunches.GetValueOrDefault(origin)?.UndoHit(launch.Charge);
             machineLaunches.UndoHit(launch.Charge);
-            return liveLaunches.Remove((origin, request));
+            var remembered = launchRequests[key];
+            launchRequests[key] = (remembered.Hash, remembered.At, null);
+            return liveLaunches.Remove(key);
         }
     }
 
@@ -204,7 +209,7 @@ public sealed partial class AgentLimits
         {
             var at = entry.Value.At > now ? now : entry.Value.At;
             if (now - at >= Hour && !liveLaunches.ContainsKey(entry.Key)) { launchRequests.Remove(entry.Key); }
-            else if (at != entry.Value.At) { launchRequests[entry.Key] = (entry.Value.Hash, at); }
+            else if (at != entry.Value.At) { launchRequests[entry.Key] = (entry.Value.Hash, at, entry.Value.Charge); }
         }
         return now;
     }
