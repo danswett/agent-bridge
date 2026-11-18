@@ -45,7 +45,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
   status:
   workflow_run: # zizmor: ignore[dangerous-triggers]
-    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
+    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Main red, Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
     types: [in_progress, completed]
   check_suite:
     types: [completed] # the only type Actions accepts here
@@ -195,6 +195,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_RULE_POST_TOKEN: ${{ steps.app.outputs.token }}
           ARM64_WAIVER: ${{ vars.ARM64_WAIVER }}
+          INFRA_NONBLOCK: ${{ vars.INFRA_NONBLOCK }}
+          FLEET_MERGERULE: ${{ vars.FLEET_MERGERULE }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           FAST: ${{ vars.FLEET_MERGERULE != 'off' }}
           EVENT: ${{ github.event_name }}

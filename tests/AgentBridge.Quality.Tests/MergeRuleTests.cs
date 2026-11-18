@@ -2110,6 +2110,121 @@ public class MergeRuleTests
         finally { File.Delete(config); }
     }
 
+    [Theory]
+    [InlineData("active", "success")]
+    [InlineData("boundary", "failure")]
+    [InlineData("expired", "failure")]
+    [InlineData("future", "failure")]
+    [InlineData("missing", "failure")]
+    [InlineData("empty", "failure")]
+    [InlineData("malformed", "failure")]
+    [InlineData("wrong-type", "failure")]
+    [InlineData("test", "failure")]
+    [InlineData("build", "failure")]
+    [InlineData("mixed", "failure")]
+    [InlineData("unknown", "failure")]
+    [InlineData("wrong-run", "failure")]
+    [InlineData("one-failure", "failure")]
+    [InlineData("prior-success", "failure")]
+    [InlineData("gap", "failure")]
+    [InlineData("test-unknown", "failure")]
+    [InlineData("build-unknown", "failure")]
+    [InlineData("test-step", "failure")]
+    [InlineData("build-step", "failure")]
+    [InlineData("publish", "failure")]
+    [InlineData("sign", "failure")]
+    [InlineData("other-red", "failure")]
+    [InlineData("plan-red", "failure")]
+    [InlineData("pr-red", "failure")]
+    [InlineData("kill-switch", "failure")]
+    [InlineData("wrong-attempt", "failure")]
+    [InlineData("matrix", "success")]
+    [InlineData("network", "success")]
+    public void Infra_nonblocking_is_run_bound_infra_only_and_expires_fail_closed(string scenario, string state)
+    {
+        var now = new DateTimeOffset(2026, 11, 18, 8, 0, 0, TimeSpan.Zero);
+        var failed = scenario is "publish" or "sign" ? scenario : scenario == "matrix" ? "product (ubuntu-latest)" : "light";
+        var record = new Dictionary<string, object?>
+        {
+            ["job"] = scenario == "unknown" ? "unlisted" : failed,
+            ["run_id"] = scenario == "wrong-run" ? 4 : 5,
+            ["run_attempt"] = scenario == "wrong-attempt" ? 3 : 2,
+            ["since"] = now.AddMinutes(scenario == "boundary" ? -120 : scenario == "expired" ? -121 : scenario == "future" ? 1 : -10),
+            ["signature"] = scenario == "test" ? "Failed Example.Test" : scenario == "build" ? "error MSB1001"
+                : scenario == "mixed" ? "apt-get: Failed to fetch; Failed Example.Test"
+                : scenario == "network" ? "network timeout" : "apt-get: Failed to fetch",
+            ["test_failure"] = scenario == "test", ["build_failure"] = scenario == "build",
+        };
+        if (scenario == "test-unknown") record.Remove("test_failure");
+        if (scenario == "build-unknown") record.Remove("build_failure");
+        var value = scenario switch
+        {
+            "missing" => null, "empty" => "", "malformed" => "[", "wrong-type" => "[{\"run_id\":{}}]",
+            _ => JsonSerializer.Serialize(new[] { record }),
+        };
+        object Entry(int id, string name, int attempt = 2, string conclusion = "success", string step = "Install dependencies") =>
+            new { id, name, status = "completed", conclusion, run_attempt = attempt,
+                steps = new[] { new { name = step, status = "completed", conclusion } } };
+        var jobs = new List<object>
+        {
+            Entry(1, "plan", conclusion: scenario == "plan-red" ? "failure" : "success"),
+            Entry(2, "product (ubuntu-latest)"), Entry(3, "app (win-x64)", conclusion: scenario == "other-red" ? "failure" : "success"),
+            Entry(4, "app (win-arm64)"), Entry(5, "light"),
+        };
+        jobs.RemoveAll(j => JsonSerializer.SerializeToElement(j).GetProperty("name").GetString() == failed);
+        jobs.Add(Entry(10, failed, scenario == "gap" ? 3 : 2, conclusion: "failure",
+            step: scenario == "test-step" ? "Run tests" : scenario == "build-step" ? "Build" : "Install dependencies"));
+        if (scenario != "one-failure")
+            jobs.Add(Entry(9, failed, 1, scenario == "prior-success" ? "success" : "failure"));
+        var github = new FakeGitHub(scenario == "pr-red" ? WaiverPullRequest("light") : GraphQLPullRequest(Head),
+            mainRuns: MainRuns((5, "completed", "failure", 2)),
+            mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Count, jobs }));
+        var config = WriteConfig();
+        try
+        {
+            File.AppendAllText(config, """
+
+                infra_nonblocking:
+                  switch: INFRA_NONBLOCK
+                  window_minutes: 120
+                  signatures: ['apt-get: Failed to fetch', 'network timeout']
+                """);
+            if (scenario is "publish" or "sign")
+                File.WriteAllText(config, File.ReadAllText(config).Replace("jobs: [light,", $"jobs: [{failed}, light,", StringComparison.Ordinal));
+            var output = new StringWriter();
+            var reads = 0;
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain, () => now,
+                name =>
+                {
+                    if (name == "FLEET_MERGERULE" && scenario == "kill-switch") return "off";
+                    if (name != "INFRA_NONBLOCK") return null;
+                    reads++; return value;
+                });
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.Equal(scenario == "kill-switch" ? 0 : 1, reads);
+            Assert.Equal(2, github.RestPaths.Count(p => p.Contains("/actions/", StringComparison.Ordinal)));
+            if (scenario == "active")
+                Assert.Contains("light: non-blocking (infra, until 2026-11-18T09:50:00", output.ToString(), StringComparison.Ordinal);
+            if (scenario is "malformed" or "wrong-type")
+                Assert.Contains("Infra non-blocking: ignored", output.ToString(), StringComparison.Ordinal);
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(121)]
+    public void Infra_nonblocking_rejects_a_window_outside_the_hard_two_hour_ceiling(int minutes)
+    {
+        var config = WriteConfig();
+        try
+        {
+            Assert.Throws<FormatException>(() => MergeRuleConfig.Parse(File.ReadAllText(config)
+                + $"\ninfra_nonblocking: {{ switch: INFRA_NONBLOCK, window_minutes: {minutes}, signatures: ['network timeout'] }}"));
+        }
+        finally { File.Delete(config); }
+    }
+
     static string WriteConfig(bool arm64Waiver = false)
     {
         var path = Path.Combine(AppContext.BaseDirectory, $"merge-rule-{Guid.NewGuid():N}.yml");

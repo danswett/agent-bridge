@@ -67,6 +67,16 @@ arm64_waiver:
   until: 2026-11-20T08:00:00Z
   switch: ARM64_WAIVER
 
+# Infra-only main-job containment; records are run/attempt-bound and fail closed.
+# Clear INFRA_NONBLOCK or set FLEET_MERGERULE=off to revoke immediately.
+infra_nonblocking:
+  switch: INFRA_NONBLOCK
+  window_minutes: 120
+  signatures:
+    - 'Failed to fetch|Temporary failure resolving'
+    - '(network|connection|operation) (timeout|timed out)|Connection reset by peer|Could not resolve host'
+    - 'The runner has lost communication|runner.*(offline|unavailable)|HTTP (502|503|504)|Service Unavailable'
+
 # Main must be green. GitHub's auto-merge doesn't pause while main's CI is red, and would keep
 # landing pull requests on a broken main, each making the breakage harder to untangle. So while
 # any named job below isn't completed successfully at its latest attempt in main's latest push

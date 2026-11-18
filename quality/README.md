@@ -579,6 +579,18 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      label (`main_green.exempt_labels`) from Quality, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.
+   - **Infra-only two-hour containment ([3072](https://github.com/danswett/agent-bridge/issues/3072)).**
+     `infra_nonblocking` reads the `INFRA_NONBLOCK` repository variable, a JSON array:
+     `[{"job":"light","run_id":123,"run_attempt":2,"since":"2026-11-18T08:00:00Z","signature":"apt-get: Failed to fetch","test_failure":false,"build_failure":false}]`.
+     Quality or the detector attests that both failures' complete logs contain no test/build
+     failure; missing negative attestations hold. The evaluator binds each record to the selected
+     main run/attempt and verifies two consecutive failed attempts of that exact job using its existing
+     job read. Failed test/build steps, unlisted jobs and publishing/signing are never exempt.
+     Only configured infra signatures qualify; mixed product failures hold. The configured
+     window is 1..120 minutes from `since`, never a future date, and expiry holds again exactly
+     at the boundary. The log names each non-blocking job and expiry; invalid evidence is ignored
+     fail-closed with a diagnostic. Clear the variable or set `FLEET_MERGERULE=off` to revoke.
+     No PR-head checks or reader requirements are relaxed; this adds no notification or API read.
    - The standing rule (owner decision 2026-11-08, replacing the 2026-11-05 label of #955):
      Copilot and Codex reviews are optional extras, and the receipts are the gate. A PR needs a
      success independent-review receipt on its head from a listed poster and no Copilot review,
