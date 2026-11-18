@@ -89,6 +89,73 @@ public sealed class QueueSubmitTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData(false)][InlineData(true)]
+    public void The_retained_108_character_probe_recognizes_owned_text_at_the_98_column_wrap(bool plain)
+    {
+        var words = new string('a', 108);
+        var rows = TwoRows(words[..98], words[98..], plain);
+        var state = CopilotInputBoxReader.Read(rows).State;
+        Assert.True(state is { Main: true, Complete: true, Shell: false, Lines: 2, Vim: CopilotVimMode.None });
+        Assert.Equal(words[..98] + "\n" + words[98..], state!.Content);
+        Assert.NotNull(typeof(CopilotInputBoxReader).GetMethod("Owned", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [rows, words]));
+    }
+
+    [Theory]
+    [InlineData(false, false)][InlineData(false, true)]
+    [InlineData(true, false)][InlineData(true, true)]
+    public async Task Wrapped_owned_text_submits_once_or_cleans_after_failure_without_replaying_the_rid(bool accepted, bool plain)
+    {
+        var words = await WrappedConsole(plain, accepted);
+        var rid = Guid.NewGuid().ToString();
+        var result = await Send(words, rid);
+        Assert.Equal(accepted ? AnswerOutcome.Delivered : AnswerOutcome.Unconfirmed, result.Outcome);
+        Assert.Equal(accepted ? new[] { "q" } : ["q", "u"], console.Actions);
+        Assert.Equal(accepted ? new[] { words } : [], console.Submitted);
+        Assert.Equal("", console.Draft); Assert.Equal(1, console.TextWrites);
+        var effects = Effects();
+        Assert.Equal(result, await Send(words, rid));
+        Assert.Equal(effects, Effects());
+    }
+
+    [Theory]
+    [InlineData("internal", false)][InlineData("internal", true)]
+    [InlineData("boundary", false)][InlineData("boundary", true)]
+    [InlineData("hardline", false)][InlineData("hardline", true)]
+    public async Task Human_spaces_and_hard_newlines_in_wrapped_text_are_not_cleared(string change, bool plain)
+    {
+        var words = await WrappedConsole(plain, false);
+        var edited = words.Insert(change == "boundary" ? 97 : 49, change == "hardline" ? "\n" : " ");
+        console.AfterQueue = () =>
+        {
+            console.Draft = edited;
+            if (change == "hardline") { console.Screen = () => TwoRows(words[..49], words[49..], plain); }
+        };
+        var rid = Guid.NewGuid().ToString();
+        var result = await Send(words, rid);
+        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
+        Assert.Equal(new[] { "q" }, console.Actions); Assert.Empty(console.Submitted);
+        Assert.Equal(edited, console.Draft); Assert.Equal(1, console.TextWrites);
+        var effects = Effects();
+        Assert.Equal(result, await Send(words, rid));
+        Assert.Equal(effects, Effects());
+    }
+
+    async Task<string> WrappedConsole(bool plain, bool accepted)
+    {
+        console.Plain = plain; console.AcceptQueue = accepted;
+        var empty = (await console.ReadScreenAsync(42)).Rows!;
+        console.Screen = () => console.Draft.Length == 0 ? empty : TwoRows(console.Draft[..98], console.Draft[98..], plain);
+        return new string('a', 108);
+    }
+
+    (int Text, int Keys, int Submissions, string Draft) Effects() =>
+        (console.TextWrites, console.Actions.Count, console.Submitted.Count, console.Draft);
+
+    static string[] TwoRows(string first, string second, bool plain) => plain
+        ? [new string('\u2500', 100), "\u276F " + first, "  " + second, new string('\u2500', 100), " Working esc interrupt \u00B7 ctrl+q enqueue"]
+        : ["\u257B" + new string('\u2584', 99), "\u2503 " + first, "\u2503 " + second, "\u2579" + new string('\u2580', 99), " Working esc interrupt \u00B7 ctrl+q enqueue"];
+
+    [Theory]
     [InlineData("owner")][InlineData("intent")][InlineData("revoke")]
     public async Task A_change_after_text_never_submits_or_clears_an_owner_edit(string change)
     {
@@ -175,10 +242,11 @@ public sealed class QueueSubmitTests : IAsyncLifetime
         public Action? BeforeKeys;
         public Action? AfterQueue;
         public Action<string>? Record;
+        public Func<IReadOnlyList<string>>? Screen;
         public readonly List<string> Submitted = [], Actions = [];
-        IReadOnlyList<string> Rows() => Plain
+        IReadOnlyList<string> Rows() => Screen?.Invoke() ?? (Plain
             ? [new string('\u2500', 100), "\u276F " + Draft, new string('\u2500', 100), " Working esc interrupt \u00B7 ctrl+q enqueue"]
-            : ["\u257B" + new string('\u2584', 99), "\u2503 " + Draft, "\u2579" + new string('\u2580', 99), " Working esc interrupt \u00B7 ctrl+q enqueue"];
+            : ["\u257B" + new string('\u2584', 99), "\u2503 " + Draft, "\u2579" + new string('\u2580', 99), " Working esc interrupt \u00B7 ctrl+q enqueue"]);
         public Task<ConsoleScreen> ReadScreenAsync(int pid, CancellationToken ct = default) => Task.FromResult(new ConsoleScreen(Rows(), null));
         public async Task<InjectionResult> InjectAsync(int pid, KeyPlan plan, CancellationToken ct = default)
         {
