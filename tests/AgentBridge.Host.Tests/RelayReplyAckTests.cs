@@ -1,0 +1,124 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using AgentBridge.AgentEnvelope;
+using AgentBridge.Host;
+using AgentBridge.Host.Lite;
+using AgentBridge.Host.Delivery;
+using AgentBridge.Protocol;
+using AgentBridge.Transport;
+using AgentBridge.Transport.Tests;
+using Codec = AgentBridge.Roster.Codec;
+using Xunit;
+
+[Trait("Category", "Network")]
+public sealed class RelayReplyAckTests
+{
+    const string Session = "11111111-1111-4111-8111-111111111111";
+    sealed class Mode : ILiteMode
+    {
+        public bool On => true;
+        public long KillEpoch => 0;
+        public void TurnOff(string why) => throw new NotSupportedException();
+        public void RaiseEpoch(long epoch) => throw new NotSupportedException();
+    }
+    sealed class Pins(LitePeer peer) : ILitePeers
+    {
+        public IReadOnlyList<LitePeer> All() => [peer];
+        public bool TryFind(string id, out LitePeer found) { found = peer; return id == peer.DeviceId; }
+    }
+    sealed class Terminal : ISessionReplier, ILiteDeliver
+    {
+        public bool Available => true;
+        public int Calls;
+        public Action? BeforeTyping;
+        public TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
+        {
+            BeforeTyping?.Invoke();
+            Calls++;
+            await Release.Task.WaitAsync(cancellationToken);
+            return new(AnswerOutcome.Delivered);
+        }
+        public async Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) =>
+            new((await ReplyAsync(new ReplyRequest { Id = Session, Request = envelope.Body.Request, Text = text }, cancellationToken: ct)).Outcome == AnswerOutcome.Delivered, null);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public async Task Durable_relay_results_ack_only_rid_and_reack_duplicates_while_rollback_stays_direct(bool lite, bool durable)
+        => await Check(lite, durable, failedWrite: false);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failed_relay_append_emits_no_ack_and_types_nothing(bool lite)
+        => await Check(lite, durable: true, failedWrite: true);
+
+    static async Task Check(bool lite, bool durable, bool failedWrite)
+    {
+        var folder = Directory.CreateTempSubdirectory("relay-ack-").FullName;
+        var terminal = new Terminal();
+        try
+        {
+            await using var relay = await TestRelay.StartAsync();
+            var token = relay.TokenFor(1, "fixture");
+            var host = await relay.ConnectAsync(token, "fixture", "host");
+            var sender = await relay.ConnectAsync(token, "fixture", "host");
+            using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var point = key.ExportParameters(false).Q;
+            var receiver = new LiteReceiver(new Mode(), new Pins(new LitePeer(sender.Id, [0x04, .. point.X!, .. point.Y!], "fixture")), terminal);
+            var source = new FleetPublisherTests.Source { Sessions = [new Session
+            {
+                Id = Session, Agent = AgentKind.Copilot, Status = SessionStatus.Idle,
+                StatusSince = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow, Activity = new(),
+            }] };
+            var logged = new List<string>();
+            var service = new SessionService(source, new MachineInfo(host.Id, "fixture", "test", "0"), logged.Add, replies: terminal) { LiteReceiver = receiver };
+            var path = Path.Combine(folder, "replies.inbox");
+            if (durable) { service.ConfigureRelayInbox(path, (_, _) => true, _ => true); }
+            if (failedWrite) { File.WriteAllText(path, "invalid snapshot"); }
+            terminal.BeforeTyping = () => { if (durable) { Assert.Contains("private reply", File.ReadAllText(path)); } };
+            host.Hub.JsonOptions = ProtocolJson.Options;
+            host.Hub.Handler = service.HandleAsync;
+            await Task.WhenAll(sender.Relay.WaitForPeerAsync(p => p.Id == host.Id, TimeSpan.FromSeconds(10)),
+                host.Relay.WaitForPeerAsync(p => p.Id == sender.Id, TimeSpan.FromSeconds(10)));
+            var channel = await sender.Hub.OpenAsync(host.Id);
+            const string rid = "22222222-2222-4222-8222-222222222222";
+            object request = new { id = Session, request = rid, text = "private reply" };
+            if (lite)
+            {
+                var from = new LiteSender(sender.Relay.AccountId, sender.Id, Codec.Base64Url(SHA256.HashData(sender.Key.Public)),
+                    "fixture", Codec.Base64Url(new byte[12]), Codec.Base64Url(new byte[16]), "agent", "fixture");
+                var envelope = LiteProfile.Seal(from, new LiteTarget(host.Id, Session, Codec.Base64Url(new byte[12])), rid,
+                    Encoding.UTF8.GetBytes("private reply"), DateTimeOffset.UtcNow.ToUnixTimeSeconds(), new EcdsaEnvelopeSigner(key));
+                request = new { envelope = Codec.Base64Url(envelope), text = "private reply", killEpoch = 0 };
+            }
+            terminal.Release.TrySetResult();
+            var first = await channel.RequestAsync(lite ? LiteReceiver.Op : Ops.SessionReply, request);
+            Assert.Equal(!failedWrite, first.GetProperty("ok").GetBoolean());
+            if (!failedWrite)
+            {
+                Receipt(first.GetProperty("result"), durable ? "present" : "absent");
+                var duplicate = await channel.RequestAsync(lite ? LiteReceiver.Op : Ops.SessionReply, request);
+                Assert.Equal(durable || lite ? 1 : 2, terminal.Calls);
+                Receipt(duplicate.GetProperty("result"), durable ? "duplicate" : "absent");
+            }
+            else { Assert.Equal(0, terminal.Calls); }
+            Assert.False(channel.Events.TryRead(out _));
+            Assert.DoesNotContain(logged, line => line.Contains("private reply", StringComparison.Ordinal));
+        }
+        finally { terminal.Release.TrySetResult(); Directory.Delete(folder, true); }
+    }
+
+    static void Receipt(JsonElement result, string vector)
+    {
+        var actual = new JsonObject();
+        if (result.TryGetProperty("reply_ack", out var ack)) { actual["reply_ack"] = JsonNode.Parse(ack.GetRawText()); }
+        Assert.True(JsonNode.DeepEquals(VectorFiles.Read("reply-ack.json")[vector], actual), actual.ToJsonString());
+    }
+}
