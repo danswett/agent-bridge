@@ -29,9 +29,11 @@ public sealed class RelayInboxFlowTests : IAsyncLifetime
         }],
     };
     readonly Terminal terminal = new();
-    readonly Channel<string> arrivals = Channel.CreateUnbounded<string>();
+    readonly string folder = Directory.CreateTempSubdirectory("relay-flow-").FullName;
     readonly ECDsa signingA = ECDsa.Create(ECCurve.NamedCurves.nistP256);
     readonly ECDsa signingB = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+    CancellationTokenSource stopped = null!;
+    Task recovery = Task.CompletedTask;
     TestRelay relay = null!;
     Device receiver = null!, senderA = null!, senderB = null!;
 
@@ -50,9 +52,11 @@ public sealed class RelayInboxFlowTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         terminal.Release.TrySetResult();
+        await StopReceiverAsync();
         await relay.DisposeAsync();
         signingA.Dispose();
         signingB.Dispose();
+        Directory.Delete(folder, true);
     }
 
     void Serve()
@@ -64,16 +68,29 @@ public sealed class RelayInboxFlowTests : IAsyncLifetime
         {
             LiteReceiver = new LiteReceiver(new Mode(), peers, terminal),
         };
-        receiver.Hub.Handler = (channel, op, data) =>
-        {
-            var pending = service.HandleAsync(channel, op, data);
-            if (op == LiteReceiver.Op)
-            {
-                var envelope = Envelope.Parse(CodecBytes(data.GetProperty("envelope").GetString()!));
-                arrivals.Writer.TryWrite(envelope.Body.Request);
-            }
-            return pending;
-        };
+        service.ConfigureRelayInbox(Path.Combine(folder, "relay-replies.inbox"), (_, _) => false,
+            c => c.Account == receiver.Relay.AccountId && peers.TryFind(c.PeerId, out _),
+            c => receiver.Relay.Presence.Any(p => p.Id == c.PeerId && p.Kind == "host"));
+        receiver.Hub.Handler = service.HandleAsync;
+        stopped = new();
+        recovery = service.RunRelayRecoveryAsync(stopped.Token, receiver.Relay);
+    }
+
+    async Task StopReceiverAsync()
+    {
+        stopped.Cancel();
+        await recovery.WaitAsync(Patience);
+        stopped.Dispose();
+        await receiver.DisposeAsync();
+    }
+
+    async Task RestartAsync()
+    {
+        await StopReceiverAsync();
+        receiver = await relay.ConnectAsync(relay.TokenFor(1, "fixture"), "fixture", "host", receiver.Key);
+        receiver.Hub.JsonOptions = ProtocolJson.Options;
+        Serve();
+        await new FleetPublisher(source, receiver.Id).PublishAsync(receiver.Relay.RegistryPutAsync);
     }
 
     async Task<(SecureChannel Channel, FleetMachine Target)> ResolveAsync(Device sender)
@@ -94,12 +111,6 @@ public sealed class RelayInboxFlowTests : IAsyncLifetime
     {
         var q = key.ExportParameters(false).Q;
         return [0x04, .. q.X!, .. q.Y!];
-    }
-
-    static byte[] CodecBytes(string encoded)
-    {
-        Assert.True(Codec.TryBase64Url(encoded, out var bytes));
-        return bytes;
     }
 
     static string Rid() => Guid.NewGuid().ToString("D");
@@ -124,8 +135,23 @@ public sealed class RelayInboxFlowTests : IAsyncLifetime
 
     static void Delivered(JsonElement ack, string rid)
     {
-        Assert.Equal(rid, ack.GetProperty("request").GetString());
+        Receipt(ack, rid);
         Assert.Equal("delivered", ack.GetProperty("status").GetString());
+    }
+
+    static void Receipt(JsonElement ack, string rid)
+    {
+        Assert.Equal(rid, ack.GetProperty("request").GetString());
+        var field = Assert.Single(ack.GetProperty("reply_ack").EnumerateObject());
+        Assert.Equal("rid", field.Name);
+        Assert.Equal(rid, field.Value.GetString());
+    }
+
+    static void AdmittedWhileBusy(JsonElement ack, string rid)
+    {
+        Receipt(ack, rid);
+        Assert.Equal("refused", ack.GetProperty("status").GetString());
+        Assert.Equal("busy", ack.GetProperty("code").GetString());
     }
 
     [Fact]
@@ -135,21 +161,24 @@ public sealed class RelayInboxFlowTests : IAsyncLifetime
         var b = await ResolveAsync(senderB);
         var firstRid = Rid();
         var secondRid = Rid();
+        var thirdRid = Rid();
         terminal.HoldFirst = true;
         var first = SendAsync(a.Channel, Request(senderA, signingA, a.Target, firstRid, "first"));
-        Task<JsonElement>? second = null;
         try
         {
             await terminal.Started.Task.WaitAsync(Patience);
-            Assert.Equal(firstRid, await arrivals.Reader.ReadAsync().AsTask().WaitAsync(Patience));
-            second = SendAsync(b.Channel, Request(senderB, signingB, b.Target, secondRid, "second"));
-            Assert.Equal(secondRid, await arrivals.Reader.ReadAsync().AsTask().WaitAsync(Patience));
+            AdmittedWhileBusy(await SendAsync(b.Channel, Request(senderB, signingB, b.Target, secondRid, "second")), secondRid);
+            AdmittedWhileBusy(await SendAsync(a.Channel, Request(senderA, signingA, a.Target, thirdRid, "third")), thirdRid);
+            Assert.Empty(terminal.Delivered);
+            Assert.Equal([firstRid], terminal.Attempts);
+            Assert.False(a.Channel.Events.TryRead(out _));
+            Assert.False(b.Channel.Events.TryRead(out _));
         }
         finally { terminal.Release.TrySetResult(); }
         Delivered(await first, firstRid);
-        Delivered(await second!, secondRid);
+        await terminal.ExpectAsync(firstRid, secondRid, thirdRid);
 
-        Assert.Equal([firstRid, secondRid], terminal.Delivered);
+        Assert.Equal([firstRid, secondRid, thirdRid], terminal.Delivered);
         Assert.Equal(1, terminal.MaximumInFlight);
     }
 
@@ -166,8 +195,9 @@ public sealed class RelayInboxFlowTests : IAsyncLifetime
 
         var duplicate = await SendAsync(a.Channel, first);
 
-        Assert.Equal(firstRid, duplicate.GetProperty("request").GetString());
+        Delivered(duplicate, firstRid);
         Assert.Equal([firstRid, secondRid], terminal.Delivered);
+        Assert.Equal([firstRid, secondRid], terminal.Attempts);
     }
 
     [Fact]
@@ -177,11 +207,7 @@ public sealed class RelayInboxFlowTests : IAsyncLifetime
         var rid = Rid();
         var request = Request(senderA, signingA, a.Target, rid, "once");
         Delivered(await SendAsync(a.Channel, request), rid);
-        await receiver.DisposeAsync();
-        receiver = await relay.ConnectAsync(relay.TokenFor(1, "fixture"), "fixture", "host", receiver.Key);
-        receiver.Hub.JsonOptions = ProtocolJson.Options;
-        Serve();
-        await new FleetPublisher(source, receiver.Id).PublishAsync(receiver.Relay.RegistryPutAsync);
+        await RestartAsync();
         var rediscovered = await ResolveAsync(senderB);
         await Task.WhenAll(
             senderA.Relay.WaitForPeerAsync(p => p.Id == rediscovered.Target.Id, Patience),
@@ -190,29 +216,39 @@ public sealed class RelayInboxFlowTests : IAsyncLifetime
 
         var ack = await SendAsync(reconnected, request);
 
-        Assert.Equal(rid, ack.GetProperty("request").GetString());
+        Delivered(ack, rid);
         Assert.Equal([rid], terminal.Delivered);
+        Assert.Equal([rid], terminal.Attempts);
     }
 
     [Fact]
-    public async Task An_undelivered_rid_is_retained_and_dispatched_after_a_receiver_restart_without_resending()
+    public async Task An_admitted_reply_recovers_after_receiver_restart_and_interrupted_work_is_not_retyped()
     {
         var a = await ResolveAsync(senderA);
-        var rid = Rid();
-        terminal.Busy = true;
-        var ack = await SendAsync(a.Channel, Request(senderA, signingA, a.Target, rid, "survive restart"));
+        var b = await ResolveAsync(senderB);
+        var interrupted = Rid();
+        var retained = Rid();
+        terminal.HoldFirst = true;
+        source.Sessions[0] = source.Sessions[0] with { Status = SessionStatus.Working };
+        AdmittedWhileBusy(await SendAsync(a.Channel, Request(senderA, signingA, a.Target, interrupted, "interrupted")), interrupted);
+        source.Sessions[0] = source.Sessions[0] with { Status = SessionStatus.Idle };
+        source.Signal();
+        await terminal.Started.Task.WaitAsync(Patience);
+        AdmittedWhileBusy(await SendAsync(b.Channel, Request(senderB, signingB, b.Target, retained, "survive restart")), retained);
         Assert.Empty(terminal.Delivered);
-        await receiver.DisposeAsync();
-        terminal.Busy = false;
-        receiver = await relay.ConnectAsync(relay.TokenFor(1, "fixture"), "fixture", "host", receiver.Key);
-        receiver.Hub.JsonOptions = ProtocolJson.Options;
-        Serve();
-        await new FleetPublisher(source, receiver.Id).PublishAsync(receiver.Relay.RegistryPutAsync);
 
-        Assert.Equal(rid, ack.GetProperty("request").GetString());
-        Assert.Equal("queued", ack.GetProperty("status").GetString());
-        await terminal.Finished.Task.WaitAsync(Patience);
-        Assert.Equal([rid], terminal.Delivered);
+        await RestartAsync();
+
+        await terminal.ExpectAsync(retained);
+        Assert.Equal([retained], terminal.Delivered);
+        Assert.Equal([interrupted, retained], terminal.Attempts);
+        Assert.Equal(1, terminal.MaximumInFlight);
+        stopped.Cancel();
+        await recovery.WaitAsync(Patience);
+        using var saved = JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, "relay-replies.inbox")));
+        var attempt = Assert.Single(saved.RootElement.GetProperty("Messages").EnumerateArray(),
+            m => m.GetProperty("Rid").GetString() == Guid.Parse(interrupted).ToString("N"));
+        Assert.Equal("unconfirmed", attempt.GetProperty("Outcome").GetString());
     }
 
     sealed class Mode : ILiteMode
@@ -238,29 +274,36 @@ public sealed class RelayInboxFlowTests : IAsyncLifetime
     sealed class Terminal : ILiteDeliver
     {
         readonly object gate = new();
+        readonly Channel<string> completed = Channel.CreateUnbounded<string>();
         int inFlight, calls;
-        public bool HoldFirst, Busy;
+        public bool HoldFirst;
         public int MaximumInFlight;
+        public ConcurrentQueue<string> Attempts { get; } = new();
         public ConcurrentQueue<string> Delivered { get; } = new();
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource Finished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task ExpectAsync(params string[] rids)
+        {
+            foreach (var rid in rids)
+            { Assert.Equal(rid, await completed.Reader.ReadAsync().AsTask().WaitAsync(Patience)); }
+        }
 
         public async Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct)
         {
-            if (Busy) { return new(false, LiteCodes.Busy); }
             bool hold;
             lock (gate)
             {
                 MaximumInFlight = Math.Max(MaximumInFlight, ++inFlight);
                 hold = HoldFirst && ++calls == 1;
             }
+            Attempts.Enqueue(envelope.Body.Request);
             Started.TrySetResult();
             try
             {
                 if (hold) { await Release.Task.WaitAsync(ct); }
                 Delivered.Enqueue(envelope.Body.Request);
-                Finished.TrySetResult();
+                completed.Writer.TryWrite(envelope.Body.Request);
                 return new(true, null);
             }
             finally { lock (gate) { inFlight--; } }

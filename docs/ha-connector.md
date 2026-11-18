@@ -601,6 +601,16 @@ This switch does not enable the connector, change launch/authorization gates, or
 host binaries that do not implement durable ingress. Focused in-process tests are local
 evidence only; hosted verification belongs to Quality and end-to-end relay proof is R-REAL.
 
+**Relay ingress proof (R-REAL).** `RelayInboxFlowTests` exercises two independently signed
+senders over real encrypted loopback relay channels to a registry-discovered session,
+using the production relay inbox and recovery pump with a temporary profile path.
+It covers serialized FIFO delivery, per-rid receipts, duplicate suppression across
+receiver reconstruction, and recovery of unstarted work without resending while an
+interrupted attempt remains unconfirmed. Relay RESULT `reply_ack: {rid}` proves durable
+admission, not delivery: occupied work retains the existing Busy/refused result, not a
+`queued` status or event. Only the terminal is stubbed; no native typing, live host,
+HA service or power-loss durability is tested. This is not a release or review grant.
+
 **Durable inbox store.** `DurableInbox` is the reused internal store: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,
 and returns the original entry on a matching rid retry, even if a retry is restamped. It keeps
