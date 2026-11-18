@@ -1656,6 +1656,28 @@ public class MergeRuleTests
     }
 
     [Theory]
+    [InlineData("queued", "success")]
+    [InlineData("queued", "failure")]
+    [InlineData("in_progress", "success")]
+    [InlineData("in_progress", "failure")]
+    public void A_newest_rerun_without_jobs_waits_instead_of_using_an_older_verdict(string status, string older)
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, status, null, 2), (5, "completed", older, 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = """{"total_count":0,"jobs":[]}""" });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            var posted = Assert.Single(github.Posted);
+            Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+            Assert.Contains("waiting for one", posted, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
     [InlineData("queued", "success", "success")]
     [InlineData("queued", "failure", "failure")]
     [InlineData("pending", "failure", "failure")]
