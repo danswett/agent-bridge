@@ -10,9 +10,9 @@ using Xunit.Abstractions;
 public sealed class PayloadSizeReportTests(ITestOutputHelper output)
 {
     [Fact]
-    public void Report_lists_every_vector_message_type_with_byte_sizes()
+    public async Task Report_lists_every_vector_message_type_with_byte_sizes()
     {
-        var result = Run(VectorFiles.Folder);
+        var result = await RunAsync(VectorFiles.Folder);
         Assert.True(result.ExitCode == 0, result.Error);
         output.WriteLine(result.Text);
         var expected = new Dictionary<string, List<int>>(StringComparer.Ordinal);
@@ -48,23 +48,23 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
         sample.Write("b.json", """
             {"records":{"Example":{"valid":[{"json":{}}],"refused":[]}}}
             """);
-        var measured = Run(sample.Path);
+        var measured = await RunAsync(sample.Path);
         Assert.True(measured.ExitCode == 0, measured.Error);
         Assert.Equal((2, 17, 3), Rows(measured.Text)["Example"]);
     }
 
     [Fact]
-    public void Report_is_deterministic_for_the_same_vectors()
+    public async Task Report_is_deterministic_for_the_same_vectors()
     {
         using var sample = new VectorFolder();
         const string alpha = """{"records":{"Alpha":{"valid":[{"json":{"text":"é"}}],"refused":[]}}}""";
         const string zulu = """{"records":{"Zulu":{"valid":[{"json":{}}],"refused":[]}}}""";
         sample.Write("first.json", zulu);
         sample.Write("last.json", alpha);
-        var first = Run(sample.Path);
+        var first = await RunAsync(sample.Path);
         sample.Write("first.json", alpha);
         sample.Write("last.json", zulu);
-        var second = Run(sample.Path);
+        var second = await RunAsync(sample.Path);
         Assert.True(first.ExitCode == 0, first.Error);
         Assert.True(second.ExitCode == 0, second.Error);
         Assert.Equal(first.Text, second.Text);
@@ -73,17 +73,50 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void Report_fails_clearly_on_a_vector_that_cannot_be_parsed()
+    public async Task Report_fails_clearly_on_a_vector_that_cannot_be_parsed()
     {
         using var sample = new VectorFolder();
         foreach (var malformed in new[] { "{broken", """{"records":{"Broken":{"valid":[{}],"refused":[]}}}""" })
         {
             sample.Write("broken.json", malformed);
-            var result = Run(sample.Path);
+            var result = await RunAsync(sample.Path);
             Assert.NotEqual(0, result.ExitCode);
             Assert.Contains("broken.json", result.Error);
             Assert.Contains("Cannot measure vector file", result.Error);
             Assert.Empty(result.Text);
+        }
+    }
+
+    [Fact]
+    public async Task The_report_deadline_starts_after_PowerShell_is_ready_and_still_bounds_a_stalled_report()
+    {
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var armed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var deadline = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waiting = WaitForReportAsync(ready.Task, exited.Task, task =>
+        {
+            Assert.Same(exited.Task, task);
+            armed.SetResult();
+            return deadline.Task;
+        });
+        try
+        {
+            Assert.False(armed.Task.IsCompleted);
+            Assert.False(waiting.IsCompleted);
+            ready.SetResult();
+            await armed.Task;
+            Assert.False(waiting.IsCompleted);
+
+            deadline.SetException(new TimeoutException("stalled report"));
+            var error = await Assert.ThrowsAsync<TimeoutException>(() => waiting);
+            Assert.Equal("stalled report", error.Message);
+            Assert.False(exited.Task.IsCompleted);
+        }
+        finally
+        {
+            ready.TrySetResult();
+            deadline.TrySetResult();
         }
     }
 
@@ -99,7 +132,7 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
             StringComparer.Ordinal);
     }
 
-    static (int ExitCode, string Text, string Error) Run(string folder)
+    static async Task<(int ExitCode, string Text, string Error)> RunAsync(string folder)
     {
         var start = new ProcessStartInfo("pwsh")
         {
@@ -109,21 +142,39 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
             StandardErrorEncoding = Encoding.UTF8,
             UseShellExecute = false,
         };
-        foreach (var arg in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
-            System.IO.Path.Combine(VectorFiles.Folder, "report-payload-sizes.ps1"), "-VectorPath", folder })
+        start.Environment["PAYLOAD_REPORT_SCRIPT"] = System.IO.Path.Combine(VectorFiles.Folder, "report-payload-sizes.ps1");
+        start.Environment["PAYLOAD_REPORT_VECTORS"] = folder;
+        foreach (var arg in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+            "[Console]::Out.WriteLine('payload-report-ready'); & $env:PAYLOAD_REPORT_SCRIPT -VectorPath $env:PAYLOAD_REPORT_VECTORS" })
         {
             start.ArgumentList.Add(arg);
         }
         using var process = Process.Start(start)!;
-        var text = process.StandardOutput.ReadToEndAsync();
+        var ready = process.StandardOutput.ReadLineAsync();
+        var text = ReadTextAsync();
         var error = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(30_000))
+        try
         {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException("Payload size report did not exit within 30 seconds.");
+            await WaitForReportAsync(ready, process.WaitForExitAsync(),
+                exited => exited.WaitAsync(TimeSpan.FromSeconds(30)));
         }
-        return (process.ExitCode, text.GetAwaiter().GetResult(), error.GetAwaiter().GetResult());
+        catch (TimeoutException)
+        {
+            if (!process.HasExited) { process.Kill(entireProcessTree: true); }
+            await process.WaitForExitAsync();
+            throw new TimeoutException("Payload size report did not exit within 30 seconds after PowerShell became ready.");
+        }
+        return (process.ExitCode, await text, await error);
+
+        async Task<string> ReadTextAsync()
+        {
+            Assert.Equal("payload-report-ready", await ready);
+            return await process.StandardOutput.ReadToEndAsync();
+        }
     }
+
+    static async Task WaitForReportAsync(Task ready, Task exited, Func<Task, Task> withinBudget) =>
+        await withinBudget(exited);
 
     sealed class VectorFolder : IDisposable
     {
