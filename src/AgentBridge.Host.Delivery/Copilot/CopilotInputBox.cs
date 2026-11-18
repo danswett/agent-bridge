@@ -54,7 +54,7 @@ public static partial class CopilotInputBoxReader
     {
         var state = Read(rows).State;
         return state is { Main: true, Complete: true, Shell: false, Vim: not CopilotVimMode.Normal }
-            && state.Rows[^1].Text.TrimEnd(' ').Length >= CompactWidth && string.Equals(words.Trim(' '), state.Content, StringComparison.Ordinal)
+            && state.Rows[^1].Text.TrimEnd(' ').Length >= CompactWidth && MatchesOwnedContent(state, words)
             ? new(state.Rows, state.Content) : null;
     }
 
