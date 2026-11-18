@@ -394,7 +394,9 @@ host sends:
 
 These reads use the host's in-memory live source, also used by its fleet registry
 publisher, without Home Assistant reads or a separate roster store. Every `Session`
-is scoped to `hello.machine.id`.
+is scoped to `hello.machine.id`. The in-memory roster is bounded to 250 sessions;
+overflow holds discovery for the affected agent until a slot is freed, without
+evicting a live row or silently allowing an omitted session to resume.
 `owner`, `pr` and `finished` carry explicit evidence:
 unknown is not confirmed none or false. Idle does not mean work-finished. Once discovery
 observes a session ended, removal bypasses upsert coalescing and quiet-session holding;

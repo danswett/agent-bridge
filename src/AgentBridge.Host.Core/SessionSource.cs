@@ -15,6 +15,7 @@ namespace AgentBridge.Host.Core;
 // locks, renames or deletes anything, and never lists agent-ha-bridge's hook spool.
 public sealed class SessionSource : ISessionSource, IRestoreMarks
 {
+    const int MaxSessions = 250;
     static readonly TimeSpan TranscriptSearchCache = TimeSpan.FromSeconds(30);
     static readonly TimeSpan WakeDebounce = TimeSpan.FromMilliseconds(50);
     static readonly TimeSpan IdleRecovery = TimeSpan.FromSeconds(15);
@@ -418,6 +419,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         List<DiscoveredSession> found;
         var release = false;
         DiscoveryHeld? held = null;
+        var overflow = new List<AgentKind>();
         if (discover)
         {
             lock (_gate) { _lastDiscovery = _time.GetTimestamp(); }
@@ -445,9 +447,24 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                     found.Add(e.Tracker.Discovered);
                 }
                 gone = [.. _entries.Keys.Where(id => Ended(_entries[id]) || (!live.Contains(id) && !holding.Contains(_entries[id].Tracker.Discovered.Agent)))];
+                // Reserve admissions before exposing row changes: readers and launch do not
+                // take _pass, so every omitted live session must already hold its agent.
+                var listed = _entries.Keys.Except(gone).ToHashSet(StringComparer.Ordinal);
+                var slots = MaxSessions - listed.Count;
+                var admitted = new List<DiscoveredSession>();
+                foreach (var candidate in found.DistinctBy(f => f.Id))
+                {
+                    if (!listed.Contains(candidate.Id))
+                    {
+                        if (slots == 0) { overflow.Add(candidate.Agent); continue; }
+                        slots--;
+                    }
+                    admitted.Add(candidate);
+                }
+                found = admitted;
             }
-            foreach (var id in gone) { Remove(id); }
             held = HeldBy(observed);
+            if (overflow.Count > 0) { held = WithUnread(held, overflow, $"the {MaxSessions}-session roster limit was reached"); }
             // A hold that begins is said at once. One that ends, or lets an agent go, waits until
             // the sessions this pass found are listed: a session the hold kept unseen (its
             // registration unreadable until now) is otherwise neither listed nor held for a
@@ -457,6 +474,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             release = Releases(held);
             if (!release) { SetHeld(held); }
             else if (held is not null) { SetHeld(Widened(held)); }
+            foreach (var id in gone) { Remove(id); }
         }
         else
         {
@@ -467,7 +485,10 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         foreach (var discovered in found.DistinctBy(f => f.Id))
         {
             Entry? entry;
-            lock (_gate) { _entries.TryGetValue(discovered.Id, out entry); }
+            lock (_gate)
+            {
+                _entries.TryGetValue(discovered.Id, out entry);
+            }
             var tracker = entry?.Tracker ?? new SessionTracker(discovered, _options, _time, _hostId);
             // A restored session's boundary, before the transcript is read: what the interrupted run
             // left asking is set aside before the status and its times are worked out (#780).
@@ -498,9 +519,9 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         if (discover) { Save(); }
     }
 
-    static DiscoveryHeld WithUnread(DiscoveryHeld? held, List<AgentKind> unread)
+    static DiscoveryHeld WithUnread(DiscoveryHeld? held, List<AgentKind> unread, string? reason = null)
     {
-        var reasons = unread.Distinct().Select(a => $"a {a.ToString().ToLowerInvariant()} session that could not be read");
+        var reasons = unread.Distinct().Select(a => reason ?? $"a {a.ToString().ToLowerInvariant()} session that could not be read").Distinct();
         var text = Limits.KeepStart(string.Join(", ", held is null ? reasons : reasons.Prepend(held.Reason)), DiscoveryHeld.MaxReasonBytes)!;
         return new DiscoveryHeld(text, [.. (held?.Agents ?? []).Union(unread).Order()]);
     }
