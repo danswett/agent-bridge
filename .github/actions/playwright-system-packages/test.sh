@@ -28,6 +28,10 @@ EOF
 cat > "$work/bin/timeout" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$TIMEOUT_LOG"
+if [ "${3:-}" = apt-get ] && [[ " $* " == *" --download-only "* ]] &&
+  [ "$(grep -c -- '--download-only' "$APT_LOG" || true)" -lt "${APT_DOWNLOAD_TIMEOUTS:-0}" ]; then
+  shift 2; "$@"; exit 124
+fi
 if [ "${3:-}" = apt-get ] && [ -n "${APT_TIMEOUT_EXIT:-}" ]; then
   shift 2; "$@"; exit "$APT_TIMEOUT_EXIT"
 fi
@@ -107,7 +111,7 @@ reset() {
   : > "$NPX_LOG"; : > "$APT_LOG"; : > "$SLEEP_LOG"; : > "$TIMEOUT_LOG"
   export NPX_OUT='sudo -- sh -c "apt-get update&& apt-get install -y --no-install-recommends libasound2t64 libgtk-4-1 xvfb"'
   unset APT_SLOW APT_UPDATE_SLOW APT_UPDATE_EXIT APT_DOWNLOAD_EXIT APT_GETS PLAYWRIGHT_APT_FORCE_FALLBACK CHECK_BROWSERS
-  unset APT_ERROR APT_FAIL_COUNT APT_AZURE_ONLY
+  unset APT_ERROR APT_FAIL_COUNT APT_AZURE_ONLY APT_DOWNLOAD_TIMEOUTS
   unset APT_DNS_EXIT APT_DNS_OUTPUT APT_UPDATE_ERROR
   unset DEBS_CACHE_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
 }
@@ -289,6 +293,25 @@ check "Canonical timeouts use three sixty-second attempts then fail loudly" \
   || { echo "FAIL: all three timeout attempts were not bounded at 60 seconds"; failures=$((failures + 1)); }
 [ "$(cat "$SLEEP_LOG")" = $'5\n20' ] \
   || { echo "FAIL: timeout retries did not use 5/20 second backoff"; failures=$((failures + 1)); }
+export PLAYWRIGHT_APT_LIMIT=1s
+for hit in false true; do
+  reset "$canonical"; export DEBS_CACHE_HIT="$hit" APT_DOWNLOAD_TIMEOUTS=2
+  unset PLAYWRIGHT_APT_LIMIT
+  check "a cache hit of $hit gives slow downloads their own three-minute attempts and recovers on the third" \
+    0 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$canonical"
+  [ "$(grep -c -- '^--kill-after=30s 180s apt-get install .*--download-only' "$TIMEOUT_LOG")" = 3 ] &&
+    [ "$(cat "$SLEEP_LOG")" = $'5\n20' ] \
+    || { echo "FAIL: download retries inherited the update limit or lost bounded backoff"; failures=$((failures + 1)); }
+  update_limit=60s; [ "$hit" != true ] || update_limit=20s
+  grep -q " $update_limit apt-get update$" "$TIMEOUT_LOG" \
+    || { echo "FAIL: the download limit changed the update's own bound"; failures=$((failures + 1)); }
+done
+reset "$canonical"; export DEBS_CACHE_HIT=true APT_DOWNLOAD_TIMEOUTS=3
+unset PLAYWRIGHT_APT_LIMIT
+check "three download timeouts remain fatal on a cache hit without installing or saving" \
+  124 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$canonical"
+grep -q '^::error::apt download failed (exit 124)' "$work/out" && [ ! -s "$GITHUB_OUTPUT" ] \
+  || { echo "FAIL: exhausted downloads did not fail loudly without authorizing a cache save"; failures=$((failures + 1)); }
 export PLAYWRIGHT_APT_LIMIT=1s
 reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_DNS_EXIT=1 APT_EXPECT_INDEX=cached
 export APT_UPDATE_ERROR="E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Temporary failure resolving 'archive.ubuntu.com'"

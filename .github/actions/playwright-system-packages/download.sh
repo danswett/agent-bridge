@@ -9,12 +9,13 @@
 # and WebKit's packages. The runner's mirror list (/etc/apt/apt-mirrors.txt, from
 # actions/runner-images) puts that mirror first and Canonical's HTTPS archive after it, but apt
 # moves down the list only when a fetch fails, never when it is slow. Network attempts get
-# 60 seconds; an Azure timeout (124) or DNS failure immediately leaves Azure. The
+# 60 seconds for updates and 180 seconds for downloads; an Azure timeout (124) or DNS failure
+# immediately leaves Azure. The
 # Azure mirror is taken off the list and apt fetches the rest from https://archive.ubuntu.com,
 # keeping what it has. Nothing else changes: no source, key or trust setting is added, apt checks
 # every package against the signed index either way. Azure DNS failures leave immediately;
 # connection/5xx errors get three attempts (5 s, then 20 s apart), including on Canonical.
-# A non-forced cache hit uses 20-second attempts within a two-minute update budget; only
+# A non-forced cache hit uses 20-second update attempts within a two-minute update budget; only
 # classified network exhaustion may warn and continue to the mandatory offline install. If
 # the mirror list isn't the Azure-then-Canonical one this expects, or Azure is still named after the
 # edit, it fails rather than go on waiting on the same mirror.
@@ -165,6 +166,8 @@ if [ "$rc" -ne 0 ]; then
   fi
 fi
 update_deadline=0
+# A fresh index may need large new debs even on a hit; do not inherit its short update limit.
+limit=${PLAYWRIGHT_APT_LIMIT:-180s}
 # Never interrupt dpkg with the network timeout while it is modifying installed packages.
 install_offline() {
   sudo apt-get install -y --no-install-recommends --no-download "${pkgs[@]}" || fail install "$?"
