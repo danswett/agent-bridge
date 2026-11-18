@@ -20,6 +20,7 @@ sealed record AppOptions
     public string? SelfTest { get; init; }
     public bool HistoryScrollBudget { get; init; }
     public bool LiveListReplay { get; init; }
+    public bool MoveDownProbe { get; init; }
 
     public static AppOptions Parse(string[] args)
     {
@@ -35,6 +36,7 @@ sealed record AppOptions
                 case "--self-test" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true }; break;
                 case "--self-test-history-scroll" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, HistoryScrollBudget = true }; break;
                 case "--self-test-live-list" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, LiveListReplay = true }; break;
+                case "--self-test-move-down" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, MoveDownProbe = true }; break;
             }
         }
         return o;
