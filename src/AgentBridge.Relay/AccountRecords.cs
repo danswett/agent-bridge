@@ -90,7 +90,8 @@ public sealed class AccountRecordService(IRosterStore? store, IRecordAdmission a
     }
 
     static bool StoreFailure(Exception e, CancellationToken ct) =>
-        e is IOException or InvalidDataException or Azure.RequestFailedException or HttpRequestException or TimeoutException ||
+        e is IOException or InvalidDataException or Azure.RequestFailedException or
+            Azure.Identity.AuthenticationFailedException or HttpRequestException or TimeoutException ||
         e is OperationCanceledException && !ct.IsCancellationRequested;
 
     Result Unavailable(int bytes)

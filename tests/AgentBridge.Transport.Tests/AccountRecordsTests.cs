@@ -140,9 +140,11 @@ public class AccountRecordsTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Storage_failure_reports_unavailable_and_keeps_the_previous_record(bool failWrite)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Storage_failure_reports_unavailable_and_keeps_the_previous_record(bool failWrite, bool authenticationFailure)
     {
         var store = new FailingStore();
         store.Fail = false;
@@ -150,6 +152,7 @@ public class AccountRecordsTests
         await service.PutAsync("123", "device", "order", "main", 0, Ciphertext);
         store.Fail = true;
         store.FailWrite = failWrite;
+        store.Failure = authenticationFailure ? new Azure.Identity.AuthenticationFailedException("unreachable") : new IOException("unreachable");
         Assert.Equal("unavailable", (await service.PutAsync("123", "device", "order", "main", 1, [7])).Error);
         if (!failWrite) { Assert.Equal("unavailable", (await service.GetAsync("123", "device", "order", "main")).Error); }
         store.Fail = false;
@@ -161,10 +164,11 @@ public class AccountRecordsTests
     {
         public readonly MemoryRosterStore Inner = new();
         public bool Fail = true, FailWrite;
+        public Exception Failure = new IOException("unreachable");
         public Task<StoredRoster?> ReadAsync(string name, CancellationToken ct) =>
-            Fail && !FailWrite ? throw new IOException("unreachable") : Inner.ReadAsync(name, ct);
+            Fail && !FailWrite ? throw Failure : Inner.ReadAsync(name, ct);
         public Task<string?> WriteAsync(string name, byte[] body, string? etag, CancellationToken ct) =>
-            Fail && FailWrite ? throw new IOException("unreachable") : Inner.WriteAsync(name, body, etag, ct);
+            Fail && FailWrite ? throw Failure : Inner.WriteAsync(name, body, etag, ct);
         public Task<bool> DeleteAsync(string name, string etag, CancellationToken ct) => throw new NotSupportedException();
     }
 }
