@@ -111,7 +111,8 @@ public sealed partial class RemoteAuthorizationTests : IAsyncLifetime
         internal GateRunEnrollment? Value = new(Enumerable.Range(0, 4).Select(_ => new GateRunParticipant(
             Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "1.0", new string('a', 64), new string('b', 64))).ToArray(),
             Guid.NewGuid(), 17, new string('c', 64));
-        public GateRunEnrollment? Read() => Value;
+        internal Action? BeforeRead;
+        public GateRunEnrollment? Read() { BeforeRead?.Invoke(); return Value; }
     }
 
     async Task<(SecureChannel Channel, AgentAuditLog Audit, GateEnrollmentFixture Enrollment)> GateAsync(TimeProvider? clock = null)
@@ -153,6 +154,30 @@ public sealed partial class RemoteAuthorizationTests : IAsyncLifetime
         Pin(other, TrustedPeerStore.Person);
         var otherChannel = await other.Hub.OpenAsync(host.Id, Patience);
         Assert.False((await otherChannel.RequestAsync("gate.start", new { request }, Patience)).GetProperty("ok").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Gate_start_allows_only_one_prepared_run_across_audit_instances()
+    {
+        var (channel, audit, enrollment) = await GateAsync();
+        var other = new AgentAuditLog(audit.Profile, time);
+        var otherRequest = Guid.NewGuid();
+        object? otherReply = null;
+        enrollment.BeforeRead = () =>
+        {
+            enrollment.BeforeRead = null;
+            otherReply = GateRunPreparation.Prepare(other, "person:fixture",
+                JsonSerializer.SerializeToElement(new { request = otherRequest }), new GateEnrollmentFixture());
+        };
+        var response = await channel.RequestAsync("gate.start", new { request = Guid.NewGuid() }, Patience);
+        Assert.NotNull(otherReply);
+        Assert.Equal("prepared", JsonSerializer.SerializeToElement(otherReply).GetProperty("outcome").GetString());
+        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+        Assert.True(complete);
+        var begin = Assert.Single(rows, r => r.Action == "gate.start" && r.Outcome == "prepared");
+        Assert.Equal(otherRequest.ToString(), begin.Request);
+        Assert.False(response.GetProperty("ok").GetBoolean());
+        Assert.Contains("audit unavailable", response.GetProperty("error").GetString());
     }
 
     [Theory]
