@@ -47,6 +47,9 @@ public static class RelayApp
         var feedbackSink = FeedbackService.CreateBackend(options.Feedback);
         builder.Services.AddSingleton(sp => new FeedbackService(options.Feedback, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<FeedbackService>>(), feedbackSink, options.TokenKey));
         var rosterStore = MachineRoster.CreateStore(options.Roster);
+        builder.Services.TryAddSingleton<IRecordAdmission, DenyRecordAdmission>();
+        builder.Services.AddSingleton(sp => new AccountRecordService(rosterStore, sp.GetRequiredService<IRecordAdmission>(),
+            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<AccountRecordService>>()));
         builder.Services.AddSingleton(sp => new MachineRoster(options, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<MachineRoster>>(), rosterStore));
         builder.Services.AddHostedService<RosterWriter>();
         builder.Services.AddSingleton<HourlyStats>();

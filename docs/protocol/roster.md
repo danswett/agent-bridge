@@ -185,6 +185,28 @@ Registry reads use relaxed JSON escaping to keep 64 maximum-length plus names wi
 24 KiB reply-frame budget. Other control messages and the put encoding are unchanged.
 Records remain unsigned display hints; `fleet.find` remains fail-closed.
 
+## Sealed account records: store core only
+
+The generic `AccountRecordService` reuses `IRosterStore` in the roster container.
+Names are `records/<account>/<kind>/<id>`: the authenticated numeric account id
+(1-20 digits), a case-sensitive kind (`order`, `marker`, `keywrap`, `manifest`,
+or `fleet`, reserved for [account state](https://github.com/danswett/agent-bridge/issues/1596)),
+and an id matching `[a-z0-9-]{1,32}`. Bodies are opaque ciphertext, at most
+65536 bytes, never parsed by the relay. The private storage header is 24 bytes:
+ASCII `ABR1`, then big-endian version (int64), body size (int32), and Unix
+milliseconds (int64). Versions start at 1; create expects 0. Updates compare the
+expected version and the storage ETag; a lost race returns `conflict` with the
+current version, without overwriting it. Reads of missing records return
+`not-found`; invalid names/versions, oversized bodies and storage failures return
+`bad-request`, `too-large` and `unavailable`, respectively.
+
+This slice is dark: no frames or HTTP routes; `IRecordAdmission` denies every
+read/write by default (`needs-device-approval`). Later slices supply signed-roster
+admission, account quota, frames, change push and rate limiting. The sealed-record
+wire format and vectors are tracked by
+[S2](https://github.com/danswett/agent-bridge/issues/759#issuecomment-6970072773);
+this private header is not the client cryptographic envelope.
+
 ## Storage
 
 In memory by default, so a restart forgets every offline machine (online ones are recorded
