@@ -66,6 +66,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AgentBridge.App.Core\AgentBridge.App.Core.csproj" />
+    <ProjectReference Include="..\AgentBridge.Host.Core\AgentBridge.Host.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
