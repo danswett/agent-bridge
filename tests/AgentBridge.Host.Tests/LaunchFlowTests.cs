@@ -92,7 +92,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     }
 
     private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null, IDiagnosticsJournal? journal = null,
-        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null)
+        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null, Action<string>? launchLog = null)
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
@@ -125,7 +125,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             Journal = journal,
             AgentWorktreeCheck = agentWorktreeCheck,
             AgentWorktreeRefusalAudit = agentWorktreeRefusalAudit,
-        }, log: logged.Enqueue, attachments: attachments, credentials: credentials, account: account);
+        }, log: launchLog ?? logged.Enqueue, attachments: attachments, credentials: credentials, account: account);
     }
 
     private protected void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
@@ -1179,6 +1179,34 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         // Live now: not on the list, and not resumed on top of itself.
         Assert.Equal(("refused", "that session is already running; two agents on one session would corrupt it"), Pair(await LaunchAsync(ch, new { resume = Id })));
         Assert.Single(starter.Specs);
+    }
+
+    [Fact]
+    [Trait("Category", "Process")]
+    public async Task New_tree_reserved_before_other_reclaim()
+    {
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "fixture");
+        var config = Config(c => c with { Workspaces = [new("App", app, true)], WorktreeIdleHours = 0 });
+        var checkedReservation = false;
+        var launcher = Launcher(config, usage: new NoSessions(), launchLog: message =>
+        {
+            logged.Enqueue(message);
+            if (!message.Contains(": worktree:", StringComparison.Ordinal) || !message.Contains("created ", StringComparison.Ordinal)) { return; }
+            var tree = Assert.Single(Directory.GetDirectories(config.WorktreeRoot));
+            Assert.Equal(0, Worktrees.Reclaim(app, config, new NoSessions(), logged.Enqueue));
+            Assert.True(Directory.Exists(tree), "A reclaim deleted the tree between Create and Reserve.");
+            Assert.True(File.Exists(Path.Combine(Worktrees.AdminFolder(tree)!, "locked")));
+            checkedReservation = true;
+        });
+
+        var result = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "person");
+
+        Assert.True(checkedReservation, $"{result.Outcome}: {result.Reason}\n{string.Join('\n', logged)}");
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        await WaitAsync(() => Task.FromResult(!File.Exists(Path.Combine(Worktrees.AdminFolder(starter.Specs[0].WorkingDirectory)!, "locked"))));
     }
 
     [Fact]

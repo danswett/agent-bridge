@@ -540,6 +540,65 @@ public sealed class LaunchPieceTests : IDisposable
 
     [Fact]
     [Trait("Category", "Process")]
+    public Task Same_repo_launches_get_distinct_reserved_trees() => ConcurrentWorktrees(sameRepository: true);
+
+    [Fact]
+    [Trait("Category", "Process")]
+    public Task Different_repo_launch_is_not_queued() => ConcurrentWorktrees(sameRepository: false);
+
+    async Task ConcurrentWorktrees(bool sameRepository)
+    {
+        var work = Repo();
+        var other = sameRepository ? Path.Combine(work, "src", "svc") : Path.Combine(root, "other");
+        if (!sameRepository) { Git(root, "clone", "-q", Path.Combine(root, "origin"), other); }
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var queued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var stamp = new DateTime(2026, 11, 17, 22, 0, 0);
+        var first = Task.Run(() => Worktrees.Create(work, WorktreeConfig(), () =>
+        {
+            entered.SetResult();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(60)), "The fixture did not release its mutation barrier.");
+            return stamp;
+        }, launchRequest: Guid.NewGuid()));
+        Task<WorktreeResult>? second = null;
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(60));
+            second = Task.Run(() => Worktrees.Create(other, WorktreeConfig(), () => stamp,
+                log: message => { if (message.Contains("queued", StringComparison.Ordinal)) { queued.TrySetResult(); } },
+                launchRequest: Guid.NewGuid()));
+            if (sameRepository)
+            {
+                Assert.Same(queued.Task, await Task.WhenAny(queued.Task, second).WaitAsync(TimeSpan.FromSeconds(60)));
+                Assert.False(second.IsCompleted);
+            }
+            else
+            {
+                Assert.Null((await second.WaitAsync(TimeSpan.FromSeconds(60))).Problem);
+                Assert.False(queued.Task.IsCompleted);
+                Assert.False(first.IsCompleted);
+            }
+        }
+        finally
+        {
+            release.Set();
+            await first.WaitAsync(TimeSpan.FromSeconds(60));
+            if (second is not null) { await second.WaitAsync(TimeSpan.FromSeconds(60)); }
+        }
+        var trees = new[] { await first, await second! };
+        Assert.All(trees, tree => Assert.Null(tree.Problem));
+        Assert.NotEqual(trees[0].Worktree, trees[1].Worktree);
+        foreach (var tree in trees)
+        {
+            var reason = Path.Combine(Worktrees.AdminFolder(tree.Worktree!)!, "locked");
+            Assert.True(File.Exists(reason), "Creation returned an unreserved worktree.");
+            Assert.StartsWith(Worktrees.ReservationPrefix, File.ReadAllText(reason).Trim());
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Process")]
     public void An_isolated_launch_gets_a_detached_worktree_at_the_fetched_base_named_by_time_and_marked_as_this_hosts()
     {
         var work = Repo();
