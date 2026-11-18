@@ -18,6 +18,22 @@ public sealed class AgentLaunchRequestCheckTests
         Assert.Null(AgentLaunchRequestCheck.Check(Request(), []));
 
     [Theory]
+    [InlineData("true")]
+    [InlineData("false")]
+    [InlineData("null")]
+    public void Question_overrides_do_not_change_the_required_permission_mode(string value)
+    {
+        Assert.Null(AgentLaunchRequestCheck.Check(Request($"\"askUser\":{value}"), []));
+        Assert.Contains("permissions", AgentLaunchRequestCheck.Check(Request($"\"askUser\":{value},\"permissions\":\"allowAll\""), []));
+    }
+
+    [Theory]
+    [InlineData("\"true\"")]
+    [InlineData("1")]
+    public void Non_boolean_question_overrides_are_refused(string value) =>
+        Assert.Contains("invalid field shape", AgentLaunchRequestCheck.Check(Request($"\"askUser\":{value}"), []));
+
+    [Theory]
     [InlineData("\"permissions\":\"allowAll\"")]
     [InlineData("\"permissions\":\"ask-only\"")]
     [InlineData("\"permissions\":\"ASK\"")]

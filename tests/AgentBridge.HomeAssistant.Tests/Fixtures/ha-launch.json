@@ -787,7 +787,7 @@
         "id": "req-0005-abcd",
         "text": "",
         "settings": {},
-        "problem": "Launch refused: unknown setting 'colour' - a launch takes agent, workspace, profile, resume, model, effort, context, permissions."
+        "problem": "Launch refused: unknown setting 'colour' - a launch takes agent, workspace, profile, resume, model, effort, context, permissions, askUser."
       }
     },
     "notText": {

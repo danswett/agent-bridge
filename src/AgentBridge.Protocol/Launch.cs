@@ -131,6 +131,8 @@ public sealed record LaunchRequest
     public string? Effort { get; init; }
     public string? Context { get; init; }
     public string? Permissions { get; init; }
+    // Absent: the host disables Copilot questions for agent-originated launches only.
+    public bool? AskUser { get; init; }
     // The job a coordinator starts this worker for (letters, digits and hyphens). Only a launch
     // with a role has its MCP servers narrowed, to those launch.workerMcp lists for that role
     // (none when it lists none); a launch without one is a person's and keeps their own.
