@@ -27,6 +27,21 @@ public sealed class CoordinatorImageTests
         Assert.Equal(title, CoordinatorImage.ReadDescription(image));
     }
 
+    [Fact]
+    public void Native_icon_resources_may_exceed_one_MiB_without_hiding_the_version_marker()
+    {
+        var bytes = Image(Supported);
+        const int resourceBytes = 1_358_076;
+        Array.Resize(ref bytes, 0x400 + resourceBytes);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x190), bytes.Length - 0x200);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x198), bytes.Length - 0x200);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x11c), resourceBytes);
+        using var image = new MemoryStream(bytes, writable: true);
+        Assert.Equal(Supported, CoordinatorImage.ReadDescription(image));
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0x11c), int.MaxValue);
+        Assert.Throws<InvalidDataException>(() => CoordinatorImage.ReadDescription(image));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("fixture host launcher")]

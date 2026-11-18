@@ -9,6 +9,10 @@ public sealed record UpdateCoordinatorHandoff(
 
 public sealed class CoordinatorHandoff
 {
+    public static string RuntimeTarget => (AppContext.TargetFrameworkName
+        ?? throw new InvalidDataException("coordinator-runtime-unavailable."))
+        + "/" + System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier;
+
     readonly string folder, runtimeTarget;
     readonly Func<Stream, string?>? metadata;
 
@@ -93,14 +97,14 @@ public sealed class CoordinatorHandoff
         copy.Flush(flushToDisk: true);
     }
 
-    static bool Within(string path, string parent)
+    internal static bool Within(string path, string parent)
     {
         var prefix = Path.EndsInDirectorySeparator(parent) ? parent : parent + Path.DirectorySeparatorChar;
         return string.Equals(path, parent, StringComparison.OrdinalIgnoreCase)
             || path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
-    static string Full(string path)
+    internal static string Full(string path)
     {
         if (!Path.IsPathFullyQualified(path)) throw Bad("handoff-path-refused: paths must be fully qualified.");
         var full = Path.GetFullPath(path);
