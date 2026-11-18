@@ -7,6 +7,10 @@ public class NeutralMachineNameTests
     [Theory]
     [InlineData("ha-contract.json", "slugs,machine,statusAttributes,cards,publications.sessionPublish")]
     [InlineData("ha-contract.json", "publications")]
+    [InlineData("ha-decisions.json", "")]
+    [InlineData("ha-notify.json", "")]
+    [InlineData("ha-replies.json", "")]
+    [InlineData("ha-stops.json", "")]
     public void Recorded_fixtures_use_neutral_machine_names(string fixture, string paths)
     {
         using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", fixture)));
