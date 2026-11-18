@@ -507,7 +507,7 @@ public sealed class SignInTests
     public async Task A_code_that_came_before_a_slow_starts_result_is_still_there_when_the_result_comes(double elapsedSeconds)
     {
         var clock = new FakeTimeProvider(Make.T0);
-        await using var channel = new HeldSignInChannel(clock);
+        await using var channel = new HeldSignInChannel();
         var ui = new LockedDispatcher();
         await using var connection = new HostConnection(_ => Task.FromResult<IClientChannel>(channel), ui) { Subscribes = false };
         var deliveries = new Deliveries(connection, ui, clock);
@@ -543,7 +543,8 @@ public sealed class SignInTests
         Assert.Equal(new Uri("https://github.com/login/device"), sheet.OpenUri);
     }
 
-    sealed class HeldSignInChannel(TimeProvider clock) : IClientChannel
+    // The test releases the reply explicitly: time advances the banner's retention, not a pipe deadline.
+    sealed class HeldSignInChannel : IClientChannel
     {
         readonly System.Threading.Channels.Channel<ChannelEvent> events = System.Threading.Channels.Channel.CreateUnbounded<ChannelEvent>();
         readonly TaskCompletionSource closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -562,7 +563,7 @@ public sealed class SignInTests
                 Ops.Hello => Task.FromResult(JsonSerializer.SerializeToElement(
                     new { ok = true, result = new HelloResult(1, new MachineInfo(PeerId, PeerName, "windows", "0.1.0"),
                         [Capabilities.SessionsRead, Capabilities.HelloChanged, AuthState.Capability]) }, ProtocolJson.Options)),
-                AuthState.Start => StartResult.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(15), clock, ct),
+                AuthState.Start => StartResult.Task.WaitAsync(ct),
                 _ => throw new InvalidOperationException($"Unexpected request: {op}"),
             };
 
