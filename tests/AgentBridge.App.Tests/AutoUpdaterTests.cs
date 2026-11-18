@@ -74,6 +74,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public Action<Action<int>, Action<long, long?>>? DownloadWithBytes;
         public TaskCompletionSource? DownloadGate;
         public string? InstalledVersion { get; set; } = "0.1.0";
+        public HaltPolicySnapshot? HaltPolicy { get; set; }
         public DateTimeOffset? DiscoveredAt { get; set; }
         public string? CheckSource { get; set; }
         public int? GitHubRemaining { get; set; }
@@ -1010,6 +1011,22 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task The_default_wrapper_refuses_the_inner_updaters_verified_halt()
+    {
+        updater.HaltPolicy = new(new(2, "{\"v\":1,\"halted\":[\"0.2.0\"]}", ["0.2.0"]), time.GetUtcNow(), true);
+        await StartAsync();
+        auto = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, _ => null, time);
+
+        await auto.Ask(UpdateAskKind.Install, Press);
+
+        Assert.Null(auto.State.Available);
+        Assert.Equal(0, updater.Downloads);
+        Assert.Equal(UpdateOutcome.Refused, prefs.LastUpdate?.Outcome);
+        Assert.Equal("halted", prefs.LastUpdate?.Code);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Halt_policy_seven_hours_old_holds_automatic_install()
     {
         HaltPolicy(new(new(2, "{\"v\":1,\"halted\":[]}", []), time.GetUtcNow() - TimeSpan.FromHours(7), false));
@@ -1071,10 +1088,40 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         HaltPolicy(new(new(2, "{\"v\":1,\"halted\":[]}", []), time.GetUtcNow(), true));
         updater.OnDownload = () => testPolicy = new(new(3, "{\"v\":1,\"halted\":[\"0.1.2\"]}", ["0.1.2"]), time.GetUtcNow(), true);
         await StartAsync();
-        await auto.TickAsync();
+        await auto.Ask(UpdateAskKind.Install, Press, now: new("0.1.2", null, time.GetUtcNow() + UpdateProtocol.NowLife));
         Assert.Null(auto.State.Available);
         Assert.Null(auto.Ready);
         Assert.False(updater.Applied);
+        Assert.Equal(UpdateOutcome.Refused, prefs.LastUpdate?.Outcome);
+        Assert.Equal("halted", prefs.LastUpdate?.Code);
+        Assert.Equal(Press, prefs.LastUpdate?.Request);
+        Assert.Equal("downloading", prefs.LastUpdate?.Step);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Halt_policy_added_during_check_refuses_the_remote_install_before_download()
+    {
+        HaltPolicy(new(new(2, "{\"v\":1,\"halted\":[]}", []), time.GetUtcNow(), true));
+        updater.Asks = () =>
+        {
+            testPolicy = new(new(3, "{\"v\":1,\"halted\":[\"0.1.2\"]}", ["0.1.2"]), time.GetUtcNow(), true);
+            return Task.CompletedTask;
+        };
+        await StartAsync();
+
+        await auto.Ask(UpdateAskKind.Install, Press, now: new("0.1.2", null, time.GetUtcNow() + UpdateProtocol.NowLife));
+
+        Assert.Equal(UpdateOutcome.Refused, prefs.LastUpdate?.Outcome);
+        Assert.Equal("halted", prefs.LastUpdate?.Code);
+        Assert.Equal(Press, prefs.LastUpdate?.Request);
+        Assert.NotEqual("downloading", prefs.LastUpdate?.Step);
+        Assert.Equal(0, updater.Downloads);
+        Assert.Null(auto.State.Available);
+        Assert.Null(auto.Ready);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
     }
 
     [Fact]

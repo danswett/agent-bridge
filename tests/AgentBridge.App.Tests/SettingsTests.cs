@@ -2595,6 +2595,33 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_halt_only_minute_tick_withdraws_Settings_Restart_to_update_offer()
+    {
+        await Connected();
+        var time = new FakeTimeProvider(Make.T0);
+        var policy = new AgentBridge.Host.Core.Updates.HaltPolicySnapshot(
+            new(2, "{\"v\":1,\"halted\":[]}", []), time.GetUtcNow(), true);
+        var observed = new ObservedUpdater(updater, time, () => Task.FromResult(policy));
+        var automatic = new AutoUpdater(observed, connection, manager, () => prefs, p => prefs = p, _ => { }, _ => null, time);
+        var page = new SettingsViewModel(connection, manager, observed, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        observed.Changed += page.UpdatesChanged;
+        await automatic.TickAsync();
+        await page.CheckForUpdatesAsync();
+        Assert.True(page.UpdateAvailable);
+        Assert.Contains("Restart to update", page.UpdateStatus);
+        var checkedAt = observed.CheckedAt;
+
+        policy = new(new(3, "{\"v\":1,\"halted\":[\"0.2.0\"]}", ["0.2.0"]), time.GetUtcNow(), true);
+        time.Advance(TimeSpan.FromMinutes(1));
+        await automatic.TickAsync();
+
+        Assert.Equal(checkedAt, observed.CheckedAt);
+        Assert.Null(observed.Ready);
+        Assert.False(page.UpdateAvailable);
+        Assert.DoesNotContain("Restart to update", page.UpdateStatus);
+    }
+
+    [Fact]
     public async Task A_release_downloaded_in_the_background_is_offered_in_Settings_as_Restart_to_update_without_a_check_there()
     {
         await Connected();
