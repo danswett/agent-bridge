@@ -30,11 +30,20 @@ internal static class HostwBundle
         var machine = runtimeTarget.EndsWith("/win-x64", StringComparison.Ordinal) ? PeMachine.Amd64
             : runtimeTarget.EndsWith("/win-arm64", StringComparison.Ordinal) ? PeMachine.Arm64 : throw Bad("Unsupported runtime target.");
         if (pe.PEHeaders.CoffHeader.Machine != machine || pe.PEHeaders.CorHeader is not null) { throw Bad("Hostw is not a matching native apphost."); }
-        long header = -1, hostEnd = pe.PEHeaders.PEHeader?.SizeOfHeaders ?? 0;
-        foreach (var section in pe.PEHeaders.SectionHeaders)
+        var optional = pe.PEHeaders.PEHeader ?? throw Bad("Missing PE header.");
+        var alignment = optional.SectionAlignment;
+        if (alignment < 1 || (alignment & (alignment - 1)) != 0 || optional.SizeOfHeaders < 1
+            || optional.SizeOfHeaders > image.Length || optional.SizeOfImage < optional.SizeOfHeaders
+            || optional.SizeOfImage % alignment != 0) { throw Bad("Invalid image extent or section alignment."); }
+        long header = -1, hostEnd = optional.SizeOfHeaders, mappedEnd = hostEnd;
+        foreach (var section in pe.PEHeaders.SectionHeaders.OrderBy(s => s.VirtualAddress))
         {
             if (section.SizeOfRawData < 0 || section.SizeOfRawData > 16 * 1024 * 1024 || section.PointerToRawData < 0
                 || section.PointerToRawData > image.Length - section.SizeOfRawData) { throw Bad("Invalid apphost section."); }
+            var mappedSize = Math.Max(section.VirtualSize, section.SizeOfRawData);
+            if (section.VirtualSize < 0 || section.VirtualAddress < mappedEnd || section.VirtualAddress % alignment != 0
+                || (long)section.VirtualAddress + mappedSize > optional.SizeOfImage) { throw Bad("Invalid mapped section extent."); }
+            mappedEnd = (long)section.VirtualAddress + mappedSize;
             hostEnd = Math.Max(hostEnd, (long)section.PointerToRawData + section.SizeOfRawData);
             image.Position = section.PointerToRawData;
             var bytes = new byte[section.SizeOfRawData];
@@ -45,7 +54,7 @@ internal static class HostwBundle
             header = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(at - 8));
         }
         if (header < hostEnd || header > image.Length - 65) { throw Bad("Missing or truncated bundle header."); }
-        var export = pe.PEHeaders.PEHeader?.ExportTableDirectory ?? throw Bad("Missing PE header.");
+        var export = optional.ExportTableDirectory;
         if (export.Size < 40) { throw Bad("Missing SDK static runtime exports."); }
         var directory = pe.GetSectionData(export.RelativeVirtualAddress).GetReader(0, 40);
         directory.Offset = 20; var functionCount = directory.ReadInt32(); var nativeCount = directory.ReadInt32(); HashSet<string> nativeNames = [];
@@ -58,7 +67,7 @@ internal static class HostwBundle
             var ordinal = ordinals.ReadUInt16();
             if (ordinal >= functionCount) { throw Bad("Export ordinal exceeds its function table."); }
             functions.Offset = ordinal * 4; var address = functions.ReadInt32();
-            if (address <= 0 || address >= pe.PEHeaders.PEHeader!.SizeOfImage
+            if (address <= 0 || address >= optional.SizeOfImage
                 || !pe.PEHeaders.SectionHeaders.Any(s => address >= s.VirtualAddress && (long)address - s.VirtualAddress < Math.Max(s.VirtualSize, s.SizeOfRawData))
                 || address >= export.RelativeVirtualAddress && (long)address < (long)export.RelativeVirtualAddress + export.Size)
             { throw Bad("Export target is unmapped or forwarded outside the static runtime."); }
