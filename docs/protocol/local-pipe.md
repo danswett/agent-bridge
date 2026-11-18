@@ -330,6 +330,10 @@ sender, which answers
 | `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived | fall back to Home Assistant |
 | `off` | the mode is off, killed, or the peer isn't pinned; no channel was opened | fall back to Home Assistant |
 
+A script's credential is checked against the host's stable machine ID even while the
+relay is detached. A live, correctly bound script sending to a pinned peer then receives
+`undeliverable`, not `refused/credential`; expired, revoked or misbound credentials remain refused.
+
 `request` is the sender's request id.
 
 After caller and input validation, the host must append one audit **attempt** before calling
