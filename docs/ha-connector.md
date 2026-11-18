@@ -575,7 +575,8 @@ logs `refused a reply to <node> from <sender>` and types nothing, so the sender 
 closes. A reply already waiting when a question opens is refused the same way (#1634).
 Publishes without a `rid` behave as before.
 
-**Durable reply ingress (#2780).** With `StateFile` configured, rid-bearing reply publishes
+**Durable reply ingress (#2780).** `homeAssistant.durableReplyIngress` defaults to `true` (absent or null);
+the host passes it to `HaConnectorOptions.DurableReplyIngress`. With `StateFile` configured, rid-bearing reply publishes
 are saved synchronously at observation in `<StateFile>.inbox`, in the host's user-owned state
 directory, before `queued` is acknowledged. Legacy publishes without a rid stay unchanged.
 The existing connector pass and per-session delivery fence provide one FIFO dispatcher per
@@ -588,6 +589,17 @@ An attempt marker is persisted before calling delivery. A restart during an atte
 messages still drain. This is not a native receipt or a claim that uncertain submissions landed.
 Busy/failed-submit requeue and person-draft preservation remain separate host-side work.
 No live HA, host management, authorization or 16 KiB publication limits change.
+
+Set `homeAssistant.durableReplyIngress` to `false` for legacy rollback and have the person
+restart the host to apply it; unset the key (or set `true`) and restart to restore durable ingress.
+Off uses the existing in-memory reply path without reading, dispatching, modifying or deleting
+the saved inbox. Previously queued entries remain for re-enabling; reconcile outstanding rids
+before switching, because legacy delivery does not consult durable deduplication history.
+Without `StateFile`, or for senders without a rid, legacy delivery remains supported.
+An invalid non-boolean value disables the connector and reports the configuration error.
+This switch does not enable the connector, change launch/authorization gates, or affect old
+host binaries that do not implement durable ingress. Focused in-process tests are local
+evidence only; hosted verification belongs to Quality and end-to-end relay proof is R-REAL.
 
 **Durable inbox store.** `DurableInbox` is the reused internal store: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,
@@ -1586,6 +1598,7 @@ Assistant and broker).
   "baseUrl": "http://127.0.0.1:8123",
   "dashboardUrlPath": "agent-decisions",  // read, never written
   "detailedActivity": true,               // when the machine has no Detailed activity switch
+  "durableReplyIngress": true,            // false: legacy reply rollback; restart to apply
   "machineName": null,                    // the computer's name; set only for a rehearsal
   "disposable": false,                    // a development build needs true
   "agentUserIds": [],                     // Home Assistant users whose presses are agents'
