@@ -40,8 +40,8 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
     public void LaunchStarted(string origin, string request, string session) => limits.LaunchStarted(origin, request, session);
     public bool LaunchFinished(string origin, string request) => limits.LaunchFinished(origin, request);
     public bool SessionEnded(string session) => limits.SessionEnded(session);
-    public bool ObserveSession(string session, DateTimeOffset? idleSince, bool personTyped) =>
-        limits.ObserveSession(session, idleSince, personTyped);
+    public bool ObserveSession(string session, DateTimeOffset? idleSince, bool personTyped, bool fleetWorker = false) =>
+        limits.ObserveSession(session, idleSince, personTyped, fleetWorker);
 
     public IReadOnlyList<string> IdleSessions()
     {
