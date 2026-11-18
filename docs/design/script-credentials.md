@@ -14,6 +14,9 @@ or revocation. Request fields cannot widen its scope. Expiry, revocation or a fa
 refuses reads and replies. `session.reply` remains refused: scripts send through `agent.send`,
 with the script wire identity and delivery checks from #2765, never as the person.
 Reply attempts require the existing audit before dispatch and preserve the sender's live-grant checks.
+The receiving host resolves the fleet node to exactly one live native session before checking
+delivery gates, and checks that binding again before replying. Missing or colliding nodes refuse
+with `noSuchSession`; gates, rate limits and replies use the native session ID.
 
 Companion notes: [agent-principals.md](agent-principals.md) (§3.3 and §3.4 define the
 session credential this builds on), [agent-launch-scope.md](agent-launch-scope.md) (§11
