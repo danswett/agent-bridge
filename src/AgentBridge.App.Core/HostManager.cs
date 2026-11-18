@@ -554,7 +554,7 @@ public sealed class HostManager
         }
     }
 
-    public async Task StopAndApplyAsync(Action begin, Action apply, Func<string?>? preflight = null, bool waitForFiles = true, InstallationFiles.Budget? fileBudget = null)
+    public async Task StopAndApplyAsync(Action begin, Action apply, Func<string?>? preflight = null, bool waitForFiles = true, InstallationFiles.Budget? fileBudget = null, Func<Task>? beforeApply = null)
     {
         fileBudget ??= new InstallationFiles.Budget(Time);
         if (waitForFiles) { await WaitForInstallationFilesAsync(preflight, fileBudget: fileBudget); }
@@ -578,6 +578,8 @@ public sealed class HostManager
                 // Again just before the hand-over: every other host's hold is fresh, and one that
                 // let a probe start while this host was waited for is waited for too.
                 await OthersDoneAsync(own, giveUp);
+                // Included in stop so Quit also waits for the final policy check.
+                if (beforeApply is not null) { await beforeApply(); }
             });
         }
         try

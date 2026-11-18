@@ -123,7 +123,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
             await RefreshHaltPolicyAsync();
             if (Halted(found))
             {
-                foundRelease = null;
+                foundRelease = found;
                 throw new UpdateHaltedException();
             }
             // A check that finished after its source changed answers for the old one.

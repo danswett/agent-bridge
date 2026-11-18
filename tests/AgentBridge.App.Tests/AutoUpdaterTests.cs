@@ -1042,6 +1042,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.False(updater.Applied);
         Assert.False(prefs.UpdateHandedOver);
+        Assert.Null(prefs.UpdatedFrom);
+        Assert.Null(prefs.UpdateRequest);
         Assert.Equal(UpdateOutcome.Refused, prefs.LastUpdate?.Outcome);
         Assert.Equal("halted", prefs.LastUpdate?.Code);
         Assert.Single(processes.Started);

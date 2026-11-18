@@ -1528,7 +1528,13 @@ public sealed class AutoUpdater
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
                 if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
                 updater.ApplyConfirmed(to, allowedUnchecked || confirmedUnchecked, HandedOver(prefs, save));
-            }, waitForFiles: false);
+            }, waitForFiles: false, beforeApply: async () =>
+            {
+                await updater.RefreshHaltPolicyAsync();
+                if (updater.Halted(to)) { throw new InstallRefusedException(ObservedUpdater.HaltedReason, "halted"); }
+                if (!updater.PolicyFresh && !allowedUnchecked && !confirmedUnchecked)
+                { throw new InstallRefusedException("bad-release protection is stale or unreadable", UpdateCode.PolicyUnreadable); }
+            });
             return null;
         }
         // Replaced while the host stopped: nothing failed, and the host is back (HostManager). What
@@ -1562,6 +1568,7 @@ public sealed class AutoUpdater
         {
             installing = false;
             if (e.Hold) { HoldOver(); Changed(); return NotNow; }
+            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
             if (request is null) { Refused(e.Message); }
             else { End(UpdateOutcome.Refused, e.Message, e.Code); }
             HoldOver(); Changed(); return e.Message;
