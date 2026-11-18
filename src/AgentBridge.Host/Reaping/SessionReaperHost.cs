@@ -109,11 +109,15 @@ public static class SessionReaperHost
                     if (part.Kind == HistoryPartKind.Unknown || part.Truncated == true) { return default; }
                     if (part.Kind != HistoryPartKind.Response) { continue; }
                     if (part.Text is null) { return default; }
-                    var matches = Regex.Matches(part.Text, @"\bVERDICT[ \t:]+(CLEAN|NOT[ \t]+CLEAN)\b|\bNOT[ \t]+CLEAN\b",
-                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-                    if (matches.Count == 0) { continue; }
-                    if (matches.Count != 1 || part.At == default || part.At.Offset != TimeSpan.Zero || part.At > now) { return default; }
-                    var notClean = Regex.IsMatch(matches[0].Value, @"\bNOT[ \t]+CLEAN\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                    var match = FinalVerdict(part.Text);
+                    if (!match.Success)
+                    {
+                        if (Regex.IsMatch(part.Text, @"\bVERDICT\b|\bNOT[ \t]+CLEAN\b",
+                            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) { return default; }
+                        continue;
+                    }
+                    if (part.At == default || part.At.Offset != TimeSpan.Zero || part.At > now) { return default; }
+                    var notClean = match.Groups["verdict"].Value.StartsWith("NOT", StringComparison.OrdinalIgnoreCase);
                     return (notClean ? ReaperVerdict.NotClean : ReaperVerdict.Clean, part.At);
                 }
             }
@@ -121,5 +125,22 @@ public static class SessionReaperHost
             before = page.Before;
         }
         return default;
+    }
+
+    static Match FinalVerdict(string text)
+    {
+        var match = Regex.Match(text.TrimEnd(),
+            @"(?:\A|\n) {0,3}(?<bold>\*\*)?(?:VERDICT[ \t:]+(?<verdict>CLEAN|NOT[ \t]+CLEAN)|(?<verdict>NOT[ \t]+CLEAN))(?(bold)\*\*)\z",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success) { return match; }
+        string? fence = null;
+        foreach (Match marker in Regex.Matches(text[..match.Index], @"(?m)^ {0,3}(?<fence>`{3,}|~{3,})(?<tail>[^\r\n]*)"))
+        {
+            var run = marker.Groups["fence"].Value;
+            if (fence is null) { fence = run; }
+            else if (run[0] == fence[0] && run.Length >= fence.Length && string.IsNullOrWhiteSpace(marker.Groups["tail"].Value))
+                fence = null;
+        }
+        return fence is null ? match : Match.Empty;
     }
 }

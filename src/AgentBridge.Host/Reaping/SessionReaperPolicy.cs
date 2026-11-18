@@ -73,6 +73,7 @@ public static class SessionReaperPolicy
         if (row.RunningTools != 0) { return "running or unknown tools"; }
         if (row.AskingQuestion != false) { return "question or unknown question state"; }
         if (row.Held != false || row.Private != false || row.Keep != false) { return "protected or unknown custody"; }
+        if (row.OpenOwnedPr != false || row.WorkComplete != true) { return "work or PR state unproved"; }
         if (row.IdleSince is not { Offset: var offset } idle || offset != TimeSpan.Zero || idle > now)
             return "unknown idle timestamp";
         if (now - idle < TimeSpan.FromMinutes(row.Role == ReaperRole.Reviewer ? 60 : 30)) { return "idle threshold"; }
