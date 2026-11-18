@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AgentBridge.Host;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -6,6 +7,7 @@ using Xunit;
 
 namespace AgentBridge.Host.Tests;
 
+[Collection("Launch HA environment")]
 [Trait("Category", "Network")]
 public sealed class CliReplyTests : IAsyncLifetime
 {
@@ -23,6 +25,8 @@ public sealed class CliReplyTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         Directory.CreateDirectory(Path.Combine(root, "selected"));
+        var json = new JsonSerializerOptions(ProtocolJson.Options);
+        json.Converters.Add(new EnvelopeWriter(() => receipt));
         server = LocalServer.Start(LocalEndpoint.For(Path.Combine(root, "selected")), async (channel, op, data) =>
         {
             operations.Add(op);
@@ -43,30 +47,14 @@ public sealed class CliReplyTests : IAsyncLifetime
             Assert.Equal(Ops.SessionReply, op);
             sent = data.Deserialize<ReplyRequest>(ProtocolJson.Options);
             if (disconnect) { await ((LocalChannel)channel).DisposeAsync(); }
-            return new { outcome = receipt, reason = "private-sentinel: do not print raw host content" };
-        });
+            if (receipt == "missing") { return new { reason = "private-sentinel" }; }
+            return new { outcome = receipt == "malformed" ? "delivered" : receipt, reason = "private-sentinel: do not print raw host content" };
+        }, json: json);
         return Task.CompletedTask;
     }
 
-    async Task<int> Run(Func<bool>? refused = null, string text = "Continue with the explanation", string profile = "selected")
-    {
-        // Before the verb exists, exercise the executable's unknown-command behavior.
-        var entry = typeof(HostSettings).Assembly.GetType("AgentBridge.Host.ReplyCommands")?.GetMethod("RunAsync");
-        if (entry is null)
-        {
-            var previous = Console.Error;
-            Console.SetError(error);
-            try
-            {
-                var result = typeof(HostSettings).Assembly.EntryPoint!.Invoke(null,
-                    [new[] { "reply", Id, Request, text, "--profile", Path.GetFileName(root) }]);
-                return result is Task<int> pending ? await pending : Assert.IsType<int>(result);
-            }
-            finally { Console.SetError(previous); }
-        }
-        return await Assert.IsAssignableFrom<Task<int>>(entry.Invoke(null,
-            [new[] { "reply", Id, Request, text, "--profile", profile }, root, refused ?? (() => false), output, error]));
-    }
+    Task<int> Run(Func<bool>? refused = null, string text = "Continue with the explanation", string profile = "selected") =>
+        ReplyCommands.RunAsync(["reply", Id, Request, text, "--profile", profile], root, refused ?? (() => false), output, error);
 
     [Theory]
     [InlineData("delivered", 0)]
@@ -75,6 +63,8 @@ public sealed class CliReplyTests : IAsyncLifetime
     [InlineData("busy", 4)]
     [InlineData("stale", 4)]
     [InlineData("future", 3)]
+    [InlineData("missing", 3)]
+    [InlineData("malformed", 3)]
     public async Task Cli_reply_prints_delivered_refused_or_unconfirmed_from_the_service_receipt(string result, int exit)
     {
         receipt = result;
@@ -85,7 +75,7 @@ public sealed class CliReplyTests : IAsyncLifetime
         Assert.Null(sent.Attachments);
         Assert.Null(sent.Mode);
         Assert.Equal(exit == 0 ? "delivered" : "", output.ToString().Trim());
-        Assert.Equal(exit == 0 ? "" : result == "future" ? "unconfirmed" : result, error.ToString().Trim());
+        Assert.Equal(exit == 0 ? "" : result is "future" or "missing" or "malformed" ? "unconfirmed" : result, error.ToString().Trim());
         Assert.DoesNotContain("private-sentinel", output.ToString() + error);
     }
 
@@ -95,6 +85,20 @@ public sealed class CliReplyTests : IAsyncLifetime
     [InlineData(false, true)]
     public async Task Cli_reply_from_an_agent_child_sends_nothing(bool partial, bool discoveredLater)
     {
+        if (!partial && !discoveredLater)
+        {
+            var previous = Environment.GetEnvironmentVariable(AgentAncestry.SessionVariable);
+            var writer = Console.Error;
+            try
+            {
+                Environment.SetEnvironmentVariable(AgentAncestry.SessionVariable, "fixture");
+                Console.SetError(error);
+                var result = typeof(HostSettings).Assembly.EntryPoint!.Invoke(null,
+                    [new[] { "reply", Id, Request, "hello", "--profile", Path.GetFileName(root) }]);
+                Assert.Equal(4, result is Task<int> pending ? await pending : Assert.IsType<int>(result));
+            }
+            finally { Console.SetError(writer); Environment.SetEnvironmentVariable(AgentAncestry.SessionVariable, previous); }
+        }
         var ancestry = new ProcessAncestry([new PeerProcess(1, null, partial ? "fixture" : "copilot")], !partial);
         var checks = 0;
         Assert.Equal(4, await Run(() => ++checks > (discoveredLater ? 1 : 0)
@@ -148,5 +152,19 @@ public sealed class CliReplyTests : IAsyncLifetime
     {
         await server.DisposeAsync();
         Directory.Delete(root, true);
+    }
+
+    sealed class EnvelopeWriter(Func<string> receipt) : JsonConverter<object>
+    {
+        public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => throw new NotSupportedException();
+        public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
+        {
+            var envelope = JsonSerializer.SerializeToElement(value, ProtocolJson.Options);
+            var raw = envelope.GetRawText();
+            if (receipt() == "malformed" && envelope.TryGetProperty("result", out var result)
+                && result.ValueKind == JsonValueKind.Object && result.TryGetProperty("outcome", out _))
+            { raw = raw.Replace("\"ok\":true", "\"ok\":\"true\""); }
+            writer.WriteRawValue(raw);
+        }
     }
 }

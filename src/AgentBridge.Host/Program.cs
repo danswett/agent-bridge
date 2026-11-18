@@ -111,6 +111,7 @@ if (command == "approve")
 {
     return await ApproveCommands.RunAsync(args, Identity.DefaultRoot, () => Refused("approving a question"), Console.Out, Console.Error);
 }
+if (command == "reply") { return await ReplyCommands.RunAsync(args, Identity.DefaultRoot, () => Refused("replying to a session"), Console.Out, Console.Error); }
 
 if (command == "devices" && arguments.ElementAtOrDefault(1) == "descriptor")
 {
@@ -399,6 +400,7 @@ switch (command)
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host approve <session> <question> <request-uuid> <approve|deny> [--profile <name>]");
+        Console.Error.WriteLine("       agent-bridge-host reply <session> <request-uuid> <text> [--profile <name>]");
         Console.Error.WriteLine("       agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>] (empty name clears)");
         Console.Error.WriteLine("       agent-bridge-host host-sign init [--profile <name>]");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");

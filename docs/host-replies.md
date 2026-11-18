@@ -7,6 +7,21 @@ worker, the agent-ha-bridge guard (G5), the elevation guard, request memory, and
 `DeliveryGate` shared with `AnswerService`, so an answer and a reply can never type into
 one session at once.
 
+## Person text-reply CLI
+
+From a person's own terminal: `agent-bridge-host reply <session> <request-uuid> "<text>" [--profile <name>]`.
+Use the full session ID and a non-empty UUID for this intent. The command uses the selected
+local host's existing `session.reply` service; it never types directly or falls back to HA.
+Agent children and unknown ancestry are refused before connecting and checked again before
+submission. An open question, unavailable capability or invalid reply is not sent.
+The host still enforces G5, its current question and composer checks, and transcript confirmation.
+
+Only a service receipt of `delivered` prints success (exit 0). `refused`, `stale` and `busy`
+are non-success (exit 4); ambiguous, unreadable or lost results are `unconfirmed` (exit 3).
+Invalid syntax/text exits 2. Raw host reasons are not echoed. There is no automatic retry,
+reconnect or new request UUID after ambiguity: check the session before taking another action.
+Images and each adapter's real CLI-to-transcript qualification remain separate cuts.
+
 ## Which agents
 
 | Agent | Replies | Why |
