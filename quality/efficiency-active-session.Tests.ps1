@@ -44,6 +44,7 @@ function Invoke-CancelledDriver {
     Assert $cancelled 'The driver did not propagate cancellation.'
 }
 try {
+    Write-Output 'READY: efficiency-active-session'
     switch ($Scenario) {
         'rates' {
             Invoke-CancelledDriver

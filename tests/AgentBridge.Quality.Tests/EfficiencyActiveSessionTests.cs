@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace AgentBridge.Quality.Tests;
 
@@ -53,11 +54,43 @@ public class EfficiencyActiveSessionTests
     static async Task Run(ProcessStartInfo start, TimeSpan startupTimeout, TimeSpan scenarioTimeout)
     {
         using var process = Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var output = new StringBuilder();
+        async Task CaptureOutput()
+        {
+            while (await process.StandardOutput.ReadLineAsync() is { } line)
+            {
+                output.AppendLine(line);
+                if (line == "READY: efficiency-active-session")
+                    ready.TrySetResult();
+            }
+        }
         var error = process.StandardError.ReadToEndAsync();
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(scenarioTimeout);
-        try { await process.WaitForExitAsync(timeout.Token); }
-        catch (OperationCanceledException) { process.Kill(entireProcessTree: true); throw; }
-        Assert.True(process.ExitCode == 0, (await error) + (await stdout));
+        var stdout = CaptureOutput();
+        var exited = process.WaitForExitAsync();
+        var phase = "startup";
+        try
+        {
+            await Task.WhenAny(ready.Task, exited).WaitAsync(startupTimeout);
+            if (exited.IsCompleted)
+            {
+                await stdout;
+                Assert.True(ready.Task.IsCompletedSuccessfully,
+                    $"Driver exited before ready.\nstdout:\n{output}\nstderr:\n{await error}");
+            }
+            phase = "scenario";
+            await exited.WaitAsync(scenarioTimeout);
+        }
+        catch (TimeoutException exception)
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+            await exited;
+            await stdout;
+            throw new TimeoutException(
+                $"Driver timed out during {phase}.\nstdout:\n{output}\nstderr:\n{await error}", exception);
+        }
+        await stdout;
+        Assert.True(process.ExitCode == 0, $"stdout:\n{output}\nstderr:\n{await error}");
     }
 }
