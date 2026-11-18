@@ -23,11 +23,13 @@ public sealed class StopDeadlineTests(ITestOutputHelper output)
     public async Task An_unproven_worker_keeps_the_PID_handle_and_typing_fence_until_it_is_proven_gone(bool faultedProof) =>
         await CheckDeadlineAsync(false, faultedProof);
 
-    [Fact]
-    public async Task A_stop_waiting_for_another_delivery_times_out_without_typing_or_terminating() =>
-        await CheckDeadlineAsync(false, typingBusy: true);
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_stop_waiting_for_another_delivery_forces_termination_without_typing(bool unknownWorker) =>
+        await CheckDeadlineAsync(false, typingBusy: true, unknownWorker: unknownWorker);
 
-    async Task CheckDeadlineAsync(bool agentError, bool? faultedProof = null, bool typingBusy = false)
+    async Task CheckDeadlineAsync(bool agentError, bool? faultedProof = null, bool typingBusy = false, bool unknownWorker = false)
     {
         using var f = new Fixture();
         var events = f.CopilotSession(Id, Pid);
@@ -52,6 +54,7 @@ public sealed class StopDeadlineTests(ITestOutputHelper output)
         var control = new Control(f);
         var gate = new DeliveryGate();
         if (typingBusy) { await gate.WaitToTypeAsync(); }
+        if (unknownWorker) { gate.MarkWorkerUncertain(null); }
         var stopper = new StopService(gate, source, f.Processes, new NoBridge(), injector, control,
             new StopOptions
             {
@@ -67,11 +70,13 @@ public sealed class StopDeadlineTests(ITestOutputHelper output)
             var result = await stopping.WaitAsync(TimeSpan.FromSeconds(2));
             if (typingBusy)
             {
-                Assert.Equal(StopOutcome.Failed, result.Outcome);
+                Assert.Equal(StopOutcome.Ended, result.Outcome);
+                Assert.True(result.Forced);
                 Assert.False(injector.Entered.Task.IsCompleted);
-                Assert.Equal(0, control.Terminations);
+                Assert.Equal(1, control.Terminations);
                 Assert.Equal(0, control.Handles);
-                Assert.Equal(SessionStatus.Idle, source.Get(Id)!.Status);
+                using var wait = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => gate.WaitToTypeAsync(wait.Token));
                 return;
             }
             if (faultedProof is not null)
@@ -87,6 +92,8 @@ public sealed class StopDeadlineTests(ITestOutputHelper output)
                     await gate.WaitToTypeAsync().WaitAsync(Bound);
                     gate.DoneTyping();
                     Assert.Equal(0, control.Handles);
+                    using var quiet = gate.TryExclude(TimeSpan.FromSeconds(30), out _);
+                    Assert.NotNull(quiet);
                 }
                 return;
             }

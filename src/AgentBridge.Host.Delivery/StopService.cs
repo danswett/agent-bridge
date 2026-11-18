@@ -256,9 +256,10 @@ public sealed class StopService : ISessionStopper
         try
         {
             var typed = false;
-            try { await gate.WaitToTypeAsync(deadline.Token); }
+            var ownsTyping = false;
+            try { await gate.WaitToTypeAsync(deadline.Token); ownsTyping = true; }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested)
-            { return Failed("ending timed out waiting for another delivery; try again"); }
+            { log($"end of {Short(session.Id)} exhausted its typing budget; continuing without typing"); }
             try
             {
                 if (probe.Active() is { } active) { return Refused(active); }
@@ -275,7 +276,7 @@ public sealed class StopService : ISessionStopper
                 }
                 if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
                 await SetEndingAsync(session.Id, true);
-                if (!asking)
+                if (ownsTyping && !asking)
                 {
                     InjectionResult typing;
                     try { typing = await injector.InjectAsync(pid, ExitKeys, deadline.Token); }
@@ -290,14 +291,14 @@ public sealed class StopService : ISessionStopper
                     typed = typing.Status != InjectionStatus.NothingTyped;
                     log($"typed /exit into {Short(session.Id)} (pid {pid}) -> {typing.Status} {typing.Detail}");
                 }
-                else
+                else if (ownsTyping)
                 {
                     log(notReady is not null
                         ? $"{Short(session.Id)} (pid {pid}) has not been seen ready since it was started here, so /exit is not typed"
                         : $"{Short(session.Id)} (pid {pid}) is asking a question, so /exit is not typed");
                 }
             }
-            finally { if (pendingWorker is null) { gate.DoneTyping(); } }
+            finally { if (ownsTyping && pendingWorker is null) { gate.DoneTyping(); } }
 
             var remaining = options.Grace - TimeSpan.FromMilliseconds(Environment.TickCount64 - began);
             if (typed && await held.WaitForExitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero))

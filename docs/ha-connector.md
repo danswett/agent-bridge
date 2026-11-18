@@ -720,20 +720,14 @@ card keeps while it asks (`Get-DaemonCardSummary`).
 * What the button holds when the connector first reads it is not a press; a session asking a
   question can be ended like any other.
 
-The host's graceful budget includes waiting for the typing slot and injecting `/exit`,
-not just waiting afterwards. Expiry cancels the injector; forced termination requires
-proof that its worker exited. An unproven worker yields a failed result while retaining
-the target's PID handle and typing fence until quiescence is proven.
+The graceful budget covers typing admission and `/exit`; an occupied slot skips typing
+and proceeds to termination. A failed injector must prove exit before its typing fence
+and PID handle are released.
 
-Pre-Ending analysis for [2910](https://github.com/danswett/agent-bridge/issues/2910):
-the reproduced injection stall happens **after** Ending, so does not establish the
-seven incidents' cause. Before Ending, the connector may be disabled/read-only, miss
-a watch event until its sweep, baseline an old press, consume a press while busy,
-or reject a confirmation not shown on the card. HA read/publish failures can prevent
-dispatch; the host can also refuse an unknown/replaced process, request confirmation,
-fail its audit, or report a delivery conflict before marking Ending. No host receipt
-of the press has been established for those incidents; these are investigation paths,
-not observed incident causes or changes to HA behavior.
+Pre-Ending hypotheses for [2910](https://github.com/danswett/agent-bridge/issues/2910),
+not established incident causes:
+* HA: disabled/read-only connector, baselined/busy press, confirmation timing or dispatch failure.
+* Host: press not received, unknown process, confirmation, audit refusal or delivery conflict.
 
 Where stage 4 knowingly differs from the daemon:
 

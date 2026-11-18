@@ -15,6 +15,7 @@ public sealed class DeliveryGate
     int deliveries;
     bool isTyping;
     bool uncertain;
+    bool unknownWorker;
     // The end of each injector worker that failed by exception, which may still be sending keys.
     readonly List<Task> failedWorkers = [];
     Exclusion? exclusion;
@@ -34,10 +35,24 @@ public sealed class DeliveryGate
     {
         lock (state)
         {
-            uncertain = true;
-            failedWorkers.Add(exited ?? Task.FromException(new InvalidOperationException("the injector worker's end cannot be observed")));
+            if (exited is null) { unknownWorker = true; }
+            else { failedWorkers.Add(exited); }
+            WorkerUncertain();
         }
     }
+
+    bool WorkerUncertain()
+    {
+        failedWorkers.RemoveAll(worker =>
+        {
+            if (!worker.IsCompleted) { return false; }
+            if (!worker.IsCompletedSuccessfully) { unknownWorker = true; _ = worker.Exception; }
+            return true;
+        });
+        return unknownWorker || failedWorkers.Count != 0;
+    }
+
+    bool IsUncertain => WorkerUncertain() || uncertain;
 
     // Admission must precede OutcomeMemory's Task.Run, not just the later session claim.
     public IDisposable? TryEnterDelivery()
@@ -112,14 +127,19 @@ public sealed class DeliveryGate
             }
             await mine.Quiet.Task.WaitAsync(limit.Token);
             Task[] workers;
-            lock (state) { workers = [.. failedWorkers]; }
+            lock (state)
+            {
+                WorkerUncertain();
+                if (unknownWorker) { return null; }
+                workers = [.. failedWorkers];
+            }
             try { await Task.WhenAll(workers).WaitAsync(limit.Token); }
             catch (Exception e) when (e is not OperationCanceledException) { return null; }
             lock (state)
             {
                 // Uncertainty forbids a graceful departure, not a recovery stop: with new deliveries
                 // blocked, none in flight and every failed worker gone, nothing can type again.
-                if (!isTyping && failedWorkers.TrueForAll(w => w.IsCompletedSuccessfully))
+                if (!isTyping && !WorkerUncertain())
                 {
                     var lease = mine;
                     mine = null;
@@ -157,9 +177,9 @@ public sealed class DeliveryGate
         lock (state)
         {
             Expire();
-            blocker = uncertain ? Blocker.JournalUncertain : isTyping ? Blocker.Typing
+            blocker = IsUncertain ? Blocker.JournalUncertain : isTyping ? Blocker.Typing
                 : deliveries > 0 || !sessions.IsEmpty ? Blocker.DeliveryInFlight : Blocker.LifecycleInProgress;
-            if (uncertain || isTyping || deliveries > 0 || !sessions.IsEmpty || exclusion is not null || stopping is not null) { return null; }
+            if (IsUncertain || isTyping || deliveries > 0 || !sessions.IsEmpty || exclusion is not null || stopping is not null) { return null; }
             return exclusion = new Exclusion(this, lifetime);
         }
     }
@@ -205,7 +225,7 @@ public sealed class DeliveryGate
             lock (owner.state)
             {
                 owner.Expire();
-                blocker = owner.uncertain ? Blocker.JournalUncertain : owner.isTyping ? Blocker.Typing
+                blocker = owner.IsUncertain ? Blocker.JournalUncertain : owner.isTyping ? Blocker.Typing
                     : owner.deliveries > 0 || !owner.sessions.IsEmpty ? Blocker.DeliveryInFlight : null;
                 if (!ReferenceEquals(owner.exclusion, this) || Committed || Committing) { return false; }
                 Committing = true;
@@ -219,7 +239,7 @@ public sealed class DeliveryGate
             {
                 connectionChanged = false;
                 if (!ReferenceEquals(owner.exclusion, this) || !Committing || Committed
-                    || owner.uncertain || owner.isTyping || owner.deliveries > 0 || !owner.sessions.IsEmpty
+                    || owner.IsUncertain || owner.isTyping || owner.deliveries > 0 || !owner.sessions.IsEmpty
                     || owner.time.GetElapsedTime(Started) >= Lifetime) { return false; }
                 lock (connection.Sync)
                 {

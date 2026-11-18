@@ -202,6 +202,8 @@ public sealed class WorkerInjector : IConsoleInjector
             var wrote = false;
             string? final = null;
             var errors = process.StandardError.ReadToEndAsync(patience.Token);
+            _ = errors.ContinueWith(t => log($"injector stderr read failed: {t.Exception!.GetBaseException().Message}"),
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             try
             {
                 await process.StandardInput.WriteAsync(plan.ToWorkerScript().AsMemory(), patience.Token);
@@ -225,9 +227,7 @@ public sealed class WorkerInjector : IConsoleInjector
             {
                 ended = true;
                 var exited = await EndAsync(process);
-                if (!exited.IsCompletedSuccessfully) { throw new InjectorWorkerException(e, exited); }
-                // Cancellation can interrupt an announcement as well as a write.
-                return Interrupted("the injector was cancelled and its worker has exited");
+                return Cancelled(wrote, e, exited);
             }
             await errors;
 
@@ -263,6 +263,13 @@ public sealed class WorkerInjector : IConsoleInjector
         {
             if (!ended) { process.Dispose(); }
         }
+    }
+
+    internal static InjectionResult Cancelled(bool wrote, Exception error, Task exited)
+    {
+        if (!exited.IsCompletedSuccessfully) { throw new InjectorWorkerException(error, exited); }
+        const string detail = "the injector was cancelled and its worker has exited";
+        return wrote ? Interrupted(detail) : Nothing(detail);
     }
 
     // The worker may still be sending keys: end it, and wait a moment for proof. The proof is its
