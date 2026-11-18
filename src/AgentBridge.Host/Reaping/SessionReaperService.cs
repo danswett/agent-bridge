@@ -14,7 +14,7 @@ public sealed partial class SessionReaperService : IAsyncDisposable
     readonly TimeProvider clock;
     readonly CancellationTokenSource stop;
     readonly SemaphoreSlim gate = new(1, 1);
-    Task<ReaperSnapshot>? pendingRead;
+    Task<(SessionReaperSettings Config, ReaperSnapshot Snapshot)>? pendingRead;
     Task? loop;
     int started, disposed;
     public event Action<SessionReaperReceipt>? Completed;
@@ -44,13 +44,17 @@ public sealed partial class SessionReaperService : IAsyncDisposable
             var receipt = new SessionReaperReceipt(1, Guid.NewGuid().ToString("N"), machine, clock.GetUtcNow(), "dry-run", [], []);
             try
             {
-                var config = settings();
                 if (pendingRead is { IsCompleted: false }) { throw new InvalidOperationException("previous read still pending"); }
-                pendingRead = Task.Run(() => read(token), token);
+                pendingRead = Task.Run(async () =>
+                {
+                    var configuration = settings();
+                    token.ThrowIfCancellationRequested();
+                    return (configuration, await read(token));
+                }, token);
                 // Observe abandoned faults without publishing late evidence or awaiting the read at shutdown.
                 _ = pendingRead.ContinueWith(task => { _ = task.Exception; }, CancellationToken.None,
                     TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                var snapshot = await pendingRead.WaitAsync(token);
+                var (config, snapshot) = await pendingRead.WaitAsync(token);
                 token.ThrowIfCancellationRequested();
                 if (clock.GetElapsedTime(began) >= TimeSpan.FromMinutes(2)) { throw new TimeoutException(); }
                 if (snapshot.Machine != machine) { throw new InvalidDataException("wrong machine"); }

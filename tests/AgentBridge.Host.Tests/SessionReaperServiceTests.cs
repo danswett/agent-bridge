@@ -175,6 +175,8 @@ public sealed class SessionReaperServiceTests : IAsyncLifetime
             try { release.Wait(); return Settings; }
             finally { exited.TrySetResult(); }
         }, log.Add, clock);
+        SessionReaperReceipt? completed = null;
+        service.Completed += receipt => completed = receipt;
         Task? shutdown = null;
         Task<SessionReaperReceipt?>? cycle = null;
         if (reachDeadline) { cycle = Task.Run(() => service.CycleAsync()); }
@@ -184,7 +186,7 @@ public sealed class SessionReaperServiceTests : IAsyncLifetime
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
             if (cycle is not null)
             {
-                clock.Advance(TimeSpan.FromMinutes(2));
+                clock.Advance(TimeSpan.FromMinutes(3));
                 var failed = Assert.IsType<SessionReaperReceipt>(await cycle.WaitAsync(TimeSpan.FromSeconds(10)));
                 Assert.NotNull(failed.Problem);
                 Assert.Empty(failed.Kept);
@@ -195,6 +197,10 @@ public sealed class SessionReaperServiceTests : IAsyncLifetime
             }
             shutdown = service.DisposeAsync().AsTask();
             await shutdown.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.NotNull(completed);
+            Assert.NotNull(completed.Problem);
+            Assert.Empty(completed.Kept);
+            Assert.Empty(completed.Ended);
         }
         finally
         {

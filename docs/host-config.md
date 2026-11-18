@@ -48,8 +48,9 @@ need explicit CLEAN, or NOT CLEAN at least 60 minutes old, and 60 idle minutes.
 The host starts one non-overlapping cycle when serving, then every 15 minutes;
 shutdown cancels it. It ships and updates with the ordinary Slipgates host,
 without a separate installation or scheduled task. Cycles have a two-minute
-evidence deadline. Reads run on background thread-pool workers; the deadline
-and shutdown never wait for an uncooperative read. Late results are discarded.
+evidence deadline. Config and snapshot acquisition run together on a background
+thread-pool worker; the deadline and shutdown never wait for an uncooperative
+read. Late results are discarded.
 An unfinished timed-out read blocks further reads.
 Each run atomically writes `<profile>/reaper/receipts/<run-id>.json` with schema 1,
 run ID, machine, UTC time, mode, `ended` and `kept` (each with a reason), and a
