@@ -82,17 +82,20 @@ public sealed class SessionService
         catch (JsonException) { return null; } // An invalid request still meets the existing refusal path.
     }
 
+    internal Func<LaunchRequest, string, Func<Func<string?>, Task<LaunchResult>>, Task<LaunchResult>>? FleetLaunchAdmission { get; init; }
+
     internal async Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, AgentAuditLog? audit,
         Func<string?> refusal, Func<LaunchConfig, string?> dispatchCheck)
     {
         if (launcher is null || audit is null) { return new(LaunchOutcome.Refused, "fleet launch service or audit is unavailable"); }
-        if (ReadOnly?.Invoke() is { } readOnly) { return new(LaunchOutcome.Refused, readOnly); }
-        // #2770 must wire atomic, durable hourly/live admission before fleet activation.
-        string? Check() => refusal() ?? (launcher.FleetConfig is { } actual ? dispatchCheck(actual) : "fleet dispatch settings are unavailable")
-            ?? "fleet launch is disabled until fleet hourly/live admission controls are wired";
+        string? Check() => ReadOnly?.Invoke() ?? refusal()
+            ?? (launcher.FleetConfig is { } actual ? dispatchCheck(actual) : "fleet dispatch settings are unavailable");
         if (Check() is { } problem) { return new(LaunchOutcome.Refused, problem); }
-        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
-            fleet: true, refusal: Check);
+        // H3 owns atomic, durable hourly/live admission; no hook means no activation.
+        if (principal != "fleet-launcher" || FleetLaunchAdmission is not { } admission)
+        { return new(LaunchOutcome.Refused, "fleet launch is disabled until fleet hourly/live admission controls are wired"); }
+        var result = await admission(request, principal, freshCheck => GateLaunchAudit.LaunchAsync(launcher, request, principal,
+            audit, new("local", "agent", principal, null), fleet: true, refusal: () => freshCheck() ?? Check()));
         return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
     }
 

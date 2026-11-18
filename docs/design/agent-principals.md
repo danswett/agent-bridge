@@ -27,6 +27,14 @@ or launch authority by itself: H2/H3 supply enforcement/audit/caps before native
 No reply, answer, trust or end permission changes. The owner's [decision](../owner-decisions.md)
 supersedes earlier launch reasoning only within [Cut H](https://github.com/danswett/agent-bridge/issues/3052).
 
+[H2](https://github.com/danswett/agent-bridge/issues/3054) admits authenticated local session agents
+as `fleet-launcher` only for an exact configured worker role, fleet name and approved isolated workspace.
+Each request UUID permanently binds the grant, originating agent and full launch-options hash in
+`fleet-launch-requests`; duplicate or changed requests refuse, including after a crash.
+Every attempt writes `fleet.launch.attempt` with grant ID and request hash before dispatch; no prompt is stored.
+Grant/credential liveness is rechecked at dispatch. The H3 admission hook defaults closed; this does not
+activate fleet launching or authorize reply, answer, trust or end.
+
 ## Contents
 
 1. [Goals, non-goals and the owner's decisions](#1-goals-non-goals-and-the-owners-decisions)

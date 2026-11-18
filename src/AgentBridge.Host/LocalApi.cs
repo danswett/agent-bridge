@@ -163,6 +163,18 @@ public static class LocalApi
             throw Refuse(op, new Caller(CallerKind.Agent, credentials.PrincipalOf(answering)),
                 "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
         }
+        if (op == LaunchProtocol.Launch && channel is LocalChannel
+            && callers.Classify(channel, fresh: true).Kind == CallerKind.Agent
+            && credentials?.Of(channel) is { Kind: "session" } fleetCaller && fleetCaller.Scope != AgentPolicy.ScopeNone
+            && data.ValueKind == JsonValueKind.Object && (data.TryGetProperty("role", out _) || data.TryGetProperty("fleetName", out _)))
+        {
+            string? Live() => credentials.Of(channel)?.Id != fleetCaller.Id
+                || callers.Classify(channel, fresh: true).Kind != CallerKind.Agent ? "the fleet-launch agent credential is no longer live" : null;
+            var permit = control.AdmitFleetLaunch(data, audit, credentials.PrincipalOf(fleetCaller), Live);
+            return await sessions.LaunchFleetAsync(permit.Request, "fleet-launcher", audit,
+                () => Live() ?? control.CheckFleetLaunchGrant(permit),
+                actual => credentials.FleetGrant.CheckDispatch(actual, permit.Request));
+        }
         if (op is LaunchProtocol.Launch or LaunchProtocol.Options
             && callers.Classify(channel).Kind == CallerKind.Agent)
         {

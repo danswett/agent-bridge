@@ -89,6 +89,14 @@ public sealed class HostControl
     {
         lock (settingsGate) { return AgentFleetLaunchGrants.Handle(options.Folder, data, options.Time); }
     }
+    internal AgentFleetLaunchPermit AdmitFleetLaunch(JsonElement data, AgentAuditLog? audit, string origin, Func<string?> live)
+    {
+        lock (settingsGate) { return AgentFleetLaunchAdmission.Admit(options.Folder, options.Time, data, audit, origin, live); }
+    }
+    internal string? CheckFleetLaunchGrant(AgentFleetLaunchPermit permit)
+    {
+        lock (settingsGate) { return AgentFleetLaunchAdmission.Check(options.Folder, options.Time, permit.Request, permit.Grant); }
+    }
 
     readonly Action<string> log;
     readonly object gate = new();
