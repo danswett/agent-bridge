@@ -149,7 +149,8 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
 
     Offered OfferOne(Entry e)
     {
-        if (_g.Find(e.Hash) is { } known)
+        var existing = _g.Find(e.Hash);
+        if (existing is { } known && (e.EvidenceOnly || (!_candidate[known] && !_g[known].Entry.EvidenceOnly)))
         {
             if (!_candidate[known]) { return new(e.Hash, Verdict.Duplicate); }
             return new(e.Hash, Verdict.Refused, _refusedCandidates.GetValueOrDefault(known, Invalid.Budget));
@@ -164,7 +165,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             if (_g.Find(body.Prev[i]) is not { } p) { return new(e.Hash, Verdict.Refused, Invalid.Parent); }
             parents[i] = p;
         }
-        if (body.Op == EntryOp.Genesis && _g.Count > 0) { return new(e.Hash, Verdict.Refused, Invalid.Genesis); }
+        if (body.Op == EntryOp.Genesis && _g.Count > 0 && existing is null) { return new(e.Hash, Verdict.Refused, Invalid.Genesis); }
         if (body.Op != EntryOp.Genesis && _g.Count == 0) { return new(e.Hash, Verdict.Refused, Invalid.Parent); }
 
         var ancestors = new Bits(_g.Count + 1);
@@ -186,6 +187,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             // Kept aside, in case a removal in this or a later offer needs it as evidence.
             if (body.Op != EntryOp.Remove || overCap)
             {
+                if (existing is not null) { return new(e.Hash, Verdict.Refused, reason ?? Invalid.Evidence); }
                 if (_refusedCandidates.Count >= 2 * EvidenceCap) { return new(e.Hash, Verdict.Refused, reason ?? Invalid.Evidence); }
                 var c = Commit(e, parents, before, facts, candidate: true);
                 _candidate.Set(c.Index);
@@ -214,7 +216,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             {
                 if (!q[i] && !_candidate[i] && !_g[i].Evidence && !ancestors[i]) { unseen++; }
             }
-            var heads = HeadIndices().Count(h => !parents.Contains(h)) + 1;
+            var heads = HeadIndices().Count(h => h != existing && !parents.Contains(h)) + 1;
             arrival = parents.Length != 1 || unseen > Window || heads > MaxHeads;
         }
 
@@ -232,7 +234,20 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     // counted, its parent stopped being a head and a refused rename left the roster with none.
     RosterNode Commit(Entry e, int[] parents, RosterState before, Facts facts, bool candidate = false)
     {
-        var node = _g.Add(e, parents);
+        var existing = _g.Find(e.Hash);
+        var node = existing is { } i ? _g[i] : _g.Add(e, parents);
+        if (existing is not null)
+        {
+            _candidate.Clear(node.Index);
+            _refusedCandidates.Remove(node.Index);
+            if (node.Evidence)
+            {
+                _evidenceBySigner[node.Signer]--; _evidence--;
+                foreach (var p in parents) { _children[p]--; }
+                node.Evidence = false;
+            }
+        }
+        node.Entry = e;
         node.Signer = e.Body.Op == EntryOp.Genesis ? node.Index : facts.Signer;
         node.Cosigner = facts.Cosigner;
         node.Target = facts.Target;
@@ -252,7 +267,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             }
             node.Takes = takes;
         }
-        _children.Add(0);
+        if (existing is null) { _children.Add(0); }
         if (!candidate && !parents.Any(p => _candidate[p]))
         {
             foreach (var p in parents) { _children[p]++; }

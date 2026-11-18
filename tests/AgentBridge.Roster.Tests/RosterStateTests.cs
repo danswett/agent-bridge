@@ -26,6 +26,8 @@ public sealed class RosterStateTests
         replay.Offer(Entry.Parse(System.Text.Encoding.UTF8.GetBytes(evidence.Canonical())), w.Entry("R"));
         Assert.True(replay.Graph[replay.Graph.Find(evidence.Hash)!.Value].Evidence);
         Assert.False(replay.State.Active.ContainsKey(w.Id("B")));
+        Assert.Equal(Verdict.Accepted, replay.Offer(w.Entry("E"))[0].Verdict);
+        Assert.False(replay.Graph[replay.Graph.Find(evidence.Hash)!.Value].Evidence);
     }
 
     [Theory]
@@ -44,6 +46,8 @@ public sealed class RosterStateTests
         var wire = plain.Canonical();
         Assert.Equal(Verdict.Refused, v.Offer(Entry.Parse(System.Text.Encoding.UTF8.GetBytes(wire[..^1] + ",\"evidence\":true}")))[0].Verdict);
         var count = v.Graph.Count;
+        var bad = w.Entry(label); bad.Sig[^1] ^= 1;
+        Assert.Equal(Invalid.Signature, v.Offer(bad)[0].Reason);
         Assert.Equal(Verdict.Accepted, v.Offer(plain)[0].Verdict);
         Assert.Equal(count, v.Graph.Count);
         Assert.False(v.Graph[v.Graph.Find(plain.Hash)!.Value].Entry.EvidenceOnly);
