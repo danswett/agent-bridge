@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using System.Globalization;
 using System.Xml.Linq;
 using Xunit;
 
@@ -116,10 +117,16 @@ public sealed class MachineTileTests
         var pane = MachinesPane();
         var list = pane.Descendants().Single(e => Id(e) == "MachineList");
 
-        Assert.DoesNotContain(list.Ancestors().TakeWhile(e => e != pane), e => e.Attribute("MaxWidth") is not null);
-        Assert.Contains(list.Elements(), e =>
-            e.Name.LocalName.EndsWith(".ItemsPanel", StringComparison.Ordinal) ||
-            e.Name.LocalName.EndsWith(".Layout", StringComparison.Ordinal));
+        Assert.DoesNotContain(list.AncestorsAndSelf().TakeWhile(e => e != pane), e => e.Attribute("MaxWidth") is not null);
+        var ns = list.Name.Namespace;
+        var layout = Assert.Single(list.Elements().Where(e =>
+            e.Name == ns + (list.Name.LocalName + ".ItemsPanel") ||
+            e.Name == ns + (list.Name.LocalName + ".Layout")));
+        var panel = layout.Name.LocalName.EndsWith(".ItemsPanel", StringComparison.Ordinal)
+            ? Assert.Single(Assert.Single(layout.Elements(ns + "ItemsPanelTemplate")).Elements())
+            : Assert.Single(layout.Elements());
+        Assert.Contains(panel.Name, new[] { ns + "ItemsWrapGrid", ns + "VariableSizedWrapGrid", ns + "UniformGridLayout" });
+        Assert.Equal("Horizontal", (string?)panel.Attribute("Orientation"));
     }
 
     // #2604: two bar rows, CPU then Memory, inside the tile after Health and before Running.
@@ -147,7 +154,19 @@ public sealed class MachineTileTests
         Assert.NotNull(text);
         var row = text.Parent!;
         Assert.Equal("Grid", row.Name.LocalName);
-        Assert.Equal(3, row.Elements(row.Name.Namespace + "Grid.ColumnDefinitions").Elements().Count());
+        var ns = row.Name.Namespace;
+        var columns = row.Elements(ns + "Grid.ColumnDefinitions").Elements(ns + "ColumnDefinition").ToList();
+        Assert.Equal(3, columns.Count);
+        foreach (var column in new[] { columns[0], columns[2] })
+        {
+            Assert.True(double.TryParse((string?)column.Attribute("Width"), NumberStyles.Float, CultureInfo.InvariantCulture, out var width)
+                && double.IsFinite(width) && width > 0, "Label and value columns must have fixed positive widths.");
+        }
+        Assert.Equal("*", (string?)columns[1].Attribute("Width"));
+        Assert.Equal("0", (string?)text.Attribute("Grid.Column") ?? "0");
+        var bar = Assert.Single(row.Elements(ns + "ProgressBar"));
+        Assert.Equal("1", (string?)bar.Attribute("Grid.Column"));
+        Assert.Contains(row.Elements(ns + "TextBlock"), e => (string?)e.Attribute("Grid.Column") == "2");
     }
 
     [Theory]
