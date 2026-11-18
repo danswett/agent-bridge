@@ -10,7 +10,7 @@
 // stored even as ciphertext, and they work on a relay without a blob store. The limits mirror
 // AttachmentLimits in src/AgentBridge.Protocol/Attachments.cs.
 import { utf8Bytes } from './answers.js';
-import { TICKET_REUSE_MS, blobIdOf, newBlobKey, sealBlob, storedSize, toBase64url } from './blobs.js';
+import { TICKET_REUSE_MS, blobIdOf, maxPlain, newBlobKey, sealBlob, storedSize, toBase64url } from './blobs.js';
 
 export const AttachmentLimits = Object.freeze({
   // One file, as it is sent in the channel.
@@ -60,16 +60,17 @@ const tooBig = (name, size, limit = AttachmentLimits.bytes) => new Error(`${name
 // is refused with a reason to show.
 export async function prepareAttachment(file, { uuid = () => globalThis.crypto.randomUUID(), shrink = shrinkImage, largeMax = 0 } = {}) {
   const type = typeof file?.type === 'string' ? file.type : '';
+  const largeLimit = Math.min(largeMax, AttachmentLimits.blobBytes);
   let name = attachmentName(file?.name, type);
   let blob = file;
   let resized = false;
   let large = false;
   if (typeof file?.size === 'number' && file.size > AttachmentLimits.bytes) {
-    if (largeMax > 0 && file.size <= largeMax) {
+    if (largeLimit > 0 && file.size <= largeLimit) {
       large = true;
     } else {
       const smaller = isImage(type) ? await shrink(file, AttachmentLimits.bytes) : null;
-      if (!smaller) { throw tooBig(name, file.size, largeMax > 0 ? largeMax : AttachmentLimits.bytes); }
+      if (!smaller) { throw tooBig(name, file.size, largeLimit > 0 ? largeLimit : AttachmentLimits.bytes); }
       blob = smaller;
       resized = true;
       name = attachmentName(`${name.replace(/\.[^.]*$/, '') || 'image'}.jpg`, 'image/jpeg');
@@ -78,7 +79,7 @@ export async function prepareAttachment(file, { uuid = () => globalThis.crypto.r
   if (typeof blob?.arrayBuffer !== 'function') { throw new Error(`this browser can't read ${name}`); }
   const bytes = new Uint8Array(await blob.arrayBuffer());
   // Read, then checked again: a file can change between being picked and being read.
-  const limit = large ? largeMax : AttachmentLimits.bytes;
+  const limit = large ? largeLimit : AttachmentLimits.bytes;
   if (bytes.length > limit) { throw tooBig(name, bytes.length, limit); }
   if (!bytes.length) { throw new Error(`${name} is empty`); }
   const sentType = resized ? 'image/jpeg' : type;
@@ -172,6 +173,9 @@ const RELAY_REFUSALS = {
 
 async function sendThroughBlobStore(client, file, onProgress, { blobs, hostId, signal, pollMs }) {
   const half = file.size / 2;
+  if (blobs?.max > 0 && storedSize(file.size) > blobs.max) {
+    throw new AttachmentError(`${file.name} is over the current ${describeSize(maxPlain(blobs.max))} limit for the relay's blob store`);
+  }
   // Uploaded once per file: a resend after a lost response, or a reply sent again after it
   // was refused, reuses the blob while its ticket lasts.
   if (!file.blob || Date.now() - file.blob.at > TICKET_REUSE_MS) {
