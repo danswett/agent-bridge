@@ -19,7 +19,7 @@ namespace AgentBridge.Host;
 // push.* ops, which register a device for notifications, go to the
 // PushNotifier, usage.* to the UsageService, and launch.options and session.launch to the
 // launcher (docs/protocol/v1-launch.md).
-public sealed class SessionService
+public sealed partial class SessionService
 {
     readonly ISessionSource source;
     readonly MachineInfo machine;
@@ -704,13 +704,23 @@ public sealed class SessionService
         // anything that can be read gets an outcome.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.reply needs an id, a request and text"); }
         var request = data.Deserialize<ReplyRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.reply needs an id, a request and text");
+        if (RelayInbox is not null && channel is SecureChannel secure)
+        {
+            return await RelayInbox.ReceiveAsync(request.Id, request.Request,
+                new(request, secure.PeerId, secure.Relay.AccountId));
+        }
+        return await ReplyCoreAsync(request, channel.PeerId);
+    }
+
+    async Task<ReplyResult> ReplyCoreAsync(ReplyRequest request, string peer)
+    {
         var (watch, progress) = Watch(request.Progress);
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);
-        var result = await replies.ReplyAsync(request, channel.PeerId, watch: watch);
+        var result = await replies.ReplyAsync(request, peer, watch: watch);
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
-            push?.Replied(channel.PeerId, request.Id);
+            push?.Replied(peer, request.Id);
             TakeBack(takeBack, answer: false);
         }
         return progress ? result with { Timings = watch.Timings } : result;

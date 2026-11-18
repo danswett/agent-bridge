@@ -31,6 +31,7 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
     readonly TimeProvider time = time ?? TimeProvider.System;
     public ReplayStore Replays { get; } = new(time ?? TimeProvider.System);
     public RateCap Rates { get; } = new(time ?? TimeProvider.System);
+    internal RelayReplyInbox? Inbox { get; set; }
 
     public async Task<object?> ServeAsync(SecureChannel channel, JsonElement data, CancellationToken ct)
     {
@@ -39,7 +40,7 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
         return await ReceiveAsync(seen, data, ct);
     }
 
-    public async Task<LiteAck> ReceiveAsync(LiteChannel channel, JsonElement data, CancellationToken ct)
+    public async Task<LiteAck> ReceiveAsync(LiteChannel channel, JsonElement data, CancellationToken ct, bool fromInbox = false)
     {
         if (!mode.On) { return new LiteAck("refused", Off, "", mode.KillEpoch); }
         if (channel.PeerKind != "host" || !channel.InPresence) { return Refuse(NotSameAccount); }
@@ -62,6 +63,14 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
         if (body.Principal.Machine != channel.PeerId) { return Refuse(Sender, body.Request); }
         if (body.Principal.Add != Codec.Base64Url(SHA256.HashData(staticKey))) { return Refuse(AddMismatch, body.Request); }
         if (body.Target.Machine != channel.Self) { return Refuse(Target, body.Request); }
+        if (!fromInbox && Inbox is not null)
+        {
+            var queued = await Inbox.ReceiveAsync(body.Target.Session!, body.Request,
+                new(null, channel.PeerId, channel.Account, channel, data.Clone()), ct);
+            return queued.Outcome == AgentBridge.Protocol.AnswerOutcome.Delivered
+                ? new LiteAck("delivered", null, body.Request, mode.KillEpoch)
+                : Refuse(queued.Reason ?? DeliveryFailed, body.Request);
+        }
         switch (Replays.Add(channel.PeerId + "/" + body.Request))
         {
             case ReplayStore.Result.Seen: return Refuse(Replay, body.Request);
