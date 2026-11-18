@@ -113,15 +113,19 @@ public sealed class SessionGroups
         foreach (var key in membership.Keys.ToArray())
         {
             if (GroupOf(key) is null) { continue; }
-            if (listed.TryGetValue(key, out var last) && now - last > TimeSpan.FromDays(30))
+            var stamped = listed.TryGetValue(key, out var last);
+            if (live.Contains(key) || !stamped)
+            {
+                if (!stamped || now - last >= TimeSpan.FromDays(1))
+                {
+                    listed[key] = now;
+                    changed = true;
+                }
+            }
+            else if (now - last > TimeSpan.FromDays(30))
             {
                 Write(membership, key, null);
                 listed.Remove(key);
-                changed = true;
-            }
-            else if ((!listed.ContainsKey(key) || live.Contains(key)) && last != now)
-            {
-                listed[key] = now;
                 changed = true;
             }
         }
