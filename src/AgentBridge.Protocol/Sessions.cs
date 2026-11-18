@@ -384,7 +384,7 @@ public sealed record Session
     public string? Repository { get; init; }
     public string? Branch { get; init; }
     public string? Model { get; init; }
-    // Advisory display metadata, not permission to stop a session.
+    // Host-owned live launch role; absence is unknown, never permission to stop.
     public string? Role { get; init; }
     // The agent's own option ids for effort and context (v1-launch.md), when the host reports them: absent,
     // never empty, and absent when longer than Limits.OptionId. Older hosts send neither; older clients ignore them.

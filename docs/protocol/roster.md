@@ -166,10 +166,10 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
   name at most 64 printable ASCII characters; at most 64 sessions). Any other member, such as
   a prompt, a question, a path or a token, refuses the whole record. Time in state is now minus
   `since`.
-  Optional `role` is advisory display metadata from the persisted launch role (`one-shot`, `lead`, `preserved`);
+  Optional `role` is host-owned live launch metadata (`one-shot`, `lead`, `preserved`), lost on host restart;
   unknown values refuse the record. `fleet.list` and `fleet.find` preserve it only for online, verified machines,
   ignoring a caller-supplied role. Neither a supplied nor a missing role authorizes a stop;
-  the persistence is same-user-writable, not trusted role authority.
+  same-user-writable provenance is never used to reconstruct authority or publish a role.
 * **Same account only; memory only.** Records are never logged, never in the roster blob, and
   are dropped when the host's socket closes. `online` is false, and `record` null, when the host
   is gone or has sent nothing for 60 seconds.

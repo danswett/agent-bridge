@@ -45,6 +45,8 @@ public interface ISessionLauncher
     bool LaunchedSession(string session, SessionProcess? process) => false;
     // Advisory display metadata only; not authority for stopping or admitting a grant.
     string? RoleOf(string session, SessionProcess? process) => null;
+    // In-memory launch authority only; never reconstructed from session-writable files.
+    string? TrustedRoleOf(string session, SessionProcess? process) => null;
 
     // launch.trust.answer, for a person whose signed command the caller has checked: answers a
     // folder-trust question a launched agent is waiting on (trust, or quit).
@@ -252,6 +254,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     public bool LaunchedSession(string session, SessionProcess? process) => provenance.Contains(session, process);
     public string? RoleOf(string session, SessionProcess? process) => provenance.RoleOf(session, process);
+    public string? TrustedRoleOf(string session, SessionProcess? process) => provenance.TrustedRoleOf(session, process);
 
     // agent-ha-bridge's $script:BridgeResumeCacheLimit: how many of the newest sessions in
     // approved folders it caches, and so decides the resume labels over.

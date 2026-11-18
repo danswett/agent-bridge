@@ -22,18 +22,19 @@ clients restart paging without `before` and merge by turn id.
 
 ## Rules for every message
 
-`sessions.list`, `session.get` and subscription upserts may include an **advisory,
-display-only** `role`: `one-shot`, `lead`, or `preserved`. It originates in
-`LaunchRequest.SessionRole` (`sessionRole`), separate from the MCP `role`, and is
-persisted with the session/process incarnation, not read from workspace metadata.
-The same-user-writable `launch-provenance.json` can be edited by a session and read
-back after host restart: its role is NOT authoritative and MUST NOT authorize a stop
-or an EndSelf grant, even when it says `one-shot`. Missing, legacy, unknown, unbound
-or conflicting roles never imply eligibility. Unavailable provenance omits the role
-without failing reads. Slice A adds no EndSelf operation and leaves the existing
-agent `session.stop` refusal unchanged. Slice B must make roles
-authoritative from host-owned state that sessions cannot write before using them for
-EndSelf admission; A's persisted display role is never that authority.
+`sessions.list`, `session.get`, subscription upserts and registry `role` use only
+host-owned **in-memory** launch state from `LaunchRequest.SessionRole`, bound to the
+process incarnation. Persisted provenance remains advisory, never restored as role authority.
+Host restart, missing/legacy/unknown roles and conflicting bindings fail closed.
+Local-only `agent.receipt {receipt,machine,target}` requires the existing authenticated
+session principal and verifies a confirmed `agent.send` delivery bound to that sender and target.
+`session.endSelf.admit {receipt,machine,target}` and `EndSelf {request,grant}` require a fresh,
+noncredentialed HostCli person, exactly like manual script-grant admission. Agents (including
+SRE agents) and the App cannot admit OR redeem. Only a live `one-shot` sender is eligible.
+Receipts last 10 minutes and are consumed on admission; grants last at most one minute,
+are session/incarnation-bound and consumed before dispatch. StopAudit writes intent before stop.
+Restart loses both; failed/interrupted execution cannot replay. Finality is judged by the person,
+not inferred from text. Ordinary stop confirmation/G5 protections remain; Fleet stays audit-only.
 
 * JSON, UTF-8, `camelCase` names. A field that is absent and one that is `null` mean
   the same thing. Text in the Basic Multilingual Plane, accented letters and CJK

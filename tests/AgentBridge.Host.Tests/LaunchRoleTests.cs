@@ -16,7 +16,7 @@ public sealed class LaunchRoleTests : LaunchFlowFixture
     [InlineData("one-shot", false)]
     [InlineData("lead", true)]
     [InlineData("preserved", false)]
-    public async Task The_launch_role_survives_restart_and_session_metadata_cannot_change_it(string role, bool patch)
+    public async Task Live_roles_ignore_metadata_and_only_advisory_provenance_survives_restart(string role, bool patch)
     {
         Directory.CreateDirectory(f.CopilotHome);
         File.WriteAllText(Path.Combine(f.CopilotHome, "mcp-config.json"), """{"mcpServers":{"keep":{"command":"fake"},"drop":{"command":"fake"}}}""");
@@ -34,7 +34,9 @@ public sealed class LaunchRoleTests : LaunchFlowFixture
         File.AppendAllText(file, "\nrole: forged\n");
         await source.RefreshAsync();
         var restarted = Launcher(Config());
-        var service = new SessionService(source, new("fixture", "Fixture", "windows", "test"), launcher: restarted);
+        Assert.Equal(role, restarted.RoleOf(result.Session!, source.ProcessOf(result.Session!)));
+        Assert.Null(restarted.TrustedRoleOf(result.Session!, source.ProcessOf(result.Session!)));
+        var service = new SessionService(source, new("fixture", "Fixture", "windows", "test"), launcher: launcher);
         var page = JsonSerializer.SerializeToElement(await service.HandleAsync(null!, Ops.SessionsList, default), ProtocolJson.Options);
         Assert.Equal(role, Assert.Single(page.GetProperty("sessions").EnumerateArray()).GetProperty("role").GetString());
         var channel = new RoleChannel();
@@ -42,7 +44,7 @@ public sealed class LaunchRoleTests : LaunchFlowFixture
         var feed = subscription.Then(channel);
         try { Assert.Equal(role, (await channel.Upsert.Task.WaitAsync(TimeSpan.FromSeconds(5))).Role); }
         finally { channel.End.TrySetResult(); await feed.WaitAsync(TimeSpan.FromSeconds(5)); }
-        var publisher = new FleetPublisher(source, "fixture", role: restarted.RoleOf);
+        var publisher = new FleetPublisher(source, "fixture", role: launcher.TrustedRoleOf);
         Assert.True(await publisher.PublishAsync((record, _) =>
         {
             Assert.Equal(role, Assert.Single(record.GetProperty("sessions").EnumerateArray()).GetProperty("role").GetString());
@@ -99,6 +101,21 @@ public sealed class LaunchRoleTests : LaunchFlowFixture
     }
 
     [Fact]
+    public async Task A_provenance_file_cannot_create_authoritative_roles_after_host_restart()
+    {
+        var launcher = Launcher(Config());
+        var launched = await launcher.LaunchAsync(new LaunchRequest
+        {
+            Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", SessionRole = "lead",
+        }, "fixture");
+        var path = Path.Combine(f.Root, "profile", "launch-provenance.json");
+        File.WriteAllText(path, File.ReadAllText(path).Replace("\"lead\"", "\"one-shot\""));
+        Assert.Equal("lead", launcher.TrustedRoleOf(launched.Session!, source.ProcessOf(launched.Session!)));
+        var service = new SessionService(source, new("fixture", "Fixture", "windows", "test"), launcher: Launcher(Config()));
+        Assert.Null(Assert.Single(Assert.IsType<SessionList>(await service.HandleAsync(null!, Ops.SessionsList, default)).Sessions).Role);
+    }
+
+    [Fact]
     public void Legacy_unbound_or_reused_processes_never_acquire_a_role()
     {
         var path = Path.Combine(f.Root, "provenance.json");
@@ -138,7 +155,7 @@ public sealed class LaunchRoleTests : LaunchFlowFixture
     [InlineData(CallerKind.App, "session.stop", false)]
     [InlineData(CallerKind.Agent, "agent.endSelf", false)]
     [InlineData(CallerKind.Agent, "session.endSelf", false)]
-    [InlineData(CallerKind.Agent, "EndSelf", false)]
+    [InlineData(CallerKind.Agent, "EndSelf", true)]
     public async Task Stop_and_unavailable_EndSelf_paths_never_read_the_advisory_role(CallerKind kind, string op, bool refused)
     {
         var actions = new DisplayOnlyRole();

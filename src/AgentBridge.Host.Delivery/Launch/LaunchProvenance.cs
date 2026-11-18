@@ -13,6 +13,7 @@ internal sealed class LaunchProvenance
     readonly Action<string> log;
     readonly Lock gate = new();
     readonly Dictionary<Guid, Origin> origins = [];
+    readonly Dictionary<Guid, Origin> live = [];
     bool unavailable;
     sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, string? Role = null);
 
@@ -44,12 +45,12 @@ internal sealed class LaunchProvenance
 
     public void Preparing(Guid request, string session = "", string? grant = null, string? role = null)
     {
-        lock (gate) { Check(); origins[request] = new(session, null, grant, SessionRoles.Known(role)); Save(); }
+        lock (gate) { Check(); live[request] = origins[request] = new(session, null, grant, SessionRoles.Known(role)); Save(); }
     }
 
     public void Abandon(Guid request)
     {
-        lock (gate) { Check(); origins.Remove(request); Save(); }
+        lock (gate) { Check(); origins.Remove(request); live.Remove(request); Save(); }
     }
 
     public void Bound(Guid request, string session, SessionProcess process)
@@ -61,6 +62,7 @@ internal sealed class LaunchProvenance
             var origin = new Origin(session, process, prior?.Grant, prior?.Role);
             if (origins.GetValueOrDefault(request) == origin) { return; }
             origins[request] = origin;
+            if (live.ContainsKey(request)) { live[request] = origin; }
             Save();
         }
     }
@@ -90,12 +92,15 @@ internal sealed class LaunchProvenance
     }
 
     // Same-user-writable provenance is advisory display data, never stop authorization.
-    public string? RoleOf(string session, SessionProcess? process)
+    public string? RoleOf(string session, SessionProcess? process) => RoleOf(session, process, origins);
+    // Never loaded from disk: host restart deliberately loses role authority.
+    public string? TrustedRoleOf(string session, SessionProcess? process) => RoleOf(session, process, live);
+    string? RoleOf(string session, SessionProcess? process, Dictionary<Guid, Origin> entries)
     {
         lock (gate)
         {
             if (unavailable || process is not { Id: > 0, StartedAt: not null }) { return null; }
-            var matches = origins.Values.Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase)).ToArray();
+            var matches = entries.Values.Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (matches.Any(o => o.Process is null)) { return null; }
             var roles = matches.Where(o => o.Process == process).Select(o => SessionRoles.Known(o.Role)).Distinct().ToArray();
             return roles.Length == 1 ? roles[0] : null;
