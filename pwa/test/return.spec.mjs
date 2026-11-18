@@ -121,16 +121,19 @@ test.afterEach(async ({ page }, info) => {
 });
 
 async function expectClockGuard(page, advanceClock) {
-  const before = await page.evaluate(() => Date.now());
-  await expect(advanceClock(page, 1)).rejects.toThrow(
+  // An earlier browser-clock tick can finish after pauseAt; observe the guard's command instead.
+  const advances = [];
+  const guardedPage = {
+    evaluate: page.evaluate.bind(page),
+    clock: { runFor: async (ms) => { advances.push(ms); } },
+  };
+  await expect(advanceClock(guardedPage, 1)).rejects.toThrow(
     'Return setup: refusing to advance fake time before a visible grace start is observed');
-  expect(await page.evaluate(() => Date.now())).toBe(before);
+  expect(advances).toEqual([]);
 }
 
 test('return_setup_refuses_to_advance_before_grace_starts', async ({ page }) => {
   await openDemo(page);
-  await page.clock.install();
-  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
   expect(await page.evaluate(() => window.agentBridgeDemo.grace.active)).toBe(false);
   await expectClockGuard(page, advanceAwayClock);
 });
@@ -142,6 +145,7 @@ test('return setup rejects clock advances even when page time moves backwards in
     Date.now = () => time--;
   });
   const before = await page.evaluate(() => Date.now());
+  await expectClockGuard(page, advanceAwayClock);
   await expectClockGuard(page, advanceHeldQuestionClock);
   expect(await page.evaluate(() => Date.now())).toBeLessThan(before);
 });
@@ -390,8 +394,6 @@ async function advanceHeldQuestionClock(page, ms) {
 
 test('held_question_setup_refuses_to_advance_before_grace_starts', async ({ page }) => {
   await openDemo(page);
-  await page.clock.install();
-  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
   expect(await page.evaluate(() => window.agentBridgeDemo.grace.active)).toBe(false);
   await expectClockGuard(page, advanceHeldQuestionClock);
 });
