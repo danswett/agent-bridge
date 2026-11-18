@@ -291,8 +291,9 @@ static class MergeRule
             if (receipt?.State == "success" && second?.State != "success")
             {
                 // A failed second receipt is reported below.
+                // Keep the receipt requirement ahead of paths so status truncation preserves its category.
                 if (second is not { State: "failure" or "error" })
-                    failures.Add($"{Capitalize(what)}, so it needs a second review's receipt ({config.CopilotWaiver.SecondReview}) on {sha}, from another model family");
+                    failures.Add($"needs a second review's receipt ({config.CopilotWaiver.SecondReview}) on {sha}, from another model family: {what}");
             }
             else if (receipt?.State == "success")
                 failures.Add($"the two receipts on {sha} must each name a model, from different families");

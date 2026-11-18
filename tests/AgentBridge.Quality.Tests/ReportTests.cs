@@ -86,9 +86,10 @@ public sealed class ReportTests
         Assert.Equal(expected, WeeklyReport.StuckOn(Open(1, rule: state, description: description), "main", mainRed: false));
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Second_receipt_blockers_are_reported_as_independent_review(bool sameFamily)
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(false, 160)]
+    public void Second_receipt_blockers_are_reported_as_independent_review(bool sameFamily, int extraPathCharacters)
     {
         var config = MergeRuleConfig.Parse("""
             base: main
@@ -104,7 +105,8 @@ public sealed class ReportTests
         var review = new ReviewFact("copilot-pull-request-reviewer", true, "COMMENTED", sha, "<!-- ccr-overview-v2 -->\nComplete");
         var first = new StatusFact("independent-review", "success", "CLEAN gpt-6.1-sol", "danswett", Now);
         var second = new StatusFact("independent-review-2", "success", "CLEAN gpt-6.1-sol", "danswett", Now);
-        var pr = new PullRequestFacts(1, "OPEN", false, "main", sha, [], [".github/workflows/ci.yml"], true, [review],
+        var path = ".github/workflows/" + new string('x', extraPathCharacters) + "ci.yml";
+        var pr = new PullRequestFacts(1, "OPEN", false, "main", sha, [], [path], true, [review],
             [first], new("COMPLETED", "SUCCESS"), null);
         if (sameFamily)
             pr = pr with { Statuses = [first, second] };

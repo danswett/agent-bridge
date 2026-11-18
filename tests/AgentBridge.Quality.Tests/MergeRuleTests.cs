@@ -264,7 +264,7 @@ public class MergeRuleTests
         var twoFamilies = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, statuses: [First(), Second()]))!;
 
         Assert.Equal("failure", oneFamily.State);
-        Assert.Equal(["It touches .github/workflows/ci.yml, so it needs a second review's receipt (independent-review-2) on abcdef0, from another model family"], oneFamily.Reasons);
+        Assert.Equal(["needs a second review's receipt (independent-review-2) on abcdef0, from another model family: it touches .github/workflows/ci.yml"], oneFamily.Reasons);
         Assert.Equal(("success", "Two model families' reviews on file; every check passed"), (twoFamilies.State, twoFamilies.Description));
     }
 
@@ -296,7 +296,7 @@ public class MergeRuleTests
     {
         var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], statuses: [First()]) with { Title = "Security: bind approvals to what was shown" })!;
 
-        Assert.Equal(["It's marked as a security change, so it needs a second review's receipt (independent-review-2) on abcdef0, from another model family"], verdict.Reasons);
+        Assert.Equal(["needs a second review's receipt (independent-review-2) on abcdef0, from another model family: it's marked as a security change"], verdict.Reasons);
     }
 
     [Fact]
@@ -579,7 +579,7 @@ public class MergeRuleTests
         {
             MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
-            Assert.StartsWith($"{Head} failure merge-rule It touches docs/old.md, so it needs a second review's receipt (independent-review-2) on abcdef0", Assert.Single(github.Posted));
+            Assert.StartsWith($"{Head} failure merge-rule Needs a second review's receipt (independent-review-2) on abcdef0, from another model family: it touches docs/old.md", Assert.Single(github.Posted));
         }
         finally
         {
