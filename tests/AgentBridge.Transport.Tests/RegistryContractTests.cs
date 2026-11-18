@@ -21,6 +21,17 @@ public sealed class RegistryContractTests
     static string? Check(JsonObject record) =>
         RosterFields.Check(JsonSerializer.SerializeToElement(record), "machine", out _, out _, out _);
 
+    [Fact]
+    public void An_unpaired_surrogate_role_is_a_bad_record_and_preserves_the_existing_registry()
+    {
+        var record = JsonSerializer.SerializeToElement(Record());
+        var registry = new SessionRegistry(TimeProvider.System);
+        Assert.Null(registry.Put("account", "machine", record));
+        using var malformed = JsonDocument.Parse(record.GetRawText().Replace("\"state\":\"working\"", "\"state\":\"working\",\"role\":\"\\ud800\"", StringComparison.Ordinal));
+        Assert.Equal("bad-record", registry.Put("account", "machine", malformed.RootElement));
+        Assert.Equal(record.GetRawText(), Assert.Single(registry.Read("account")).Json);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("2026-11-17T18:00:00Z")]
