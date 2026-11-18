@@ -376,6 +376,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `dotnet-coverage` with TRX, `--blame-crash` and the existing `--blame-hang` watchdog.
      The shared quality command builder also adds crash blame locally. Public crash diagnostics
      remain execution-sequence XML only; private crash-dump upload is deferred.
+     Windows retries only failed cases once after checking complete TRX evidence.
+     xUnit's run-level `[FAIL]` error diagnostic is accepted only when its exact name
+     matches a failed result with error details; other run errors still fail closed.
+     Definitions are indexed by test ID, preserving missing/duplicate identity rejection.
      When the whole ring runs, it's
      `AgentBridge.slnx` as before. The whole solution is always built, since projects no
      test references (the benchmarks) are compiled nowhere else on a pull request;

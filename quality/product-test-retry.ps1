@@ -10,8 +10,23 @@ function Read-ProductTrx([string]$Directory) {
         $summary = $run.ResultSummary
         $rows = @($run.Results.UnitTestResult | Where-Object { $_ })
         $c = $summary.Counters
+        $failedNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($row in $rows) {
+            if ($row.outcome -eq 'Failed' -and $row.Output.ErrorInfo.Message) {
+                [void]$failedNames.Add([string]$row.testName)
+            }
+        }
+        foreach ($info in $summary.RunInfos.RunInfo) {
+            if ($info.outcome -ne 'Error') { continue }
+            # xUnit also logs assertion failures as run-level errors. Only the exact
+            # adapter diagnostic backed by a failed result is a retryable test error.
+            $text = ([string]$info.Text).Trim()
+            if ($text -cnotmatch '\A\[xUnit\.net \d+:\d{2}:\d{2}\.\d+\][ \t]+(?<name>[^\r\n]+) \[FAIL\]\z' -or
+                -not $failedNames.Contains($Matches['name'])) {
+                throw "Non-test run error in $($file.Name); refusing recovery."
+            }
+        }
         if ($summary.outcome -notin @('Completed', 'Passed', 'Failed') -or
-            @($summary.RunInfos.RunInfo | Where-Object outcome -EQ 'Error').Count -or
             @($rows | Where-Object outcome -NotIn @('Passed', 'Failed', 'NotExecuted')).Count -or
             [int]$c.total -ne $rows.Count -or [int]$c.failed -ne @($rows | Where-Object outcome -EQ 'Failed').Count -or
             [int]$c.passed -ne @($rows | Where-Object outcome -EQ 'Passed').Count -or
@@ -19,10 +34,18 @@ function Read-ProductTrx([string]$Directory) {
             [int]$c.error -or [int]$c.aborted -or [int]$c.timeout) {
             throw "Incomplete or non-test failure in $($file.Name); refusing recovery."
         }
+        $definitionsById = @{}
+        foreach ($definition in $run.TestDefinitions.UnitTest) {
+            $id = [string]$definition.id
+            if (-not $id) { throw 'TRX definition is missing its test ID.' }
+            # A duplicate stays ambiguous, including when a third definition exists.
+            if ($definitionsById.ContainsKey($id)) { $definitionsById[$id] = $null }
+            else { $definitionsById[$id] = $definition }
+        }
         foreach ($row in $rows) {
-            $definitions = @($run.TestDefinitions.UnitTest | Where-Object id -EQ $row.testId)
-            if ($definitions.Count -ne 1) { throw "Missing or ambiguous TRX definition for $($row.testName)." }
-            $definition = $definitions[0]
+            $id = [string]$row.testId
+            $definition = if ($id) { $definitionsById[$id] } else { $null }
+            if (-not $definition) { throw "Missing or ambiguous TRX definition for $($row.testName)." }
             $method = $definition.TestMethod
             if (-not $method.className -or -not $method.name -or -not $row.testName -or -not $definition.storage) {
                 throw 'TRX does not identify a test case and its assembly.'

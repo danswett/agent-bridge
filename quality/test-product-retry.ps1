@@ -63,9 +63,13 @@ function dotnet {
                 $path = Join-Path $script:first 'Other.Tests.trx'
                 (Get-Content $path -Raw).Replace('</ResultSummary>', '<RunInfos><RunInfo outcome="Error" /></RunInfos></ResultSummary>') | Set-Content $path
             }
-            { $_ -in 'adapter-failed', 'adapter-twice-red' } {
+            { $_ -in 'adapter-failed', 'adapter-host', 'adapter-twice-red' } {
                 Remove-Item -LiteralPath (Join-Path $script:first 'Example.Tests.trx')
-                Write-AdapterTrx $script:first $script:cases[0].Name
+                if ($script:scenario -eq 'adapter-host') {
+                    Write-AdapterTrx $script:first $script:cases[0].Name -Passed 3450 -Skipped 0
+                } else {
+                    Write-AdapterTrx $script:first $script:cases[0].Name
+                }
             }
         }
         $global:LASTEXITCODE = 1
@@ -139,28 +143,37 @@ try {
     }
     $r = Run-Case 'adapter-failed'
     Assert ($r.Code -eq 0 -and $r.Calls.Count -eq 2) 'a complete xUnit TRX with a failed-case Error diagnostic and skipped rows retries once'
+    $r = Run-Case 'adapter-host'
+    Assert ($r.Code -eq 0 -and $r.Calls.Count -eq 2) 'the earlier Host-shaped TRX with one failure and 3450 passes retries once'
     $r = Run-Case 'adapter-twice-red'
     Assert ($r.Code -ne 0 -and $r.Calls.Count -eq 2) 'a second failure after an adapter diagnostic stays red'
     $fixtureDirectory = Join-Path $scratch 'adapter-fixture'
     Write-AdapterTrx $fixtureDirectory $script:cases[0].Name
     $fixturePath = Join-Path $fixtureDirectory 'runner_net10.0[2].trx'
     $fixture = [xml](Get-Content -LiteralPath $fixturePath -Raw)
-    foreach ($mutation in 'unchanged', 'foreign-error', 'unbacked-fail', 'extra-error', 'truncated', 'aborted', 'missing-definition', 'duplicate-definition', 'missing-id') {
+    foreach ($mutation in 'unchanged', 'foreign-error', 'unbacked-fail', 'passed-fail', 'missing-error-detail', 'extra-error', 'multiline-error', 'truncated', 'aborted', 'missing-definition', 'duplicate-definition', 'triple-definition', 'missing-id') {
         $document = $fixture.Clone()
         $run = $document.TestRun
         $diagnostic = $run.ResultSummary.RunInfos.RunInfo[0]
         switch ($mutation) {
             'foreign-error' { $diagnostic.Text = "Data collector 'Blame' error: test host crashed." }
             'unbacked-fail' { $diagnostic.Text = '[xUnit.net 00:03:16.68]     Example.Tests.Other [FAIL]' }
+            'passed-fail' { $diagnostic.Text = '[xUnit.net 00:03:16.68]     Example.Tests.Case1 [FAIL]' }
+            'missing-error-detail' { [void]$run.Results.UnitTestResult[0].RemoveChild($run.Results.UnitTestResult[0].Output) }
             'extra-error' {
                 $extra = $diagnostic.Clone()
                 $extra.Text = 'Coverage collection failed.'
                 [void]$diagnostic.ParentNode.AppendChild($extra)
             }
+            'multiline-error' { $diagnostic.Text += "`nTest host crashed." }
             'truncated' { $run.ResultSummary.Counters.total = '1343' }
             'aborted' { $run.ResultSummary.outcome = 'Aborted' }
             'missing-definition' { [void]$run.TestDefinitions.RemoveChild($run.TestDefinitions.UnitTest[0]) }
             'duplicate-definition' { [void]$run.TestDefinitions.AppendChild($run.TestDefinitions.UnitTest[0].Clone()) }
+            'triple-definition' {
+                [void]$run.TestDefinitions.AppendChild($run.TestDefinitions.UnitTest[0].Clone())
+                [void]$run.TestDefinitions.AppendChild($run.TestDefinitions.UnitTest[0].Clone())
+            }
             'missing-id' { $run.Results.UnitTestResult[0].RemoveAttribute('testId') }
         }
         $document.Save($fixturePath)
@@ -168,6 +181,8 @@ try {
         try { $parsed = @(Read-ProductTrx $fixtureDirectory) } catch { $message = $_.Exception.Message }
         if ($mutation -eq 'unchanged') {
             Assert (-not $message -and $parsed.Count -eq 1342 -and @($parsed | Where-Object Outcome -EQ Failed).Count -eq 1) 'real-shaped TRX counters, warning, skipped rows and bracket-suffixed filename are accepted'
+        } elseif ($mutation -in 'missing-definition', 'duplicate-definition', 'triple-definition', 'missing-id') {
+            Assert ($message -like 'Missing or ambiguous TRX definition*') "real-shaped $mutation evidence is refused by the identity check"
         } else {
             Assert ([bool]$message) "real-shaped $mutation evidence is refused"
         }
