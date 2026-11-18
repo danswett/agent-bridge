@@ -351,7 +351,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    `windows-11-arm` product leg to `main`, #1249); the plan
    step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
    compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
-   delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, `sign`, each pinned to
+   delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, `sign`,
+   `nudge-merge-rule` (dispatches main's merge-rule workflow), each pinned to
    the jobs it follows), and its `if:` is
    `always()`; `publish-gate` needs `quality-gate` and requires its success as a top-level
    condition, `sign` needs `publish-gate` with exactly the condition

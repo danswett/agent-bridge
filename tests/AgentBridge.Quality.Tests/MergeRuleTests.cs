@@ -1346,6 +1346,35 @@ public class MergeRuleTests
             IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
     }
 
+    [Fact]
+    public void CI_dispatches_main_s_merge_rule_after_the_gating_jobs_without_waiting_on_delivery()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        YamlMappingNode Load(params string[] path)
+        {
+            var yaml = new YamlStream();
+            yaml.Load(new StringReader(File.ReadAllText(Path.Combine(root, Path.Combine(path)))));
+            return (YamlMappingNode)yaml.Documents[0].RootNode;
+        }
+        var gating = ((YamlSequenceNode)((YamlMappingNode)Load("quality", "merge-rule.yml")["main_green"])["jobs"])
+            .Select(j => j.ToString().Split(" (")[0]).Distinct().Order(StringComparer.Ordinal).ToArray();
+        var job = (YamlMappingNode)((YamlMappingNode)Load(".github", "workflows", "ci.yml")["jobs"])["nudge-merge-rule"];
+        var needs = ((YamlSequenceNode)job["needs"]).Select(n => n.ToString()).Order(StringComparer.Ordinal).ToArray();
+
+        Assert.Equal(gating, needs);
+        Assert.DoesNotContain(needs, n => n is "app-installer" or "publish-gate" or "sign" or "publish" or "attest");
+        var permissions = (YamlMappingNode)job["permissions"];
+        Assert.Equal(["actions", "contents"], permissions.Children.Select(p => p.Key.ToString()).Order(StringComparer.Ordinal));
+        Assert.Equal("write", permissions["actions"].ToString());
+        Assert.Equal("read", permissions["contents"].ToString());
+        var condition = job["if"].ToString();
+        Assert.StartsWith("always()", condition, StringComparison.Ordinal);
+        Assert.Contains("github.event.pull_request.head.repo.full_name == github.repository", condition, StringComparison.Ordinal);
+        var step = (YamlMappingNode)((YamlSequenceNode)job["steps"]).Single();
+        Assert.Equal("true", step["continue-on-error"].ToString());
+        Assert.Equal("gh workflow run merge-rule.yml --repo \"$GITHUB_REPOSITORY\" --ref main", step["run"].ToString());
+    }
+
     [Theory]
     [InlineData("skipped", false, true)]
     [InlineData("skipped", true, false)]
