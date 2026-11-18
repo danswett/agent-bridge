@@ -1,5 +1,4 @@
 using System.IO.Compression;
-using System.Text;
 using AgentBridge.App.Core;
 using Xunit;
 

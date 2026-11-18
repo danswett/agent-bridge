@@ -107,7 +107,7 @@ public sealed class SlotPointer(string root)
         { throw new InvalidDataException("Invalid relative slot/package reference."); }
     }
 
-    Snapshot Pin(Target target)
+    internal Snapshot Pin(Target target)
     {
         CheckReference(target);
         var slot = target.Slot;

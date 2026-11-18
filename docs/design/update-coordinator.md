@@ -132,3 +132,14 @@ The native slot-entry-v1 marker gates compatibility, never image trust.
 Host registrations select the root helper only after it exists; build folders
 and unmigrated installs are unchanged. D2 deploys no aliases and publishes no
 pointer. D3 must install verified aliases before its single activation commit.
+
+### D3a: recoverable bootstrap preparation, no publication
+
+`SlotMigration` has no production caller yet. It caches the verified target,
+prepares/revalidates its slot, and requires a closed bundle plus slot-entry-v1.
+An immutable `stable-entry.json` retains the first bootstrap's verified package
+provenance; later targets do not overwrite running root images. Both root aliases
+are checksum-bound copies, with repeat/interrupted preparation safe while legacy
+`current` stays intact. A missing pointer still routes to legacy. No pointer is
+published here; D3b/D3c must complete locator/coordinator and non-stopping handover
+before enabling activation. Existing ancestry/power-loss limitations remain.
