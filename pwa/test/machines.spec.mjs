@@ -678,10 +678,6 @@ test.describe('one truthful update line', () => {
   const refused = "the release feed's rate limit refused the check (rate limit exceeded; check again after 9:46 AM); checking again after 9:46 AM";
   const heldDetail = 'Checked 28 minutes ago \u00b7 checking again soon';
   const update = (page) => page.locator('#machine-list [data-device-id="demo"] .machine-update');
-  async function checkUpdates(page, menu = update(page).locator('.machine-update-menu')) {
-    await menu.click();
-    await page.getByRole('menuitem', { name: 'Check for updates', exact: true }).click();
-  }
   async function show(page, change) {
     await page.clock.setFixedTime(now);
     await page.goto('?demo=1&static=1&updates=1&updateNow=1#/machines');
@@ -733,17 +729,17 @@ test.describe('one truthful update line', () => {
     await expect(block.locator('.machine-update-detail')).toHaveText([heldDetail]);
     await expect(block.locator('p')).toHaveCount(2);
     await expect(block).not.toContainText('Up to date');
-    await expect(block.getByRole('button')).toHaveCount(2);
+    await expect(block.getByRole('button')).toHaveCount(1);
     await expect(block.locator('.machine-update-now')).toHaveClass(/\bprimary\b/);
   });
 
   test('a refusal note preserves the plain check hold description', async ({ page }) => {
     await show(page, {});
     const machine = page.locator('#machine-list > [data-device-id="demo"]');
-    const check = update(page).locator('.machine-update-menu');
+    const check = update(page).locator('.machine-update-check');
     const note = 'This check was refused.';
     await page.evaluate((note) => window.agentBridgeDemo.host.scriptUpdates([note]), note);
-    await checkUpdates(page, check);
+    await check.click();
     await expect(machine.locator('.machine-error')).toHaveText(note);
     await page.evaluate((reason) => window.agentBridgeDemo.setUpdate({
       ...window.agentBridgeDemo.host.update, last: { outcome: 'failed', reason, at: '2026-11-10T17:40:00Z' },
@@ -756,26 +752,26 @@ test.describe('one truthful update line', () => {
     test(refusal ? 'a retried check shows a host refusal and remains usable'
       : 'a past limited check permits another manual request without an automatic state change', async ({ page }) => {
       await show(page, { automatic: false, last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
-      const check = update(page).locator('.machine-update-menu');
+      const check = update(page).locator('.machine-update-check');
       await expect(update(page).locator('.machine-update-detail')).toHaveText([heldDetail]);
       await page.clock.setFixedTime(new Date('2026-11-10T17:47:00Z'));
       await page.evaluate(() => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update }));
       await expect(check).toBeEnabled();
       if (refusal) { await page.evaluate((note) => window.agentBridgeDemo.host.scriptUpdates([note]), refusal); }
-      await checkUpdates(page, check);
+      await check.click();
       const requests = () => page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op }) => op));
       await expect.poll(requests).toEqual(['update.check']);
       if (refusal) {
         await expect(page.locator('#machine-list > [data-device-id="demo"] .machine-error')).toHaveText(refusal);
         await expect(check).toBeEnabled();
-        await checkUpdates(page, check);
+        await check.click();
         await expect.poll(requests).toEqual(['update.check', 'update.check']);
       }
     });
   }
 
-  for (const [phase, label] of [['idle', null], ['checking', 'Checking\u2026'], ['asking', 'An update request is in progress']]) {
-    test(`the ${phase} update menu names each machine`, async ({ page }) => {
+  for (const [phase, label] of [['idle', 'Check now'], ['checking', 'Checking\u2026'], ['asking', 'Asking\u2026']]) {
+    test(`the ${phase} check control names each machine`, async ({ page }) => {
       await show(page, {});
       await page.evaluate(async (phase) => {
         const { renderMachines } = await import('/js/ui/views.js');
@@ -791,16 +787,11 @@ test.describe('one truthful update line', () => {
           },
         });
       }, phase);
-      const checks = page.locator('#update-names-fixture .machine-update-menu');
+      const checks = page.locator('#update-names-fixture .machine-update-check');
       await expect(checks).toHaveCount(2);
       for (const [i, machine] of ['Workshop', 'Laptop'].entries()) {
-        await expect(checks.nth(i)).toHaveText('More');
-        await expect(checks.nth(i)).toHaveAccessibleName(`Update actions on ${machine}`);
-        await checks.nth(i).click();
-        const action = page.getByRole('menuitem', { name: 'Check for updates', exact: true });
-        if (phase === 'idle') { await expect(action).toBeEnabled(); }
-        else { await expect(action).toBeDisabled(); await expect(action).toHaveAccessibleDescription(label); }
-        await page.keyboard.press('Escape');
+        await expect(checks.nth(i)).toHaveText(label);
+        await expect(checks.nth(i)).toHaveAccessibleName(`${label} on ${machine}`);
       }
     });
   }
@@ -812,7 +803,7 @@ test.describe('one truthful update line', () => {
       await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
       await expect(block.locator('.machine-update-detail')).toHaveText([heldDetail]);
       await expect(block).not.toContainText(/9:46|limited|refused|failed|quota/i);
-      await expect(block.getByRole('button', { name: 'Update actions on Demo machine', exact: true })).toBeEnabled();
+      await expect(block.getByRole('button', { name: 'Check now on Demo machine', exact: true })).toBeEnabled();
     });
   }
 
@@ -828,10 +819,10 @@ test.describe('one truthful update line', () => {
       await expect(action).toBeEnabled();
       if (canUpdateNow) {
         await expect(action).toHaveClass(/\bprimary\b/);
-        await expect(block.locator('.machine-update-menu')).toHaveCount(1);
+        await expect(block.locator('.machine-update-check')).toHaveCount(0);
         await expect(block).not.toContainText(/9:46 AM|Can't check/);
       } else {
-        await expect(block.locator('.machine-update-menu')).toBeEnabled();
+        await expect(block.locator('.machine-update-check')).toBeEnabled();
         await expect(block).not.toContainText(/9:46|limited|refused|failed|quota/i);
       }
       await action.click();
@@ -846,9 +837,9 @@ test.describe('one truthful update line', () => {
     await expect(update(page).locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked 1 h ago']);
   });
 
-  test('a current check keeps two text lines and update menu focus through redraws', async ({ page }) => {
+  test('a current check keeps two text lines and Check now focus through redraws', async ({ page }) => {
     await show(page, {});
-    const block = update(page), check = block.locator('.machine-update-menu');
+    const block = update(page), check = block.locator('.machine-update-check');
     await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
     await check.focus();
     const set = (change) => page.evaluate((c) => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update, ...c }), change);
@@ -857,31 +848,30 @@ test.describe('one truthful update line', () => {
     await expect(check).toBeFocused();
     await set({ phase: 'idle', checkedAt: now.toISOString(), last: { outcome: 'current', at: now.toISOString() } });
     await expect(block.locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked under a minute ago']);
-    await expect(block.getByRole('button', { name: 'Update actions on Demo machine', exact: true })).toBeFocused();
+    await expect(block.getByRole('button', { name: 'Check now on Demo machine', exact: true })).toBeFocused();
     await expect(check).toBeEnabled();
     await expect(block.getByRole('button')).toHaveCount(1);
   });
 
-  test('a successful menu check moves keyboard focus to Update now', async ({ page }) => {
+  test('a successful Check now moves keyboard focus to Update now', async ({ page }) => {
     await page.clock.install({ time: now });
     await show(page, { busy: { working: 0, waiting: 0 } });
-    const block = update(page), check = block.locator('.machine-update-menu');
+    const block = update(page), check = block.locator('.machine-update-check');
     await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
     await page.clock.pauseAt(new Date(now.getTime() + 60_000));
     await check.focus();
     await page.keyboard.press('Enter');
-    await page.getByRole('menuitem', { name: 'Check for updates', exact: true }).click();
     await page.clock.runFor(50);
-    await expect(check).toHaveText('More');
+    await expect(check).toHaveText('Checking…');
     await expect(check).toBeFocused();
     await page.evaluate(() => window.agentBridgeDemo.setUpdate({
       ...window.agentBridgeDemo.host.update, available: '0.1.4462',
     }));
     await page.clock.runFor(400);
     await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4415)');
-    await expect(check).toHaveCount(1);
+    await expect(check).toHaveCount(0);
     await expect(block.locator('.machine-update-now')).toBeFocused();
-    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op }) => op))).toEqual(['update.check']);
+    expect(await page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op }) => op))).toEqual(['update.check']);
     await page.evaluate(() => window.agentBridgeDemo.setUpdate({
       ...window.agentBridgeDemo.host.update, available: null,
     }));
@@ -905,10 +895,10 @@ test.describe('one truthful update line', () => {
     await show(page, { available: '0.1.4462', last: null, busy: { working: 0, waiting: 0 } });
     const block = update(page);
     await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4415)');
-    await expect(block.getByRole('button')).toHaveCount(2);
+    await expect(block.getByRole('button')).toHaveCount(1);
     await expect(block.locator('.machine-update-now')).toHaveClass(/\bprimary\b/);
     await expect(block.getByRole('link')).toHaveCount(0);
-    await expect(block.locator('.machine-update-menu')).toHaveCount(1);
+    await expect(block.locator('.machine-update-check')).toHaveCount(0);
     await expect(page.locator('#machine-list [data-device-id="demo"] .tile-health-word')).toHaveText('Not measured yet');
     await block.locator('.machine-update-now').click();
     await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op, now }) => ({ op, now }))))
@@ -947,9 +937,9 @@ test.describe('one truthful update line', () => {
     const details = block.locator('.machine-update-detail');
     const set = (change) => page.evaluate((c) => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update, ...c }), change);
     await expect(details).toHaveText(['Checked 12 min ago']);
-    await expect(block.getByRole('button', { name: 'Update actions on Demo machine' })).toBeEnabled();
+    await expect(block.getByRole('button', { name: 'Check now' })).toBeEnabled();
     await set({ gitHubRemaining: 0 });
-    await expect(block.getByRole('button', { name: 'Update actions on Demo machine' })).toBeEnabled();
+    await expect(block.getByRole('button', { name: 'Check now' })).toBeEnabled();
     await set({ checkSource: 'github', checkedAt: '2026-11-10T17:41:00Z' });
     await expect(details).toHaveText(['Checked under a minute ago']);
     await set({ checkSource: 'unknown', gitHubQuotaAt: now.toISOString() });
@@ -966,23 +956,21 @@ test.describe('one truthful update line', () => {
   });
 
   for (const width of [390, 820, 1180]) {
-    test(`the update block has a 44px secondary menu and wraps within its card at ${width}px`, async ({ page }) => {
+    test(`the update block has a 44px secondary Check now and wraps within its card at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await page.clock.install({ time: now });
       await show(page, {});
-      const block = update(page), check = block.getByRole('button', { name: 'Update actions on Demo machine', exact: true });
+      const block = update(page), check = block.getByRole('button', { name: 'Check now on Demo machine', exact: true });
       await expect(check).toHaveClass(/\bsecondary\b/);
       expect((await check.boundingBox()).height).toBeGreaterThanOrEqual(44);
       await expect(block.locator('.glyph')).toHaveCount(1);
       await page.clock.pauseAt(new Date(now.getTime() + 60_000));
-      await checkUpdates(page, check);
+      await check.click();
       await page.clock.runFor(50);
       await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
       await expect(block.locator('.machine-update-line')).toHaveText('Checking…');
-      await check.click();
-      await expect(page.getByRole('menuitem', { name: 'Check for updates', exact: true })).toBeDisabled();
-      await page.keyboard.press('Escape');
-      await expect(block.locator('.machine-update-line .glyph')).toHaveCount(1);
+      await expect(block.getByRole('button', { name: 'Checking… on Demo machine', exact: true })).toBeDisabled();
+      await expect(block.locator('.machine-update-actions .glyph')).toHaveCount(1);
       await page.evaluate(() => window.agentBridgeDemo.setUpdate({
         ...window.agentBridgeDemo.host.update, phase: 'idle', available: '0.1.4462', current: '0.1.4384',
       }));

@@ -33,10 +33,9 @@ test('a release the machine found is shown, and Install downloads it, installs i
   await expect(block.locator('.machine-update-line')).toHaveText(/^(Downloading 0\.2\.0 \(50%\)|Installing 0\.2\.0: its app and host restart)\u2026$/);
   await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.2.0');
   await expect(block.locator('.machine-update-last')).toHaveText('Updated to 0.2.0.');
-  // Nothing newer: Install goes, the update menu stays.
+  // Nothing newer: Install goes, Check stays.
   await expect(block.locator('.machine-update-install')).toHaveCount(0);
-  await expect(block.locator('.machine-update-menu')).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.length)).toBe(1);
+  await expect(block.locator('.machine-update-check')).toBeVisible();
   const log = await page.evaluate(() => window.agentBridgeDemo.updateLog);
   expect(log).toHaveLength(1);
   expect(log[0].op).toBe('update.install');
@@ -69,12 +68,11 @@ test("a press the machine refuses says why on the machine's row, and Check all a
   expect(look.block).not.toBe(look.row);
   expect(look.gap).toBe(0);
   const errId = await error.getAttribute('id');
-  for (const button of [block.locator('.machine-update-menu'), block.locator('.machine-update-install')]) {
+  for (const button of [block.locator('.machine-update-check'), block.locator('.machine-update-install')]) {
     expect((await button.getAttribute('aria-describedby')).split(' ')).toContain(errId);
   }
 
-  await page.locator('#machines > .machine-menu button').click();
-  await page.getByRole('menuitem', { name: 'Check all', exact: true }).click();
+  await page.locator('#machine-list .machine-check-all').click();
   await expect(rowOf(page).getByRole('alert')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.install', 'update.check']);
 });
@@ -93,22 +91,6 @@ test('a read-only machine offers no updates', async ({ page }) => {
   await expect(page.locator('#machine-list [data-device-id="demo"]')).toBeVisible();
   await expect(page.locator('#machine-list .machine-update')).toHaveCount(0);
   await expect(page.locator('#machine-list .machine-check-all')).toHaveCount(0);
-  await expect(page.locator('#machines .machine-menu')).toHaveCount(0);
-});
-
-test('Check leaves the card and Check all leaves the rows for their respective menus', async ({ page }) => {
-  await openDemo(page);
-  const row = rowOf(page);
-  await expect(row.getByRole('button', { name: /^Check/ })).toHaveCount(0);
-  await expect(page.locator('#machine-list .machine-check-all')).toHaveCount(0);
-
-  await row.locator('button[aria-haspopup="menu"]').click();
-  await page.getByRole('menuitem', { name: 'Check for updates', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
-
-  await page.locator('#machines button[aria-haspopup="menu"]:not(#machine-list button)').click();
-  await page.getByRole('menuitem', { name: 'Check all', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check', 'update.check']);
 });
 
 // ---- Update now (#1159) ----
