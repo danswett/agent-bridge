@@ -92,6 +92,21 @@ The SDK native icon directory is 1,358,076 bytes: the bounded resource envelope 
 16 MiB, matching C2's section ceiling; version nesting/block limits remain unchanged.
 Legacy `current` remains authoritative until D proves activation/migration.
 
+### F: persistent apply observation
+
+The early coordinator mode always invokes `UpdateApplyObserver`, even with no
+optional report callback. It flushes one create-only, at-most-16-KiB
+`coordinator-result.json` in the already-private operation handoff directory,
+before draining real apply ownership. The existing ten-minute observation window
+and Completed-only respawn gate are unchanged. Failed/Unknown records include
+step, elapsed time and a diagnostic explicitly labelling ApplyProcessId/ApplyPath
+as the **updater**, not a lock holder; an unavailable PID is `unknown`.
+Oversize or unwritable records fail explicitly, without retry or respawn authority.
+The observer runs in the staged helper, not a fleet service; if that node leaves,
+no other node takes over the local operation. Its record stays in that operation's
+handoff directory. It does not scan Restart Manager, infer holder identity, retry
+apply (E), or claim app/host convergence.
+
 ## C/D: approved design basis, not activation proof
 
 Use immutable `root\slots\<release-identity>-<package-digest>` payloads. One validated

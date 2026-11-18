@@ -61,6 +61,24 @@ public sealed class CoordinatorModeTests : IDisposable
     }
 
     [Fact]
+    public async Task Production_observer_persists_unknown_with_updater_identity_without_an_optional_callback()
+    {
+        File.WriteAllText(Path.Combine(home, "install", "current", "sq.version"),
+            "<package><metadata><id>AgentBridgeApp</id><version>0.1.0</version><mainExe>AgentBridge.exe</mainExe></metadata></package>");
+        Assert.Equal(4, await Run().WaitAsync(TimeSpan.FromSeconds(5)));
+        var resultPath = Path.Combine(stage.Directory, "coordinator-result.json");
+        using var record = JsonDocument.Parse(File.ReadAllBytes(resultPath));
+        var payload = record.RootElement;
+        Assert.Equal((int)UpdateApplyEnd.Unknown, payload.GetProperty("End").GetInt32());
+        Assert.Equal("version-skew", payload.GetProperty("Code").GetString());
+        Assert.Equal(22, payload.GetProperty("ApplyProcessId").GetInt32());
+        Assert.Equal("updater", payload.GetProperty("ApplyProcessRole").GetString());
+        Assert.Equal(Path.Combine(home, "install", "Update.exe"), payload.GetProperty("ApplyPath").GetString());
+        Assert.Contains("updater PID=22", payload.GetProperty("Diagnostic").GetString());
+        Assert.Single(starts);
+    }
+
+    [Fact]
     public async Task A_timed_out_observer_cannot_exit_the_mode_before_real_apply_ownership_drains()
     {
         var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -72,6 +90,8 @@ public sealed class CoordinatorModeTests : IDisposable
         {
             time.Advance(TimeSpan.FromMinutes(10));
             Assert.Equal(UpdateApplyEnd.Unknown, (await observed.Task.WaitAsync(TimeSpan.FromSeconds(5))).End);
+            using var record = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(stage.Directory, "coordinator-result.json")));
+            Assert.Equal("updater", record.RootElement.GetProperty("ApplyProcessRole").GetString());
             Assert.False(run.IsCompleted);
             Assert.False(worker.Disposed);
             Assert.Throws<IOException>(() => File.OpenWrite(stage.ImagePath).Dispose());
