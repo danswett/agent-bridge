@@ -628,10 +628,12 @@ in `agents` is held:
 * the Home Assistant connector retires no session's entities, of any agent
   ([ha-connector.md](../ha-connector.md#lifecycle)).
 
-Host-bound roster membership is memory-only. The serving host neither loads nor writes
-`sessions-listed.json`; a restart requires fresh live discovery for each row, never disk
-membership to fill in an incomplete pass. An unavailable, empty or corrupt source supplies
-no membership. Holds are rediscovered, not restored from the earlier host's roster.
+Host-bound roster membership is memory-only: each row requires fresh live discovery,
+never disk membership to fill in an incomplete pass. `sessions-listed.json` keeps only
+process-generation resume guards: a previously known unreadable runtime holds its agent
+across passes and restarts, without supplying a row. A positively exited or replaced
+process releases that guard. Native discovery may supersede an ended registration only
+with a process proven to have started after that registration's last update.
 
 Sessions of the other agents are removed and resumed as usual. `reason` says what holds it, in
 words for a person, at most 512 bytes; a client shows it as it is ("discovery held: …", as the
