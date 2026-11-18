@@ -6,6 +6,22 @@ namespace AgentBridge.HostLauncher;
 
 public static class StableEntryMode
 {
+    internal static async Task<int?> RunGuardedAsync(string? image, string[] args, Action<string> log,
+        Func<ProcessStartInfo, Task<int>>? run = null)
+    {
+        try
+        {
+            return await RunAsync(image ?? throw new InvalidOperationException("Missing launcher image path."),
+                args, run).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException
+            or InvalidDataException or System.Text.Json.JsonException)
+        {
+            log($"stable-entry failed: {e.GetType().Name}: {e.Message}");
+            return 1;
+        }
+    }
+
     public static async Task<int?> RunAsync(string image, string[] args, Func<ProcessStartInfo, Task<int>>? run = null)
     {
         image = Path.GetFullPath(image);

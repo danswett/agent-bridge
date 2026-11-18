@@ -128,6 +128,9 @@ The closed hostw bundle supports root `AgentBridge.exe` and
 `agent-bridge-hostw.exe` aliases. Root copies resolve once and retain the selected
 slot through the child lifetime; payload copies keep their ordinary roles.
 Missing pointer means trusted legacy `current`; invalid pointer fails closed.
+Malformed or corrupt slots log `stable-entry failed` and exit 1 without fallback.
+After activation, a missing root launcher is logged as unavailable rather than
+launching/registering the legacy payload or escaping the app's installation check.
 The native slot-entry-v1 marker gates compatibility, never image trust.
 Host registrations select the root helper only after it exists; build folders
 and unmigrated installs are unchanged. D2 deploys no aliases and publishes no
