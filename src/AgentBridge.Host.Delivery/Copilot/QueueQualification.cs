@@ -33,7 +33,7 @@ internal sealed record QueueTarget(int ProcessId, long StartedAt, string Console
     static bool Hash(string value) => value.Length == 64 && value.All(char.IsAsciiHexDigit);
 }
 
-internal enum QueueCapability { Unknown, Verified }
+internal enum QueueCapability { Unknown, Verified, Unsupported }
 
 // Inactive source seam: only a future authorized controller may supply capture and a
 // cursor-bound raw transcript reader for this launched target. No delivery path calls this.
@@ -49,6 +49,7 @@ internal sealed class QueueQualification
     long issued;
     TimeSpan lifetime;
     bool working;
+    internal QueueTarget? Snapshot => target;
 
     QueueQualification(Func<Task<string?>> capture, Func<IReadOnlyList<string>?> read, TimeProvider clock, QueueTarget? target)
         => (this.capture, this.read, this.clock, this.target) = (capture, read, clock, target);
@@ -98,16 +99,23 @@ internal sealed class QueueQualification
             {
                 using var json = JsonDocument.Parse(row);
                 var root = json.RootElement;
-                if (root.ValueKind != JsonValueKind.Object) { working = false; return false; }
+                if (root.ValueKind != JsonValueKind.Object || !Unique(root)) { working = false; return false; }
+                if (root.TryGetProperty("data", out var payload) && payload.ValueKind == JsonValueKind.Object && !Unique(payload))
+                { working = false; return false; }
                 if (root.TryGetProperty("agentId", out var agent) && agent.ValueKind != JsonValueKind.Null) { continue; }
                 var type = Text(root, "type");
                 if (type == "assistant.turn_start") { working = true; }
                 else if (type is "assistant.turn_end" or "session.resume" or "session.shutdown" or "abort") { working = false; }
-                else if (type == "user.message" && working && challenge is not null
+                else if (type == "user.message" && challenge is not null
                     && root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object
-                    && Text(data, "delivery") == "queued" && Text(data, "content") == challenge.Text
-                    && (!data.TryGetProperty("source", out var source) || source.ValueKind == JsonValueKind.Null
-                        || source.ValueKind == JsonValueKind.String && source.GetString() == "user")) { matched = true; }
+                    && Text(data, "content") == challenge.Text)
+                {
+                    if (matched || !working || Text(data, "delivery") != "queued"
+                        || data.TryGetProperty("source", out var source) && source.ValueKind != JsonValueKind.Null
+                            && (source.ValueKind != JsonValueKind.String || source.GetString() != "user"))
+                    { working = false; return false; }
+                    matched = true;
+                }
             }
             catch (JsonException) { working = false; return false; }
         }
@@ -116,4 +124,6 @@ internal sealed class QueueQualification
 
     static string? Text(JsonElement value, string name) =>
         value.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+    static bool Unique(JsonElement value) =>
+        value.EnumerateObject().Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() == value.EnumerateObject().Count();
 }
