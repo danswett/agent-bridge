@@ -95,7 +95,7 @@ test('one machines keyed and keyless readings taken at the same moment are one r
 });
 
 test('a further Copilot account is a row of its own under its login, and one machine reading it as its own account is the same row', () => {
-  // DSWETT-DEV-VM1 is signed in as octo and lists dswett_microsoft as a further account; the
+  // One machine is signed in as octo and lists dswett_microsoft as a further account; the
   // laptop is signed in as dswett_microsoft itself, and its failed read lends the row its error.
   const vm = { agents: [reading(), reading({ account: 'DSwett_Microsoft', slot: 2, measuredAt: iso(-H) }, [{ key: 'plan', label: 'Plan', percent: 12 }])] };
   const laptop = { agents: [failure({ account: 'dswett_microsoft' })] };

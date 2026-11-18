@@ -1663,18 +1663,18 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     // A delegate chooses its name (#303): its commas, drawn on the row, are spaces in the row's
-    // name, so "x, idle, DEV-VM2" can't read as facts of the row's own.
+    // name, so "x, idle, node-b" can't read as facts of the row's own.
     [Fact]
     public void A_delegates_name_on_a_row_is_read_without_its_commas()
     {
         var asking = Make.Session(question: Make.Approval() with { Agent = "agent-7" }) with
         {
             WaitingOn = "agent-7",
-            Subagents = [new Subagent { Id = "agent-7", Kind = SubagentKind.Background, Status = SubagentStatus.Waiting, Name = "x, idle, DEV-VM2" }],
+            Subagents = [new Subagent { Id = "agent-7", Kind = SubagentKind.Background, Status = SubagentStatus.Waiting, Name = "x, idle, node-b" }],
         };
         var card = new SessionCardViewModel(asking, Context());
-        Assert.Equal("Delegate x, idle, DEV-VM2 asks", card.RowStatus);
-        Assert.Equal("A session, Delegate x idle DEV-VM2 asks, danswett/agent-bridge, 5m, Test PC", card.RowLabel);
+        Assert.Equal("Delegate x, idle, node-b asks", card.RowStatus);
+        Assert.Equal("A session, Delegate x idle node-b asks, danswett/agent-bridge, 5m, Test PC", card.RowLabel);
     }
 
     [Fact]
