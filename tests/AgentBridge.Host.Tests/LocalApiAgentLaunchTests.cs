@@ -244,6 +244,19 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
         Assert.Contains("live-limit", (await Launch(Body())).Reason);
     }
 
+    [Fact]
+    public void Invalid_durable_state_holds_lifecycle_capacity_without_crashing_the_observer()
+    {
+        Assert.True(credentials.LaunchGate.CheckLaunch(Principal, "pending", "hash").Allowed);
+        var state = Path.Combine(root, "launch-admissions", "state.json");
+        File.WriteAllText(state, "null");
+        messages.Clear();
+        Assert.Null(Record.Exception(() =>
+        { _ = new AgentLaunchLifecycle(credentials.LaunchGate, launcher, source, new(root), messages.Add); }));
+        Assert.Contains(messages, message => message.Contains("needs-person", StringComparison.Ordinal));
+        Assert.Equal("null", File.ReadAllText(state));
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -360,9 +373,11 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
     public async Task Only_a_proven_CreateProcess_failure_frees_live_capacity_and_neither_outcome_refunds_the_hour(int state)
     {
-        var proven = state == 0;
+        var proven = state is 0 or 3 or 4;
         File.WriteAllText(Path.Combine(f.Root, HostSettings.FileName), """
             {"agents":{"enabled":true,"launch":{"enabled":true},
               "inbound":{"local":{"launch":{"workspaces":["App"],"agents":["claude"],"permissions":"ask"}}},
@@ -382,8 +397,12 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
             credentials: credentials, agentWorktreeCheck: AgentLaunchWorktreeCheck.Check);
         var handle = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher),
             null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: credentials, audit: new(f.Root));
-        async Task<LaunchResult> Launch() => Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch,
-            JsonSerializer.SerializeToElement(new { request = Guid.NewGuid().ToString("D"), agent = "claude", workspace = "App", permissions = "ask" })));
+        async Task<LaunchResult> Launch()
+        {
+            var id = Guid.NewGuid().ToString("D");
+            return Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch,
+                JsonSerializer.SerializeToElement(new { request = state >= 3 ? "ABCDEFAB" + id[8..].ToUpperInvariant() : id, agent = "claude", workspace = "App", permissions = "ask" })));
+        }
         if (state == 2)
         {
             Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
@@ -399,6 +418,14 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
         starter.Throws = proven ? new System.ComponentModel.Win32Exception(2) : new IOException("start result unknown");
         Assert.Equal(proven ? LaunchOutcome.Failed : LaunchOutcome.Unconfirmed, (await Launch()).Outcome);
         starter.Throws = null;
+        if (state == 4)
+        {
+            var restarted = new AgentCredentials(f.Root, "machine");
+            _ = LocalApi.Handler(new SessionService(source, new("machine", "Test", "windows", "0.1.0"),
+                launcher: Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }), credentials: restarted)),
+                null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")), credentials: restarted, audit: new(f.Root));
+            Assert.Empty(restarted.LaunchGate.Reservations());
+        }
         Assert.Contains(proven ? "rate-limited" : "live-limit", (await Launch()).Reason);
     }
 
