@@ -139,7 +139,7 @@ export function conceal(el, { entry = 'toast' } = {}) {
   a.finished.then(done, () => {});
 }
 
-// Disclosures (Reasoning, Tool history, a delegate's details, Ended): when the person opens
+// Disclosures (Reasoning, Tool history, a delegate's details): when the person opens
 // one, what it reveals settles in, a nudge down, as its space opens at once; closing is at
 // once. Only an open the person asked for: a <details> a page opens for them (a question
 // unfolding its card) appears as it is. Installed once, for every <details> on the page.

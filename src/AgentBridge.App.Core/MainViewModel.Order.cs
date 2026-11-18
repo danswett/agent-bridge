@@ -4,7 +4,7 @@ namespace AgentBridge.App.Core;
 
 // The cards' order (#164, ui.md §6.1): the person's, kept on this device by SessionOrder. Rows
 // move only when the person moves them, never on an upsert; pinned rows sit above the rest; the
-// sessions a host removed fold into Ended · N. Kept apart from the rest of MainViewModel, whose
+// sessions a host removed disappear. Kept apart from the rest of MainViewModel, whose
 // markup #180 rewrites.
 public sealed partial class MainViewModel
 {
@@ -30,7 +30,7 @@ public sealed partial class MainViewModel
         }
     }
 
-    // Sessions a host removed while the app was running, the most recently ended first.
+    // Kept empty for existing view bindings; removed sessions are never retained.
     public ObservableCollection<EndedRow> Ended { get; } = [];
     public bool HasEnded => Ended.Count > 0;
     public string EndedHeader => $"Ended · {Ended.Count}";
@@ -72,7 +72,7 @@ public sealed partial class MainViewModel
         };
     }
 
-    // The cards shown, in order, with the group headers, the dots and the Ended group. Rows move
+    // The cards shown, in order, with the group headers and the dots. Rows move
     // only when the arrangement says so, and an update never moves one while someone types in any
     // card: moving it then would take the words from under their fingers (in Most recent, where
     // updates move rows). chosen: the person moved, pinned or sorted, which moves rows anyway.
@@ -108,7 +108,6 @@ public sealed partial class MainViewModel
                 : (restSeen ? null : "Sessions");
             if (c.Pinned) { pinnedSeen = true; } else { restSeen = true; }
         }
-        SyncEnded(a.Ended);
         // Saving failed (the file can't be written), here or in the change before: the list is Most
         // recent now, and says so.
         if (Order.Sort != toldSort)
@@ -118,23 +117,6 @@ public sealed partial class MainViewModel
         }
         if (Order.Sort != sort) { Rearrange(chosen); }
     }
-    void SyncEnded(IReadOnlyList<EndedSession> ended)
-    {
-        var now = Time.GetUtcNow();
-        var several = machines.Count > 1;
-        var rows = ended.Select(e => new EndedRow(e.Key, string.IsNullOrEmpty(e.Session.Title) ? "Untitled session" : e.Session.Title,
-            string.Join(" · ", new[] { several ? MachineOf(e.Machine)?.Name : null, $"ended {Words.Ago(e.EndedAt, now)}" }.Where(s => !string.IsNullOrEmpty(s))))).ToList();
-        if (rows.SequenceEqual(Ended)) { return; }
-        var had = Ended.Count;
-        Ended.Clear();
-        foreach (var r in rows) { Ended.Add(r); }
-        if (had != Ended.Count)
-        {
-            Raise(nameof(HasEnded));
-            Raise(nameof(EndedHeader));
-        }
-    }
-
     // A machine's sessions are placed once it has sent its whole list (SessionOrder.Arrange).
     Arrangement Arranged() => Order.Arrange(
         byId.Values.Where(Visible).Select(c => new OrderEntry(owner[c].Key, c.Session)).ToList(),
@@ -142,8 +124,6 @@ public sealed partial class MainViewModel
         shows: k => MachineOf(k) is { } m && Shows(m),
         settled: k => MachineOf(k)?.Host.Sessions.Complete != false);
 
-    // "ended 3m ago" moves on with the clock.
-    void RefreshEnded() => SyncEnded(Arranged().Ended);
 }
 
 public sealed record EndedRow(string Key, string Title, string Meta);

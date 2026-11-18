@@ -8,8 +8,7 @@
 //     the host sends moves a row. Only a move (Alt+Up/Down, a drag, the row menu) does.
 //   * Pinned rows sit above the rest, in the order they were pinned or moved to.
 //   * Most recent: latest activity first (a prompt, a finished turn, a question or an answer, a status change; #628). Machine: by machine name, then your order.
-//   * A session the host removed is kept in memory as ended, for the Ended group, until the page
-//     goes; nothing else about it is kept.
+//   * A session the host removed leaves the list immediately; offline or hidden machines end nothing.
 //   * Unread: a new main-agent response turn since the row was last open on screen. A
 //     session seen for the first time is not news: what it did before then was never shown.
 //
@@ -29,7 +28,6 @@ export const YOUR_ORDER_NAME = 'Your order, on this device';
 // Rows remembered whose sessions aren't shown now (another machine's, one offline): enough for
 // every session of a few busy machines, and bounded so the record never grows without end.
 const MAX_KEYS = 300;
-const MAX_ENDED = 20;
 const GROUP_RETENTION = 30 * 86400000;
 
 export const orderKey = (hostId, id) => `${hostId ?? ''}\n${id}`;
@@ -69,7 +67,6 @@ function read(raw) {
 export class SessionOrder {
   #state;
   #usable = true;
-  #ended = [];
   // What the last arrange() showed, by group: moves are among the rows on screen, not among
   // rows remembered for sessions that aren't shown.
   #shown = { pinned: [], sessions: [], pending: new Set() };
@@ -210,13 +207,13 @@ export class SessionOrder {
   }
 
   // entries: [{ hostId, session }], every live session shown. nameOf(hostId): a machine's name,
-  // for the Machine sort. shows(hostId): whether a machine is shown, for the Ended group.
+  // for the Machine sort.
   // settled(hostId): whether a machine has sent its whole list (sessions.synced). Its sessions
   // are placed only then, all together, newest first: a snapshot arrives one session at a time,
   // and placing each as it came would put them in reverse, depending on how the frames batched.
   // Until then they show at the top, newest first.
-  // Returns { pinned, sessions, ended }: the first two are entries, in order; ended is
-  // [{ hostId, session, endedAt }], the most recently ended first.
+  // Returns { pinned, sessions, ended }: live entries in the first two; ended stays empty
+  // for legacy callers.
   arrange(entries, { nameOf = () => '', shows = () => true, settled = () => true } = {}) {
     this.#place(entries.filter((e) => settled(e.hostId)), entries);
     const s = this.#state;
@@ -233,9 +230,7 @@ export class SessionOrder {
     const pinned = entries.filter((e) => pins.has(keyOf(e))).sort(by);
     const sessions = entries.filter((e) => !pins.has(keyOf(e))).sort(by);
     this.#shown = { pinned: pinned.map(keyOf), sessions: sessions.map(keyOf), pending: new Set(pending) };
-    const live = new Set(entries.map(keyOf));
-    const ended = this.#ended.filter((e) => shows(e.hostId) && !live.has(keyOf(e)));
-    return { pinned, sessions, ended };
+    return { pinned, sessions, ended: [] };
   }
 
   // Sessions never placed go to the top of the unpinned rows, once; a session seen for the
@@ -372,11 +367,7 @@ export class SessionOrder {
     this.#drop(key);
     delete this.#state.seenTurns[key];
     this.#save();
-    this.#ended = [{ hostId, session, endedAt: new Date(this.now()).toISOString() }, ...this.#ended.filter((e) => keyOf(e) !== key)].slice(0, MAX_ENDED);
   }
-
-  // The account went: its ended sessions go with it.
-  clearEnded() { this.#ended = []; }
 
   #save() {
     if (!this.#usable) { return; }

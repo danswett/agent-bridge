@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Processes;
@@ -62,6 +63,22 @@ public sealed class FleetStartedAtTests
             var machines = RelayFleetRoster.Parse([JsonSerializer.SerializeToElement(new { machine = "machine", online = true, record })]);
             Assert.Single(Assert.Single(machines).Sessions);
         }
+    }
+
+    [Theory]
+    [InlineData("\"2026-11-04T10:00:00Z\"", null)]
+    [InlineData("null", "bad-record")]
+    [InlineData("42", "bad-record")]
+    [InlineData("\"invalid\"", "bad-record")]
+    [InlineData("\"2026-11-04T10:00:00.001Z\"", "bad-record")]
+    [InlineData("\"2026-11-04T10:00:00+01:00\"", "bad-record")]
+    public async Task The_relay_accepts_only_whole_second_utc_process_starts(string json, string? refusal)
+    {
+        var record = JsonNode.Parse((await PublishAsync(new FleetPublisherTests.Source())).GetRawText())!;
+        record["sessions"]![0]!["startedAt"] = JsonNode.Parse(json);
+        var registry = new SessionRegistry(TimeProvider.System);
+        Assert.Equal(refusal, registry.Put("account", "machine", JsonSerializer.SerializeToElement(record)));
+        Assert.Equal(refusal is null ? 1 : 0, registry.Read("account").Count);
     }
 
     [Fact]

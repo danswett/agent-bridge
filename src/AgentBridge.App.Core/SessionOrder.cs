@@ -12,13 +12,7 @@ public sealed record OrderEntry(string Machine, Session Session)
     public string Key => SessionOrder.KeyOf(Machine, Session.Id);
 }
 
-// A session a host removed while the app was running, for the Ended group.
-public sealed record EndedSession(string Machine, Session Session, DateTimeOffset EndedAt)
-{
-    public string Key => SessionOrder.KeyOf(Machine, Session.Id);
-}
-
-public sealed record Arrangement(IReadOnlyList<OrderEntry> Pinned, IReadOnlyList<OrderEntry> Sessions, IReadOnlyList<EndedSession> Ended);
+public sealed record Arrangement(IReadOnlyList<OrderEntry> Pinned, IReadOnlyList<OrderEntry> Sessions);
 
 // The order of the sessions list, kept on this device: the person's, not the host's (ui.md §1
 // principle 2 and §6.1, #164; pwa/js/session-order.js is the same, rule for rule). Sorting by
@@ -31,8 +25,7 @@ public sealed record Arrangement(IReadOnlyList<OrderEntry> Pinned, IReadOnlyList
 //     host sends moves a row; only a move does (Alt+Up/Down, a drag, the row menu).
 //   * Pinned rows sit above the rest. Most recent: meaningful activity. Machine: by machine name, then
 //     your order. Each sorts within Pinned and within the rest; rows move only in Your order.
-//   * A session a host removed is kept in memory as ended, for the Ended group, until the app
-//     restarts. A machine that goes offline or out of view ends nothing.
+//   * A session a host removed leaves the list immediately; offline or hidden machines end nothing.
 //   * Unread: a new main-agent response turn since the row was last open. A session seen for the
 //     first time is not news.
 //
@@ -44,13 +37,10 @@ public sealed class SessionOrder
     // Rows remembered whose sessions aren't shown now: enough for several busy machines, and
     // bounded so the file never grows without end.
     const int MaxKeys = 300;
-    const int MaxEnded = 20;
 
     readonly string? path;
-    readonly TimeProvider time;
     readonly State state;
     readonly Dictionary<string, (Session Session, DateTimeOffset At)> activity = new(StringComparer.Ordinal);
-    List<EndedSession> ended = [];
     // What the last Arrange showed, by group: moves are among the rows on screen, not among rows
     // remembered for sessions that aren't shown.
     List<string> shownPinned = [];
@@ -73,10 +63,9 @@ public sealed class SessionOrder
     };
 
     // path: where the order is kept, or null to keep it only while the app runs.
-    public SessionOrder(string? path, TimeProvider? time = null)
+    public SessionOrder(string? path)
     {
         this.path = path;
-        this.time = time ?? TimeProvider.System;
         state = Load(path, out var usable);
         Usable = usable;
     }
@@ -148,10 +137,9 @@ public sealed class SessionOrder
     }
 
     // entries: every live session shown. nameOf(machine): a machine's name, for the Machine sort.
-    // shows(machine): whether a machine is shown, for the Ended group. settled(machine): whether a
-    // machine has sent its whole list. Its sessions are placed only then, all together, newest
-    // first: a snapshot arrives one session at a time, and placing each as it came would put them
-    // in reverse. Until then they show at the top, newest first.
+    // settled(machine): whether a machine has sent its whole list. Its sessions are placed only
+    // then, all together, newest first: a snapshot arrives one session at a time, and placing
+    // each as it came would put them in reverse. Until then they show at the top, newest first.
     public Arrangement Arrange(IReadOnlyList<OrderEntry> entries, Func<string, string?>? nameOf = null, Func<string, bool>? shows = null, Func<string, bool>? settled = null)
     {
         foreach (var e in entries) { Observe(e.Machine, e.Session, snapshot: settled?.Invoke(e.Machine) == false); }
@@ -187,9 +175,7 @@ public sealed class SessionOrder
         rest.Sort(by);
         shownPinned = pinned.Select(e => e.Key).ToList();
         shownSessions = rest.Select(e => e.Key).ToList();
-        var live = entries.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
-        var gone = ended.Where(e => (shows?.Invoke(e.Machine) ?? true) && !live.Contains(e.Key)).ToList();
-        return new Arrangement(pinned, rest, gone);
+        return new Arrangement(pinned, rest);
     }
 
     // Sessions never placed go to the top of the unpinned rows, once; a session seen for the
@@ -299,8 +285,6 @@ public sealed class SessionOrder
         Drop(key);
         state.SeenTurns.Remove(key);
         Save();
-        ended = [new EndedSession(machine, session, time.GetUtcNow()), .. ended.Where(e => e.Key != key)];
-        if (ended.Count > MaxEnded) { ended.RemoveRange(MaxEnded, ended.Count - MaxEnded); }
     }
 
     // A machine's complete list: rows remembered for its sessions that aren't in it ended while

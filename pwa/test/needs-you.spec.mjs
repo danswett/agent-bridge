@@ -897,8 +897,8 @@ test.describe('a moment before the lane takes a click', () => {
     const approve = lane(page).locator('.needs-approve').first();
     const top = await approve.evaluate((b) => b.getBoundingClientRect().top);
     const before = (await log(page)).length;
-    // Two sessions below the lane go (into the Ended group, folded, shorter than their rows): the
-    // list gets shorter, the browser pulls its scroll back, and the lane comes down with it, with
+    // Two sessions below the lane are removed: the list gets shorter, the browser pulls its
+    // scroll back, and the lane comes down with it, with
     // nothing in the lane itself changing. The page reads its layout as they go (as drawing what
     // leaves does), so the browser pulls the scroll back there and then; and its scroll event can
     // come before the size change is reported (as CI's Chromium and WebKit had it), here at once.

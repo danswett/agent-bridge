@@ -178,21 +178,19 @@ public sealed class MainTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_session_its_host_removes_folds_into_ended_and_the_others_keep_their_places()
+    public async Task A_session_its_host_removes_leaves_the_list_and_the_others_keep_their_places()
     {
         await SnapshotAsync();
         Assert.False(TestUi.Read(() => main.HasEnded));
 
         await host.SendAsync(Events.SessionRemove, new SessionRemoved("asking"));
-        await Wait.UntilAsync(() => main.HasEnded, "the ended group");
+        await Wait.UntilAsync(() => main.AllCards.All(c => c.Id != "asking"), "the removed row");
 
         Assert.Equal(["old"], Order());
         TestUi.Read(() =>
         {
-            Assert.Equal("Ended · 1", main.EndedHeader);
-            var row = Assert.Single(main.Ended);
-            Assert.Equal("A session", row.Title);
-            Assert.StartsWith("ended ", row.Meta, StringComparison.Ordinal);
+            Assert.Empty(main.Ended);
+            Assert.False(main.HasEnded);
             return true;
         });
     }

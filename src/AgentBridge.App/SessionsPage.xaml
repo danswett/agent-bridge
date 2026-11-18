@@ -496,7 +496,6 @@
                     </DataTemplate>
                 </ListView.ItemTemplate>
                 <ListView.Footer>
-                    <!-- Ended · N, folded: sessions a host removed while the app was running (#164). -->
                     <Expander
                         Margin="12,8,12,0"
                         HorizontalAlignment="Stretch"

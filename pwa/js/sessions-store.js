@@ -81,8 +81,7 @@ export class SessionsStore {
     return s;
   }
 
-  // The change carries the session as it last was: the list keeps it in its Ended group
-  // (session-order.js).
+  // Carry the last session so observers can clean up its ordering and selection.
   remove(id) {
     const session = typeof id === 'string' ? this.#sessions.get(id) : undefined;
     if (!session) { return false; }
