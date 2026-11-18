@@ -18,6 +18,17 @@ errors log only the exception type, never its potentially credential-bearing mes
 Non-HA launches and all credential handling stay unchanged;
 providing this URL does not itself establish that an HA agent credential is available.
 
+## Fleet launch provenance
+
+The host's fleet launch route persists `grant: "fleet"` in `launch-provenance.json`
+before dispatch, then binds it to the discovered session and exact process/start time.
+Ordinary launches and older unattributed records never acquire that grant. Origin
+proof survives reopening the store, but conflicting person/process records, unfinished
+launches and corrupt storage fail closed. Names and caller-supplied fields are not proof.
+This reconciles the predecessor provenance work for
+[agent stopping](https://github.com/danswett/agent-bridge/issues/2741) with the current
+host-owned fleet grant; it does not itself enable stopping or fleet launch admission.
+
 ## Answering `launch.options` without waiting for Agency (#1527)
 
 Agency's `hub list-local-sessions --json` took 18.5 s on a cold run against its 20 s cap, so
