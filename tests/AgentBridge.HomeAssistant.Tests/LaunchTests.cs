@@ -331,6 +331,44 @@ public sealed class LaunchTests : IDisposable
         Assert.Equal("agent", activity["driver"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData(AgentUser, false, null, false)]
+    [InlineData("person", true, null, false)]
+    [InlineData(AgentUser, true, "true", true)]
+    [InlineData(AgentUser, true, "false", false)]
+    [InlineData("person", false, null, null)]
+    public async Task The_launch_origin_sets_the_question_default_without_a_required_payload_setting(
+        string user, bool requested, string? askUser, bool? expected)
+    {
+        await using var c = await Ready();
+        if (requested)
+        {
+            var settings = new JsonObject();
+            if (askUser is not null) { settings["askUser"] = askUser; }
+            Payload(new JsonObject { ["request"] = "req-noask-0001", ["text"] = "go", ["settings"] = settings });
+        }
+
+        await Launch(c, user);
+
+        var wire = System.Text.Json.JsonSerializer.SerializeToNode(Assert.Single(launched), ProtocolJson.Options)!;
+        Assert.Equal(expected, wire["askUser"]?.GetValue<bool>());
+    }
+
+    [Theory]
+    [InlineData("yes")]
+    [InlineData("not-a-bool")]
+    public async Task An_invalid_question_override_is_refused_before_launching(string value)
+    {
+        await using var c = await Ready();
+        Payload(new JsonObject { ["request"] = "req-noask-0002", ["settings"] = new JsonObject { ["askUser"] = value } });
+
+        await Launch(c, AgentUser);
+
+        Assert.Empty(launched);
+        Assert.Contains("askUser", Note);
+        Assert.Equal("refused", Outcome()["outcome"]!.GetValue<string>());
+    }
+
     public static TheoryData<string> Refusals => [.. Loaded.Value["refusals"]!.AsObject().Select(r => r.Key)];
 
     [Theory]
