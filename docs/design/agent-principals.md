@@ -152,7 +152,7 @@ bytes.
 
 **Display string.** `driverPrincipal` becomes `agent:<machine>/<session>`, at most 75 ASCII bytes
 (6 + 32 + 1 + 36), which fits v1-sessions.md:833's 128-byte limit. It is an identifier. What a
-person reads ("from copilot on *DSWETT-HOME*") is built from verified structured fields
+person reads ("from copilot on *host-d*") is built from verified structured fields
 (§6.1, §6.3).
 
 ### 3.2 Who gets one (decision 3)
