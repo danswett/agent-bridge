@@ -133,8 +133,9 @@ public sealed class AgentAuditLog
                     {
                         long retained = 0;
                         var prior = GateAuditProjection.Load(profile, alreadyLocked: true, boundary: (floor, _) => retained = floor);
-                        if (!prior.Complete || retained > 0 || prior.Rows.Any(r => r.Action == entry.Action && r.Request == entry.Request))
-                        { throw new IOException("gate request already audited or evidence incomplete"); }
+                        if (!prior.Complete || retained > 0 || prior.Rows.Any(r => r.Action == entry.Action && r.Request == entry.Request)
+                            || entry.Action == "gate.start" && GateRunPreparation.HasPreparedRun(prior.Rows))
+                        { throw new IOException("gate request already audited, a run is prepared, or evidence incomplete"); }
                         if (entry.Action == "gate.reset" && prior.Rows.Where(GateRunPreparation.IsBegin).MaxBy(r => r.Gate!.Sequence)?.Gate?.Run != metadata.PreviousRun)
                         { throw new IOException("gate reset parent changed before append"); }
                     }
