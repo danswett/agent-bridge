@@ -2,6 +2,8 @@ using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // #800: a session whose agent needs sign-in, whose turn ended on an error, or that has stopped
@@ -499,22 +501,84 @@ public sealed class SignInTests
         await Wait.UntilAsync(() => demo.Main.SignIns.Any(b => b.Line == "Signed in \u00b7 3 sessions recovered"), "its own recovery", why: () => string.Join(" | ", demo.Main.SignIns.Select(b => b.Line)));
     }
 
-    [Fact]
-    [Trait("Category", "Network")]
-    public async Task A_code_that_came_before_a_slow_starts_result_is_still_there_when_the_result_comes()
+    [Theory]
+    [InlineData(10.3)]
+    [InlineData(16)]
+    public async Task A_code_that_came_before_a_slow_starts_result_is_still_there_when_the_result_comes(double elapsedSeconds)
     {
-        await using var demo = new Demo();
-        await demo.Host.NeedSignInAsync();
-        await Wait.UntilAsync(() => demo.Banner is { HasVerb: true }, "the sign-in banner");
-        // The code comes at once; the start's result 11 s later, within its timeout.
-        demo.Host.NextStartDelay = TimeSpan.FromSeconds(11);
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Wait.UntilAsync(() => demo.Main.SignInCodesHeld == 1, "the code held for the start");
-        await Task.Delay(TimeSpan.FromSeconds(10.3));
-        // Past the ten seconds, the banners are drawn again (and what is held pruned): the code stays.
-        TestUi.Read(() => { for (var i = 0; i < 5; i++) { demo.Main.Tick(); } return 0; });
-        Assert.Equal(1, TestUi.Read(() => demo.Main.SignInCodesHeld));
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is { HasCode: true }, "the code", patience: TimeSpan.FromSeconds(5));
+        var clock = new FakeTimeProvider(Make.T0);
+        await using var channel = new HeldSignInChannel(clock);
+        var ui = new LockedDispatcher();
+        await using var connection = new HostConnection(_ => Task.FromResult<IClientChannel>(channel), ui) { Subscribes = false };
+        var deliveries = new Deliveries(connection, ui, clock);
+        var main = new MainViewModel(connection,
+            new CardContext { Deliveries = deliveries, Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection },
+            new UsageViewModel(clock)) { Time = clock };
+        connection.Start();
+        await connection.WhenConnectedAsync().WaitAsync(FakeHost.Patience);
+        connection.Sessions.BeginSnapshot();
+        connection.Sessions.Upsert(Needing("a"));
+        connection.Sessions.EndSnapshot();
+
+        var banner = Assert.Single(main.SignIns);
+        Assert.True(banner.HasVerb);
+        var start = main.StartSignInAsync(banner);
+        main.OnAgentSignIn(Machine.LocalKey, AuthState.CodeEvent, Json(Code()));
+        Assert.Equal(1, main.SignInCodesHeld);
+        Assert.False(main.SignInSheet!.HasCode);
+
+        // #2844: the original 11 s demo delay left only 4 s before the channel's 15 s deadline.
+        // Model a scheduler gap as well as the original wait, without sleeping or running a host.
+        clock.Advance(TimeSpan.FromSeconds(elapsedSeconds));
+        for (var i = 0; i < 5; i++) { main.Tick(); }
+        Assert.Equal(1, main.SignInCodesHeld);
+        Assert.False(main.SignInSheet!.HasCode);
+        Assert.False(start.IsCompleted);
+
+        channel.StartResult.SetResult(Json("""{"outcome":"started","flow":"flow-1"}"""));
+        await start;
+        var sheet = Assert.IsType<SignInSheetViewModel>(main.SignInSheet);
+        Assert.True(sheet.HasCode);
+        Assert.Equal("WDJB-MJHT", sheet.Code);
+        Assert.Equal(new Uri("https://github.com/login/device"), sheet.OpenUri);
+    }
+
+    sealed class HeldSignInChannel(TimeProvider clock) : IClientChannel
+    {
+        readonly System.Threading.Channels.Channel<ChannelEvent> events = System.Threading.Channels.Channel.CreateUnbounded<ChannelEvent>();
+        readonly TaskCompletionSource closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<JsonElement> StartResult { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public System.Threading.Channels.ChannelReader<ChannelEvent> Events => events.Reader;
+        public string PeerId => "host-id";
+        public string PeerName => "Test PC";
+        public string PeerKind => "host";
+        public bool IsOpen => !Closed.IsCompleted;
+        public Task Closed => closed.Task;
+        public Exception? CloseReason => null;
+
+        public Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null) =>
+            op switch
+            {
+                Ops.Hello => Task.FromResult(JsonSerializer.SerializeToElement(
+                    new HelloResult(1, new MachineInfo(PeerId, PeerName, "windows", "0.1.0"),
+                        [Capabilities.SessionsRead, Capabilities.HelloChanged, AuthState.Capability]), ProtocolJson.Options)),
+                AuthState.Start => StartResult.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(15), clock, ct),
+                _ => throw new InvalidOperationException($"Unexpected request: {op}"),
+            };
+
+        public async Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null) =>
+            (await RequestAsync(op, data, timeout, ct, progress), -1);
+
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) =>
+            throw new NotSupportedException("This fixture receives sign-in events directly on the test UI.");
+
+        public ValueTask DisposeAsync()
+        {
+            StartResult.TrySetCanceled();
+            events.Writer.TryComplete();
+            closed.TrySetResult();
+            return ValueTask.CompletedTask;
+        }
     }
 
     [Fact]
