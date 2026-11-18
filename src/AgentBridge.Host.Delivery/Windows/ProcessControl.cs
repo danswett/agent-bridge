@@ -54,7 +54,7 @@ public sealed class WindowsProcessControl : IProcessControl
             var me = WindowsIdentity.GetCurrent().User;
             if (owner is null || me is null) { handle.Dispose(); return HeldOpen.Refused("the host could not read who runs the session; end it at the machine"); }
             if (owner != me) { handle.Dispose(); return HeldOpen.Refused("the session runs as another user; end it at the machine"); }
-            return HeldOpen.Of(new Held(handle, processId));
+            return HeldOpen.Of(new Held(handle, processId, DateTimeOffset.FromFileTime(created)));
         }
         catch
         {
@@ -83,9 +83,10 @@ public sealed class WindowsProcessControl : IProcessControl
         }
     }
 
-    sealed class Held(SafeProcessHandle handle, int id) : IHeldProcess
+    sealed class Held(SafeProcessHandle handle, int id, DateTimeOffset started) : IHeldProcess
     {
         public int Id => id;
+        public DateTimeOffset? StartedAt => started;
 
         public async Task<bool> WaitForExitAsync(TimeSpan timeout)
         {
