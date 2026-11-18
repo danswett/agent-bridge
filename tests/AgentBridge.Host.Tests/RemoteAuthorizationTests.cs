@@ -67,6 +67,46 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData(true, TrustedPeerStore.Service)]
+    [InlineData(true, TrustedPeerStore.Host)]
+    [InlineData(false, TrustedPeerStore.Person)]
+    public async Task Gate_controls_require_a_current_host_pinned_person_not_a_claimed_actor(bool pins, string role)
+    {
+        authorization.Dispose();
+        authorization = new RemoteAuthorization(pins, store, time);
+        authorization.Attach(host.Hub);
+        var profile = Path.Combine(fixture.Root, "gate");
+        host.Hub.Handler = authorization.Handler(service, new AgentAuditLog(profile, time));
+        var peer = await PeerAsync();
+        Pin(peer, role);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        foreach (var op in new[] { "gate.start", "gate.pause", "gate.reset", "gate.seal" })
+        {
+            var response = await channel.RequestAsync(op, new { request = Guid.NewGuid(), actorKind = "person-client" }, Patience);
+            Assert.False(response.GetProperty("ok").GetBoolean());
+            Assert.Contains("pinned person", response.GetProperty("error").GetString());
+        }
+        Assert.False(Directory.Exists(profile));
+    }
+
+    [Fact]
+    public async Task Gate_start_is_held_without_trusted_enrollment_and_never_takes_identities_from_the_request()
+    {
+        var profile = Path.Combine(fixture.Root, "gate");
+        host.Hub.Handler = authorization.Handler(service, new AgentAuditLog(profile, time));
+        var peer = await PeerAsync();
+        Pin(peer, TrustedPeerStore.Person);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var response = await channel.RequestAsync("gate.start", new { request = Guid.NewGuid() }, Patience);
+        Assert.False(response.GetProperty("ok").GetBoolean());
+        Assert.Contains("enrollment unavailable", response.GetProperty("error").GetString());
+        response = await channel.RequestAsync("gate.start", new { request = Guid.NewGuid(), path = "relay", actorKind = "person-client" }, Patience);
+        Assert.False(response.GetProperty("ok").GetBoolean());
+        Assert.Contains("only a request UUID", response.GetProperty("error").GetString());
+        Assert.False(Directory.Exists(profile));
+    }
+
+    [Theory]
     [InlineData(true, TrustedPeerStore.Person, false, "Steer")]
     [InlineData(true, TrustedPeerStore.Person, true, "Steer")]
     [InlineData(false, TrustedPeerStore.Person, false, "Unknown")]
