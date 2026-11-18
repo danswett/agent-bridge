@@ -105,10 +105,20 @@ static partial class SelfTest
             var method = "none";
             var openedAtBottom = false;
             var done = new TaskCompletionSource<bool>();
+            LatestInputStamp? firstScrollInput = null, fillingScrollInput = null;
+            LatestInputReceipt? firstScrollReceipt = null, fillingScrollReceipt = null;
             var heard = new KeyEventHandler((_, e) =>
             {
-                if (e.Key == VirtualKey.PageUp && from is not null) { receivedMs ??= watch.Elapsed.TotalMilliseconds; }
-                if (e.Key == VirtualKey.PageUp && fillingStartedMs is { } sent) { fillingInputMs ??= watch.Elapsed.TotalMilliseconds - sent; }
+                if (e.Key == VirtualKey.PageUp && from is not null)
+                {
+                    receivedMs ??= watch.Elapsed.TotalMilliseconds;
+                    if (firstScrollInput is { } firstInput) { firstScrollReceipt ??= away.StampLatestNativeInput(firstInput, scroll); }
+                }
+                if (e.Key == VirtualKey.PageUp && fillingStartedMs is { } sent)
+                {
+                    fillingInputMs ??= watch.Elapsed.TotalMilliseconds - sent;
+                    if (fillingScrollInput is { } fillingInput) { fillingScrollReceipt ??= away.StampLatestNativeInput(fillingInput, scroll); }
+                }
             });
             void Changed(object? sender, ScrollViewerViewChangedEventArgs e)
             {
@@ -128,6 +138,7 @@ static partial class SelfTest
                 openedAtBottom = true;
                 if (!list.Focus(FocusState.Programmatic)) { return; }
                 from = scroll.VerticalOffset;
+                firstScrollInput = away.BeginLatestNativeInput();
                 try { method = Press(window.Handle, VirtualKey.PageUp, foreground: false); }
                 catch (InvalidOperationException e) { done.TrySetException(e); }
             };
@@ -143,10 +154,13 @@ static partial class SelfTest
                 if (done.Task.IsCompleted && ById<ItemsRepeater>(away, "History") is { } historyRows)
                 {
                     check(await Until(() => !moving, TimeSpan.FromSeconds(2)), "finishes the first native scroll");
+                    CheckLatestNativeReceipt(away, firstScrollReceipt, check);
                     fillingStartedMs = watch.Elapsed.TotalMilliseconds;
+                    fillingScrollInput = away.BeginLatestNativeInput();
                     Press(window.Handle, VirtualKey.PageUp, foreground: false);
                     await Until(() => fillingInputMs is not null, TimeSpan.FromSeconds(2));
                     check(await Until(() => !moving, TimeSpan.FromSeconds(2)), "finishes native scrolling during older drawing");
+                    CheckLatestNativeReceipt(away, fillingScrollReceipt, check);
                     if (Enumerable.Range(0, historyRows.ItemsSourceView?.Count ?? 0).Select(i => historyRows.TryGetElement(i)).OfType<FrameworkElement>()
                         .FirstOrDefault(row => row.TransformToVisual(scroll).TransformPoint(default).Y + row.ActualHeight > 0 && row.TransformToVisual(scroll).TransformPoint(default).Y < scroll.ViewportHeight) is { } anchor)
                     {
@@ -357,8 +371,14 @@ static partial class SelfTest
             int? wheelReceivedCount = null;
             var wheelMoving = false;
             var wheelEvents = 0;
+            LatestInputStamp? wheelInput = null;
+            LatestInputReceipt? wheelReceipt = null;
             void WheelChanged(object? sender, ScrollViewerViewChangedEventArgs e) { wheelMoving = e.IsIntermediate; if (observerDiagnostics) { wheelEvents++; } }
-            var heardWheel = new PointerEventHandler((_, _) => wheelReceivedCount ??= WheelHistoryCount());
+            var heardWheel = new PointerEventHandler((_, _) =>
+            {
+                wheelReceivedCount ??= WheelHistoryCount();
+                if (wheelInput is { } input) { wheelReceipt ??= away.StampLatestNativeInput(input, scroll); }
+            });
             scroll.ViewChanged += WheelChanged;
             scroll.AddHandler(UIElement.PointerWheelChangedEvent, heardWheel, true);
             try
@@ -372,6 +392,7 @@ static partial class SelfTest
                         && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
                 }, TimeSpan.FromSeconds(10));
                 var wheelTarget = PostedInputTarget(window).Detail;
+                wheelInput = away.BeginLatestNativeInput();
                 Wheel(window, list);
                 var wheeled = await Until(() => wheelReceivedCount is not null
                     && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
@@ -424,6 +445,7 @@ static partial class SelfTest
                 }
                 if (!quarantined)
                 {
+                    CheckLatestNativeReceipt(away, wheelReceipt, check);
                     check(wheelReady && wheeled, wheelReady && wheeled ? tookMessage
                         : $"{tookMessage} ({(wheelReceivedCount is null ? receipt : "wheel received")}; ready: {wheelReady}; moved: {wheeled}; {wheelTarget})");
                     check(ok, ok ? keptMessage
