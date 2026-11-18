@@ -767,6 +767,32 @@ public sealed class LaunchPieceTests : IDisposable
         public bool? ReservationActive(string token) => active;
     }
 
+    [Fact]
+    [Trait("Category", "Process")]
+    public void An_expired_claim_waits_until_its_launch_has_stopped_being_followed()
+    {
+        var work = Repo();
+        var made = Worktrees.Create(work, WorktreeConfig(), launchRequest: Guid.NewGuid());
+        var locked = Path.Combine(Worktrees.AdminFolder(made.Worktree!)!, "locked");
+        var now = DateTimeOffset.UtcNow;
+        File.SetLastWriteTimeUtc(locked, now.AddMinutes(-31).UtcDateTime);
+        var nobody = new UnusedClaims();
+
+        Worktrees.Reclaim(work, WorktreeConfig(), nobody, _ => { }, () => now);
+        Assert.True(File.Exists(locked));
+        Assert.True(Worktrees.ReservationActive(made.Reservation!));
+
+        Worktrees.EndReservation(made.Reservation!);
+        Worktrees.Reclaim(work, WorktreeConfig(), nobody, _ => { }, () => now);
+        Assert.False(File.Exists(locked));
+        Assert.False(Worktrees.ReservationActive(made.Reservation!));
+    }
+
+    sealed class UnusedClaims : IWorktreeUsage
+    {
+        public WorktreeUsage Read() => new(true, [], "");
+    }
+
     // ---- what can be resumed ----
 
     [Fact]

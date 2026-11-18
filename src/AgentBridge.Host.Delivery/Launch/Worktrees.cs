@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -83,6 +84,7 @@ public static class Worktrees
     // agent-bridge-created; this host's is its own.
     public const string Marker = "agent-bridge-host-created";
     public const string ReservationPrefix = "agent-bridge-host-launch:";
+    static readonly ConcurrentDictionary<string, Mutex> reservations = new(StringComparer.Ordinal);
     sealed record Creation(Guid Request, string Worktree, string Admin, string Commit);
     static readonly ConditionalWeakTable<WorktreeResult, Creation> creations = new();
 
@@ -297,21 +299,59 @@ public static class Worktrees
     public static (string? Token, string? Problem) Reserve(string worktree)
     {
         if (!IsManaged(worktree)) { return (null, null); }
-        if (AdminFolder(worktree) is { } admin && File.Exists(Path.Combine(admin, "locked"))) { return (null, null); }
+        using var operation = Enter(worktree, out var busy);
+        if (operation is null) { return (null, busy); }
+        if (AdminFolder(worktree) is { } admin && File.Exists(Path.Combine(admin, "locked"))) { return (null, "already-reserved"); }
         var token = ReservationPrefix + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+        // A named handle survives across async/thread changes, but disappears after a host crash.
+        // Other host profiles/processes can therefore distinguish a live launch from an orphan.
+        Mutex live;
+        try { live = new Mutex(false, ReservationName(token)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        { return (null, $"Cannot track the worktree reservation ({e.GetType().Name})."); }
+        if (!reservations.TryAdd(token, live)) { live.Dispose(); return (null, "Cannot establish a unique worktree reservation."); }
         var locked = Git.Run(worktree, ["worktree", "lock", "--reason", token, worktree]);
-        return locked.Ok ? (token, null) : (null, $"Cannot protect the worktree while its session starts: {locked.Said}");
+        if (!locked.Ok) { EndReservation(token); }
+        if (locked.Ok) { return (token, null); }
+        return AdminFolder(worktree) is { } changed && File.Exists(Path.Combine(changed, "locked"))
+            ? (null, "already-reserved") : (null, $"Cannot protect the worktree while its session starts (git lock exited {locked.ExitCode}).");
+    }
+
+    static bool ReservationToken(string token) => token.StartsWith(ReservationPrefix, StringComparison.Ordinal)
+        && token.Length == ReservationPrefix.Length + 32 && token[ReservationPrefix.Length..].All(char.IsAsciiHexDigit);
+
+    static string ReservationName(string token) => (OperatingSystem.IsWindows() ? @"Local\" : "") + "AgentBridgeHostLaunch_" + token[ReservationPrefix.Length..];
+
+    internal static bool? ReservationActive(string token)
+    {
+        if (!ReservationToken(token)) { return null; }
+        try
+        {
+            if (!Mutex.TryOpenExisting(ReservationName(token), out var live)) { return false; }
+            live.Dispose();
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or PlatformNotSupportedException) { return null; }
+    }
+
+    internal static void EndReservation(string token)
+    {
+        if (reservations.TryRemove(token, out var live)) { live.Dispose(); }
     }
 
     // Unlocks it, only if the lock is still exactly this launch's.
     public static bool Release(string worktree, string token)
     {
-        if (!token.StartsWith(ReservationPrefix, StringComparison.Ordinal) || AdminFolder(worktree) is not { } admin) { return false; }
+        if (!ReservationToken(token)) { return false; }
+        using var operation = Enter(worktree, out _);
+        if (operation is null || AdminFolder(worktree) is not { } admin) { return false; }
         string reason;
         try { reason = File.ReadAllText(Path.Combine(admin, "locked")).Trim(); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
         if (!string.Equals(reason, token, StringComparison.Ordinal)) { return false; }
-        return Git.Run(worktree, ["worktree", "unlock", worktree]).Ok;
+        if (!Git.Run(worktree, ["worktree", "unlock", worktree]).Ok) { return false; }
+        EndReservation(token);
+        return true;
     }
 
     // ---- the reclaimer: agent-ha-bridge's Remove-BridgeFinishedWorktree and what it calls ----
@@ -369,11 +409,31 @@ public static class Worktrees
         foreach (var worktree in mine)
         {
             var name = Path.GetFileName(worktree);
+            ExpireReservation(worktree, common, usage!, log, now);
             var why = Retained(worktree, common, baseRef, idleHours, snapshot, now) ?? Remove(worktree, baseRef, idleHours, usage!, now);
             if (why is null) { removed++; log($"removed finished worktree {name}"); }
             else { log($"retained worktree {name}: {why}"); }
         }
         return removed;
+    }
+
+    static void ExpireReservation(string worktree, string common, IWorktreeUsage usage, Action<string> log, Func<DateTimeOffset> now)
+    {
+        if (CommonDir(worktree) is not { } own || !Folders.Same(own, common)
+            || AdminFolder(worktree) is not { } admin || !Below(admin, Path.Combine(common, "worktrees"))
+            || !NoLinks(common, [Path.GetRelativePath(common, admin)]) || !NoLinks(admin, [Marker, "locked"])
+            || !NoLinks(worktree, [".git"])) { return; }
+        var locked = Path.Combine(admin, "locked");
+        try
+        {
+            if (!File.Exists(locked)) { return; }
+            var token = File.ReadAllText(locked).Trim();
+            if (!ReservationToken(token) || now().UtcDateTime - File.GetLastWriteTimeUtc(locked) <= TimeSpan.FromMinutes(30)
+                || usage.ReservationActive(token) != false || usage.Read().InUse(worktree)) { return; }
+            log(Release(worktree, token) ? "released an expired launch reservation" : "retained an expired launch reservation: its unlock could not be confirmed");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        { log($"retained a launch reservation: its state could not be read ({e.GetType().Name})"); }
     }
 
     static string? Retained(string worktree, string common, string baseRef, double idleHours, WorktreeUsage usage, Func<DateTimeOffset> now)

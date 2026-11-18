@@ -236,6 +236,8 @@ For a workspace with `isolate: true`, each new session (never a resume):
    administration folder with the time.
 7. `git worktree lock --reason agent-bridge-host-launch:<random>` before releasing the
    repository mutex, lifted only if the lock still has that reason once the session registers.
+   The token is 32 hexadecimal characters. Claiming an already-locked tree returns
+   `already-reserved`; the host reports `busy`, without exposing its reason or token.
 
 Worktrees are under `launch.worktrees.root`, by default `~/repos/wt`, the same root
 agent-ha-bridge uses: shared with other sessions and other repositories. This host never
@@ -278,6 +280,14 @@ mutations wait up to two minutes rather than refusing immediately. The mutex is 
 by the physical common git folder, not the host or shared worktree root, so a different
 repository does not wait behind it. The entire mutex-owned turn is synchronous: no
 `await` crosses ownership of the thread-affine mutex.
+
+An abandoned launch reservation can expire after **more than 30 minutes**, measured from
+the git administration `locked` file's modification time. Reclaim unlocks only this host's
+exact token format, with known-unused session state and proof that no live launch holds
+that token. A named in-memory handle protects a followed launch across local host processes;
+following completion or a host crash drops that handle, not the git lock. Unknown usage,
+active launches and other lock reasons remain protected. Unlocking alone does not authorize
+removal: all existing finished-worktree checks still apply.
 
 agent-ha-bridge's `Remove-BridgeFinishedWorktree`, protection for protection. It runs where
 agent-ha-bridge runs it, before each isolated launch (not a resume) and before the cap is

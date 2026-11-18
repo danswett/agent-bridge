@@ -29,6 +29,7 @@ public sealed record WorktreeUsage(bool Known, IReadOnlyList<string> Directories
 public interface IWorktreeUsage
 {
     WorktreeUsage Read();
+    bool? ReservationActive(string token) => Worktrees.ReservationActive(token);
 }
 
 // The safety snapshot, unknown while session discovery is held: a session discovery could not
