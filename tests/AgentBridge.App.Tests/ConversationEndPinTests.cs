@@ -20,13 +20,20 @@ public sealed class ConversationEndPinTests
     {
         var view = new SessionView();
         view.PrepareHistoryForProbe();
+        view.FirstFrameForProbe();
+        Assert.True(view.HistoryDrawing);
         view.FollowState.PointerOver(7);
+        view.FollowState.TouchDown(8);
         view.DrawEarlierForProbe();
+        Assert.False(view.HistoryDrawing);
         view.DrainForProbe();
         view.Follow();
         Assert.Empty(view.Scroller.Targets);
         Assert.Equal(1, view.ShownCount);
         view.FollowState.PointerLeft(7);
+        Assert.False(view.HistoryDrawing);
+        view.FollowState.TouchUp(8);
+        Assert.True(view.HistoryDrawing);
         view.DrawEarlierForProbe();
         Assert.Equal(2, view.ShownCount);
         Assert.Contains(view.Scroller.ScrollableHeight, view.Scroller.Targets);
@@ -48,27 +55,20 @@ public sealed class ConversationEndPinTests
         Assert.Equal([view.Scroller.ScrollableHeight], view.Scroller.Targets);
     }
 
-    [Fact]
-    public void A_bring_target_spanning_the_viewport_does_not_latch_navigation_that_will_not_scroll()
-    {
-        var view = new SessionView();
-        view.PrepareHistoryForProbe();
-        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Top = -50, Height = 200 });
-        view.DrawEarlierForProbe();
-        Assert.Equal(2, view.ShownCount);
-    }
-
     [Theory]
-    [InlineData(0, 0)]
-    [InlineData(double.NaN, 10)]
-    public void An_explicit_alignment_or_offset_still_owns_a_bring_target_spanning_the_viewport(double alignment, double offset)
+    [InlineData(10, 50, double.NaN, 0, true)]
+    [InlineData(-50, 200, double.NaN, 0, true)]
+    [InlineData(-50, 200, 0, 0, false)]
+    [InlineData(-50, 200, double.NaN, 10, false)]
+    public void Only_bring_requests_that_move_the_target_take_navigation_custody(double top, double height, double alignment, double offset, bool still)
     {
         var view = new SessionView();
         view.PrepareHistoryForProbe();
-        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Top = -50, Height = 200 }, alignment, offset);
+        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Top = top, Height = height }, alignment, offset);
+        Assert.Equal(still, view.Pinned);
+        Assert.Equal(still, view.HistoryEnd);
         view.DrawEarlierForProbe();
-        Assert.False(view.Pinned);
-        Assert.Equal(1, view.ShownCount);
+        Assert.Equal(still ? 2 : 1, view.ShownCount);
     }
 
     [Fact]
@@ -151,28 +151,26 @@ public sealed class ConversationEndPinTests
     public void History_cannot_repin_navigation_before_its_first_view_change_even_when_a_hold_ends()
     {
         var view = new SessionView();
-        view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
+        view.PrepareHistoryForProbe();
         view.FollowState.PointerOver(1);
         view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Parent = view.Scroller });
         Assert.False(view.HistoryEnd);
         view.FollowState.PointerLeft(1);
         Assert.False(view.HistoryEnd);
         Assert.Empty(view.Scroller.Targets);
+        view.Scroller.VerticalOffset = 150;
+        view.StopScrolling();
+        view.DrawEarlierForProbe();
+        view.DrainForProbe();
+        Assert.Equal(1, view.ShownCount);
+        Assert.Empty(view.Scroller.Targets);
         view.Scroller.VerticalOffset = 50;
         view.StopScrolling();
         Assert.False(view.HistoryEnd);
+        view.DrawEarlierForProbe();
+        Assert.Equal(2, view.ShownCount);
         view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
         view.StopScrolling();
-        Assert.True(view.HistoryEnd);
-    }
-
-    [Fact]
-    public void A_bring_request_already_wholly_in_view_does_not_take_the_end_pin()
-    {
-        var view = new SessionView();
-        view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
-        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Parent = view.Scroller, Top = 10 });
-        Assert.True(view.Pinned);
         Assert.True(view.HistoryEnd);
     }
 

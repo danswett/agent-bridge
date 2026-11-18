@@ -21,10 +21,15 @@ namespace Microsoft.UI.Xaml
         public bool IsLoaded { get; init; } = true;
         public double Top { get; init; } = -100;
         public double Height { get; init; } = 50;
-        public Media.Transform TransformToVisual(UIElement viewport) => new(Top);
+        double? broughtAt;
+        public Media.Transform TransformToVisual(UIElement viewport) =>
+            new(Top + (broughtAt is { } at && viewport is Controls.ScrollViewer scroll ? at - scroll.VerticalOffset : 0));
         public event Action<UIElement, BringIntoViewRequestedEventArgs>? BringIntoViewRequested;
-        public void Bring(UIElement target, double alignment = double.NaN, double offset = 0) =>
+        public void Bring(UIElement target, double alignment = double.NaN, double offset = 0)
+        {
+            target.broughtAt = (this as Controls.ScrollViewer)?.VerticalOffset;
             BringIntoViewRequested?.Invoke(this, new(target) { VerticalAlignmentRatio = alignment, VerticalOffset = offset });
+        }
     }
 
     public sealed class BringIntoViewRequestedEventArgs(UIElement target) : EventArgs
@@ -182,6 +187,8 @@ namespace AgentBridge.App
         public void StopScrolling() { scrolling = false; navigationPending = false; }
         public bool HasAnchor => anchor is not null;
         public int ShownCount => historyShown.Count;
+        public bool HistoryDrawing => historyDraw?.IsRunning == true;
+        public void FirstFrameForProbe() => historyFirstFrame?.Invoke(this, new());
         public void DrawEarlierForProbe() => DrawEarlier();
         public void DrainForProbe() => DispatcherQueue.Drain();
         public void DetachForProbe() => UnwatchHistory();
@@ -207,11 +214,7 @@ namespace AgentBridge.App
             Scroller.Targets.Clear();
         }
         static double Top(Microsoft.UI.Xaml.UIElement element, Microsoft.UI.Xaml.UIElement viewport) => element.Top;
-        sealed record ProbeCard(string Id, Core.SessionHistory Stored)
-        {
-            public string? LiveTurn => null;
-            public string? UserMessage => null;
-        }
+        sealed record ProbeCard(string Id, Core.SessionHistory Stored, string? LiveTurn = null, string? UserMessage = null);
         sealed class ProbeRows
         {
             public Microsoft.UI.Xaml.UIElement? TryGetElement(int index) => null;
