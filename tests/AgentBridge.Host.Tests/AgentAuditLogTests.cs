@@ -22,11 +22,11 @@ public sealed class AgentAuditLogTests : IDisposable
         new("local", "req-1", "agent:m1/s1", ["agent:m1/s1"], action, "m2/s2", outcome, "fine");
 
     [Fact]
-    public void A_launch_refusal_is_idempotent_per_authenticated_principal_and_request_across_writers()
+    public void A_worktree_refusal_is_idempotent_per_authenticated_principal_and_request_across_writers()
     {
-        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D") };
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
         Assert.True(Log().Append(entry));
-        Assert.True(Log().Append(entry with { Reason = "fallback" }));
+        Assert.True(Log().Append(entry));
         Assert.True(Log().Append(entry with { Principal = "agent:m1/other" }));
         Assert.True(Log().Append(entry with { Request = Guid.NewGuid().ToString("D") }));
         var rows = File.ReadAllLines(Path.Combine(Audit, "launches-2026-11-08.jsonl")).Skip(1)
@@ -34,6 +34,235 @@ public sealed class AgentAuditLogTests : IDisposable
         Assert.Equal(3, rows.Length);
         Assert.Single(rows, row => row.GetProperty("request").GetString() == entry.Request
             && row.GetProperty("principal").GetString() == entry.Principal);
+    }
+
+    [Fact]
+    public void Ordinary_repeated_refusals_are_not_the_worktree_callback_fallback_pair()
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D") };
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Append(entry with { Grant = "agent-worktree-refusal" }));
+        Assert.Equal(4, File.ReadAllLines(Path.Combine(Audit, "launches-2026-11-08.jsonl")).Length);
+    }
+
+    [Theory]
+    [InlineData("reason")]
+    [InlineData("text")]
+    [InlineData("chain")]
+    [InlineData("target")]
+    [InlineData("direction")]
+    public void A_marked_request_with_different_audit_payload_is_not_a_replay(string field)
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry, "one"));
+        var changed = field switch
+        {
+            "reason" => entry with { Reason = "another refusal" },
+            "chain" => entry with { Chain = ["agent:m1/other"] },
+            "target" => entry with { Target = "another" },
+            "direction" => entry with { Direction = "another" },
+            _ => entry,
+        };
+        Assert.True(Log().Append(changed, field == "text" ? "two" : "one"));
+        Assert.Equal(3, File.ReadAllLines(Path.Combine(Audit, "launches-2026-11-08.jsonl")).Length);
+    }
+
+    [Fact]
+    public void Counted_summaries_are_never_marked_as_the_worktree_callback_fallback_pair()
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry));
+        var windows = new LocalApi.RefusalAudits(clock);
+        windows.Windows[entry.Principal] = (clock.GetTimestamp(), 60, 0, clock.GetTimestamp());
+        var data = JsonSerializer.SerializeToElement(new { request = entry.Request });
+        clock.Advance(TimeSpan.FromMinutes(1));
+        LocalApi.AuditRefusal(entry.Principal, [], entry.Action, data, Log(), "refused", windows, entry.Grant);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        LocalApi.AuditRefusal(entry.Principal, [], entry.Action, data, Log(), "refused", windows, entry.Grant);
+        var rows = File.ReadAllLines(Path.Combine(Audit, "launches-2026-11-08.jsonl")).Skip(1)
+            .Select(line => JsonSerializer.Deserialize<JsonElement>(line)).ToArray();
+        Assert.Equal(3, rows.Length);
+        Assert.Equal(2, rows.Count(row => row.GetProperty("reason").GetString()!.Contains("additional")));
+    }
+
+    [Theory]
+    [InlineData("write")]
+    [InlineData("flush")]
+    [InlineData("replay-flush")]
+    public void A_partial_write_or_flush_exception_never_acknowledges_unproven_durability(string fault)
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry with { Request = Guid.NewGuid().ToString("D") }));
+        Assert.True(Log().Bootstrap());
+        if (fault == "replay-flush") { Assert.True(Log().Append(entry)); }
+        var broken = new AgentAuditLog(profile, clock, said.Add)
+            { OpenFile = (file, options) => new InterruptedAuditStream(file, options, fault) };
+        Assert.False(broken.Append(entry));
+        var path = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        var before = File.ReadAllBytes(path);
+        Assert.Equal(fault != "write", Log().Append(entry));
+        Assert.Equal(before, File.ReadAllBytes(path));
+        if (fault != "write") { Assert.Equal(3, File.ReadAllLines(path).Length); }
+    }
+
+    sealed class InterruptedAuditStream(string file, FileStreamOptions options, string fault) : FileStream(file, options)
+    {
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            if (fault != "write") { base.Write(buffer); return; }
+            base.Write(buffer[..(buffer.Length / 2)]);
+            base.Flush(flushToDisk: false);
+            throw new IOException("injected partial audit row write");
+        }
+        public override void Flush(bool flushToDisk)
+        {
+            if (flushToDisk) { throw new IOException("injected durable audit flush failure"); }
+            base.Flush(flushToDisk);
+        }
+    }
+
+    [Theory]
+    [InlineData("edited-tail")]
+    [InlineData("missing-predecessor")]
+    [InlineData("torn-tail")]
+    [InlineData("edited-interior")]
+    public void A_worktree_refusal_cannot_be_acknowledged_from_broken_coverage_or_chain(string fault)
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry with { Request = Guid.NewGuid().ToString("D"), Reason = "interior" }));
+        Assert.True(Log().Bootstrap());
+        var predecessor = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        if (fault == "missing-predecessor") { clock.Advance(TimeSpan.FromDays(1)); }
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Verify(launch: true).Intact);
+        var file = Path.Combine(Audit, $"launches-{clock.GetUtcNow():yyyy-MM-dd}.jsonl");
+        if (fault == "missing-predecessor") { File.Delete(predecessor); }
+        else
+        {
+            var raw = File.ReadAllText(file);
+            File.WriteAllText(file, fault == "torn-tail" ? raw[..^8]
+                : raw.Replace(fault == "edited-tail" ? "\"fine\"" : "\"interior\"", "\"evil\""));
+        }
+        var before = File.ReadAllBytes(file);
+        Assert.False(Log().Verify(launch: true).Intact);
+        Assert.False(Log().Append(entry));
+        Assert.Equal(before, File.ReadAllBytes(file));
+    }
+
+    [Fact]
+    public void A_verified_append_only_checkpoint_lag_preserves_one_worktree_refusal_without_repairing_the_head()
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry with { Request = Guid.NewGuid().ToString("D") }));
+        Assert.True(Log().Bootstrap());
+        var head = File.ReadAllBytes(Path.Combine(Audit, "launches.head"));
+        var blocked = Path.Combine(Audit, "launches.head.new");
+        Directory.CreateDirectory(blocked);
+        try { Assert.False(Log().Append(entry)); }
+        finally { Directory.Delete(blocked); }
+        var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        var before = File.ReadAllBytes(file);
+        Assert.False(Log().Verify(launch: true).Intact);
+        Assert.True(Log().Append(entry));
+        Assert.Equal(before, File.ReadAllBytes(file));
+        Assert.Equal(head, File.ReadAllBytes(Path.Combine(Audit, "launches.head")));
+    }
+
+    [Fact]
+    public void Recovered_torn_evidence_must_not_ack_a_worktree_replay()
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Bootstrap());
+        var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        File.AppendAllText(file, "{\"torn\":");
+        Assert.True(Log().Append(entry with { Request = Guid.NewGuid().ToString("D"), Grant = null }));
+        var before = File.ReadAllBytes(file);
+        Assert.False(Log().Verify(launch: true).Intact);
+        Assert.False(Log().Append(entry));
+        Assert.Equal(before, File.ReadAllBytes(file));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Missing_launch_anchor_must_not_ack_a_worktree_replay(bool bothAnchors)
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Append(Entry()));
+        Assert.True(Log().Bootstrap());
+        File.Delete(Path.Combine(Audit, "launches.head"));
+        if (bothAnchors) { File.Delete(Path.Combine(Audit, "agents.head")); }
+        var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        var before = File.ReadAllBytes(file);
+        Assert.False(Log().Append(entry));
+        Assert.Equal(before, File.ReadAllBytes(file));
+        Assert.False(File.Exists(Path.Combine(Audit, "launches.head")));
+    }
+
+    [Fact]
+    public void A_failed_first_launch_anchor_never_becomes_replay_proof_or_a_second_refusal()
+    {
+        Assert.True(Log().Append(Entry()));
+        Assert.True(Log().Bootstrap());
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        var blocked = Path.Combine(Audit, "launches.head.new");
+        Directory.CreateDirectory(blocked);
+        try { Assert.False(Log().Append(entry)); }
+        finally { Directory.Delete(blocked); }
+        var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        var before = File.ReadAllBytes(file);
+        Assert.False(Log().Append(entry));
+        Assert.Equal(before, File.ReadAllBytes(file));
+        Assert.Equal(2, File.ReadAllLines(file).Length);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UUID_casing_does_not_duplicate_a_worktree_refusal_and_new_records_are_canonical(bool uppercaseFirst)
+    {
+        const string id = "12345678-9abc-4def-8abc-0123456789ab";
+        var entry = Entry("session.launch", "refused") with { Request = uppercaseFirst ? id.ToUpperInvariant() : id, Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Append(entry with { Request = uppercaseFirst ? id : id.ToUpperInvariant() }));
+        var row = JsonSerializer.Deserialize<JsonElement>(Assert.Single(File.ReadAllLines(Path.Combine(Audit, "launches-2026-11-08.jsonl")).Skip(1)));
+        Assert.Equal(id, row.GetProperty("request").GetString());
+    }
+
+    [Fact]
+    public void An_incomplete_launch_stream_does_not_silently_discard_new_ordinary_refusal_evidence()
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D") };
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Bootstrap());
+        var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        File.WriteAllText(file, File.ReadAllText(file).Replace("\"fine\"", "\"evil\""));
+        Assert.True(Log().Append(entry with { Request = Guid.NewGuid().ToString("D") }));
+        Assert.Equal(3, File.ReadAllLines(file).Length);
+        Assert.False(Log().Verify(launch: true).Intact);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_row_write_or_durable_replay_fails_closed_when_the_audit_file_cannot_be_flushed(bool replay)
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Bootstrap());
+        var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        var before = File.ReadAllBytes(file);
+        var attempt = replay ? entry : entry with { Request = Guid.NewGuid().ToString("D") };
+        using (new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Assert.False(Log().Append(attempt));
+            Assert.Equal(before, File.ReadAllBytes(file));
+        }
+        Assert.True(Log().Append(attempt));
+        Assert.Equal(replay ? 2 : 3, File.ReadAllLines(file).Length);
     }
 
     [Fact]
