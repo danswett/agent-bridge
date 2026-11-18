@@ -1079,6 +1079,55 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal("unconfirmed", o.Outcome_);
         lock (told) { Assert.Equal([o.Session!], told); }
     }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("codex")]
+    public async Task A_launch_with_unknown_session_and_process_start_is_still_told_to_the_restore_record(string agent)
+    {
+        screens.Rows = null;
+        starter.UndatedProcess = true;
+        locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(500), readyWait: TimeSpan.FromMilliseconds(100));
+        var told = new List<string>();
+        launcher.SessionStarted += (id, _) => { lock (told) { told.Add(id); } };
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"), launcher: launcher).HandleAsync;
+        var ch = await OpenAsync();
+
+        var o = await LaunchAsync(ch, new { agent, workspace = "App", prompt = "go" });
+
+        var id = agent == "codex" ? starter.CodexId : Assert.Single(starter.Specs).Arguments[1];
+        Assert.Null(Assert.IsType<Session>(source.Get(id)).StartedAt);
+        Assert.Null(Assert.IsType<SessionProcess>(source.ProcessOf(id)).StartedAt);
+        lock (told) { Assert.Equal([id], told); }
+        Assert.Equal(id, o.Session);
+        Assert.Equal(agent == "copilot" ? "unconfirmed" : "started", o.Outcome_);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_undated_Codex_cannot_be_claimed_without_its_launch_process_ownership(bool unknownOwnership)
+    {
+        locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        starter.Registers = false;
+        starter.UndatedProcess = true;
+        starter.UnknownOwnership = unknownOwnership;
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(500));
+        var told = new List<string>();
+        launcher.SessionStarted += (id, _) => { lock (told) { told.Add(id); } };
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"), launcher: launcher).HandleAsync;
+        var ch = await OpenAsync();
+        var launching = LaunchAsync(ch, new { agent = "codex", workspace = "App", prompt = "go" });
+        await WaitAsync(() => Task.FromResult(starter.Pids.Count == 1));
+        starter.RegisterCodex(starter.Specs[0], starter.Pids[0] + 1, 7001, starter.CodexId);
+        await source.RefreshAsync();
+
+        Assert.NotEqual("started", (await launching).Outcome_);
+        Assert.Null(Assert.IsType<Session>(source.Get(starter.CodexId)).StartedAt);
+        lock (told) { Assert.Empty(told); }
+    }
+
     [Fact]
     public async Task A_Copilot_that_registers_but_whose_window_is_not_ready_when_the_wait_ends_is_said_to_have_appeared()
     {
@@ -1687,6 +1736,8 @@ public abstract partial class LaunchFlowFixture
         public readonly List<StartSpec> Specs = [];
         public string? Unavailable_;
         public volatile bool Registers = true;
+        public bool UndatedProcess;
+        public bool UnknownOwnership;
         public bool ExitsAtOnce;
         // Starting the agent fails with this.
         public Exception? Throws;
@@ -1728,7 +1779,7 @@ public abstract partial class LaunchFlowFixture
         {
             lock (Specs)
             {
-                if (!running.Contains(started.ProcessId)) { return null; }
+                if (!running.Contains(started.ProcessId) || UnknownOwnership) { return null; }
                 return processId == started.ProcessId || parents.GetValueOrDefault(processId) == started.ProcessId;
             }
         }
@@ -1757,7 +1808,8 @@ public abstract partial class LaunchFlowFixture
             var transcript = f.CodexTranscript(id);
             Fixture.Append(transcript, Codex.Line("session_meta", new { id, cwd = spec.WorkingDirectory }, 0));
             f.CodexRegistration(id, pid, transcript, updated: DateTimeOffset.UtcNow);
-            f.Processes.Run(AgentKind.Codex, pid, "codex", DateTimeOffset.UtcNow);
+            if (UndatedProcess) { f.Processes.RunUndated(AgentKind.Codex, pid, "codex"); }
+            else { f.Processes.Run(AgentKind.Codex, pid, "codex", DateTimeOffset.UtcNow); }
         }
 
         void Register(StartSpec spec, int pid)
@@ -1770,7 +1822,8 @@ public abstract partial class LaunchFlowFixture
             var args = spec.Arguments.ToList();
             var id = args[args.IndexOf("--session-id") + 1];
             f.CopilotSession(id, pid, lockWrite: DateTimeOffset.UtcNow.AddSeconds(1));
-            f.Processes.Run(AgentKind.Copilot, pid, $"copilot --session-id {id}", DateTimeOffset.UtcNow);
+            if (UndatedProcess) { f.Processes.RunUndated(AgentKind.Copilot, pid, $"copilot --session-id {id}"); }
+            else { f.Processes.Run(AgentKind.Copilot, pid, $"copilot --session-id {id}", DateTimeOffset.UtcNow); }
         }
     }
 }

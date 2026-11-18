@@ -4,7 +4,7 @@ import { RecentOrder } from '../../js/recent-order.js';
 import { SessionOrder } from '../../js/session-order.js';
 
 const row = (id, question = null) => ({ hostId: 'host', session: { id, question } });
-const list = (...ids) => ({ pinned: [], sessions: ids.map((id) => row(id)), ended: [] });
+const list = (...ids) => ({ pinned: [], sessions: ids.map((id) => row(id)) });
 const ids = (r) => r.sessions.map((e) => e.session.id);
 
 test('activity moves together no sooner than five seconds after the last batch', () => {
@@ -44,7 +44,7 @@ test('holds collect changes; a new session or question alone bypasses within its
 
 test('pins stay separate, and explicit sorts reset the shown order without activity batching', () => {
   const recent = new RecentOrder();
-  const target = { pinned: [row('p'), row('q')], sessions: [row('a')], ended: [] };
+  const target = { pinned: [row('p'), row('q')], sessions: [row('a')] };
   recent.arrange(target, { sort: 'recent' });
   const changed = { ...target, pinned: [row('q'), row('p')] };
   assert.deepEqual(recent.arrange(changed, { sort: 'recent', held: true }).pinned.map((e) => e.session.id), ['p', 'q']);

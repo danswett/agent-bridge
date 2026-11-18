@@ -163,7 +163,7 @@ export class SessionListView {
     const entries = this.sessions.list();
     const sort = this.order.sort;
     const held = this.needsOnly || this.#recentHolds.size > 0 || !!this.#recentFocus?.isConnected;
-    const arranged = this.#recent.arrange(this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled }), { sort, held });
+    const arranged = this.#recent.arrange(this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, settled: this.settled }), { sort, held });
     clearTimeout(this.#recentTimer);
     if (this.#recent.wait !== null) { this.#recentTimer = setTimeout(() => this.schedule(), this.#recent.wait); }
     const before = new Map();

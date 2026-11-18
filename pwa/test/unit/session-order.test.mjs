@@ -16,7 +16,7 @@ const entry = (id, n, hostId = 'h1', title = id) => ({ hostId, session: { id, ti
 const ids = (list) => list.map((e) => e.session.id);
 const shown = (o, entries, opts) => {
   const r = o.arrange(entries, opts);
-  return { pinned: ids(r.pinned), sessions: ids(r.sessions), ended: r.ended.map((e) => e.session.id) };
+  return { pinned: ids(r.pinned), sessions: ids(r.sessions) };
 };
 const key = (id, hostId = 'h1') => orderKey(hostId, id);
 
@@ -109,7 +109,7 @@ test('pin and unpin: pinned rows sit above the rest, and an unpinned one goes ba
   shown(o, list);
   o.setPinned(key('c'), true);
   o.setPinned(key('b'), true);
-  assert.deepEqual(shown(o, list), { pinned: ['c', 'b'], sessions: ['a'], ended: [] });
+  assert.deepEqual(shown(o, list), { pinned: ['c', 'b'], sessions: ['a'] });
   assert.equal(o.isPinned(key('c')), true);
   // A pin survives a reload.
   assert.deepEqual(shown(new SessionOrder({ storage }), list).pinned, ['c', 'b']);
@@ -118,7 +118,7 @@ test('pin and unpin: pinned rows sit above the rest, and an unpinned one goes ba
   assert.ok(o.move(key('b'), -1));
   assert.deepEqual(shown(o, list).pinned, ['b', 'c']);
   o.setPinned(key('c'), false);
-  assert.deepEqual(shown(o, list), { pinned: ['b'], sessions: ['c', 'a'], ended: [] });
+  assert.deepEqual(shown(o, list), { pinned: ['b'], sessions: ['c', 'a'] });
 });
 
 test('a row dragged among the pinned ones is pinned, and one dragged out is unpinned', () => {
@@ -128,9 +128,9 @@ test('a row dragged among the pinned ones is pinned, and one dragged out is unpi
   o.setPinned(key('a'), true);
   shown(o, list);
   assert.ok(o.place(key('c'), key('a'), true));
-  assert.deepEqual(shown(o, list), { pinned: ['a', 'c'], sessions: ['b'], ended: [] });
+  assert.deepEqual(shown(o, list), { pinned: ['a', 'c'], sessions: ['b'] });
   assert.ok(o.place(key('a'), key('b'), true));
-  assert.deepEqual(shown(o, list), { pinned: ['c'], sessions: ['b', 'a'], ended: [] });
+  assert.deepEqual(shown(o, list), { pinned: ['c'], sessions: ['b', 'a'] });
 });
 
 test('most recent and machine sorts, and pins above both', () => {
@@ -144,7 +144,7 @@ test('most recent and machine sorts, and pins above both', () => {
   o.setSort('machine');
   assert.deepEqual(shown(o, list, { nameOf: (h) => names[h] }).sessions, ['b', 'a', 'c']);
   o.setPinned(key('c', 'h2'), true);
-  assert.deepEqual(shown(o, list, { nameOf: (h) => names[h] }), { pinned: ['c'], sessions: ['b', 'a'], ended: [] });
+  assert.deepEqual(shown(o, list, { nameOf: (h) => names[h] }), { pinned: ['c'], sessions: ['b', 'a'] });
   // Rows move only in your order.
   assert.equal(o.canMove(key('a', 'h2'), -1), false);
 });
@@ -226,12 +226,15 @@ test('a session the host removes is forgotten, and one only gone from view is no
   store.retain(new Set(['c']));
   const r = o.arrange(live());
   assert.deepEqual(ids(r.sessions), ['c']);
-  assert.deepEqual(r.ended, []);
+  assert.deepEqual(r, { pinned: [], sessions: live() });
   assert.equal(o.isPinned(key('a')), false);
-  assert.deepEqual(o.arrange(live(), { shows: () => false }).ended, []);
+  o.setPinned(key('c'), true);
+  assert.deepEqual(o.arrange([]), { pinned: [], sessions: [] });
+  assert.equal(o.isPinned(key('c')), true);
   // Clearing a machine's store (it went offline) ends nothing.
   store.clear();
-  assert.equal(o.arrange([]).ended.length, 0);
+  assert.deepEqual(o.arrange([]), { pinned: [], sessions: [] });
+  assert.equal(o.isPinned(key('c')), true);
 });
 
 test('a machine\'s complete list forgets rows of its sessions that ended while nobody looked', () => {

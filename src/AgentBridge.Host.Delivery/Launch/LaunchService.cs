@@ -1553,12 +1553,15 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return null;
     }
 
-    // Whether a Codex session is new to a launch: not there when it started, and started after.
+    // Not there before this launch, with a recent process birth or proven ownership of the
+    // launch's process when discovery cannot read that birth. Session start may be unknown.
     bool Candidate(Pending p, string id, out SessionProcess? process)
     {
         process = source.ProcessOf(id);
         return !p.CodexBefore.Contains(id)
-            && (process?.StartedAt ?? source.Get(id)?.StartedAt) is { } at && at >= p.Started.StartedAt - TimeSpan.FromSeconds(2);
+            && (process?.StartedAt is { } at
+                ? at >= p.Started.StartedAt - TimeSpan.FromSeconds(2)
+                : process is not null && starter.Owns(p.Started, process.Id) == true);
     }
 
     // Why a reply must not be typed into this session yet (ReplyService.LaunchHeld): a launch of it

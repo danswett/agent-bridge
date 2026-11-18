@@ -28,14 +28,14 @@ public class SessionOrderBenchmarks
             template with { Id = $"{i:x8}-6b35-49bd-b083-39572fbff648", UpdatedAt = t0.AddSeconds(-(i * 7919 % 300)) }))];
         // In memory only: nothing is written.
         _order = new SessionOrder(path: null) { Sort = Sort };
-        _order.Arrange(_entries, Name, _ => true, _ => true);
+        _order.Arrange(_entries, Name, _ => true);
         for (var i = 0; i < 10; i++) { _order.SetPinned(_entries[i * 30].Key, true); }
     }
 
     static string? Name(string machine) => Names.GetValueOrDefault(machine);
 
     [Benchmark]
-    public Arrangement Arrange() => _order.Arrange(_entries, Name, _ => true, _ => true);
+    public Arrangement Arrange() => _order.Arrange(_entries, Name, _ => true);
 }
 
 // A session card's reply rendered to the app's Markdown model, at a typical reply's length and at

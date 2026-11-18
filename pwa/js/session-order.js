@@ -212,9 +212,8 @@ export class SessionOrder {
   // are placed only then, all together, newest first: a snapshot arrives one session at a time,
   // and placing each as it came would put them in reverse, depending on how the frames batched.
   // Until then they show at the top, newest first.
-  // Returns { pinned, sessions, ended }: live entries in the first two; ended stays empty
-  // for legacy callers.
-  arrange(entries, { nameOf = () => '', shows = () => true, settled = () => true } = {}) {
+  // Returns { pinned, sessions }: live entries in each group, in order.
+  arrange(entries, { nameOf = () => '', settled = () => true } = {}) {
     this.#place(entries.filter((e) => settled(e.hostId)), entries);
     const s = this.#state;
     const placed = new Set([...s.pinned, ...s.order]);
@@ -230,7 +229,7 @@ export class SessionOrder {
     const pinned = entries.filter((e) => pins.has(keyOf(e))).sort(by);
     const sessions = entries.filter((e) => !pins.has(keyOf(e))).sort(by);
     this.#shown = { pinned: pinned.map(keyOf), sessions: sessions.map(keyOf), pending: new Set(pending) };
-    return { pinned, sessions, ended: [] };
+    return { pinned, sessions };
   }
 
   // Sessions never placed go to the top of the unpinned rows, once; a session seen for the

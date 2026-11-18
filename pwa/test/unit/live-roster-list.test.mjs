@@ -39,7 +39,7 @@ test('the list uses each host snapshot without a Home Assistant client', (t) => 
   f.snapshot('first', ['here']);
   f.snapshot('second', ['there']);
   assert.deepEqual(f.ids(), ['first/here', 'second/there']);
-  assert.deepEqual(f.arranged().ended, []);
+  assert.deepEqual(Object.values(f.arranged()).flat().map((e) => `${e.hostId}/${e.session.id}`).sort(), f.ids());
 });
 
 for (const replacementSnapshot of [false, true]) {
@@ -54,7 +54,7 @@ for (const replacementSnapshot of [false, true]) {
     assert.deepEqual(f.ids(), ['first/live']);
     assert.deepEqual(list.pinned, []);
     assert.deepEqual(list.sessions.map((e) => e.session.id), ['live']);
-    assert.deepEqual(list.ended, []);
+    assert.deepEqual(Object.values(list).flat().map((e) => e.session.id), ['live']);
   });
 }
 

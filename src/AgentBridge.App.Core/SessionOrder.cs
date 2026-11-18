@@ -140,7 +140,7 @@ public sealed class SessionOrder
     // settled(machine): whether a machine has sent its whole list. Its sessions are placed only
     // then, all together, newest first: a snapshot arrives one session at a time, and placing
     // each as it came would put them in reverse. Until then they show at the top, newest first.
-    public Arrangement Arrange(IReadOnlyList<OrderEntry> entries, Func<string, string?>? nameOf = null, Func<string, bool>? shows = null, Func<string, bool>? settled = null)
+    public Arrangement Arrange(IReadOnlyList<OrderEntry> entries, Func<string, string?>? nameOf = null, Func<string, bool>? settled = null)
     {
         foreach (var e in entries) { Observe(e.Machine, e.Session, snapshot: settled?.Invoke(e.Machine) == false); }
         PlaceNew(entries.Where(e => settled?.Invoke(e.Machine) ?? true).ToList(), entries);
