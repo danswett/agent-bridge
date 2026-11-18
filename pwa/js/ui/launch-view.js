@@ -652,7 +652,8 @@ export class LaunchPanel {
         ? this.#options.workspaces.length ? 'pick a workspace' : `no workspace is approved on this machine yet; approve one at the machine (${APPROVE_HINT})`
         : null)
       ?? (launch.transfer && !target.transfers ? `this machine does not take sessions from other machines` : null)
-      ?? checkLaunch(launch)
+      // Check the settings now; the transfer is not complete until it is signed below.
+      ?? checkLaunch(launch.transfer ? { ...launch, transfer: null } : launch)
       ?? (agent?.needsPrompt && !launch.resume && !launch.transfer && !launch.prompt ? `${agent.label} starts its session only on a first message; give it a prompt` : null);
     if (problem) {
       this.#local({ text: `Not launched: ${sentence(problem)}`, tone: 'bad' });
@@ -674,6 +675,11 @@ export class LaunchPanel {
         this.#lock();
       }
       if (this.#selection !== selection) { return; }
+      const bad = checkLaunch(launch);
+      if (bad) {
+        this.#local({ text: `Not launched: ${sentence(bad)}`, tone: 'bad' });
+        return;
+      }
     }
     this.#jumped = null;
     this.#localLine = null;

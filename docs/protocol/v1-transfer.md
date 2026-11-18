@@ -69,6 +69,10 @@ A machine that is asleep or does not answer is left out.
 | `agent` | **Required.** A launcher installed here that runs the session's kind: the one it lists on the other machine, or another of the same kind. Checked against the bundle once it arrives |
 | `resume` | Not with `transfer` |
 
+Before sending, the PWA checks `transfer.from`, the session UUID and the command's
+nonempty base64url parts with the host's limits (body 2048, by 96, mac 64 characters)
+and refusal wording. The host still verifies the signed command and its authority.
+
 Everything else (`profile`, `model`, `effort`, `context`, `permissions`, `prompt`,
 `attachments`) is as for any launch. The outcomes are a launch's. While the bundle is being
 fetched the launch has not started anything, so a failure there is `refused`, with the source's

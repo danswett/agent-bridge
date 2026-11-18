@@ -174,7 +174,7 @@ export class DemoHost {
   #launchScript = [];
   launchOptions = demoLaunchOptions();
   // The other machine's sessions, as it offers them for a transfer.
-  remote = { hostId: 'demo-studio', machineName: 'Studio PC', resumable: demoRemoteResumable() };
+  remote = { hostId: '0123456789abcdef0123456789abcdef', machineName: 'Studio PC', resumable: demoRemoteResumable() };
   // How long Studio PC takes to say what it offers, for a test of a slow machine.
   remoteDelayMs = 0;
   // launch.trust.answer: outcomes by request, every request as received, and the next outcomes.
