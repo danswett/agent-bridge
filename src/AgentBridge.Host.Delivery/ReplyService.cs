@@ -406,7 +406,7 @@ public sealed class ReplyService : ISessionReplier
         // long transcript reads it without holding up every other delivery; the read in the
         // turn only covers what has been written since.
         var input = inputs.GetOrAdd(transcript, path => new CopilotInput(path));
-        input.Read();
+        var observed = input.Read();
 
         // One delivery typed at a time across sessions, and the last checks are made once its
         // turn has come, not when it arrived.
@@ -456,6 +456,8 @@ public sealed class ReplyService : ISessionReplier
                 return Done(Refused("the session was resumed in a new Copilot while a question or approval was open, and its window may still show it, where a reply would answer it; answer or dismiss it at the machine (or type there), then reply") with { Refusal = ReplyRefusal.Asking });
             }
             if (before.Asking && !noTranscriptYet) { return Done(Asking()); }
+            if (stillCurrent is not null && (!before.Retryable || before.RetryGeneration != observed.RetryGeneration))
+                return Done(Stale(retryChangedReason));
             from = before.ScannedTo;
             // Typed only into Copilot's input box, empty and outside shell mode, as the screen
             // shows it now: words left in it would go with the reply, and in shell mode Enter runs
@@ -504,7 +506,8 @@ public sealed class ReplyService : ISessionReplier
                         || !processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid && p.StartedAt == process.StartedAt))
                         return Changed();
                     var latest = input.Read();
-                    if (!latest.Readable || latest.Asking || latest.Resumed) return Changed();
+                    if (!latest.Readable || latest.Asking || latest.Resumed || !latest.Retryable
+                        || latest.RetryGeneration != observed.RetryGeneration) return Changed();
                     return stillCurrent() ? null : Changed();
                     string Changed() { retryChanged = true; return retryChangedReason; }
                 }

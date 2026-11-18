@@ -74,6 +74,10 @@ The scheduler starts only after the second startup Stop check and Serving, with
 serving readiness checked again at the final effect. Uncertain delivery never
 retries. Host shutdown cancels and awaits the scheduler; its process-local state
 does not migrate to another host.
+Retry delivery also binds the transcript's main-event generation and retryability,
+re-read inside the injector's final-effect callback. An abort, shutdown, resume,
+new prompt or changed failure withdraws that retry even before SessionSource
+projects the new transcript records. Ordinary replies keep their existing rules.
 `sessions.autoRetry` defaults on and is read fresh, including at the final-effect
 fence. False, malformed config, read-only delivery, G5, questions, permission/trust
 prompts, auth, quota (including 402), and unrecognized failures never auto-send.
