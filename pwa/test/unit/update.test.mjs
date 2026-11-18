@@ -398,6 +398,19 @@ test('a later different release never revives a capped note hidden when no relea
   assert.equal(control.stateOf('a').note, null);
 });
 
+test('a missing update state clears its capped note before the card returns without reading stateOf', async () => {
+  const capped = { ...ready, canUpdateNow: false, updateNowWhy: 'restart-cap' };
+  const fleet = nowFleet(capped, []);
+  const control = new UpdateControl({ fleet, newRequest: () => 'r-idle' });
+  await control.pressNow('a');
+  assert.match(control.stateOf('a').note, /updates when its sessions are quiet/i);
+  fleet.states.delete('a');
+  assert.equal(control.state('a'), null);
+  fleet.states.set('a', { ...ready, request: null, last: null });
+  assert.equal(control.state('a').available, capped.available);
+  assert.equal(control.stateOf('a').note, null);
+});
+
 test('only an explicit settled download failure offers a retry, never a held check or an unknown step', () => {
   const failed = { ...found, last: { outcome: 'failed', step: 'downloading' } };
   assert.ok(canRetryDownload(readUpdateState(failed)));

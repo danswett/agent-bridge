@@ -392,7 +392,12 @@ export class UpdateControl {
 
   #emit() { for (const fn of this.#listeners) { try { fn(); } catch (e) { console.error(e); } } }
 
-  state(id) { return this.fleet.update(id); }
+  state(id) {
+    const s = this.fleet.update(id);
+    // The card skips stateOf when the update capability or snapshot disappears.
+    this.#idleNote(id, s);
+    return s;
+  }
 
   // { busy, asking, note } for one machine's row.
   stateOf(id) {
@@ -401,10 +406,9 @@ export class UpdateControl {
       note: this.#notes.get(id) ?? idleNote };
   }
 
-  #idleNote(id) {
+  #idleNote(id, s = this.fleet.update(id)) {
     const note = this.#idleNotes.get(id);
     if (!note) { return null; }
-    const s = this.fleet.update(id);
     const changedLast = ['outcome', 'from', 'to', 'reason', 'request', 'at', 'code', 'step']
       .some((field) => (s?.last?.[field] ?? null) !== (note.last?.[field] ?? null));
     if (!s?.installer || s.unavailable || s.available !== note.release
