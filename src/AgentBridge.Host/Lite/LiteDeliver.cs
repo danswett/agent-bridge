@@ -33,7 +33,8 @@ public sealed class LiteDeliver(
         var body = envelope.Body;
         var target = body.Target.Session ?? "";
         var outcome = await DecideAsync(envelope, text, target, ct);
-        log($"lite deliver: from {Clean(body.Principal.Machine)}/{Clean(body.Principal.Session)} to {Clean(target)} request {Clean(body.Request)}: {(outcome.Typed ? "typed" : outcome.Code)}");
+        var sender = body.Principal.Kind == "script" ? Clean(body.Principal.SenderId) : $"{Clean(body.Principal.Machine)}/{Clean(body.Principal.Session)}";
+        log($"lite deliver: from {sender} to {Clean(target)} request {Clean(body.Request)}: {(outcome.Typed ? "typed" : outcome.Code)}");
         return outcome;
     }
 
@@ -69,8 +70,13 @@ public sealed class LiteDeliver(
     {
         foreach (var gate in gates)
         {
-            try { if ((await gate.CheckAsync(envelope, target)).Allowed) { return true; } }
-            catch (Exception e) when (e is not OperationCanceledException) { log($"lite deliver: a gate failed: {e.GetType().Name}"); }
+            try
+            {
+                var decision = await gate.CheckAsync(envelope, target);
+                log($"lite deliver: to {Clean(target)} request {Clean(envelope.Body.Request)} gate {gate.GetType().Name}: {(decision.Allowed ? "allowed" : "refused")}{(decision.Reason is { } reason ? ": " + Clean(reason) : "")}");
+                if (decision.Allowed) { return true; }
+            }
+            catch (Exception e) when (e is not OperationCanceledException) { log($"lite deliver: to {Clean(target)} request {Clean(envelope.Body.Request)} gate {gate.GetType().Name}: failed: {e.GetType().Name}"); }
         }
         return false;
     }
@@ -102,7 +108,9 @@ public sealed class LiteDeliver(
 
     // The provenance line: who sent it, from where, and that the user did not type it.
     static string Frame(AgentPrincipal from, string request, string escaped) =>
-        $"[{Brand} · from an agent on {Clean(from.Machine)} · session {Clean(from.Session)} · request {Clean(request)} · not typed by your user] {escaped}";
+        from.Kind == "script"
+            ? $"[{Brand} · from script {Clean(from.SenderId)} · request {Clean(request)} · not typed by your user] {escaped}"
+            : $"[{Brand} · from an agent on {Clean(from.Machine)} · session {Clean(from.Session)} · request {Clean(request)} · not typed by your user] {escaped}";
 
     // Nothing in the body may pass as part of the header or as a key or an attachment.
     static string Escape(string text)

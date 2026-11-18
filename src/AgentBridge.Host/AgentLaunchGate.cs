@@ -18,19 +18,38 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
     {
         var policy = CheckPolicy();
         if (!policy.Allowed || policy.Limits is null) { return policy; }
-        var result = limits.CheckLaunch(origin, request, requestSha256, policy.Limits);
-        if (result.Reason == AgentLimitVerdict.RateLimited)
+        var result = limits.ReserveLaunch(origin, request, requestSha256, policy.Limits);
+        var reason = result.Reason == AgentLimitVerdict.LiveLimited
+            ? $"live-limit: this machine has reached its limit of {policy.Limits.LiveAgentLaunched} live agent-started sessions; wait for one to end"
+            : result.Reason;
+        if (result.Reason is AgentLimitVerdict.RateLimited or AgentLimitVerdict.LiveLimited)
         {
             try
             {
                 LocalApi.AuditRefusal(origin, [], LaunchProtocol.Launch, JsonSerializer.SerializeToElement(new { request }), audit,
-                    $"rate-limited; retry after {result.RetryAfterSeconds}s; hourly caps: launches {policy.Limits.LaunchesPerOriginPerHour} per agent and {policy.Limits.LaunchesPerMachinePerHour} per machine; attempts {policy.Limits.LaunchAttemptsPerOriginPerHour} per agent", refusals);
+                    result.Reason == AgentLimitVerdict.LiveLimited ? reason!
+                    : $"rate-limited; retry after {result.RetryAfterSeconds}s; hourly caps: launches {policy.Limits.LaunchesPerOriginPerHour} per agent and {policy.Limits.LaunchesPerMachinePerHour} per machine; attempts {policy.Limits.LaunchAttemptsPerOriginPerHour} per agent", refusals);
             }
             catch (InvalidOperationException)
             { return policy with { Allowed = false, Reason = "auditUnwritable: the launch refusal could not be recorded" }; }
         }
-        return policy with { Allowed = result.Allowed, Reason = result.Reason,
+        return policy with { Allowed = result.Allowed, Reason = reason,
             RetryAfterSeconds = result.RetryAfterSeconds, Duplicate = result.Duplicate };
+    }
+
+    // Host lifecycle API for the ingress/idle-loop composition; never exposed as agent operations.
+    public void LaunchStarted(string origin, string request, string session) => limits.LaunchStarted(origin, request, session);
+    public bool LaunchFinished(string origin, string request) => limits.LaunchFinished(origin, request);
+    public bool SessionEnded(string session) => limits.SessionEnded(session);
+    public bool ObserveSession(string session, DateTimeOffset? idleSince, bool personTyped) =>
+        limits.ObserveSession(session, idleSince, personTyped);
+
+    public IReadOnlyList<string> IdleSessions()
+    {
+        var policy = CheckPolicy();
+        if (!policy.Allowed || policy.Limits is null)
+        { throw new InvalidOperationException($"Idle-end policy is unavailable: {policy.Reason}"); }
+        return limits.IdleSessions(policy.Limits);
     }
 
     internal object ProjectOptions(LaunchOptions offered)

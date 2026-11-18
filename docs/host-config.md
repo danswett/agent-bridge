@@ -95,7 +95,7 @@ never create the key.
     "copilotAccounts": ["dswett_microsoft"]
   },
   "devBox": { "keepAwake": false, "intervalMinutes": 15 },
-  "agentMessaging": { "remote": "off", "allowAllTargets": false }
+  "agentMessaging": { "remote": "off", "allowAllTargets": false, "allowAllTargetSessions": [] }
 }
 ```
 
@@ -165,8 +165,9 @@ and `fleetNames` or `fleetNames.launchRule` set to `null` disables named launche
 | `usage.copilotAccounts` | `[]` | Further GitHub logins whose Copilot allowance this machine reports beside the account Copilot is signed in as, as agent-ha-bridge's own setting: up to three, each its own row on the phone and the app, under its login, and on the Home Assistant connector's `usage_copilot_2`, `_3` or `_4` by its place in the list. Each is read with the token `gh` holds for exactly that login (`gh auth token --user <login>`) and nothing else, at the idle pace, one at a time; a reading that answers for another login is refused. So `gh auth login` as that account is all the setup there is. Logins only, never tokens |
 | `devBox.keepAwake` | `false` | On a Microsoft Dev Box, keep the machine from hibernating on disconnect while the host runs ([below](#dev-box-keep-awake)), as agent-ha-bridge's own setting. Set it in the Windows app's Settings (shown on a Dev Box only; applies at once) or here (applies when the host restarts). `migrate` carries agent-ha-bridge's. Nothing happens on a machine that is not a Dev Box |
 | `devBox.intervalMinutes` | `15` | How often a pass runs, from 1 to 30. More than 30 is read as 30 and said, and `config set` refuses it: a pass less often than the pool's grace period (never under 60 minutes) can miss the pending stop entirely |
-| `agentMessaging.remote` | `"off"` | The temporary AP5-lite mode (#728): `"off"` or `"own-account"`, for the owner's own agents on the owner's own account, ahead of the signed roster (#55), which still gates everything beyond it. The runbook is [protocol/agent-lite.md](protocol/agent-lite.md). Off means nothing of it is active, and an install or upgrade never writes it. Read afresh for each message, so changing it needs no restart and switching it to `"off"` holds from the next message; a message not sent this way goes over Home Assistant. This slice holds only the setting: nothing sends or receives yet |
-| `agentMessaging.allowAllTargets` | `false` | Counts only while `agentMessaging.remote` is `"own-account"`. `false`: own agents may not type into allow-all sessions, and those targets fall back to Home Assistant. Left `false` until the owner decides otherwise |
+| `agentMessaging.remote` | `"off"` | The temporary AP5-lite mode (#728): `"off"` or `"own-account"`, for the owner's own agents on the owner's own account, ahead of the signed roster (#55), which still gates everything beyond it. The runbook is [protocol/agent-lite.md](protocol/agent-lite.md). Off means nothing of it is active, and an install or upgrade never writes it. Read afresh for each message, so changing it needs no restart and switching it to `"off"` holds from the next message; a message not sent this way goes over Home Assistant |
+| `agentMessaging.allowAllTargets` | `false` | Counts only while `agentMessaging.remote` is `"own-account"`. `false`: own agents may not type into allow-all sessions. `true` is only a master switch; a target also needs its exact session id in `agentMessaging.allowAllTargetSessions` |
+| `agentMessaging.allowAllTargetSessions` | `[]` | Exact session ids allowed to receive own-agent text while `allowAllTargets` is true, only if this host launched the session in allow-all mode since its last restart (the launch record is in memory). Even listed sessions started by hand or before a host restart are refused as `notReplyTarget`. Missing or empty denies all allow-all sessions; names and wildcards never grant access. Read afresh for each message |
 | `agents.enabled` | `false` | The agents policy (#720, [design](design/agent-principals.md), "The per-machine policy"): master switch for agent-to-agent commands on this machine, both directions. **Changed only at the machine**, in this file or with `agent-bridge-host config` (refused inside agent sessions); no request from another device or an agent reads or changes it. Absent section: agents are off, every grant below is off, and the limits are the defaults. This slice only parses and validates it; nothing consumes it yet |
 | `agents.credentialDays` | `7` | How long an agent's credential lives, from 1 to 7 |
 | `agents.issue.launched`, `agents.issue.adopted` | `none` | The scope a credential gets at issue: `none`, `read`, `read+reply` or `read+reply+launch` |
@@ -204,8 +205,9 @@ wrong turns launching off. In `homeAssistant`, any value that is wrong turns the
 and is said in the log. In `devBox`, a `keepAwake` that is not `true` or `false`, or a `devBox` that
 is not an object, leaves keep-awake off; an interval that is not a whole number from 1 is 15. In
 `agentMessaging`, a `remote` that is not exactly `"off"` or `"own-account"`, or an `agentMessaging`
-that is not an object, is off, and an `allowAllTargets` that is not `true` or `false` is `false`;
-each is said, and `config set` refuses to write it. A setting
+that is not an object, is off, and an `allowAllTargets` that is not `true` or `false` is `false`.
+An `allowAllTargetSessions` that is not a list enables no allow-all sessions; invalid entries are
+ignored and said. `config set` refuses to write any of these values. A setting
 someone may have meant as off is never read as on.
 
 An unreadable, invalid or newer-schema file also turns relay load sharing off. A `load` that
@@ -542,9 +544,14 @@ evidence; launch pruning and launch-handler wiring remain in later #1401 slices.
 `agent.send` now writes one outbound `agent.send` attempt after caller and input validation,
 before invoking the sender (#1985, #1401 A1). Its principal and chain come from the credential,
 not the request. The outcome is `attempted`, never proof of delivery, and `request` is a local
-attempt id, not the relay request id returned by the sender. Sender refusals or failures leave
-that one attempt record. An absent log, a false append or a thrown append refuses the send with
-`auditUnwritable`; nothing is sent or queued. Early caller/input refusals write no record in A1.
+attempt id, not the relay request id returned by the sender. A second record persists the terminal
+`delivered`, `refused`, `undeliverable`, `unconfirmed` or `off` outcome with the same attempt id,
+credential attribution, target and text hash/byte length, never plaintext or free-form sender codes.
+Sender exceptions and cancellation append `unconfirmed` without exception text, then rethrow.
+An absent log, a false append or a thrown append before dispatch refuses the send with
+`auditUnwritable`; nothing is sent or queued. A failed terminal append also raises `auditUnwritable`
+(taking precedence over a sender error), but the message may have been sent; the host never resends.
+Early caller/input refusals write no record in A1.
 Authenticated agent `session.answer` calls write one local `refused` record and still cannot
 answer (#2011, #1401 A5). The target is a normalized session UUID, or `unknown` for malformed
 input. `fleet.find` and `fleet.list` write one local `attempted` record before reading the

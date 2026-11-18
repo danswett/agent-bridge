@@ -7,6 +7,10 @@ parent [#1396](https://github.com/danswett/agent-bridge/issues/1396), November 1
 This is a static code inventory, not live parity, a permission grant, or authority
 to retire HA. No runtime, signing, approval, stop or notification behavior changes.
 
+November 17, 2026 (Pacific), [#2751](https://github.com/danswett/agent-bridge/issues/2751)
+adds the bounded C8 usage view below. Other original inventory limitations remain;
+this is not full row 27 parity or a new live-evidence receipt.
+
 ## Reconcile the records first
 
 Engineering supplied the complete #2401 and
@@ -48,11 +52,12 @@ Evidence keys used below:
 | `launch_agent_session` | T `launchSession` -> `session.launch` | Schema/adapter present; same capability/host refusal distinction for `sessions.launch`. A `permissions` argument is not authority. |
 | `read_launch_result` | T `LaunchLedger.read` | Process-memory ledger of this MCP server's launches, bounded to 200 entries; not a durable host result lookup. Also gated on `sessions.launch`. |
 | `get_launch_options` | T `getLaunchOptions` -> `launch.options` | Also gated on `sessions.launch`; not offered to current read-only agent connections despite the host permitting the read operation. |
+| `read_agent_usage` | T `readUsage` -> `usage.get` with `{}` | Requires exact `usage` capability and an accepted principal; local report only, no arguments or write path. |
 
-These are **all six** tool definitions and dispatches, not a sample.
+These are **all seven** tool definitions and dispatches, not a sample.
 S starts stdio only, and offers no tools when connection establishment fails.
 P sends `hello`, then `agent.hello` only when `AGENT_BRIDGE_TOKEN` is supplied.
-Without an accepted principal S offers/dispatches only its two read tools.
+Without an accepted principal S offers/dispatches only its two session read tools.
 H advertises only `sessions.read` and `usage` to agent descendants; accepting a
 credential does not add reply/launch capabilities. F's `fleet.list`/`fleet.find`
 and the native `agent.send` entry point are not wired into these MCP tools.
@@ -83,7 +88,7 @@ for that mechanism in S/T/P. No row below has a new live receipt.
 | 15 Forget machine | **Absent; refusal-only.** No forget or roster-management schema/dispatch in S/T. | Person-only confirmed forget must not become an agent tool. C2; fleet reads are not roster mutation. |
 | 16 Finished-turn/question push | **Partial.** T `readSession` returns response/question snapshots and polls; P `#dispatch` drops `ev` frames. | No subscription, background delivery, withdrawal or reconnect/dedup receipt. C3/C4; snapshots are not push proof. |
 | 17 Native forms | **Partial: question data only.** T list-with-content/read return `question`; S has no elicitation/ask alias or form submission. | No MCP native form interaction. C5; f1-f12 were HA per-field dropdowns, not keyboard function keys. No agent approval/permission submission. |
-| 27 Dashboard equivalents | **Partial.** T local list/detail/status only. S lacks fleet lookup, usage and machine-view tools; reply/launch schemas are presently capability-blocked. | C6/C7/C8; F already implements native reads, but no MCP wrapper or verified remote detail routing exists here. |
+| 27 Dashboard equivalents | **Partial.** T local list/detail/status and capability-gated `read_agent_usage`; usage preserves the host's allowance fields, sources, timestamps and errors. S still lacks fleet lookup and machine-view tools; reply/launch schemas are presently capability-blocked. | C8 usage first cut (#2751); fake-host tests cover missing/unknown capabilities, missing principal, fields/errors and no write/shared/remote path. C6/C7, other views, remote detail and live proof remain open. |
 | 28 Push opens question | **Absent.** No notice/deep-link tool in S/T; P drops events. A manually read `question` is not a notice's exact-target open. | C9 defines the MCP inspect equivalent before implementation; it must never submit or answer by navigation. |
 | 29 Images in replies | **Absent.** S reply accepts text only; T sends no attachment reference. H `Acts` refuses agent attachment start/chunk/discard. | C10 first; no person credential, local path or text encoding may stand in for an authorized image-reply mechanism. |
 
