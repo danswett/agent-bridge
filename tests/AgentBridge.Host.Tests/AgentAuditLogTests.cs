@@ -169,6 +169,56 @@ public sealed class AgentAuditLogTests : IDisposable
         Assert.Equal(head, File.ReadAllBytes(Path.Combine(Audit, "launches.head")));
     }
 
+    [Fact]
+    public void Recovered_torn_evidence_must_not_ack_a_worktree_replay()
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Bootstrap());
+        var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        File.AppendAllText(file, "{\"torn\":");
+        Assert.True(Log().Append(entry with { Request = Guid.NewGuid().ToString("D"), Grant = null }));
+        var before = File.ReadAllBytes(file);
+        Assert.False(Log().Verify(launch: true).Intact);
+        Assert.False(Log().Append(entry));
+        Assert.Equal(before, File.ReadAllBytes(file));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Missing_launch_anchor_must_not_ack_a_worktree_replay(bool bothAnchors)
+    {
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        Assert.True(Log().Append(entry));
+        Assert.True(Log().Append(Entry()));
+        Assert.True(Log().Bootstrap());
+        File.Delete(Path.Combine(Audit, "launches.head"));
+        if (bothAnchors) { File.Delete(Path.Combine(Audit, "agents.head")); }
+        var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        var before = File.ReadAllBytes(file);
+        Assert.False(Log().Append(entry));
+        Assert.Equal(before, File.ReadAllBytes(file));
+        Assert.False(File.Exists(Path.Combine(Audit, "launches.head")));
+    }
+
+    [Fact]
+    public void A_failed_first_launch_anchor_never_becomes_replay_proof_or_a_second_refusal()
+    {
+        Assert.True(Log().Append(Entry()));
+        Assert.True(Log().Bootstrap());
+        var entry = Entry("session.launch", "refused") with { Request = Guid.NewGuid().ToString("D"), Grant = "agent-worktree-refusal" };
+        var blocked = Path.Combine(Audit, "launches.head.new");
+        Directory.CreateDirectory(blocked);
+        try { Assert.False(Log().Append(entry)); }
+        finally { Directory.Delete(blocked); }
+        var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        var before = File.ReadAllBytes(file);
+        Assert.False(Log().Append(entry));
+        Assert.Equal(before, File.ReadAllBytes(file));
+        Assert.Equal(2, File.ReadAllLines(file).Length);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

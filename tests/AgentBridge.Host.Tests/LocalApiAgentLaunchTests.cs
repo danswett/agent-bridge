@@ -306,6 +306,7 @@ public sealed class LocalApiAgentLaunchFlowTests : LaunchFlowFixture
             var seed = Guid.NewGuid();
             Assert.True(audit.Append(new("local", seed.ToString(), "person:local", [], "session.stop", seed.ToString(), "reserved",
                 Gate: new(1, seed, Guid.NewGuid(), 0, "intent", "local", "person-client", seed, "none"))));
+            Assert.True(audit.Append(new("local", seed.ToString(), "person:local", [], LaunchProtocol.Launch, "local", "started")));
         }
         var calls = 0;
         bool? callbackResult = null;
