@@ -68,8 +68,9 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
         if (trust?.Access != QualificationAccess.SreCli || journal is null)
         { return QualificationGrantDecision.Refuse("qualification revocation requires SRE CLI"); }
         var old = journal.Find(id);
-        if (id == Guid.Empty || old is null || old.Id != id || old.State == QualificationGrantState.Revoked)
-        { return QualificationGrantDecision.Refuse("qualification grant missing or already revoked"); }
+        if (id == Guid.Empty || old is null || old.Id != id)
+        { return QualificationGrantDecision.Refuse("qualification grant missing"); }
+        if (old.State == QualificationGrantState.Revoked) { return new(old, null); }
         var next = old with { State = QualificationGrantState.Revoked };
         return journal.TryAppend(old, next) ? new(next, null)
             : QualificationGrantDecision.Refuse("qualification grant concurrently changed");

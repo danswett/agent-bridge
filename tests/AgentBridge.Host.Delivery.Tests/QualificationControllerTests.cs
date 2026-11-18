@@ -18,7 +18,8 @@ public sealed class QualificationControllerTests
         public string Mode = "queued";
         public string? Nonce;
         public int Effects;
-        public Task<string?> CaptureAsync() => Task.FromResult(Identity);
+        public Task<string?>? CaptureOverride;
+        public Task<string?> CaptureAsync() => CaptureOverride ?? Task.FromResult(Identity);
         public IReadOnlyList<string> Read() { var rows = Rows.ToArray(); Rows.Clear(); return rows; }
         public async Task<QualificationSubmission> SendAsync(string text, Func<Task<bool>> fence, CancellationToken cancellationToken)
         {
@@ -30,6 +31,7 @@ public sealed class QualificationControllerTests
             if (Mode == "ambiguous") { Rows.Clear(); Rows.Add(Event("user.message", text)); Rows.Add(Event("user.message", text, "steering")); }
             if (Mode == "malformed") { Rows.Add("{"); }
             if (Mode == "duplicate-property") { Rows.Clear(); Rows.Add("{\"type\":\"abort\",\"type\":\"user.message\",\"data\":{\"content\":" + JsonSerializer.Serialize(text) + ",\"delivery\":\"queued\"}}"); }
+            if (Mode == "duplicate-content") { Rows.Clear(); Rows.Add(Event("user.message", text)); Rows.Add("{\"type\":\"user.message\",\"data\":{\"content\":" + JsonSerializer.Serialize(text) + ",\"content\":\"other\",\"delivery\":\"queued\"}}"); }
             AfterSend?.Invoke(); return Submission;
         }
     }
@@ -38,10 +40,11 @@ public sealed class QualificationControllerTests
     {
         public readonly List<QualificationRecord> Entries = [];
         public bool Available = true;
+        public Action? AfterAppend;
         public void Append(QualificationRecord record)
         {
             if (!Available) { throw new IOException("receipt append failed"); }
-            Entries.Add(record);
+            Entries.Add(record); AfterAppend?.Invoke();
         }
     }
 
@@ -68,18 +71,21 @@ public sealed class QualificationControllerTests
         Assert.Same(record, Assert.Single(run.Receipts.Entries));
         Assert.Equal(Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(record.Evidence))), record.ContentHash);
         var json = JsonSerializer.Serialize(record);
-        foreach (var forbidden in new[] { "private-fixture", "ConsoleId", "ProcessId", "CliPath", "nodeId", "machineName", run.Probe.Nonce! })
+        var binding = run.Authority.Trust.Binding;
+        foreach (var forbidden in new[] { "private-fixture", "ConsoleId", "ProcessId", "CliPath", "nodeId", "machineName",
+            run.Probe.Nonce!, binding.Host.ToString(), binding.Vm.ToString(), binding.Run.ToString(), run.Authority.Id.ToString() })
         { Assert.DoesNotContain(forbidden, json, StringComparison.OrdinalIgnoreCase); }
         Assert.Equal(QueueCapability.Verified, await controller.CurrentAsync());
         Assert.Equal(QueueCapability.Unknown, (await controller.StartAsync(run.Authority.Id)).Capability);
         Assert.Equal(1, run.Probe.Effects);
-        Assert.Null(controller.End().Refusal);
+        Assert.Null((await controller.EndAsync()).Refusal);
         Assert.Equal(QueueCapability.Unknown, await controller.CurrentAsync());
+        Assert.Equal(QueueCapability.Unknown, await run.Controller().CurrentAsync());
     }
 
     [Theory]
     [InlineData("absent")][InlineData("nonce")][InlineData("steering")]
-    [InlineData("duplicate")][InlineData("ambiguous")][InlineData("malformed")][InlineData("duplicate-property")]
+    [InlineData("duplicate")][InlineData("ambiguous")][InlineData("malformed")][InlineData("duplicate-property")][InlineData("duplicate-content")]
     public async Task Missing_wrong_or_ambiguous_raw_evidence_stays_unknown_and_revokes_the_run(string mode)
     {
         var run = new Run(); run.Probe.Mode = mode;
@@ -147,5 +153,39 @@ public sealed class QualificationControllerTests
         await Assert.ThrowsAsync<IOException>(() => controller.StartAsync(run.Authority.Id));
         Assert.Equal(QualificationGrantState.Revoked, run.Authority.Journal.Entries.Last().State);
         Assert.Equal(QueueCapability.Unknown, await controller.CurrentAsync());
+    }
+
+    [Fact]
+    public async Task An_identity_read_timeout_invalidates_permanently_without_waiting_past_the_run_deadline()
+    {
+        var run = new Run(); var controller = run.Controller();
+        Assert.Equal(QueueCapability.Verified, (await controller.StartAsync(run.Authority.Id)).Capability);
+        run.Probe.CaptureOverride = new TaskCompletionSource<string?>().Task;
+        var current = controller.CurrentAsync();
+        run.Authority.Clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(QueueCapability.Unknown, await current.WaitAsync(TimeSpan.FromSeconds(5)));
+        run.Probe.CaptureOverride = null;
+        Assert.Equal(QueueCapability.Unknown, await controller.CurrentAsync());
+    }
+
+    [Fact]
+    public async Task Identity_loss_during_durable_append_adds_unknown_instead_of_returning_the_stale_positive()
+    {
+        var run = new Run(); run.Receipts.AfterAppend = () => run.Probe.Identity = null;
+        var result = await run.Controller().StartAsync(run.Authority.Id);
+        Assert.Equal(QueueCapability.Unknown, result.Capability);
+        Assert.Equal(new[] { QueueCapability.Verified, QueueCapability.Unknown }, run.Receipts.Entries.Select(x => x.Evidence.Capability));
+    }
+
+    [Fact]
+    public async Task A_failed_current_identity_read_surfaces_the_error_and_permanently_revokes()
+    {
+        var run = new Run(); var controller = run.Controller();
+        Assert.Equal(QueueCapability.Verified, (await controller.StartAsync(run.Authority.Id)).Capability);
+        run.Probe.CaptureOverride = Task.FromException<string?>(new IOException("identity unavailable"));
+        await Assert.ThrowsAsync<IOException>(() => controller.CurrentAsync());
+        run.Probe.CaptureOverride = null;
+        Assert.Equal(QueueCapability.Unknown, await controller.CurrentAsync());
+        Assert.Equal(QualificationGrantState.Revoked, run.Authority.Journal.Entries.Last().State);
     }
 }
