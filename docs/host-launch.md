@@ -70,6 +70,9 @@ request UUID and identical audited payload under the audit folder lock. Generic 
 remain separate records. A fallback verifies the anchor and chain and flushes its existing
 row before acknowledging an append-only checkpoint lag; coverage breaks and unknown
 durability fail closed. Checkpoint faults remain visible and are not repaired.
+Marked refusals establish a launch anchor. Replay requires that healthy anchor to
+remain present; neither recovered torn evidence nor a missing first checkpoint is
+proof of an append-only lag, even if all current files end with a newline.
 
 ## Dispatch facts seam (#2788)
 

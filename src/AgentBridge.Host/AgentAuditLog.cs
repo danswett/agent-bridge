@@ -91,6 +91,7 @@ public sealed class AgentAuditLog
             var refusalRequest = entry is { Action: "session.launch", Outcome: "refused", Gate: null }
                 && Guid.TryParseExact(entry.Request, "D", out var id) ? id.ToString("D") : null;
             if (refusalRequest is not null) { entry = entry with { Request = refusalRequest }; }
+            var worktreeRefusal = refusalRequest is not null && entry.Grant == WorktreeRefusalGrant;
             var bytes = text is null || entry.Gate is not null ? null : Encoding.UTF8.GetBytes(text);
             var chain = (entry.Chain ?? []).Take(MaxChain).Select(c => Cap(c, MaxField)).ToArray();
             var line = new Line(now, Cap(entry.Direction, MaxField), Cap(entry.Request, MaxField), Cap(entry.Principal, MaxField), chain,
@@ -100,7 +101,7 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var folderLock = Lock(folder, timing: LockTiming);
-                if (refusalRequest is not null && entry.Grant == WorktreeRefusalGrant)
+                if (worktreeRefusal)
                 {
                     var prior = GateAuditProjection.Load(profile, alreadyLocked: true);
                     var persisted = prior.Rows.FirstOrDefault(r => r.Action == line.Action && r.Outcome == line.Outcome && r.Gate is null
@@ -111,14 +112,16 @@ public sealed class AgentAuditLog
                     if (persisted is not null)
                     {
                         // A flushed refusal survives a failed checkpoint; never append its fallback twice.
-                        if ((!VerifyProfile(profile, true, log).Intact
+                        var checkpoint = ReadHead(folder, true);
+                        if (checkpoint is not { Fault: "none" } || prior.Rows.Any(r => r.PreviousTailIncomplete)
+                            || (!VerifyProfile(profile, true, log).Intact
                             && (HeadFault(folder, true) != "audit-incomplete" || !VerifyProfile(profile, true, log, chainOnly: true).Intact))
                             || Files(folder, true).Any(EndsWithoutNewline))
                         { throw new IOException("the persisted launch refusal cannot be verified"); }
                         using (var durable = OpenFile(Path.Combine(folder, FileFor(persisted.At, true)),
                             new() { Mode = FileMode.Open, Access = FileAccess.ReadWrite, Share = FileShare.Read }))
                         { durable.Flush(flushToDisk: true); }
-                        if (!prior.Complete || HasHeads(folder) && ReadHead(folder, true) is null)
+                        if (!prior.Complete)
                         { log("agent launch refusal is persisted; its audit checkpoint remains incomplete"); }
                         return true;
                     }
@@ -139,7 +142,7 @@ public sealed class AgentAuditLog
                     line = line with { Gate = metadata, Reason = metadata.ReasonCode, DataSha256 = null, TextLength = null };
                 }
                 var launch = entry.Action == "session.launch";
-                var anchored = entry.Gate is not null || HasHeads(folder);
+                var anchored = entry.Gate is not null || HasHeads(folder) || worktreeRefusal;
                 var expected = ReadHead(folder, launch);
                 string[] faults = anchored ? new[] { Continuity(profile, false, log), Continuity(profile, true, log) } : [];
                 var fault = faults.Contains("coverage-break") ? "coverage-break" : faults.FirstOrDefault(f => f != "none") ?? "none";
