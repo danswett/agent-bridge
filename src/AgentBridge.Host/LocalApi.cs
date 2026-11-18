@@ -23,6 +23,11 @@ public static class LocalApi
 
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
+        if (op == Ops.SessionStop && credentials?.IsScriptConnection(channel) == true)
+        {
+            if (credentials.Of(channel)?.FleetStop != true) { credentials.CheckScriptOperation(channel, op, log); }
+            return await sessions.StopFleetAsync(channel, data, credentials, audit);
+        }
         if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
         {
             if (credentials.Of(channel)?.FleetLaunch != true) { credentials.CheckScriptOperation(channel, op, log); }
@@ -48,7 +53,7 @@ public static class LocalApi
             { throw Refuse(op, caller, "only the local app may read or change workspace fleet workers", log); }
             return control.WorkspaceFleetWorkers(data);
         }
-        if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet")
+        if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet" or "scripts.grant-stop" or "scripts.revoke-stop")
         { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
         if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
         {

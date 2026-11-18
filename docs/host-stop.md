@@ -6,6 +6,26 @@ use ([host-answers.md](host-answers.md), [host-replies.md](host-replies.md)): th
 worker to type `/exit`, the agent-ha-bridge guard (G5), request memory, and the same
 `DeliveryGate`, so ending a session never types over an answer or a reply.
 
+## SRE agent stopping
+
+For [agent-stop parity](https://github.com/danswett/agent-bridge/issues/2741), a person
+at the host may grant the SRE controller script `stop:fleet` with
+`scripts grant-stop <name>` and remove it with `scripts revoke-stop <name>`.
+This is separate from launch grants and ordinary read credentials; names grant nothing.
+Existing script authentication still refuses use from inside an agent process.
+The Fleet Ops SRE remains the ending actor; this is not worker self-service.
+
+That authenticated local script calls `session.stop` with only `node`, request UUID
+and optional `confirm`. Only an exact, uniquely discovered node is accepted, never
+a session UUID, label, prefix or caller-supplied clearance. The host requires its
+durable fleet launch grant bound to the current process and positive
+[work-state clearance](host-work-clearance.md): no owned open PR, unpushed/dirty,
+held or private work. Missing, stale, future or changed evidence fails closed.
+The live `agents.enabled` switch, grant, origin, identity and clearance are rechecked after waits, before typing and
+before termination; the durable audit attributes the script principal as `agent`.
+Person stopping, confirmation, G5 and delivery fencing remain intact. Relay service
+and host roles still cannot stop; ordinary agent/session credentials gain no authority.
+
 ## Local person command
 
 On Windows, run `agent-bridge-host stop <session> [--confirm <token>] [--profile <name>]` from the person's

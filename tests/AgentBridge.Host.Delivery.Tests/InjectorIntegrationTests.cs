@@ -468,6 +468,21 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Equal((InjectionStatus.NothingTyped, true), (result.Status, result.Detail.Contains(WorkerInjector.FileName)));
     }
 
+    [WindowsFact]
+    public async Task Stop_authority_is_rechecked_after_worker_start_before_sending_keys()
+    {
+        using var gone = AgentBridge.Host.Core.Processes.ProcessLaunch.Start(
+            new ProcessStartInfo("cmd.exe", "/c exit") { UseShellExecute = false, CreateNoWindow = true })!;
+        gone.WaitForExit();
+        var checks = 0;
+        var plan = new KeyPlan([new KeySend("x", true, 10, 0)])
+        { Proceed = () => ++checks == 1 ? null : "authority revoked" };
+        var result = await new WorkerInjector(Worker).InjectAsync(gone.Id, plan);
+        Assert.Equal(2, checks);
+        Assert.Equal(InjectionStatus.NothingTyped, result.Status);
+        Assert.Contains("authority revoked", result.Detail);
+    }
+
     // A reply through the real ReplyService and the real worker into a real console. The
     // echo program plays Copilot: once Enter arrives, what was typed before it is written to
     // the transcript as the person's prompt, which is how the reply is confirmed.

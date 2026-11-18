@@ -9,6 +9,8 @@ public sealed class RemoteAuthorization : IDisposable
 {
     static readonly HashSet<string> Reads = [Ops.Hello, Ops.SessionsList, Ops.SessionGet, Ops.SessionsSubscribe];
     static readonly HashSet<string> HostOperations = [Ops.Hello, UsageProtocol.Get, TransferProtocol.Op, Lite.LiteReceiver.Op];
+    // Agent stops use the separately granted local SRE controller and verified launch provenance.
+    // Service/host relay roles remain unable to stop sessions.
     static readonly HashSet<string> PersonOperations =
     [
         .. Reads, Ops.SessionsFocus, Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop,

@@ -201,6 +201,14 @@ public sealed class WorkerInjector : IConsoleInjector
             var errors = process.StandardError.ReadToEndAsync();
             try
             {
+                if (plan.Proceed?.Invoke() is { } stop)
+                {
+                    process.StandardInput.Close();
+                    using var noKeys = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    await process.WaitForExitAsync(noKeys.Token);
+                    await errors;
+                    return Nothing($"stopped before typing: {stop}");
+                }
                 await process.StandardInput.WriteAsync(plan.ToWorkerScript());
                 process.StandardInput.Close();
             }

@@ -19,7 +19,7 @@ namespace AgentBridge.Host;
 // push.* ops, which register a device for notifications, go to the
 // PushNotifier, usage.* to the UsageService, and launch.options and session.launch to the
 // launcher (docs/protocol/v1-launch.md).
-public sealed class SessionService
+public sealed partial class SessionService
 {
     readonly ISessionSource source;
     readonly MachineInfo machine;

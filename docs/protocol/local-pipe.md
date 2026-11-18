@@ -7,6 +7,16 @@ connection reaches. Implemented by `AgentBridge.Local` (server and client) and
 `AgentBridge.Host` (`LocalApi`, `HostControl`). Why it looks like this:
 [app-windows.md](../app-windows.md#local-api-a-named-pipe-owned-by-the-host).
 
+## SRE fleet stop extension
+
+A separately host-granted `stop:fleet` script may send `session.stop` with
+`{ "node": "<exact registered node>", "request": "<UUID>", "confirm": "<optional token>" }`.
+No other fields are accepted. It uses the normal stop result/confirmation contract
+but requires verified agent fleet-launch provenance and current host work clearance.
+Only a person using the host CLI grants/revokes this permission (`scripts grant-stop`
+or `scripts revoke-stop`); read/launch credentials and displayed names never imply it.
+See [host stopping](../host-stop.md#sre-agent-stopping). Relay permissions are unchanged.
+
 ## Endpoint
 
 One per host profile.

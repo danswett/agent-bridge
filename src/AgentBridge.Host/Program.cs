@@ -743,6 +743,7 @@ async Task<int> ServeAsync(HostHandover handover)
     {
         LoadEnabled = () => settings.LoadEnabled,
         Load = loadService,
+        FleetStopClearance = new WorkStateClearanceProvider(source),
         Drivers = drivers,
         FleetNames = fleetNames,
         // Said in hello so a phone shows the machine read-only and why.

@@ -36,6 +36,7 @@ public sealed partial class StopFlowTests
         var folder = Path.Combine(f.Root, "fleet-stop", Guid.NewGuid().ToString("N"));
         var credentials = new AgentCredentials(folder, "fixture", clock);
         var script = credentials.MintScript("sre").Credential;
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), """{"agents":{"enabled":true}}""");
         var audit = new AgentAuditLog(folder, clock);
         if (grant) { ScriptCredentialCommands.Handle(new StopScriptChannel(), "scripts.grant-stop",
             JsonSerializer.SerializeToElement(new { name = "sre" }),
@@ -74,7 +75,7 @@ public sealed partial class StopFlowTests
     }
 
     [Theory]
-    [InlineData(0), InlineData(1), InlineData(2), InlineData(3), InlineData(4), InlineData(5), InlineData(6)]
+    [InlineData(0), InlineData(1), InlineData(2), InlineData(3), InlineData(4), InlineData(5), InlineData(6), InlineData(7)]
     public async Task Fleet_stop_refuses_person_missing_unknown_and_protected_work(int blocked)
     {
         var clearance = new StopClearance();
@@ -87,6 +88,7 @@ public sealed partial class StopFlowTests
             6 => value with { CheckedAt = value.CheckedAt.AddMinutes(-1) }, _ => value,
         };
         var setup = StopFleet(blocked == 1 ? null : clearance, fleet: blocked != 0);
+        if (blocked == 7) { File.WriteAllText(Path.Combine(setup.Audit, HostSettings.FileName), """{"agents":{"enabled":false}}"""); }
         Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await SendFleet(setup.Handler)).Outcome);
         Assert.Empty(injector.Plans);
         Assert.Empty(control.Terminated);
@@ -119,6 +121,26 @@ public sealed partial class StopFlowTests
         Assert.Equal(StopOutcome.Refused, Assert.IsType<StopResult>(await stop).Outcome);
         Assert.Empty(control.Terminated);
         Assert.NotNull(source.Get(Id));
+    }
+
+    [Fact]
+    public async Task Fleet_stop_grants_survive_reload_but_revocation_never_falls_back()
+    {
+        var setup = StopFleet(new StopClearance());
+        var granted = setup.Credentials.Of(stopScript)!;
+        var reopened = new AgentCredentials(setup.Audit, "fixture", clock);
+        var connection = new StopScriptChannel();
+        reopened.Accept(connection, granted);
+        Assert.True(reopened.Of(connection)!.FleetStop);
+        Assert.False(reopened.Of(connection)!.FleetLaunch);
+        ScriptCredentialCommands.Handle(new StopScriptChannel(), "scripts.revoke-stop",
+            JsonSerializer.SerializeToElement(new { name = "sre" }),
+            new FixedCallerGuard(new(CallerKind.HostCli, "fixture owner")), setup.Credentials, new AgentAuditLog(setup.Audit));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SendFleet(setup.Handler));
+        var after = new AgentCredentials(setup.Audit, "fixture", clock);
+        after.Accept(connection, granted);
+        Assert.False(after.Of(connection)!.FleetStop);
+        Assert.Empty(injector.Plans);
     }
 
     [Fact]

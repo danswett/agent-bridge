@@ -272,7 +272,8 @@ public sealed class StopService : ISessionStopper
                 if (!asking)
                 {
                     InjectionResult typing;
-                    try { typing = await injector.InjectAsync(pid, ExitKeys); }
+                    try { typing = await injector.InjectAsync(pid, beforeDispatch is null ? ExitKeys : ExitKeys with
+                        { Proceed = () => beforeDispatch(pid, startedAt) ? null : "stop authorization changed" }); }
                     catch (Exception e) { typing = new InjectionResult(InjectionStatus.Interrupted, e.Message); }
                     typed = typing.Status != InjectionStatus.NothingTyped;
                     log($"typed /exit into {Short(session.Id)} (pid {pid}) -> {typing.Status} {typing.Detail}");
@@ -295,6 +296,7 @@ public sealed class StopService : ISessionStopper
             {
                 return Failed($"{started}, so the host stopped short of terminating the session; check at the machine");
             }
+            if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
             var refused = held.Terminate();
             if (refused is not null) { log($"end of {Short(session.Id)} (pid {pid}) could not terminate: {refused}"); }
             if (await held.WaitForExitAsync(options.TerminateWait))
