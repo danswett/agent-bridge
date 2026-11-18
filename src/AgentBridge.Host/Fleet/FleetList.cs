@@ -157,11 +157,10 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
 
     public async Task<object?> HandleAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default, AgentAuditLog? auditLog = null)
     {
-        var caller = Authorize(channel, Op);
+        var caller = Authorize(channel, Op, auditLog ?? audit);
         // The only member read; a principal or account in the body is ignored. Names are what a
         // person typed, so they come only when asked for (design §5.8).
         var withNames = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("include", out var inc) && inc.ValueKind == JsonValueKind.String && inc.GetString() == "content";
-        LocalApi.AuditAgentAction(credentials!, caller, Op, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
         var result = await ListAsync(withNames, ct);
         credentials!.CompleteFleetRead(caller, result);
@@ -174,7 +173,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
     // match needs no machine pin; its scope and optional model come only from the scoped roster.
     public async Task<object?> FindAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default, AgentAuditLog? auditLog = null)
     {
-        var caller = Authorize(channel, FindOp);
+        var caller = Authorize(channel, FindOp, auditLog ?? audit);
         var name = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString()!.Trim() : "";
         if (name.Length is 0 or > 64) { throw new InvalidOperationException("refused: fleet.find needs a \"name\" of 1 to 64 characters"); }
         string? machine = null;
@@ -186,7 +185,6 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
                 throw new InvalidOperationException("refused: fleet.find \"machine\" must be 1 to 64 of letters, digits, '.', '_', '-'");
             }
         }
-        LocalApi.AuditAgentAction(credentials!, caller, FindOp, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
         if (roster is not IScopedFleetRoster scoped) { throw new InvalidOperationException("refused: fleet.find needs an authenticated account-scoped registry"); }
         var snapshot = await scoped.ReadScopedAsync(ct);
@@ -226,7 +224,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model);
 
-    AgentCredential Authorize(IProtocolChannel channel, string op)
+    AgentCredential Authorize(IProtocolChannel channel, string op, AgentAuditLog? auditLog)
     {
         credentials?.CheckScriptOperation(channel, op);
         if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException($"refused: {op} isn't available on this host"); }
@@ -238,6 +236,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         {
             throw new InvalidOperationException($"refused: this agent's credential has scope '{caller.Scope}'; {op} needs at least '{AgentProtocol.ScopeRead}'");
         }
+        LocalApi.AuditAgentAction(credentials, caller, op, "fleet", "attempted", auditLog);
         if (roster is null) { throw new InvalidOperationException($"refused: {op} has no session registry on this host"); }
         return caller;
     }
