@@ -1338,6 +1338,10 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'rerun-known-flakes')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-rerun-known-flakes.ps1
+      - name: Main-red detection records incidents without polling
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'main-red')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-main-red.ps1
       - name: Product crashes name the test without enabling hang dumps
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'product-crash-diagnostics')) }}
         shell: pwsh
