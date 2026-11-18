@@ -1198,7 +1198,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     }
                 }
                 if (made.Detail.Length > 0) { log($"launch {Short(key)}: worktree: {made.Detail}"); }
-                if (made.Path is null) { return Refused($"Launch refused: requested isolation failed. {made.Problem}"); }
+                if (made.Path is null)
+                {
+                    return made.Problem == "already-reserved" ? new LaunchResult(LaunchOutcome.Busy, "The worktree is already reserved by another launch.")
+                        : Refused($"Launch refused: requested isolation failed. {made.Problem}");
+                }
                 directory = made.Path;
                 worktree = made.Worktree;
             }
@@ -1209,6 +1213,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             if (worktree is not null && reservation is null)
             {
                 var (token, problem) = await Task.Run(() => Worktrees.Reserve(worktree));
+                if (problem == "already-reserved") { return new LaunchResult(LaunchOutcome.Busy, "The worktree is already reserved by another launch."); }
                 if (problem is not null) { return Refused($"Launch refused: {problem}"); }
                 if (token is not null) { (reservation, reserved) = (token, worktree); }
             }
@@ -1527,12 +1532,13 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             if (p.Reservation is { } token && p.Worktree is { } worktree)
             {
                 // Only once it has registered: one still starting stays protected, and one that
-                // never did is left locked for a person to look at, as agent-ha-bridge leaves it.
+                // never did stays locked until expiry and a known-unused snapshot allow reclaim.
                 // A session seen registered counts, ready or not.
                 if (p.Decided.Task.IsCompletedSuccessfully && p.Decided.Task.Result.Outcome == LaunchOutcome.Started || p.RegisteredLate || p.RegisteredAt is not null)
                 {
                     try { Worktrees.Release(worktree, token); } catch (Exception) { }
                 }
+                Worktrees.EndReservation(token);
             }
             p.Decided.TrySetResult(new LaunchResult(LaunchOutcome.Unconfirmed, $"{label} in {p.Where} was not seen to start; check its window") { Launched = p.Launched });
         }

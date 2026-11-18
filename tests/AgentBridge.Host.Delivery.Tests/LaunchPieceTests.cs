@@ -589,11 +589,13 @@ public sealed class LaunchPieceTests : IDisposable
         var trees = new[] { await first, await second! };
         Assert.All(trees, tree => Assert.Null(tree.Problem));
         Assert.NotEqual(trees[0].Worktree, trees[1].Worktree);
+        Assert.NotEqual(trees[0].Reservation, trees[1].Reservation);
         foreach (var tree in trees)
         {
             var reason = Path.Combine(Worktrees.AdminFolder(tree.Worktree!)!, "locked");
             Assert.True(File.Exists(reason), "Creation returned an unreserved worktree.");
             Assert.StartsWith(Worktrees.ReservationPrefix, File.ReadAllText(reason).Trim());
+            Assert.Equal(tree.Reservation, File.ReadAllText(reason).Trim());
         }
     }
 
@@ -704,7 +706,7 @@ public sealed class LaunchPieceTests : IDisposable
 
     [Fact]
     [Trait("Category", "Process")]
-    public void A_worktree_is_locked_while_its_session_starts_and_only_this_launchs_lock_is_lifted()
+    public void A_duplicate_claim_is_refused()
     {
         var work = Repo();
         var made = Worktrees.Create(work, WorktreeConfig(), () => new DateTime(2026, 10, 28, 9, 0, 0));
@@ -713,10 +715,82 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.StartsWith(Worktrees.ReservationPrefix, token);
         Assert.Equal(token, File.ReadAllText(Path.Combine(Worktrees.AdminFolder(made.Worktree!)!, "locked")).Trim());
         // Already locked, by anyone: left as it is.
-        Assert.Equal(((string?)null, (string?)null), Worktrees.Reserve(made.Worktree!));
+        Assert.Equal(((string?)null, "already-reserved"), Worktrees.Reserve(made.Worktree!));
         Assert.False(Worktrees.Release(made.Worktree!, Worktrees.ReservationPrefix + new string('0', 32)));
+        Assert.Equal(token, File.ReadAllText(Path.Combine(Worktrees.AdminFolder(made.Worktree!)!, "locked")).Trim());
         Assert.True(Worktrees.Release(made.Worktree!, token!));
         Assert.False(File.Exists(Path.Combine(Worktrees.AdminFolder(made.Worktree!)!, "locked")));
+    }
+
+    [Fact]
+    [Trait("Category", "Process")]
+    public void A_stale_reservation_is_released()
+    {
+        var work = Repo();
+        var made = Worktrees.Create(work, WorktreeConfig(), launchRequest: Guid.NewGuid());
+        var locked = Path.Combine(Worktrees.AdminFolder(made.Worktree!)!, "locked");
+        var now = DateTimeOffset.UtcNow;
+        File.SetLastWriteTimeUtc(locked, now.AddMinutes(-31).UtcDateTime);
+
+        Worktrees.Reclaim(work, WorktreeConfig(), new ClaimUsage(false), _ => { }, () => now);
+
+        Assert.False(File.Exists(locked));
+        Assert.True(Directory.Exists(made.Worktree));
+        Assert.False(Worktrees.Release(made.Worktree!, made.Reservation!));
+    }
+
+    [Theory]
+    [InlineData(true, 31, true)]
+    [InlineData(null, 31, true)]
+    [InlineData(false, 30, true)]
+    [InlineData(false, 29, true)]
+    [InlineData(false, 31, false)]
+    [Trait("Category", "Process")]
+    public void Active_unknown_young_and_foreign_claims_stay_locked(bool? active, int minutes, bool owned)
+    {
+        var work = Repo();
+        var made = Worktrees.Create(work, WorktreeConfig(), launchRequest: Guid.NewGuid());
+        var locked = Path.Combine(Worktrees.AdminFolder(made.Worktree!)!, "locked");
+        if (!owned) { File.WriteAllText(locked, "a persons private reason"); }
+        var reason = File.ReadAllText(locked);
+        var now = DateTimeOffset.UtcNow;
+        File.SetLastWriteTimeUtc(locked, now.AddMinutes(-minutes).UtcDateTime);
+
+        Worktrees.Reclaim(work, WorktreeConfig(), new ClaimUsage(active), _ => { }, () => now);
+
+        Assert.Equal(reason, File.ReadAllText(locked));
+    }
+
+    sealed class ClaimUsage(bool? active) : IWorktreeUsage
+    {
+        public WorktreeUsage Read() => new(true, [], "");
+        public bool? ReservationActive(string token) => active;
+    }
+
+    [Fact]
+    [Trait("Category", "Process")]
+    public void An_expired_claim_waits_until_its_launch_has_stopped_being_followed()
+    {
+        var work = Repo();
+        var made = Worktrees.Create(work, WorktreeConfig(), launchRequest: Guid.NewGuid());
+        var locked = Path.Combine(Worktrees.AdminFolder(made.Worktree!)!, "locked");
+        var now = DateTimeOffset.UtcNow;
+        File.SetLastWriteTimeUtc(locked, now.AddMinutes(-31).UtcDateTime);
+        var nobody = new UnusedClaims();
+
+        Worktrees.Reclaim(work, WorktreeConfig(), nobody, _ => { }, () => now);
+        Assert.True(File.Exists(locked));
+        Assert.True(Worktrees.ReservationActive(made.Reservation!));
+
+        Worktrees.EndReservation(made.Reservation!);
+        Worktrees.Reclaim(work, WorktreeConfig(), nobody, _ => { }, () => now);
+        Assert.False(File.Exists(locked));
+        Assert.False(Worktrees.ReservationActive(made.Reservation!));
+    }
+
+    sealed class UnusedClaims : IWorktreeUsage
+    {
+        public WorktreeUsage Read() => new(true, [], "");
     }
 
     // ---- what can be resumed ----

@@ -373,7 +373,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      the build scripts, the relay container) and inside `light`: when the whole ring runs,
      every one of those steps runs;
    - `product`'s test projects, tested through a solution filter, still under
-     `dotnet-coverage` with TRX and `--blame-hang`. When the whole ring runs, it's
+     `dotnet-coverage` with TRX, `--blame-crash` and the existing `--blame-hang` watchdog.
+     The shared quality command builder also adds crash blame locally. Public crash diagnostics
+     remain execution-sequence XML only; private crash-dump upload is deferred.
+     When the whole ring runs, it's
      `AgentBridge.slnx` as before. The whole solution is always built, since projects no
      test references (the benchmarks) are compiled nowhere else on a pull request;
    - `product`'s runners, from its selected suites' `platforms` (all three when the whole
