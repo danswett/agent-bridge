@@ -79,9 +79,14 @@ static class CrashLog
 static class AppLog
 {
     static readonly object Gate = new();
+    static readonly System.Collections.Concurrent.ConcurrentQueue<string> Recent = new();
+
+    public static IReadOnlyList<string> Tail() => Recent.ToArray();
 
     public static void Write(string line)
     {
+        Recent.Enqueue(line.Length <= 512 ? line : line[..512]);
+        while (Recent.Count > 20) { Recent.TryDequeue(out _); }
         try
         {
             lock (Gate)
