@@ -37,6 +37,7 @@ const code = (v) => (typeof v === 'string' && /^[a-z-]{1,32}$/.test(v) ? v : nul
 const count = (v) => (Number.isSafeInteger(v) && v >= 0 ? Math.min(v, BUSY_MOST) : 0);
 const timestamp = (v) => (typeof v === 'string' && Number.isFinite(Date.parse(v)) ? v : null);
 const quota = (v) => (Number.isInteger(v) && v >= 0 && v <= 2147483647 ? v : null);
+const byteCount = (v) => (Number.isInteger(v) && v >= 0 && v < 2 ** 63 ? v : null);
 
 function readResult(raw) {
   const r = obj(raw);
@@ -112,6 +113,9 @@ export function readUpdateState(raw) {
     // An unknown phase reads as idle: nothing to wait on.
     phase: PHASES.includes(s.phase) ? s.phase : 'idle',
     progress,
+    bytes: byteCount(s.bytes),
+    total: byteCount(s.total),
+    downloaded: typeof s.downloaded === 'boolean' ? s.downloaded : null,
     waiting: str(s.waiting),
     request: str(s.request),
     automatic: s.automatic === true,
@@ -160,8 +164,8 @@ export const underWay = (s) => !!s && (['checking', 'downloading', 'installing']
 const settled = (s) => !!s && s.installer && s.phase === 'idle';
 export const canCheck = (s) => settled(s);
 export const canInstall = (s) => settled(s) && !!s.available;
-export const canRetryDownload = (s) => canInstall(s) && s.last?.outcome === 'failed'
-  && s.last.step === 'downloading' && !checkHeld(s);
+export const canRetryDownload = (s) => canInstall(s) && !s.downloaded && s.last?.outcome === 'failed'
+  && s.last.step === 'downloading' && s.last.to === s.available && !checkHeld(s);
 export const canUpdateWhenIdle = (s) => !!s && s.installer && !!s.available && !s.canUpdateNow
   && s.updateNowWhy === 'restart-cap' && ['idle', 'waiting'].includes(s.phase);
 // Update now beside Install: only where the machine says it can be pressed, with a release ready,

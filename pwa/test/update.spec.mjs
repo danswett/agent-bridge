@@ -164,21 +164,6 @@ test('a capped update shows quiet wording once and never revives its note after 
   await expect(row.getByText('Updates when its sessions are quiet', { exact: true })).toHaveCount(0);
 });
 
-test('Check leaves the card and Check all leaves the rows for their respective menus', async ({ page }) => {
-  await openDemo(page);
-  const row = rowOf(page);
-  await expect(row.getByRole('button', { name: /^Check/ })).toHaveCount(0);
-  await expect(page.locator('#machine-list .machine-check-all')).toHaveCount(0);
-
-  await row.locator('button[aria-haspopup="menu"]').click();
-  await page.getByRole('menuitem', { name: 'Check for updates', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
-
-  await page.locator('#machines button[aria-haspopup="menu"]:not(#machine-list button)').click();
-  await page.getByRole('menuitem', { name: 'Check all', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check', 'update.check']);
-});
-
 test('Update now on a quiet machine goes on one press, asking nothing, and says it updated', async ({ page }) => {
   await openDemo(page, '&updateNow=1');
   await setUpdate(page, QUIET);

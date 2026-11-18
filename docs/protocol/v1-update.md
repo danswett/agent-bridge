@@ -480,8 +480,8 @@ host's own text (#826). "Bridge", never "host".
   changed release or unavailable app clears it. Identical quiet wording is shown only once.
   A read-only machine already says "View only", and offers neither. Install keeps
   its words and its wait.
-* **A failed download** (`last.outcome: failed`, `last.step: downloading`) with an installed app,
-  a release available and phase `idle` offers **Try again now** instead of Install or Update now.
+* **A failed download** (`last.outcome: failed`, `last.step: downloading`, `last.to: available`),
+  not already downloaded, with an installed app and phase `idle` offers **Try again now** instead of Install or Update now.
   It sends one ordinary Install request; only the app decides when to download or restart.
   A held Check, unknown failure step or update already under way offers no download retry.
 * **One press on a quiet machine** (owner): nothing working, no question or approval waiting,
