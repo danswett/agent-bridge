@@ -21,7 +21,7 @@ public sealed partial class SessionView
             || Card?.Row?.Key is not { } key || shownHistory != key || Recovery?.Current?.Key != key) { return; }
         var turn = ReadingHistory();
         Recovery.Remember(new(key, new(scroll.VerticalOffset, pinEnd || scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack,
-            anchor, turn?.Id, turn?.Top ?? 0, turn is null ? Card?.Session.Activity.ResponseTurn : null)));
+            anchor, turn?.Id, turn?.Top ?? 0, turn is null && Card?.ResponseTruncated == false ? Card?.Session.Activity.ResponseTurn : null)));
     }
 
     // History arrives asynchronously and is drawn in small batches. Keep the saved anchor
@@ -30,8 +30,9 @@ public sealed partial class SessionView
     {
         if (restoreReading is not { } saved) { return false; }
         if (applyingReading || shownHistory != Card?.Row?.Key || ConversationScroll is not { ViewportHeight: > 0 } scroll || !ConversationList.IsLoaded) { return true; }
-        // A live block belongs to the protocol's reply turn, not the latest prompt or an unproven legacy offset.
-        if (!saved.AtEnd && saved.Turn is null && (string.IsNullOrEmpty(saved.ResponseTurn) || saved.ResponseTurn != Card?.Session.Activity.ResponseTurn))
+        // A live block needs the same live, untruncated reply: cutting its prefix renumbers the blocks.
+        if (!saved.AtEnd && saved.Turn is null && (string.IsNullOrEmpty(saved.ResponseTurn) || saved.ResponseTurn != Card?.Session.Activity.ResponseTurn
+            || saved.ResponseTurn != Card?.LiveTurn || Card?.ResponseTruncated == true))
         { restoreReading = null; anchor = null; pinEnd = true; return false; }
         if (history is { State: HistoryLoad.Loading } or { State: HistoryLoad.Idle, HasOlder: false, Start: null }) { return true; }
         applyingReading = true;

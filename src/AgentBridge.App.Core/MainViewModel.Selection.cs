@@ -18,12 +18,12 @@ public sealed partial class MainViewModel
         set
         {
             if (value is not null && !owner.ContainsKey(value)) { return; }
-            if (value == open) { return; }
+            if (value == open && (value is null || !restoreSelection)) { return; }
             if (!restoringSelection)
             {
                 restoreSelection = false;
                 pendingReading = null;
-                Recovery?.Remember(value is null ? null : new(KeyOf(value), null));
+                if (value != open || value is not null && Recovery?.Current?.Key != KeyOf(value)) { Recovery?.Remember(value is null ? null : new(KeyOf(value), null)); }
             }
             var before = open;
             if (!Set(ref open, value)) { return; }
@@ -51,12 +51,12 @@ public sealed partial class MainViewModel
             // A different host may still be connecting. Its saved choice waits without
             // leaving an already available local session blank.
             if (pendingReading?.Key.StartsWith(machine.Key + "\n", StringComparison.Ordinal) == true) { pendingReading = null; }
-            next = open ?? Sessions.FirstOrDefault();
+            next = open ?? Sessions.FirstOrDefault(c => owner[c].Host.Sessions.Complete);
             if (next is null) { return; }
             if (pendingReading is null) { restoreSelection = false; }
         }
+        if (reading is not null || pendingReading is null) { Recovery.Remember(reading ?? new(KeyOf(next), null)); }
         if (next == open) { return; }
-        Recovery.Remember(reading ?? new(KeyOf(next), null));
         restoringSelection = true;
         try { Selected = next; }
         finally { restoringSelection = false; }
