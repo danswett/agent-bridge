@@ -275,7 +275,7 @@ public sealed class SessionRosterFixtureTests
     [InlineData("empty")]
     [InlineData("corrupt")]
     [InlineData("missing")]
-    public async Task A_host_roster_never_loads_or_rewrites_disk_membership_when_discovery_is_incomplete(string state)
+    public async Task Disk_resume_guards_never_supply_host_roster_membership_when_discovery_is_incomplete(string state)
     {
         using var fixture = new Fixture();
         var path = Path.Combine(fixture.Root, "sessions-listed.json");
@@ -295,7 +295,6 @@ public sealed class SessionRosterFixtureTests
         Assert.NotNull(source.Held);
         Assert.Empty(source.Snapshot());
         Assert.Null(source.Get(Id));
-        Assert.Equal(saved, File.Exists(path) ? File.ReadAllText(path) : null);
         using var subscription = source.Subscribe();
         Assert.Equal(0, subscription.Result.Count);
     }
@@ -369,6 +368,7 @@ public sealed class SessionRosterFixtureTests
     public async Task Overflow_is_held_before_mid_pass_reads_and_old_holds_survive_until_admission_completes(bool previousHold)
     {
         using var fixture = new Fixture();
+        var admissionPatience = TimeSpan.FromSeconds(30);
         var ids = Enumerable.Range(0, 251).Select(i => $"{i:D8}-0000-4000-8000-000000000000").ToArray();
         for (var i = 0; i < 250; i++)
         {
@@ -388,7 +388,7 @@ public sealed class SessionRosterFixtureTests
             if (entered is { } paused)
             {
                 paused.TrySetResult();
-                if (!proceed.Wait(Patience)) { throw new TimeoutException("Paused roster pass was not released."); }
+                if (!proceed.Wait(admissionPatience)) { throw new TimeoutException("Paused roster pass was not released."); }
             }
             return false;
         }, hostId: "host-id");
@@ -402,9 +402,10 @@ public sealed class SessionRosterFixtureTests
         {
             proceed.Reset();
             entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            var pass = Task.Run(() => source.RefreshAsync());
-            try { await entered.Task.WaitAsync(Patience); inspect(); }
-            finally { entered = null; proceed.Set(); await pass.WaitAsync(Patience); }
+            var pass = Task.Factory.StartNew(() => source.RefreshAsync(), CancellationToken.None,
+                TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
+            try { await entered.Task.WaitAsync(admissionPatience); inspect(); }
+            finally { entered = null; proceed.Set(); await pass.WaitAsync(admissionPatience); }
         }
         void AssertHeld()
         {
@@ -483,6 +484,10 @@ public sealed class SessionRosterFixtureTests
             Assert.Equal(!reused, after.Held?.Agents.Contains(AgentKind.Copilot) == true);
             Assert.Null(after.ProcessOf(Id));
         }
+        f.Processes.Exit(AgentKind.Copilot, 300);
+        await using var departed = new SessionSource(options, f.Processes, f.Time, hostId: "host-id");
+        await departed.RefreshAsync();
+        Assert.Null(departed.Held);
     }
 
     static void AssertRow(JsonElement row, string machine)

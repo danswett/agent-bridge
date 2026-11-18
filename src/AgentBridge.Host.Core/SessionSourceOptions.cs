@@ -47,8 +47,8 @@ public sealed class SessionSourceOptions
     // Where discovery says what holds it and what it carried on without. Null: nowhere.
     public Action<string>? Log { get; init; }
 
-    // Legacy unbound compatibility sources only (#147). A host-bound roster ignores this:
-    // membership is memory-only, and the serving host never configures this path.
+    // Process-generation resume guards across restarts (#147), never host-bound roster membership.
+    // Legacy unbound sources may restore rows; a host-bound source only restores discovery holds.
     public string? StateFile { get; init; }
 
     // Runs between reading a registration and checking it did not change meanwhile, so a test

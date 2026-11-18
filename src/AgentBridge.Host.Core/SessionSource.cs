@@ -423,10 +423,15 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         if (discover)
         {
             lock (_gate) { _lastDiscovery = _time.GetTimestamp(); }
-            // What the host listed when it last ran, read once, for the first discovery pass
-            // (Discover's accounting and Restore).
-            if (_hostId is null && !_restored && _options.StateFile is { } state) { _remembered = Load(state); }
+            // Host-bound sources keep these process guards across passes, but never restore rows.
+            if (!_restored && _options.StateFile is { } state) { _remembered = Load(state); }
             var observed = Discover();
+            if (_hostId is not null)
+            {
+                _remembered?.RemoveAll(s => !observed.Any(o => o.Agent == s.Agent && (!o.Observed.Listed ||
+                    o.Observed.Processes.Concat(o.Observed.Unidentified).Any(p => s.ProcessId is { } pid &&
+                        SameProcess(new AgentProcess(pid, s.ProcessStartedAt, null), p)))));
+            }
             found = [.. observed.SelectMany(o => o.Sessions)];
             var live = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
             var holding = observed.Where(o => o.Holds.Count > 0).Select(o => o.Agent).ToHashSet();
@@ -434,10 +439,11 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             {
                 _restored = true;
                 found.AddRange(Restore(observed, found));
-                _remembered = null;
+                if (_hostId is null) { _remembered = null; }
             }
             List<string> gone;
-            bool Ended(Entry e) => observed.Any(o => o.Agent == e.Tracker.Discovered.Agent && o.Ended?.Contains(e.ListForm.Id) == true);
+            bool Ended(Entry e) => observed.Any(o => o.Agent == e.Tracker.Discovered.Agent &&
+                o.Ended is { } ended && ended.TryGetValue(e.ListForm.Id, out var r) && !Successor(e.Tracker.Discovered, r));
             lock (_gate)
             {
                 // An agent whose pass was incomplete keeps every session it had: one it could
@@ -541,7 +547,10 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // being sure that is all (none when complete). Observed and Ended are what a restart's
     // first pass checks a remembered session against (Restore).
     sealed record AgentDiscovery(AgentKind Agent, IReadOnlyList<DiscoveredSession> Sessions, IReadOnlyList<string> Holds,
-        AgentProcessObservation Observed, IReadOnlySet<string>? Ended = null);
+        AgentProcessObservation Observed, IReadOnlyDictionary<string, Registration>? Ended = null);
+
+    static bool Successor(DiscoveredSession session, Registration ended) =>
+        session.ProcessStartedAt is { } started && ended.Updated is { } at && started > at + TimeSpan.FromSeconds(1);
 
     List<AgentDiscovery> Discover()
     {
@@ -599,31 +608,35 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         var observed = _processes.Observe(agent);
         var holds = new List<string>();
         var accounted = new HashSet<int>();
-        var ended = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ended = new Dictionary<string, Registration>(StringComparer.OrdinalIgnoreCase);
         var pidless = agent == AgentKind.Codex ? new List<Registration>() : null;
         IReadOnlyList<DiscoveredSession> sessions = RegistrationDiscovery.Find(agent, roots, observed.Processes, findTranscript, holds, accounted, _options.AfterRegistrationRead, observed.Unidentified, ended, pidless);
+        var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var pids = sessions.Select(s => s.ProcessId).ToHashSet();
+        bool AdmitNative(DiscoveredSession s)
+        {
+            if (ids.Contains(s.Id) || pids.Contains(s.ProcessId) ||
+                (ended.TryGetValue(s.Id, out var r) && !Successor(s, r))) { return false; }
+            ids.Add(s.Id);
+            pids.Add(s.ProcessId);
+            return true;
+        }
         if (codexLocks)
         {
             // agent-ha-bridge's registration, where there is one, carries what its hooks saw
-            // (status, the approval marker) and wins, an ended one included. One CLI owns one
+            // (status, the approval marker) and wins unless a successor is proven. One CLI owns one
             // session. A terminal a thread lock binds to a session is accounted for by it.
-            var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            ids.UnionWith(ended);
-            var pids = sessions.Select(s => s.ProcessId).ToHashSet();
             var locked = CodexLockDiscovery.Find(_options.CodexHome, observed.Processes, _processes.FileHolders, _codexLockHolders, findTranscript, _time.GetUtcNow(), holds)
-                .Where(s => !ids.Contains(s.Id) && !pids.Contains(s.ProcessId)).ToList();
+                .Where(AdmitNative).ToList();
             accounted.UnionWith(locked.Where(s => s.ProcessId is not null).Select(s => s.ProcessId!.Value));
             sessions = [.. sessions, .. locked];
         }
         if (claudeSessions)
         {
             // agent-ha-bridge's registration, where there is one, carries what its hooks saw
-            // (status, permission prompts) and wins, an ended one included. One CLI owns one session.
-            var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            ids.UnionWith(ended);
-            var pids = sessions.Select(s => s.ProcessId).ToHashSet();
+            // (status, permission prompts) and wins unless a successor is proven. One CLI owns one session.
             var own = ClaudeSessionDiscovery.Find(_options.ClaudeHome, observed.Processes, findTranscript, holds, accounted, observed.Unidentified, _options.UsageProbeRoots);
-            sessions = [.. sessions, .. own.Where(s => !ids.Contains(s.Id) && !pids.Contains(s.ProcessId))];
+            sessions = [.. sessions, .. own.Where(AdmitNative)];
         }
         if (agent == AgentKind.Codex)
         {
@@ -790,7 +803,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             var running = o.Observed.Processes.Concat(o.Observed.Unidentified).ToList();
             foreach (var s in remembered.Where(s => s.Agent == o.Agent))
             {
-                if (ids.Contains(s.Id) || o.Ended?.Contains(s.Id) == true) { continue; }
+                if (ids.Contains(s.Id) || o.Ended?.ContainsKey(s.Id) == true) { continue; }
                 // Only a process that can be told from a later one given its pid: a session is
                 // never put back on a stranger.
                 if (s.ProcessId is not { } pid || s.ProcessStartedAt is not { } started || pids.Contains((s.Agent, pid))) { continue; }
@@ -847,13 +860,14 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
 
     const long MaxStateBytes = 4 * 1024 * 1024;
 
-    // StateFile, written whole and renamed into place whenever what discovery lists changes, so
-    // it always says what the next start would need to keep. Only on the pass.
+    // Process identities for restart guards; host-bound sources never use them as roster rows.
+    // Written whole and renamed into place. Only on the pass.
     void Save()
     {
-        if (_hostId is not null || _options.StateFile is not { } path) { return; }
+        if (_options.StateFile is not { } path) { return; }
         List<DiscoveredSession> sessions;
-        lock (_gate) { sessions = [.. _entries.Values.Select(e => e.Tracker.Discovered).OrderBy(d => d.Id, StringComparer.Ordinal)]; }
+        lock (_gate) { sessions = [.. _entries.Values.Select(e => e.Tracker.Discovered)
+            .Concat(_hostId is null ? [] : _remembered ?? []).DistinctBy(d => d.Id).OrderBy(d => d.Id, StringComparer.Ordinal)]; }
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
         {
