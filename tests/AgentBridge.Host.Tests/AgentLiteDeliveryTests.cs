@@ -18,7 +18,7 @@ public sealed class AgentLiteDeliveryTests
     sealed class Fixture : ISessionSource, ISessionReplier, IConsoleInjector
     {
         public SessionStatus Status = SessionStatus.Idle;
-        public bool Exists = true, FlipAfterFirstGet, AllowAllTargets;
+        public bool Exists = true, FlipAfterFirstGet, AllowAllTargets, Ambiguous;
         public string[] Rows = EmptyBox;
         public int Gets;
         public AnswerOutcome Outcome = AnswerOutcome.Delivered;
@@ -31,7 +31,9 @@ public sealed class AgentLiteDeliveryTests
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches = new();
         public LiteDeliver Build() => new([new ForcedAskGate(Launches, () => AllowAllTargets)], this, this, this, Log.Add, Clock);
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
-        public long Revision => 0; public IReadOnlyList<Session> Snapshot() => []; public SessionList List(string? cursor = null) => new([], 0);
+        public long Revision => 0;
+        public IReadOnlyList<Session> Snapshot() => Get(Target) is { } s ? Ambiguous ? [s, s with { Id = Target[..^1] + "2" }] : [s] : [];
+        public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
         public Session? Get(string id)
         {
@@ -64,6 +66,18 @@ public sealed class AgentLiteDeliveryTests
     }
 
     static Task<LiteDelivery> Send(Fixture f, string text = "hi") => f.Build().DeliverAsync(Envelope(text), text, default);
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_roster_node_resolves_only_to_an_unambiguous_live_session(bool ambiguous)
+    {
+        var f = new Fixture { Ambiguous = ambiguous }; f.Launch(LaunchProtocol.Ask);
+        var envelope = Envelope("hi");
+        envelope = envelope with { Body = envelope.Body with { Target = envelope.Body.Target with { Session = AgentBridge.HomeAssistant.HaContract.NodeId(Target) } } };
+        Assert.Equal(!ambiguous, (await f.Build().DeliverAsync(envelope, "hi", default)).Typed);
+        if (!ambiguous) { Assert.Equal(Target, Assert.Single(f.Typed).Id); }
+        else { Assert.Empty(f.Typed); }
+    }
     [Fact]
     public async Task Script_delivery_is_labelled_and_logged_as_a_script_never_an_agent()
     {
