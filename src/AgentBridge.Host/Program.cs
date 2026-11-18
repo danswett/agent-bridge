@@ -593,7 +593,7 @@ async Task<int> ServeAsync(HostHandover handover)
     await using var keepAwake = OperatingSystem.IsWindows() ? NewKeepAwake(devCenter) : null;
     keepAwake?.Start();
     // The Home Assistant connector (docs/ha-connector.md): this machine's sessions on the dashboard
-    // agent-ha-bridge's writer generates. Off unless config.json turns it on, and paused while
+    // agent-ha-bridge's writer generates. Gated by homeAssistant.enabled, and paused while
     // agent-ha-bridge runs for this user (looked at every few seconds, as the app's view of it is).
     Func<string?>? haActive = haProbe is null ? null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
     // Ended sessions moved between the account's machines, on commands a person's device signs,
@@ -655,9 +655,15 @@ async Task<int> ServeAsync(HostHandover handover)
     // Home Assistant's refusals of this machine, counted with every other process of this user so a
     // rejected token is never repeated into a ban (#227); the app shows what it says.
     var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
-    await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
-        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current, launchAudit: agentAudit);
-    load.SetConsumerDemand((!localOnly && settings.LoadEnabled) || homeAssistant is not null);
+    if (!settings.HomeAssistant.Enabled)
+    {
+        foreach (var problem in settings.HomeAssistantProblems) { Log($"config.json: {problem}"); }
+        Log("the Home Assistant connector is off (homeAssistant.enabled is not true)");
+    }
+    await using var homeAssistant = settings.HomeAssistant.Enabled
+        ? HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
+            HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current, launchAudit: agentAudit)
+        : null;
     // What takes answering, replying, ending and launching away while it runs (design G5).
     // Asked afresh by what acts on it (updates, the readiness checks, the app's status).
     string? ServeReadOnly() => ReadOnlyReason() ?? g5.Active();
@@ -1115,7 +1121,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,
         CodexHome = options.CodexHome,
         Config = settings.Launch,
-        HomeAssistantEnabled = settings.HomeAssistant.Enabled || settings.HomeAssistant.EnabledRequested,
+        HomeAssistantEnabled = settings.HomeAssistant.RequiresReplyPath,
         HomeAssistantBaseUrl = settings.HomeAssistant.BaseUrl,
         // A session waiting to be restored keeps its worktree as a live one does (#780).
         WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),

@@ -79,7 +79,7 @@ never create the key.
     "remoteFolderTrustDevices": []
   },
   "homeAssistant": {
-    "enabled": false,
+    "enabled": true,
     "baseUrl": "http://homeassistant.local:8123",
     "dashboardUrlPath": "agent-decisions",
     "detailedActivity": true,

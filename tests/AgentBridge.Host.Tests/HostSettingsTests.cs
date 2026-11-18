@@ -350,10 +350,10 @@ public sealed class HostSettingsTests : IDisposable
     }
 
     [Fact]
-    public void The_home_assistant_connector_is_off_by_default_and_a_wrong_section_turns_off_only_it()
+    public void The_home_assistant_connector_defaults_on_pending_the_off_HA_proof_and_a_wrong_section_turns_off_only_it()
     {
-        var off = With(null).Settings;
-        Assert.False(off.HomeAssistant.Enabled);
+        var defaults = With(null).Settings;
+        Assert.True(defaults.HomeAssistant.Enabled);
 
         var (settings, problem) = With("""{ "permissions": { "remoteApproval": false }, "homeAssistant": { "enabled": true, "baseUrl": "not a url" } }""");
         Assert.Null(problem);

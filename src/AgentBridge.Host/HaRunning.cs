@@ -7,13 +7,17 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
-// Starting the Home Assistant connector with serve, when this machine's config.json turns it on
+// Starting the Home Assistant connector with serve, while this machine's config.json permits it
 // and everything it needs is there (HaGate). Null, having said why, otherwise.
 public sealed class HaRunning : IAsyncDisposable
 {
     readonly HaConnector connector;
     readonly HttpClient http;
     readonly Mutex claim;
+    readonly CancellationTokenSource stop = new();
+    Task watch = Task.CompletedTask;
+
+    public Task Stopped => watch;
 
     HaRunning(HaConnector connector, HttpClient http, Mutex claim) { this.connector = connector; this.http = http; this.claim = claim; }
 
@@ -21,7 +25,8 @@ public sealed class HaRunning : IAsyncDisposable
         Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log, ISessionAnswerer? answers = null,
         Func<HaReply, CancellationToken, Task<AgentBridge.Protocol.ReplyResult>>? reply = null, ISessionStopper? stops = null,
         AgentBridge.Host.Delivery.Launch.ISessionLauncher? launcher = null, IHostUpdates? updates = null, SessionDrivers? drivers = null,
-        HaAuthGuard? auth = null, Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load = null, AgentAuditLog? launchAudit = null)
+        HaAuthGuard? auth = null, Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load = null, AgentAuditLog? launchAudit = null,
+        HttpMessageHandler? transport = null, TimeProvider? time = null)
     {
         foreach (var p in settings.HomeAssistantProblems) { log($"config.json: {p}"); }
         var ha = settings.HomeAssistant;
@@ -55,7 +60,8 @@ public sealed class HaRunning : IAsyncDisposable
             log("the Home Assistant connector is off: no Home Assistant token; give it one with agent-bridge-host ha token set");
             return null;
         }
-        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        var http = transport is null ? new HttpClient() : new HttpClient(transport);
+        http.Timeout = TimeSpan.FromSeconds(15);
         // Answers from the cards go through the host's own delivery, as an app's do; a host that
         // cannot type into sessions here serves no answer controls rather than dead ones.
         Func<AgentBridge.Protocol.AnswerRequest, CancellationToken, Task<AgentBridge.Protocol.AnswerResult>>? answer =
@@ -98,13 +104,38 @@ public sealed class HaRunning : IAsyncDisposable
             (updates is null || !ha.CheckForUpdates ? "" : ", the update buttons when this copy was installed by its updater") +
             (ha.Notify.Enabled ? $", notifications via {ha.Notify.Service}" : "") +
             (answer is not null && ha.Notify.ButtonsOn ? $", answer buttons to {ha.Notify.AnswerButtonServices.Count} phone(s)" : ""));
-        return new HaRunning(connector, http, claim);
+        var running = new HaRunning(connector, http, claim);
+        running.watch = running.WatchOffAsync(folder, time ?? TimeProvider.System, log);
+        return running;
+    }
+
+    async Task WatchOffAsync(string folder, TimeProvider time, Action<string> log)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1), time);
+            while (await timer.WaitForNextTickAsync(stop.Token))
+            {
+                var (settings, problem) = HostSettings.Load(folder);
+                if (settings.HomeAssistant.Enabled) { continue; }
+                if (problem is not null) { log($"config.json: {problem}"); }
+                foreach (var issue in settings.HomeAssistantProblems) { log($"config.json: {issue}"); }
+                log("the Home Assistant connector is stopping (homeAssistant.enabled is not true); restart after ha on to reconnect");
+                return;
+            }
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        finally
+        {
+            try { await connector.DisposeAsync(); }
+            finally { http.Dispose(); claim.Dispose(); }
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        await connector.DisposeAsync();
-        http.Dispose();
-        claim.Dispose();
+        await stop.CancelAsync();
+        try { await watch; }
+        finally { stop.Dispose(); }
     }
 }

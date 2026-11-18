@@ -8,7 +8,7 @@ namespace AgentBridge.Host;
 //
 //   agent-bridge-host ha status          whether the connector would run, and why not
 //   agent-bridge-host ha inventory       HA credential/state file presence only
-//   agent-bridge-host ha off|on          audited connection change, effective after one restart
+//   agent-bridge-host ha off|on          audited change; off is live, on needs one restart
 //   agent-bridge-host ha token set       masked input, local format check and attempt consent
 //   agent-bridge-host ha token clear
 //   agent-bridge-host ha shadow          what the connector would publish beside what the broker
@@ -104,7 +104,7 @@ public static class HaCommands
         var audit = new AgentAuditLog(folder, log: error.WriteLine);
         var state = enabled ? "on" : "off";
         var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString(), "person:local", [],
-            "host.homeAssistant", "profile", "requested", $"{state}; restart-required");
+            "host.homeAssistant", "profile", "requested", enabled ? "on; restart-required" : "off; stop-requested");
         if (!audit.Append(entry))
         {
             error.WriteLine("Not changed: the Home Assistant control audit could not be written.");

@@ -25,8 +25,8 @@ namespace AgentBridge.Host;
 // (LaunchConfig, docs/host-launch.md). Nothing is approved until a person adds it here at the
 // machine (agent-bridge-host workspace add). A file that cannot be read turns launching off.
 //
-// homeAssistant: the Home Assistant connector (HaSettings, docs/ha-connector.md). Off unless
-// turned on; a file that cannot be read leaves it off.
+// homeAssistant: the Home Assistant connector (HaSettings, docs/ha-connector.md). Enabled until
+// the HA-off proof, subject to its startup gates; a file that cannot be read leaves it off.
 //
 // delivery.readOnly: a host that only shows sessions, and takes no answer, reply, stop, launch,
 // approval or transfer from another device, whatever agent-ha-bridge is doing (ReadOnlyGate). Off
@@ -84,7 +84,7 @@ public sealed record HostSettings(bool RemoteApproval)
     // What was wrong with the launch section, entry by entry; launching stays on for what was right.
     public IReadOnlyList<string> LaunchProblems { get; init; } = [];
 
-    // The Home Assistant connector (docs/ha-connector.md): off unless turned on here. What was
+    // The Home Assistant connector (docs/ha-connector.md): enabled pending the HA-off proof. What was
     // wrong with its section turns it off and is said, without touching anything else.
     public HaSettings HomeAssistant { get; init; } = HaSettings.Default;
 
@@ -166,6 +166,7 @@ public sealed record HostSettings(bool RemoteApproval)
     // anyway would read a setting meant as off as on.
     static HostSettings Off => Default with
     {
+        HomeAssistant = HaSettings.Default with { Enabled = false },
         RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, FleetShare = false, FleetLaunchRule = "off", LoadEnabled = false, ReadOnly = true,
         Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RemoteManage = false, RestoreOnStart = false, RestoreKept = true,
         EscapedApproval = AgentBridge.Protocol.EscapedApproval.Machine, EscapedApprovalDevices = [],

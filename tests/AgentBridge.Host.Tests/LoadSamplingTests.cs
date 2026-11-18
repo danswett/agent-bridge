@@ -46,4 +46,23 @@ public sealed class LoadSamplingTests
         sampler.Start();
         Assert.Equal(TimeSpan.FromSeconds(seconds), await clock.Armed.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30)));
     }
+
+    [Theory]
+    [InlineData(true, true, 5)]
+    [InlineData(true, false, 5)]
+    [InlineData(false, true, 60)]
+    [InlineData(false, false, 60)]
+    public async Task Relay_demand_is_preserved_and_local_only_ignores_HA(bool relay, bool ha, int seconds)
+    {
+        using var fixture = new Fixture();
+        await using var source = fixture.Source();
+        var clock = new Clock();
+        var settings = HostSettings.Default with
+        {
+            HomeAssistant = HostSettings.Default.HomeAssistant with { Enabled = ha },
+        };
+        await using var sampler = HostLoadSampling.Create(settings, source, new Table(), clock, relay);
+        sampler.Start();
+        Assert.Equal(TimeSpan.FromSeconds(seconds), await clock.Armed.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+    }
 }

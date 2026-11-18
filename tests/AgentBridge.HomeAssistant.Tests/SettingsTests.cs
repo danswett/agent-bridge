@@ -15,12 +15,13 @@ public sealed class SettingsTests : IDisposable
     static (HaSettings Settings, IReadOnlyList<string> Problems) Read(string json) => HaSettings.Read(JsonDocument.Parse(json).RootElement);
 
     [Fact]
-    public void The_connector_is_off_unless_turned_on()
+    public void The_connector_defaults_on_pending_the_off_HA_proof_but_still_requires_a_base_url()
     {
         var (absent, none) = HaSettings.Read(null);
-        Assert.False(absent.Enabled);
+        Assert.True(absent.Enabled);
         Assert.Empty(none);
         Assert.False(Read("{}").Settings.Enabled);
+        Assert.True(Read("""{"baseUrl":"http://ha.test:8123"}""").Settings.Enabled);
         Assert.Equal("agent-decisions", absent.DashboardUrlPath);
         Assert.True(absent.DetailedActivity);
     }
@@ -30,6 +31,7 @@ public sealed class SettingsTests : IDisposable
     {
         foreach (var json in new[]
         {
+            "false",
             """{"enabled":"yes","baseUrl":"http://ha.test:8123"}""",
             """{"enabled":true}""",
             """{"enabled":true,"baseUrl":"ftp://ha.test"}""",

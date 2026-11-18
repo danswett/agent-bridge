@@ -1488,7 +1488,7 @@ Assistant and broker).
 
 ```jsonc
 "homeAssistant": {
-  "enabled": false,                       // off by default
+  "enabled": true,                        // until the reviewed HA-off proof
   "baseUrl": "http://127.0.0.1:8123",
   "dashboardUrlPath": "agent-decisions",  // read, never written
   "detailedActivity": true,               // when the machine has no Detailed activity switch
@@ -1521,6 +1521,15 @@ agent-bridge-host ha shadow               # compare with agent-ha-bridge's retai
 off, and `Home Assistant connector paused: …` while agent-ha-bridge runs.
 Use `ha off` or `ha on` for connection changes; generic `config set` and `config unset`
 refuse `homeAssistant.enabled` rather than bypass its audit and startup checks.
+The host calls the connector startup only while this control is on; a valid URL,
+stored token and the existing G5/G6 guards are still required. The host checks
+`ha off` once a second and stops the running connector without deleting rollback
+credentials. `ha on` still needs a host restart to reconnect. Its existing audit
+records the requested/configured setting, not proof of running-state completion.
+The default-OFF retirement flip is separate
+([#3048](https://github.com/danswett/agent-bridge/issues/3048)), after the HA-off proof.
+HA being enabled no longer requests five-second load sampling; relay sharing and
+local sessions determine sampling demand independently.
 
 `ha token set` requires the base URL first. It reports length, whitespace and only eight SHA256
 hex characters, checks the local JWT shape (not validity), then warns about the recorded

@@ -6,10 +6,10 @@ using System.Text.Json;
 namespace AgentBridge.HomeAssistant;
 
 // The connector's settings: the homeAssistant section of the profile's config.json
-// (docs/host-config.md, docs/ha-connector.md). Off unless a person turns it on at the machine.
+// (docs/host-config.md, docs/ha-connector.md). Enabled until the HA-off proof; all other gates apply.
 //
 //   "homeAssistant": {
-//     "enabled": false,
+//     "enabled": true,
 //     "baseUrl": "http://homeassistant.local:8123",
 //     "dashboardUrlPath": "agent-decisions",
 //     "detailedActivity": true,
@@ -26,10 +26,12 @@ public sealed record HaSettings
 {
     public const string DefaultDashboard = "agent-decisions";
 
-    public bool Enabled { get; init; }
+    public bool Enabled { get; init; } = true;
     // Validation can disable the connector without making an explicitly HA-enabled launch safe.
     public bool EnabledRequested { get; private init; }
     public Uri? BaseUrl { get; init; }
+    // A default-on control without a configured endpoint must not block native-only launches.
+    public bool RequiresReplyPath => EnabledRequested || Enabled && BaseUrl is not null;
     // The dashboard agent-ha-bridge's publication writer generates, read (never written) to
     // know when an ended session's card has gone (dashboard.urlPath there).
     public string DashboardUrlPath { get; init; } = DefaultDashboard;
@@ -64,7 +66,7 @@ public sealed record HaSettings
     public static (HaSettings Settings, IReadOnlyList<string> Problems) Read(JsonElement? section)
     {
         if (section is not { } s || s.ValueKind == JsonValueKind.Null) { return (Default, []); }
-        if (s.ValueKind != JsonValueKind.Object) { return (Default, ["homeAssistant is not an object; the Home Assistant connector is off"]); }
+        if (s.ValueKind != JsonValueKind.Object) { return (Default with { Enabled = false }, ["homeAssistant is not an object; the Home Assistant connector is off"]); }
         var problems = new List<string>();
         bool Bool(string name, bool fallback)
         {
@@ -82,14 +84,14 @@ public sealed record HaSettings
         }
         var settings = new HaSettings
         {
-            Enabled = Bool("enabled", false),
+            Enabled = Bool("enabled", Default.Enabled),
             DetailedActivity = Bool("detailedActivity", true),
             Disposable = Bool("disposable", false),
             DashboardUrlPath = Text("dashboardUrlPath") ?? DefaultDashboard,
             MachineName = Text("machineName"),
             Notify = HaNotifySettings.Read(s, problems),
         };
-        settings = settings with { EnabledRequested = settings.Enabled };
+        settings = settings with { EnabledRequested = s.TryGetProperty("enabled", out var requested) && requested.ValueKind == JsonValueKind.True };
         if (s.TryGetProperty("updates", out var u) && u.ValueKind != JsonValueKind.Null)
         {
             if (u.ValueKind != JsonValueKind.Object) { problems.Add("homeAssistant.updates is not an object"); }

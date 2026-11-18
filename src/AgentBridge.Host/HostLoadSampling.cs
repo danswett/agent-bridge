@@ -9,7 +9,7 @@ public static class HostLoadSampling
         TimeProvider? time = null, bool relay = true)
     {
         var sampler = new ProcessLoadSampler(source, table, time);
-        sampler.SetConsumerDemand((relay && settings.LoadEnabled) || settings.HomeAssistant.Enabled);
+        sampler.SetConsumerDemand(relay && settings.LoadEnabled);
         return sampler;
     }
 }

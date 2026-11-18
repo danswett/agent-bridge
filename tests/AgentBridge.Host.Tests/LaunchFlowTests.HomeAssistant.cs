@@ -19,6 +19,20 @@ public sealed class LaunchHaEnvironmentFlowTests : LaunchFlowFixture
     const string ConfiguredUrl = "https://receiving-host.example/ha/";
 
     [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"homeAssistant":{}}""")]
+    [InlineData("""{"homeAssistant":{"enabled":false}}""")]
+    public async Task Default_on_without_a_configured_HA_endpoint_preserves_native_launches(string json)
+    {
+        var (settings, _) = HostSettings.Parse(json, "fixture-config.json");
+        var result = await HaLauncher(settings.HomeAssistant.RequiresReplyPath, settings.HomeAssistant.BaseUrl).LaunchAsync(
+            new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        Assert.DoesNotContain(UrlVariable, Assert.Single(starter.Specs).Environment!.Keys);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("https://stale-sender.example/api")]
     public async Task A_remote_launch_overlays_the_receiving_hosts_endpoint_without_user_scope_dependency(string? inherited)
@@ -133,7 +147,7 @@ public sealed class LaunchHaEnvironmentFlowTests : LaunchFlowFixture
     LaunchService HaLauncher(bool enabled, string? url, Exception? credentialError = null)
     {
         var (ha, _) = HaSettings.Read(JsonSerializer.SerializeToElement(new { enabled, baseUrl = url }));
-        return HaLauncher(ha.Enabled || ha.EnabledRequested, ha.BaseUrl, credentialError);
+        return HaLauncher(ha.RequiresReplyPath, ha.BaseUrl, credentialError);
     }
 
     LaunchService HaLauncher(bool enabled, Uri? baseUrl, Exception? credentialError = null)
