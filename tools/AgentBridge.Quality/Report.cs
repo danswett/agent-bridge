@@ -299,7 +299,7 @@ static class WeeklyReport
     static readonly Regex Combined = new(@"^#\d+:\s*", RegexOptions.CultureInvariant);
     // MergeRuleCommand's MainFact reasons: while main is red, merge-rule names that first on every
     // pull request, which would hide what each one waits on next.
-    static readonly Regex MainItem = new(@"^(.+ is red \(ci |.+'s ci .+ is being re-run|no finished ci run on |couldn't read .+'s ci:)", RegexOptions.CultureInvariant);
+    static readonly Regex MainItem = new(@"^(.+ is red \(ci |.+'s ci .+ is being re-run|no (finished|completed non-cancelled) ci run on |couldn't read .+'s ci:)", RegexOptions.CultureInvariant);
 
     /// <summary>
     /// merge-rule's description (MergeRule.Evaluate) reduced to its first item's kind, passing over

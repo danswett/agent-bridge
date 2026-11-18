@@ -435,12 +435,18 @@ static class MergeRuleCommand
                 log = $"Main: no completed non-cancelled product evidence in {config.MainGreen.Workflow}'s push history.";
                 return new("failure", $"no completed non-cancelled CI run on {config.Base}: waiting for one");
             }
-            var (run, latest) = evidence.Value;
+            var (run, latest, rerunning) = evidence.Value;
             var sha = run.GetProperty("head_sha").GetString();
             if (!IsCommitSha(sha))
                 throw new InvalidOperationException("CI run has no valid commit SHA");
             var id = run.GetProperty("id").GetInt64();
             var attempt = RunAttempt(run);
+            if (rerunning)
+            {
+                var reason = $"{config.Base}'s CI {MergeRule.Short(sha!)} is being re-run: waiting for {config.Base} to be green";
+                log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {MergeRule.Short(sha!)} is being re-run.";
+                return new("failure", reason);
+            }
             var planGreen = latest.TryGetValue("plan", out var plan)
                 && plan.GetProperty("status").GetString() == "completed" && plan.GetProperty("conclusion").GetString() == "success";
             bool Green(JsonElement job) => job.GetProperty("status").GetString() == "completed"
@@ -502,7 +508,7 @@ static class MergeRuleCommand
         }
     }
 
-    static (JsonElement Run, Dictionary<string, JsonElement> Jobs)? CompletedMain(Session session)
+    static (JsonElement Run, Dictionary<string, JsonElement> Jobs, bool Rerunning)? CompletedMain(Session session)
     {
         var config = session.Config;
         var seen = 0;
@@ -515,7 +521,10 @@ static class MergeRuleCommand
             {
                 if (run.GetProperty("conclusion").GetString() == "cancelled")
                     continue;
+                var isNewest = newest;
+                newest = false;
                 var id = run.GetProperty("id").GetInt64();
+                var attempt = RunAttempt(run);
                 var jobs = new List<JsonElement>();
                 for (var jobPage = 1; ; jobPage++)
                 {
@@ -529,8 +538,8 @@ static class MergeRuleCommand
                 }
                 if (jobs.Count == 0 && Incomplete(run))
                 {
-                    if (newest && RunAttempt(run) > 1)
-                        return null;
+                    if (isNewest && attempt > 1)
+                        return (run.Clone(), [], true);
                     continue;
                 }
                 // Failed-jobs-only reruns retain earlier successful instances.
@@ -542,14 +551,14 @@ static class MergeRuleCommand
                     if (latest.Any(j => j.Key.StartsWith(placeholder.Key.Split(" (", StringSplitOptions.None)[0] + " (", StringComparison.Ordinal)
                         && j.Key != placeholder.Key && RunAttempt(j.Value) > RunAttempt(placeholder.Value)))
                         latest.Remove(placeholder.Key);
+                // A re-run in flight is the newest word on its SHA; an older run's verdict must not stand in for it.
+                if (isNewest && attempt > 1 && ((Incomplete(run) && latest.Values.All(j => RunAttempt(j) < attempt))
+                    || latest.Any(j => (j.Key == "plan" || j.Key.StartsWith("product", StringComparison.Ordinal)
+                    || config.MainGreen.Jobs.Any(n => n.Split(" (", StringSplitOptions.None)[0] == j.Key.Split(" (", StringSplitOptions.None)[0])
+                    || config.MainGreen.LegFamilies.Any(f => f.Contains(j.Key, StringComparer.Ordinal))) && Incomplete(j.Value))))
+                    return (run.Clone(), latest, true);
                 if (!latest.TryGetValue("plan", out var plan))
                     throw new InvalidOperationException("CI job list has no plan");
-                // A re-run in flight is the newest word on its SHA; an older run's verdict must not stand in for it.
-                if (newest && RunAttempt(run) > 1 && latest.Any(j => (j.Key == "plan" || j.Key.StartsWith("product", StringComparison.Ordinal)
-                    || config.MainGreen.Jobs.Any(n => n.Split(" (", StringSplitOptions.None)[0] == j.Key.Split(" (", StringSplitOptions.None)[0])
-                    || config.MainGreen.LegFamilies.Any(f => f.Contains(j.Key, StringComparer.Ordinal))) && Incomplete(j.Value)))
-                    return null;
-                newest = false;
                 var planPending = Incomplete(plan);
                 var planConclusion = plan.GetProperty("conclusion").GetString();
                 if (!planPending && planConclusion is null)
@@ -566,7 +575,7 @@ static class MergeRuleCommand
                     || config.MainGreen.LegFamilies.Any(f => f.Contains(j.Key, StringComparer.Ordinal)))
                     && (Incomplete(j.Value) || j.Value.GetProperty("conclusion").GetString() == "cancelled")))
                     continue;
-                return (run.Clone(), latest);
+                return (run.Clone(), latest, false);
             }
             seen += runs.GetArrayLength();
             if (seen >= doc.RootElement.GetProperty("total_count").GetInt32())

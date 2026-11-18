@@ -517,8 +517,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    head; GitHub merges when required checks pass. Builders never arm or merge.
    The [single Fleet pipeline register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
    owns standing decisions/exceptions; this section describes Bridge operations only.
-   **Reader enforcement is STALE:** the current evaluator/config can accept one
-   independent receipt plus completed Copilot instead of the required second family.
+   **Reader enforcement remains partial:** the evaluator requires both receipt
+   families where configured; Copilot cannot replace either receipt.
    Before arming or permitting merge, Quality MUST manually verify authorized
    posters and Quality-only posting; actual approved model/effort (or approved
    retained continuity); successful receipts backed by linked CLEAN review verdicts explicitly
@@ -550,8 +550,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      walks main's `ci.yml` push runs newest first, across up to 100 runs. A cancelled run never
      counts. A candidate needs a successful completed plan and completed product instances;
      queued, in-progress or cancelled named jobs pass the run over. A failed plan or a
-     classification-skipped product family also passes it over. A newer main head still running
-     does not block; the pull request's own running checks still do. The single
+     classification-skipped product family also passes it over. A newer main head's first
+     attempt still running does not block; the pull request's own running checks still do.
+     The newest non-cancelled run's active retry holds with an explicit re-run waiting reason
+     when its current-attempt jobs have not appeared, or its plan, product or named jobs
+     are unfinished. It never falls back to another run's verdict in that state.
+     An empty first attempt still consumes the newest slot; an older retry does not acquire it.
+     The single
      `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
      light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
      dynamic family: at least one entry must exist and every present instance must pass; runners

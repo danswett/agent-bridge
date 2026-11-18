@@ -80,6 +80,8 @@ public sealed class ReportTests
     [InlineData("failure", "Main is red (CI abc1234): waiting for main to be fixed; Draft: mark it ready for review", "draft")]
     [InlineData("failure", "#7: Main's CI abc1234 is being re-run: waiting for main to be green; Waiting for a Copilot review of def5678", "Copilot review")]
     [InlineData("failure", "Main is red (CI abc1234): waiting for main to be fixed", "main red")]
+    [InlineData("failure", "No completed non-cancelled CI run on main: waiting for one; Held by the label 'hold'", "held")]
+    [InlineData("failure", "No completed non-cancelled CI run on main: waiting for one", "main red")]
     public void An_open_pull_request_is_stuck_on_the_first_item_merge_rule_names_after_a_red_main(string state, string description, string expected) =>
         Assert.Equal(expected, WeeklyReport.StuckOn(Open(1, rule: state, description: description), "main", mainRed: false));
 

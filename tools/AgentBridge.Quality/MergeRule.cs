@@ -276,18 +276,16 @@ static class MergeRule
         // independent review's success receipt on the head is the review requirement, and Copilot's
         // review is an optional extra. A change that needs that review needs a second one too, from
         // another model family, unless every sensitive file it touches is one that one review is
-        // enough for. A completed Copilot review is that other family (Quality's choice on #962,
-        // option a), and a Copilot error or timeout is not a verdict either way. The copilot-waived
-        // label is still accepted in the config but changes nothing.
+        // enough for. Copilot is optional and never replaces either receipt, so review events
+        // cannot change the gate. The copilot-waived label is still accepted but changes nothing.
         var oneReview = config.CopilotWaiver.OneReviewPaths.Select(p => new Glob(p, ignoreCase: true)).ToList();
         var needsSecond = marked || (pr.FullyRead && (!pr.FilesComplete || sensitive.Any(f => !oneReview.Any(g => g.IsMatch(f)))));
         // A reviewer's failure in the second context blocks below whatever else is on the head
         // (sr-962b).
         var second = LatestReceipt(config, pr, config.CopilotWaiver.SecondReview);
         var families = needsSecond && receipt is not null && second is not null && DifferentFamilies(receipt.Description, second.Description);
-        // Copilot never replaces the first receipt; it only stands in for the second.
         var waived = receipt?.State == "success"
-            && (!needsSecond || copilot || (second?.State == "success" && families));
+            && (!needsSecond || (second?.State == "success" && families));
         if (!waived)
         {
             if (receipt?.State == "success" && second?.State != "success")
