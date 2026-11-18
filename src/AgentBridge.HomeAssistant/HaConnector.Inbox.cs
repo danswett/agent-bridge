@@ -7,7 +7,7 @@ namespace AgentBridge.HomeAssistant;
 public sealed partial class HaConnector
 {
     readonly DurableInbox? inbox;
-    readonly ConcurrentQueue<(InboxMessage Message, bool Duplicate)> inboxReceipts = new();
+    readonly ConcurrentQueue<(InboxMessage Message, bool Duplicate, Notice? Notice)> inboxReceipts = new();
 
     bool StoreInbox(HaTrigger hit)
     {
@@ -25,7 +25,7 @@ public sealed partial class HaConnector
             var message = inbox.Enqueue(node, rid, CleanSender(Str(a, "sender")), JsonSerializer.Serialize(hit.State), time.GetUtcNow(), out var duplicate);
             p.Reply.Handle(hit.State);
             p.Reply.ReadAgain = true;
-            inboxReceipts.Enqueue((message, duplicate));
+            inboxReceipts.Enqueue((message, duplicate, null));
             return true;
         }
     }
@@ -44,9 +44,10 @@ public sealed partial class HaConnector
             {
                 var outcome = InboxOutcome(message);
                 p.Reply.Ack = MakeAck(message.Rid, message.Sender, outcome, receipt.Duplicate && message.DeliveredAt is not null);
-                await TransientAsync(p, outcome == "refused" ? "Reply NOT sent" :
+                var notice = receipt.Notice ?? new Notice(outcome == "refused" ? "Reply NOT sent" :
                     message.DeliveredAt is null ? "Reply queued" : "Duplicate reply dropped",
-                    outcome == "refused" ? new JsonObject { ["error"] = "This request was refused; check the session and inbox capacity before retrying with a new request id." } : [], ct);
+                    outcome == "refused" ? new JsonObject { ["error"] = "This request was refused; check the session and inbox capacity before retrying with a new request id." } : []);
+                await TransientAsync(p, notice.Summary, notice.Extra, ct);
             }
             inboxReceipts.TryDequeue(out _);
         }
@@ -95,11 +96,11 @@ public sealed partial class HaConnector
         while (inbox?.Peek(p.Node) is { } next)
         {
             var outcome = next.StartedAt is null ? "refused" : "unconfirmed";
-            CompleteInbox(p.Node, next.Rid, outcome);
-            p.Reply.Ack = MakeAck(next.Rid, next.Sender, outcome);
+            var message = inbox.Deliver(p.Node, next.Rid, time.GetUtcNow(), outcome);
+            inboxReceipts.Enqueue((message, false, new Notice("Reply NOT sent", new JsonObject { ["error"] = outcome == "refused"
+                ? "The session is asking a question; retry after it closes with a new request id." : "Delivery was interrupted; check the terminal before retrying." })));
             if (outcome == "unconfirmed") { log($"Home Assistant connector: interrupted reply {next.Rid} was not retyped"); }
-            await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = outcome == "refused"
-                ? "The session is asking a question; retry after it closes." : "Delivery was interrupted; check the terminal before retrying." }, ct);
+            await InboxReceiptsAsync(ct);
         }
         p.Reply.ReadAgain = false;
     }

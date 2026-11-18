@@ -581,8 +581,11 @@ directory, before `queued` is acknowledged. Legacy publishes without a rid stay 
 The existing connector pass and per-session delivery fence provide one FIFO dispatcher per
 node; queued messages survive process restart and bypass the old 16-message memory limit.
 Each rid is acknowledged as queued, then with its delivery outcome; the sender waits through
-queued without calling it delivered. Delivery refusals may be retried; overflow refusals retain
-their rid and require a new rid after capacity frees. Terminal outcomes survive
+queued without calling it delivered. Delivery refusals may be retried; overflow refusals and
+accepted replies refused when a question opens retain their rid and require a new rid.
+Question refusals are saved as payload-free terminal results before publication; a failed
+publication retries through the receipt queue without delivery. After restart, a same-rid
+retry returns the persisted refusal, even after the question closes. Terminal outcomes survive
 restart and are re-acknowledged on duplicate sends, without typing again.
 An attempt marker is persisted before calling delivery. A restart during an attempt reports
 `unconfirmed` and logs the interruption rather than risking duplicate typing; later queued
