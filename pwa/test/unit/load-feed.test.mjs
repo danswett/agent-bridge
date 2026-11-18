@@ -46,7 +46,7 @@ test('the guarded feed omits invalid host percentages without losing bytes or ch
     const a = await fake(t, { result: raw }), feed = new LoadFeed();
     await feed.attach('a', a.client);
     assert.deepEqual(feed.load('a'), sample());
-    assert.equal(loadBars(feed.load('a')).state, 'fresh');
+    assert.equal(loadBars(feed.load('a')).state, 'partial');
     assert.equal(loadBars(feed.load('a')).memory.percent, null);
   }
 });
@@ -64,7 +64,7 @@ test('the shared capped MachineLoad vector feeds partial bars without exposing s
   const bars = loadBars(feed.load('a'));
   assert.equal(bars.state, 'partial');
   assert.equal(bars.cpu.percent, raw.cpu.percent);
-  assert.equal(bars.memory.percent, 100 * (1 - raw.memory.availableBytes / raw.memory.totalBytes));
+  assert.equal(bars.memory.percent, null);
 });
 test('get then subscribe feeds exact machine figures and ignores all other fields', async (t) => {
   const a = await fake(t), b = await fake(t, { result: sample({ cpu: undefined }) });
@@ -72,15 +72,17 @@ test('get then subscribe feeds exact machine figures and ignores all other field
   const feed = new LoadFeed({ now: () => 0, onChange: (id) => changes.push(id) });
   await Promise.all([feed.attach('a', a.client), feed.attach('b', b.client)]);
   assert.deepEqual(a.ops(), ['load.get', 'load.subscribe']);
-  a.update(sample({ sessions: [{ name: 'ignored' }], future: true, cpu: { percent: 12, cores: 8 } }));
-  assert.deepEqual(feed.load('a'), sample({ cpu: { percent: 12 } }));
+  a.update(sample({ sessions: [{ name: 'ignored' }], future: true, cpu: { percent: 12, cores: 8 },
+    memory: { totalBytes: 100, availableBytes: 25, usedPercent: 75 } }));
+  assert.deepEqual(feed.load('a'), sample({ cpu: { percent: 12 }, memory: { totalBytes: 100, availableBytes: 25, usedPercent: 75 } }));
   assert.equal(loadBars(feed.load('a')).memory.percent, 75);
   assert.equal(loadBars(feed.load('b')).cpu.percent, null);
   assert.ok(changes.includes('a') && changes.includes('b'));
 });
 test('only the host state and age determine freshness, never elapsed client time', async (t) => {
   let now = 100;
-  const a = await fake(t), feed = new LoadFeed({ now: () => now });
+  const a = await fake(t, { result: sample({ memory: { totalBytes: 100, availableBytes: 25, usedPercent: 75 } }) });
+  const feed = new LoadFeed({ now: () => now });
   await feed.attach('a', a.client);
   now += 1000000;
   assert.equal(loadBars(feed.load('a')).state, 'fresh');
@@ -91,6 +93,8 @@ test('only the host state and age determine freshness, never elapsed client time
   now += 1000;
   a.update(sample({ state: 'stale', ageMs: 0 }));
   assert.equal(loadBars(feed.load('a')).state, 'stale');
+  assert.equal(loadBars(feed.load('a')).cpu.percent, null);
+  assert.equal(loadBars(feed.load('a')).memory.percent, null);
 });
 
 test('no load capability makes no load request and exposes no record or demo figure', async (t) => {
