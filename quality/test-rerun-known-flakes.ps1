@@ -52,43 +52,61 @@ function Fake-Gh {
     $s = $script:Scenario
     switch -Regex ($a) {
         '^api repos/r/actions/runs/100$' {
-            @{ path = '.github/workflows/ci.yml'; event = 'push'; head_branch = 'main'; head_repository = @{ full_name = 'r' }
+            @{ id = 100; status = $s.status; path = $s.path; event = $s.event; head_branch = $s.branch; head_repository = @{ full_name = $s.repository }
                 conclusion = $s.conclusion; run_attempt = $s.attempt; created_at = '2026-11-09T05:00:00Z'; html_url = 'https://example/run/100'
-                head_sha = 'abcdef0123456789' } | ConvertTo-Json -Depth 4; return }
+                head_sha = ('abcdef01' * 5) } | ConvertTo-Json -Depth 4; return }
         '^api repos/r/actions/runs\?' { @{ workflow_runs = @($s.newer) } | ConvertTo-Json -Depth 4; return }
+        '^api repos/r/actions/workflows/ci.yml/runs\?' { @{ workflow_runs = @($s.newer) } | ConvertTo-Json -Depth 4; return }
+        '^api repos/r/actions/runs/100/attempts/1/jobs' {
+            @{ jobs = @(@{ id = 9; name = 'original'; conclusion = 'failure' }) } | ConvertTo-Json -Depth 4; return }
         '^api repos/r/actions/runs/100/jobs' {
             $js = @(@{ id = 7; name = $s.jobName; labels = $s.labels; conclusion = $s.jobConclusion }) + @($s.extraJobs)
             if ($s.gate) { $js += @{ id = 8; name = 'quality-gate'; conclusion = 'failure' } }
             @{ jobs = $js } | ConvertTo-Json -Depth 4; return }
         '^api repos/r/actions/jobs/8/logs' { 'Error: Process completed with exit code 1.'; return }
         '^api repos/r/actions/jobs/7/logs' {
+            if ($s.logFails) { $global:LASTEXITCODE = 1; return }
             if ($s.log.Contains([string][char]27) -and '--allow-escape-sequences' -notin $args) {
                 $global:LASTEXITCODE = 1; return
             }
             $s.log; return }
         '^api repos/r/actions/jobs/9/logs' { $s.extraLog; return }
+        '^issue list.*--label main-red' {
+            if ($a -match '--state open' -and $s.incidentState -eq 'closed') { '[]'; return }
+            @(@{ number = 40; body = $s.incidentBody
+                comments = @($s.comments) }) | ConvertTo-Json -Depth 6 -AsArray; return }
         '^issue list' { ($issues | ConvertTo-Json -Depth 4 -AsArray); return }
-        '^run rerun' { return }
-        '^issue comment' { return }
+        '^issue view' { @{ comments = @($s.comments) } | ConvertTo-Json -Depth 6; return }
+        '^run rerun' { if ($s.dispatchFails) { $global:LASTEXITCODE = 1 }; return }
+        '^issue comment' {
+            $s.comments += @{ author = @{ login = 'github-actions[bot]' }; body = $args[([array]::IndexOf($args, '--body') + 1)] }; return }
+        '^issue edit' { return }
+        default { throw "Unexpected gh request: $a" }
     }
 }
-function Run-Scenario([hashtable]$Over, [switch]$DryRun) {
+function Run-Scenario([hashtable]$Over, [switch]$DryRun, [switch]$AutoRerun, [switch]$Replay) {
     $script:Scenario = @{ conclusion = 'failure'; attempt = 1; newer = @(); jobConclusion = 'failure'; gate = $false
         jobName = 'product (windows-latest)'; labels = @('windows-latest'); extraJobs = @()
-        extraLog = '  Failed A.B.C.Method [1 s]'; log = '  Failed A.B.C.Method [1 s]' } + @{}
+        extraLog = '  Failed A.B.C.Method [1 s]'; log = '  Failed A.B.C.Method [1 s]'
+        path = '.github/workflows/ci.yml'; event = 'push'; branch = 'main'; repository = 'r'; comments = @()
+        status = 'completed'; logFails = $false; dispatchFails = $false; incidentState = 'open'
+        incidentBody = "<!-- main-red run=100 attempt=1 -->`nsha=$('abcdef01' * 5) attempt=1" } + @{}
     foreach ($k in $Over.Keys) { $script:Scenario[$k] = $Over[$k] }
     $script:Calls = @()
     $summary = [IO.Path]::GetTempFileName()
     $previous = $env:GITHUB_STEP_SUMMARY
     try {
         $env:GITHUB_STEP_SUMMARY = $summary
-        $r = Invoke-RerunKnownFlakes -RunId 100 -Repository 'r' -DryRun:$DryRun
+        $invoke = @{ RunId = 100; Repository = 'r'; DryRun = $DryRun }
+        if ($AutoRerun) { $invoke.AutoRerun = $true }
+        $r = Invoke-RerunKnownFlakes @invoke
+        if ($Replay) { $null = Invoke-RerunKnownFlakes @invoke }
         $evidence = Get-Content -LiteralPath $summary -Raw
     } finally {
         $env:GITHUB_STEP_SUMMARY = $previous
         Remove-Item -LiteralPath $summary
     }
-    [pscustomobject]@{ Result = $r; Summary = [string]$evidence
+    [pscustomobject]@{ Result = $r; Summary = [string]$evidence; Calls = @($script:Calls)
         Requests = @($script:Calls | Where-Object { $_ -like 'run rerun*' })
         Reran = @($script:Calls | Where-Object { $_ -like 'run rerun*' }).Count; Comments = @($script:Calls | Where-Object { $_ -like 'issue comment*' }).Count }
 }
@@ -149,6 +167,72 @@ $x = Run-Scenario @{ jobConclusion = 'timed_out'; extraJobs = @(@{ id = 9; name 
 Assert (-not $x.Result.Rerun -and $x.Reran -eq 0) 'a cancellation beside a Windows timeout refuses'
 $workflow = Get-Content (Join-Path $PSScriptRoot '..\.github\workflows\rerun-known-flakes.yml') -Raw
 Assert ($workflow -match "workflow_run.conclusion == 'timed_out'") 'the workflow also admits a timed-out CI conclusion'
+$groupTemplate = [regex]::Match($workflow, '(?m)^\s+group:\s*(.+)$').Groups[1].Value.Trim()
+$groups = @(foreach ($completion in @(@{ id = 100; attempt = 1 }, @{ id = 100; attempt = 2 }, @{ id = 101; attempt = 1 })) {
+    $groupTemplate.Replace('${{ github.event.workflow_run.id }}', [string]$completion.id).Replace('${{ github.event.workflow_run.run_attempt }}', [string]$completion.attempt)
+})
+Assert (@($groups | Sort-Object -Unique).Count -eq 3 -and 'main-red-ci' -notin $groups) 'rerun handlers isolate each run and attempt from S1 and unrelated completions'
 
+foreach ($failureLog in '  Failed New.Real.Failure [1 s]', 'error CS1002: ; expected') {
+    $x = Run-Scenario @{ log = $failureLog } -AutoRerun
+    Assert ($x.Result.Rerun -and $x.Reran -eq 1) "auto mode retries an unfiled failure or build error: $failureLog"
+}
+$x = Run-Scenario @{ jobConclusion = 'timed_out'; labels = @('ubuntu-latest') } -AutoRerun
+Assert ($x.Reran -eq 1) 'auto mode covers non-Windows timeouts too'
+$x = Run-Scenario @{ logFails = $true } -AutoRerun
+Assert ($x.Reran -eq 1) 'unavailable job logs cannot suppress an otherwise eligible automatic rerun'
+$x = Run-Scenario @{} -AutoRerun -Replay
+Assert ($x.Reran -eq 1) 'repeated first-attempt delivery cannot request a second rerun even before metadata advances'
+Assert (@($x.Calls | Where-Object { $_ -like 'issue comment 1 *rerun-known-flakes: test=A.B.C.Method run=100 attempt=1 job=*' }).Count -eq 1) 'auto mode preserves the countable known-flake receipt'
+$marker = "<!-- rerun-once run=100 attempt=1 sha=$('abcdef01' * 5) -->`n"
+$x = Run-Scenario @{ comments = @(@{ author = @{ login = 'stranger' }; body = $marker }) } -AutoRerun
+Assert ($x.Reran -eq 1) 'an untrusted comment cannot spoof a dispatch reservation'
+$x = Run-Scenario @{ comments = @(@{ author = @{ login = 'github-actions[bot]' }; body = "job: $marker" }) } -AutoRerun
+Assert ($x.Reran -eq 1) 'a marker embedded in a job name is not a reservation'
+$s1Record = "<!-- main-red run=100 attempt=1 -->`nsha=$('abcdef01' * 5) attempt=1"
+$x = Run-Scenario @{ incidentBody = 'an earlier run opened this incident'; comments = @(@{ author = @{ login = 'github-actions[bot]' }; body = $s1Record }) } -AutoRerun
+Assert ($x.Reran -eq 1) 'S1 evidence on a reused incident binds the current run and SHA too'
+try { $null = Run-Scenario @{ incidentBody = '<!-- main-red run=100 attempt=1 -->' } -AutoRerun; Assert $false 'an incident without the full matching SHA must refuse' }
+catch { Assert (@($script:Calls | Where-Object { $_ -like 'run rerun*' }).Count -eq 0) 'an incident without the full matching SHA refuses before dispatch' }
+try {
+    $null = Run-Scenario @{ incidentBody = 'unrelated'; comments = @(@{ author = @{ login = 'stranger' }; body = $s1Record }) } -AutoRerun
+    Assert $false 'untrusted S1 evidence must refuse'
+} catch { Assert (@($script:Calls | Where-Object { $_ -like 'run rerun*' }).Count -eq 0) 'an untrusted S1 record cannot attach the rerun to an unrelated incident' }
+try { $null = Run-Scenario @{ dispatchFails = $true } -AutoRerun; Assert $false 'a dispatch failure must surface' }
+catch {
+    Assert ($_.Exception.Message -like 'gh run rerun*failed*') 'a dispatch failure surfaces instead of reporting success'
+    $before = @($script:Calls | Where-Object { $_ -like 'run rerun*' }).Count
+    $null = Invoke-RerunKnownFlakes -RunId 100 -Repository r -AutoRerun
+    Assert (@($script:Calls | Where-Object { $_ -like 'run rerun*' }).Count -eq $before) 'uncertain dispatch retains its reservation rather than risking a second request'
+}
+$x = Run-Scenario @{ attempt = 2; conclusion = 'success'; jobConclusion = 'success'; log = ''; incidentState = 'closed' } -AutoRerun -Replay
+Assert ($x.Reran -eq 0) 'green attempt two never requests another rerun'
+Assert (@($x.Calls | Where-Object { $_ -like 'issue edit 40 *--add-label flaky*' }).Count -eq 1) 'green attempt two labels the incident once'
+Assert (@($x.Calls | Where-Object { $_ -like 'issue edit 1 *--add-label flaky*' }).Count -eq 1) 'green attempt two labels the matched flake issue'
+Assert (@($x.Calls | Where-Object { $_ -like 'issue comment 40 *rerun-flake: run=100 attempt=2 passed; failed test(s)=A.B.C.Method*' }).Count -eq 1) 'green evidence uses original failed tests, even after S1 closes the incident'
+Assert (@($x.Calls | Where-Object { $_ -like 'issue list*--state all*' }).Count -gt 0) 'attempt two can find the closed S1 incident'
+foreach ($originalLog in '  Failed New.Real.Failure [1 s]', 'error CS1002: ; expected', '') {
+    try {
+        $x = Run-Scenario @{ attempt = 2; conclusion = 'success'; jobConclusion = 'success'; log = ''; extraLog = $originalLog } -AutoRerun -Replay
+        $expectedTests = if ($originalLog -like '*New.Real.Failure*') { 'New.Real.Failure' } else { 'none' }
+        Assert ($x.Reran -eq 0 -and @($x.Calls | Where-Object { $_ -like 'issue edit 40 *--add-label flaky*' }).Count -eq 1) "green attempt two labels only the incident without matched flakes: $originalLog"
+        Assert (@($x.Calls | Where-Object { $_ -like "issue comment 40 *rerun-flake: run=100 attempt=2 passed; failed test(s)=$expectedTests*" }).Count -eq 1 -and @($x.Calls | Where-Object { $_ -like 'issue edit *' }).Count -eq 1) 'unfiled failures and nameless failures retain one accurate receipt without flake-issue writes'
+    } catch { Assert $false "green attempt two without matches must complete: $originalLog ($($_.Exception.Message))" }
+}
+$x = Run-Scenario @{ attempt = 2 } -AutoRerun -Replay
+Assert ($x.Reran -eq 0 -and @($x.Calls | Where-Object { $_ -like 'issue comment 40 *rerun-failed: run=100 attempt=2 same test(s)=A.B.C.Method*' }).Count -eq 1) 'a repeated failure records its intersection once for mitigation, never attempt three'
+$x = Run-Scenario @{ attempt = 2; log = '  Failed Different.Test.Failure [1 s]' } -AutoRerun
+Assert (@($x.Calls | Where-Object { $_ -like 'issue comment 40 *same test(s)=none*' }).Count -eq 1) 'a different second failure is not misrepresented as repeatable evidence'
+foreach ($over in @(
+    @{ jobConclusion = 'cancelled' }, @{ attempt = 3 }, @{ branch = 'feature' }, @{ repository = 'fork/r' },
+    @{ event = 'pull_request' }, @{ path = '.github/workflows/other.yml' }, @{ status = 'in_progress' },
+    @{ newer = @(@{ id = 101; path = '.github/workflows/ci.yml'; created_at = '2026-11-09T05:10:00Z' }) },
+    @{ newer = @(@{ id = 101; path = '.github/workflows/ci.yml'; created_at = '2026-11-09T05:00:00Z' }) }
+)) {
+    $x = Run-Scenario $over -AutoRerun
+    Assert ($x.Reran -eq 0 -and $x.Comments -eq 0) "auto mode retains trust, cancellation, freshness and attempt guards: $($over.Keys -join ',')"
+}
+$x = Run-Scenario @{} -AutoRerun -DryRun
+Assert ($x.Reran -eq 0 -and $x.Comments -eq 0) 'auto dry run leaves no reservation or issue writes'
 if ($script:failures) { "$($script:failures) failure(s)"; exit 1 }
 'rerun-known-flakes: all checks passed'
