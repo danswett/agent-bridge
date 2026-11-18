@@ -24,7 +24,9 @@ public sealed class SessionEvidence
                 "stale" => Boolean(v),
                 "openAsks" or "unsentLength" => v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) && n >= 0,
                 "unsentHash" => Hash(v),
-                "observedAt" or "lastReplyAt" => v.ValueKind == JsonValueKind.String && DateTimeOffset.TryParseExact(v.GetString(),
+                "observedAt" or "lastReplyAt" => v.ValueKind == JsonValueKind.String && v.GetString() is { } stamp
+                    && (stamp.Length == 20 || stamp.Length is >= 22 and <= 28 && stamp[19] == '.' && stamp[20..^1].All(char.IsAsciiDigit))
+                    && DateTimeOffset.TryParseExact(stamp,
                     ["yyyy-MM-dd'T'HH:mm:ss'Z'", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'"], CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out _),
                 "senderVerified" => Boolean(v) || Text(v, "unknown"),
                 "attention" => Only(v, "kind") && v.TryGetProperty("kind", out var k) && k.ValueKind == JsonValueKind.String
