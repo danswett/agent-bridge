@@ -9,7 +9,7 @@ using Xunit;
 // stop delivery that keeps the host's two-press rule (session.stop): what the card says at each
 // press, as the daemon says it (Fixtures/ha-stops.json, recorded from its own functions), and
 // what reaches the host.
-public sealed class StopTests : IDisposable
+public sealed partial class StopTests : IDisposable
 {
     const string Machine = "DSWETT-DEV-VM1";
     const string A = "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20";
