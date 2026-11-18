@@ -42,7 +42,7 @@ public sealed partial class RemoteAuthorizationTests
         if (revoked)
         {
             await Assert.ThrowsAsync<InvalidOperationException>(async () => await admitted.WaitAsync(Patience));
-            Assert.False((await queued).GetProperty("ok").GetBoolean());
+            await Assert.ThrowsAsync<IOException>(() => queued);
         }
         else { await admitted.WaitAsync(Patience); Result(await queued); }
         Assert.Equal(revoked, replies.Last is null);
@@ -76,5 +76,20 @@ public sealed partial class RemoteAuthorizationTests
     {
         internal bool Unreadable;
         public override DateTimeOffset GetUtcNow() => Unreadable ? throw new IOException("clock unavailable") : base.GetUtcNow();
+    }
+
+    [Fact]
+    public async Task Gate_pause_voids_and_releases_admission_when_its_control_channel_is_revoked()
+    {
+        var (channel, audit, _) = await GateAsync();
+        var run = Result(await channel.RequestAsync("gate.start", new { request = Guid.NewGuid() }, Patience)).GetProperty("run").GetGuid();
+        Result(await channel.RequestAsync("gate.pause", new { request = Guid.NewGuid(), run }, Patience));
+        var resumed = audit.Admission.WaitForAdmissionAsync();
+        Assert.False(resumed.IsCompleted);
+        store.Revoke(devices[^1].Key.Public);
+        authorization.Revalidate();
+        await resumed.WaitAsync(Patience);
+        audit.RunPause.ValidateClock();
+        Assert.True(GateAuditProjection.Read(audit.Profile, run).Invalidated);
     }
 }

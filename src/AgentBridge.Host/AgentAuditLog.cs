@@ -59,6 +59,26 @@ public sealed class AgentAuditLog
     readonly object gate = new();
     readonly string profile;
     internal string Profile => profile;
+    internal TimeProvider Clock => time;
+    internal AgentBridge.Host.Delivery.DeliveryGate Admission { get; }
+    readonly Lazy<GateRunPause> runPause;
+    internal GateRunPause RunPause => runPause.Value;
+    internal void ControlFault()
+    {
+        log("gate control invalidated; its audit marker could not be written");
+        try
+        {
+            lock (gate)
+            {
+                var folder = Path.Combine(profile, FolderName);
+                using var held = Lock(folder);
+                if (ReadHead(folder, false) is { } head)
+                { WriteHead(folder, false, head, head.Sequence, "coverage-break"); }
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        { log("gate control could not persist its coverage fault"); }
+    }
     GateRunContext? controlWriterRun;
     internal GateRunContext? ControlWriterRun
     {
@@ -72,20 +92,23 @@ public sealed class AgentAuditLog
     bool failing;
     bool retentionFailing;
 
-    public AgentAuditLog(string profileFolder, TimeProvider? time = null, Action<string>? log = null, long maxBytes = MaxBytes)
+    public AgentAuditLog(string profileFolder, TimeProvider? time = null, Action<string>? log = null, long maxBytes = MaxBytes,
+        AgentBridge.Host.Delivery.DeliveryGate? admission = null)
     {
         profile = profileFolder;
         this.time = time ?? TimeProvider.System;
         this.log = log ?? (_ => { });
         this.maxBytes = maxBytes;
+        Admission = admission ?? new();
+        runPause = new(() => new GateRunPause(this));
     }
 
     // text is only measured and hashed, never kept. Returns whether the line was written.
     public bool Append(AgentAuditEntry entry, string? text = null)
     {
-        var now = time.GetUtcNow();
         try
         {
+            var now = time.GetUtcNow();
             var bytes = text is null || entry.Gate is not null ? null : Encoding.UTF8.GetBytes(text);
             var chain = (entry.Chain ?? []).Take(MaxChain).Select(c => Cap(c, MaxField)).ToArray();
             var line = new Line(now, Cap(entry.Direction, MaxField), Cap(entry.Request, MaxField), Cap(entry.Principal, MaxField), chain,

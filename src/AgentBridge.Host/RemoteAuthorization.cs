@@ -93,10 +93,16 @@ public sealed class RemoteAuthorization : IDisposable
         {
             if (!IsPinnedPerson(channel)) { throw new InvalidOperationException(GateRunPreparation.PersonRequired); }
             if (sessions.ReadOnly?.Invoke() is { } readOnly) { throw new InvalidOperationException(readOnly); }
+            launchAudit?.RunPause.ValidateClock();
+            if (op is "gate.pause" or "gate.resume")
+            { return (launchAudit ?? throw new InvalidOperationException("gate control refused: audit unavailable")).RunPause.Control(
+                $"person:{channel.PeerId}", data, channel.Closed, op == "gate.resume"); }
             if (op != "gate.start") { throw new InvalidOperationException("gate lifecycle control is unavailable"); }
             return GateRunPreparation.Prepare(launchAudit ?? throw new InvalidOperationException("gate control refused: audit unavailable"),
                 $"person:{channel.PeerId}", data, enrollment);
         }
+        if (launchAudit is not null && op is Ops.SessionAnswer or Ops.SessionReply or Ops.SessionStop or LaunchProtocol.Launch
+            && (!Enabled || IsPinnedPerson(channel))) { await launchAudit.RunPause.WaitAsync(); launchAudit.RunPause.ValidateClock(); }
         var audit = op == LaunchProtocol.Launch ? launchAudit : null;
         var ingress = audit is null ? null : new GateLaunchIngress("relay", "person-client", $"person:{channel.PeerId}", audit.ControlWriterRun);
         if (!Enabled) { return await sessions.HandleAsync(channel, op, data, hello => DiagnosticsFor(channel, hello), op == Ops.SessionStop ? launchAudit : audit, ingress); }
