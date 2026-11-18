@@ -69,6 +69,30 @@ public sealed class LocalApiAgentLaunchTests : IDisposable
     }
 
     [Theory]
+    [InlineData(AgentProtocol.ScopeRead)]
+    [InlineData(AgentProtocol.ScopeReadReplyLaunch)]
+    public async Task A_null_session_service_never_bypasses_the_agent_launch_refusal_or_reserves_capacity(string scope)
+    {
+        Authenticate(scope);
+        var noService = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.Agent, "fixture")),
+            credentials: credentials, audit: new(root));
+        if (scope == AgentProtocol.ScopeRead)
+        {
+            var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => noService(channel, LaunchProtocol.Launch, Body()));
+            Assert.Contains("for the person", refusal.Message);
+        }
+        else
+        {
+            var refusal = Assert.IsType<LaunchResult>(await noService(channel, LaunchProtocol.Launch, Body()));
+            Assert.Equal(LaunchOutcome.Refused, refusal.Outcome);
+            Assert.Contains("unavailable", refusal.Reason);
+        }
+        Assert.Equal(0, launcher.Starts);
+        Assert.Empty(credentials.LaunchGate.Reservations());
+        Assert.Equal("refused", Assert.Single(Rows()).GetProperty("outcome").GetString());
+    }
+
+    [Theory]
     [InlineData("switch", "agents.launch.enabled")]
     [InlineData("permissions", "permissions")]
     [InlineData("arguments", "extra arguments")]
