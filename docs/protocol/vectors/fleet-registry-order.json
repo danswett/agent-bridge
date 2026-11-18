@@ -1,0 +1,97 @@
+{
+  "description": "#2936 spec-only, post-verification ordering inputs, not registry wire records. at/readerAt are UTC Unix milliseconds. verified is trusted test setup, never relay input. IDs identify fixture candidates. All candidates share one authenticated account and exact name; machine IDs are neutral comparison domains.",
+  "readerAt": 1000000,
+  "cases": [
+    { "name": "replacement-newer-epoch-beats-seq-and-local-clock", "records": [
+      { "id": "predecessor", "machine": "a", "live": true, "verified": true, "epoch": 1, "seq": 99, "at": 1000000, "localAt": 9007199254740991 },
+      { "id": "replacement", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 0, "at": 999999, "localAt": 0 }
+    ], "expected": { "result": "found", "id": "replacement" } },
+    { "name": "replacement-older-despite-positive-clock-skew", "records": [
+      { "id": "predecessor", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 0, "at": 940001 },
+      { "id": "replacement", "machine": "a", "live": true, "verified": true, "epoch": 1, "seq": 99, "at": 1059999 }
+    ], "expected": { "result": "found", "id": "predecessor" } },
+    { "name": "higher-seq-within-epoch", "records": [
+      { "id": "earlier", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1, "at": 1000001 },
+      { "id": "later", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 2, "at": 999999 }
+    ], "expected": { "result": "found", "id": "later" } },
+    { "name": "equal-evidence-different-times", "records": [
+      { "id": "first", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1, "at": 999999 },
+      { "id": "second", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1, "at": 1000001 }
+    ], "expected": { "result": "ambiguous" } },
+    { "name": "missing-at", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1 }
+    ], "expected": { "result": "ambiguous" } },
+    { "name": "missing-epoch-beside-complete-evidence", "records": [
+      { "id": "first", "machine": "a", "live": true, "verified": true, "seq": 1, "at": 1000000 },
+      { "id": "second", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 2, "at": 1000000 }
+    ], "expected": { "result": "ambiguous" } },
+    { "name": "null-seq", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": null, "at": 1000000 }
+    ], "expected": { "result": "ambiguous" } },
+    { "name": "forged-beside-verified", "records": [
+      { "id": "authentic", "machine": "a", "live": true, "verified": true, "epoch": 1, "seq": 1, "at": 1000000 },
+      { "id": "forged", "machine": "a", "live": true, "verified": false, "epoch": 99, "seq": 99, "at": 1000000 }
+    ], "expected": { "result": "refused" } },
+    { "name": "unsigned-no-verification", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "epoch": 2, "seq": 1, "at": 1000000 }
+    ], "expected": { "result": "refused" } },
+    { "name": "predecessor-still-live", "records": [
+      { "id": "predecessor", "machine": "a", "live": true, "verified": true, "epoch": 1, "seq": 1, "at": 1000000 },
+      { "id": "replacement", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1, "at": 1000000 }
+    ], "expected": { "result": "found", "id": "replacement" } },
+    { "name": "same-name-different-machines-incomparable", "records": [
+      { "id": "first", "machine": "a", "live": true, "verified": true, "epoch": 1, "seq": 1, "at": 1000000 },
+      { "id": "second", "machine": "b", "live": true, "verified": true, "epoch": 999, "seq": 99, "at": 1000001 }
+    ], "expected": { "result": "ambiguous" } },
+    { "name": "offline-predecessor-never-competes", "records": [
+      { "id": "predecessor", "machine": "b", "live": false, "verified": false },
+      { "id": "replacement", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1, "at": 1000000 }
+    ], "expected": { "result": "found", "id": "replacement" } },
+    { "name": "inclusive-sixty-second-bounds", "records": [
+      { "id": "earlier", "machine": "a", "live": true, "verified": true, "epoch": 1, "seq": 1, "at": 1060000 },
+      { "id": "later", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1, "at": 940000 }
+    ], "expected": { "result": "found", "id": "later" } },
+    { "name": "future-skew-over-bound", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1, "at": 1060001 }
+    ], "expected": { "result": "refused" } },
+    { "name": "stale-over-bound", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1, "at": 939999 }
+    ], "expected": { "result": "refused" } },
+    { "name": "negative-at", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1, "at": -1 }
+    ], "expected": { "result": "refused" } },
+    { "name": "negative-epoch", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": -1, "seq": 1, "at": 1000000 }
+    ], "expected": { "result": "refused" } },
+    { "name": "negative-seq", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": -1, "at": 1000000 }
+    ], "expected": { "result": "refused" } },
+    { "name": "fractional-at", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1, "at": 1000000.5 }
+    ], "expected": { "result": "refused" } },
+    { "name": "fractional-epoch", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 2.5, "seq": 1, "at": 1000000 }
+    ], "expected": { "result": "refused" } },
+    { "name": "fractional-seq", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1.5, "at": 1000000 }
+    ], "expected": { "result": "refused" } },
+    { "name": "legacy-random-wire-epoch-not-an-ordinal", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": "0123456789abcdef", "seq": 1, "at": 1000000 }
+    ], "expected": { "result": "refused" } },
+    { "name": "unsafe-integer-epoch", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 9007199254740992, "seq": 1, "at": 1000000 }
+    ], "expected": { "result": "refused" } },
+    { "name": "sequence-replay", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 2, "at": 1000000, "previous": { "epoch": 2, "seq": 2 } }
+    ], "expected": { "result": "refused" } },
+    { "name": "sequence-regression", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 2, "seq": 1, "at": 1000000, "previous": { "epoch": 2, "seq": 2 } }
+    ], "expected": { "result": "refused" } },
+    { "name": "epoch-regression", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 1, "seq": 99, "at": 1000000, "previous": { "epoch": 2, "seq": 1 } }
+    ], "expected": { "result": "refused" } },
+    { "name": "new-epoch-allows-sequence-reset", "records": [
+      { "id": "candidate", "machine": "a", "live": true, "verified": true, "epoch": 3, "seq": 0, "at": 1000000, "previous": { "epoch": 2, "seq": 99 } }
+    ], "expected": { "result": "found", "id": "candidate" } }
+  ]
+}
