@@ -128,6 +128,34 @@ public sealed class GroupTests : IDisposable
     }
 
     [Fact]
+    public void Incomplete_snapshots_do_not_expire_members_that_have_not_arrived_yet()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var order = new SessionOrder(null, clock);
+        var id = order.Groups.Create("Work");
+        order.Groups.SetGroup(K("a"), id);
+        order.Groups.SetGroup(K("b"), id);
+        clock.Advance(TimeSpan.FromDays(31));
+        order.Arrange([E("a")], settled: _ => false);
+        order.Arrange([E("a"), E("b")]);
+        Assert.Equal(id, order.Groups.GroupOf(K("b")));
+    }
+
+    [Fact]
+    public void Retention_uses_the_true_last_listing_even_within_the_daily_save_window()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var order = new SessionOrder(null, clock);
+        var id = order.Groups.Create("Work");
+        order.Groups.SetGroup(K("a"), id);
+        clock.Advance(TimeSpan.FromHours(23));
+        order.Arrange([E("a")]);
+        clock.Advance(TimeSpan.FromDays(30) - TimeSpan.FromHours(23) + TimeSpan.FromTicks(1));
+        order.Arrange([]);
+        Assert.Equal(id, order.Groups.GroupOf(K("a")));
+    }
+
+    [Fact]
     public void Listing_stamps_save_at_most_once_per_day_rather_than_on_every_arrangement()
     {
         var clock = new FakeTimeProvider(Make.T0);
