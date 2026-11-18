@@ -303,6 +303,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         this.updates = updates;
         this.answer = answer;
         this.reply = reply;
+        inbox = reply is not null && options.ConsumeAnswers && options.StateFile is { } state ? new DurableInbox(state + ".inbox") : null;
         stopper = stop;
         // Every write asks first (design G5): a pass can run long (each request may take its
         // timeout), and agent-ha-bridge starting part-way through must stop the rest of it, not
@@ -703,6 +704,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             allDirty = false;
         }
         var live = source.Snapshot().ToDictionary(s => s.Id, StringComparer.Ordinal);
+        inbox?.ForgetExcept(live.Keys.Concat(underWay.Keys).Select(HaContract.NodeId).ToHashSet(StringComparer.Ordinal));
         List<string> work;
         List<(string Id, string Node)> gone;
         lock (gate)

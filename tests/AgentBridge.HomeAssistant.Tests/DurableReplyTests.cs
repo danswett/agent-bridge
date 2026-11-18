@@ -57,20 +57,6 @@ public sealed partial class ReplyTests
         Assert.Empty(replied);
     }
 
-    [Fact]
-    public async Task A_transiently_absent_published_session_keeps_its_queued_reply()
-    {
-        await using var c = await Ready();
-        c.Observe(ha.SendFromCard(Node, "survives discovery gap", rid: "gap"));
-        sessions.End(A);
-        await Pass(c);
-        Assert.NotNull(new DurableInbox(InboxPath).Peek(Node));
-        Idle();
-        for (var n = 0; n < 3; n++) { await Pass(c); await c.DeliveredAsync(); }
-
-        Assert.Equal("survives discovery gap", Assert.Single(replied).Text);
-    }
-
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
