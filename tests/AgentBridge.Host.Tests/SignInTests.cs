@@ -131,6 +131,11 @@ public sealed class SignInTests(ITestOutputHelper output)
         // Queued source notifications can also sweep; isolate the runner's expiry path.
         await using var h = await Harness.CreateAsync(manualSweeps: runnerFirst, manualSourceChanges: runnerFirst);
         h.Factory.Process.HoldDisposal = runnerFirst;
+        var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.States.After = state =>
+        {
+            if (state == RecoveryState.Failed) { ended.TrySetResult(); }
+        };
         var phone = h.Phone();
         await h.Start(phone).Then(phone);
         await h.Factory.Started.Task.WaitAsync(Patience);
@@ -155,7 +160,11 @@ public sealed class SignInTests(ITestOutputHelper output)
             }
             else { h.Time.Advance(TimeSpan.FromSeconds(10)); }
             await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+            h.Factory.Process.ReleaseDisposal.TrySetResult();
+            // Disposal entry is not flow completion; a revoked phone cannot receive Done.
+            await ended.Task.WaitAsync(Patience);
             Assert.Equal(0, h.Service.CodesHeld);
+            Assert.False(h.Service.FlowRunning);
             Assert.Equal(0, h.Recovery.Resumes);
             Assert.Equal(0, h.Clock.Repeating);
         }
