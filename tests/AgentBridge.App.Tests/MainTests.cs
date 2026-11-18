@@ -200,6 +200,29 @@ public sealed class MainTests : IAsyncLifetime
     SessionCardViewModel Card(string id) => TestUi.Read(() => main.Sessions.Single(c => c.Id == id));
 
     [Fact]
+    public async Task Group_commands_update_the_model_and_rearrange_even_while_editing()
+    {
+        await SnapshotAsync();
+        TestUi.Read(() =>
+        {
+            var old = Card("old");
+            old.Editing = true;
+            var id = main.CreateGroup("Work");
+            main.MoveToGroup(old, id);
+            Assert.Equal(1, main.GroupCounts[id]);
+            Assert.False(main.CanMove(old, -1));
+            main.RenameGroup(id, "Renamed");
+            Assert.Equal("Renamed", Assert.Single(main.Groups).Name);
+            main.RemoveFromGroup(old);
+            Assert.True(main.Move(old, -1));
+            Assert.Equal(["old", "asking"], main.Sessions.Select(c => c.Id));
+            main.DeleteGroup(id);
+            Assert.Empty(main.Groups);
+            return true;
+        });
+    }
+
+    [Fact]
     public async Task A_move_the_person_makes_while_typing_in_a_card_still_moves_it()
     {
         await SnapshotAsync();
