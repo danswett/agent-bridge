@@ -645,7 +645,7 @@ public class CopilotPlannerTests
     [InlineData(5, true)]
     public void Text_defaults_too_long_together_for_one_answer_are_answered_at_the_machine(int fields, bool atMachine)
     {
-        var defaults = Enumerable.Range(0, fields).ToDictionary(i => "f" + i, _ => new string('x', 4_000));
+        var defaults = Enumerable.Range(0, fields).ToDictionary(i => "f" + i, _ => new string('x', 16_000));
         var (question, form) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties = defaults.ToDictionary(d => d.Key, d => new { type = "string", @default = d.Value }) } }));
 
         Assert.Equal(atMachine ? true : null, question.AnswerAtMachine);
@@ -707,9 +707,9 @@ public class CopilotPlannerTests
             Id = new string('x', 256), Question = "call-1", Request = Guid.NewGuid().ToString(), Progress = true,
             Fields = new Dictionary<string, JsonElement>
             {
-                ["a"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
-                ["b"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
-                ["c"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["a"] = JsonSerializer.SerializeToElement(new string('x', 16_000)),
+                ["b"] = JsonSerializer.SerializeToElement(new string('x', 16_000)),
+                ["c"] = JsonSerializer.SerializeToElement(new string('x', 16_000)),
                 ["d"] = JsonSerializer.SerializeToElement(new string('x', last)),
             }.Concat(numbers.Select(n => KeyValuePair.Create(n, JsonDocument.Parse(written).RootElement.Clone()))).ToDictionary(),
         };
@@ -719,9 +719,9 @@ public class CopilotPlannerTests
         var shorter = Largest(last, CopilotFieldSchema.JavaScriptNumber(Math.CopySign(1e21, value)));
         var properties = new Dictionary<string, object>
         {
-            ["a"] = new { type = "string", @default = new string('x', 4_000) },
-            ["b"] = new { type = "string", @default = new string('x', 4_000) },
-            ["c"] = new { type = "string", @default = new string('x', 4_000) },
+            ["a"] = new { type = "string", @default = new string('x', 16_000) },
+            ["b"] = new { type = "string", @default = new string('x', 16_000) },
+            ["c"] = new { type = "string", @default = new string('x', 16_000) },
             ["d"] = new { type = "string", @default = new string('x', last) },
         };
         foreach (var n in numbers) { properties[n] = new Dictionary<string, object> { ["type"] = "number", [bound] = value }; }
@@ -730,7 +730,7 @@ public class CopilotPlannerTests
         Assert.True(ProtocolJson.ByteCount(atBound) > Limits.AnswerRequest);
         Assert.True(ProtocolJson.ByteCount(shorter) <= Limits.AnswerRequest);
         Assert.Null(question.AnswerAtMachine);
-        Assert.Equal($"the answer is larger than {Limits.AnswerRequest / 1024} KiB", Answers.Check(question, atBound));
+        Assert.Equal($"the answer is larger than {Limits.AnswerRequest / 1024} KiB; send as a reply instead, attaching the text as a file if needed", Answers.Check(question, atBound));
         Assert.Null(Answers.Check(question, shorter));
         var (plan, problem) = CopilotPlanner.Plan(form, shorter);
         Assert.Null(problem);
@@ -768,9 +768,9 @@ public class CopilotPlannerTests
             Id = new string('x', 256), Question = "call-1", Request = Guid.NewGuid().ToString(), Progress = true,
             Fields = new Dictionary<string, JsonElement>
             {
-                ["a"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
-                ["b"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
-                ["c"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["a"] = JsonSerializer.SerializeToElement(new string('x', 16_000)),
+                ["b"] = JsonSerializer.SerializeToElement(new string('x', 16_000)),
+                ["c"] = JsonSerializer.SerializeToElement(new string('x', 16_000)),
                 ["d"] = JsonSerializer.SerializeToElement(new string('x', last)),
             }.Concat(numbers.Select(n => KeyValuePair.Create(n, JsonDocument.Parse(written).RootElement.Clone()))).ToDictionary(),
         };
@@ -778,9 +778,9 @@ public class CopilotPlannerTests
         var smallest = Largest(last);
         var properties = new Dictionary<string, object>
         {
-            ["a"] = new { type = "string", @default = new string('x', 4_000) },
-            ["b"] = new { type = "string", @default = new string('x', 4_000) },
-            ["c"] = new { type = "string", @default = new string('x', 4_000) },
+            ["a"] = new { type = "string", @default = new string('x', 16_000) },
+            ["b"] = new { type = "string", @default = new string('x', 16_000) },
+            ["c"] = new { type = "string", @default = new string('x', 16_000) },
             ["d"] = new { type = "string", @default = new string('x', last) },
         };
         foreach (var n in numbers) { properties[n] = JsonDocument.Parse(schema).RootElement.Clone(); }
@@ -791,7 +791,7 @@ public class CopilotPlannerTests
         Assert.Equal(lowerBound > Limits.AnswerRequest ? true : null, question.AnswerAtMachine);
         if (question.AnswerAtMachine != true)
         {
-            Assert.Equal(over > 0 ? $"the answer is larger than {Limits.AnswerRequest / 1024} KiB" : null, Answers.Check(question, smallest));
+            Assert.Equal(over > 0 ? $"the answer is larger than {Limits.AnswerRequest / 1024} KiB; send as a reply instead, attaching the text as a file if needed" : null, Answers.Check(question, smallest));
         }
     }
 
@@ -822,9 +822,9 @@ public class CopilotPlannerTests
             Id = new string('x', 256), Question = "call-1", Request = Guid.NewGuid().ToString(), Progress = true,
             Fields = new Dictionary<string, JsonElement>
             {
-                ["a"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
-                ["b"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
-                ["c"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["a"] = JsonSerializer.SerializeToElement(new string('x', 16_000)),
+                ["b"] = JsonSerializer.SerializeToElement(new string('x', 16_000)),
+                ["c"] = JsonSerializer.SerializeToElement(new string('x', 16_000)),
                 ["d"] = JsonSerializer.SerializeToElement(new string('x', last)),
             },
         };
@@ -832,9 +832,9 @@ public class CopilotPlannerTests
         var smallest = Largest(last);
         var properties = new Dictionary<string, object>
         {
-            ["a"] = new { type = "string", minLength = 4_000 },
-            ["b"] = new { type = "string", minLength = 4_000 },
-            ["c"] = new { type = "string", minLength = 4_000 },
+            ["a"] = new { type = "string", minLength = 16_000 },
+            ["b"] = new { type = "string", minLength = 16_000 },
+            ["c"] = new { type = "string", minLength = 16_000 },
             ["d"] = new { type = "string", minLength = last },
         };
         var (question, _) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties, required = new[] { "a", "b", "c", "d" } } }));
@@ -853,20 +853,20 @@ public class CopilotPlannerTests
     {
         var properties = new Dictionary<string, object>
         {
-            ["a"] = new { type = "string", @default = new string('x', 4_000) },
-            ["b"] = new { type = "string", @default = new string('x', 4_000) },
-            ["c"] = new { type = "string", @default = new string('x', 4_000) },
-            ["d"] = new { type = "string", @default = new string('x', 3_900) },
+            ["a"] = new { type = "string", @default = new string('x', 16_000) },
+            ["b"] = new { type = "string", @default = new string('x', 16_000) },
+            ["c"] = new { type = "string", @default = new string('x', 16_000) },
+            ["d"] = new { type = "string", @default = new string('x', 13_000) },
             ["p"] = new { type = "string", pattern = "^x{600}$" },
         };
         var (question, _) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties, required = new[] { "p" } } }));
         var answer = Answer(new Dictionary<string, string>
         {
-            ["a"] = new string('x', 4_000), ["b"] = new string('x', 4_000), ["c"] = new string('x', 4_000), ["d"] = new string('x', 3_900), ["p"] = new string('x', 600),
+            ["a"] = new string('x', 16_000), ["b"] = new string('x', 16_000), ["c"] = new string('x', 16_000), ["d"] = new string('x', 13_000), ["p"] = new string('x', 600),
         });
 
         Assert.Null(question.AnswerAtMachine);
-        Assert.Equal($"the answer is larger than {Limits.AnswerRequest / 1024} KiB", Answers.Check(question, answer));
+        Assert.Equal($"the answer is larger than {Limits.AnswerRequest / 1024} KiB; send as a reply instead, attaching the text as a file if needed", Answers.Check(question, answer));
     }
 
     // A number default spelled long is still one short number: neither client sends it as
@@ -889,7 +889,7 @@ public class CopilotPlannerTests
         Assert.NotNull(plan);
     }
 
-    // A form of three 4,000-character text defaults, numbers number defaults of 1e20, a boolean
+    // A form of three 16,000-character text defaults, numbers number defaults of 1e20, a boolean
     // defaulting to true, a list defaulting to one tick, a required choice when given, and a
     // text default "d" filling the smallest answer (sent as `script`: numbers as the PWA writes
     // them, or as the schema does) to over bytes past the bound, or of filler characters.
@@ -899,9 +899,9 @@ public class CopilotPlannerTests
         {
             var fields = new Dictionary<string, JsonElement>
             {
-                ["a"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
-                ["b"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
-                ["c"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["a"] = JsonSerializer.SerializeToElement(new string('x', 16_000)),
+                ["b"] = JsonSerializer.SerializeToElement(new string('x', 16_000)),
+                ["c"] = JsonSerializer.SerializeToElement(new string('x', 16_000)),
                 ["flag"] = JsonSerializer.SerializeToElement(true),
                 ["list"] = JsonSerializer.SerializeToElement(Array.Empty<string>()),
                 ["d"] = JsonSerializer.SerializeToElement(new string('x', last)),
@@ -918,9 +918,9 @@ public class CopilotPlannerTests
         var answer = Largest(Fields(last));
         var properties = new Dictionary<string, object>
         {
-            ["a"] = new { type = "string", @default = new string('x', 4_000) },
-            ["b"] = new { type = "string", @default = new string('x', 4_000) },
-            ["c"] = new { type = "string", @default = new string('x', 4_000) },
+            ["a"] = new { type = "string", @default = new string('x', 16_000) },
+            ["b"] = new { type = "string", @default = new string('x', 16_000) },
+            ["c"] = new { type = "string", @default = new string('x', 16_000) },
             ["flag"] = new { type = "boolean", @default = true },
             ["list"] = new { type = "array", items = new { @enum = new[] { "p", "q" } }, @default = new[] { "p" } },
             ["d"] = new { type = "string", @default = new string('x', last) },

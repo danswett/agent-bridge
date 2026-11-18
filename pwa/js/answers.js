@@ -8,9 +8,9 @@
 
 export const Limits = Object.freeze({
   // Free text in an answer: session.answer's text, a text field, or a field's other.
-  text: 4 * 1024,
+  text: 16 * 1024,
   // The whole session.answer request as sent.
-  request: 16 * 1024,
+  request: 60 * 1024,
 });
 
 const encoder = new TextEncoder();
@@ -55,7 +55,7 @@ export const answerReasonCode = (reason) => (reason === AnswerReasons.otherNotSe
 const hasOther = (v) => (isObject(v) && has(v, 'other')) || (Array.isArray(v) && v.some(hasOther));
 
 const textProblem = (text, what) =>
-  (typeof text === 'string' && utf8Bytes(text) > Limits.text ? `${what} is longer than ${Limits.text / 1024} KiB` : null);
+  (typeof text === 'string' && utf8Bytes(text) > Limits.text ? `${what} is longer than ${Limits.text / 1024} KiB; send as a reply instead, attaching the text as a file if needed` : null);
 
 const label = (field) => field.title ?? field.name;
 
@@ -102,7 +102,7 @@ export function checkAnswer(question, answer) {
   if (question.answerAtMachine === true) { return 'this prompt can only be answered at the machine'; }
   // Per-text limits alone don't bound the request: several text fields, each within its
   // own limit, can add up to more than a host promised to take.
-  if (hostJsonBytes(answer) > Limits.request) { return `the answer is larger than ${Limits.request / 1024} KiB`; }
+  if (hostJsonBytes(answer) > Limits.request) { return `the answer is larger than ${Limits.request / 1024} KiB; send as a reply instead, attaching the text as a file if needed`; }
   const fields = isObject(answer.fields) ? answer.fields : null;
   if (question.fields.length === 0) {
     if (fields && Object.keys(fields).length > 0) { return 'this question takes a text answer, not fields'; }
@@ -360,7 +360,7 @@ export function draftText(question, state) {
 // What a form's state sends, checked as the host will check it: { answer } to submit, or
 // { problem, field } to show, with the field it is about ('' for a question without fields,
 // null for none). The request id is a stand-in the same length as the UUID the service gives
-// it, so the 16 KiB check counts the same bytes. The card's form and the Needs you lane (#165)
+// it, so the request-size check counts the same bytes. The card's form and the Needs you lane (#165)
 // both answer through this, so a tap in either sends the same request.
 export function prepareAnswer(question, state, sessionId) {
   const { answer, problems } = buildAnswer(question, state);

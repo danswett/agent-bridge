@@ -386,32 +386,31 @@ test.describe('on a phone', () => {
     expect((await log(page))[0].fields).toEqual({ ok: true });
   });
 
-  test('free text is a textarea limited to 4 KiB of UTF-8, counted in bytes, not characters', async ({ page }) => {
+  test('free text is a textarea limited to 16 KiB of UTF-8, counted in bytes, not characters', async ({ page }) => {
     await openDemo(page);
     const q = await ask(page, { id: 'q-text', message: 'Anything to add?', fields: [{ name: 'notes', title: 'Notes', type: 'text', required: true }] });
     const box = q.getByRole('textbox', { name: 'Notes' });
-    // 1,366 euro signs: 1,366 characters, but 4,098 bytes.
-    await box.fill('€'.repeat(1366));
-    await expect(q.locator('.bytes')).toHaveText('Too long: 4.0 KiB of 4 KiB');
+    await box.fill('€'.repeat(5462));
+    await expect(q.locator('.bytes')).toHaveText('Too long: 16.0 KiB of 16 KiB');
     await expect(box).toHaveAttribute('aria-invalid', 'true');
     await q.getByRole('button', { name: 'Send answer' }).tap();
-    await expect(q.locator('.answer-error')).toHaveText('"Notes": the text is longer than 4 KiB.');
+    await expect(q.locator('.answer-error')).toHaveText('"Notes": the text is longer than 16 KiB; send as a reply instead, attaching the text as a file if needed.');
     expect(await log(page)).toEqual([]);
-    await box.fill('€'.repeat(1365));
+    await box.fill('€'.repeat(5461));
     await expect(box).not.toHaveAttribute('aria-invalid', 'true');
     await q.getByRole('button', { name: 'Send answer' }).tap();
     await expect(q).toHaveCount(0);
-    expect((await log(page))[0].fields.notes).toHaveLength(1365);
+    expect((await log(page))[0].fields.notes).toHaveLength(5461);
   });
 
-  test('a whole answer over 16 KiB, as the machine would serialize it, is caught before it is sent', async ({ page }) => {
+  test('a whole answer over 60 KiB, as the machine would serialize it, is caught before it is sent', async ({ page }) => {
     await openDemo(page);
     const names = ['a', 'b'];
     const q = await ask(page, { id: 'q-big', message: 'Two notes?', fields: names.map((name) => ({ name, title: `Note ${name}`, type: 'text' })) });
-    // 1,024 emoji each: 4 KiB of text, within the limit, but 12 KiB of the host's JSON.
-    for (const name of names) { await q.getByRole('textbox', { name: `Note ${name}` }).fill('😀'.repeat(1024)); }
+    // 16 KiB of emoji each: within the text limit, but 48 KiB of the host's JSON.
+    for (const name of names) { await q.getByRole('textbox', { name: `Note ${name}` }).fill('😀'.repeat(4096)); }
     await q.getByRole('button', { name: 'Send answer' }).tap();
-    await expect(q.locator('.answer-error')).toHaveText('The answer is larger than 16 KiB.');
+    await expect(q.locator('.answer-error')).toHaveText('The answer is larger than 60 KiB; send as a reply instead, attaching the text as a file if needed.');
     expect(await log(page)).toEqual([]);
     await q.getByRole('textbox', { name: 'Note b' }).fill('short');
     await q.getByRole('button', { name: 'Send answer' }).tap();

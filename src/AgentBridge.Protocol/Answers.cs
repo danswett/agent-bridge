@@ -17,7 +17,7 @@ public static class Answers
         // its own limit, can add up to more than a host promised to take.
         if (JsonSerializer.SerializeToUtf8Bytes(answer, ProtocolJson.Options).Length > Limits.AnswerRequest)
         {
-            return $"the answer is larger than {Limits.AnswerRequest / 1024} KiB";
+            return $"the answer is larger than {Limits.AnswerRequest / 1024} KiB; send as a reply instead, attaching the text as a file if needed";
         }
         if (question.Fields.Count == 0)
         {
@@ -99,7 +99,7 @@ public static class Answers
         || value.ValueKind == JsonValueKind.Array && value.EnumerateArray().Any(HasOther);
 
     static string? TextProblem(string? text, string what) =>
-        text is not null && Encoding.UTF8.GetByteCount(text) > Limits.AnswerText ? $"{what} is longer than {Limits.AnswerText / 1024} KiB" : null;
+        text is not null && Encoding.UTF8.GetByteCount(text) > Limits.AnswerText ? $"{what} is longer than {Limits.AnswerText / 1024} KiB; send as a reply instead, attaching the text as a file if needed" : null;
 
     static string Label(Field field) => field.Title ?? field.Name;
 }

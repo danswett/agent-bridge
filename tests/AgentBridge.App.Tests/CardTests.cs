@@ -44,6 +44,31 @@ public sealed class CardTests : IAsyncLifetime
     QuestionViewModel Question(Question q, IReadOnlyList<string>? caps = null) => new(q, "s1", AgentKind.Copilot, caps ?? connection.Capabilities, deliveries, "Test PC");
 
     [Theory]
+    [InlineData(4097)]
+    [InlineData(16384)]
+    [InlineData(16385)]
+    public async Task Answer_cap_keeps_the_whole_draft_and_offers_a_reply_when_it_cannot_send(int bytes)
+    {
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        var q = Question(Make.Choice() with { Fields = [] });
+        q.FreeText = new string('x', bytes);
+        q.Send();
+        if (bytes > 16384)
+        {
+            Assert.Contains("send as a reply instead", q.Error);
+            Assert.Contains("file", q.Error);
+            Assert.Empty(host.Sent(Ops.SessionAnswer));
+        }
+        else
+        {
+            await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Any(), "whole answer sent");
+            Assert.Equal(q.FreeText, Assert.Single(host.Sent(Ops.SessionAnswer)).GetProperty("text").GetString());
+        }
+        Assert.Equal(bytes, q.FreeText.Length);
+        q.Detach();
+    }
+
+    [Theory]
     [InlineData(false, false, false, false, false)]
     [InlineData(false, true, false, false, true)]
     [InlineData(true, false, false, false, true)]

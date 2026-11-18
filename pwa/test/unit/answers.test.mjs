@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   Limits, answerability, answerRequest, buildAnswer, checkAnswer, draftText, hostJsonBytes, initialState,
-  optionTone, orderOptions, problemField, tapToAnswer, utf8Bytes,
+  optionTone, orderOptions, prepareAnswer, problemField, tapToAnswer, utf8Bytes,
 } from '../../js/answers.js';
 import { readAnswerResult, readQuestion } from '../../js/protocol.js';
 import { answerControls, answeredWords, describeAnswer, describeClosed } from '../../js/ui/question-view.js';
@@ -27,7 +27,7 @@ test('other text is accepted only where the field allows it and must say somethi
   const q = form(choice('answer', { other: true }));
   assert.equal(checkAnswer(q, fields({ answer: { other: 'neither, use c' } })), null);
   assert.match(checkAnswer(q, fields({ answer: { other: '  ' } })), /empty/);
-  assert.match(checkAnswer(q, fields({ answer: { other: 'x'.repeat(Limits.text + 1) } })), /longer than 4 KiB/);
+  assert.match(checkAnswer(q, fields({ answer: { other: 'x'.repeat(Limits.text + 1) } })), /longer than 16 KiB/);
   assert.match(checkAnswer(q, fields({ answer: { other: 'c', also: 1 } })), /unexpected properties beside other/);
   assert.match(checkAnswer(q, fields({ answer: 3 })), /expected a choice/);
 });
@@ -74,7 +74,7 @@ test('a question without fields takes non-empty text, and one with fields takes 
   assert.match(checkAnswer(plain, { id: 's1', question: 'q1', request: 'r1', text: ' ' }), /empty/);
   assert.match(checkAnswer(plain, fields({ answer: 'a' })), /not fields/);
   assert.match(checkAnswer(form(choice('answer')), { text: 'a' }), /not a text answer/);
-  assert.match(checkAnswer(plain, { text: 'é'.repeat(Limits.text / 2 + 1) }), /longer than 4 KiB/);
+  assert.match(checkAnswer(plain, { text: 'é'.repeat(Limits.text / 2 + 1) }), /longer than 16 KiB/);
 });
 
 test('a truncated question is never answered remotely', () => {
@@ -174,36 +174,45 @@ test('a stale answer can be given again only when the host cancelled its form, a
   assert.equal(answeredWords(form(), { text: 'wait' }), 'wait');
 });
 
-test('the 4 KiB limit counts UTF-8 bytes, not characters', () => {
+test('the 16 KiB limit counts UTF-8 bytes, not characters', () => {
   const q = form({ name: 't', type: 'text' });
-  // 1,025 emoji are 2,050 UTF-16 code units and 4,100 bytes: over, though far fewer characters.
-  const emoji = '😀'.repeat(1025);
-  assert.equal(utf8Bytes(emoji), 4100);
-  assert.match(checkAnswer(q, fields({ t: emoji })), /longer than 4 KiB/);
-  assert.equal(checkAnswer(q, fields({ t: '😀'.repeat(1024) })), null);
+  const emoji = '😀'.repeat(4097);
+  assert.equal(utf8Bytes(emoji), 16388);
+  assert.match(checkAnswer(q, fields({ t: emoji })), /longer than 16 KiB/);
+  assert.equal(checkAnswer(q, fields({ t: '😀'.repeat(4096) })), null);
   assert.equal(checkAnswer(q, fields({ t: 'x'.repeat(Limits.text) })), null);
-  assert.match(checkAnswer(q, fields({ t: '€'.repeat(1366) })), /longer than 4 KiB/);
+  assert.match(checkAnswer(q, fields({ t: '€'.repeat(5462) })), /longer than 16 KiB/);
 });
 
-test('a request over 16 KiB is refused even when each text is within its own limit', () => {
+test('the composer accepts 4 KiB plus one through 16 KiB and offers a reply without losing oversized text', () => {
+  const q = form();
+  for (const bytes of [4097, 16384]) {
+    const text = 'x'.repeat(bytes);
+    assert.deepEqual(prepareAnswer(q, { text }, 's1'), { answer: { text }, problem: null, field: null });
+  }
+  const state = { text: 'x'.repeat(16385) };
+  assert.match(prepareAnswer(q, state, 's1').problem, /send as a reply instead.*file/);
+  assert.equal(state.text.length, 16385);
+});
+
+test('a request over 60 KiB is refused even when each text is within its own limit', () => {
   const names = ['t0', 't1', 't2', 't3', 't4'];
   const text = 'x'.repeat(Limits.text);
   const all = (n) => fields(Object.fromEntries(names.slice(0, n).map((k) => [k, text])));
   const q = (n) => form(...names.slice(0, n).map((name) => ({ name, type: 'text' })));
-  assert.match(checkAnswer(q(5), all(5)), /larger than 16 KiB/);
+  assert.match(checkAnswer(q(5), all(5)), /larger than 60 KiB.*send as a reply instead/);
   assert.equal(checkAnswer(q(3), all(3)), null);
   // Checked before anything else about the fields, as the host checks it.
-  assert.match(checkAnswer(form(), fields(Object.fromEntries(names.map((k) => [k, text])))), /larger than 16 KiB/);
+  assert.match(checkAnswer(form(), fields(Object.fromEntries(names.map((k) => [k, text])))), /larger than 60 KiB/);
 });
 
 test('the request is measured as the host serializes it: an emoji is a 12-byte surrogate pair', () => {
-  // 1,024 emoji are 4 KiB of UTF-8, within the per-text limit, but 12 KiB of the host's
-  // JSON. One fits; two are over 16 KiB, though JSON.stringify makes them 8 KiB.
-  const emoji = '😀'.repeat(1024);
+  // 16 KiB of emoji is 48 KiB in the host's JSON: one fits the envelope, two do not.
+  const emoji = '😀'.repeat(4096);
   const q = form(...['a', 'b'].map((name) => ({ name, type: 'text' })));
   const two = fields({ a: emoji, b: emoji });
   assert.ok(utf8Bytes(JSON.stringify(two)) < Limits.request);
-  assert.match(checkAnswer(q, two), /larger than 16 KiB/);
+  assert.match(checkAnswer(q, two), /larger than 60 KiB/);
   assert.equal(checkAnswer(q, fields({ a: emoji })), null);
 });
 

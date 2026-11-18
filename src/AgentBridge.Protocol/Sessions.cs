@@ -111,8 +111,9 @@ public static class Limits
     public const int QuestionMessage = 8 * 1024;
     public const int History = 50;
     // Free text in an answer (session.answer's text, or a field's other), and the request.
-    public const int AnswerText = 4 * 1024;
-    public const int AnswerRequest = 16 * 1024;
+    public const int AnswerText = 16 * 1024;
+    // Fits 16 KiB of emoji (48 KiB serialized), leaving room below Noise's 64 KiB frame.
+    public const int AnswerRequest = 60 * 1024;
     // The text of a session.reply.
     public const int ReplyText = 16 * 1024;
     // A sub-agent's entry (docs/design/subagents.md §5): its label, the start of the prompt
