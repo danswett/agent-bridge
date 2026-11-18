@@ -125,6 +125,21 @@ public sealed class ReplyClearTests
         Assert.Equal(0, h.Replies);
     }
 
+    [Fact]
+    public async Task A_request_that_goes_stale_before_clear_keys_preserves_the_draft()
+    {
+        await using var h = await Harness.Create();
+        var current = true;
+        var request = h.Request() with { StillCurrent = () => current };
+        h.BeforeKeys = () => current = false;
+        var result = await h.Replier.ReplyAsync(request);
+        Assert.Equal(0, h.Clears);
+        Assert.Equal(0, h.Replies);
+        Assert.Equal("unfinished draft", h.Draft);
+        Assert.Null(result.Cleared);
+        Assert.Equal(AnswerOutcome.Stale, result.Outcome);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
