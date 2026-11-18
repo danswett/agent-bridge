@@ -15,8 +15,10 @@ public sealed class FeedbackSendViewModel : Observable
     public const string FailedText = "Couldn't send. Try again when you're online.";
     public const string GatheringText = "Gathering what's included…";
     public const string SendingText = "Sending…";
+    public const string OrdinaryUnavailableText = "Ordinary feedback is disabled. No diagnostics are collected or sent.";
 
-    readonly IFeedbackSender? sender;
+    IFeedbackSender? sender;
+    readonly bool allowSending;
     readonly IUiDispatcher ui;
     readonly Func<DateTimeOffset> now;
     readonly Action<string, bool>? announce;
@@ -35,9 +37,10 @@ public sealed class FeedbackSendViewModel : Observable
 
     // announce(speech, urgent) is the live-region hook, like Receipt's: urgent for a failure or refusal
     // (said assertively), polite otherwise. It is called on the UI for each change of the line.
-    public FeedbackSendViewModel(IFeedbackSender? sender, IUiDispatcher? ui = null, Func<DateTimeOffset>? now = null, Action<string, bool>? announce = null)
+    public FeedbackSendViewModel(IFeedbackSender? sender, IUiDispatcher? ui = null, Func<DateTimeOffset>? now = null, Action<string, bool>? announce = null, bool allowSending = true)
     {
         this.sender = sender;
+        this.allowSending = allowSending;
         this.ui = ui ?? InlineDispatcher.Instance;
         this.now = now ?? (() => DateTimeOffset.UtcNow);
         this.announce = announce;
@@ -54,11 +57,11 @@ public sealed class FeedbackSendViewModel : Observable
 
     // First send only, once a bundle is gathered; after a failure the person uses Try again, and after
     // too large or refused they change the report, which gathers again (BeginGathering, then Ready).
-    public bool CanSend => !closed && sender is not null && bundle is not null && state == FeedbackSendState.Ready;
+    public bool CanSend => allowSending && !closed && sender is not null && bundle is not null && state == FeedbackSendState.Ready;
 
     // What the sender said Try again does: Never hides it; Now and WhenOnline allow it; AfterDelay allows
     // it once RetryAt has passed. Nothing retries by itself; call RefreshRetry from a timer to update it.
-    public bool CanRetry => !closed && sender is not null && bundle is not null && state == FeedbackSendState.Failed && retry switch
+    public bool CanRetry => allowSending && !closed && sender is not null && bundle is not null && state == FeedbackSendState.Failed && retry switch
     {
         FeedbackRetry.Now or FeedbackRetry.WhenOnline => true,
         FeedbackRetry.AfterDelay => retryAt is null || now() >= retryAt,
@@ -84,6 +87,11 @@ public sealed class FeedbackSendViewModel : Observable
 
     public async Task<FeedbackBundle?> PrepareAsync(IFeedbackBundleSource source, FeedbackRequest request, CancellationToken ct = default)
     {
+        if (!allowSending)
+        {
+            if (DropBundle()) { Apply(FeedbackSendState.Refused, OrdinaryUnavailableText, Tone.None, FeedbackRetry.Never, FeedbackFailureReason.Disabled, null, false); }
+            return null;
+        }
         BeginGathering();
         if (!IsGathering || closed) { return null; }
         int mine;
@@ -107,6 +115,16 @@ public sealed class FeedbackSendViewModel : Observable
     }
 
     public void RefreshRetry() { Raise(nameof(CanRetry)); Raise(nameof(RetryHint)); }
+
+    public void RefreshSender(IFeedbackSender? available)
+    {
+        lock (gate)
+        {
+            if (!allowSending || closed || running is not null || state is FeedbackSendState.Sending or FeedbackSendState.Sent) { return; }
+            sender = available;
+        }
+        Raise(nameof(CanSend)); Raise(nameof(CanRetry));
+    }
 
     // The screen is gathering (first open, or after the person changed the report).
     public void BeginGathering()
@@ -203,13 +221,14 @@ public sealed class FeedbackSendViewModel : Observable
 
     async Task Run()
     {
-        if (sender is null) { return; }
+        IFeedbackSender active;
         FeedbackBundle send;
         CancellationTokenSource cancel;
         int mine;
         lock (gate)
         {
-            if (closed || bundle is null || state == FeedbackSendState.Sending) { return; }
+            if (!allowSending || closed || sender is not { } available || bundle is null || state == FeedbackSendState.Sending) { return; }
+            active = available;
             send = bundle;
             cancel = running = new CancellationTokenSource();
             mine = ++generation;
@@ -217,7 +236,7 @@ public sealed class FeedbackSendViewModel : Observable
         }
         Apply(FeedbackSendState.Sending, SendingText, Tone.Progress, null, null, null, false);
         FeedbackSendResult? result;
-        try { result = await sender.SendAsync(send, cancel.Token).ConfigureAwait(false); }
+        try { result = await active.SendAsync(send, cancel.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested) { result = null; }
         catch { result = new FeedbackSendResult.Failed(FeedbackFailureReason.UploadRejected, FeedbackRetry.WhenOnline); }
         bool current;

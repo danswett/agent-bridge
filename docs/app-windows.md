@@ -41,7 +41,7 @@ same-directory temporary file before atomically replacing the old marker; failed
 preserve the old marker and remove the temporary file. Only an actual exit,
 not hiding to the tray, calls `Complete()`. Crash evidence survives closing; a teardown
 crash restores the marker. Self-tests leave markers alone. `RecordHang` is the seam for
-the separate watchdog slice; recovery UI and the existing feedback submission remain separate work.
+the separate watchdog slice.
 
 Recovery feedback uses a strict allow-list: numeric version, fixed crash/hang/exit stage,
 UTC timings and an exact known framework exception type. HResult is unavailable in legacy
@@ -51,6 +51,12 @@ by the recovery gatherer. The existing sender independently enforces this recove
 before requesting an upload slot; preview and upload remain the exact same bytes.
 Accept is single-use; dismiss drops only the snapshot, leaving the active run marker intact.
 An unavailable feedback sender still permits a redacted preview, but never a send.
+After the window loads, an unclean previous run opens the shared feedback dialog once;
+clean runs, demos and self-tests do not. Settings and the tray open an explicitly disabled
+ordinary feedback view: no diagnostic collection, preview, Send or retry, even when a recipient
+and relay are available. Sender refresh cannot enable that view. No optional note is offered.
+Recovery's included-item list and exact redacted preview appear before Send becomes available.
+Feedback still needs the existing configured recipient and accepting relay; no plaintext fallback exists.
 
 ## Decisions
 

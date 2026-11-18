@@ -41,9 +41,21 @@ public sealed class ReportThisOffer
 public sealed class RecoveryReportOffer(PreviousRun? previous)
 {
     int accepted;
+    int opened;
     public PreviousRun? Previous { get; private set; } = previous is { Unclean: true } ? previous : null;
     public bool Visible => Previous is not null;
     public void Dismiss() => Previous = null;
+
+    public async Task<bool> OpenWhenReadyAsync(bool windowReady, Func<Task> show)
+    {
+        if (!windowReady || !Visible || Interlocked.Exchange(ref opened, 1) != 0) { return false; }
+        try { await show(); return true; }
+        catch
+        {
+            Interlocked.Exchange(ref opened, 0);
+            throw;
+        }
+    }
 
     public Task AcceptAsync(FeedbackSendViewModel send)
     {
