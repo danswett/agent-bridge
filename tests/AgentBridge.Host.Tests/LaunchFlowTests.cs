@@ -83,7 +83,13 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
 
     internal static void NormalizeFiles(IEnumerable<string> files)
     {
-        foreach (var file in files) { File.SetAttributes(file, FileAttributes.Normal); }
+        foreach (var file in files)
+        {
+            try { File.SetAttributes(file, FileAttributes.Normal); }
+            // Started is reported before the follower's finally releases its git worktree lock.
+            // A lock removed since enumeration already needs no cleanup; other I/O errors still fail.
+            catch (FileNotFoundException) { }
+        }
     }
 
     private protected LaunchConfig Config(Func<LaunchConfig, LaunchConfig>? change = null)
