@@ -106,7 +106,7 @@ public static class SlotPreparation
         {
             if (executable == "agent-bridge-hostw" && bundledHostw) { continue; } // Its embedded closure is mandatory after extraction.
             using var stream = new PayloadStream(files[executable + ".deps.json"]);
-            using var deps = JsonDocument.Parse(stream);
+            using var deps = JsonDocument.Parse(stream, new() { AllowDuplicateProperties = false });
             var target = deps.RootElement.GetProperty("runtimeTarget").GetProperty("name").GetString()!;
             if ((!target.EndsWith("/win-x64", StringComparison.Ordinal) && !target.EndsWith("/win-arm64", StringComparison.Ordinal))
                 || (runtimeTarget is not null && runtimeTarget != target))
@@ -120,11 +120,28 @@ public static class SlotPreparation
     internal static IEnumerable<(string Name, byte Type)> RuntimeAssets(JsonElement deps, string target)
     {
         var libraries = deps.GetProperty("targets").GetProperty(target);
+        var graph = libraries.EnumerateObject().ToDictionary(l => l.Name, _ => new List<string>(), StringComparer.Ordinal);
+        var incoming = graph.Keys.ToDictionary(n => n, _ => 0, StringComparer.Ordinal);
         foreach (var library in libraries.EnumerateObject())
         {
             if (library.Value.TryGetProperty("dependencies", out var dependencies))
             foreach (var dependency in dependencies.EnumerateObject())
-            { if (!libraries.TryGetProperty(dependency.Name + "/" + dependency.Value.GetString(), out _)) { throw new InvalidDataException("Missing runtime dependency: " + dependency.Name); } }
+            {
+                var name = dependency.Name + "/" + dependency.Value.GetString();
+                if (!incoming.ContainsKey(name)) { throw new InvalidDataException("Missing runtime dependency: " + dependency.Name); }
+                graph[library.Name].Add(name); incoming[name]++;
+            }
+        }
+        var ready = new Queue<string>(incoming.Where(n => n.Value == 0).Select(n => n.Key));
+        var visited = 0;
+        while (ready.TryDequeue(out var node))
+        {
+            visited++;
+            foreach (var child in graph[node]) { if (--incoming[child] == 0) { ready.Enqueue(child); } }
+        }
+        if (visited != graph.Count) { throw new InvalidDataException("Cyclic runtime dependency graph."); }
+        foreach (var library in libraries.EnumerateObject())
+        {
             foreach (var group in library.Value.EnumerateObject().Where(g => g.Name is "runtime" or "native" or "resources" or "runtimeTargets"))
             foreach (var asset in group.Value.EnumerateObject())
             {
