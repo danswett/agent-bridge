@@ -526,6 +526,13 @@ content that taints a coordinator that reads them, and gives agents typed projec
 
 ## Signing
 
+Implementation update, November 16, 2026 (Pacific), #2371: the host reader can consume
+locally pinned roster state, verify the active host add's `hostSign`, schema, 60-second
+freshness and epoch/sequence order before marking a received snapshot verified.
+Rejected signed records expose no sessions or complete list. Replay state is per reader,
+account, generation and add hash, in memory only. Production roster injection/activation,
+subscription and removal/cache purge remain separate gates; no switch is enabled here.
+
 **What is true today.** #1782 supplies protected key custody, not verified registry records.
 Until #1776's enrollment, signing and trusted reader dependencies land,
 **the relay can forge, alter, hide or replay records, and map any name to any `node`,
