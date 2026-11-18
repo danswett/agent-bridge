@@ -89,6 +89,30 @@ for (const hidden of [false, true]) {
   });
 }
 
+test('pagehide without visibilitychange suspends motion and clocks until a persisted pageshow', async ({ page }) => {
+  await surface(page);
+  await page.evaluate(async () => {
+    const { whileVisible } = await import('/js/ui/ticker.js');
+    const { watchPresses, enter } = await import('/js/ui/motion.js');
+    state.ticks = 0;
+    state.ticker = whileVisible(() => state.ticks++, 30000);
+    watchPresses(document);
+    document.documentElement.style.setProperty('--ab-motion-value-duration', '60000ms');
+    state.motion = enter(document.querySelector('#launch'), 'value');
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+  });
+  expect(await page.evaluate(() => ({ visibility: document.visibilityState,
+    pausedAttribute: document.documentElement.hasAttribute('data-motion-hidden'), motion: state.motion.playState,
+  }))).toEqual({ visibility: 'visible', pausedAttribute: true, motion: 'paused' });
+  await page.clock.runFor(30000);
+  expect(await page.evaluate(() => ({ ticks: state.ticks, wakes: state.wakes }))).toEqual({ ticks: 0, wakes: 0 });
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+  expect(await page.evaluate(() => ({ ticks: state.ticks, pausedAttribute: document.documentElement.hasAttribute('data-motion-hidden'),
+    motion: state.motion.playState,
+  }))).toEqual({ ticks: 1, pausedAttribute: false, motion: 'running' });
+  await page.evaluate(() => state.ticker.stop());
+});
+
 test('a launch jump that expires while hidden does not jump or restart on return', async ({ page }) => {
   await surface(page, true);
   await page.evaluate(() => {
