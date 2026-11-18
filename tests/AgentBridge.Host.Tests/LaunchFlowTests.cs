@@ -77,8 +77,13 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         if (relay is not null) { await relay.DisposeAsync(); }
         await source.DisposeAsync();
         await clock.DisposeAsync();
-        foreach (var file in Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories)) { File.SetAttributes(file, FileAttributes.Normal); }
+        NormalizeFiles(Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories));
         f.Dispose();
+    }
+
+    internal static void NormalizeFiles(IEnumerable<string> files)
+    {
+        foreach (var file in files) { File.SetAttributes(file, FileAttributes.Normal); }
     }
 
     private protected LaunchConfig Config(Func<LaunchConfig, LaunchConfig>? change = null)
