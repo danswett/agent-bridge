@@ -41,10 +41,17 @@ match this host, with explicit `isVm: true` and `ownerLaptop: false`; unknown
 classification never permits ending. Keep the actual IDs and `protectedIds` /
 `protectedNames` lists in this private profile config, never in the repository.
 `approvedReceipt` and `approvedSha256` bind SRE approval to a first dry-run receipt.
-Missing tool, custody, completion or PR evidence means KEEP, not a safe default.
+Missing required tool, question, hold, git or verdict evidence means KEEP.
+Names and the private protected lists preserve leads, readers, KEEP/private/held
+sessions and other protected roles. A `.slipgates-hold` entry in a session's
+workspace is an explicit hold; the session or a lead may create it. Unreadable
+or missing workspaces have UNKNOWN hold state and stay KEEP.
 Builders require clean, unstashed, non-operation git state and HEAD contained in
 the fresh same-name origin branch; no tracking upstream is required. Reviewers
 need explicit CLEAN, or NOT CLEAN at least 60 minutes old, and 60 idle minutes.
+The host reads the last own assistant message containing `VERDICT CLEAN` or
+`NOT CLEAN` from its conversation history, not prompts, tools or delegates.
+Newer chatter does not erase it; ambiguous or incomplete history stays KEEP.
 The host starts one non-overlapping cycle when serving, then every 15 minutes;
 shutdown cancels it. It ships and updates with the ordinary Slipgates host,
 without a separate installation or scheduled task. Cycles have a two-minute
@@ -60,8 +67,11 @@ uncertain outcomes are never retried, even across host restarts.
 The host calls its existing `session.stop` service once, never auto-confirms a
 second press, and reports ended only when that service confirms it.
 Native transcript tools/background work and questions are used, not idle as a
-proxy. No canonical custody/holds or completion/open-PR producer exists yet:
-these remain UNKNOWN, so current native sessions stay KEEP even in live mode.
+proxy. Builder completion is derived from these facts plus 30 idle minutes and
+the clean, fully pushed git proof. An open PR does not block a fully pushed
+builder; no separate completion/PR field is required. The final stop guard
+rechecks the hold marker, protected lists, tools/questions and unchanged native
+activity, refusing changed evidence.
 Git queries are gated behind the other safety proofs and use one fetch per
 worktree per cycle, with no tracking requirement or F7 credential.
 
