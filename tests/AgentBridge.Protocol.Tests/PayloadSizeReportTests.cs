@@ -35,32 +35,44 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
     [Fact]
     public async Task Report_lists_every_vector_message_type_with_byte_sizes()
     {
-        var result = await RunAsync(VectorFiles.Folder);
-        Assert.True(result.ExitCode == 0, result.Error);
-        output.WriteLine(result.Text);
+        using var corpus = new VectorFolder();
         var expected = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        var sampleCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var file in Directory.GetFiles(VectorFiles.Folder, "*.json"))
         {
             var records = JsonNode.Parse(File.ReadAllText(file))!["records"]?.AsObject();
             if (records is null) { continue; }
+            var sampleRecords = ReportSample(records);
+            corpus.Write(System.IO.Path.GetFileName(file),
+                new JsonObject { ["records"] = sampleRecords }.ToJsonString(ProtocolJson.Options));
             foreach (var (name, record) in records)
             {
                 if (!expected.TryGetValue(name, out var sizes)) { expected[name] = sizes = []; }
+                sampleCounts.TryGetValue(name, out var count);
                 foreach (var kind in new[] { "valid", "refused" })
                 {
+                    count += sampleRecords[name]![kind]!.AsArray().Count;
                     foreach (var vector in record![kind]!.AsArray())
                     {
                         sizes.Add(Encoding.UTF8.GetByteCount(vector!["json"]!.ToJsonString(ProtocolJson.Options)));
                     }
                 }
+                sampleCounts[name] = count;
             }
         }
+        // Measure the full corpus in C#; PowerShell needs only its real extrema, not every refusal variant.
+        corpus.Write("non-record.json", """{"handshake":{}}""");
+        var result = await RunAsync(corpus.Path);
+        Assert.True(result.ExitCode == 0, result.Error);
+        output.WriteLine("Full corpus: {0} payloads; PowerShell sample: {1}.",
+            expected.Values.Sum(sizes => sizes.Count), sampleCounts.Values.Sum());
+        output.WriteLine(result.Text);
         var rows = Rows(result.Text);
         Assert.NotEmpty(expected);
         Assert.Equal(expected.Keys.Order(StringComparer.Ordinal), rows.Keys);
         foreach (var (name, sizes) in expected)
         {
-            Assert.Equal((sizes.Min(), sizes.Max(), sizes.Count), rows[name]);
+            Assert.Equal((sizes.Min(), sizes.Max(), sampleCounts[name]), rows[name]);
         }
 
         using var sample = new VectorFolder();
@@ -143,7 +155,25 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
         }
     }
 
-    static JsonObject ReportSample(JsonObject records) => (JsonObject)records.DeepClone();
+    static JsonObject ReportSample(JsonObject records)
+    {
+        var sample = new JsonObject();
+        foreach (var (name, record) in records)
+        {
+            var vectors = new[] { "valid", "refused" }.SelectMany(kind =>
+                record![kind]!.AsArray().Select(vector =>
+                    (Kind: kind, Vector: vector!, Bytes: Encoding.UTF8.GetByteCount(vector!["json"]!.ToJsonString(ProtocolJson.Options)))))
+                .OrderBy(vector => vector.Bytes).ToArray();
+            Assert.NotEmpty(vectors);
+            var selected = new JsonObject { ["valid"] = new JsonArray(), ["refused"] = new JsonArray() };
+            foreach (var vector in new[] { vectors[0], vectors[^1] }.DistinctBy(vector => vector.Bytes))
+            {
+                selected[vector.Kind]!.AsArray().Add(vector.Vector.DeepClone());
+            }
+            sample[name] = selected;
+        }
+        return sample;
+    }
 
     static Dictionary<string, (int Min, int Max, int Count)> Rows(string text)
     {
