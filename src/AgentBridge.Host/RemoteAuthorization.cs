@@ -31,16 +31,18 @@ public sealed class RemoteAuthorization : IDisposable
 
     readonly ConditionalWeakTable<SecureChannel, TrustedPeerLease> leases = new();
     readonly ITimer? timer;
+    readonly IGateRunEnrollmentProvider enrollment;
     ChannelHub? hub;
 
     public bool Enabled { get; }
     public TrustedPeerStore Store { get; }
     public event Action? Changed;
 
-    public RemoteAuthorization(bool enabled, TrustedPeerStore store, TimeProvider? time = null)
+    public RemoteAuthorization(bool enabled, TrustedPeerStore store, TimeProvider? time = null, IGateRunEnrollmentProvider? enrollment = null)
     {
         Enabled = enabled;
         Store = store;
+        this.enrollment = enrollment ?? new HeldGateRunEnrollmentProvider();
         if (enabled)
         {
             timer = (time ?? TimeProvider.System).CreateTimer(_ => Revalidate(), null,
@@ -87,6 +89,14 @@ public sealed class RemoteAuthorization : IDisposable
 
     public Func<SecureChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, AgentAuditLog? launchAudit = null) => async (channel, op, data) =>
     {
+        if (GateRunPreparation.IsControl(op))
+        {
+            if (!IsPinnedPerson(channel)) { throw new InvalidOperationException(GateRunPreparation.PersonRequired); }
+            if (sessions.ReadOnly?.Invoke() is { } readOnly) { throw new InvalidOperationException(readOnly); }
+            if (op != "gate.start") { throw new InvalidOperationException("gate lifecycle control is unavailable"); }
+            return GateRunPreparation.Prepare(launchAudit ?? throw new InvalidOperationException("gate control refused: audit unavailable"),
+                $"person:{channel.PeerId}", data, enrollment);
+        }
         var audit = op == LaunchProtocol.Launch ? launchAudit : null;
         var ingress = audit is null ? null : new GateLaunchIngress("relay", "person-client", $"person:{channel.PeerId}", audit.ControlWriterRun);
         if (!Enabled) { return await sessions.HandleAsync(channel, op, data, hello => DiagnosticsFor(channel, hello), op == Ops.SessionStop ? launchAudit : audit, ingress); }

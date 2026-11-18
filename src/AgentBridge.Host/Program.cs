@@ -467,7 +467,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var machine = new MachineInfo(Wire.DeviceId(identity.Key.Public), name, OsName(), HostVersion(), Dev: IsDevBuild() ? true : null, Instance: Guid.NewGuid().ToString("N"));
     using var trustedPeers = new RemoteAuthorization(settings.TrustedPeers,
         new TrustedPeerStore(identity.Folder, identity.Key.Public, () => identity.Account?.AccountId,
-            log: settings.TrustedPeers ? Log : null));
+            log: settings.TrustedPeers ? Log : null), enrollment: new HeldGateRunEnrollmentProvider());
     if (trustedPeers.Enabled) { Log("trusted-peer enforcement is on; only explicit full-key pins grant remote authority"); }
 
     using var stop = new CancellationTokenSource();

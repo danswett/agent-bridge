@@ -32,6 +32,29 @@ public sealed class GateAuditTests : IDisposable
 
     GateAuditReport Read() => Assert.IsType<GateAuditReport>(GateAuditProjection.Read(Profile, run));
 
+    [Fact]
+    public void Begin_marker_preserves_pinned_host_profiles_heads_and_existing_recorder_cursor()
+    {
+        var enrollment = new
+        {
+            participants = Enumerable.Range(0, 4).Select(_ => new { host = Guid.NewGuid(), profile = Guid.NewGuid(),
+                instrumentation = "1.0", agentsHead = new string('a', 64), launchesHead = new string('b', 64) }).ToArray(),
+            recorder = Guid.NewGuid(), cursor = 17, digest = new string('c', 64)
+        };
+        var metadata = JsonSerializer.Deserialize<GateAuditMetadata>(JsonSerializer.Serialize(new
+        {
+            v = 1, operation = Guid.NewGuid(), run, sequence = 0, phase = "control", path = "relay",
+            actorKind = "person-client", incarnation = Guid.Empty, reasonCode = "none", enrollment
+        }), Json)!;
+        Assert.True(new AgentAuditLog(Profile, clock).Append(new("in", Guid.NewGuid().ToString(),
+            "person:fixture", [], "gate.start", "profile", "prepared", Gate: metadata)));
+        var output = new StringWriter();
+        Assert.Equal(0, AuditCommands.Run(["audit"], root, output, new StringWriter()));
+        using var row = JsonDocument.Parse(output.ToString());
+        Assert.Equal(JsonSerializer.SerializeToElement(enrollment, Json).GetRawText(),
+            row.RootElement.GetProperty("gate").GetProperty("enrollment").GetRawText());
+    }
+
     [Theory]
     [InlineData(false), InlineData(true)]
     public void Launch_binding_requires_the_same_request_and_one_credit_per_resulting_session(bool differentRequest)
