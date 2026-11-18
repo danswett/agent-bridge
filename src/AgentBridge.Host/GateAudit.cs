@@ -54,7 +54,9 @@ internal static class GateAuditProjection
         long retained = 0;
         var (rows, complete) = Load(profile, fault => coverage |= fault == "coverage-break",
             boundary: (floor, unproven) => { retained = floor; adopted = unproven; });
-        return Project(rows, complete && !adopted, run, coverage: coverage || retained > 0, retainedThrough: retained);
+        var report = Project(rows, complete && !adopted, run, coverage: coverage || retained > 0, retainedThrough: retained);
+        return GateRunPreparation.Held(profile)
+            ? report with { IncompleteReasons = [.. report.IncompleteReasons, "roster-observation-unavailable"] } : report;
     }
 
     internal static GateAuditReport Project(IReadOnlyList<AuditCommands.Row> rows, bool complete, Guid run, Guid? onlyOperation = null, bool coverage = false, long retainedThrough = 0)

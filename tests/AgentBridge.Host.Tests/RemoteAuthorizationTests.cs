@@ -109,14 +109,14 @@ public sealed partial class RemoteAuthorizationTests : IAsyncLifetime
 
     sealed class GateEnrollmentFixture : IGateRunEnrollmentProvider
     {
-        public event Action? Changed;
+        public event Action<GateRunEnrollment?>? Changed;
         internal GateRunEnrollment? Value = new(Enumerable.Range(0, 4).Select(_ => new GateRunParticipant(
             Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "1.0", new string('a', 64), new string('b', 64))).ToArray(),
             Guid.NewGuid(), 17, new string('c', 64));
         internal Action? BeforeRead;
         internal Action? BeforeNotification;
         public GateRunEnrollment? Read() { BeforeRead?.Invoke(); return Value; }
-        internal void Change(GateRunEnrollment? value) { Value = value; BeforeNotification?.Invoke(); Changed?.Invoke(); }
+        internal void Change(GateRunEnrollment? value) { Value = value; BeforeNotification?.Invoke(); Changed?.Invoke(value); }
     }
 
     async Task<(SecureChannel Channel, AgentAuditLog Audit, GateEnrollmentFixture Enrollment)> GateAsync(TimeProvider? clock = null)
