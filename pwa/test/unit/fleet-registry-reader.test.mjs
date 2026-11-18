@@ -13,6 +13,7 @@ import { parseStrict } from '../../js/roster/strict-json.js';
 const vectors = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/roster-state.json', import.meta.url)));
 const scenario = vectors.scenarios.find((s) => s.name === 'host-sign');
 const oracle = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/fleet-registry-signing.json', import.meta.url)));
+const fields = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/fleet-registry-fields.json', import.meta.url)));
 const canonical = (v) => JSON.stringify(v, (_, x) => x && !Array.isArray(x) && typeof x === 'object'
   ? Object.fromEntries(Object.keys(x).filter((k) => k !== 'sig').sort().map((k) => [k, x[k]])) : x);
 
@@ -26,8 +27,8 @@ async function setup() {
   let now = Date.parse('2026-11-12T18:00:00Z');
   const options = { account: vectors.account, generation: vectors.generation, roster: () => roster, now: () => now };
   const reader = new FleetRegistryReader(options);
-  const make = (changes = {}, signer = key) => {
-    const record = { ...structuredClone(oracle.record), machine: scenario.devices.H, ...changes };
+  const make = (changes = {}, signer = key, base = oracle.record) => {
+    const record = { ...structuredClone(base), machine: scenario.devices.H, ...changes };
     delete record.sig;
     record.sig = base64Url(fromRaw(sign('sha256', frame(utf8(oracle.context), utf8(canonical(record))), { key: signer, dsaEncoding: 'ieee-p1363' })));
     return { machine: record.machine, online: true, record };
@@ -109,3 +110,17 @@ test('sequence ordering retains all signed int64 bits rather than rounded JavaSc
     assert.equal(result.length, count);
   }
 });
+
+for (const c of fields.schema) {
+  test(`shared relay roster vector: ${c.name}`, async () => {
+    const s = await setup();
+    const record = { ...structuredClone(fields.record), ...structuredClone(c.record ?? {}) };
+    if (c.session) Object.assign(record.sessions[0], c.session);
+    const result = await s.read(s.make(record, s.key, {}));
+    assert.equal(result.length, c.accepted ? 1 : 0);
+    if (c.accepted) {
+      assert.deepEqual(result[0].sessions, record.sessions);
+      assert.equal(result[0].truncated, record.truncated);
+    }
+  });
+}
