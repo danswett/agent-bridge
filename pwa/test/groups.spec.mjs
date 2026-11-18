@@ -282,11 +282,11 @@ const groupState = (page) => page.locator('#session-list > *').evaluateAll((els)
   return state;
 });
 
-for (const { name, id, key, expected } of [
-  { name: 'Alt+ArrowDown on the last row of a group moves it to the top of the next group', id: COPILOT, key: 'Alt+ArrowDown', expected: [[], [COPILOT, CLAUDE], [DELEGATING]] },
-  { name: 'Alt+ArrowUp on the first row of a group moves it to the foot of the previous group', id: CLAUDE, key: 'Alt+ArrowUp', expected: [[COPILOT, CLAUDE], [], [DELEGATING]] },
-  { name: 'Alt+ArrowDown on the last group enters the top of Sessions', id: CLAUDE, key: 'Alt+ArrowDown', expected: [[COPILOT], [], [CLAUDE, DELEGATING]] },
-  { name: 'Alt+ArrowUp on the first Sessions row enters the foot of the last group', id: DELEGATING, key: 'Alt+ArrowUp', expected: [[COPILOT], [CLAUDE, DELEGATING], []] },
+for (const { name, id, key, speech, expected } of [
+  { name: 'Alt+ArrowDown on the last row of a group moves it to the top of the next group', id: COPILOT, key: 'Alt+ArrowDown', speech: 'Moved to Personal', expected: [[], [COPILOT, CLAUDE], [DELEGATING]] },
+  { name: 'Alt+ArrowUp on the first row of a group moves it to the foot of the previous group', id: CLAUDE, key: 'Alt+ArrowUp', speech: 'Moved to Team', expected: [[COPILOT, CLAUDE], [], [DELEGATING]] },
+  { name: 'Alt+ArrowDown on the last group enters the top of Sessions', id: CLAUDE, key: 'Alt+ArrowDown', speech: 'Removed from Personal', expected: [[COPILOT], [], [CLAUDE, DELEGATING]] },
+  { name: 'Alt+ArrowUp on the first Sessions row enters the foot of the last group', id: DELEGATING, key: 'Alt+ArrowUp', speech: 'Moved to Personal', expected: [[COPILOT], [CLAUDE, DELEGATING], []] },
 ]) {
   test(`${name} and keeps membership and order after reload`, async ({ page }) => {
     await setup(page);
@@ -298,6 +298,7 @@ for (const { name, id, key, expected } of [
     const button = row(page, id).locator('.row-main');
     await button.press(key);
     await expect(button).toBeFocused();
+    await expect(page.locator('#session-list + [role="status"]')).toHaveText(speech);
     const expectedState = { pinned: [CODEX], groups: [{ name: 'Team', ids: expected[0] }, { name: 'Personal', ids: expected[1] }], sessions: expected[2] };
     await expect.poll(() => groupState(page)).toEqual(expectedState);
     await page.reload();

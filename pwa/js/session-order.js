@@ -299,6 +299,30 @@ export class SessionOrder {
     return true;
   }
 
+  // Alt+Up/Down follows displayed group order, not the interleaved storage order.
+  moveAcrossGroups(key, delta) {
+    if (delta !== -1 && delta !== 1) { return false; }
+    if (this.#group(key) === 'pinned') { return this.move(key, delta); }
+    if (this.sort !== 'yours' || this.#group(key) !== 'sessions' || this.isPending(key)) { return false; }
+    const from = this.groupFor(key);
+    const members = (id) => this.#shown.sessions.filter((k) => this.groupFor(k) === id);
+    const shown = members(from);
+    let to = from;
+    let neighbour = shown[shown.indexOf(key) + delta];
+    if (neighbour === undefined) {
+      const groups = [...this.groups.filter((g) => g.id === from || !this.isGroupCollapsed(g.id)).map((g) => g.id), null];
+      const at = groups.indexOf(from) + delta;
+      if (at < 0 || at >= groups.length) { return false; }
+      to = groups[at];
+      const target = members(to);
+      neighbour = delta > 0 ? target[0] : target.at(-1);
+    }
+    if (neighbour !== undefined && this.isPending(neighbour)) { return false; }
+    if (to !== from) { this.setGroup(key, to); }
+    if (neighbour !== undefined) { this.#insert(key, neighbour, to === from ? delta > 0 : delta < 0); }
+    return true;
+  }
+
   // A drag: the row goes before (or after) the target row, and into the target's group, so a
   // row dragged among the pinned ones is pinned.
   place(key, target, after = false) {

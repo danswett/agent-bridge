@@ -343,3 +343,29 @@ test('keyboard group moves wait for both rows to be placed and refuse other sort
     assert.equal(f.o.moveAcrossGroups(key('a'), 1), false);
   }
 });
+
+test('keyboard moves within Pinned keep membership and cannot cross either Pinned edge', () => {
+  const f = edgeFixture();
+  f.o.setPinned(key('b'), true);
+  f.snapshot();
+  assert.equal(f.o.moveAcrossGroups(key('d'), 1), true);
+  assert.deepEqual(f.snapshot().pinned, ['b', 'd']);
+  const before = f.storage.raw;
+  assert.equal(f.o.moveAcrossGroups(key('b'), -1), false);
+  assert.equal(f.o.moveAcrossGroups(key('d'), 1), false);
+  assert.equal(f.storage.raw, before);
+  assert.equal(f.o.groupFor(key('b')), f.first);
+  assert.equal(f.o.groupFor(key('d')), f.first);
+});
+
+test('keyboard moves enter empty Sessions and return to the empty last group after reload', () => {
+  const f = edgeFixture();
+  f.o.setGroup(key('e'), f.first);
+  f.o.setGroup(key('f'), f.first);
+  f.snapshot();
+  assert.equal(f.o.moveAcrossGroups(key('c'), 1), true);
+  const again = new SessionOrder({ storage: f.storage });
+  assert.deepEqual(f.snapshot(again).sessions, ['c']);
+  assert.equal(again.moveAcrossGroups(key('c'), -1), true);
+  assert.deepEqual(f.snapshot(new SessionOrder({ storage: f.storage })).groups[1], ['c']);
+});

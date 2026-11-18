@@ -424,13 +424,19 @@ export class SessionListView {
   #keyOf(card) { return SessionListView.key(card.hostId, card.id); }
 
   // Moves a row and keeps the move in view and in focus.
-  #move(card, delta) {
-    if (!this.moving || !this.order.move(this.#keyOf(card), delta)) { return false; }
+  #move(card, delta, acrossGroups = false) {
+    if (!this.moving) { return false; }
+    const key = this.#keyOf(card), from = this.order.groupFor(key);
+    if (!(acrossGroups ? this.order.moveAcrossGroups(key, delta) : this.order.move(key, delta))) { return false; }
     // Into view before the slide is measured: the slide's first frame puts the row back where it
     // was, and a scroll then would find it already in sight and leave its new place clipped.
     this.#moved(card.element, () => { this.render(); card.element.scrollIntoView({ block: 'nearest' }); });
     card.els.open.focus({ preventScroll: true });
-    this.#say(delta < 0 ? 'Moved up' : 'Moved down');
+    const to = this.order.groupFor(key);
+    this.#say(!this.order.usable ? 'Your order could not be saved on this device.'
+      : to === from ? delta < 0 ? 'Moved up' : 'Moved down'
+      : to === null ? `Removed from ${this.order.groups.find((g) => g.id === from).name}`
+      : `Moved to ${this.order.groups.find((g) => g.id === to).name}`);
     return true;
   }
 
@@ -646,7 +652,7 @@ export class SessionListView {
       }
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') { return; }
       if (e.altKey) {
-        if (card) { e.preventDefault(); if (!this.#grab) { this.#move(card, e.key === 'ArrowUp' ? -1 : 1); } }
+        if (card) { e.preventDefault(); if (!this.#grab) { this.#move(card, e.key === 'ArrowUp' ? -1 : 1, true); } }
         return;
       }
       e.preventDefault();
