@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: main-red
+  group: main-red-ci
   cancel-in-progress: false
 
 jobs:
