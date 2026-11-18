@@ -200,7 +200,7 @@ public sealed partial class HaConnector
         {
             Published? p;
             lock (gate) { p = published.TryGetValue(done.SessionId, out var found) ? found : null; }
-            if (p is not null) { await ReplyDoneAsync(p, done, now, ct); }
+            if (p is not null) { if (!await ReplyDoneAsync(p, done, now, ct)) { break; } }
             else if (done.Result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { DeleteImages(done.Images); }
             // Only once said: a pass that fails part-way says it again rather than not at all.
             replies.TryDequeue(out _);
@@ -210,7 +210,7 @@ public sealed partial class HaConnector
         }
     }
 
-    async Task ReplyDoneAsync(Published p, ReplyDone done, DateTimeOffset now, CancellationToken ct)
+    async Task<bool> ReplyDoneAsync(Published p, ReplyDone done, DateTimeOffset now, CancellationToken ct)
     {
         var result = done.Result;
         var short8 = done.SessionId[..Math.Min(8, done.SessionId.Length)];
@@ -220,7 +220,7 @@ public sealed partial class HaConnector
         if (done.Rid is { } rid)
         {
             var outcome = result.Outcome switch { AnswerOutcome.Delivered => "delivered", AnswerOutcome.Unconfirmed => "unconfirmed", _ => "refused" };
-            InboxOutcome(done.SessionId, rid, outcome);
+            if (!InboxOutcome(done.SessionId, rid, outcome)) { return false; }
             if (outcome == "refused") { p.Reply.ForgetRid(rid); }
             else if (p.Reply.Rids.ContainsKey(rid)) { p.Reply.Rids[rid] = outcome; }
             p.Reply.Ack = MakeAck(rid, done.Sender, outcome);
@@ -269,6 +269,7 @@ public sealed partial class HaConnector
             if (box.Present && box.Value == sent) { await ResetReplyBoxAsync(p.Node, ct); }
             else { log($"Home Assistant connector kept a follow-up reply typed for {short8} while the previous one was delivering"); }
         }
+        return true;
     }
 
     // Used images go from Home Assistant's store beside the passes, as deliveries run: each

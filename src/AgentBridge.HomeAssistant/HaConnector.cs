@@ -708,7 +708,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         // their dashboard cards still await removal. Held discovery proves no such absence.
         if (!RetirementHeld() && inbox.Any(i => !live.ContainsKey(i.Node)))
         {
-            inbox = queuedInbox!.RetainNodes(live.Keys.ToHashSet(StringComparer.Ordinal));
+            TryInbox(() => inbox = queuedInbox!.RetainNodes(live.Keys.ToHashSet(StringComparer.Ordinal)));
         }
         List<string> work;
         List<(string Id, string Node)> gone;

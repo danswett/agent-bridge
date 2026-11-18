@@ -590,9 +590,9 @@ at dispatch and receipts survive within the store's retention caps. Before termi
 the host durably marks the entry `unconfirmed`. A crash across typing cannot prove whether
 the terminal consumed the message: it is **not automatically replayed**, and a retry gets
 `unconfirmed`, not a false delivery claim. Normal completed delivery is once per retained rid.
-Missing, corrupt or unwritable storage refuses queueing. This is host-local session state:
-stopping that host stops delivery; losing its state loses its queued messages, not an automatic
-handoff to another machine. This change does not install or migrate a running host.
+Unavailable/corrupt storage refuses queueing/dispatch. Completion/retirement write failures are logged and retried
+without starving owner answers or publishing; delivery-completion acknowledgements follow persistence. State stays host-local:
+stopping the host stops delivery; losing state loses queued messages, not an automatic handoff. No running host is installed or migrated.
 
 **Durable inbox foundation.** `DurableInbox` is the internal store used by the host queue above: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,

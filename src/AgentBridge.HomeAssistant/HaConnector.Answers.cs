@@ -29,6 +29,7 @@ public sealed partial class HaConnector
         // A press spent at an answer that was not complete yet, so the tap that completes it
         // is not taken for a Send (Set-DaemonPressSpent).
         public string? SpentPress;
+        public (long After, string? Editor)? AgentSend;
         // A press or a publish already used, so it is never delivered twice.
         public string? UsedPress;
         // The phone taps (by event) already given to the host for this question.
@@ -293,6 +294,7 @@ public sealed partial class HaConnector
         now.UsedPress = was.UsedPress;
         now.UsedStamp = was.UsedStamp;
         now.SpentPress = was.SpentPress;
+        now.AgentSend = was.AgentSend;
         now.PhoneTaps.UnionWith(was.PhoneTaps);
         // A tap that reached nothing (Busy, Refused), with the selector seen waiting under the new
         // arming: the same option may be tapped again, as after RearmAsync. Kept, it ignored the
@@ -932,8 +934,8 @@ public sealed partial class HaConnector
         var node = p.Node;
         // A press of Send (or of the box) the watch reported after the last failure: what lets
         // words that failed be given again.
-        var fresh = since.Any(h => (h.EntityId == SessionEntities.Submit(node) || h.EntityId == SessionEntities.Reply(node)) && h.State.State != armed.SpentPress)
-            || await PressedSinceFailureAsync(node, armed, ct);
+        var fresh = armed.AgentSend is null && (since.Any(h => (h.EntityId == SessionEntities.Submit(node) || h.EntityId == SessionEntities.Reply(node)) && h.State.State != armed.SpentPress)
+            || await PressedSinceFailureAsync(node, armed, ct));
         var decision = await ha.GetStateAsync(SessionEntities.Decision(node), ct);
         if (!armed.WindowChecked && decision?.State == HaDecision.Awaiting && DecisionIdOf(decision) == armed.Question.Id)
         {
@@ -1132,7 +1134,7 @@ public sealed partial class HaConnector
         }
         // ...nor the Send the card showed when an answer failed: pressed while it was being
         // delivered, it belongs to the attempt that failed, not to a new one.
-        var pressed = Changed(armed.SubmitBaseline, submit) && submit.Value != armed.SpentPress && submit.Value != armed.UsedPress
+        var pressed = armed.AgentSend is null && Changed(armed.SubmitBaseline, submit) && submit.Value != armed.SpentPress && submit.Value != armed.UsedPress
             && !(armed.SubmitAtFailure is { Present: true } atFailure && atFailure.Value == submit.Value);
         var complete = missing.Count == 0;
         // A lone choice that takes another answer, typed into the reply box and sent with Send.

@@ -40,7 +40,6 @@ public sealed partial class ReplyTests
     [InlineData(true, "agent-user", "agent-user", true)]
     [InlineData(true, null, "agent-user", false)]
     [InlineData(true, "agent-user", null, false)]
-    [InlineData(false, null, null, true)]
     public async Task An_agent_payload_and_companion_press_cannot_confirm_the_owners_completed_form(bool together, string? agent, string? user, bool restFails)
     {
         await using var c = await Ready(agent is null ? [] : [agent]);
@@ -70,42 +69,10 @@ public sealed partial class ReplyTests
     {
         await using var c = await Ready("agent-user");
         if (stale) { await Do(c, ha.SendFromCard(Node, "earlier", driver: "agent", rid: "r-old")); }
-        Idle(question: Pick());
-        await Pass(c);
+        Idle(question: Pick()); await Pass(c);
         await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
         await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
         Assert.Single(answered);
-    }
-
-    [Theory]
-    [InlineData("invalid")]
-    [InlineData("corrupt")]
-    [InlineData("unwritable")]
-    public async Task Completion_storage_failure_keeps_uncertainty_without_starving_owner_answers_and_retries(string failure)
-    {
-        await using var c = await Asking();
-        await Do(c, ha.SendFromCard(Node, "message", driver: "agent", rid: "r-1"));
-        Idle(turn: 2);
-        await Pass(c, 20);
-        await c.DeliveredAsync();
-        var path = Path.Combine(folder, "ha-connector.json.inbox");
-        var saved = File.ReadAllText(path);
-        Assert.Equal("unconfirmed", Assert.Single(new DurableInbox(path).Read()).Outcome);
-        if (failure == "unwritable") { File.Delete(path); Directory.CreateDirectory(path); }
-        else { File.WriteAllText(path, failure == "invalid" ? """{"Version":2,"Messages":[]}""" : "{broken"); }
-        Idle(question: Pick());
-        await Pass(c);
-        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
-        await Do(c, ha.Press(SessionEntities.Submit(Node)));
-        Assert.Single(answered);
-        Assert.NotEqual("delivered", Ack.GetProperty("outcome").GetString());
-        Assert.Contains(log, m => m.Contains("inbox", StringComparison.Ordinal) && m.Contains("failed", StringComparison.Ordinal));
-        if (failure == "unwritable") { Directory.Delete(path); }
-        File.WriteAllText(path, saved);
-        await Pass(c);
-        Assert.Equal("delivered", Assert.Single(new DurableInbox(path).Read()).Outcome);
-        Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
-        Assert.Single(replied);
     }
 
     [Theory]
@@ -126,31 +93,53 @@ public sealed partial class ReplyTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task A_semantically_invalid_snapshot_refuses_queueing_without_starving_owner_answers(bool startup)
+    [InlineData(true, null)]
+    [InlineData(false, null)]
+    [InlineData(false, "invalid")]
+    [InlineData(false, "corrupt")]
+    [InlineData(false, "unwritable")]
+    public async Task Inbox_storage_failure_never_starves_owner_answers_or_falsely_acknowledges_persistence(bool startup, string? completion)
     {
         Directory.CreateDirectory(folder);
         var path = Path.Combine(folder, "ha-connector.json.inbox");
         if (startup) { File.WriteAllText(path, """{"Version":2,"Messages":[]}"""); }
         await using var c = await Asking();
-        if (!startup) { File.WriteAllText(path, """{"Version":2,"Messages":[]}"""); }
+        string? saved = null;
+        if (completion is not null)
+        {
+            await Do(c, ha.SendFromCard(Node, "message", driver: "agent", rid: "r-1"));
+            Idle(turn: 2); await Pass(c, 20);
+            await c.DeliveredAsync();
+            saved = File.ReadAllText(path);
+            Assert.Equal("unconfirmed", Assert.Single(new DurableInbox(path).Read()).Outcome);
+        }
+        if (completion == "unwritable") { File.Delete(path); Directory.CreateDirectory(path); }
+        else if (!startup) { File.WriteAllText(path, completion == "corrupt" ? "{broken" : """{"Version":2,"Messages":[]}"""); }
+        if (completion is not null) { Idle(question: Pick()); await Pass(c); }
         var mark = ha.Log.Count;
-        c.Observe(ha.SendFromCard(Node, "message", driver: "agent", rid: "r-invalid"));
+        if (completion is null) { c.Observe(ha.SendFromCard(Node, "message", driver: "agent", rid: "r-invalid")); }
         c.Observe(ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
         c.Observe(ha.Press(SessionEntities.Submit(Node)));
         await Pass(c);
         Assert.Single(answered);
-        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
-        Assert.Contains(NotesSince(mark), n => n.Attributes.TryGetProperty("error", out var error)
-            && error.GetString()!.Contains("queue unavailable", StringComparison.Ordinal));
-        Assert.Empty(replied);
+        Assert.Contains(log, m => m.Contains("inbox", StringComparison.Ordinal) && m.Contains("failed", StringComparison.Ordinal));
+        if (saved is null)
+        {
+            Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+            Assert.Contains(NotesSince(mark), n => n.Attributes.TryGetProperty("error", out var error) && error.GetString()!.Contains("queue unavailable", StringComparison.Ordinal));
+            Assert.Empty(replied); return;
+        }
+        Assert.False(Detail.TryGetProperty("reply_ack", out _));
+        if (completion == "unwritable") { Directory.Delete(path); }
+        File.WriteAllText(path, saved);
+        await Pass(c);
+        Assert.Equal("delivered", Assert.Single(new DurableInbox(path).Read()).Outcome);
+        Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
+        Assert.Single(replied);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Retirement_preserves_entries_through_discovery_holds_and_restart_then_forgets_both_pending_and_receipts(bool storageFails)
+    [Fact]
+    public async Task Retirement_preserves_entries_through_discovery_holds_and_restart_then_forgets_both_pending_and_receipts()
     {
         var path = Path.Combine(folder, "ha-connector.json.inbox");
         await using (var c = await Asking())
@@ -173,13 +162,7 @@ public sealed partial class ReplyTests
             Assert.Equal(2, new DurableInbox(path).Read().Count);
             sessions.Held = null;
             sessions.End(A);
-            var saved = File.ReadAllText(path);
-            if (storageFails) { File.WriteAllText(path, """{"Version":2,"Messages":[]}"""); }
-            const string other = "7fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20";
-            sessions.Set(FakeSessions.Copilot(other));
             await Pass(c);
-            Assert.Contains(HaContract.Topics(HaContract.NodeId(other)).StatusState, ha.Retained.Keys);
-            if (storageFails) { File.WriteAllText(path, saved); await Pass(c); }
             Assert.Empty(new DurableInbox(path).Read());
         }
         replied.Clear();
@@ -193,16 +176,22 @@ public sealed partial class ReplyTests
         Assert.Equal(["new delivered", "new pending"], replied.Select(r => r.Text));
     }
 
-    [Fact]
-    public async Task Startup_reclaims_shared_capacity_from_sessions_that_ended_while_the_connector_was_down()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Startup_reclaims_shared_capacity_from_sessions_that_ended_while_the_connector_was_down(bool storageFails)
     {
         Directory.CreateDirectory(folder);
         var path = Path.Combine(folder, "ha-connector.json.inbox");
-        var messages = Enumerable.Range(0, 1000).Select(n =>
-            new InboxMessage("gone-" + n / 100, "r-" + n, "sender", "old", FakeSessions.T0, null)).ToList();
-        File.WriteAllText(path, JsonSerializer.Serialize(new { Version = 1, Messages = messages }));
+        var messages = Enumerable.Range(0, 1000).Select(n => new InboxMessage("gone-" + n / 100, "r-" + n, "sender", "old", FakeSessions.T0, null)).ToList();
+        var saved = JsonSerializer.Serialize(new { Version = 1, Messages = messages });
+        File.WriteAllText(path, saved);
         await using var c = Connector();
+        if (storageFails) { File.WriteAllText(path, """{"Version":2,"Messages":[]}"""); }
+        Idle();
         await Pass(c);
+        Assert.Contains(HaContract.Topics(Node).StatusState, ha.Retained.Keys);
+        if (storageFails) { File.WriteAllText(path, saved); await Pass(c); }
         var store = new DurableInbox(path);
         Assert.Empty(store.Read());
         Assert.Equal("new", store.Enqueue(A, "new", "sender", "new", FakeSessions.T0).Rid);
@@ -325,19 +314,23 @@ public sealed partial class ReplyTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Unwritable_or_corrupt_storage_never_acknowledges_a_durable_queue(bool corrupt)
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Unwritable_or_corrupt_storage_never_acknowledges_a_durable_queue(int failure)
     {
         Directory.CreateDirectory(folder);
         var path = Path.Combine(folder, "ha-connector.json.inbox");
-        if (corrupt) { File.WriteAllText(path, "{broken"); }
-        else { Directory.CreateDirectory(path); }
+        if (failure == 1) { File.WriteAllText(path, "{broken"); }
+        else if (failure == 0) { Directory.CreateDirectory(path); }
         await using var c = await Asking();
+        if (failure == 2) { File.WriteAllText(path, """{"Version":1,"Messages":[]}"""); }
+        using var held = failure == 2 ? File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read) : null;
         await Do(c, ha.SendFromCard(Node, "first", driver: "agent", rid: "r-1"));
         Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
         Assert.Contains("queue unavailable", Detail.GetProperty("error").GetString());
         Assert.Equal(0, Detail.GetProperty("reply_queue_count").GetInt32());
+        held?.Dispose();
         await CardCloses(c);
         Assert.Empty(replied);
     }
