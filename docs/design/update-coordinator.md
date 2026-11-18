@@ -68,6 +68,17 @@ CLI compatibility only, never trust; missing support refuses with
 remain mandatory at staging. No hostw is stamped with that suffix here: it must
 ship in the same build as the real early coordinator mode, not a metadata-only slice.
 
+### B3b: private current-helper handoff, not cutover
+
+Validate canonical paths, reparse ancestors and install exclusion before any stage
+write. Copy the current trusted installed helper through its retained read-only
+handle, binding source/copy SHA256 and requiring the shared C2 bundle verifier.
+Read compatibility metadata from those streams, never a re-resolved path. Keep
+the target package's verified checksum/copy lease separate: downgrade targets are
+applied by the current coordinator, not an old target helper. A missing v1 marker
+refuses without fallback or staging. Directory checks do not pin ancestor handles;
+the documented ancestry TOCTOU limit remains. No title marker or launch is wired here.
+
 ## C/D: approved design basis, not activation proof
 
 Use immutable `root\slots\<release-identity>-<package-digest>` payloads. One validated
