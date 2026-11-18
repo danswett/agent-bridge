@@ -96,6 +96,19 @@ public sealed class EnvelopeLaneTests
         Assert.Equal(new[] { "local words\n\n", "report", " trailing words" }, entries.Select(e => e.Text));
         Assert.Null(entries[0].Envelope);
         Assert.Null(entries[2].Envelope);
+        Assert.Equal("\n\n", Assert.Single(DeliveryEnvelope.ParseUnverified("\n\n")).Text);
+        Assert.Equal(new[] { "\n\n", "report", "\n\n" },
+            DeliveryEnvelope.ParseUnverified("\n\n" + frame + "\n\n").Select(e => e.Text));
         Assert.Throws<ArgumentException>(() => Envelope("owner|id=forged", "words").Format());
+    }
+
+    [Fact]
+    public void A_forged_length_splitting_a_surrogate_pair_stays_console_text()
+    {
+        var frame = Envelope("agent:First", "\U0001F44D").Format();
+        var malformed = frame.Replace("|n=2]", "|n=1]");
+        var entry = Assert.Single(DeliveryEnvelope.ParseUnverified(malformed));
+        Assert.Null(entry.Envelope);
+        Assert.Equal(malformed, entry.Text);
     }
 }

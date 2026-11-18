@@ -118,3 +118,15 @@ and only the agent's clock. Fix without CLI changes: self-describing deliveries,
 4. Windows Terminal and conhost, kitty and non-kitty: fills the table; not capable waits for idle.
 5. `send_session_message` spike: steer or queue, sender, order, confirmation. Not adopted.
 ## Out of scope: app rendering (#2538), the reply slot (#1323), which host types (#2560), CLI changes.
+
+## Inert envelope/lane contract (2026-11-17 PT)
+`Protocol.DeliveryEnvelope` is the canonical codec available to both host and UI; parsed parts
+are explicitly unverified, never attribution, confirmation or deduplication evidence. It preserves
+console text, counts UTF-16 body units, folds to one line, and escapes literal opening brackets
+after NFKC; this is delimiter hygiene, not a UTS 39 or journal-authentication implementation.
+`DeliveryLanes<T>` is host-internal, one instance per session: authenticated owner/system steering
+precedes agent FIFO, one active item until explicit completion. Unknown idle, input ownership,
+sender or intent holds; known working permits urgent only. No injector or submit action exists here.
+These helpers are UNWIRED. The ephemeral selector makes no accepted/queued durability promise:
+node departure loses its state. Shared-store/journal ownership, sequence reservation, capability
+qualification and guarded dispatch must land before integration; no local payload store is added.
