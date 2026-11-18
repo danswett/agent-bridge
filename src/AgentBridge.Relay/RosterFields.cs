@@ -82,10 +82,6 @@ public static class RosterFields
         try { _ = SessionEvidence.Read(s); }
         catch (InvalidDataException) { return false; }
         catch (InvalidOperationException) { return false; }
-        if (seen.Contains("startedAt") && (s.GetProperty("startedAt").ValueKind != JsonValueKind.String
-            || s.GetProperty("startedAt").GetString() is not { Length: 20 } started
-            || !DateTimeOffset.TryParseExact(started, "yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out _))) { return false; }
         // Printable ASCII only: a name is display text from an untrusted source.
         return !seen.Contains("name") || (Is(s.GetProperty("name"), JsonValueKind.String)
             && s.GetProperty("name").GetString() is { Length: > 0 and <= MaxNameLength } name && name.All(c => c is >= ' ' and <= '~'));
