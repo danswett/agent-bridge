@@ -33,7 +33,7 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
     Dictionary<string, byte[]> Evidence() => Directory.GetFiles(Audit, "*.jsonl").ToDictionary(p => p, File.ReadAllBytes);
 
     [Fact]
-    public async Task Clean_retention_advances_the_root_without_disabling_subsequent_production_launches()
+    public async Task Clean_retention_preserves_run_anchors_without_disabling_subsequent_production_launches()
     {
         Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
         Pair();
@@ -43,10 +43,10 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
             auditClock.Advance(TimeSpan.FromDays(1));
             Assert.True(Writer().Append(Ordinary()));
         }
-        Assert.False(File.Exists(Path.Combine(Audit, oldest)));
+        Assert.True(File.Exists(Path.Combine(Audit, oldest)));
         Assert.True(Writer().Verify().Intact);
         Assert.Equal("none", JsonNode.Parse(File.ReadAllText(Head(false)))!["fault"]!.GetValue<string>());
-        Assert.True(GateAuditProjection.Read(Profile, run).Invalidated);
+        Assert.False(GateAuditProjection.Read(Profile, run).Invalidated);
         Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
         Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
     }
