@@ -419,6 +419,88 @@ acknowledgement) is always there, empty when there are none. A signed command's 
 body's JSON bytes, and this input begins with its own label, so neither ever verifies as the
 other. The library takes the raw ECDH secret, which the caller's key store computes.
 
+## Sync epoch keys (#759 K1)
+
+**Contract and vectors only, not enabled.** [The roaming design](../design/session-order-roaming.md)
+and [the key decision](https://github.com/danswett/agent-bridge/issues/759#issuecomment-6755248456)
+govern this channel. Hosts never hold its key. Sign-in, enrollment codes, roster
+bytes and the pairwise CommandMac key are not an account secret.
+
+An approved person's device creates `K_epoch`, **256 fresh CSPRNG bits**, only when
+the person explicitly enables sync and no manifest already exists. It chooses a
+fresh random 128-bit epoch id (32 lowercase hex). Sync stays off before that.
+An offline device with no key keeps local edits and waits for another approved
+device; it never creates a competing epoch. There is no recovery or escrow in
+the first release. Forked manifests stop sync for reconciliation, not relay-time LWW.
+
+### Manifest (sealed-record store, kind `manifest`)
+
+This is a signed **public object**, not encrypted record content and **not a roster
+entry kind**. Nothing is submitted to the roster log or its strict entry parser.
+The wrapper is `{body, sig, uv?}` as for a person command; exact decoded content
+is at most 8 KiB. `body` is base64url of strict UTF-8 I-JSON, signed without
+re-serialization, with exactly:
+
+`{v:1, kind:"manifest", account, generation, epoch, previous, heads, by, byAdd, commitment}`.
+
+`account`, `generation`, ids, hashes, signatures and `uv.by` use the encodings
+above. `heads` is 1 to 4 roster hashes in head order. `byAdd` is the signer's
+exact admission hash. `previous` is null only for initial enable, otherwise the
+previous manifest hash, `SHA-256(previous bodyBytes)`. The current manifest hash
+is likewise `SHA-256(bodyBytes)`; signature or wrapper spelling cannot change it.
+`commitment = SHA-256(F("agent-bridge sync key commitment v1", account, generation, epoch, K_epoch))`.
+All ids (including generation and epoch) in these new frames are UTF-8 text;
+hashes and keys are raw bytes.
+
+`sig` is low-S DER ECDSA-P256-SHA256 by `by.sign` over
+`F("agent-bridge sync key manifest v1", bodyBytes)`. Presence uses the existing
+proof with role `sync-key-manifest`, never `by` or `command`.
+Verify through the roster library's public APIs: held, unquarantined heads;
+`stateOf(heads)` and current state both identify this exact active person's add;
+no probation, held lineage or signer-key collision; then signature and recorded
+presence. In JS these are `RosterVerifier`, `verify` and `presenceProof`;
+no new trust root or roster op is introduced.
+
+### Key wrap (kind `keywrap`)
+
+Exactly `{v:1, kind:"keywrap", account, generation, epoch, manifest, holder,
+holderAdd, target, targetAdd, nonce, ciphertext}`. `manifest` is its body hash.
+Both devices must be active, non-probationary, non-held persons without a signer
+key collision. Check each **id AND add-entry hash** in the verified current roster
+before wrapping; never trust a public DH key supplied alongside a request.
+Use those exact admissions' DH keys, never signing keys.
+
+Let `C = F(account, generation, epoch, holder, holderAdd, target, targetAdd, manifest)`.
+`Z = ECDH-P256(holder.dh, target.dh)` is the raw 32-byte shared x-coordinate.
+`W = HKDF-SHA256(ikm:Z, salt:"agent-bridge sync key wrap v1", info:C, length:32)`.
+This purpose is **never** `"agent-bridge command v1"` (CommandMac).
+AES-256-GCM encrypts the 32 key bytes under `W`, a fresh random 12-byte `nonce`,
+128-bit tag and `AAD = F("agent-bridge sync key wrap aad v1", C)`.
+`ciphertext` is 48 bytes including the appended tag. Do not reuse a nonce under
+one `W`. Unwrap checks the intended local id/add, exact manifest binding,
+admissions, GCM tag, then key commitment before making a key usable.
+
+### Removal, continuity and implementation boundary
+
+A removal pauses sync until a presence-authorised remaining approver publishes a
+successor manifest: **fresh random `K_next`, never derived from `K_epoch`**,
+new epoch id, previous manifest hash, and current roster heads. Re-wrap only to
+remaining approved devices and re-encrypt retained records under the new epoch.
+Best-effort deleting old ciphertext cannot erase a removed member's old copies.
+Rotation is required by this contract but implemented later; this slice does not
+authorize shipping without it.
+
+Production callers must enforce roster freshness, persist a pinned manifest chain
+and epoch floor, reject forks/rollback, and serialize initial enable so absence
+from an offline or withholding relay never authorizes a second key. Old manifest
+heads may precede later adds, but never bypass a removal's rotation requirement.
+`pwa/js/sync-key.js` is a dormant, pure vector checker only: no key generation,
+store, freshness, rotation, transport or UI. Its caller supplies the pinned
+predecessor (null only at genesis), verified roster and raw test ECDH secret.
+[sync-key.json](vectors/sync-key.json) fixes the manifest signature, commitment,
+wrap KAT and cross-purpose/AAD/admission refusals; its private values are public
+test material only. Sealed record schemas and record AAD belong to S2, not K1.
+
 ## Signing keys
 
 A person's device's `sign` key (design §3.2) is its own ECDSA P-256 key, beside its ECDH device
