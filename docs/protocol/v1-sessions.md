@@ -1051,7 +1051,10 @@ adds optional `cleared: { text, marks, truncated }`: text that a clear attempt m
 have deleted, escaped with host-only `[start, length]` marks in UTF-16 units.
 It is returned even if the reply is later refused, and is never logged. This cut
 refuses before keys unless the complete single-row draft fits 500 escaped characters;
-it therefore always returns `truncated: false`. There is no wire confirmation field,
+it therefore always returns `truncated: false`. Lossless host-only composer evidence
+is mandatory: display-normalized screen text alone cannot authorize deletion.
+Replay requires the original sender, session and still-current host authority callbacks;
+foreign replay receives no escrow or progress. There is no wire confirmation field,
 production clear producer or capability in this cut. Signed person relay confirmation,
 policy and PWA/app presentation follow separately; existing clients are unchanged.
 

@@ -229,8 +229,14 @@ public sealed partial class ReplyService : ISessionReplier
         {
             return Task.FromResult(Refused("request must be a UUID"));
         }
+        // Clear callbacks identify this host-verified authority generation; new or revoked
+        // authority cannot inherit escrow, even with the same device and request UUID.
+        var owner = (peer ?? "", request.Id, request.ClearConfirmation, request.ClearDraftSource,
+            request.ClearConfirmation is null ? null : request.IntentSource,
+            request.ClearConfirmation is null ? ReplyIntent.Unknown : request.Intent);
         return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "reply", key, log), t => DeliverAsync(request, key, peer ?? "", t), result =>
-            log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({ReplyReasons.Shared(result.Reason)})")}"));
+            log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({ReplyReasons.Shared(result.Reason)})")}"),
+            owner: owner, foreign: () => Task.FromResult(Refused("the request belongs to another sender, target or authorization; use a new request")));
     }
 
     async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)

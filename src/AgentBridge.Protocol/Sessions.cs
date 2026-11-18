@@ -848,6 +848,10 @@ public sealed record ReplyRequest
     // No production producer until the signed relay ingress and policy land (#804).
     [JsonIgnore]
     public Func<string, string?>? ClearConfirmation { get; init; }
+    // Host-only lossless composer evidence, never reconstructed from normalized screen rows.
+    // No production producer until a trustworthy source of the original draft lands.
+    [JsonIgnore]
+    public Func<string?>? ClearDraftSource { get; init; }
 }
 
 public sealed record ClearedComposer(string Text, IReadOnlyList<IReadOnlyList<int>> Marks, bool Truncated = false);

@@ -163,6 +163,10 @@ G5, elevation, launch and transcript guards before clearing and again before rep
 No wire field supplies it. There is deliberately **no production producer or advertised
 capability yet**: signed relay-only confirmation, default-off policy and PWA/app UI
 remain follow-up slices. The pipe, HA, MCP and agent paths cannot enable it.
+Clearing additionally requires host-only `ClearDraftSource`: lossless original composer
+text, rechecked before keys. Screen rows alone are insufficient because their ASCII
+spaces are normalized. Missing evidence refuses before keys; this source also has no
+production producer. The confirmation digest and returned escrow include every space.
 
 This first cut permits only complete, single-row, non-shell Copilot drafts that can be
 returned whole within 500 escaped characters. Everything else is refused before keys.
@@ -170,8 +174,10 @@ The clear (Ctrl+End, Ctrl+U) is held to the original rows and safe footer in the
 Within the same typing slot, two consecutive empty reads must arrive within two seconds,
 then the normal guarded reply path runs. Any attempted deletion returns `cleared`
 (`text`, host escape `marks`, `truncated: false`), even if later guards refuse the reply.
-It is never logged. Request memory prevents a duplicate clear. No live key validation
-or production enablement is claimed by this foundation.
+It is never logged. Request memory binds replies to the sender and target; clear replay
+additionally requires the same host verification callbacks and still-current person
+intent. A changed authority generation is refused without escrow or progress.
+No live key validation or production enablement is claimed by this foundation.
 
 ## Attachments (Copilot)
 

@@ -11,6 +11,7 @@ public sealed class ReplyClearTests
     [Theory]
     [InlineData("unfinished draft")]
     [InlineData("draft \u202e")]
+    [InlineData("  unfinished draft  ")]
     public async Task A_confirmed_person_clear_checks_empty_twice_then_sends_once_and_remembers_the_deleted_draft(string draft)
     {
         await using var h = await Harness.Create();
@@ -35,6 +36,8 @@ public sealed class ReplyClearTests
     [InlineData("authority")]
     [InlineData("confirmation")]
     [InlineData("generation")]
+    [InlineData("verifier")]
+    [InlineData("draft-source")]
     public async Task A_clear_replay_never_discloses_escrow_to_another_sender_target_or_authority(string change)
     {
         await using var h = await Harness.Create();
@@ -49,6 +52,8 @@ public sealed class ReplyClearTests
             case "authority": authorized = false; break;
             case "confirmation": request = request with { ClearConfirmation = null, IntentSource = null }; break;
             case "generation": request = request with { IntentSource = () => ReplyIntent.Steer }; break;
+            case "verifier": request = request with { ClearConfirmation = _ => null }; break;
+            case "draft-source": request = request with { ClearDraftSource = () => h.Draft }; break;
         }
         var result = await h.Replier.ReplyAsync(request, peer);
         Assert.Equal(AnswerOutcome.Refused, result.Outcome);
@@ -85,6 +90,7 @@ public sealed class ReplyClearTests
     [InlineData("multiline")]
     [InlineData("oversize")]
     [InlineData("permission")]
+    [InlineData("no-lossless-evidence")]
     public async Task An_unconfirmed_unsafe_or_unrecoverable_composer_is_never_cleared(string condition)
     {
         await using var h = await Harness.Create();
@@ -98,6 +104,7 @@ public sealed class ReplyClearTests
             case "multiline": h.Draft = "first\nsecond"; break;
             case "oversize": h.Draft = new string('x', 501); break;
             case "permission": await h.Ask(); break;
+            case "no-lossless-evidence": request = request with { ClearDraftSource = null }; break;
         }
         Assert.Equal(AnswerOutcome.Refused, (await h.Replier.ReplyAsync(request)).Outcome);
         Assert.Equal(0, h.Clears);
@@ -140,8 +147,9 @@ public sealed class ReplyClearTests
     {
         await using var h = await Harness.Create();
         var wire = JsonSerializer.Deserialize<ReplyRequest>(
-            $$"""{"id":"{{Id}}","request":"{{Guid.NewGuid()}}","text":"go on","clearConfirmation":{},"intentSource":"Steer"}""", ProtocolJson.Options)!;
+            $$"""{"id":"{{Id}}","request":"{{Guid.NewGuid()}}","text":"go on","clearConfirmation":{},"clearDraftSource":{},"intentSource":"Steer"}""", ProtocolJson.Options)!;
         Assert.Null(wire.ClearConfirmation);
+        Assert.Null(wire.ClearDraftSource);
         Assert.Equal(AnswerOutcome.Refused, (await h.Replier.ReplyAsync(wire)).Outcome);
         h.Draft = "";
         var result = await h.Replier.ReplyAsync(h.Request());
@@ -189,6 +197,7 @@ public sealed class ReplyClearTests
                 Id = Id, Request = Guid.NewGuid().ToString(), Text = "go on",
                 IntentSource = () => ReplyIntent.Steer,
                 ClearConfirmation = digest => digest == expected ? null : "changed composer",
+                ClearDraftSource = () => Draft,
             };
         }
         public async Task Ask()

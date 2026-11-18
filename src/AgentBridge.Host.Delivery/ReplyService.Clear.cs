@@ -13,18 +13,22 @@ public sealed partial class ReplyService
         const string Unsafe = "the composer cannot be cleared safely; nothing was sent";
         const string Changed = "the session or person confirmation changed; nothing more was typed";
         const string NotEmpty = "the composer did not read empty after clearing; nothing was sent";
-        if (state is not { Complete: true, Main: true, Shell: false, Lines: 1, Vim: CopilotVimMode.None or CopilotVimMode.Insert }
-            || state.Content.Length == 0 || state.Content.Length > CopilotInputBoxReader.ShownLength)
+        var draft = request.ClearDraftSource?.Invoke();
+        if (draft is null || state is not { Complete: true, Main: true, Shell: false, Lines: 1, Vim: CopilotVimMode.None or CopilotVimMode.Insert }
+            || draft.Length == 0 || draft.Length > CopilotInputBoxReader.ShownLength
+            || draft.Contains('\n') || draft.Contains('\r') || state.Content != draft.Trim(' '))
             return (null, Unsafe, null);
-        var (shown, marks) = ShownText.RevealMarked(state.Content, rightToLeft: true);
+        var (shown, marks) = ShownText.RevealMarked(draft, rightToLeft: true);
         // Never delete words we cannot return whole. Wrapped and multi-line drafts need a
         // lossless reconstruction first; their screen rows are not their original line breaks.
         if (shown.Length > CopilotInputBoxReader.ShownLength) return (null, Unsafe, null);
         var saved = new ClearedComposer(shown, [.. marks.Select(m => (IReadOnlyList<int>)[m.Start, m.Length])]);
         var digest = EscapedApproval.Shown(shown);
+        var clearing = true;
         string? Fence()
         {
             if (request.Intent != ReplyIntent.Steer || request.ClearConfirmation is null
+                || (clearing && request.ClearDraftSource?.Invoke() != draft)
                 || probe.Active() is not null || guard.Refuse(pid) is not null || LaunchHeld?.Invoke(session.Id) is not null)
                 return Changed;
             if (source.Get(session.Id) is not { Agent: AgentKind.Copilot, Status: SessionStatus.Idle, Question: null } live
@@ -52,6 +56,7 @@ public sealed partial class ReplyService
             return (null, Logged("the injector failed while clearing the composer; nothing was sent", e), null);
         }
         if (result.Status == InjectionStatus.NothingTyped) return (null, "the composer changed before clearing; nothing was sent", null);
+        clearing = false;
         remember(saved);
         if (result.Status != InjectionStatus.Typed) return (null, "the composer did not finish clearing; nothing was sent", null);
         var started = options.Time.GetTimestamp();
