@@ -65,8 +65,9 @@ export function promptOrigin(session, { repeat = false } = {}) {
   }
   if (from === 'notification') { return { from, icon: 'driven', by: null, repeat: false, text, preview, facts: ['Notification'], spoken: 'Notification' }; }
   const by = from === 'agent' && session.driver === 'agent' && session.driverPrincipal ? promptFact(session.driverPrincipal, 128) || null : null;
+  const label = from === 'agent' ? promptFact(a.userMessageLabel) : '';
   return from === 'agent'
-    ? { from, icon: 'driven', by, repeat: false, text, preview, facts: ['Sent by an agent'], spoken: 'Prompt sent by an agent' }
+    ? { from, icon: 'driven', by, repeat: false, text, preview, facts: [label ? `From: ${label}` : 'Sent by an agent'], spoken: label ? aloud(`From: ${label}`) : 'Prompt sent by an agent' }
     : { from: 'other', icon: 'driven', by: null, repeat: false, text, preview, facts: ['Automatic prompt'], spoken: 'Automatic prompt' };
 }
 
