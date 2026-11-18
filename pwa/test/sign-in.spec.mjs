@@ -448,11 +448,15 @@ for (const attempt of ['retry', 'start']) {
     }
     await expect(sheet(page).locator('.sign-in-starting')).toBeVisible();
     await page.evaluate(() => window.__signInCancelReplyHeld);
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
     await page.evaluate(() => {
       const h = window.agentBridgeDemo.host;
       h.frame({ ev: 'signin.code', seq: h.seq + 1, data: { flow: 'late-flow', agent: 'copilot', userCode: 'LATE-CODE', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() } });
     });
-    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(1);
+    await expect.poll(async () => {
+      await page.clock.runFor(1);
+      return page.evaluate(() => window.agentBridgeDemo.signInCodesHeld);
+    }).toBe(1);
     await visibility(page, false);
     // The host stops offering this device sign-in while the cancel finishes.
     await page.evaluate(() => {
@@ -460,10 +464,12 @@ for (const attempt of ['retry', 'start']) {
       const s = d.host.get('signin-1');
       d.upsert({ ...s, attention: { ...s.attention, signIn: 'unknown', since: new Date().toISOString() } });
     });
-    await expect.poll(() => page.evaluate(() =>
-      window.agentBridgeDemo.hosts.link('demo').store.get('signin-1').attention.signIn)).toBeNull();
-    await page.clock.runFor(1600);
-    await expect(sheet(page)).toBeHidden({ timeout: 5000 });
+    await expect.poll(async () => {
+      await page.clock.runFor(1);
+      return page.evaluate(() => window.agentBridgeDemo.hosts.link('demo').store.get('signin-1').attention.signIn);
+    }).toBeNull();
+    await page.evaluate(() => window.__releaseSignInCancel());
+    await expect(sheet(page)).toBeHidden();
     expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
     await page.clock.runFor(10000);
     expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
