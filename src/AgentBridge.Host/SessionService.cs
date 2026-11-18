@@ -82,6 +82,20 @@ public sealed class SessionService
         catch (JsonException) { return null; } // An invalid request still meets the existing refusal path.
     }
 
+    internal async Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, AgentAuditLog? audit,
+        Func<string?> refusal, Func<LaunchConfig, string?> dispatchCheck)
+    {
+        if (launcher is null || audit is null) { return new(LaunchOutcome.Refused, "fleet launch service or audit is unavailable"); }
+        if (ReadOnly?.Invoke() is { } readOnly) { return new(LaunchOutcome.Refused, readOnly); }
+        // #2770 must wire atomic, durable hourly/live admission before fleet activation.
+        string? Check() => refusal() ?? (launcher.FleetConfig is { } actual ? dispatchCheck(actual) : "fleet dispatch settings are unavailable")
+            ?? "fleet launch is disabled until fleet hourly/live admission controls are wired";
+        if (Check() is { } problem) { return new(LaunchOutcome.Refused, problem); }
+        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
+            fleet: true, refusal: Check);
+        return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
+    }
+
     // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or
     // null. Set, it offers sessions.restore.
     public Func<RestoreNotice?>? Restore { get; init; }
@@ -198,7 +212,7 @@ public sealed class SessionService
         HandleAsync(channel, op, data, shape, null);
 
     internal async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape,
-        AgentAuditLog? actionAudit, GateLaunchIngress? launchIngress = null)
+        AgentAuditLog? actionAudit, GateLaunchIngress? launchIngress = null, Func<ReplyIntent>? replyIntent = null)
     {
         switch (op)
         {
@@ -218,7 +232,7 @@ public sealed class SessionService
             case Ops.SessionAnswer:
                 return await AnswerAsync(channel, data, actionAudit);
             case Ops.SessionReply:
-                return await ReplyAsync(channel, data);
+                return await ReplyAsync(channel, data, replyIntent);
             case Ops.AttachmentStart or Ops.AttachmentChunk or Ops.AttachmentDiscard when attachments is not null:
                 return Attach(channel, op, data);
             case Ops.SessionStop:
@@ -455,7 +469,9 @@ public sealed class SessionService
         Action<AnswerOutcome>? Prepare(Guid operation, Session session, Question question)
         {
             if (AnswerGate(session, question, operation, "person-client") is not { } gate) { return null; }
-            var intent = new AgentAuditEntry("local", gate.Operation.ToString(), "person:local", [], Ops.SessionAnswer,
+            gate = gate with { Path = channel is SecureChannel ? "relay" : "local" };
+            var principal = channel is SecureChannel relay ? $"person:{relay.PeerId}" : "person:local";
+            var intent = new AgentAuditEntry(gate.Path, gate.Operation.ToString(), principal, [], Ops.SessionAnswer,
                 gate.Incarnation.ToString(), "attempted", Gate: gate);
             if (audit is not { } writer || !writer.Append(intent)) { return null; }
             return outcome => writer.Append(intent with { Outcome = outcome == AnswerOutcome.Delivered ? "delivered" : "refused",
@@ -684,12 +700,13 @@ public sealed class SessionService
         return offered;
     }
 
-    async Task<ReplyResult> ReplyAsync(IProtocolChannel channel, JsonElement data)
+    async Task<ReplyResult> ReplyAsync(IProtocolChannel channel, JsonElement data, Func<ReplyIntent>? intent)
     {
         // As for answers: a request without an id or request UUID fails as a request, and
         // anything that can be read gets an outcome.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.reply needs an id, a request and text"); }
         var request = data.Deserialize<ReplyRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.reply needs an id, a request and text");
+        request = request with { IntentSource = intent };
         var (watch, progress) = Watch(request.Progress);
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);

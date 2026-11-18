@@ -113,6 +113,39 @@ public sealed class FleetRecordSigningTests
     }
 
     [Fact]
+    public async Task The_host_publication_forwards_its_signer_to_each_completed_record()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var q = key.ExportParameters(false).Q;
+        byte[] point = [4, .. q.X!, .. q.Y!];
+        var publication = new FleetPublication(new FleetPublisherTests.Source(), "machine", share: true, sign: record =>
+            FleetRecordSigning.Sign(record, bytes => P256.FromRaw(key.SignData(bytes, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))));
+        for (var sequence = 1; sequence <= 2; sequence++)
+        {
+            Assert.True(await publication.PollAsync((record, ct) =>
+            {
+                Assert.True(FleetRecordSigning.Verify(record, point));
+                Assert.Equal(sequence, record.GetProperty("seq").GetInt64());
+                return Task.CompletedTask;
+            }, force: true));
+        }
+    }
+
+    [Fact]
+    public async Task The_host_publication_with_missing_custody_stays_unsigned_and_creates_nothing()
+    {
+        var profile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var publication = new FleetPublication(new FleetPublisherTests.Source(), "machine", share: true,
+            sign: record => FleetRecordSigning.SignExisting(record, profile));
+        Assert.True(await publication.PollAsync((record, ct) =>
+        {
+            Assert.False(record.TryGetProperty("sig", out _));
+            Assert.False(Directory.Exists(profile));
+            return Task.CompletedTask;
+        }));
+    }
+
+    [Fact]
     public async Task The_record_budget_is_checked_after_the_signer_runs()
     {
         var publisher = new FleetPublisher(new FleetPublisherTests.Source(), "machine", sign: record =>
