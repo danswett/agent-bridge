@@ -57,6 +57,27 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Missing_stable_launcher_after_cutover_is_logged_and_never_uses_the_legacy_launcher()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var root = Directory.CreateDirectory(Path.Combine(app, "install")).FullName;
+        var current = Directory.CreateDirectory(Path.Combine(root, "current")).FullName;
+        File.WriteAllText(Path.Combine(root, "Update.exe"), "fixture");
+        File.WriteAllText(Path.Combine(root, "active-slot.json"), "{}");
+        File.WriteAllText(Path.Combine(current, "agent-bridge-host.exe"), "fixture");
+        File.WriteAllText(Path.Combine(current, "agent-bridge-hostw.exe"), "must not run");
+        var logs = new List<string>();
+        var own = new HostManager(new(current, host.Folder, "test"), tasks, processes,
+            userId: "fixture", userSid: "fixture") { Log = logs.Add };
+
+        Assert.False(own.HostInstalled);
+        Assert.Contains("stable-entry failed: FileNotFoundException", Assert.Single(logs));
+        Assert.Throws<InvalidOperationException>(() => own.SetStartAtSignIn(true));
+        Assert.Empty(tasks.Registered);
+        Assert.Empty(processes.Started);
+    }
+
+    [Fact]
     public async Task Uninstall_hook_cleanup_uses_this_apps_host_and_profile_without_guessing_agent_homes()
     {
         var commands = new CleanupCommands(new CommandResult(true, false, 0, "Owned hook cleanup finished.\n"));
