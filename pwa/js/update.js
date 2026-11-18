@@ -36,6 +36,15 @@ const code = (v) => (typeof v === 'string' && /^[a-z-]{1,32}$/.test(v) ? v : nul
 const count = (v) => (Number.isSafeInteger(v) && v >= 0 ? Math.min(v, BUSY_MOST) : 0);
 const timestamp = (v) => (typeof v === 'string' && Number.isFinite(Date.parse(v)) ? v : null);
 const quota = (v) => (Number.isInteger(v) && v >= 0 && v <= 2147483647 ? v : null);
+const bytes = (v) => Number.isSafeInteger(v) && v >= 0 ? v : null;
+const STEPS = new Map([['downloading', 'Downloading'], ['installing', 'Installing'], ['restarting', 'Restarting'],
+  ['host-start', 'Starting bridge'], ['host-version', 'Checking bridge version']]);
+function readJourney(raw, back = false) {
+  const r = obj(raw);
+  if (!r || !str(r.to) || !timestamp(r.at) || (!back && !timestamp(r.backBy))) { return null; }
+  return back ? { from: str(r.from), to: r.to, request: str(r.request), at: r.at }
+    : { to: r.to, at: r.at, backBy: r.backBy };
+}
 
 function readResult(raw) {
   const r = obj(raw);
@@ -45,6 +54,7 @@ function readResult(raw) {
     outcome: OUTCOMES.includes(r.outcome) ? r.outcome : 'failed',
     from: str(r.from), to: str(r.to), reason: str(r.reason), request: str(r.request), at: str(r.at),
     code: code(r.code),
+    step: STEPS.has(r.step) ? r.step : null,
   };
 }
 
@@ -111,6 +121,9 @@ export function readUpdateState(raw) {
     // An unknown phase reads as idle: nothing to wait on.
     phase: PHASES.includes(s.phase) ? s.phase : 'idle',
     progress,
+    bytes: bytes(s.bytes), total: bytes(s.total),
+    downloaded: typeof s.downloaded === 'boolean' ? s.downloaded : null,
+    installing: timestamp(s.installing), leaving: readJourney(s.leaving), back: readJourney(s.back, true),
     waiting: str(s.waiting),
     request: str(s.request),
     automatic: s.automatic === true,
@@ -129,6 +142,65 @@ export function readUpdateState(raw) {
 const checkHoldReason = (s) => !s?.last?.code && ['failed', 'refused'].includes(s?.last?.outcome)
   && (s.last.reason === 'checking again soon' || s.last.reason?.startsWith("the release feed's rate limit refused the check"));
 export const checkHeld = (s) => checkHoldReason(s) && !(Date.parse(s.checkedAt) > Date.parse(s.last.at));
+
+function releaseTag(value) {
+  const run = typeof value === 'string' ? /^v?0\.1\.(0|[1-9][0-9]{0,18})$/.exec(value)?.[1] : null;
+  return run !== null && run !== undefined && BigInt(run) <= 9223372036854775807n ? `v0.1.${run}` : null;
+}
+
+// Only these three departure states are inferences. A correlated host result takes their place.
+export function updateCard(s, { online = true, now = Date.now() } = {}) {
+  if (!s) { return null; }
+  const leaving = s.leaving, since = Date.parse(leaving?.at ?? s.installing);
+  const last = s.last && (!Number.isFinite(since) || Date.parse(s.last.at) >= since)
+    && (!s.request || !s.last.request || s.request === s.last.request) ? s.last : null;
+  const request = s.request ?? last?.request ?? null;
+  const back = s.back && s.current === s.back.to && request === (s.back.request ?? null)
+    && (!Number.isFinite(since) || Date.parse(s.back.at) >= since) ? s.back : null;
+  if (!online && (back || last?.outcome === 'updated' || last?.outcome === 'current')) { return null; }
+  let state, text, step = null, action = null, href = null, nextAt = null, at = null;
+  if (last && ['failed', 'refused'].includes(last.outcome) && !checkHoldReason(s)) {
+    state = 'failed'; at = timestamp(last.at); step = STEPS.get(last.step) ?? null;
+    const words = new Map([
+      ['downloading', ['Download failed', 'Try the update again at the machine.']],
+      ['installing', ['Not installed', 'Try the update again at the machine.']],
+      ['restarting', ['Update did not take', 'Try the update again at the machine.']],
+      ['host-start', ['Updated, but its bridge did not start', 'Open Slipgates at the machine; a fix is looked for every 5 minutes.']],
+      ['host-version', ['App and bridge versions do not match', 'Open Slipgates at the machine.']],
+    ]);
+    [text, action] = words.get(last.step) ?? ['Not updated', 'Open Slipgates at the machine.'];
+  } else if (back || (last?.outcome === 'updated' && s.current === last.to
+    && request === (last.request ?? null) && (s.installing || leaving || last.step))) {
+    at = timestamp((back ?? last).at);
+    if (!at || now >= Date.parse(at) + 600000) { return null; }
+    state = 'back'; text = 'Back online'; nextAt = Date.parse(at) + 600000;
+  } else if (last && ['updated', 'current'].includes(last.outcome) && (leaving || s.installing)) { return null;
+  } else if (leaving && !online) {
+    at = leaving.at;
+    const elapsed = now - Date.parse(at);
+    state = elapsed >= 600000 ? 'didNotComeBack' : elapsed >= 180000 ? 'slow' : 'restarting';
+    text = state === 'didNotComeBack' ? 'Did not come back after 10 minutes'
+      : state === 'slow' ? 'Restarting is taking longer than usual' : 'Restarting';
+    nextAt = state === 'restarting' ? Date.parse(at) + 180000 : state === 'slow' ? Date.parse(at) + 600000 : null;
+    if (state === 'didNotComeBack') {
+      step = 'Restarting'; action = 'At the machine, open Slipgates; if it will not start, install the release from its release page.';
+    }
+  } else if (!online) { return null;
+  } else if (s.installing || leaving) {
+    state = 'installing'; text = 'Installing';
+  } else if (s.phase === 'downloading' && (s.bytes != null || s.total != null)) {
+    state = 'downloading'; text = `Downloading${s.bytes != null ? ` \u00b7 ${s.bytes}${s.total != null ? ` / ${s.total}` : ''} bytes` : ''}`;
+  } else if (s.downloaded === true && s.phase === 'idle') {
+    state = 'ready'; text = 'Update ready';
+  } else { return null; }
+  if (action) {
+    const tag = releaseTag(last?.to ?? leaving?.to ?? s.available);
+    href = tag ? `https://github.com/danswett/agent-bridge/releases/tag/${tag}` : null;
+  }
+  return { state, text, step, action, href, nextAt, key: `${state}:${at ?? ''}:${step ?? ''}`,
+    glyph: action ? 'failed' : state === 'slow' ? 'needs' : ['back', 'ready'].includes(state) ? 'done' : 'working',
+    health: ['installing', 'restarting', 'slow', 'didNotComeBack'].includes(state), dismissible: !!action || state === 'back' };
+}
 
 // The card's quiet age; historical source and quota are not an allowance to check now (#2187).
 export function updateDetails(s, now = Date.now()) {
@@ -377,6 +449,7 @@ export class UpdateControl {
   #confirming = new Map();
   // Counted up by clear(): a press whose confirmation was open across it is never sent.
   #generation = 0;
+  #cards = new Map();
 
   // fleet: a FleetStatus (update(id), call(id, op, data), noteUpdate(id, state), watch(id)).
   // sign({ id, machineKey, release, accept, request }): an Update now's signed command for that
@@ -395,6 +468,27 @@ export class UpdateControl {
 
   // { busy, asking, note } for one machine's row.
   stateOf(id) { return { busy: this.#busy.has(id), asking: this.#asking.has(id), note: this.#notes.get(id) ?? null }; }
+
+  card(id, online = true) {
+    const was = this.#cards.get(id);
+    let card = updateCard(this.state(id), { online, now: this.now() });
+    if (!card && was?.card && was.dismissed !== was.card.key
+      && (was.card.state === 'failed' || (was.card.state === 'back' && online && this.now() < was.card.nextAt))) {
+      card = was.card;
+    }
+    let timer = was?.nextAt === card?.nextAt ? was?.timer : null;
+    if (!timer) {
+      clearTimeout(was?.timer);
+      if (card?.nextAt) { timer = setTimeout(() => this.#emit(), Math.max(0, card.nextAt - this.now())); timer.unref?.(); }
+    }
+    this.#cards.set(id, { card, key: card?.key, nextAt: card?.nextAt, timer, dismissed: was?.dismissed });
+    return card && card.key !== was?.dismissed ? card : null;
+  }
+
+  dismissCard(id) {
+    const card = this.#cards.get(id);
+    if (card) { card.dismissed = card.key; this.#emit(); }
+  }
 
   // Whether this device can offer Update now at all (it has a key to sign with).
   get signs() { return typeof this.sign === 'function'; }
@@ -505,6 +599,10 @@ export class UpdateControl {
   restarting(id, online) {
     const s = this.fleet.update(id);
     const was = this.#leaving.get(id);
+    if (s?.leaving) {
+      if (!was) { this.#leaving.set(id, { gone: null, timer: null }); }
+      return !!this.card(id, online);
+    }
     if (!(s?.phase === 'installing' && s.requestNow)) {
       if (was) { clearTimeout(was.timer); this.#leaving.delete(id); }
       return false;
@@ -528,7 +626,9 @@ export class UpdateControl {
 
   // What to announce about a machine's Update now, once per step (nowAnnouncement), or null.
   announce(id) {
-    const { key, text } = nowAnnouncement(this.fleet.update(id), this.#said.get(id) ?? null);
+    const card = this.card(id);
+    const { key, text } = card ? { key: card.state, text: this.#said.get(id) === card.state ? null : card.text }
+      : nowAnnouncement(this.fleet.update(id), this.#said.get(id) ?? null);
     if (key === null) { this.#said.delete(id); } else { this.#said.set(id, key); }
     return text;
   }
@@ -542,6 +642,8 @@ export class UpdateControl {
     this.#confirming.get(id)?.abort();
     this.#notes.delete(id);
     this.#said.delete(id);
+    clearTimeout(this.#cards.get(id)?.timer);
+    this.#cards.delete(id);
     clearTimeout(this.#leaving.get(id)?.timer);
     this.#leaving.delete(id);
     this.#emit();
@@ -553,6 +655,8 @@ export class UpdateControl {
     this.#confirming.clear();
     this.#notes.clear();
     this.#said.clear();
+    for (const card of this.#cards.values()) { clearTimeout(card.timer); }
+    this.#cards.clear();
     for (const l of this.#leaving.values()) { clearTimeout(l.timer); }
     this.#leaving.clear();
     this.#nowRequests = [];

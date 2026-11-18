@@ -12,6 +12,19 @@ import { deviceIdOf } from '../../js/identity.js';
 import { fromUtf8 } from '../../js/bytes.js';
 import { fromBase64url } from '../../js/blobs.js';
 import * as updates from '../../js/update.js';
+import vm from 'node:vm';
+
+const viewSource = readFileSync(new URL('../../js/ui/views.js', import.meta.url), 'utf8')
+  .replace(/^import .*;\r?$/gm, '').replace(/^export /gm, '');
+const element = (tag, props, ...children) => ({ tag, props, children: children.flat(Infinity).filter((c) => c != null && c !== false),
+  style: {}, dataset: props?.dataset ?? {}, querySelectorAll: () => [] });
+const views = vm.runInNewContext(`${viewSource}\n({ updateRow, renderMachines })`, {
+  ...updates, h: element, glyph: (name) => element('span', { 'data-glyph': name }), icon: () => null,
+  signInDevicesLines: () => null, ALL: 'all', ago: () => '',
+  loadBars: () => ({ state: 'offline', cpu: { percent: null }, memory: { percent: null } }),
+});
+const nodes = (el) => typeof el !== 'object' || !el ? [] : [el, ...(el.children ?? []).flatMap(nodes)];
+const texts = (el) => typeof el === 'string' ? el : (el?.children ?? []).map(texts).join(' ');
 
 const NOW = Date.parse('2026-11-02T18:00:00.000Z');
 const found = readUpdateState({ current: '0.4.0', installer: true, available: '0.5.0', checkedAt: '2026-11-02T17:55:00.000Z', phase: 'idle' });
@@ -52,6 +65,10 @@ test('each state appears at its time', (t) => {
   assert.equal(control.card('a', true).state, 'back');
   t.mock.timers.tick(1);
   assert.equal(control.card('a', true), null);
+  back.at = new Date().toISOString();
+  assert.equal(show({ current: back.to, back, last: { outcome: 'updated', to: back.to, request: 'r', at: back.at } }).state, 'back');
+  control.dismissCard('a');
+  assert.equal(control.card('a', true), null);
 });
 
 for (const [step, word] of [
@@ -68,8 +85,13 @@ for (const [step, word] of [
     assert.equal(card.step, word);
     assert.equal(typeof card.action, 'string');
     assert.ok(card.action.length > 0);
+    const row = views.updateRow(control, 'a', 'Machine', NOW).el;
+    assert.equal(nodes(row).filter((n) => n.props?.class === 'machine-update-next').length, 1);
+    assert.equal(texts(row).includes('Last step:'), word !== null);
     t.mock.timers.tick(86400000);
     assert.equal(control.card('a', true).state, 'failed');
+    fleet.states.set('a', progressState({ last: { outcome: 'current', at: new Date().toISOString() } }));
+    assert.equal(control.card('a', true).state, 'failed', 'a later check cannot dismiss the failure');
     control.dismissCard('a');
     assert.equal(control.card('a', true), null);
   });
@@ -80,6 +102,34 @@ test('a host last replaces an inference', () => {
   assert.equal(updates.updateCard(state, { online: false, now: NOW + 600000 }).state, 'didNotComeBack');
   state.last = { outcome: 'failed', step: 'host-start', at: new Date(NOW + 600001).toISOString() };
   assert.equal(updates.updateCard(state, { online: false, now: NOW + 600002 }).state, 'failed');
+});
+
+test('a stale back or last cannot credit a new attempt, and a later outage is not an update restart', () => {
+  const back = { from: '0.1.122', to: departure.to, at: departure.at };
+  const state = progressState({ current: departure.to, back, installing: new Date(NOW + 1000).toISOString(),
+    last: { outcome: 'failed', step: 'installing', at: departure.at } });
+  assert.equal(updates.updateCard(state, { now: NOW + 1001 }).state, 'installing');
+  state.installing = null;
+  state.last = null;
+  state.leaving = departure;
+  assert.equal(updates.updateCard(state, { online: false, now: NOW + 1001 }), null);
+});
+
+test('rendered online and offline rows pair progress words with glyphs and withhold health figures', (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: NOW });
+  const fleet = fakeFleet(() => {});
+  fleet.states.set('a', progressState({ leaving: departure }));
+  const control = new UpdateControl({ fleet });
+  t.after(() => control.clear());
+  for (const [online, word] of [[true, 'Installing'], [false, 'Restarting']]) {
+    const list = { querySelectorAll: () => [], replaceChildren(...rows) { this.children = rows; } };
+    views.renderMachines(list, { presence: online ? [{ id: 'a', kind: 'host', name: 'Machine' }] : [], updates: control, now: NOW });
+    const row = list.children[0];
+    assert.ok(texts(row).includes(word));
+    assert.ok(texts(row).includes('Not measured while updating'));
+    assert.ok(nodes(row).some((n) => n.props?.['data-glyph'] === 'working'));
+    assert.ok(!nodes(row).some((n) => n.props?.class?.startsWith('machine-load')));
+  }
 });
 
 test('no leaving takes the 90 s path and an old UpdateState round-trips unchanged', () => {
@@ -109,6 +159,13 @@ test('hostile host string never reaches card text and unknown facts stay absent'
     last: { outcome: 'failed', reason: hostile, step: hostile, to: hostile, at: departure.at } });
   assert.deepEqual([state.bytes, state.total, state.downloaded, state.installing, state.leaving, state.back, state.last.step], Array(7).fill(null));
   assert.ok(!JSON.stringify(updates.updateCard(state, { now: NOW })).includes(hostile));
+  assert.ok(!JSON.stringify(updates.updateCard(progressState({ leaving: { ...departure, to: hostile } }), { now: NOW })).includes(hostile));
+  const fleet = { update: () => state };
+  const control = new UpdateControl({ fleet });
+  const row = views.updateRow(control, 'a', 'Machine', NOW).el;
+  assert.ok(!texts(row).includes(hostile));
+  assert.equal(nodes(row).filter((n) => n.tag === 'a').length, 0);
+  control.clear();
 });
 
 test('a new-app held check still offers only Check now in an already installed PWA', () => {

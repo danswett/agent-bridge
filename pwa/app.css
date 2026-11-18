@@ -524,6 +524,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .machine-update, .machine-signin, .machine-diagnose-hint { font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
 .machine-update p, .machine-signin p { margin: 0; }
 .machine-update { min-width: 0; overflow-wrap: anywhere; }
+.machine-update-card { display: grid; justify-items: start; gap: var(--ab-space-2); border-inline-start: 2px solid currentColor; padding-inline-start: var(--ab-space-3); }
+.machine-update-card a { color: var(--ab-text); text-decoration: underline; }
 .machine-update-line { display: flex; align-items: baseline; gap: var(--ab-space-2); color: var(--ab-text); }
 .machine-update-line > span:last-child { min-width: 0; }
 .machine-update-line > .glyph { flex-shrink: 0; align-self: start; margin-top: 2px; }

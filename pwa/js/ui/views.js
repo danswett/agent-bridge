@@ -1084,12 +1084,27 @@ const drawnAs = new WeakMap();
 // The update block inside a machine's row, under its two lines (#51, #213): what its app is
 // doing, how the last update ended, Check, Install and Update now (or why Update now can't be
 // pressed there, #1159), and a refused press's reason.
-function updateRow(updates, id, name, now) {
+function updateRow(updates, id, name, now, online = true) {
   const s = updates?.state(id);
   if (!s) { return { key: null, el: null }; }
   const { busy, asking, note } = updates.stateOf(id);
   // Seen leaving for an Update now while online: its row reads so once it has gone (renderMachines).
-  updates.restarting?.(id, true);
+  const restarting = updates.restarting?.(id, online);
+  const card = updates.card?.(id, online);
+  const health = card?.health ?? (online ? s.phase === 'installing' && !s.back : restarting);
+  if (!online && !card) { return { key: null, el: null, health }; }
+  if (card && card.state !== 'ready') {
+    return {
+      key: card, card, health,
+      el: h('div', { class: 'machine-update machine-update-card', dataset: { updateState: card.state } },
+        h('p', { class: 'machine-update-line' }, glyph(card.glyph), h('span', null, card.text)),
+        card.step ? h('p', { class: 'machine-update-step' }, `Last step: ${card.step}`) : null,
+        card.action ? h('p', { class: 'machine-update-next' }, card.action) : null,
+        card.href ? h('a', { href: card.href, rel: 'noopener noreferrer' }, 'Release page') : null,
+        card.dismissible ? h('button', { type: 'button', class: 'button secondary small machine-update-dismiss',
+          onclick: () => updates.dismissCard(id) }, 'Dismiss') : null),
+    };
+  }
   const updateNow = updates.isUpdateNow?.(s.last?.request) ?? false;
   const idle = s.installer && s.phase === 'idle' && !s.waiting;
   const checkFailed = idle && !updateNow && checkHeld(s);
@@ -1100,7 +1115,9 @@ function updateRow(updates, id, name, now) {
   }
   const checking = s.phase === 'checking';
   if (checking && !s.waiting) { said = 'Checking\u2026'; }
-  const last = checkFailed || (idle && s.last?.outcome === 'current') ? null : lastLine(s, now, { updateNow });
+  if (card?.state === 'ready') { said = card.text; }
+  const last = checkFailed || (idle && s.last?.outcome === 'current') || (updates.card && (s.back || s.installing || s.leaving
+    || ['failed', 'refused'].includes(s.last?.outcome))) ? null : lastLine(s, now, { updateNow });
   const check = canCheck(s) && !busy && !asking;
   const install = canInstall(s) && !busy && !asking;
   const offerNow = updates.signs === true && canUpdateNow(s);
@@ -1124,7 +1141,7 @@ function updateRow(updates, id, name, now) {
     (row?.querySelector('.machine-update-now') ?? row?.querySelector('.machine-update-check'))?.focus();
   };
   return {
-    key,
+    key, health,
     el: h('div', { class: 'machine-update' },
       h('p', { class: 'machine-update-line' },
         glyph(['checking', 'downloading', 'installing', 'waiting'].includes(s.phase) ? 'working'
@@ -1269,16 +1286,16 @@ function machineLoadBar(bar, label, bars) {
       bar?.free ? h('span', null, bar.free) : null));
 }
 
-function machineHealth(bars) {
+function machineHealth(bars, updating = false) {
   return h('p', { class: 'tile-health' },
     h('span', { class: 'tile-label' }, 'Health: '),
     h('span', { class: 'tile-health-icon', 'aria-hidden': 'true' }, bars?.state === 'offline' ? '\u2298' : '\u25cb'),
-    h('span', { class: 'tile-health-word' }, bars?.state === 'offline' ? 'Offline' : 'Not measured yet'));
+    h('span', { class: 'tile-health-word' }, updating ? 'Not measured while updating' : bars?.state === 'offline' ? 'Offline' : 'Not measured yet'));
 }
 
 // A machine's tile (#1147 S1), its sections in one order: Health, Can run, Running, Actions. Only
 // what a host reports is shown; freshness is not a health diagnosis.
-function machineTile({ name, raw, bars, sessions = [], onSelect, onLaunch, more, expanded = false }) {
+function machineTile({ name, raw, bars, sessions = [], onSelect, onLaunch, more, expanded = false, updating = false }) {
   const why = raw?.held ? `Discovery is held: ${raw.held}` : raw?.readOnly ? `This machine is view only: ${raw.readOnly}` : null;
   const running = !raw?.sessions ? 'Not reported yet' : raw.sessions.startsWith('0 ') ? 'No sessions running' : raw.sessions;
   const contents = h('div', { hidden: !expanded },
@@ -1290,9 +1307,9 @@ function machineTile({ name, raw, bars, sessions = [], onSelect, onLaunch, more,
     toggle.setAttribute('aria-expanded', String(!contents.hidden));
   } }, h('span', { class: 'tile-label' }, 'Running, '), h('span', null, running), icon('chevron'));
   return h('section', { class: 'machine-tile', 'aria-label': name },
-    machineHealth(bars),
-    h('p', { class: 'tile-measured' }, measurementAge(bars)),
-    machineLoadBar(bars?.cpu, 'CPU', bars), machineLoadBar(bars?.memory, 'Memory', bars),
+    machineHealth(bars, updating),
+    h('p', { class: 'tile-measured' }, updating ? '' : measurementAge(bars)),
+    updating ? null : [machineLoadBar(bars?.cpu, 'CPU', bars), machineLoadBar(bars?.memory, 'Memory', bars)],
     h('div', { class: 'tile-running' }, toggle, contents),
     h('div', { class: 'tile-actions' },
       why ? h('p', { class: 'tile-actions-note' }, why)
@@ -1351,6 +1368,9 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   const restarting = new Set([...offline.map((k) => k.id), ...(updates?.leavingIds?.() ?? [])]
     .filter((id) => id !== me && !presence.some((d) => d.id === id) && updates?.restarting?.(id, false)));
   const leftNow = [...restarting].filter((id) => !offline.some((k) => k.id === id));
+  for (const id of [...offline.map((k) => k.id), ...leftNow]) {
+    rows.set(id, updateRow(updates, id, updates?.nameOf?.(id) ?? 'This machine', now, false));
+  }
   announceUpdates(list, updates, hosts);
   const signInRows = new Map(hosts.map((d) => [d.id, signInRow(signInDevices?.(d.id))]));
   const diagnoses = new Map(hosts.map((d) => [d.id, diagnoseRow(diagnose, d.id, d.name)]));
@@ -1374,12 +1394,14 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   const key = JSON.stringify([current, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key,
     runningSessions.get(d.id).map((session) => [session.id, session.title])]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
-    offline.map((k) => [k.id, k.name, k.lastSeen, k.start ?? null, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget, [...restarting]]);
+    offline.map((k) => [k.id, k.name, k.lastSeen, k.start ?? null, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]),
+    [...rows].filter(([id]) => !hosts.some((d) => d.id === id)).map(([id, row]) => [id, row.key]), !!forget, [...restarting]]);
   const loadKey = JSON.stringify([...loads].map(([id, bars]) => [id, bars?.state, bars?.cpu, bars?.memory, measurementAge(bars)]));
   if (drawnAs.get(list) === key) {
     if (drawnMachineLoads.get(list) !== loadKey) {
       // Load-only changes must not remove a button between pointer down and release.
       for (const row of list.children) {
+        if (rows.get(row.dataset.deviceId)?.health) { continue; }
         const bars = loads.get(row.dataset.deviceId);
         const age = row.querySelector('.tile-measured');
         if (age) { age.textContent = measurementAge(bars); }
@@ -1396,7 +1418,7 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
   // press redraws it armed, and a keyboard's second press must land on the new one.
   const active = list.ownerDocument?.activeElement;
-  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics', 'machine-launch', 'machine-view', 'tile-running-toggle', 'machine-running-view', 'machine'].find((c) => active.classList.contains(c)) } : null;
+  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-update-dismiss', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics', 'machine-launch', 'machine-view', 'tile-running-toggle', 'machine-running-view', 'machine'].find((c) => active.classList.contains(c)) } : null;
   const expanded = new Set([...list.querySelectorAll('.tile-running-toggle[aria-expanded="true"]')].map((el) => el.closest('li').dataset.deviceId));
   list.replaceChildren(...hosts.map((d) => {
     const selected = d.id === current || (all && hosts.length === 1);
@@ -1404,13 +1426,15 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
       id: d.id, name: d.name, select: () => onSelect(d.id), selected,
       facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online',
       tile: machineTile({
+        updating: rows.get(d.id).health,
         name: d.name, raw: facts?.(d.id) ?? null, bars: loads.get(d.id), sessions: runningSessions.get(d.id), onSelect: () => onSelect(d.id), onLaunch: () => onLaunch(d.id),
         more: [rows.get(d.id).el, signInRows.get(d.id).el, diagnoses.get(d.id).el], expanded: expanded.has(d.id),
       }),
     });
   }), ...leftNow.map((id) => machineRow({
     id, name: updates.nameOf?.(id) ?? 'This machine', offline: true,
-    facts: h('span', { class: 'machine-seen' }), state: RESTARTING,
+    facts: h('span', { class: 'machine-seen' }), state: rows.get(id).card?.text ?? RESTARTING,
+    more: [rows.get(id).el, machineHealth(null, rows.get(id).health)],
   })), ...offline.map((k) => {
     const name = typeof k.name === 'string' && k.name ? k.name : 'unnamed';
     const seen = ago(k.lastSeen, now);
@@ -1418,9 +1442,9 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
     return machineRow({
       id: k.id, name, offline: true,
       facts: h('span', { class: 'machine-seen' }, `Last seen ${seen || 'a while ago'}`),
-      state: restarting.has(k.id) ? RESTARTING : startWords(k.start),
+      state: rows.get(k.id).card?.text ?? (restarting.has(k.id) ? RESTARTING : startWords(k.start)),
       more: [
-        machineHealth(loads.get(k.id)),
+        rows.get(k.id).el, machineHealth(loads.get(k.id), rows.get(k.id).health),
         forget ? h('div', { class: 'machine-actions' }, h('button', {
           type: 'button', class: `button secondary small machine-forget${s.armed ? ' armed' : ''}`,
           // The name starts with the words shown, so a person who says what they see presses it
