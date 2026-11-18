@@ -107,7 +107,7 @@ internal sealed class DurableInbox
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(node);
         ArgumentException.ThrowIfNullOrWhiteSpace(rid);
-        if (outcome is not ("delivered" or "unconfirmed")) { throw new ArgumentOutOfRangeException(nameof(outcome)); }
+        if (outcome is not ("delivered" or "unconfirmed" or "refused")) { throw new ArgumentOutOfRangeException(nameof(outcome)); }
         using var held = Lock();
         var messages = Load();
         var index = messages.FindIndex(m => m.Node == node && m.Rid == rid);
