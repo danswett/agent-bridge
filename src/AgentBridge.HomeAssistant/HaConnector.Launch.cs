@@ -282,10 +282,14 @@ public sealed partial class HaConnector
                 await ClearPromptPayloadAsync(ct);
                 await LaunchNoteAsync("Launch refused: the request carried an id that is not valid, so nothing was started.", ct);
                 return;
-            case "stale" or "handled":
-                log($"Home Assistant connector: a Launch press ignored a {read.Kind} launch request left in the prompt payload");
+            case "handled":
+                log("Home Assistant connector WARNING: a Launch press ignored an already handled request; nothing launched");
                 await ClearPromptPayloadAsync(ct);
-                if (read.Kind == "handled") { return; }
+                await LaunchNoteAsync("Launch ignored: this request was already handled. Use a new request id or clear the prompt payload before launching from the card.", ct);
+                return;
+            case "stale":
+                log("Home Assistant connector: a Launch press ignored a stale launch request left in the prompt payload");
+                await ClearPromptPayloadAsync(ct);
                 payloadSkip = true;
                 break;
         }
@@ -454,7 +458,8 @@ public sealed partial class HaConnector
         var age = state.LastUpdated is { } published ? (pressedAt - published).TotalSeconds : double.PositiveInfinity;
         if (age < 0) { return new("newer"); }
         var id = idElement.ValueKind == JsonValueKind.String ? idElement.GetString() : null;
-        if (id is not null && (launchInFlight.ContainsKey(id) || launchRequestsHandled.Contains(id, StringComparer.Ordinal))) { return new("handled"); }
+        if (id is not null && (launchInFlight.ContainsKey(id) || launchRequestsHandled.Contains(id, StringComparer.Ordinal)
+            || launchOutcomes.Any(o => o["request"]!.GetValue<string>() == id))) { return new("handled"); }
         if (age > 60) { return new("stale"); }
         if (id is null || !RequestIdPattern().IsMatch(id)) { return new("malformed"); }
 
