@@ -223,6 +223,31 @@ public sealed class MainTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Row_actions_cross_group_edges_without_changing_pins_or_losing_the_card()
+    {
+        await SnapshotAsync();
+        TestUi.Read(() =>
+        {
+            var old = Card("old");
+            var asking = Card("asking");
+            var a = main.CreateGroup("A");
+            var b = main.CreateGroup("B");
+            main.MoveToGroup(asking, a);
+            main.MoveToGroup(old, b);
+            old.Editing = true;
+            Assert.True(asking.Row!.CanMoveDown);
+            Assert.True(asking.Row.MoveDown());
+            Assert.Equal(b, main.Order.Groups.GroupOf(main.KeyOf(asking)));
+            Assert.True(asking.Row.CanMoveUp);
+            Assert.True(asking.Row.MoveUp());
+            Assert.Equal(a, main.Order.Groups.GroupOf(main.KeyOf(asking)));
+            Assert.False(asking.Pinned);
+            Assert.Equal(2, main.Sessions.Count);
+            return true;
+        });
+    }
+
+    [Fact]
     public async Task A_move_the_person_makes_while_typing_in_a_card_still_moves_it()
     {
         await SnapshotAsync();

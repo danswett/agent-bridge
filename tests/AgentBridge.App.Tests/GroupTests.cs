@@ -72,7 +72,7 @@ public sealed class GroupTests : IDisposable
     }
 
     [Fact]
-    public void Pins_keep_membership_and_keyboard_and_drag_moves_cannot_leave_the_group()
+    public void Pins_keep_membership_and_drag_moves_cannot_leave_the_group()
     {
         var order = new SessionOrder(null);
         OrderEntry[] rows = [E("a"), E("b"), E("c")];
@@ -82,7 +82,7 @@ public sealed class GroupTests : IDisposable
         order.Groups.SetGroup(K("c"), id);
         Assert.True(order.Move(K("a"), 1));
         Assert.Equal(["b", "c", "a"], order.Arrange(rows).Sessions.Select(e => e.Session.Id));
-        Assert.False(order.Move(K("a"), 1));
+        Assert.True(order.CanMove(K("a"), 1));
         Assert.False(order.Place(K("a"), K("b"), false));
         order.SetPinned(K("a"), true);
         order.Arrange(rows);
