@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Xml.Linq;
@@ -46,21 +45,6 @@ public sealed class FleetEnrollmentTests : IAsyncLifetime
         return card;
     }
 
-    static PropertyInfo Property(string name)
-    {
-        var property = typeof(SessionCardViewModel).GetProperty(name);
-        Assert.NotNull(property);
-        return property;
-    }
-    static T Read<T>(SessionCardViewModel card, string name) => Assert.IsType<T>(Property(name).GetValue(card));
-    static void Draft(SessionCardViewModel card, string value) => Property("FleetNameDraft").SetValue(card, value);
-    static Task Save(SessionCardViewModel card)
-    {
-        var method = typeof(SessionCardViewModel).GetMethod("SaveFleetNameAsync");
-        Assert.NotNull(method);
-        return Assert.IsAssignableFrom<Task>(method.Invoke(card, null));
-    }
-
     [Theory]
     [InlineData("\"present\"", "present", "Another live session uses this label")]
     [InlineData("\"absent\"", "absent", "No duplicate was found")]
@@ -74,28 +58,28 @@ public sealed class FleetEnrollmentTests : IAsyncLifetime
         var gate = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         host.OnAsync("session.rename", _ => gate.Task);
         var card = Card();
-        Assert.True(Read<bool>(card, "CanEnrollFleetName"));
-        Assert.Contains("The relay sees this label.", Read<string>(card, "FleetNameDisclosure"));
-        Assert.Contains("Do not include private task details", Read<string>(card, "FleetNameDisclosure"));
+        Assert.True(card.CanEnrollFleetName);
+        Assert.Contains("The relay sees this label.", card.FleetNameDisclosure);
+        Assert.Contains("Do not include private task details", card.FleetNameDisclosure);
         card.Update(card.Session with { Title = "Changed fixture title", Cwd = @"C:\other-fixture", Repository = "other-workspace" });
-        Assert.Empty(Read<string>(card, "FleetNameDraft"));
-        Assert.Empty(Read<string>(card, "FleetNameResult"));
+        Assert.Empty(card.FleetNameDraft);
+        Assert.Empty(card.FleetNameResult);
         await connection.CallAsync(FakeHost.Barrier);
         Assert.Empty(host.Sent("session.rename"));
-        Draft(card, "Public role");
-        var saving = Save(card);
+        card.FleetNameDraft = "Public role";
+        var saving = card.SaveFleetNameAsync();
         await Wait.UntilAsync(() => host.Sent("session.rename").Any(), "rename sent");
-        Assert.Empty(Read<string>(card, "FleetNameResult"));
-        Assert.False(Read<bool>(card, "CanEnrollFleetName"));
-        await Save(card);
+        Assert.Empty(card.FleetNameResult);
+        Assert.False(card.CanEnrollFleetName);
+        await card.SaveFleetNameAsync();
         var reply = new JsonObject { ["id"] = card.Id, ["name"] = "Public role" };
         if (status is not null) { reply["duplicateStatus"] = JsonNode.Parse(status); }
         gate.SetResult(reply);
         await saving;
-        Assert.Contains("saved", Read<string>(card, "FleetNameResult"));
-        Assert.Contains($"Duplicate status: {expected}", Read<string>(card, "FleetNameResult"));
-        Assert.Contains(warning, Read<string>(card, "FleetNameResult"));
-        Assert.True(Read<bool>(card, "CanEnrollFleetName"));
+        Assert.Contains("saved", card.FleetNameResult);
+        Assert.Contains($"Duplicate status: {expected}", card.FleetNameResult);
+        Assert.Contains(warning, card.FleetNameResult);
+        Assert.True(card.CanEnrollFleetName);
         var sent = Assert.Single(host.Sent("session.rename"));
         Assert.Equal(card.Id, sent.GetProperty("id").GetString());
         Assert.Equal("Public role", sent.GetProperty("name").GetString());
@@ -106,15 +90,15 @@ public sealed class FleetEnrollmentTests : IAsyncLifetime
     {
         host.On("session.rename", _ => new { duplicateStatus = "present" });
         var card = Card();
-        await Save(card);
-        Assert.Contains("saved", Read<string>(card, "FleetNameResult"));
+        await card.SaveFleetNameAsync();
+        Assert.Contains("saved", card.FleetNameResult);
         Assert.Equal("", Assert.Single(host.Sent("session.rename")).GetProperty("name").GetString());
         host.On("session.rename", _ => throw new HostErrorException("fixture refused"));
-        await Save(card);
-        Assert.DoesNotContain("saved", Read<string>(card, "FleetNameResult"));
-        Assert.DoesNotContain("Another live", Read<string>(card, "FleetNameResult"));
-        Assert.Contains("fixture refused", Read<string>(card, "FleetNameResult"));
-        Assert.True(Read<bool>(card, "CanEnrollFleetName"));
+        await card.SaveFleetNameAsync();
+        Assert.DoesNotContain("saved", card.FleetNameResult);
+        Assert.DoesNotContain("Another live", card.FleetNameResult);
+        Assert.Contains("fixture refused", card.FleetNameResult);
+        Assert.True(card.CanEnrollFleetName);
         Assert.Equal(2, host.Sent("session.rename").Count());
     }
 
@@ -126,11 +110,11 @@ public sealed class FleetEnrollmentTests : IAsyncLifetime
     public async Task Ineligible_cards_never_send_a_rename(string? key, string? readOnly, AgentKind agent)
     {
         var card = Card(key, readOnly, agent);
-        Assert.False(Read<bool>(card, "ShowFleetEnrollment"));
-        Assert.False(Read<bool>(card, "CanEnrollFleetName"));
-        await Save(card);
+        Assert.False(card.ShowFleetEnrollment);
+        Assert.False(card.CanEnrollFleetName);
+        await card.SaveFleetNameAsync();
         Assert.Empty(host.Sent("session.rename"));
-        Assert.DoesNotContain("saved", Read<string>(card, "FleetNameResult"));
+        Assert.DoesNotContain("saved", card.FleetNameResult);
     }
 
     [Fact]

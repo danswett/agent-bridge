@@ -366,6 +366,10 @@ from, who can set one, and how it is marked.
   No other names/nodes. App/CLI show present/unknown with the save result, never silently absent.
   Dynamic warning is after successful save; it is no uniqueness proof, ban, credential or retry.
   Present: "Another live session uses this label; lookup may refuse or select a newer session."
+  The local Windows App exposes a blank fleet-label input and an explicit Save fleet label
+  action in session Details, after the disclosure. Remote and read-only cards cannot enroll.
+  Drafts are never seeded from titles, workspaces, Home Assistant labels or folders.
+  Failed saves clear any previous saved result and are not retried automatically.
 * **Marked as untrusted.** Every client renders a name as plain text, never as markup or a
   template (HA's component must neutralise template markers as HA does today, `HaPayloads.cs:25-31`).
   In the agent surfaces (see "Who may read") the name is not part of the typed result; it is
