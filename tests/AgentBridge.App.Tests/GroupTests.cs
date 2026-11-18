@@ -46,10 +46,19 @@ public sealed class GroupTests : IDisposable
     public void Membership_and_removal_survive_reloading_the_same_order_file()
     {
         var order = new SessionOrder(FilePath);
+        OrderEntry[] rows = [E("a"), E("b"), E("c")];
+        order.Arrange(rows);
         var id = order.Groups.Create("Work");
+        order.Groups.SetGroup(K("c"), id);
+        Assert.Equal(["c", "a", "b"], order.Arrange(rows).Sessions.Select(e => e.Session.Id));
         order.Groups.SetGroup(K("a"), id);
         var again = new SessionOrder(FilePath);
         Assert.Equal(id, again.Groups.GroupOf(K("a")));
+        again.Arrange(rows);
+        again.Groups.SetGroup(K("c"), id);
+        Assert.Equal(["a", "c", "b"], again.Arrange(rows).Sessions.Select(e => e.Session.Id));
+        again.Groups.SetGroup(K("c"), null);
+        Assert.Equal(["c", "a", "b"], again.Arrange(rows).Sessions.Select(e => e.Session.Id));
         again.Groups.SetGroup(K("a"), null);
         Assert.Null(new SessionOrder(FilePath).Groups.GroupOf(K("a")));
         Assert.Throws<ArgumentOutOfRangeException>(() => again.Groups.SetGroup(K("a"), "missing"));
@@ -60,10 +69,11 @@ public sealed class GroupTests : IDisposable
     {
         var order = new SessionOrder(FilePath);
         OrderEntry[] rows = [E("a"), E("b"), E("c")];
-        var before = order.Arrange(rows).Sessions.Select(e => e.Key).ToArray();
+        order.Arrange(rows);
         var id = order.Groups.Create("Work");
         order.Groups.SetGroup(K("a"), id);
         order.Groups.SetGroup(K("c"), id);
+        var before = order.Arrange(rows).Sessions.Select(e => e.Key).ToArray();
         order.Groups.Delete(id);
         var again = new SessionOrder(FilePath);
         Assert.Empty(again.Groups.Items);
@@ -72,24 +82,27 @@ public sealed class GroupTests : IDisposable
     }
 
     [Fact]
-    public void Pins_keep_membership_and_keyboard_and_drag_moves_cannot_leave_the_group()
+    public void Pin_boundary_drops_keep_membership_while_unpinned_moves_stay_in_their_group()
     {
         var order = new SessionOrder(null);
         OrderEntry[] rows = [E("a"), E("b"), E("c")];
         order.Arrange(rows);
         var id = order.Groups.Create("Work");
         order.Groups.SetGroup(K("a"), id);
-        order.Groups.SetGroup(K("c"), id);
-        Assert.True(order.Move(K("a"), 1));
-        Assert.Equal(["b", "c", "a"], order.Arrange(rows).Sessions.Select(e => e.Session.Id));
-        Assert.False(order.Move(K("a"), 1));
-        Assert.False(order.Place(K("a"), K("b"), false));
         order.SetPinned(K("a"), true);
+        order.Groups.SetGroup(K("c"), id);
         order.Arrange(rows);
-        order.SetPinned(K("a"), false);
+        Assert.True(order.Place(K("a"), K("b"), false));
         order.Arrange(rows);
         Assert.Equal(id, order.Groups.GroupOf(K("a")));
-        Assert.False(order.Move(K("a"), -1));
+        Assert.False(order.Move(K("a"), 1));
+        Assert.False(order.Place(K("a"), K("b"), false));
+        Assert.True(order.Move(K("a"), -1));
+        Assert.Equal(["a", "c", "b"], order.Arrange(rows).Sessions.Select(e => e.Session.Id));
+        order.SetPinned(K("a"), true);
+        order.SetPinned(K("c"), true);
+        order.Groups.SetGroup(K("a"), null);
+        Assert.Equal(["a", "c"], order.Arrange(rows).Pinned.Select(e => e.Session.Id));
     }
 
     [Fact]
@@ -127,8 +140,10 @@ public sealed class GroupTests : IDisposable
         Assert.Equal(id, order.Groups.GroupOf(K("a")));
     }
 
-    [Fact]
-    public void Listing_stamps_save_at_most_once_per_day_rather_than_on_every_arrangement()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Listing_stamps_throttle_saves_but_keep_exact_retention_in_memory_and_after_flush(bool reload)
     {
         var clock = new FakeTimeProvider(Make.T0);
         var order = new SessionOrder(FilePath, clock);
@@ -137,14 +152,60 @@ public sealed class GroupTests : IDisposable
         order.Groups.SetGroup(K("a"), id);
         var before = System.IO.File.ReadAllText(FilePath);
         order.MarkSeen(K("a"), "reply");
-        clock.Advance(TimeSpan.FromHours(1));
+        clock.Advance(TimeSpan.FromHours(23));
         order.Arrange([E("a")]);
         Assert.Equal(before, System.IO.File.ReadAllText(FilePath));
         Assert.True(new SessionOrder(FilePath).Unread(K("a"), "reply"));
-        clock.Advance(TimeSpan.FromDays(1));
+        clock.Advance(TimeSpan.FromHours(2));
         order.Arrange([E("a")]);
         Assert.NotEqual(before, System.IO.File.ReadAllText(FilePath));
         Assert.False(new SessionOrder(FilePath).Unread(K("a"), "reply"));
+        before = System.IO.File.ReadAllText(FilePath);
+        clock.Advance(TimeSpan.FromHours(23));
+        order.Arrange([E("a")]);
+        Assert.Equal(before, System.IO.File.ReadAllText(FilePath));
+        if (reload) { order.Flush(); order = new SessionOrder(FilePath, clock); }
+        clock.Advance(TimeSpan.FromDays(29) + TimeSpan.FromHours(2));
+        order.Arrange([]);
+        Assert.Equal(id, order.Groups.GroupOf(K("a")));
+        clock.Advance(TimeSpan.FromHours(22) + TimeSpan.FromTicks(1));
+        order.Arrange([]);
+        Assert.Null(order.Groups.GroupOf(K("a")));
+    }
+
+    [Fact]
+    public async Task Filtered_machines_refresh_membership_without_affecting_visible_counts()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var ui = new LockedDispatcher();
+        await using var local = new HostConnection(_ => Task.FromException<AgentBridge.Local.LocalChannel>(new InvalidOperationException("Offline test")), ui);
+        await using var remote = new HostConnection(_ => Task.FromException<AgentBridge.Local.LocalChannel>(new InvalidOperationException("Offline test")), ui);
+        Machine M(string key, HostConnection host) => new(key, host, new CardContext { Host = host, Deliveries = new Deliveries(host, ui), Folds = new FoldStore(null), Capabilities = () => host.Capabilities });
+        var main = new MainViewModel(M(Machine.LocalKey, local), new UsageViewModel(clock), order: new SessionOrder(null, clock));
+        main.Add(M("remote", remote));
+        local.Sessions.Upsert(Make.Session("a"));
+        remote.Sessions.Upsert(Make.Session("b"));
+        var id = main.CreateGroup("Work");
+        var key = SessionOrder.KeyOf("remote", "b");
+        var card = main.AllCards.Single(c => c.Id == "b");
+        card.Editing = true;
+        main.MoveToGroup(card, id);
+        Assert.Equal(1, main.GroupCounts[id]);
+        Assert.False(main.CanMove(card, -1));
+        main.RenameGroup(id, "Renamed");
+        Assert.Equal("Renamed", Assert.Single(main.Groups).Name);
+        main.SelectedMachine = main.Machines.Single(m => m.Key == Machine.LocalKey);
+        clock.Advance(TimeSpan.FromDays(31));
+        remote.Sessions.Upsert(Make.Session("b"));
+        Assert.Equal(id, main.Order.Groups.GroupOf(key));
+        Assert.Equal(0, main.GroupCounts[id]);
+        Assert.Equal("a", Assert.Single(main.Sessions).Id);
+        main.SelectedMachine = main.Machines[0];
+        main.RemoveFromGroup(card);
+        Assert.Equal(["b", "a"], main.Sessions.Select(c => c.Id));
+        Assert.False(main.Move(card, -1));
+        main.DeleteGroup(id);
+        Assert.Empty(main.Groups);
     }
 
     [Fact]
