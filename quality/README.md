@@ -555,6 +555,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      The newest non-cancelled run's active retry holds with an explicit re-run waiting reason
      when its current-attempt jobs have not appeared, or its plan, product or named jobs
      are unfinished. It never falls back to another run's verdict in that state.
+     An older skipped product does not permit fallback while the plan retry has finished
+     but its product retry has not appeared.
      An empty first attempt still consumes the newest slot; an older retry does not acquire it.
      The single
      `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,

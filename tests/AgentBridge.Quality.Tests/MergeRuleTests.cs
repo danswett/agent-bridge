@@ -1821,6 +1821,30 @@ public class MergeRuleTests
     }
 
     [Theory]
+    [InlineData("product")]
+    [InlineData("product (${{ matrix.os }})")]
+    [InlineData("product (ubuntu-latest)")]
+    public void A_newest_plan_retry_waits_for_a_skipped_products_retry_to_appear(string placeholder)
+    {
+        var jobs = new[] { placeholder, "plan", "light", "app (win-x64)", "app (win-arm64)" }.Select((name, id) =>
+            new { id, name, status = "completed", conclusion = name == "plan" ? "success" : "skipped",
+                run_attempt = name == "plan" ? 2 : 1 }).ToArray();
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, "in_progress", null, 2), (5, "completed", "success", 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }) });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            var posted = Assert.Single(github.Posted);
+            Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+            Assert.Contains("is being re-run", posted, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
     [InlineData("product", "success", "success")]
     [InlineData("product (${{ matrix.os }})", "failure", "failure")]
     public void A_successful_plan_retry_supersedes_its_old_skipped_product_placeholder(string placeholder, string conclusion, string state)

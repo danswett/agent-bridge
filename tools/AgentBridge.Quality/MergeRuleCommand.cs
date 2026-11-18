@@ -570,7 +570,11 @@ static class MergeRuleCommand
                     throw new InvalidOperationException("CI job list has no product family");
                 if (product.Any(j => Incomplete(j.Value)
                     || j.Value.GetProperty("conclusion").GetString() is "cancelled" or "skipped"))
+                {
+                    if (isNewest && attempt > 1 && Incomplete(run))
+                        return (run.Clone(), latest, true);
                     continue;
+                }
                 if (latest.Any(j => (config.MainGreen.Jobs.Any(n => n.Split(" (", StringSplitOptions.None)[0] == j.Key.Split(" (", StringSplitOptions.None)[0])
                     || config.MainGreen.LegFamilies.Any(f => f.Contains(j.Key, StringComparer.Ordinal)))
                     && (Incomplete(j.Value) || j.Value.GetProperty("conclusion").GetString() == "cancelled")))
