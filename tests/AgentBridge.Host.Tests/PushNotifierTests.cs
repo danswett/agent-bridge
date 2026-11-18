@@ -1825,6 +1825,53 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Empty(PushStore.Load(StorePath, "2").AllApns);
     }
 
+    [Theory]
+    [InlineData(Ops.PushUnsubscribe, false)]
+    [InlineData(Ops.PushUnsubscribe, true)]
+    [InlineData(Ops.PushList, false)]
+    [InlineData(Ops.PushList, true)]
+    [InlineData(ApnsPushRequest.Unsubscribe, false)]
+    [InlineData(ApnsPushRequest.Unsubscribe, true)]
+    [InlineData(ApnsPushRequest.List, false)]
+    [InlineData(ApnsPushRequest.List, true)]
+    public void Stale_unsubscribe_and_list_requests_cannot_touch_a_new_account_binding(string op, bool switchBack)
+    {
+        using var host = P256KeyPair.Generate();
+        using var person = P256KeyPair.Generate();
+        Action? duringRequest = null;
+        Enforce(host, person, () =>
+        {
+            duringRequest?.Invoke();
+            return Account;
+        });
+        Start();
+        var peer = PinnedPeer(person);
+        duringRequest = () =>
+        {
+            duringRequest = null;
+            notifier.Attach(new FakeSender("2"));
+            if (switchBack) { notifier.Attach(sender); }
+            var key = B64Url.Encode(person.Public);
+            var auth = B64Url.Encode(new byte[16]);
+            store.Put(new PushSubscriber(peer.Device, "NEW-BINDING", "https://new-binding.example.test/push",
+                key, auth, "https://new-binding.example.test/app", T));
+            store.PutApns(new ApnsRegistration(peer.Device, "NEW-BINDING", "prod", "0102",
+                B64Url.Encode(new byte[32]), key, auth, T));
+        };
+        var request = op == ApnsPushRequest.Unsubscribe
+            ? JsonSerializer.SerializeToElement(new { target = "prod" })
+            : JsonSerializer.SerializeToElement(new { });
+
+        var error = Assert.Throws<InvalidOperationException>(() => notifier.Handle(peer, op, request));
+
+        Assert.Contains("account changed", error.Message);
+        Assert.Equal("NEW-BINDING", Assert.Single(store.All).Name);
+        Assert.Equal("NEW-BINDING", Assert.Single(store.AllApns).Name);
+        var persisted = PushStore.Load(StorePath, switchBack ? Account : "2");
+        Assert.Equal("NEW-BINDING", Assert.Single(persisted.All).Name);
+        Assert.Equal("NEW-BINDING", Assert.Single(persisted.AllApns).Name);
+    }
+
     [Fact]
     public void A_subscription_is_checked_when_it_arrives()
     {
