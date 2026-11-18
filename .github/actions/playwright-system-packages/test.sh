@@ -42,6 +42,19 @@ EOF
 # download that finishes prints APT_GETS, apt's "Get:" lines for what it fetched, if set.
 cat > "$work/bin/apt-get" <<'EOF'
 #!/usr/bin/env bash
+# Model a runner-trusted signature, its signed index hash/size, and archive hashes.
+chain_index() {
+  if [ -f "$PLAYWRIGHT_APT_LISTS/cache_Packages" ]; then
+    echo "$PLAYWRIGHT_APT_LISTS/cache_Packages"
+  else echo "$PLAYWRIGHT_APT_LISTS/image_Packages"; fi
+}
+archive_matches_index() {
+  local digest size
+  read -r digest size < "$(chain_index)"
+  [ -f "$PLAYWRIGHT_APT_ARCHIVES/cached.deb" ] &&
+    [ "$(wc -c < "$PLAYWRIGHT_APT_ARCHIVES/cached.deb")" -eq "$size" ] &&
+    printf '%s  %s\n' "$digest" "$PLAYWRIGHT_APT_ARCHIVES/cached.deb" | sha256sum --check --status
+}
 if [ "$1" = -o ] && [[ "$2" == Dir::Cache::archives=* ]]; then
   plan=${2#Dir::Cache::archives=}
   compgen -G "$plan/*.deb" > /dev/null && exit 99
@@ -53,10 +66,19 @@ case "$*" in
     [ -n "${plan:-}" ] || exit 99
     [ -z "${APT_VERIFY_ERROR:-}" ] || { echo "$APT_VERIFY_ERROR" >&2; exit 100; }
     if [ -n "${APT_VERIFY_URI:-}" ]; then printf '%s\n' "$APT_VERIFY_URI"; exit 0; fi
+    if [ -n "${APT_CHAIN_SOURCE:-}" ]; then
+      read -r hash size < "$(chain_index)"
+      printf "'https://archive.ubuntu.com/cached.deb' cached.deb %s SHA256:%s\n" "$size" "$hash"
+      exit 0
+    fi
     hash=$(printf 'valid deb\n' | sha256sum); hash=${hash%% *}
     printf "'https://archive.ubuntu.com/cached.deb' cached.deb 10 SHA256:%s\n" "$hash"
     exit 0 ;;
   *--no-download*)
+    if [ -n "${APT_CHAIN_SOURCE:-}" ]; then
+      archive_matches_index || { echo 'E: archive hash or size mismatch' >&2; exit 100; }
+      cp "$PLAYWRIGHT_APT_ARCHIVES/cached.deb" "$APT_CHAIN_INSTALLED"
+    fi
     if [ -n "${APT_EXPECT_INDEX:-}" ] && [ "$(cat "$PLAYWRIGHT_APT_LISTS"/*_Packages)" != "$APT_EXPECT_INDEX" ]; then
       echo 'E: package candidates do not match the cached archives' >&2; exit 100
     fi
@@ -74,6 +96,17 @@ case "$*" in
     if [ "${APT_UPDATE_SLOW:-}" = all ] || { [ -n "${APT_UPDATE_SLOW:-}" ] && grep -q azure "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"; }; then
       case "$APT_UPDATE_SLOW" in ignore) trap '' TERM; /usr/bin/sleep 30 ;; *) exec /usr/bin/sleep 30 ;; esac
     fi
+    if [ -n "${APT_CHAIN_SOURCE:-}" ]; then
+      # The trusted fixture is outside the cache; equality models signature verification.
+      cmp -s "$APT_CHAIN_SOURCE/InRelease" "$APT_TRUSTED_RELEASE" ||
+        { echo 'E: InRelease signature verification failed' >&2; exit 100; }
+      read -r digest size _ < "$APT_CHAIN_SOURCE/InRelease"
+      [ "$(wc -c < "$APT_CHAIN_SOURCE/Packages")" -eq "$size" ] &&
+        printf '%s  %s\n' "$digest" "$APT_CHAIN_SOURCE/Packages" | sha256sum --check --status ||
+        { echo 'E: signed Packages hash or size mismatch' >&2; exit 100; }
+      cp "$APT_CHAIN_SOURCE/Packages" "$PLAYWRIGHT_APT_LISTS/image_Packages"
+      cp "$APT_CHAIN_SOURCE/InRelease" "$PLAYWRIGHT_APT_LISTS/image_InRelease"
+    fi
     exit "${APT_UPDATE_EXIT:-0}" ;;
   *--download-only*)
     if [ -n "${APT_SLOW:-}" ] && grep -q 'azure\.archive\.ubuntu\.com' "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"; then
@@ -86,6 +119,10 @@ case "$*" in
     fi
     if [ "${APT_DOWNLOAD_EXIT:-0}" -eq 0 ] && [ -n "${APT_NEW_VERSION:-}" ]; then
       : > "$PLAYWRIGHT_APT_ARCHIVES/libgtk-4-1_${APT_NEW_VERSION}_amd64.deb"
+    fi
+    if [ "${APT_DOWNLOAD_EXIT:-0}" -eq 0 ] && [ -n "${APT_CHAIN_SOURCE:-}" ]; then
+      cp "$APT_CHAIN_SOURCE/cached.deb" "$PLAYWRIGHT_APT_ARCHIVES/cached.deb"
+      archive_matches_index || { echo 'E: downloaded archive hash mismatch' >&2; exit 100; }
     fi
     [ -z "${APT_GETS:-}" ] || printf '%s\n' "$APT_GETS"
     exit "${APT_DOWNLOAD_EXIT:-0}" ;;
@@ -130,6 +167,7 @@ reset() {
   unset APT_DNS_EXIT APT_DNS_OUTPUT APT_UPDATE_ERROR APT_UPDATE_FAIL_COUNT
   unset DEBS_CACHE_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
   unset APT_VERIFY_ERROR APT_VERIFY_URI
+  unset APT_CHAIN_SOURCE APT_TRUSTED_RELEASE APT_CHAIN_INSTALLED
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
 # download.sh is given CHECK_BROWSERS, chromium and webkit unless set.
@@ -151,6 +189,55 @@ check() {
     echo "ok: $name"
   fi
 }
+
+cache_auth_cases() {
+  local damage hash size calls want
+  for damage in tampered-InRelease tampered-Packages missing-InRelease invalid-signature size-mismatch live-signature live-Packages live-size; do
+    reset "$canonical"; export DEBS_CACHE_HIT=true PLAYWRIGHT_APT_LIMIT=10s
+    export APT_CHAIN_SOURCE="$work/cache-fixture/repository" APT_TRUSTED_RELEASE="$work/cache-fixture/runner-trusted-InRelease"
+    export APT_CHAIN_INSTALLED="$work/cache-fixture/installed.deb"
+    mkdir -p "$APT_CHAIN_SOURCE"
+    printf 'valid deb\n' > "$APT_CHAIN_SOURCE/cached.deb"
+    hash=$(sha256sum "$APT_CHAIN_SOURCE/cached.deb"); hash=${hash%% *}
+    printf '%s 10\n' "$hash" > "$APT_CHAIN_SOURCE/Packages"
+    hash=$(sha256sum "$APT_CHAIN_SOURCE/Packages"); hash=${hash%% *}
+    size=$(wc -c < "$APT_CHAIN_SOURCE/Packages")
+    printf '%s %s Packages\nrunner-trusted-signature\n' "$hash" "$size" > "$APT_CHAIN_SOURCE/InRelease"
+    cp "$APT_CHAIN_SOURCE/InRelease" "$APT_TRUSTED_RELEASE"
+    cp "$APT_CHAIN_SOURCE/Packages" "$HOME/.cache/playwright-apt-lists/cache_Packages"
+    cp "$APT_CHAIN_SOURCE/InRelease" "$HOME/.cache/playwright-apt-lists/cache_InRelease"
+    calls=$(printf 'update\n%s\n%s' "$verify" "$cached"); want=0
+    case "$damage" in
+      tampered-InRelease) echo forged >> "$HOME/.cache/playwright-apt-lists/cache_InRelease" ;;
+      tampered-Packages)
+        printf 'evil! deb\n' > "$HOME/.cache/playwright-apt-debs/cached.deb"
+        hash=$(sha256sum "$HOME/.cache/playwright-apt-debs/cached.deb")
+        printf '%s 10\n' "${hash%% *}" > "$HOME/.cache/playwright-apt-lists/cache_Packages"
+        calls=$(printf 'update\n%s\n%s' "$verify" "$download") ;;
+      missing-InRelease) rm "$HOME/.cache/playwright-apt-lists/cache_InRelease" ;;
+      invalid-signature) echo unknown-key > "$HOME/.cache/playwright-apt-lists/cache_InRelease" ;;
+      size-mismatch) sed -i 's/ 10$/ 11/' "$HOME/.cache/playwright-apt-lists/cache_Packages" ;;
+      live-signature) echo forged >> "$APT_CHAIN_SOURCE/InRelease" ;;
+      live-Packages) echo forged >> "$APT_CHAIN_SOURCE/Packages" ;;
+      live-size)
+        sed -i "1s/ $size / $((size + 1)) /" "$APT_CHAIN_SOURCE/InRelease"
+        cp "$APT_CHAIN_SOURCE/InRelease" "$APT_TRUSTED_RELEASE" ;;
+    esac
+    if [[ "$damage" == live-* ]]; then want=100; calls=update; fi
+    check "$damage cannot promote unauthenticated cached metadata or archives" "$want" "$calls" "$canonical"
+    if [ -e "$PLAYWRIGHT_APT_LISTS/cache_Packages" ] ||
+      { [ "$want" -eq 0 ] && ! cmp -s "$APT_CHAIN_INSTALLED" "$APT_CHAIN_SOURCE/cached.deb"; } ||
+      { [ "$want" -ne 0 ] && [ -e "$APT_CHAIN_INSTALLED" ]; }; then
+      echo "FAIL: $damage consumed cached metadata or installed an unauthenticated archive"
+      failures=$((failures + 1))
+    fi
+  done
+}
+if [ "${1:-}" = --cache-auth ]; then
+  cache_auth_cases
+  echo "cache-auth: $failures failure(s)"
+  [ "$failures" -eq 0 ]; exit
+fi
 
 reset "$azure" "$canonical"
 check "a download that finishes in time fetches the packages Playwright names, from the mirror list as it stands" \
@@ -542,6 +629,7 @@ else
   echo "FAIL: cache identity did not hash the exact package list without network"; failures=$((failures + 1))
 fi
 
+cache_auth_cases
 if [ "$failures" -ne 0 ]; then
   echo "::error::$failures of download.sh's checks failed"; exit 1
 fi
