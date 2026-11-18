@@ -75,6 +75,8 @@ public sealed partial class ReplyTests
         await Pass(restarted);
         await restarted.DeliveredAsync();
         await Pass(restarted);
+        await restarted.DeliveredAsync();
+        await Pass(restarted);
         Assert.Equal("keep through discovery hold", Assert.Single(replied).Text);
         Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
     }
