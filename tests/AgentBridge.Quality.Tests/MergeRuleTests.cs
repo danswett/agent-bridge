@@ -28,6 +28,7 @@ public class MergeRuleTests
           workflow: ci.yml
           jobs: [quality-gate]
           exempt_labels: [fixes-main]
+          exempt_paths: [tests/AgentBridge.*.Tests/**, pwa/test/**]
         copilot_waiver:
           labels: [copilot-waived]
           second_review: independent-review-2
@@ -1238,14 +1239,14 @@ public class MergeRuleTests
     public void The_fixes_main_label_exempts_only_the_main_check_so_a_sensitive_fix_still_needs_its_receipt()
     {
         var red = new MainFact("failure", "main is red (CI c500000): waiting for main to be fixed");
-        string[] files = ["src/AgentBridge.Transport/Channel.cs"];
+        string[] files = ["tests/AgentBridge.Quality.Tests/MergeRuleTests.cs"];
 
-        var unreviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["fixes-main"]))!;
-        var reviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["Fixes-Main"], statuses: [Receipt("success")]))!;
-        var unlabelled = MergeRule.Evaluate(Config, red, Pr(files, statuses: [Receipt("success")]))!;
+        var unreviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["fixes-main", "security"]))!;
+        var reviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["Fixes-Main", "security"], statuses: [Receipt("success")]))!;
+        var unlabelled = MergeRule.Evaluate(Config, red, Pr(files, labels: ["security"], statuses: [Receipt("success")]))!;
 
-        Assert.Equal(("failure", "Needs an independent review of abcdef0: it touches src/AgentBridge.Transport/Channel.cs"), (unreviewed.State, unreviewed.Description));
-        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file; main isn't green, but it's labelled Fixes-Main"), (reviewed.State, reviewed.Description));
+        Assert.Equal(("failure", "Needs an independent review of abcdef0: it's marked as a security change"), (unreviewed.State, unreviewed.Description));
+        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file; fixes-main tests-only bypass used"), (reviewed.State, reviewed.Description));
         Assert.Equal(("failure", "Main is red (CI c500000): waiting for main to be fixed"), (unlabelled.State, unlabelled.Description));
     }
 
@@ -1256,7 +1257,8 @@ public class MergeRuleTests
     {
         var plain = GraphQLPullRequest(Head);
         var fix = GraphQLPullRequest(Older, labels: ["fixes-main"], number: 7);
-        var unreadable = new FakeGitHub(plain, listed: [plain, fix], byNumber: new Dictionary<int, string> { [42] = plain, [7] = fix }, failMain: true);
+        var unreadable = new FakeGitHub(plain, listed: [plain, fix], byNumber: new Dictionary<int, string> { [42] = plain, [7] = fix }, failMain: true,
+            files: """{"files": [{"filename": "tests/AgentBridge.Quality.Tests/MergeRuleTests.cs"}]}""");
         var unfinished = new FakeGitHub(plain, mainRuns: MainRuns((5, "in_progress", null, 1)));
         var config = WriteConfig();
         try
@@ -1267,7 +1269,7 @@ public class MergeRuleTests
             Assert.Equal(1, exit);
             Assert.Equal(
                 [$"{Head} error merge-rule Couldn't read main's CI: gh: HTTP 502 ",
-                 $"{Older} success merge-rule Copilot reviewed 0000000; every check passed; independent review on file; main isn't green, but it's labelled fixes-main "],
+                 $"{Older} success merge-rule Copilot reviewed 0000000; every check passed; independent review on file; fixes-main tests-only bypass used "],
                 unreadable.Posted);
             Assert.Equal([$"{Head} failure merge-rule No completed non-cancelled CI run on main: waiting for one "], unfinished.Posted);
         }
@@ -2118,7 +2120,7 @@ public class MergeRuleTests
             hold_labels: [hold]
             independent_review: { context: independent-review, posters: [danswett] }
             codeql: { workflow: CodeQL, check: CodeQL }
-            main_green: { workflow: ci.yml, exempt_labels: [fixes-main], jobs: [light, app (win-x64), app (win-arm64), product] }
+            main_green: { workflow: ci.yml, exempt_labels: [fixes-main], exempt_paths: [tests/AgentBridge.*.Tests/**], jobs: [light, app (win-x64), app (win-arm64), product] }
             copilot_waiver: { second_review: independent-review-2 }
             sensitive_paths: [docs/old.md]
             """ + (arm64Waiver ? "\n" + WaiverYaml : ""));
