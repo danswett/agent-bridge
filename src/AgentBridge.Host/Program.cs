@@ -1040,8 +1040,8 @@ async Task<int> ServeAsync(HostHandover handover)
         // Anything else the relay or network does to one connection is a reason to
         // reconnect, never to exit: the relay is not trusted, and a host that one bad frame
         // can stop is a denial of service. That includes a cancellation neither token above
-        // asked for: the socket's own keep-alive aborts with one, and on DSWETT-DEV-VM1 one
-        // that got this far took the host down for good, minutes after a relay deploy (#40).
+        // asked for: the socket's own keep-alive aborts with one, and one that got this far
+        // took a host down for good, minutes after a relay deploy (#40).
         catch (Exception e)
         {
             // A relay restarting before ready (1012) still spreads this retry, as after one.
