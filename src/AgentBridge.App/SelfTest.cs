@@ -290,6 +290,10 @@ static partial class SelfTest
             await CheckSessionDetails(window, main, demo, Check, outFile);
             await CheckAnswerMoves(window, main, Check, outFile);
             await CheckHistoryScroll(window, main, Check);
+            Check(result.TryGetValue("latestTiming", out var timings)
+                && JsonSerializer.SerializeToElement(timings) is { ValueKind: JsonValueKind.Array } timingRecords
+                && timingRecords.EnumerateArray().Any(r => r.GetProperty("Kind").GetString() == "check"),
+                "latest: records Windows view check timings");
             await CheckHistoryYourMessages(window, main, Check);
             await CheckMessageTimes(window, main, Check);
             await CheckHistoryScrollBudget(window, main, demo, Check, result);
