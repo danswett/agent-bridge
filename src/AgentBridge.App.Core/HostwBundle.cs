@@ -48,11 +48,20 @@ internal static class HostwBundle
         var export = pe.PEHeaders.PEHeader?.ExportTableDirectory ?? throw Bad("Missing PE header.");
         if (export.Size < 40) { throw Bad("Missing SDK static runtime exports."); }
         var directory = pe.GetSectionData(export.RelativeVirtualAddress).GetReader(0, 40);
-        directory.Offset = 24; var nativeCount = directory.ReadInt32(); HashSet<string> nativeNames = [];
-        if (nativeCount < 6 || nativeCount > 10000) { throw Bad("Invalid native runtime export count."); }
-        directory.Offset = 32; var pointers = pe.GetSectionData(directory.ReadInt32()).GetReader(0, nativeCount * 4);
+        directory.Offset = 20; var functionCount = directory.ReadInt32(); var nativeCount = directory.ReadInt32(); HashSet<string> nativeNames = [];
+        if (functionCount < 1 || functionCount > 10000 || nativeCount < 6 || nativeCount > 10000) { throw Bad("Invalid native runtime export count."); }
+        var functions = pe.GetSectionData(directory.ReadInt32()).GetReader(0, functionCount * 4);
+        var pointers = pe.GetSectionData(directory.ReadInt32()).GetReader(0, nativeCount * 4);
+        var ordinals = pe.GetSectionData(directory.ReadInt32()).GetReader(0, nativeCount * 2);
         for (var i = 0; i < nativeCount; i++)
         {
+            var ordinal = ordinals.ReadUInt16();
+            if (ordinal >= functionCount) { throw Bad("Export ordinal exceeds its function table."); }
+            functions.Offset = ordinal * 4; var address = functions.ReadInt32();
+            if (address <= 0 || address >= pe.PEHeaders.PEHeader!.SizeOfImage
+                || !pe.PEHeaders.SectionHeaders.Any(s => address >= s.VirtualAddress && (long)address - s.VirtualAddress < Math.Max(s.VirtualSize, s.SizeOfRawData))
+                || address >= export.RelativeVirtualAddress && (long)address < (long)export.RelativeVirtualAddress + export.Size)
+            { throw Bad("Export target is unmapped or forwarded outside the static runtime."); }
             var block = pe.GetSectionData(pointers.ReadInt32()); var name = block.GetReader(0, Math.Min(256, block.Length));
             nativeNames.Add(name.ReadUTF8(name.IndexOf(0)));
         }
@@ -69,6 +78,7 @@ internal static class HostwBundle
         var configLocation = (reader.ReadInt64(), reader.ReadInt64());
         if (id.Length != 12 || reader.ReadUInt64() != 0) { throw Bad("Invalid bundle identity or unsupported flags."); }
         var entries = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<Entry>();
         long expanded = 0;
         for (var i = 0; i < count; i++)
         {
@@ -77,6 +87,7 @@ internal static class HostwBundle
             if (entry.Size < 1 || entry.Size > 512L * 1024 * 1024 || expanded > 1024L * 1024 * 1024
                 || entry.Compressed < 0 || entry.Type > 5 || !SlotPreparation.SafeRelative(entry.Name) || !entries.TryAdd(entry.Name, entry))
             { throw Bad("Invalid, unsafe or duplicate embedded entry."); }
+            ordered.Add(entry);
         }
         var end = hostEnd;
         foreach (var entry in entries.Values.OrderBy(e => e.Offset))
@@ -98,10 +109,10 @@ internal static class HostwBundle
         using var aggregate = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var documents = new Dictionary<byte, JsonElement>();
         var buffer = new byte[8192];
-        foreach (var entry in entries.Values)
+        foreach (var entry in ordered)
         {
             image.Position = entry.Offset;
-            using var slice = new Slice(image, entry.Compressed == 0 ? entry.Size : entry.Compressed);
+            using var slice = new Slice(image, entry.Compressed == 0 ? entry.Size : entry.Compressed, entry.Compressed != 0);
             using Stream contents = entry.Compressed == 0 ? slice : new DeflateStream(slice, CompressionMode.Decompress, leaveOpen: true);
             if (entry.Type is 3 or 4 && (entry.Size > 4 * 1024 * 1024 || documents.ContainsKey(entry.Type))) { throw Bad("Ambiguous or oversized JSON closure."); }
             using var json = entry.Type is 3 or 4 ? new MemoryStream() : null;
@@ -117,7 +128,7 @@ internal static class HostwBundle
             }
             if (size != entry.Size || slice.Remaining != 0) { throw Bad("Embedded payload is truncated."); }
             aggregate.AppendData(hash.GetHashAndReset());
-            if (json is not null) { using var document = JsonDocument.Parse(json.ToArray()); documents.Add(entry.Type, document.RootElement.Clone()); }
+            if (json is not null) { using var document = JsonDocument.Parse(json.ToArray(), new() { AllowDuplicateProperties = false }); documents.Add(entry.Type, document.RootElement.Clone()); }
         }
         var actualId = Convert.ToBase64String(aggregate.GetHashAndReset()).Replace('+', '-').Replace('/', '_')[..12];
         if (id != actualId) { throw Bad("Embedded bytes do not match the bundle manifest identity."); }
@@ -141,13 +152,16 @@ internal static class HostwBundle
         return new UTF8Encoding(false, true).GetString(bytes);
     }
 
-    sealed class Slice(Stream source, long length) : Stream
+    sealed class Slice(Stream source, long length, bool compressed) : Stream
     {
         public long Remaining { get; private set; } = length;
         public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
         public override int Read(Span<byte> buffer)
         {
-            var read = source.Read(buffer[..(int)Math.Min(buffer.Length, Remaining)]);
+            if (buffer.IsEmpty) { return 0; }
+            // Prevent inflater read-ahead from hiding tails; exhaustion before BFINAL is not EOF success.
+            if (compressed && Remaining == 0) { throw Bad("Compressed payload has no final block."); }
+            var read = source.Read(buffer[..(int)Math.Min(buffer.Length, compressed ? Math.Min(1, Remaining) : Remaining)]);
             Remaining -= read;
             return read;
         }
