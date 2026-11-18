@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using AgentBridge.AgentEnvelope;
+using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Copilot;
@@ -45,16 +46,17 @@ public sealed class LiteDeliver(
         try { safe = Escape(text); }
         catch (ArgumentException) { return Refused(LiteCodes.NotReplyTarget); } // not valid Unicode
         if (string.IsNullOrEmpty(text) || text.Length > MaxChars || !body.BindsData(Encoding.UTF8.GetBytes(text)) || target.Length == 0 || !Guid.TryParseExact(body.Request, "D", out _)) { return Refused(LiteCodes.NotReplyTarget); }
-        if (source.Get(target) is not { } session) { return Refused(LiteCodes.NoSuchSession); }
-        if (!await AllowedAsync(envelope, target)) { return Refused(LiteCodes.NotReplyTarget); }
+        if (Resolve(target) is not { } session) { return Refused(LiteCodes.NoSuchSession); }
+        var native = session.Id;
+        if (!await AllowedAsync(envelope, native)) { return Refused(LiteCodes.NotReplyTarget); }
         if (session.Agent != AgentKind.Copilot || session.ProcessId is not { } pid) { return Refused(LiteCodes.NotReplyTarget); }
         if (!Idle(session)) { return Refused(LiteCodes.Busy); }
         if (!await ComposerEmptyAsync(pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
         // Check before handing off; RequireIdle also rechecks once the replier holds the typing slot.
-        if (source.Get(target) is not { } now || now.ProcessId != pid) { return Refused(LiteCodes.NoSuchSession); }
+        if (Resolve(target) is not { } now || now.Id != native || now.ProcessId != pid) { return Refused(LiteCodes.NoSuchSession); }
         if (!Idle(now)) { return Refused(LiteCodes.Busy); }
-        if (!WithinRate(target)) { return Refused(LiteCodes.Busy); }
-        var reply = new ReplyRequest { Id = target, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true };
+        if (!WithinRate(native)) { return Refused(LiteCodes.Busy); }
+        var reply = new ReplyRequest { Id = native, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true };
         var result = await replier.ReplyAsync(reply, null, ct);
         return result.Outcome switch
         {
@@ -63,6 +65,13 @@ public sealed class LiteDeliver(
             AnswerOutcome.Stale => Refused(LiteCodes.NoSuchSession),
             _ => Refused(result.Refusal switch { ReplyRefusal.Asking or ReplyRefusal.Busy => LiteCodes.Busy, ReplyRefusal.ComposerUnverified => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
         };
+    }
+
+    Session? Resolve(string target)
+    {
+        if (!target.StartsWith("agent_bridge_", StringComparison.Ordinal)) { return source.Get(target); }
+        var matches = source.Snapshot().Where(s => HaContract.NodeId(s.Id) == target).Take(2).ToArray();
+        return matches.Length == 1 ? source.Get(matches[0].Id) : null;
     }
 
     // Any gate allowing is enough (forced-ask OR allowlisted); one that throws allows nothing.

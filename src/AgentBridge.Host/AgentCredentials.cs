@@ -384,19 +384,19 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // principal, for as long as its credential stands.
     public AgentHelloResult Accept(IProtocolChannel channel, AgentCredential credential)
     {
-        // A script connection cannot shed its read-only limit by authenticating again.
+        // A script connection cannot shed its scope limit by authenticating again.
         CheckScriptOperation(channel, AgentProtocol.Hello);
         var principal = PrincipalOf(credential);
         connections.AddOrUpdate(channel, new Connection(credential.Id, principal, credential.Kind == "script"));
-        return new AgentHelloResult(principal, credential.Kind == "script" ? AgentProtocol.ScopeRead : credential.Scope);
+        return new AgentHelloResult(principal, credential.Scope);
     }
 
     // Keep the script restriction even after its record disappears: absence is never person authority.
     internal void CheckScriptOperation(IProtocolChannel channel, string op, Action<string>? refusalLog = null)
     {
         if (!connections.TryGetValue(channel, out var c) || !c.Script) { return; }
-        var why = op is not (Fleet.FleetList.Op or Fleet.FleetList.FindOp)
-            ? "script connections may call only fleet.list and fleet.find"
+        var why = op is not (Fleet.FleetList.Op or Fleet.FleetList.FindOp or Lite.LiteAgentSend.Op)
+            ? "script credentials have read+reply scope: only fleet.list, fleet.find and agent.send are allowed; a script cannot raise its own scope"
             : Of(channel) is null ? "the script credential is no longer live" : null;
         if (why is null) { return; }
         var line = $"refused {op} from {c.Principal}: {why}";
