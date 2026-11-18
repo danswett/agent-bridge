@@ -19,6 +19,11 @@ public sealed class RosterEvidenceTests
 
     [Theory]
     [InlineData("""{"attention":{"kind":"approval"},"openAsks":2,"stale":false}""")]
+    [InlineData("""{"attention":{"kind":"none"}}""")]
+    [InlineData("""{"attention":{"kind":"question"}}""")]
+    [InlineData("""{"attention":{"kind":"trust"}}""")]
+    [InlineData("""{"attention":{"kind":"permission"}}""")]
+    [InlineData("""{"attention":{"kind":"unknown"}}""")]
     [InlineData("""{"observedAt":"2026-11-07T12:00:00Z","lastReplyAt":"2026-11-07T11:59:00Z","senderVerified":"unknown"}""")]
     [InlineData("""{"unsentLength":0,"senderVerified":false}""")]
     public void Valid_optional_evidence_is_accepted(string evidence) => Assert.Null(Check(evidence));
@@ -43,6 +48,10 @@ public sealed class RosterEvidenceTests
     [InlineData("""{"lastReplyAt":"bad"}""")]
     [InlineData("""{"senderVerified":"true"}""")]
     [InlineData("""{"provenance":{"source":"owner","sendMarker":true,"unsentHash":"private"}}""")]
+    [InlineData("""{"provenance":{"source":"host-observed","sendMarker":"true"}}""")]
+    [InlineData("""{"provenance":{"source":"host-observed","prompt":"private"}}""")]
+    [InlineData("""{"provenance":{}}""")]
+    [InlineData("""{"attention":{"kind":"a-future-kind-that-is-more-than-thirty-two-characters"}}""")]
     [InlineData("""{"composerText":"private"}""")]
     public void Malformed_unknown_or_private_evidence_is_a_bad_record(string evidence) =>
         Assert.Equal("bad-record", Check(evidence));

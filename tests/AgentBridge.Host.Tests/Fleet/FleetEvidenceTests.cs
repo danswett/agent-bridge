@@ -67,5 +67,6 @@ public sealed partial class FleetListTests
         Assert.Equal("unknown", (await EvidenceRow("""{"attention":{"kind":"future"}}"""))
             .GetProperty("attention").GetProperty("kind").GetString());
         await Assert.ThrowsAsync<InvalidDataException>(() => EvidenceRow("""{"observedAt":"not-a-time"}"""));
+        await Assert.ThrowsAsync<InvalidDataException>(() => EvidenceRow("""{"lastReplyAt":"not-a-time"}"""));
     }
 }
