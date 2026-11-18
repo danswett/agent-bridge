@@ -46,14 +46,9 @@ public sealed class RosterStateVectorTests
                 var w = new World();
                 w.Genesis();
                 w.Add("+W", "G", "W", "G");
-                var line = "+W";
-                for (var i = 0; i < RosterVerifier.Window + 1; i++)
-                {
-                    w.Rename($"r{i}", "G", i % 2 == 0 ? "G" : "+W", line, $"Desk {i}");
-                    line = $"r{i}";
-                }
+                for (var i = 0; i < 3; i++) { w.Add($"+D{i}", "G", $"D{i}", "G"); }
                 w.Add("+P", "G", "P", "G");
-                w.Merge("adopt", "W", [line, "+P"], adopt: true);
+                w.Merge("adopt", "W", ["+W", "+P"], adopt: true);
                 w.Remove("G-W", "G", "+W", "adopt");
                 return w;
             },
@@ -363,11 +358,11 @@ public sealed class RosterStateVectorTests
         var evidenceSteps = evidenceMerge["steps"]!.AsArray();
         Assert.Equal("refused", evidenceSteps[^3]!["verdict"]!.GetValue<string>());
         Assert.Equal("cap", evidenceSteps[^3]!["reason"]!.GetValue<string>());
-        Assert.Equal(["G", "W"], evidenceSteps[^2]!["names"]!.AsObject().Select(p => p.Key));
+        Assert.Equal(["D0", "D1", "D2", "G", "W"], evidenceSteps[^2]!["names"]!.AsObject().Select(p => p.Key));
         Assert.Equal("quarantined", evidenceSteps[^1]!["verdict"]!.GetValue<string>());
         Assert.Equal(["adopt"], evidenceMerge["state"]!["evidence"]!.AsArray().Select(n => n!.GetValue<string>()));
         Assert.Contains("+P", evidenceMerge["state"]!["quarantined"]!.AsArray().Select(n => n!.GetValue<string>()));
-        Assert.Equal(["G"], Active("evidence-only-adopting-merge"));
+        Assert.Equal(["D0", "D1", "D2", "G"], Active("evidence-only-adopting-merge"));
         var probation = byName["probation"]["steps"]!.AsArray();
         Assert.Equal(["A", "G"], probation[^3]!["serving"]!.AsArray().Select(n => n!.GetValue<string>()));
         Assert.Equal(["A", "C", "G"], probation[^2]!["serving"]!.AsArray().Select(n => n!.GetValue<string>()));
