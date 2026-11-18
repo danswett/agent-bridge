@@ -441,7 +441,7 @@ export class RosterVerifier {
       let more = false;
       for (let i = 0; i < g.count; i++) {
         const n = g.at(i);
-        if (n.op !== 'merge' || !n.body.adopt || this.#adoptingMerges.has(i) || this.#candidate.has(i) || q.has(n.signer)) continue;
+        if (n.op !== 'merge' || !n.body.adopt || this.#adoptingMerges.has(i) || this.#candidate.has(i) || n.evidence || q.has(n.signer)) continue;
         this.#adoptingMerges.add(i);
         this.#adoptClosure(i);
         more = true;
