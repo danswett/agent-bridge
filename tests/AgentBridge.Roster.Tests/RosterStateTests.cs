@@ -8,6 +8,26 @@ public sealed class RosterStateTests
     static void Verdicts(IReadOnlyList<Offered> offered, params Verdict[] expected) =>
         Assert.Equal(expected, offered.Select(o => o.Verdict));
 
+    [Fact]
+    public void Storage_evidence_stays_non_applying_until_an_eligible_removal_and_survives_replay()
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("+B", "G", "B", "G");
+        w.Rename("E", "B", "+B", "+B", "evidence");
+        w.Remove("R", "G", "+B", "E");
+        var wire = w.Entry("E").Canonical();
+        var evidence = Entry.Parse(System.Text.Encoding.UTF8.GetBytes(wire[..^1] + ",\"evidence\":true}"));
+        var v = w.Verifier("G", "+B");
+        Assert.Equal(Invalid.Cap, v.Offer(evidence)[0].Reason);
+        Assert.False(v.Holds(evidence.Hash));
+        Assert.Equal(Verdict.Quarantined, v.Offer(w.Entry("R"))[0].Verdict);
+        var replay = w.Verifier("G", "+B");
+        replay.Offer(Entry.Parse(System.Text.Encoding.UTF8.GetBytes(evidence.Canonical())), w.Entry("R"));
+        Assert.True(replay.Graph[replay.Graph.Find(evidence.Hash)!.Value].Evidence);
+        Assert.False(replay.State.Active.ContainsKey(w.Id("B")));
+    }
+
     // G, then A and B added by G in a line, both confirmed.
     internal static World Line()
     {
