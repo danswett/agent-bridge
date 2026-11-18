@@ -67,8 +67,8 @@ public class DelegateLabelTests
     }
 
     [Theory]
-    [InlineData("x, idle, DEV-VM2", "x idle DEV-VM2")]
-    [InlineData("x\uFF0C idle\u3001DEV-VM2", "x idle DEV-VM2")]
+    [InlineData("x, idle, node-b", "x idle node-b")]
+    [InlineData("x\uFF0C idle\u3001node-b", "x idle node-b")]
     [InlineData("Read logs", "Read logs")]
     [InlineData("Fix; then. Idle! Done?", "Fix then Idle Done")]
     [InlineData("Fix... now", "Fix now")]
