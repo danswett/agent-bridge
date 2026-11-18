@@ -17,6 +17,7 @@ public sealed partial class RemoteAuthorizationTests : IAsyncLifetime
     readonly FakeTimeProvider time = new(new DateTimeOffset(2026, 11, 3, 0, 0, 0, TimeSpan.Zero));
     readonly SessionDrivers drivers = new();
     readonly List<Device> devices = [];
+    readonly List<IDisposable> gateObservers = [];
     SessionSource source = null!;
     TestRelay relay = null!;
     Device host = null!;
@@ -108,11 +109,14 @@ public sealed partial class RemoteAuthorizationTests : IAsyncLifetime
 
     sealed class GateEnrollmentFixture : IGateRunEnrollmentProvider
     {
+        public event Action<GateRunEnrollment?>? Changed;
         internal GateRunEnrollment? Value = new(Enumerable.Range(0, 4).Select(_ => new GateRunParticipant(
             Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "1.0", new string('a', 64), new string('b', 64))).ToArray(),
             Guid.NewGuid(), 17, new string('c', 64));
         internal Action? BeforeRead;
+        internal Action? BeforeNotification;
         public GateRunEnrollment? Read() { BeforeRead?.Invoke(); return Value; }
+        internal void Change(GateRunEnrollment? value) { Value = value; BeforeNotification?.Invoke(); Changed?.Invoke(value); }
     }
 
     async Task<(SecureChannel Channel, AgentAuditLog Audit, GateEnrollmentFixture Enrollment)> GateAsync(TimeProvider? clock = null)
@@ -122,6 +126,7 @@ public sealed partial class RemoteAuthorizationTests : IAsyncLifetime
         authorization = new RemoteAuthorization(true, store, time, enrollment);
         authorization.Attach(host.Hub);
         var audit = new AgentAuditLog(Path.Combine(fixture.Root, "gate"), clock ?? time);
+        gateObservers.Add(GateRunPreparation.Observe(audit, source, enrollment));
         host.Hub.Handler = authorization.Handler(service, audit);
         var peer = await PeerAsync();
         Pin(peer, TrustedPeerStore.Person);
@@ -802,6 +807,7 @@ public sealed partial class RemoteAuthorizationTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        foreach (var observer in gateObservers) { observer.Dispose(); }
         authorization.Dispose();
         await relay.DisposeAsync();
         await source.DisposeAsync();

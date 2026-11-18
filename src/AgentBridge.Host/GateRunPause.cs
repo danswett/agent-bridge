@@ -16,10 +16,12 @@ internal sealed class GateRunPause : IDisposable
     {
         this.audit = audit;
         sync = GateRunPreparation.Sync(audit);
-        foreach (var group in GateAuditProjection.Load(audit.Profile).Rows.Where(r => r.Gate?.Phase == "control").GroupBy(r => r.Gate!.Run))
+        using var held = sync.EnterScope();
+        var history = GateAuditProjection.Load(audit.Profile);
+        foreach (var group in history.Rows.Where(r => r.Gate?.Phase == "control").GroupBy(r => r.Gate!.Run))
         {
             var last = group.MaxBy(r => r.Gate!.Sequence)!;
-            if (last.Outcome == "paused")
+            if (last.Outcome == "paused" && (!history.Complete || !GateRunPreparation.Voided(history.Rows, last.Gate!.Run)))
             {
                 if (!audit.Append(new("in", last.Request!, last.Principal, [], "gate.pause", "profile", "invalidated",
                     Gate: last.Gate! with { Operation = Guid.NewGuid(), PauseDeadline = null, ReasonCode = "restart" }))) { audit.ControlFault(); }
@@ -50,8 +52,8 @@ internal sealed class GateRunPause : IDisposable
                 if (lease is null || marker!.Gate!.Operation != prior.Gate.Operation)
                 { throw new InvalidOperationException("the original pause is no longer active"); }
             }
-            var begin = rows.SingleOrDefault(r => r.Action == "gate.start" && r.Outcome == "prepared" && r.Gate?.Run == run);
-            if (begin?.Principal != principal || rows.Any(r => r.Gate?.Run == run && r.Outcome == "invalidated"))
+            var begin = rows.SingleOrDefault(r => GateRunPreparation.IsBegin(r) && r.Gate?.Run == run);
+            if (begin?.Principal != principal || GateRunPreparation.Voided(rows, run))
             { throw new InvalidOperationException("gate pause refused: unknown, foreign or invalidated run"); }
             if (resume)
             {
@@ -97,6 +99,7 @@ internal sealed class GateRunPause : IDisposable
         await Task.WhenAny(mine.Drained, mine.Resumed);
         lock (sync)
         {
+            _ = GateRunPreparation.Read(audit);
             CheckClock();
             if (controlLost.IsCompleted || !ReferenceEquals(lease, mine) || !mine.Drained.IsCompletedSuccessfully)
             { End(mine); throw new InvalidOperationException("gate pause ended before acknowledgment"); }
@@ -135,10 +138,12 @@ internal sealed class GateRunPause : IDisposable
             lease = null;
             timer?.Dispose();
             timer = null;
-            var written = audit.Append(marker! with { Request = request ?? marker.Request, Outcome = resumed ? "resumed" : "invalidated",
+            var history = GateAuditProjection.Load(audit.Profile);
+            var voided = history.Complete && GateRunPreparation.Voided(history.Rows, marker!.Gate!.Run);
+            var written = voided || audit.Append(marker! with { Request = request ?? marker!.Request, Outcome = resumed ? "resumed" : "invalidated",
                 Gate = marker!.Gate! with { PauseDeadline = null, ReasonCode = resumed ? "none" : reason } });
             if (!written) { audit.ControlFault(); }
-            return written;
+            return written && (!resumed || !voided);
         }
     }
     public void Dispose() => End();

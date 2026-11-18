@@ -149,6 +149,9 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     public long Revision { get { lock (_gate) { return _revision; } } }
 
     public event EventHandler<SessionChange>? Changed;
+    // Participating host/profile membership is not the local session-discovery inventory.
+    public event Action? GateRosterChanged;
+    public void NotifyGateRosterChanged() => GateRosterChanged?.Invoke();
 
     public IReadOnlyList<Session> Snapshot()
     {
