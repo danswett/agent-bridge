@@ -238,12 +238,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         var verifierDirty = false;
         foreach (var (index, entry) in parsed)
         {
-            // Persisted evidence is a duplicate, not a new ancestor to carry or upgrade.
-            if (replay.Any(e => e.Hash.AsSpan().SequenceEqual(entry.Hash)))
-            {
-                results[index] = new Result(Codec.Base64Url(entry.Hash), "duplicate", null);
-                continue;
-            }
+            var persisted = replay.Any(e => e.Hash.AsSpan().SequenceEqual(entry.Hash));
             if (aside.Count > 0 || verifierDirty)
             {
                 // Size-refused entries must not affect later entries unless they are ancestors.
@@ -290,7 +285,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
                 if (JsonSerializer.SerializeToUtf8Bytes(new Stored(1, generation, candidate), Json).Length > limit)
                 {
                     results[index] = results[index] with { Verdict = "refused", Reason = Invalid.Cap };
-                    aside.Add((index, entry.AsEvidence(), true));
+                    if (!persisted) { aside.Add((index, entry.AsEvidence(), true)); }
                     continue;
                 }
                 if (evidence.Count > 0 && (entry.Body.Op != EntryOp.Remove
@@ -312,7 +307,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
             }
             else if (offered.Verdict == Verdict.Refused && verifier.Graph.Find(entry.Hash) is not null)
             {
-                aside.Add((index, entry.AsEvidence(), false));
+                if (!persisted) { aside.Add((index, entry.AsEvidence(), false)); }
             }
         }
         return (results, changed ? new Stored(1, generation, kept) : null);
