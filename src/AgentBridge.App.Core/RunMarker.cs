@@ -28,26 +28,32 @@ public sealed class RunMarker : IDisposable
         Directory.CreateDirectory(dir);
         ownership = UserLock.TryTake(path + ".lock", deleteOnClose: true) ?? throw new IOException("The new run record is already owned.");
         var saved = false;
+        List<(string Path, FileStream Owner)> recoveredLeases = [];
         try
         {
-            Previous = ReadPrevious(dir, out var recovered);
+            Previous = ReadPrevious(dir, recoveredLeases, out var recovered);
             Save();
-            if (recovered is not null)
-            {
-                using var owner = UserLock.TryTake(recovered + ".lock", deleteOnClose: true);
-                if (owner is not null) { File.Delete(recovered); }
-            }
+            if (recovered is not null) { File.Delete(recovered); }
             saved = true;
         }
-        finally { if (!saved) { ownership.Dispose(); } }
+        finally
+        {
+            foreach (var lease in recoveredLeases) { lease.Owner.Dispose(); }
+            if (!saved) { ownership.Dispose(); }
+        }
     }
 
     public static RunMarker Start(string dir, string version, TimeProvider? clock = null) =>
         new(dir, version, clock ?? TimeProvider.System);
 
-    public static PreviousRun ReadPrevious(string dir) => ReadPrevious(dir, out _);
+    public static PreviousRun ReadPrevious(string dir)
+    {
+        List<(string Path, FileStream Owner)> leases = [];
+        try { return ReadPrevious(dir, leases, out _); }
+        finally { foreach (var lease in leases) { lease.Owner.Dispose(); } }
+    }
 
-    static PreviousRun ReadPrevious(string dir, out string? record)
+    static PreviousRun ReadPrevious(string dir, List<(string Path, FileStream Owner)> leases, out string? record)
     {
         record = null;
         try
@@ -55,9 +61,10 @@ public sealed class RunMarker : IDisposable
             PreviousRun previous = new(false);
             foreach (var file in Directory.EnumerateFiles(dir, "run-marker*.json"))
             {
-                // A lifetime lease, not a PID or a session-local mutex, proves this run is gone.
-                using var owner = UserLock.TryTake(file + ".lock", deleteOnClose: true);
+                // Keep abandoned records owned until the replacement is durable and consumed.
+                var owner = UserLock.TryTake(file + ".lock", deleteOnClose: true);
                 if (owner is null) { continue; }
+                leases.Add((file, owner));
                 PreviousRun candidate;
                 try { candidate = (JsonSerializer.Deserialize<PreviousRun>(File.ReadAllText(file)) ?? new(true)) with { Unclean = true }; }
                 catch (FileNotFoundException) { continue; }
