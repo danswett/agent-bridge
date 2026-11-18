@@ -856,6 +856,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         {
             if (!options.PlatformSupported) { return Refused("launching sessions is not supported on this platform yet; start it at the machine"); }
             if (probe.Active() is { } active) { return Refused(active); }
+            if (request.DispatchAllowed?.Invoke() == false) { return Refused("the launch is no longer authorized"); }
             if (!Config.Enabled) { return Refused("launching is turned off on this machine (launch.enabled in the host's config)"); }
             if (starter.Unavailable() is { } unavailable) { return Refused(unavailable); }
             if (options.HomeAssistantEnabled && options.HomeAssistantBaseUrl is null)
@@ -925,7 +926,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     }
                 }
                 return await StartAsync(plan, claim, key, handed, fetched, ct, restoring,
-                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet);
+                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet, dispatchAllowed: request.DispatchAllowed);
             }
             finally
             {
@@ -1105,7 +1106,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     }
 
     async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false, Func<bool>? dispatchAllowed = null)
     {
         Pending follow;
         LaunchedWith launched;
@@ -1116,6 +1117,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         {
             // Checked again: agent-ha-bridge may have started while this one waited its turn.
             if (probe.Active() is { } active) { return Refused(active); }
+            if (dispatchAllowed?.Invoke() == false) { return Refused("the launch is no longer authorized"); }
             if (BusyReason() is { } busy) { return new LaunchResult(LaunchOutcome.Busy, busy) { Trust = BusyQuestion() }; }
             // And the session to resume, which another press may have resumed while this one
             // waited: two agents on one transcript would corrupt it.
@@ -1289,6 +1291,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
             // Last chance to withdraw: nothing has started yet.
             if (ct.IsCancellationRequested) { return Refused(Withdrawn); }
+            if (dispatchAllowed?.Invoke() == false) { return Refused("the launch is no longer authorized"); }
             // Where a prompt of the person's would show they got past its startup questions
             // (HeldForReply): what the transcript holds now is from before this agent.
             var transcriptFrom = TranscriptFrom(plan.Launcher, sessionId);

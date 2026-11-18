@@ -32,14 +32,15 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
     public ReplayStore Replays { get; } = new(time ?? TimeProvider.System);
     public RateCap Rates { get; } = new(time ?? TimeProvider.System);
 
-    public async Task<object?> ServeAsync(SecureChannel channel, JsonElement data, CancellationToken ct)
+    public async Task<object?> ServeAsync(SecureChannel channel, JsonElement data, CancellationToken ct, Func<bool>? dispatchAllowed = null)
     {
         var seen = new LiteChannel(channel.PeerId, channel.PeerKind, channel.PeerStatic, channel.Relay.DeviceId, channel.Relay.AccountId,
             channel.Relay.Presence.Any(p => p.Id == channel.PeerId && p.Kind == "host"));
-        return await ReceiveAsync(seen, data, ct);
+        return await ReceiveAsync(seen, data, ct, () => channel.IsOpen && dispatchAllowed?.Invoke() != false
+            && channel.Relay.Presence.Any(p => p.Id == channel.PeerId && p.Kind == "host"));
     }
 
-    public async Task<LiteAck> ReceiveAsync(LiteChannel channel, JsonElement data, CancellationToken ct)
+    public async Task<LiteAck> ReceiveAsync(LiteChannel channel, JsonElement data, CancellationToken ct, Func<bool>? dispatchAllowed = null)
     {
         if (!mode.On) { return new LiteAck("refused", Off, "", mode.KillEpoch); }
         if (channel.PeerKind != "host" || !channel.InPresence) { return Refuse(NotSameAccount); }
@@ -68,11 +69,19 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
             case ReplayStore.Result.Full: return Refuse(Busy, body.Request);
         }
         if (!Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session)) { return Refuse(Rate, body.Request); }
-        LiteDelivery result; try { result = await deliver.DeliverAsync(verified, text, ct); }
+        string? denied = null;
+        bool Current()
+        {
+            if (!mode.On) { denied = Off; return false; }
+            if (dispatchAllowed?.Invoke() == false || !peers.TryFind(channel.PeerId, out var current)) { denied = NotPeer; return false; }
+            try { LiteProfile.Check(envelope, current.SignPoint, channel.Account, Encoding.UTF8.GetBytes(text), time.GetUtcNow().ToUnixTimeSeconds()); return true; }
+            catch (EnvelopeException x) { denied = x.Code; return false; }
+        }
+        LiteDelivery result; try { result = await deliver.DeliverAsync(verified, text, ct, Current); }
         catch (Exception x) when (x is not OperationCanceledException || !ct.IsCancellationRequested) { return Refuse(DeliveryFailed, body.Request); }
         return result.Typed
             ? new LiteAck("delivered", null, body.Request, mode.KillEpoch)
-            : Refuse(result.Code ?? DeliveryFailed, body.Request);
+            : Refuse(denied ?? result.Code ?? DeliveryFailed, body.Request);
     }
 
     LiteAck Refuse(string code, string request = "") => new("refused", code, request, mode.KillEpoch);

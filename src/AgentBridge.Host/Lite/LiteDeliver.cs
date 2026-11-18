@@ -28,17 +28,17 @@ public sealed class LiteDeliver(
     readonly TimeProvider time = clock ?? TimeProvider.System;
     readonly ConcurrentDictionary<string, Queue<DateTimeOffset>> recent = new(StringComparer.Ordinal);
 
-    public async Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct)
+    public async Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct, Func<bool>? dispatchAllowed = null)
     {
         var body = envelope.Body;
         var target = body.Target.Session ?? "";
-        var outcome = await DecideAsync(envelope, text, target, ct);
+        var outcome = await DecideAsync(envelope, text, target, ct, dispatchAllowed);
         var sender = body.Principal.Kind == "script" ? Clean(body.Principal.SenderId) : $"{Clean(body.Principal.Machine)}/{Clean(body.Principal.Session)}";
         log($"lite deliver: from {sender} to {Clean(target)} request {Clean(body.Request)}: {(outcome.Typed ? "typed" : outcome.Code)}");
         return outcome;
     }
 
-    async Task<LiteDelivery> DecideAsync(VerifiedEnvelope envelope, string text, string target, CancellationToken ct)
+    async Task<LiteDelivery> DecideAsync(VerifiedEnvelope envelope, string text, string target, CancellationToken ct, Func<bool>? dispatchAllowed)
     {
         var body = envelope.Body;
         string safe;
@@ -46,7 +46,7 @@ public sealed class LiteDeliver(
         catch (ArgumentException) { return Refused(LiteCodes.NotReplyTarget); } // not valid Unicode
         if (string.IsNullOrEmpty(text) || text.Length > MaxChars || !body.BindsData(Encoding.UTF8.GetBytes(text)) || target.Length == 0 || !Guid.TryParseExact(body.Request, "D", out _)) { return Refused(LiteCodes.NotReplyTarget); }
         if (source.Get(target) is not { } session) { return Refused(LiteCodes.NoSuchSession); }
-        if (!await AllowedAsync(envelope, target)) { return Refused(LiteCodes.NotReplyTarget); }
+        if (dispatchAllowed?.Invoke() == false || !await AllowedAsync(envelope, target)) { return Refused(LiteCodes.NotReplyTarget); }
         if (session.Agent != AgentKind.Copilot || session.ProcessId is not { } pid) { return Refused(LiteCodes.NotReplyTarget); }
         if (!Idle(session)) { return Refused(LiteCodes.Busy); }
         if (!await ComposerEmptyAsync(pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
@@ -54,7 +54,8 @@ public sealed class LiteDeliver(
         if (source.Get(target) is not { } now || now.ProcessId != pid) { return Refused(LiteCodes.NoSuchSession); }
         if (!Idle(now)) { return Refused(LiteCodes.Busy); }
         if (!WithinRate(target)) { return Refused(LiteCodes.Busy); }
-        var reply = new ReplyRequest { Id = target, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true };
+        var reply = new ReplyRequest { Id = target, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true,
+            DispatchAllowed = async () => dispatchAllowed?.Invoke() != false && await AllowedAsync(envelope, target) };
         var result = await replier.ReplyAsync(reply, null, ct);
         return result.Outcome switch
         {

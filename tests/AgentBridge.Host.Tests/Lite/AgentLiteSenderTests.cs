@@ -64,7 +64,7 @@ public class AgentLiteSenderTests
     {
         public string? Text;
         public VerifiedEnvelope? Envelope;
-        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) { Envelope = envelope; Text = text; return Task.FromResult(result); }
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct, Func<bool>? dispatchAllowed = null) { Envelope = envelope; Text = text; return Task.FromResult(result); }
     }
 
     [Fact]

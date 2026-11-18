@@ -210,6 +210,8 @@ public static class LocalApi
         ReplyIntent ReplyIntentNow() => replyCaller is (CallerKind.App or CallerKind.HostCli)
             && !channel.Closed.IsCompleted && credentials?.Of(channel) is null
             && callers.Classify(channel, fresh: true).Kind == replyCaller ? ReplyIntent.Steer : ReplyIntent.Unknown;
+        var dispatchCaller = Acts.Contains(op) ? callers.Classify(channel, fresh: true).Kind : CallerKind.Other;
+        bool DispatchAllowed() => channel.IsOpen && dispatchCaller != CallerKind.Agent && callers.Classify(channel, fresh: true).Kind == dispatchCaller;
         // Shaped inside the service, so hello.changed compares what this caller is told (#651).
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
@@ -224,7 +226,7 @@ public static class LocalApi
             _ => hello,
         }, actionAudit: op is (LaunchProtocol.Launch or Ops.SessionAnswer or Ops.SessionStop)
             && callers.Classify(channel).Kind is (CallerKind.App or CallerKind.HostCli) ? audit : null,
-            replyIntent: op == Ops.SessionReply ? ReplyIntentNow : null);
+            replyIntent: op == Ops.SessionReply ? ReplyIntentNow : null, dispatchAllowed: Acts.Contains(op) ? DispatchAllowed : null);
     };
 
     internal sealed class RefusalAudits(TimeProvider time)

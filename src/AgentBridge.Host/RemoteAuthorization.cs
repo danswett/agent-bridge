@@ -117,8 +117,9 @@ public sealed class RemoteAuthorization : IDisposable
         if (!operations.Contains(op)) { throw new InvalidOperationException("the peer role does not allow this operation"); }
         ReplyIntent ReplyIntentNow() => !channel.Closed.IsCompleted && Store.Current(lease, channel.Relay.AccountId)
             ? ReplyIntent.Steer : ReplyIntent.Unknown;
+        bool DispatchAllowed() => channel.IsOpen && Store.Current(lease, channel.Relay.AccountId);
         return await sessions.HandleAsync(channel, op, data, hello => Shape(channel, hello), op == Ops.SessionStop ? launchAudit : audit, ingress,
-            replyIntent: op == Ops.SessionReply && lease.Role == TrustedPeerStore.Person ? ReplyIntentNow : null);
+            replyIntent: op == Ops.SessionReply && lease.Role == TrustedPeerStore.Person ? ReplyIntentNow : null, dispatchAllowed: DispatchAllowed);
     };
 
     // What the peer's role lets its hello say. Also what hello.changed compares at each later look

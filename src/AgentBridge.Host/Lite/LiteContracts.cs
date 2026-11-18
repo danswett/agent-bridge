@@ -10,5 +10,5 @@ public interface ILiteMode { bool On { get; } long KillEpoch { get; } void TurnO
 public sealed record LitePeer(string DeviceId, byte[] SignPoint, string Name);           // SignPoint = peer's 65-byte P-256 agent signing point, pinned
 public interface ILitePeers { bool TryFind(string deviceId, out LitePeer peer); IReadOnlyList<LitePeer> All(); }  // L2b implements
 public sealed record LiteDelivery(bool Typed, string? Code);
-public interface ILiteDeliver { Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct); } // L5 implements; L4 default stub returns (false, "notReplyTarget")
+public interface ILiteDeliver { Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct, Func<bool>? dispatchAllowed = null); } // L5 implements; L4 default stub returns (false, "notReplyTarget")
 public interface ILiteSender { Task<LiteOutcome> SendAsync(AgentCredential caller, LiteSendInput input, CancellationToken ct); }  // L3 implements; L7 calls

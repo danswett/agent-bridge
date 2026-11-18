@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json.Serialization;
 
 namespace AgentBridge.Protocol;
 
@@ -7,6 +8,8 @@ namespace AgentBridge.Protocol;
 // first press of a session that is not idle was given back, sent with the second press.
 public sealed record StopRequest
 {
+    [JsonIgnore]
+    public Func<bool>? DispatchAllowed { get; init; }
     public required string Id { get; init; }
     public required string Request { get; init; }
     public string? Confirm { get; init; }
