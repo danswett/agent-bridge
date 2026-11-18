@@ -44,6 +44,8 @@ public static class Refusal
     public const string Signer = "signer";
     // A v2 host add whose hostSignProof is not hostSign's signature over the binding (V1).
     public const string HostProof = "host-proof";
+    // A v3 person's capSignProof is not capSign's signature over the binding.
+    public const string CapProof = "cap-proof";
     // cosig and uv's members not matching the body's cosigner.
     public const string Cosigner = "cosigner";
     // Over 46 KiB for a removal, or 8 KiB for anything else, of fixed content.
