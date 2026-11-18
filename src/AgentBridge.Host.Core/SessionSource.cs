@@ -604,8 +604,9 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         if (claudeSessions)
         {
             // agent-ha-bridge's registration, where there is one, carries what its hooks saw
-            // (status, permission prompts) and wins. One CLI owns one session.
-            var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+            // (status, permission prompts) and wins, an ended one included. One CLI owns one session.
+            var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            ids.UnionWith(ended);
             var pids = sessions.Select(s => s.ProcessId).ToHashSet();
             var own = ClaudeSessionDiscovery.Find(_options.ClaudeHome, observed.Processes, findTranscript, holds, accounted, observed.Unidentified, _options.UsageProbeRoots);
             sessions = [.. sessions, .. own.Where(s => !ids.Contains(s.Id) && !pids.Contains(s.ProcessId))];

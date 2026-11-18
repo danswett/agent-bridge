@@ -311,6 +311,43 @@ public sealed class SessionRosterFixtureTests
         Assert.Equal(250, subscription.Result.Count);
     }
 
+    [Fact]
+    public async Task An_ended_Claude_registration_cannot_be_readmitted_by_its_own_session_file_during_a_hold()
+    {
+        using var fixture = new Fixture();
+        fixture.ClaudeSessionFile(700, Id);
+        fixture.ClaudeRegistration(Id, 700, null);
+        fixture.Processes.Run(AgentKind.Claude, 700, "claude.exe");
+        fixture.ClaudeSessionFile(701, "99999999-9999-4999-8999-999999999999");
+        fixture.Processes.RunUndated(AgentKind.Claude, 701, "claude.exe");
+        fixture.Processes.Unidentify(AgentKind.Claude, 701);
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(Id, Assert.Single(source.List().Sessions).Id);
+        Assert.Contains("could not be read (pid 701)", source.Held!.Reason);
+        using var subscription = source.Subscribe();
+        while (subscription.Events.TryRead(out _)) { }
+        var path = Path.Combine(fixture.ClaudeRegistrations, Id + ".json");
+        var registration = JsonNode.Parse(File.ReadAllText(path))!;
+        registration["Ended"] = true;
+        File.WriteAllText(path, registration.ToJsonString());
+
+        await source.RefreshAsync();
+
+        var changes = new List<SessionEvent>();
+        while (subscription.Events.TryRead(out var change)) { changes.Add(change); }
+        Assert.Equal([Events.SessionRemove], changes.Select(c => c.Name));
+        Assert.Equal(Id, Assert.IsType<SessionRemoved>(changes[0].Data).Id);
+        Assert.Null(source.Get(Id));
+        Assert.Empty(source.List().Sessions);
+        Assert.NotNull(source.Held);
+        using var fresh = source.Subscribe();
+        Assert.Equal(0, fresh.Result.Count);
+        await source.RefreshAsync();
+        Assert.False(subscription.Events.TryRead(out _));
+        Assert.Null(source.Get(Id));
+    }
+
     static void AssertRow(JsonElement row, string machine)
     {
         Assert.Equal(machine, row.GetProperty("machine").GetString());
