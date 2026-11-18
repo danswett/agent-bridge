@@ -68,7 +68,7 @@ internal sealed class SessionState
     // Work started in the background that outlives the turn (Copilot's agents and shells).
     public readonly BackgroundWork Background = new();
     // Questions the agent is waiting on, oldest first; the newest is the one shown.
-    public readonly List<Question> Pending = [];
+    public readonly PendingQuestions Pending = new();
     // A restored session's boundary (#780): a question the interrupted run left went with it, so it
     // neither shows nor makes the session waiting. Set by the session source; not the transcript's,
     // so a reset keeps it. Which questions are the interrupted run's is told by transcript position,
@@ -89,6 +89,7 @@ internal sealed class SessionState
             {
                 foreach (var q in Pending.Where(q => known is { } k ? k.Contains(q.Id) : q.AskedAt < from)) { interrupted.Add(q.Id); knownSeen.Add(q.Id); }
             }
+            Pending.Hide(interrupted);
             backlog = value is not null;
         }
     }
@@ -117,7 +118,8 @@ internal sealed class SessionState
     public void EndBacklog() => backlog = false;
 
     // What is asking now: Pending, less what the interrupted run left.
-    public List<Question> Asking => interrupted.Count > 0 ? Pending.Where(q => !interrupted.Contains(q.Id)).ToList() : Pending;
+    public IReadOnlyCollection<Question> Asking => Pending.Asking;
+    public Question? ShownQuestion => Pending.Newest;
     // session.attention (#800): what went wrong that the status cannot say. An error lasts until
     // the next turn, a sign-in until the model is seen answering (CopilotParser.Answered).
     public Attention? Attention;
@@ -125,7 +127,7 @@ internal sealed class SessionState
     // others waiting on the session's screen is read from them (CopilotDialogs.Identifiable).
     public readonly Dictionary<string, CopilotPermissionPrompt> Permissions = new(StringComparer.Ordinal);
 
-    public SessionStatus Effective => (interrupted.Count > 0 ? Pending.Any(q => !interrupted.Contains(q.Id)) : Pending.Count > 0) ? SessionStatus.Waiting : Status;
+    public SessionStatus Effective => Asking.Count > 0 ? SessionStatus.Waiting : Status;
     public DateTimeOffset? EffectiveSince;
 
     public void Reset()
@@ -168,17 +170,18 @@ internal sealed class SessionState
 
     public void Ask(Question question)
     {
-        Pending.RemoveAll(q => q.Id == question.Id);
-        Pending.Add(question);
-        if (askedFrom is not { } from) { return; }
-        // Asked again by the new run, in the first read too, it is the new run's: kept apart, it
-        // was hidden though the agent was asking it (Copilot on #837).
-        var interruptedAsk = backlog && (known is { } k ? k.Contains(question.Id) && knownSeen.Add(question.Id) : question.AskedAt < from);
-        if (interruptedAsk) { interrupted.Add(question.Id); }
-        else { interrupted.Remove(question.Id); }
+        if (askedFrom is { } from)
+        {
+            // Asked again by the new run, in the first read too, it is the new run's: kept apart, it
+            // was hidden though the agent was asking it (Copilot on #837).
+            var interruptedAsk = backlog && (known is { } k ? k.Contains(question.Id) && knownSeen.Add(question.Id) : question.AskedAt < from);
+            if (interruptedAsk) { interrupted.Add(question.Id); }
+            else { interrupted.Remove(question.Id); }
+        }
+        Pending.Add(question, interrupted.Contains(question.Id));
     }
 
-    public bool Answer(string? id) => id is not null && Pending.RemoveAll(q => q.Id == id) > 0;
+    public bool Answer(string? id) => id is not null && Pending.Remove(id);
 
     // What the main agent wrote: the latest text, and its own.
     public void MainSaid(string? content, string? reasoning, DateTimeOffset? at)
@@ -225,7 +228,7 @@ internal sealed class SessionState
     public void FailTurn(DateTimeOffset? at)
     {
         Tools.FailRunning(at, mainOnly: true);
-        Pending.RemoveAll(q => q.Agent is null);
+        Pending.RemoveFor(null);
         Status = SessionStatus.Idle;
     }
 }
