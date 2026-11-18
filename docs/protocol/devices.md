@@ -83,6 +83,14 @@ The wrapper has `body` and `sig`, and optionally `cosig` and `uv`. `uv` has `by`
 sender and forwarder emits it **canonically**: members in that order, no insignificant
 whitespace. A receiver accepts a wrapper with whitespace and forwards it canonically.
 
+The optional final wrapper member `evidence` is only `true` (`type` for non-booleans,
+`value` for false), checked last. This unsigned, non-authority hint forces a fully
+validated entry down the cap-candidate path: it never applies or adopts a branch.
+Only an eligible removal can retain it as evidence. Forwarders preserve it, including
+in stored logs and client replay; signed body bytes and hashes are unchanged.
+Wrappers without it and the verifier's 4,096-entry limit are unchanged. Older parsers
+refuse the new member rather than applying evidence as an ordinary entry.
+
 **Size** is measured over fixed content: the body bytes, the decoded signatures, and each
 assertion's decoded parts. A `remove` is at most **46 KiB** (47,104 bytes); any other entry at most
 **8 KiB** (8,192). Over either is `size`, on every path.
@@ -118,7 +126,7 @@ object with the same name after unescaping (`duplicate-member`). The syntax is c
 whole input first; then each member in document order: its name, whether it repeats one, and
 then its value. Names and enumerated values are case-sensitive.
 
-**The wrapper:** an object (`type`); no member but the four (`unknown-member`); `body`, then
+**The wrapper:** an object (`type`); no member but the five above (`unknown-member`); `body`, then
 `sig`, present (`missing-member`); `body`'s base64url; `sig`'s, then its DER and low-S; the same
 for `cosig`; `uv` an object with only `by` and `cosigner`, and not empty (`value`), each assertion
 with exactly its three members and minimal DER. Then the size against 46 KiB; then the body;
