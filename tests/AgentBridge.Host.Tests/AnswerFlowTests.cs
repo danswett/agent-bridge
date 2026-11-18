@@ -2442,6 +2442,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     public async Task A_permission_prompt_drawn_against_the_form_still_stops_the_answer(string where)
     {
         await using var clock = new PollClock(frozen: true);
+        Serve(Answerer(time: clock));
         var rechecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         clock.OnNextWait(() => rechecking.TrySetResult());
         List<string> prompt = where switch
