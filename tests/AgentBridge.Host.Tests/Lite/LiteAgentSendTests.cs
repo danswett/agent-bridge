@@ -154,6 +154,7 @@ public sealed class LiteAgentSendTests : IDisposable
         Assert.Equal("unconfirmed", response.GetProperty("outcome").GetString());
         Assert.Equal("check_conversation", response.GetProperty("nextStep").GetString());
         Assert.Single(sender.Calls);
+        Assert.Equal(new[] { "attempted", "unconfirmed" }, AuditLines().Select(entry => entry.GetProperty("outcome").GetString()));
     }
 
     [Fact]
