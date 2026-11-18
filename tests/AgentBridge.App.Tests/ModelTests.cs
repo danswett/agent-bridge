@@ -544,19 +544,39 @@ public sealed class MarkdownTests
     }
 
     [Theory]
-    [InlineData("[](")]
-    [InlineData("[a](")]
-    [InlineData("(www.a")]
-    [InlineData("*a\n")]
-    [InlineData("|a|b|\n")]
-    public void Runs_of_markup_the_parser_is_quadratic_on_are_read_in_linear_time(string unit)
+    [InlineData("[](", 20000)]
+    [InlineData("[a](", 20000)]
+    [InlineData("(www.a", 20000)]
+    [InlineData("*a\n", 20000)]
+    [InlineData("|a|b|\n", 20000)]
+    [InlineData("tel:1 ", 10000)]
+    [InlineData("mailto:a ", 7000)]
+    public void Runs_of_markup_the_parser_is_quadratic_on_are_read_in_linear_time(string unit, int count)
     {
-        var text = Repeat(unit, 20000);
+        var text = Repeat(unit, count);
 
-        Speed.IsLinear(n => Repeat(unit, n), 20000, t => { MarkdownModel.Parse(t); MarkdownModel.Outline(t); });
+        Speed.IsLinear(n => Repeat(unit, n), count, t => { MarkdownModel.Parse(t); MarkdownModel.Outline(t); });
 
         var blocks = MarkdownModel.Parse(text);
         Assert.Contains(unit.TrimEnd('\n'), string.Concat(blocks.OfType<MdParagraph>().SelectMany(b => b.Inlines).OfType<MdText>().Select(t => t.Text)));
+    }
+
+    [Theory]
+    [InlineData("tel:1 ")]
+    [InlineData("mailto:a ")]
+    public void Runs_of_contact_autolinks_exhaust_the_budget_but_ordinary_contact_text_is_still_markdown(string unit)
+    {
+        var text = Repeat(unit, MarkdownModel.MaxChars / unit.Length);
+
+        Assert.False(MarkdownModel.Bounded(text));
+        Assert.Equal([new MdText(text)], Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse(text))).Inlines);
+        Assert.Equal((0, null), MarkdownModel.Outline(text));
+
+        var ordinary = "# Contact\n\n" + Repeat(unit, 10) + "**details**";
+        Assert.True(MarkdownModel.Bounded(ordinary));
+        var blocks = MarkdownModel.Parse(ordinary);
+        Assert.IsType<MdHeading>(blocks[0]);
+        Assert.Contains(new MdText("details", MdStyle.Bold), Assert.IsType<MdParagraph>(blocks[1]).Inlines);
     }
 
     [Fact]
