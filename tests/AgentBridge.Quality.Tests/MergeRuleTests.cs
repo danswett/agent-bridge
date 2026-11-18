@@ -240,6 +240,51 @@ public class MergeRuleTests
         Assert.Equal(["the independent review of abcdef0 failed: sec-42 failure"], failed.Reasons);
     }
 
+    const string RedMain = "main is red (CI c500000): waiting for main to be fixed";
+
+    [Fact]
+    public void The_fixes_main_label_lifts_a_red_main_for_a_tests_only_change_and_logs_the_use()
+    {
+        var red = new MainFact("failure", RedMain);
+        var verdict = MergeRule.Evaluate(Config, red, Pr(["tests/AgentBridge.Quality.Tests/MergeRuleTests.cs", "pwa/test/e2e/sign-in.spec.ts"],
+            labels: ["fixes-main"], statuses: [First()]))!;
+
+        Assert.Equal("success", verdict.State);
+        Assert.Contains("fixes-main tests-only bypass used", verdict.Description);
+    }
+
+    [Fact]
+    public void The_fixes_main_label_does_not_lift_a_red_main_when_one_file_is_not_a_test()
+    {
+        var red = new MainFact("failure", RedMain);
+        var verdict = MergeRule.Evaluate(Config, red, Pr(["tests/AgentBridge.Quality.Tests/MergeRuleTests.cs", "src/AgentBridge.App/Program.cs"],
+            labels: ["fixes-main"], statuses: [First()]))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Equal([RedMain], verdict.Reasons);
+    }
+
+    [Fact]
+    public void The_fixes_main_label_does_not_lift_a_red_main_when_the_file_list_is_incomplete()
+    {
+        var red = new MainFact("failure", RedMain);
+        var verdict = MergeRule.Evaluate(Config, red, Pr(["tests/AgentBridge.Quality.Tests/MergeRuleTests.cs"],
+            labels: ["fixes-main"], statuses: [First()], filesComplete: false))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Contains(RedMain, verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_tests_only_change_without_the_fixes_main_label_waits_on_a_red_main()
+    {
+        var red = new MainFact("failure", RedMain);
+        var verdict = MergeRule.Evaluate(Config, red, Pr(["tests/AgentBridge.Quality.Tests/MergeRuleTests.cs"], statuses: [First()]))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Equal([RedMain], verdict.Reasons);
+    }
+
     [Fact]
     public void A_sensitive_change_without_Copilot_needs_a_second_receipt_from_another_model_family()
     {
