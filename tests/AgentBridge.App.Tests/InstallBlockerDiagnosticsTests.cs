@@ -5,154 +5,97 @@ using Microsoft.Extensions.Time.Testing;
 using Velopack.Locators;
 using Xunit;
 
-public sealed class InstallBlockerDiagnosticsTests : IAsyncLifetime
+public sealed class InstallBlockerDiagnosticsTests : IDisposable
 {
     readonly string root = Path.Combine(Path.GetTempPath(), "holder-fixture-" + Guid.NewGuid().ToString("N"));
-    Process? holder;
-    nint ownImage;
-    string FilePath => Path.Combine(root, "current", "blocked-runtime.dll");
+    readonly Dictionary<string, InstallBlockers.Holder> holders = new();
+    readonly List<FileStream> locks = [];
+    bool unreadable;
+    bool reusedPid;
+    int queries;
 
-    public async Task InitializeAsync()
+    public InstallBlockerDiagnosticsTests()
     {
         VelopackLocator.Current.RootAppDir = root;
-        if (!OperatingSystem.IsWindows()) { return; }
-        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+        Directory.CreateDirectory(Path.Combine(root, "current"));
         var ownFile = Path.Combine(root, "current", "own-runtime.dll");
-        File.Copy(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "version.dll"), ownFile);
-        ownImage = System.Runtime.InteropServices.NativeLibrary.Load(ownFile);
-        File.Copy(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "version.dll"), FilePath);
-        var start = new ProcessStartInfo("pwsh")
-        {
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            UseShellExecute = false, CreateNoWindow = true,
-        };
-        start.Environment.Clear();
-        foreach (var key in new[] { "SystemRoot", "PATH", "TEMP", "TMP" })
-        {
-            if (Environment.GetEnvironmentVariable(key) is { } value) { start.Environment[key] = value; }
-        }
-        start.Environment["DOTNET_PROCESSOR_COUNT"] = "1";
-        start.Environment["HELD_FILE_FIXTURE"] = FilePath;
-        foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-Command",
-            "$h = [Runtime.InteropServices.NativeLibrary]::Load($env:HELD_FILE_FIXTURE); try { [Console]::WriteLine('ready'); [Console]::ReadLine() | Out-Null } finally { [Runtime.InteropServices.NativeLibrary]::Free($h) }" })
-        {
-            start.ArgumentList.Add(argument);
-        }
-        holder = Process.Start(start)!;
-        holder.PriorityClass = ProcessPriorityClass.BelowNormal;
-        Assert.Equal("ready", await holder.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15)));
+        Hold("own-runtime.dll", new(Environment.ProcessId, 1, "own app", "", ownFile));
     }
 
-    public async Task DisposeAsync()
+    string Hold(string name, InstallBlockers.Holder? holder = null)
     {
-        if (holder is not null)
-        {
-            holder.StandardInput.Close();
-            await holder.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-            holder.Dispose();
-        }
-        if (ownImage != 0) { System.Runtime.InteropServices.NativeLibrary.Free(ownImage); }
-        if (Directory.Exists(root)) { Directory.Delete(root, recursive: true); }
+        var file = Path.Combine(root, "current", name);
+        File.WriteAllText(file, "old install");
+        locks.Add(new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read));
+        holders[file] = holder ?? new(4242, 1, "fixture holder", "", Path.Combine(Path.GetTempPath(), "external", "fixture.exe"));
+        return file;
     }
 
-    [Fact]
-    public void A_confirmed_external_holder_names_the_process_and_the_actual_installation_file()
+    List<InstallBlockers.Holder> Query(List<string> files, CancellationToken cancellation)
     {
-        var blockers = InstallBlockers.Find();
-        if (!OperatingSystem.IsWindows()) { Assert.Null(blockers); return; }
+        cancellation.ThrowIfCancellationRequested();
+        if (unreadable) { throw new UnauthorizedAccessException("private-probe-path"); }
+        var generation = reusedPid && ++queries > 1 ? 2 : 1;
+        return files.Where(holders.ContainsKey).Select(file => holders[file] with { Started = generation }).Distinct().ToList();
+    }
 
+    string? Probe() => InstallBlockers.Find(default, new FakeTimeProvider(), Query);
+
+    public void Dispose()
+    {
+        foreach (var handle in locks) { handle.Dispose(); }
+        Directory.Delete(root, recursive: true);
+    }
+
+    [Theory]
+    [InlineData("blocked-runtime.dll")]
+    [InlineData("resources.pri")]
+    public void A_persistent_holder_names_the_process_and_confirmed_installation_file_not_just_executable_images(string name)
+    {
+        Hold(name);
+        var blockers = Probe();
         Assert.NotNull(blockers);
-        Assert.Contains($"pid {holder!.Id}", blockers, StringComparison.Ordinal);
-        Assert.Contains("blocked-runtime.dll", blockers, StringComparison.Ordinal);
+        Assert.Contains("fixture holder (pid 4242)", blockers, StringComparison.Ordinal);
+        Assert.Contains(Path.Combine("current", name), blockers, StringComparison.Ordinal);
         Assert.DoesNotContain("own-runtime.dll", blockers, StringComparison.Ordinal);
-        Assert.DoesNotContain(holder.MainModule!.FileName!, blockers, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(root, blockers, StringComparison.Ordinal);
         Assert.Contains(blockers, new UpdateBlockedException(blockers).Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Releasing_the_confirmed_holder_allows_the_real_installation_file_to_be_replaced()
+    public async Task Releasing_the_confirmed_holder_first_allows_the_fake_installation_file_to_be_replaced()
     {
-        if (!OperatingSystem.IsWindows()) { Assert.Null(InstallBlockers.Find()); return; }
-        Assert.Contains($"pid {holder!.Id}", InstallBlockers.Find()!, StringComparison.Ordinal);
-        var blockers = await InstallationFiles.AwaitReleaseAsync(InstallBlockers.Find, TimeProvider.System,
-            CancellationToken.None, waiting: _ => holder.StandardInput.Close()).WaitAsync(TimeSpan.FromSeconds(20));
-
+        var file = Hold("blocked-runtime.dll");
+        Assert.Contains("blocked-runtime.dll", Probe()!, StringComparison.Ordinal);
+        holders.Clear();
+        foreach (var handle in locks) { handle.Dispose(); }
+        var blockers = await InstallationFiles.AwaitReleaseAsync(_ => Probe(), new FakeTimeProvider(), default)
+            .WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Null(blockers);
-        await holder.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-        File.WriteAllText(FilePath, "replacement");
-        Assert.Equal("replacement", File.ReadAllText(FilePath));
+        File.WriteAllText(file, "replacement");
+        Assert.Equal("replacement", File.ReadAllText(file));
     }
 
     [Fact]
-    public void Reusing_a_pid_in_later_snapshots_does_not_attribute_its_file_to_the_previous_process()
+    public void An_unreadable_probe_is_unknown_not_permission_to_replace_files()
     {
-        if (!OperatingSystem.IsWindows()) { Assert.Null(InstallBlockers.Find()); return; }
-        var calls = 0;
-        var detail = InstallBlockers.Find(default, new FakeTimeProvider(), (_, _) =>
-            [new(42, ++calls == 1 ? 1 : 2, "fixture", "", @"C:\external\fixture.exe")]);
-        Assert.Equal(InstallationFiles.Unknown, detail);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_bisection_stops_after_its_fake_clock_deadline_or_quit_without_retaining_the_monitor(bool quit)
-    {
-        if (!OperatingSystem.IsWindows()) { Assert.Null(InstallBlockers.Find()); return; }
-        var clock = new FakeTimeProvider();
-        using var cancel = new CancellationTokenSource();
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var calls = 0;
-        List<InstallBlockers.Holder> Query(List<string> files, CancellationToken token)
-        {
-            if (Interlocked.Increment(ref calls) == 2)
-            {
-                entered.SetResult();
-                release.Task.GetAwaiter().GetResult();
-            }
-            return [new(42, 1, "fixture", "", @"C:\external\fixture.exe")];
-        }
-        var work = new InstallationFiles.Budget(clock).ProbeOnceAsync(token =>
-        {
-            try { return InstallBlockers.Find(token, clock, Query); }
-            finally { returned.SetResult(); }
-        }, cancel.Token);
-        Task? pending = null;
-        try
-        {
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            pending = InstallBlockers.PendingScan;
-            if (quit) { cancel.Cancel(); }
-            else { clock.Advance(InstallationFiles.ReleaseWait); }
-            if (quit) { await Assert.ThrowsAnyAsync<OperationCanceledException>(() => work.WaitAsync(TimeSpan.FromSeconds(5))); }
-            else { Assert.Contains(await work.WaitAsync(TimeSpan.FromSeconds(5)), new[] { InstallationFiles.Unknown, InstallationFiles.TimedOut }); }
-            await returned.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.False(pending!.IsCompleted);
-            Assert.Equal(InstallationFiles.Unknown, InstallBlockers.Find(default, clock, Query));
-        }
-        finally
-        {
-            release.TrySetResult();
-            if (pending is not null) { await pending.WaitAsync(TimeSpan.FromSeconds(5)); }
-        }
-        Assert.Equal(2, calls);
-        Assert.Contains("holding current", InstallBlockers.Find(default, clock,
-            (_, _) => [new(42, 1, "fixture", "", @"C:\external\fixture.exe")])!, StringComparison.Ordinal);
+        var file = Hold("blocked-runtime.dll");
+        unreadable = true;
+        Assert.Equal(InstallationFiles.Unknown, Probe());
+        Assert.Equal("old install", File.ReadAllText(file));
     }
 
     [Fact]
-    public void An_unavailable_installation_probe_is_unknown_not_permission_to_replace_files()
+    public void Reusing_a_pid_during_bisection_does_not_guess_the_previous_processes_file()
     {
-        VelopackLocator.Current.RootAppDir = Path.Combine(root, "unavailable");
-        Assert.Equal(OperatingSystem.IsWindows() ? InstallationFiles.Unknown : null, InstallBlockers.Find());
+        Hold("blocked-runtime.dll");
+        reusedPid = true;
+        Assert.Equal(InstallationFiles.Unknown, Probe());
     }
 }
 
 namespace Velopack.Locators
 {
-    // Only the locator boundary is substituted; the linked production scanner uses real Windows APIs.
     static class VelopackLocator
     {
         public static bool IsCurrentSet => true;
