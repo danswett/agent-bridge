@@ -1357,6 +1357,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     The host snapshots the send arm's label per prompt and keeps it with that turn's history
     metadata, so a later driver never renames an earlier sender. This sender-supplied label is
     display-only, not an authenticated identity or an authorization/trust decision.
+    If a new input or restored arm replaces the word-match state before the prompt's words
+    arrive, the host discards the unmatched attribution; labels already bound to a prompt stay.
     For `other`, the diamond still reads "Automatic prompt". Then the
     age in meta style: when its turn began (`statusSince` when it started running, seen here). The
     protocol doesn't date a prompt, so one first seen after its turn has no age.

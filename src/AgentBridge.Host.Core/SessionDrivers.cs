@@ -200,6 +200,8 @@ public sealed partial class SessionDriver
         {
             if (onlyAt is { } g && generation != g) { return; }
             var before = ShownLocked();
+            // Replacing the match state invalidates any prompt whose words have not matched yet.
+            (awaitingAgentPrompt, awaitingLabel) = (false, null);
             expected = words is null ? null : Collapse(words) is { Length: > 0 } said ? said : null;
             wordsToCome = toCome && expected is null;
             driver = by;
@@ -226,6 +228,7 @@ public sealed partial class SessionDriver
         lock (gate)
         {
             var before = ShownLocked();
+            (awaitingAgentPrompt, awaitingLabel) = (false, null);
             (driver, principal, pendingAt, expected, wordsToCome, armedLabel) = (saved.Driver, saved.Principal, saved.Pending, saved.Expected, saved.WordsToCome, saved.Label);
             generation++;
             changed = before != ShownLocked();
