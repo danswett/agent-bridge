@@ -108,6 +108,10 @@ internal sealed class QualificationController(QualificationGrants? authority = n
         finally { gate.Release(); }
     }
 
+    internal async Task<bool> MatchesAsync(int pid, DateTimeOffset? created) =>
+        created is not null && snapshot?.ProcessId == pid && snapshot.StartedAt == created.Value.ToFileTime()
+        && await CurrentAsync() == QueueCapability.Verified;
+
     internal async Task<QualificationGrantDecision> EndAsync()
     {
         await gate.WaitAsync();

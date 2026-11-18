@@ -50,6 +50,14 @@ public enum CopilotVimMode { None, Insert, Normal }
 
 public static partial class CopilotInputBoxReader
 {
+    internal static CopilotInputBox? Owned(IReadOnlyList<string> rows, string words)
+    {
+        var state = Read(rows).State;
+        return state is { Main: true, Complete: true, Shell: false, Vim: not CopilotVimMode.Normal }
+            && state.Rows[^1].Text.TrimEnd(' ').Length >= CompactWidth && string.Equals(words.Trim(' '), state.Content, StringComparison.Ordinal)
+            ? new(state.Rows, state.Content) : null;
+    }
+
     const char RailTop = '\u257B';
     const char Rail = '\u2503';
     const char RailBottom = '\u2579';
