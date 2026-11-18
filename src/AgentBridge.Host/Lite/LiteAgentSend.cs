@@ -1,10 +1,16 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using AgentBridge.Protocol;
 using AgentBridge.Transport;
 
 namespace AgentBridge.Host.Lite;
 
-public sealed record LiteSendReply(string Outcome, string? Code, string Request);
+public sealed record LiteSendReply(string Outcome, string? Code, string Request)
+{
+    [JsonPropertyName("reply_ack"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ReplyAck? ReplyAck { get; init; }
+}
 
 // The agent.send pipe op: an agent that passed agent.hello asks its host to send text to a
 // session on another of the person's machines (AP5-lite L7, #1355). The sender is whoever the
@@ -25,7 +31,7 @@ public static partial class LiteAgentSend
         {
             throw new InvalidOperationException("refused: agent.send is for an agent connection that has passed agent.hello");
         }
-        // Only the three fields are read, so a principal (or anything else) in the body is ignored.
+        // A principal in the body never changes the authenticated sender.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("refused: badRequest: agent.send needs machine, session and text"); }
         var machine = Field(data, "machine");
         var session = Field(data, "session");
@@ -38,7 +44,14 @@ public static partial class LiteAgentSend
         {
             throw new ArgumentException("refused: badText: text must not be blank or hold control characters other than tab, CR and LF");
         }
-        // This local attempt id is not the relay request id, which the sender creates later.
+        string? request = null;
+        if (data.TryGetProperty("request", out var retry))
+        {
+            if (retry.ValueKind != JsonValueKind.String || !Guid.TryParse(retry.GetString(), out var rid))
+            { throw new ArgumentException("refused: badRequest: request must be a UUID"); }
+            request = rid.ToString("D");
+        }
+        // The audit attempt id is distinct from the relay request UUID, including on retries.
         var attempt = new AgentAuditEntry("out", Guid.NewGuid().ToString("D"), credentials.PrincipalOf(caller),
             caller.Chain, Op, $"{machine}/{session}", "attempted");
         bool written;
@@ -46,7 +59,7 @@ public static partial class LiteAgentSend
         catch (Exception) { throw AuditUnavailable(); }
         if (!written) { throw AuditUnavailable(); }
         LiteOutcome outcome;
-        try { outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct); }
+        try { outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text) { Request = request }, ct); }
         catch (Exception)
         {
             AppendTerminal("unconfirmed");
@@ -54,7 +67,7 @@ public static partial class LiteAgentSend
         }
         var name = outcome.Kind.ToString().ToLowerInvariant();
         AppendTerminal(name);
-        return new LiteSendReply(name, outcome.Code, outcome.Request);
+        return new LiteSendReply(name, outcome.Code, outcome.Request) { ReplyAck = outcome.ReplyAck };
 
         void AppendTerminal(string terminal)
         {
