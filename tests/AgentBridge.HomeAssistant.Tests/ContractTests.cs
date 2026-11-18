@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Protocol;
@@ -12,6 +13,26 @@ public class ContractTests
     static string Slug => Contract.Text("machine.slug");
     static string SessionId => Contract.Text("session.sessionId");
     static string Node => Contract.Text("session.node");
+
+    [Theory]
+    [InlineData(128L, null)]
+    [InlineData(null, "not-found")]
+    public void Transcript_metadata_survives_the_shared_contract_and_status_publication(long? bytes, string? unavailable)
+    {
+        var json = JsonSerializer.SerializeToNode(FakeSessions.Copilot(SessionId), ProtocolJson.Options)!.AsObject();
+        json["transcript_bytes"] = bytes;
+        json["transcript_bytes_unavailable"] = unavailable;
+        var observation = JsonNode.Parse("""{"observed_at":"2026-11-17T03:30:00.000Z","source":"file-size","host_id":"host-one"}""")!;
+        json["transcript_observation"] = observation.DeepClone();
+        var session = json.Deserialize<Session>(ProtocolJson.Options)!;
+
+        var status = HaPayloads.StatusAttributes(session, "Fixture", Machine, DateTimeOffset.UtcNow);
+        Assert.Equal(bytes, status["transcript_bytes"]?.GetValue<long>());
+        Assert.Equal(unavailable, status["transcript_bytes_unavailable"]?.GetValue<string>());
+        Assert.Equal(bytes is not null, status.ContainsKey("transcript_bytes"));
+        Assert.Equal(unavailable is not null, status.ContainsKey("transcript_bytes_unavailable"));
+        Assert.True(JsonNode.DeepEquals(observation, status["transcript_observation"]));
+    }
 
     [Fact]
     public void Machine_slugs_are_derived_as_agent_ha_bridge_derives_them()

@@ -322,8 +322,10 @@ jobs:
         if: env.DOTNET_TARGET != ''
         shell: pwsh
         run: |
+          . ./quality/dotnet-test-command.ps1
           $filter = if ($env:TEST_FILTER) { " --filter `"$env:TEST_FILTER`"" } else { '' }
-          dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "dotnet test $env:DOTNET_TARGET -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory TestResults --logger trx$filter"
+          $command = Add-DotnetCrashBlame "dotnet test $env:DOTNET_TARGET -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory TestResults --logger trx$filter"
+          dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml $command
         timeout-minutes: 20
         env:
           DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
@@ -1336,6 +1338,10 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'rerun-known-flakes')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-rerun-known-flakes.ps1
+      - name: Product crashes name the test without enabling hang dumps
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'product-crash-diagnostics')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-product-crash.ps1
       - name: The forms soak rig's redaction masks every secret shape
         # Offline: no CLI, console, token or model.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'forms-soak-scripts')) }}

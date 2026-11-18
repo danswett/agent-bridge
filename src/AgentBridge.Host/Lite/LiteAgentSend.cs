@@ -45,7 +45,15 @@ public static partial class LiteAgentSend
         try { written = appendAttempt?.Invoke(attempt, text) == true; }
         catch (Exception) { throw AuditUnavailable(); }
         if (!written) { throw AuditUnavailable(); }
-        var outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct);
+        LiteOutcome outcome;
+        try { outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct); }
+        catch (Exception)
+        {
+            AppendTerminal("unconfirmed");
+            throw;
+        }
+        var name = outcome.Kind.ToString().ToLowerInvariant();
+        AppendTerminal(name);
         var nextStep = outcome.Kind switch
         {
             LiteKind.Delivered => "done",
@@ -55,11 +63,22 @@ public static partial class LiteAgentSend
             LiteKind.Unconfirmed => "check_conversation",
             _ => "stop",
         };
-        return new LiteSendReply(outcome.Kind.ToString().ToLowerInvariant(), outcome.Code, outcome.Request, nextStep);
+        return new LiteSendReply(name, outcome.Code, outcome.Request, nextStep);
+
+        void AppendTerminal(string terminal)
+        {
+            bool terminalWritten;
+            try { terminalWritten = appendAttempt?.Invoke(attempt with { Outcome = terminal }, text) == true; }
+            catch (Exception) { throw TerminalAuditUnavailable(); }
+            if (!terminalWritten) { throw TerminalAuditUnavailable(); }
+        }
     }
 
     static InvalidOperationException AuditUnavailable() =>
         new("refused: auditUnwritable: the agent audit log could not be written; nothing was sent");
+
+    static InvalidOperationException TerminalAuditUnavailable() =>
+        new("refused: auditUnwritable: the terminal agent audit outcome could not be written; the message may have been sent");
 
     [GeneratedRegex(@"^[A-Za-z0-9._-]{1,64}\z")]
     private static partial Regex MachinePattern();

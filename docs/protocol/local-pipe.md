@@ -112,8 +112,13 @@ host also asks *which* process each request comes from, op by op:
 |---|---|---|
 | **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …`. That includes `session.history` (`…; reading a session's history is for the person, from the app or a phone`, [v1-history.md](v1-history.md#security-and-authorization)) and `sessions.focus` (`…; telling the host the person is using the app is for the person, from the app or a phone`): a device in use holds back the person's pushes ([v1-sessions.md](v1-sessions.md#while-the-person-uses-a-device-1190)) |
 | **The app** | Not inside an agent session, its whole ancestry read, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included, except the host-CLI-only `scripts.add` and `scripts.revoke` |
-| **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, `session.rename`, `agent.adopt`, `agent.revoke`, `scripts.add`, `scripts.revoke`, and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
-| **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before except `session.rename`, `host.status` and `host.subscribe`; not the other management ops (`only the Slipgates app beside this host may stop, restart, sign in, change settings or read the relay account`) |
+| **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, `session.launch`, `session.rename`, `agent.adopt`, `agent.revoke`, `scripts.add`, `scripts.revoke`, and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
+| **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before except `session.rename` and `session.launch`; `host.status` and `host.subscribe`; not the other management ops (`only the Slipgates app beside this host may stop, restart, sign in, change settings or read the relay account`) |
+
+`session.launch` checks caller classification afresh. An untraceable caller is refused
+with `untraceableCaller` and audited as `unknown:local`, without trusting identity fields
+in the request. These records share the bounded refusal-audit window; if the audit
+cannot be written, the launch stays refused with `auditUnwritable`.
 
 The ancestry is read when the connection is accepted (`GetNamedPipeClientProcessId`, then one
 process snapshot for every parent and its executable's name, with start times checked so a
@@ -329,7 +334,18 @@ the sender. An absent audit log, a false append or a thrown append raises the fi
 The sender is not called, and nothing is queued or retried. Early caller/input refusals are not
 audited in this slice. The record's `attempted` outcome is not delivery confirmation; its local
 attempt id is distinct from the sender's relay request id. Only text hash and byte length are
-recorded, never the text. See [the audit log](../host-config.md#the-agent-audit-log).
+recorded, never the text.
+
+Before replying, the host appends the terminal `delivered`, `refused`, `undeliverable`,
+`unconfirmed` or `off` outcome with the same local attempt id, credential attribution,
+target and text hash/byte length. Free-form sender codes are not logged. If this append
+returns false or throws, the caller receives
+`refused: auditUnwritable: the terminal agent audit outcome could not be written; the message may have been sent`,
+not a successful reply; the host does not resend. A sender exception or cancellation
+is recorded as `unconfirmed` before being rethrown, without logging exception text:
+delivery cannot be established. If that terminal append fails, `auditUnwritable`
+takes precedence over the sender error.
+See [the audit log](../host-config.md#the-agent-audit-log).
 
 ### The MCP server (`mcp/`)
 

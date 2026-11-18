@@ -24,6 +24,10 @@ public interface ISessionLauncher
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot write durable launch evidence."));
 
     Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
+    Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
+        CancellationToken cancellationToken = default) => Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "fleet launch is unavailable"));
+    bool IsFleetWorker(string session, SessionProcess? process) => false;
+    LaunchConfig? FleetConfig => null;
     Task<LaunchResult>? ReplayAuditedAsync(LaunchRequest request, string peer) => null;
 
     Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
@@ -61,6 +65,8 @@ public sealed class LaunchServiceOptions
     public required string CodexHome { get; init; }
     public LaunchConfig Config { get; init; } = LaunchConfig.Default;
     public bool PlatformSupported { get; init; } = OperatingSystem.IsWindows();
+    public bool HomeAssistantEnabled { get; init; }
+    public Uri? HomeAssistantBaseUrl { get; init; }
 
     // How long a launch request waits for the session to register before it answers
     // unconfirmed. Copilot registers in seconds; a first launch that has to sign in can take
@@ -756,6 +762,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
         LaunchOnceAsync(request, peer, null);
+    public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
+        CancellationToken cancellationToken = default) => LaunchOnceAsync(request, principal, prepare, fleet: true);
+    public bool IsFleetWorker(string session, SessionProcess? process) => provenance.IsFleetWorker(session, process);
+    public LaunchConfig FleetConfig => Config;
 
     public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
         CancellationToken cancellationToken = default)
@@ -764,11 +774,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return LaunchOnceAsync(request, peer, prepare);
     }
 
-    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare)
+    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare)
-            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare))
+        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet)
+            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, fleet: fleet))
             : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
             Settled(request, result, $"launch {Short(key)}"),
             owner: prepare is null ? Owner(request, peer) : new LaunchOwner(peer, RequestBinding(request)),
@@ -840,7 +850,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
     async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default,
-        Func<Guid, Action<string>?>? prepare = null)
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
     {
         try
         {
@@ -848,6 +858,15 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             if (probe.Active() is { } active) { return Refused(active); }
             if (!Config.Enabled) { return Refused("launching is turned off on this machine (launch.enabled in the host's config)"); }
             if (starter.Unavailable() is { } unavailable) { return Refused(unavailable); }
+            if (options.HomeAssistantEnabled && options.HomeAssistantBaseUrl is null)
+            {
+                return Refused("Home Assistant reply path is not ready: homeAssistant.baseUrl is not configured on this host");
+            }
+            if (options.HomeAssistantEnabled && options.HomeAssistantBaseUrl is { } baseUrl &&
+                (!baseUrl.IsAbsoluteUri || baseUrl.Query.Length > 0 || baseUrl.Fragment.Length > 0 || baseUrl.UserInfo.Length > 0))
+            {
+                return Refused("Home Assistant reply path is not ready: homeAssistant.baseUrl must be an absolute URL without a query, fragment or userinfo");
+            }
             if (LaunchProtocol.Check(request) is { } invalid) { return Refused(invalid); }
             var settings = string.Join(", ", new[] { ("agent", request.Agent), ("workspace", request.Workspace), ("resume", request.Resume), ("profile", request.Profile), ("model", request.Model), ("effort", request.Effort), ("context", request.Context), ("permissions", request.Permissions) }
                 .Where(x => x.Item2 is not null).Select(x => $"{x.Item1}={x.Item2}"));
@@ -906,7 +925,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     }
                 }
                 return await StartAsync(plan, claim, key, handed, fetched, ct, restoring,
-                    peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare);
+                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet);
             }
             finally
             {
@@ -1075,13 +1094,24 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return Refused(recorded ? reason : $"{reason} auditUnwritable: the agent worktree refusal could not be recorded.");
     }
 
+    async Task<string?> DiscardWorktreeAsync(WorktreeResult made, Guid key)
+    {
+        try { return await Task.Run(() => Worktrees.DiscardCreated(made, key)); }
+        catch (Exception e)
+        {
+            log($"launch {Short(key)}: refused worktree cleanup failed: {e.GetType().Name}");
+            return "Its cleanup could not be completed safely.";
+        }
+    }
+
     async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
-        Func<Guid, Action<string>?>? prepare = null)
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
     {
         Pending follow;
         LaunchedWith launched;
         await starting.WaitAsync(ct);
         string? reservation = null, reserved = null;
+        WorktreeResult? created = null;
         try
         {
             // Checked again: agent-ha-bridge may have started while this one waited its turn.
@@ -1144,6 +1174,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             if (plan.Isolated is { } isolated)
             {
                 var made = await Task.Run(() => Worktrees.Create(directory, Config, options.LocalNow, new HeldWorktreeUsage(source, options.WorktreeUsage), m => log($"launch {Short(key)}: worktree: {m}"), launchRequest: agentPrincipal is null ? null : key));
+                created = agentPrincipal is not null ? made : null;
                 if (agentPrincipal is not null)
                 {
                     string? worktreeRefusal;
@@ -1159,13 +1190,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     }
                     if (worktreeRefusal is not null)
                     {
-                        string? cleanup;
-                        try { cleanup = await Task.Run(() => Worktrees.DiscardCreated(made, key)); }
-                        catch (Exception e)
-                        {
-                            log($"launch {Short(key)}: refused worktree cleanup failed: {e.GetType().Name}");
-                            cleanup = "Its cleanup could not be completed safely.";
-                        }
+                        var cleanup = await DiscardWorktreeAsync(made, key);
+                        created = null;
                         if (cleanup is not null) { worktreeRefusal += $" The new worktree was retained: {cleanup}"; }
                         return RefuseAgentWorktree(key, agentPrincipal, worktreeRefusal);
                     }
@@ -1208,7 +1234,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
                 extras, plan.Profile, prompt);
             var environment = AgentEnvironment.For(options.CopilotHome, options.ClaudeHome,
-                options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath());
+                options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath(),
+                options.HomeAssistantEnabled ? options.HomeAssistantBaseUrl : null);
             environment[Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched";
             // Set to nothing when none is issued, so a token of the host's own is never inherited.
             environment[Launchers.TokenVariable] = null;
@@ -1273,24 +1300,25 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 if (auditRegistered is null) { return Refused("the launch audit could not be written durably"); }
             }
             // A crash before registration must not turn an unbound launch into an adoptable process.
-            provenance.Preparing(key, sessionId);
+            provenance.Preparing(key, sessionId, fleet ? "fleet" : null);
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)
             {
-                try { environment[Launchers.TokenVariable] = credentials.Prepare(sessionId, launchId); credentialIssued = environment[Launchers.TokenVariable] is not null; }
+                try { environment[Launchers.TokenVariable] = fleet ? credentials.PrepareFleet(sessionId, launchId) : credentials.Prepare(sessionId, launchId); credentialIssued = environment[Launchers.TokenVariable] is not null; }
                 catch (Exception e) when (e is InvalidOperationException or ArgumentException or IOException or UnauthorizedAccessException)
                 {
-                    log($"launch {Short(key)}: no agent credential was issued: {e.Message}");
+                    log($"launch {Short(key)}: no agent credential was issued: {e.GetType().Name}");
                 }
             }
+            if (fleet && !credentialIssued) { provenance.Abandon(key); return Refused("a read+reply fleet worker credential could not be issued"); }
             Started started;
-            try { started = starter.Start(spec); }
+            try { started = starter.Start(spec); created = null; }
             catch (Exception e)
             {
                 if (credentialIssued) { credentials!.Abandon(launchId); }
                 provenance.Abandon(key);
-                log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
+                log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.GetType().Name}");
                 return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} couldn't be started") { Launched = launched };
             }
             if (credentialIssued) { credentials!.Bind(launchId, started.ProcessId, started.StartedAt); }
@@ -1307,6 +1335,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         finally
         {
             if (reservation is not null && reserved is not null) { Worktrees.Release(reserved, reservation); }
+            if (created is not null && await DiscardWorktreeAsync(created, key) is { } retained)
+            { log($"launch {Short(key)}: the unstarted worktree was retained: {retained}"); }
             starting.Release();
         }
 
