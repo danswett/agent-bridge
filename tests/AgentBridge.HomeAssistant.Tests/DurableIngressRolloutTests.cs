@@ -21,16 +21,19 @@ public sealed class DurableIngressRolloutTests : IDisposable
 
     HaConnector Connector(bool? enabled = null, bool persistent = true)
     {
-        var config = new JsonObject
+        var config = new JsonObject();
+        if (enabled is { } value) { config["durableReplyIngress"] = value; }
+        var (settings, problems) = HaSettings.Read(JsonSerializer.SerializeToElement(config));
+        Assert.Empty(problems);
+        return new HaConnector(new HaConnectorOptions
         {
-            ["MachineName"] = "fixture-host",
-            ["Version"] = "test",
-            ["StateFile"] = persistent ? StateFile : null,
-            ["FieldPinDelay"] = TimeSpan.Zero.ToString(),
-            ["ReplyCommitWait"] = TimeSpan.Zero.ToString(),
-        };
-        if (enabled is { } value) { config["DurableReplyIngress"] = value; }
-        return new HaConnector(config.Deserialize<HaConnectorOptions>()!, ha, sessions, () => null, time: time,
+            MachineName = "fixture-host",
+            Version = "test",
+            StateFile = persistent ? StateFile : null,
+            DurableReplyIngress = settings.DurableReplyIngress,
+            FieldPinDelay = TimeSpan.Zero,
+            ReplyCommitWait = TimeSpan.Zero,
+        }, ha, sessions, () => null, time: time,
             answer: (_, _) => Task.FromResult(new AnswerResult(AnswerOutcome.Delivered)),
             reply: (r, _) =>
             {

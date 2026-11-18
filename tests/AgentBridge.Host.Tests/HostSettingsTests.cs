@@ -383,12 +383,14 @@ public sealed class HostSettingsTests : IDisposable
     public void Durable_ingress_rollback_can_be_set_and_unset_and_an_invalid_value_is_not_written()
     {
         Assert.Equal(0, Run("config", "set", "homeAssistant.durableReplyIngress", "false"));
+        Assert.False(HostSettings.Load(folder).Settings.HomeAssistant.DurableReplyIngress);
         var path = Path.Combine(folder, HostSettings.FileName);
         var before = File.ReadAllText(path);
         Assert.Equal(1, Run("config", "set", "homeAssistant.durableReplyIngress", "no"));
         Assert.Contains("Not written", Said);
         Assert.Equal(before, File.ReadAllText(path));
         Assert.Equal(0, Run("config", "unset", "homeAssistant.durableReplyIngress"));
+        Assert.True(HostSettings.Load(folder).Settings.HomeAssistant.DurableReplyIngress);
         Assert.Empty(HostSettings.Load(folder).Settings.HomeAssistantProblems);
     }
 
