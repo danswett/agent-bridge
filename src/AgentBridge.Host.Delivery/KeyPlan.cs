@@ -23,7 +23,12 @@ namespace AgentBridge.Host.Delivery;
 // box carries the box's mode (shell, vim normal) beside a spinner and hints that animate, and
 // after the words are typed the box's first row is theirs (#843 review).
 public sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, IReadOnlyList<ScreenRow>? Expect = null,
-    IReadOnlyList<ScreenRowCheck>? Checks = null);
+    IReadOnlyList<ScreenRowCheck>? Checks = null)
+{
+    public SubmitKey Submit { get; init; }
+}
+
+public enum SubmitKey { None, Queue, Clear }
 
 // A row of the console's visible window, counted from its top, and its text.
 public sealed record ScreenRow(int Row, string Text);
@@ -71,6 +76,8 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
     // Asked by the injector once it holds the typing slot, just before anything is typed (it may
     // have waited there behind another delivery): a reason to type nothing now, or null.
     public Func<string?>? Proceed { get; init; }
+    internal Func<Task<string?>>? ProceedAsync { get; init; }
+    internal DateTimeOffset? TargetCreatedAt { get; init; }
 
     public const string Up = "\u001b[A";
     public const string Down = "\u001b[B";
@@ -79,16 +86,18 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
 
     // What the worker reads on stdin: a header, then one line per send with the text as
     // base64 of its UTF-8, so nothing in it can be mistaken for the line format.
-    public const string Header = "agent-bridge-keys 1";
+    public const string Header = "agent-bridge-keys 2";
 
     public string ToWorkerScript()
     {
         var script = new StringBuilder(Header).Append('\n');
         foreach (var send in Sends)
         {
+            if (!Enum.IsDefined(send.Submit) || send.Submit != SubmitKey.None && (send.Enter || send.Text.Length > 0))
+            { throw new InvalidOperationException("a submit action must be a separate, unambiguous send"); }
             script.Append("send ")
                 .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(send.Text)))
-                .Append(' ').Append(send.Enter ? '1' : '0')
+                .Append(' ').Append(send.Submit switch { SubmitKey.Queue => 'q', SubmitKey.Clear => 'u', _ => send.Enter ? '1' : '0' })
                 .Append(' ').Append(send.EnterDelayMs.ToString(CultureInfo.InvariantCulture))
                 .Append(' ').Append(send.PauseAfterMs.ToString(CultureInfo.InvariantCulture));
             foreach (var expect in send.Expect ?? [])
@@ -125,7 +134,7 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
                 s.Text.EndsWith(' ') ? "space" : null,
             }.Where(k => k is not null))
             : $"{s.Text.Length} chars";
-        return $"{keys}{(s.Enter ? " enter" : "")}{(s.Expect is { Count: > 0 } || s.Checks is { Count: > 0 } ? " (if the screen still shows it)" : "")}".Trim();
+        return $"{keys}{(s.Enter ? " enter" : s.Submit == SubmitKey.Queue ? " ctrl+q" : s.Submit == SubmitKey.Clear ? " clear-owned" : "")}{(s.Expect is { Count: > 0 } || s.Checks is { Count: > 0 } ? " (if the screen still shows it)" : "")}".Trim();
     }));
 
     static int Count(string text, string what) => (text.Length - text.Replace(what, "").Length) / what.Length;

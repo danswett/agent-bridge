@@ -29,14 +29,12 @@ public sealed class QueueSubmitTests : IAsyncLifetime
         service = new(new DeliveryGate(), source, f.Processes, new NoBridge(), new NoGuard(), console,
             new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, PreRead = false,
                 ConfirmTimeout = TimeSpan.Zero });
-        // Optional on the parent so this RED compiles and exercises its existing delivery path.
         Wire(controller);
         console.Record = text => Fixture.Append(events, Copilot.Event("user.message", new { content = text, delivery = "queued" }, 3));
     }
 
     public async Task DisposeAsync() { await source.DisposeAsync(); f.Dispose(); }
-    void Wire(QualificationController? value) =>
-        typeof(ReplyService).GetProperty("QueueController", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(service, value);
+    void Wire(QualificationController? value) => service.QueueController = value;
     Task<ReplyResult> Send(string text = "first", string? rid = null) =>
         service.ReplyAsync(new ReplyRequest { Id = Id, Request = rid ?? Guid.NewGuid().ToString(), Text = text, IntentSource = () => intent });
 
@@ -105,6 +103,31 @@ public sealed class QueueSubmitTests : IAsyncLifetime
         Assert.Equal("owner draft", console.Draft); Assert.Equal(0, console.TextWrites);
     }
 
+    [Fact]
+    public async Task Revocation_during_the_injectors_own_wait_is_rechecked_before_any_key()
+    {
+        console.BeforeKeys = () => run.Authority.Grants().Revoke(run.Authority.Id);
+        Assert.Equal(AnswerOutcome.Refused, (await Send()).Outcome);
+        Assert.Equal(0, console.TextWrites); Assert.Empty(console.Actions);
+    }
+
+    [Theory]
+    [InlineData(false)][InlineData(true)]
+    public async Task An_owner_edit_after_the_queue_key_is_never_cleared(bool accepted)
+    {
+        console.AcceptQueue = accepted; console.AfterQueue = () => console.Draft += " owner edit";
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Send()).Outcome);
+        Assert.Equal(new[] { "q" }, console.Actions); Assert.EndsWith(" owner edit", console.Draft);
+    }
+
+    [Theory]
+    [InlineData(false)][InlineData(true)]
+    public void Conflicting_text_or_Enter_with_a_queue_action_is_rejected_before_serialization(bool enter)
+    {
+        var plan = new KeyPlan([new KeySend(enter ? "" : "text", enter, 0, 0) { Submit = SubmitKey.Queue }]);
+        Assert.Throws<InvalidOperationException>(() => plan.ToWorkerScript());
+    }
+
     [Theory]
     [InlineData("q")][InlineData("u")][InlineData("invalid")]
     public void The_real_worker_decoder_distinguishes_queue_cleanup_and_invalid_actions(string action)
@@ -117,6 +140,22 @@ public sealed class QueueSubmitTests : IAsyncLifetime
         else { Assert.NotNull(sends); Assert.Equal(action, sends[0]!.GetType().GetProperty("Submit")!.GetValue(sends[0])!.ToString()); }
     }
 
+    [Theory]
+    [InlineData("\u0011", true, 81, 8u)][InlineData("\u0015", true, 85, 8u)][InlineData("\u000b", true, 75, 8u)][InlineData("\r", false, 13, 0u)]
+    public void The_real_worker_encodes_a_chord_as_distinct_modified_key_down_and_up(string text, bool control, int vk, uint modifiers)
+    {
+        var program = Assembly.Load("agent-bridge-injector").GetType("AgentBridge.Injector.Program")!;
+        var records = (Array)program.GetMethod("Records", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [text, control])!;
+        Assert.Equal(2, records.Length);
+        for (var i = 0; i < 2; i++)
+        {
+            var record = records.GetValue(i)!; var type = record.GetType();
+            Assert.Equal((ushort)vk, type.GetField("VirtualKeyCode")!.GetValue(record));
+            Assert.Equal(modifiers, type.GetField("ControlKeyState")!.GetValue(record));
+            Assert.Equal(1 - i, type.GetField("KeyDown")!.GetValue(record));
+        }
+    }
+
     sealed class NoBridge : IAgentHaBridgeProbe { public string? Active() => null; }
     sealed class NoGuard : ITargetGuard { public string? Refuse(int processId) => null; }
     sealed class ConsoleFake : IConsoleInjector
@@ -125,6 +164,8 @@ public sealed class QueueSubmitTests : IAsyncLifetime
         public bool AcceptQueue = true;
         public int TextWrites;
         public Action? AfterText;
+        public Action? BeforeKeys;
+        public Action? AfterQueue;
         public Action<string>? Record;
         public readonly List<string> Submitted = [], Actions = [];
         IReadOnlyList<string> Rows() => ["\u257B" + new string('\u2584', 99), "\u2503 " + Draft,
@@ -132,9 +173,9 @@ public sealed class QueueSubmitTests : IAsyncLifetime
         public Task<ConsoleScreen> ReadScreenAsync(int pid, CancellationToken ct = default) => Task.FromResult(new ConsoleScreen(Rows(), null));
         public async Task<InjectionResult> InjectAsync(int pid, KeyPlan plan, CancellationToken ct = default)
         {
+            BeforeKeys?.Invoke();
             if (plan.Proceed?.Invoke() is { } stop) { return new(InjectionStatus.NothingTyped, stop); }
-            if (typeof(KeyPlan).GetProperty("ProceedAsync", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(plan)
-                is Func<Task<string?>> fence && await fence() is { } stopped) { return new(InjectionStatus.NothingTyped, stopped); }
+            if (plan.ProceedAsync is { } fence && await fence() is { } stopped) { return new(InjectionStatus.NothingTyped, stopped); }
             var tokens = plan.ToWorkerScript().Split('\n', StringSplitOptions.RemoveEmptyEntries).Skip(1).ToArray();
             for (var i = 0; i < plan.Sends.Count; i++)
             {
@@ -147,6 +188,7 @@ public sealed class QueueSubmitTests : IAsyncLifetime
                 Actions.Add(action);
                 if (action == "u") { Draft = ""; }
                 else if (action != "q" || AcceptQueue) { Submitted.Add(Draft); Record?.Invoke(Draft); Draft = ""; }
+                if (action == "q") { AfterQueue?.Invoke(); }
             }
             return new(InjectionStatus.Typed, "ok");
         }

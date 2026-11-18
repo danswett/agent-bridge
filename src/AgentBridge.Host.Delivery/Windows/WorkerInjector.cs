@@ -20,6 +20,9 @@ public sealed class WorkerInjector : IConsoleInjector
     // One worker at a time: a process holds one console, and two answers in flight to two
     // sessions gain nothing from racing each other's keys.
     static readonly SemaphoreSlim One = new(1, 1);
+    // A final-effect fence may capture identity while holding One; these read-only workers
+    // serialize separately and finish before the typing worker starts.
+    static readonly SemaphoreSlim Identity = new(1, 1);
 
     readonly string path;
     readonly Action<string> log;
@@ -41,6 +44,7 @@ public sealed class WorkerInjector : IConsoleInjector
         try
         {
             if (plan.Proceed?.Invoke() is { } stop) { return Nothing($"stopped before typing: {stop}"); }
+            if (plan.ProceedAsync is { } fence && await fence() is { } changed) { return Nothing($"stopped before typing: {changed}"); }
             return await RunAsync(processId, plan);
         }
         catch (Exception e) when (e is not InjectorWorkerException) { throw new InjectorWorkerException(e, Task.CompletedTask); }
@@ -124,7 +128,7 @@ public sealed class WorkerInjector : IConsoleInjector
 
     internal async Task<string?> CaptureIdentityAsync(int processId, DateTimeOffset createdAt, CancellationToken cancellationToken = default)
     {
-        await One.WaitAsync(cancellationToken);
+        await Identity.WaitAsync(cancellationToken);
         try
         {
             var start = new ProcessStartInfo(path)
@@ -168,7 +172,7 @@ public sealed class WorkerInjector : IConsoleInjector
                 }
             }
         }
-        finally { One.Release(); }
+        finally { Identity.Release(); }
     }
 
     async Task<ConsoleScreen> ScreenAsync(int processId)
@@ -238,6 +242,11 @@ public sealed class WorkerInjector : IConsoleInjector
             StandardOutputEncoding = Encoding.UTF8,
         };
         start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
+        if (plan.TargetCreatedAt is { } created)
+        {
+            start.ArgumentList.Add("--bound");
+            start.ArgumentList.Add(created.ToFileTime().ToString(CultureInfo.InvariantCulture));
+        }
         Process? process;
         try { process = ProcessLaunch.Start(start); }
         catch (Exception e) { return Nothing(CouldNotStart(processId, e)); }

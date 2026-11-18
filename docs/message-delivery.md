@@ -40,6 +40,18 @@ current capability; teardown/failure revokes. No host starts or live keys ran.
 Consumers must ask the controller for current capability; a stored receipt alone
 never authorizes delivery, and restart defaults to Unknown.
 
+## Queue-submit execution (B)
+The host-only `ReplyService.QueueController` seam is unregistered by default.
+Queueable intent (or a requested queue mode) never falls back to Enter: current
+controller evidence must match the target incarnation before text and each action.
+The typing gate stays held through a fresh owned-content check, one Ctrl+Q, and an
+empty-composer check. Retained owned text is cleared with Ctrl+U/Ctrl+K and reported
+unconfirmed, never resubmitted. Changed/unsafe/unreadable content is never cleared.
+Request memory prevents a same-rid retry from typing again. Worker protocol v2
+rejects unknown/conflicting actions before text; v1 Enter plans remain readable.
+Fake tests are not qualification; trusted adapters and disposable-VM clearance
+remain prerequisites. This adds no host queue, ingress authority or retry policy.
+
 ## Problem and cause
 Copilot CLI joins steers pending mid-turn with `\n\n` into one user turn (6 of 692 turns in one
 transcript). The host types bare text (`HaReplies.cs:26`) and only Lite and `RetryEpisode` set
