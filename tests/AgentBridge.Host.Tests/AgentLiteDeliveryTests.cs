@@ -1,10 +1,15 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using AgentBridge.AgentEnvelope;
+using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Fleet;
 using AgentBridge.Host.Lite;
+using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -18,7 +23,8 @@ public sealed class AgentLiteDeliveryTests
     sealed class Fixture : ISessionSource, ISessionReplier, IConsoleInjector
     {
         public SessionStatus Status = SessionStatus.Idle;
-        public bool Exists = true, FlipAfterFirstGet, AllowAllTargets;
+        public bool Exists = true, FlipAfterFirstGet, AllowAllTargets, Collision;
+        public Action? OnRead;
         public string[] Rows = EmptyBox;
         public int Gets;
         public AnswerOutcome Outcome = AnswerOutcome.Delivered;
@@ -31,7 +37,10 @@ public sealed class AgentLiteDeliveryTests
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches = new();
         public LiteDeliver Build() => new([new ForcedAskGate(Launches, () => AllowAllTargets)], this, this, this, Log.Add, Clock);
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
-        public long Revision => 0; public IReadOnlyList<Session> Snapshot() => []; public SessionList List(string? cursor = null) => new([], 0);
+        public long Revision => 0;
+        public IReadOnlyList<Session> Snapshot() => Get(Target) is not { } session ? [] : Collision
+            ? [session, session with { Id = "11111111-1111-1111-2222-222222222222" }] : [session];
+        public SessionList List(string? cursor = null) => new(Snapshot(), 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
         public Session? Get(string id)
         {
@@ -51,6 +60,7 @@ public sealed class AgentLiteDeliveryTests
         }
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken ct = default)
         {
+            OnRead?.Invoke();
             if (Interlocked.Increment(ref reads) == 2) { ReplyScreenRead.TrySetResult(); }
             return Task.FromResult(new ConsoleScreen(Rows, null));
         }
@@ -64,6 +74,106 @@ public sealed class AgentLiteDeliveryTests
     }
 
     static Task<LiteDelivery> Send(Fixture f, string text = "hi") => f.Build().DeliverAsync(Envelope(text), text, default);
+
+    [Theory]
+    [InlineData("idle", "delivered", null)]
+    [InlineData("busy", "refused", LiteCodes.Busy)]
+    [InlineData("unlaunched", "refused", LiteCodes.NotReplyTarget)]
+    [InlineData("composer", "refused", LiteCodes.ComposerNotEmpty)]
+    [InlineData("collision", "refused", LiteCodes.NoSuchSession)]
+    [InlineData("late-collision", "refused", LiteCodes.NoSuchSession)]
+    [InlineData("gone", "refused", LiteCodes.NoSuchSession)]
+    public async Task A_script_sends_a_fleet_list_node_through_the_signed_path_to_only_one_live_native_session(
+        string state, string outcome, string? code)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        using var home = new global::Fixture();
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        byte[] ownStatic = [.. Enumerable.Range(1, 32).Select(i => (byte)i)];
+        var self = Wire.DeviceId(ownStatic);
+        const string other = "33333333333333333333333333333333", account = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var credentials = new AgentCredentials(home.Root, self);
+        var script = credentials.MintScript("collector").Credential;
+        var channel = new ScriptChannel();
+        credentials.Accept(channel, script);
+        var audit = new AgentAuditLog(home.Root);
+        var f = new Fixture();
+        f.Launch(LaunchProtocol.Ask);
+        JsonElement record = default;
+        await new FleetPublisher(f, other).PublishAsync((value, _) => { record = value; return Task.CompletedTask; });
+        var frames = new[] { JsonSerializer.SerializeToElement(new { machine = other, online = true, record }) };
+        var fleet = new FleetList(credentials, new ScriptRoster(RelayFleetRoster.Parse(frames)));
+        var q = key.ExportParameters(false).Q;
+        var receiver = new LiteReceiver(new ScriptMode(), new ScriptPeers(new(self, [0x04, .. q.X!, .. q.Y!], "sender")), f.Build());
+        var link = new ScriptLink(self, account, other, ownStatic, receiver);
+        var sender = new AgentLiteSender(new ScriptMode(), new ScriptPeers(new(other, [], "receiver")), link,
+            credentials.IsLive, () => new EcdsaEnvelopeSigner(key), ownStatic);
+        var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.Other, "fixture")),
+            credentials: credentials, lite: sender, fleet: fleet, audit: audit);
+        var listing = JsonSerializer.SerializeToElement(await handler(channel, FleetList.Op, JsonSerializer.SerializeToElement(new { })), ProtocolJson.Options);
+        var target = Assert.Single(listing.GetProperty("sessions").EnumerateArray());
+        Assert.Equal(HaContract.NodeId(Target), target.GetProperty("node").GetString());
+        if (state == "busy") { f.Status = SessionStatus.Working; }
+        if (state == "unlaunched") { f.Launch(LaunchProtocol.AllowAll); }
+        if (state == "composer") { f.Rows = [.. EmptyBox.Take(3), "\u2503 unfinished", .. EmptyBox.Skip(4)]; }
+        if (state == "collision") { f.Collision = true; }
+        if (state == "late-collision") { f.OnRead = () => f.Collision = true; }
+        if (state == "gone") { f.Exists = false; }
+
+        var result = Assert.IsType<LiteSendReply>(await handler(channel, LiteAgentSend.Op, JsonSerializer.SerializeToElement(new
+        {
+            machine = target.GetProperty("machine").GetString(), session = target.GetProperty("node").GetString(), text = "hello",
+        })));
+
+        Assert.Equal((outcome, code), (result.Outcome, result.Code));
+        if (outcome == "delivered")
+        {
+            var typed = Assert.Single(f.Typed);
+            Assert.Equal(Target, typed.Id);
+            Assert.True(typed.RequireIdle);
+            Assert.Contains($"from script {script.Principal}", typed.Text);
+        }
+        else { Assert.Empty(f.Typed); }
+    }
+
+    sealed class ScriptMode : ILiteMode
+    {
+        public bool On => true;
+        public long KillEpoch => 0;
+        public void TurnOff(string why) => throw new NotSupportedException();
+        public void RaiseEpoch(long epoch) => throw new NotSupportedException();
+    }
+
+    sealed class ScriptPeers(LitePeer peer) : ILitePeers
+    {
+        public IReadOnlyList<LitePeer> All() => [peer];
+        public bool TryFind(string id, out LitePeer found) { found = peer; return id == peer.DeviceId; }
+    }
+
+    sealed class ScriptRoster(IReadOnlyList<FleetMachine> machines) : IFleetRoster
+    {
+        public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => Task.FromResult(machines);
+    }
+
+    sealed class ScriptLink(string self, string account, string other, byte[] ownStatic, LiteReceiver receiver) : ILiteLink
+    {
+        public string Self => self;
+        public string Account => account;
+        public IReadOnlyList<PresenceEntry> Presence => [new(other, "receiver", "host", DateTimeOffset.UtcNow)];
+        public Task<LiteAck> SendAsync(string peerId, object request, CancellationToken ct) =>
+            receiver.ReceiveAsync(new(Self, "host", ownStatic, other, Account, true), JsonSerializer.SerializeToElement(request), ct);
+    }
+
+    sealed class ScriptChannel : IProtocolChannel
+    {
+        public string PeerId => "fixture";
+        public string PeerName => "fixture";
+        public string PeerKind => "fixture";
+        public bool IsOpen => true;
+        public Task Closed => Task.CompletedTask;
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
+    }
+
     [Fact]
     public async Task Script_delivery_is_labelled_and_logged_as_a_script_never_an_agent()
     {
