@@ -239,10 +239,14 @@ public class DeviceRosterTests
         body["target"]!["add"] = Codec.Base64Url(Entry.Parse(Encoding.UTF8.GetBytes(before.Entries[2])).Hash);
         var second = Padded(w["second"] with { Body = RosterFixture.Bytes(body) }, 1024, parent);
         var result = await Make(w, store).AppendAsync(RosterFixture.Account, [ancestor.Canonical(), second.Canonical()]);
-        Assert.Equal(["duplicate", "accepted"], result!.Select(r => r.Verdict));
+        Assert.Equal([("refused", Invalid.Cap), ("accepted", (string?)null)], result!.Select(r => (r.Verdict, r.Reason)));
         var snapshot = (await roster.GetAsync(RosterFixture.Account))!;
         Assert.Equal(before.Entries.Count + 3, snapshot.Entries.Count);
         Assert.Equal(second.Canonical(), snapshot.Entries[^1]);
+        var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
+        Assert.True(replay.Graph[replay.Graph.Find(ancestor.Hash)!.Value].Evidence);
+        Assert.False(replay.State.Active.ContainsKey(w.Id("D0")));
     }
 
     [Theory]
@@ -272,19 +276,36 @@ public class DeviceRosterTests
         Assert.Equal(!full, snapshot.Entries.Any(s => Entry.Parse(Encoding.UTF8.GetBytes(s)).Hash.SequenceEqual(rename.Hash)));
     }
 
-    [Fact]
-    public async Task A_plain_copy_can_upgrade_its_marked_candidate_below_the_storage_cap()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task A_plain_copy_can_upgrade_its_marked_candidate_below_the_storage_cap(bool persisted, bool unrelated)
     {
         var w = Scenario();
-        var roster = Make(w);
-        await roster.AppendAsync(RosterFixture.Account, [Wire(w, "G"), Wire(w, "addB")]);
-        w.Rename("E", "B", "addB", "addB", "renamed");
+        w.Add("addC", "B", "C", "addB");
+        w.Remove("E", "B", "addC", "addC");
+        w.Remove("outer", "G", "addB", "E", keep: ["addC"]);
+        w.Remove("other", "G", "G", "G");
+        var store = new MemoryRosterStore();
+        var roster = Make(w, store);
+        await roster.AppendAsync(RosterFixture.Account, [Wire(w, "G"), Wire(w, "addB"), Wire(w, "addC")]);
         var entry = w.Entry("E");
-        var result = await roster.AppendAsync(RosterFixture.Account, [entry.AsEvidence().Canonical(), entry.Canonical()]);
-        Assert.Equal(["refused", "accepted"], result!.Select(r => r.Verdict));
-        var snapshot = (await roster.GetAsync(RosterFixture.Account))!;
-        Assert.Equal(3, snapshot.Entries.Count);
-        Assert.Equal(entry.Canonical(), snapshot.Entries[^1]);
+        if (persisted)
+        {
+            var carried = await roster.AppendAsync(RosterFixture.Account, [entry.AsEvidence().Canonical(), Wire(w, "outer")]);
+            Assert.Equal(["accepted", "quarantined"], carried!.Select(r => r.Verdict));
+        }
+        string[] retry = persisted ? [entry.Canonical()] : [entry.AsEvidence().Canonical(), entry.Canonical()];
+        var result = await Make(w, store).AppendAsync(RosterFixture.Account, unrelated ? [.. retry, Wire(w, "other")] : retry);
+        Assert.Equal(persisted ? ["accepted"] : ["refused", "accepted"], result!.Take(retry.Length).Select(r => r.Verdict));
+        if (unrelated) { Assert.Equal("accepted", result![^1].Verdict); }
+        var snapshot = (await Make(w, store).GetAsync(RosterFixture.Account))!;
+        var replay = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        replay.Offer(snapshot.Entries.Select(s => Entry.Parse(Encoding.UTF8.GetBytes(s))));
+        Assert.False(replay.Graph[replay.Graph.Find(entry.Hash)!.Value].Evidence);
+        Assert.False(replay.State.Active.ContainsKey(w.Id("C")));
+        Assert.Equal("duplicate", (await Make(w, store).AppendAsync(RosterFixture.Account, [entry.Canonical()]))![0].Verdict);
     }
 
     [Fact]
