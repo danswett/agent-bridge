@@ -423,7 +423,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             lock (_gate) { _lastDiscovery = _time.GetTimestamp(); }
             // What the host listed when it last ran, read once, for the first discovery pass
             // (Discover's accounting and Restore).
-            if (!_restored && _options.StateFile is { } state) { _remembered = Load(state); }
+            if (_hostId is null && !_restored && _options.StateFile is { } state) { _remembered = Load(state); }
             var observed = Discover();
             found = [.. observed.SelectMany(o => o.Sessions)];
             var live = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
@@ -435,15 +435,16 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 _remembered = null;
             }
             List<string> gone;
+            bool Ended(Entry e) => observed.Any(o => o.Agent == e.Tracker.Discovered.Agent && o.Ended?.Contains(e.ListForm.Id) == true);
             lock (_gate)
             {
                 // An agent whose pass was incomplete keeps every session it had: one it could
-                // not see this time is not one that has ended, and it keeps being read.
-                foreach (var e in _entries.Values.Where(e => !live.Contains(e.ListForm.Id) && holding.Contains(e.Tracker.Discovered.Agent)))
+                // not see this time is not one that has ended. Positive ended evidence wins.
+                foreach (var e in _entries.Values.Where(e => !live.Contains(e.ListForm.Id) && holding.Contains(e.Tracker.Discovered.Agent) && !Ended(e)))
                 {
                     found.Add(e.Tracker.Discovered);
                 }
-                gone = [.. _entries.Keys.Where(id => !live.Contains(id) && !holding.Contains(_entries[id].Tracker.Discovered.Agent))];
+                gone = [.. _entries.Keys.Where(id => Ended(_entries[id]) || (!live.Contains(id) && !holding.Contains(_entries[id].Tracker.Discovered.Agent)))];
             }
             foreach (var id in gone) { Remove(id); }
             held = HeldBy(observed);
@@ -596,8 +597,9 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         if (claudeSessions)
         {
             // agent-ha-bridge's registration, where there is one, carries what its hooks saw
-            // (status, permission prompts) and wins. One CLI owns one session.
-            var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+            // (status, permission prompts) and wins, an ended one included. One CLI owns one session.
+            var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            ids.UnionWith(ended);
             var pids = sessions.Select(s => s.ProcessId).ToHashSet();
             var own = ClaudeSessionDiscovery.Find(_options.ClaudeHome, observed.Processes, findTranscript, holds, accounted, observed.Unidentified, _options.UsageProbeRoots);
             sessions = [.. sessions, .. own.Where(s => !ids.Contains(s.Id) && !pids.Contains(s.ProcessId))];
@@ -759,7 +761,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     List<DiscoveredSession> Restore(List<AgentDiscovery> observed, List<DiscoveredSession> found)
     {
         var restored = new List<DiscoveredSession>();
-        if (_remembered is not { Count: > 0 } remembered || !observed.Any(o => o.Holds.Count > 0)) { return restored; }
+        if (_hostId is not null || _remembered is not { Count: > 0 } remembered || !observed.Any(o => o.Holds.Count > 0)) { return restored; }
         var ids = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
         var pids = found.Where(f => f.ProcessId is not null).Select(f => (f.Agent, f.ProcessId!.Value)).ToHashSet();
         foreach (var o in observed.Where(o => o.Holds.Count > 0))
@@ -828,7 +830,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // it always says what the next start would need to keep. Only on the pass.
     void Save()
     {
-        if (_options.StateFile is not { } path) { return; }
+        if (_hostId is not null || _options.StateFile is not { } path) { return; }
         List<DiscoveredSession> sessions;
         lock (_gate) { sessions = [.. _entries.Values.Select(e => e.Tracker.Discovered).OrderBy(d => d.Id, StringComparer.Ordinal)]; }
         var buffer = new ArrayBufferWriter<byte>();
