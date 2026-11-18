@@ -1,4 +1,9 @@
 // Compile the production pin hooks without loading WinUI or starting a live UI.
+namespace Windows.Foundation
+{
+    public readonly record struct Point(double X, double Y);
+}
+
 namespace Microsoft.UI.Xaml
 {
     public class DependencyObject
@@ -14,6 +19,8 @@ namespace Microsoft.UI.Xaml
         public static readonly object PointerCanceledEvent = new();
         public static readonly object PointerCaptureLostEvent = new();
         public bool IsLoaded { get; init; } = true;
+        public double Top { get; init; } = -100;
+        public Media.Transform TransformToVisual(UIElement viewport) => new(Top);
         public event Action<UIElement, BringIntoViewRequestedEventArgs>? BringIntoViewRequested;
         public void Bring(UIElement target) => BringIntoViewRequested?.Invoke(this, new(target));
     }
@@ -21,6 +28,7 @@ namespace Microsoft.UI.Xaml
     public sealed class BringIntoViewRequestedEventArgs(UIElement target) : EventArgs
     {
         public UIElement TargetElement => target;
+        public (double X, double Y, double Height) TargetRect => (0, 0, 50);
     }
 }
 
@@ -44,6 +52,7 @@ namespace Microsoft.UI.Xaml.Controls
         readonly List<(object Event, Input.PointerEventHandler Handler, bool HandledToo)> handlers = [];
         public double VerticalOffset { get; set; } = 100;
         public double ScrollableHeight { get; set; } = 200;
+        public double ViewportHeight { get; } = 100;
         public List<double> Targets { get; } = [];
         public bool AcceptChange { get; set; } = true;
 
@@ -78,6 +87,11 @@ namespace Microsoft.UI.Xaml.Controls.Primitives
 
 namespace Microsoft.UI.Xaml.Media
 {
+    public sealed class Transform(double top)
+    {
+        public Windows.Foundation.Point TransformPoint(Windows.Foundation.Point point) => new(point.X, point.Y + top);
+    }
+
     public static class VisualTreeHelper
     {
         public static DependencyObject? GetParent(DependencyObject node) => node.Parent;
