@@ -76,6 +76,7 @@
                     Click="OnResendEnd" />
             </StackPanel>
             <TextBlock
+                x:Name="EndStatus"
                 Style="{StaticResource AbTypeMeta}"
                 TextWrapping="Wrap"
                 AutomationProperties.AutomationId="EndStatus"

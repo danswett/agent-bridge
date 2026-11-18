@@ -84,6 +84,7 @@
         </ItemsControl>
 
         <TextBlock
+            x:Name="DelegateNote"
             Style="{StaticResource AbTypeMeta}"
             Foreground="{ThemeResource AbText2}"
             TextWrapping="Wrap"
