@@ -76,8 +76,9 @@ handle, binding source/copy SHA256 and requiring the shared C2 bundle verifier.
 Read compatibility metadata from those streams, never a re-resolved path. Keep
 the target package's verified checksum/copy lease separate: downgrade targets are
 applied by the current coordinator, not an old target helper. A missing v1 marker
-refuses without fallback or staging. Directory checks do not pin ancestor handles;
-the documented ancestry TOCTOU limit remains. No title marker or launch is wired here.
+refuses without fallback or staging. Windows install/stage comparisons use retained
+directory-handle final paths, resolving device/short-name aliases before writes.
+Unresolvable paths refuse; other ancestor TOCTOU limits remain. No marker or launch is wired here.
 
 ### B3c: early mode and app cutover
 
