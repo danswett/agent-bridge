@@ -16,6 +16,11 @@ public sealed class Machine : IAsyncDisposable
         Host = host;
         Cards = cards;
         Toasts = toasts;
+        if (toasts is not null)
+        {
+            host.OwnerPagesEnabled = toasts.Enabled;
+            host.OwnerPage += toasts.OwnerPage;
+        }
         // Nor are rows a gap in its events may have left out of date (#427): the recovery's snapshot
         // begins only once it has read hello, status and usage again, and until then the list looked
         // whole, so answers, replies, End session and toasts' buttons went on against it. This

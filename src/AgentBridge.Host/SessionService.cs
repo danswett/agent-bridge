@@ -199,6 +199,49 @@ public sealed class SessionService
 
     // Channels with a subscription running; tests and the host's log read it.
     public int Subscribers => subscribers.Values.Count(s => s.Feed is not null);
+    internal Func<IProtocolChannel, bool>? OwnerPageAllowed { get; set; }
+
+    bool OwnerDeviceAllowed(string device)
+    {
+        var now = Time.GetUtcNow();
+        var active = subscribers.Where(p => p.Value.Feed is not null && OwnerPageAllowed?.Invoke(p.Key) == true)
+            .Select(p => (Device: p.Key.PeerId, Presence: Volatile.Read(ref p.Value.Presence)))
+            .Where(p => p.Presence is { Focus.Visible: true, LastInput: { } at } && at <= now && now - at < TimeSpan.FromMinutes(2))
+            .OrderByDescending(p => p.Presence!.LastInput).ThenBy(p => p.Device, StringComparer.Ordinal).FirstOrDefault().Device;
+        return active is null || active == device;
+    }
+
+    internal async Task<NotifyOwnerResult> NotifyOwnerAsync(NotifyOwnerRequest request, Func<bool> authorized)
+    {
+        OwnerClientAck AppRefused(string reason) => new(OwnerClientKind.App, OwnerNotifyOutcome.Refused, reason);
+        var clients = subscribers.Where(p => p.Value.Feed is not null && p.Value.OwnerPages
+            && (p.Key is AgentBridge.Local.LocalChannel || p.Key.PeerKind == "app") && OwnerPageAllowed?.Invoke(p.Key) == true)
+            .Select(p => p.Key).Take(17).ToArray();
+        var app = AppRefused(clients.Length > 16 ? "tooManyClients" : clients.Length == 0 ? "noSubscribedClient" : "policySuppressed");
+        var sent = 0;
+        var failed = false;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        if (clients.Length <= 16)
+        {
+            foreach (var client in clients)
+            {
+                if (!authorized()) { app = AppRefused("callerNotAuthorized"); failed = true; break; }
+                if (!subscribers.TryGetValue(client, out var state) || !state.OwnerPages || state.Feed is null
+                    || OwnerPageAllowed?.Invoke(client) != true || !OwnerDeviceAllowed(client.PeerId)) { continue; }
+                try { await client.SendEventAsync(NotifyOwnerProtocol.Op, request, timeout.Token); sent++; }
+                catch (Exception e) when (e is IOException or OperationCanceledException or ObjectDisposedException)
+                {
+                    log($"owner page app delivery unconfirmed ({e.GetType().Name})");
+                    app = AppRefused("deliveryUnconfirmed");
+                    failed = true;
+                }
+            }
+        }
+        if (sent > 0 && !failed) { app = new(OwnerClientKind.App, OwnerNotifyOutcome.Delivered, ""); }
+        var pwa = push?.NotifyOwner(request, authorized, OwnerDeviceAllowed)
+            ?? new OwnerClientAck(OwnerClientKind.Pwa, OwnerNotifyOutcome.Refused, "deliveryUnavailable");
+        return new(request.Request, [app, pwa]);
+    }
 
     // Each feed as it is made, so tests can check a replaced one is let go.
     internal event Action<object>? FeedCreated;
@@ -336,6 +379,7 @@ public sealed class SessionService
                 await old.StopAsync();
             }
             if (!channel.IsOpen) { throw new IOException("the channel is closed"); }
+            state.OwnerPages = request.OwnerPages == true;
             var feed = new Feed(source.Subscribe(since), request.Patch == true, state, Time, QuietInterval, request.Handles == true);
             state.Feed = feed;
             FeedCreated?.Invoke(feed);
@@ -448,6 +492,7 @@ public sealed class SessionService
     {
         public readonly SemaphoreSlim Gate = new(1, 1);
         public Feed? Feed;
+        public volatile bool OwnerPages;
         public int Registered;
         // Null until the channel says (sessions.focus): every live change then goes at once, as before.
         public FocusRequest? Focus;

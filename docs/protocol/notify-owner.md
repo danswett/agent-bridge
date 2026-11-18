@@ -1,4 +1,4 @@
-# Owner paging: host contract (slice 1)
+# Owner paging: host contract and delivery
 
 `notify-owner` is local-pipe-only, after `agent.hello`. Only a live script credential
 explicitly minted by the person's `scripts add <name> --notify-owner` may call it.
@@ -15,12 +15,23 @@ Reply: `{request, clients: [{client: "app"|"pwa", outcome: "delivered"|"queued"|
 Unknown or absent client kinds/outcomes never acknowledge delivery.
 Both client kinds are always represented. Stable refusals: `callerNotAuthorized`,
 `badRequest`, `payloadTooLarge`, `audienceRefused`, `targetRefused`, `rateLimited`,
-`auditUnwritable`, `deliveryUnavailable`; delivery's `noSubscribedClient` is reserved.
+`auditUnwritable`, `deliveryUnavailable`, `noSubscribedClient`, `policySuppressed`,
+`tooManyClients`, `deliveryUnconfirmed`.
 Every call/refusal is audited without title/body; an unwritable audit fails closed.
 CLI: `agent-bridge-host notify-owner <title> <body> [--profile <name>]`, using the
 process's script token, prints per-kind JSON and exits nonzero on any refusal.
 
-**No client delivery in this slice.** Both kinds currently refuse `deliveryUnavailable`.
-App/PWA admission, #913 selection and delivery/subscription acknowledgments require
-a separate slice to stay below 400 WHOLE. This does not yet unblock Fleet N1.
+App clients opt in with `sessions.subscribe {ownerPages:true}` and receive the
+typed request as a `notify-owner` event. Only the freshly classified local app or
+a current pinned-person relay app qualifies; service/host/session/script peers do not.
+PWA delivery uses existing encrypted Web Push subscriptions with current person pins;
+pinning off or an uncertain route refuses. The most recently active eligible device
+(visible, input within two minutes) alerts; while away, eligible devices may alert.
+Policy, script authority and person pins are rechecked before a queued push sends.
+`delivered` means app-channel acceptance, not OS presentation or an owner read receipt;
+`queued` means the volatile, five-minute push outbox accepted it, not browser delivery.
+Pages replace the previous owner-page tag, keep 30-second burst replacements quiet,
+and open only the machine, without approval controls.
+Intent is audited before dispatch; terminal audit failure refuses acknowledgment and
+cancels remaining queued work, but cannot retract a page already sent.
 No silent manage, host-gone, relay-only send, HA or N2 path is reused or changed.

@@ -712,6 +712,7 @@ public sealed record SubscribeRequest
 {
     public bool? Patch { get; init; }
     public bool? Handles { get; init; }
+    public bool? OwnerPages { get; init; }
     public SubscribeSince? Since { get; init; }
 }
 

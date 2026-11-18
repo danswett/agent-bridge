@@ -84,6 +84,16 @@ public sealed class ToastPlanner
     // away, or its snapshot has not confirmed them), so nothing is raised for them until they are.
     public Func<bool> Held { get; internal set; } = () => false;
 
+    DateTimeOffset? ownerPageAt;
+    public void OwnerPage(NotifyOwnerRequest page)
+    {
+        if (!Enabled()) { return; }
+        var now = time.GetUtcNow();
+        var quiet = Quiet() || ownerPageAt is { } at && now - at < TimeSpan.FromSeconds(30);
+        ownerPageAt = now;
+        sink.Show(new ToastNotice(Tag("~owner", MachineKey), ToastXml.OwnerPage(page, MachineKey), quiet));
+    }
+
     // The sessions as the app first hears of them: a turn that finished before is not news, but
     // a question already pending is notified, as the host does after a restart. Sessions it
     // knew before a reconnect are brought up to date: a toast whose question was answered
@@ -228,6 +238,7 @@ public sealed class ToastPlanner
     // before), since none of them can be acted on now.
     public void MachineGone()
     {
+        if (ownerPageAt is not null) { sink.Withdraw(Tag("~owner", MachineKey)); ownerPageAt = null; }
         foreach (var (id, t) in sessions) { if (t.Shown is not null) { finished.Add(id); } }
         foreach (var id in finished) { sink.Withdraw(TagOf(id)); }
         finished.Clear();
@@ -466,6 +477,9 @@ public static partial class ToastXml
     // window, which says the same with Try again.
     public static string CouldNotInstall(string message) =>
         End(Start(Args(("action", "open")), $"{Product.Name} couldn't update", message, null));
+
+    public static string OwnerPage(NotifyOwnerRequest page, string? machineKey = null) =>
+        End(Start(Args(machineKey, ("action", "open")), page.Title, page.Body, null));
 
     // What became of an answer given on a toast, replacing that toast.
     public static string Outcome(string sessionId, string title, string text, string? machineKey = null) =>

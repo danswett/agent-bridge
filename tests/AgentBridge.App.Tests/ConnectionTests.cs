@@ -45,6 +45,29 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_owner_page_reaches_the_toast_sink_with_escaped_text_and_no_approval_actions()
+    {
+        var shown = new TaskCompletionSource<ToastNotice>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var planner = new ToastPlanner(new PageSink(shown)) { WindowActive = () => true, Quiet = () => true };
+        await using var machine = new Machine(Machine.LocalKey, connection, new CardContext
+        { Host = connection, Deliveries = new Deliveries(connection, new LockedDispatcher()), Folds = new FoldStore(null), Capabilities = () => [] }, planner);
+        await Wait.UntilAsync(() => Volatile.Read(ref syncs) > 0, "the fake host snapshot");
+        foreach (var ch in host.Channels.Distinct().Where(c => c.IsOpen))
+        { await ch.SendEventAsync("notify-owner", new NotifyOwnerRequest(Guid.NewGuid(), "owner", "policy", "<attention>&", "private <page>")); }
+        var toast = await shown.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        var xml = System.Xml.Linq.XElement.Parse(toast.Xml);
+        Assert.Equal(["<attention>&", "private <page>"], xml.Descendants("text").Select(t => t.Value));
+        Assert.Empty(xml.Descendants("action"));
+        Assert.True(toast.Quiet);
+    }
+
+    sealed class PageSink(TaskCompletionSource<ToastNotice> shown) : IToastSink
+    {
+        public void Show(ToastNotice notice) => shown.TrySetResult(notice);
+        public void Withdraw(string tag) { }
+    }
+
+    [Fact]
     public async Task Reconnect_ends_a_hung_attempt_and_starts_one_new_attempt_without_overlapping_loops()
     {
         // #800: a link not Connected while its host answers. The first attempt's connect hangs

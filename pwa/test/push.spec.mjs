@@ -58,7 +58,7 @@ test('a push shows a notification, and every later notice about the session repl
   const deliver = (data) => { delivered += 1; return cdp.send('ServiceWorker.deliverPushMessage', { origin, registrationId, data }); };
   const settled = () => expect.poll(() => worker.evaluate(() => self.testShown), { timeout: 15000 }).toBe(delivered);
   const shown = () => page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications())
-    .map((n) => ({ title: n.title, body: n.body, tag: n.tag, silent: n.silent, renotify: n.renotify, data: n.data })));
+    .map((n) => ({ title: n.title, body: n.body, tag: n.tag, silent: n.silent, renotify: n.renotify, data: n.data, actions: n.actions })));
 
   await deliver(notice(scope, 'question', 'DEV · waiting on you\nWhich database?'));
   await settled();
@@ -81,4 +81,12 @@ test('a push shows a notification, and every later notice about the session repl
   const all = await shown();
   expect(all.map((n) => n.title)).toContain(BRAND.name);
   expect(all.find((n) => n.tag === 'other').data.url).toBe(scope);
+
+  await deliver(notice(scope, 'ownerPage', 'Private page', { title: 'Attention', tag: `${MACHINE}:~owner`,
+    navigate: `${scope}?host=${MACHINE}`, data: { kind: 'ownerPage', machine: MACHINE, class: 'needsYou' } }));
+  await settled();
+  await expect.poll(shown, { timeout: 15000 }).toHaveLength(3);
+  expect((await shown()).find((n) => n.tag === `${MACHINE}:~owner`)).toMatchObject({
+    title: 'Attention', body: 'Private page', silent: false, actions: [], data: { url: `${scope}?host=${MACHINE}`, session: null, question: null },
+  });
 });

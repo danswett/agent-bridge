@@ -103,6 +103,8 @@ public sealed class HostConnection : IAsyncDisposable
     // as sent. They come only to the channels in a flow, and are not kept here: a code is the
     // sheet's for as long as it is open, and no one else's.
     public event Action<string, JsonElement>? AgentSignIn;
+    public Func<bool> OwnerPagesEnabled { get; set; } = () => false;
+    public event Action<NotifyOwnerRequest>? OwnerPage;
 
     public bool Can(string capability) => Capabilities.Contains(capability);
 
@@ -445,7 +447,8 @@ public sealed class HostConnection : IAsyncDisposable
         // the resumed snapshot ends (SessionStore.Finish), which then asks again in full.
         var patch = hello.Capabilities.Contains(AgentBridge.Protocol.Capabilities.SessionsPatch);
         var instance = hello.Machine.Instance;
-        var request = patch ? new SubscribeRequest { Patch = true, Handles = hello.Capabilities.Contains(AgentBridge.Protocol.Capabilities.SessionsHandles) ? true : null, Since = Sessions.ResumeFrom(instance) } : null;
+        var request = new SubscribeRequest { OwnerPages = OwnerPagesEnabled(), Patch = patch ? true : null,
+            Handles = patch && hello.Capabilities.Contains(AgentBridge.Protocol.Capabilities.SessionsHandles) ? true : null, Since = patch ? Sessions.ResumeFrom(instance) : null };
         PostSessions(ch, () => Sessions.BeginSnapshot(ch, patch ? instance : null));
         // Its result is read loosely, only for resumed: read strictly, a result the app could not
         // read ended the connection, and every reconnect asked again (#446).
@@ -662,6 +665,12 @@ public sealed class HostConnection : IAsyncDisposable
     {
         switch (ev.Name)
         {
+            case NotifyOwnerProtocol.Op:
+                var page = ev.Data.Deserialize<NotifyOwnerRequest>(ProtocolJson.Options) ?? throw new JsonException("missing owner page");
+                if (page.Request == Guid.Empty || page.Audience != "owner" || page.Target != "policy"
+                    || string.IsNullOrWhiteSpace(page.Title) || string.IsNullOrWhiteSpace(page.Body)) { throw new JsonException("invalid owner page"); }
+                PostSessions(ch, () => { if (OwnerPagesEnabled()) { OwnerPage?.Invoke(page); } });
+                break;
             case Events.SessionUpsert:
                 {
                     // Read first, which refuses one the app can't read (an id that is not text, or
