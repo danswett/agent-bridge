@@ -50,7 +50,11 @@ function Invoke-ProductTestRetry {
     $solution = $Target
     if ([IO.Path]::GetExtension($Target) -eq '.slnf') {
         $selection = (Get-Content -LiteralPath $Target -Raw | ConvertFrom-Json).solution
-        $solution = Join-Path (Split-Path (Resolve-Path $Target)) $selection.path
+        $solution = if ([IO.Path]::IsPathRooted($selection.path)) {
+            $selection.path
+        } else {
+            Join-Path (Split-Path (Resolve-Path $Target)) $selection.path
+        }
         $paths = @($selection.projects)
     } else {
         $paths = @(([xml](Get-Content -LiteralPath $solution -Raw)).SelectNodes('//Project') | ForEach-Object { $_.Path })
