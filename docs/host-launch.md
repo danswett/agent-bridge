@@ -63,6 +63,17 @@ launches retain their existing paths. This wiring does not add restart-durable c
 idle-ending loop; unresolved/live reservations remain conservative.
 Proven prestart refusals and busy outcomes release only their own hourly and live
 reservation; request memory and the separate attempt budget are retained.
+Prestart busy outcomes record a refusal even before a launch intent exists. A successful
+worktree refusal audit is acknowledged host-side so the pipe does not record it twice.
+Only the worktree callback/fallback pair is marked idempotent by principal, canonical
+request UUID and identical audited payload under the audit folder lock. Generic repeated refusals and counted summaries
+remain separate records. A fallback verifies the anchor and chain and flushes its existing
+row before acknowledging an append-only checkpoint lag; coverage breaks and unknown
+durability fail closed. Checkpoint faults remain visible and are not repaired.
+Marked refusals establish a launch anchor. Replay requires that healthy anchor to
+remain present; neither recovered torn evidence nor a missing first checkpoint is
+proof of an append-only lag, even if all current files end with a newline.
+Later appends preserve the missing-anchor fault instead of blessing a replacement checkpoint.
 
 ## Dispatch facts seam (#2788)
 

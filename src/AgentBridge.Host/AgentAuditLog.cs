@@ -46,6 +46,7 @@ public sealed class AgentAuditLog
     public const int MaxReason = 200;
     public const int MaxField = 256;
     public const int MaxChain = 16;
+    internal const string WorktreeRefusalGrant = "agent-worktree-refusal";
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = JsonIgnoreCondition.Never };
 
@@ -69,6 +70,7 @@ public sealed class AgentAuditLog
     readonly Action<string> log;
     readonly long maxBytes;
     internal AuditLockTiming? LockTiming { get; init; }
+    internal Func<string, FileStreamOptions, FileStream> OpenFile { private get; init; } = static (file, options) => new(file, options);
     bool failing;
     bool retentionFailing;
 
@@ -86,6 +88,10 @@ public sealed class AgentAuditLog
         var now = time.GetUtcNow();
         try
         {
+            var refusalRequest = entry is { Action: "session.launch", Outcome: "refused", Gate: null }
+                && Guid.TryParseExact(entry.Request, "D", out var id) ? id.ToString("D") : null;
+            if (refusalRequest is not null) { entry = entry with { Request = refusalRequest }; }
+            var worktreeRefusal = refusalRequest is not null && entry.Grant == WorktreeRefusalGrant;
             var bytes = text is null || entry.Gate is not null ? null : Encoding.UTF8.GetBytes(text);
             var chain = (entry.Chain ?? []).Take(MaxChain).Select(c => Cap(c, MaxField)).ToArray();
             var line = new Line(now, Cap(entry.Direction, MaxField), Cap(entry.Request, MaxField), Cap(entry.Principal, MaxField), chain,
@@ -95,6 +101,32 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var folderLock = Lock(folder, timing: LockTiming);
+                if (worktreeRefusal)
+                {
+                    var prior = GateAuditProjection.Load(profile, alreadyLocked: true);
+                    var persisted = prior.Rows.FirstOrDefault(r => r.Action == line.Action && r.Outcome == line.Outcome && r.Gate is null
+                        && r.Grant == WorktreeRefusalGrant && string.Equals(r.Request, line.Request, StringComparison.OrdinalIgnoreCase)
+                        && r.Principal == line.Principal && r.Direction == line.Direction && r.Target == line.Target
+                        && r.Reason == line.Reason && r.DataSha256 == line.DataSha256 && r.TextLength == line.TextLength
+                        && r.Chain is { } recordedChain && recordedChain.SequenceEqual(line.Chain, StringComparer.Ordinal));
+                    if (persisted is not null)
+                    {
+                        // A flushed refusal survives a failed checkpoint; never append its fallback twice.
+                        var checkpoint = ReadHead(folder, true);
+                        if (checkpoint is not { Fault: "none" } || prior.Rows.Any(r => r.PreviousTailIncomplete)
+                            || (!VerifyProfile(profile, true, log).Intact
+                            && (HeadFault(folder, true) != "audit-incomplete" || !VerifyProfile(profile, true, log, chainOnly: true).Intact))
+                            || Files(folder, true).Any(EndsWithoutNewline))
+                        { throw new IOException("the persisted launch refusal cannot be verified"); }
+                        using (var durable = OpenFile(Path.Combine(folder, FileFor(persisted.At, true)),
+                            new() { Mode = FileMode.Open, Access = FileAccess.ReadWrite, Share = FileShare.Read }))
+                        { durable.Flush(flushToDisk: true); }
+                        if (!prior.Complete)
+                        { log("agent launch refusal is persisted; its audit checkpoint remains incomplete"); }
+                        return true;
+                    }
+                    if (!prior.Complete) { throw new IOException("launch refusal evidence is incomplete"); }
+                }
                 if (entry.Gate is not null) { Bootstrap(folder); }
                 if (entry.Gate is { } metadata)
                 {
@@ -110,7 +142,7 @@ public sealed class AgentAuditLog
                     line = line with { Gate = metadata, Reason = metadata.ReasonCode, DataSha256 = null, TextLength = null };
                 }
                 var launch = entry.Action == "session.launch";
-                var anchored = entry.Gate is not null || HasHeads(folder);
+                var anchored = entry.Gate is not null || HasHeads(folder) || worktreeRefusal;
                 var expected = ReadHead(folder, launch);
                 string[] faults = anchored ? new[] { Continuity(profile, false, log), Continuity(profile, true, log) } : [];
                 var fault = faults.Contains("coverage-break") ? "coverage-break" : faults.FirstOrDefault(f => f != "none") ?? "none";
@@ -135,7 +167,7 @@ public sealed class AgentAuditLog
                 if (used > limit - data.Length - (torn ? 1 : 0)) { throw new IOException("the agent audit quota is full"); }
                 var options = new FileStreamOptions { Mode = FileMode.Append, Access = FileAccess.Write, Share = FileShare.Read };
                 if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
-                using (var stream = new FileStream(file, options))
+                using (var stream = OpenFile(file, options))
                 {
                     // A crash mid-write can leave a partial line: start on a fresh one so it can't swallow this event.
                     if (torn) { stream.Write("\n"u8); }
@@ -328,7 +360,12 @@ public sealed class AgentAuditLog
             var folder = Path.Combine(profile, FolderName);
             var fault = HeadFault(folder, launch);
             if (ReadHead(folder, launch) is null && Files(folder, launch).SelectMany(File.ReadLines).Any(raw =>
-                JsonSerializer.Deserialize<JsonElement>(raw, Json).TryGetProperty("gate", out var gate) && gate.ValueKind != JsonValueKind.Null))
+            {
+                var row = JsonSerializer.Deserialize<JsonElement>(raw, Json);
+                return row.TryGetProperty("gate", out var gate) && gate.ValueKind != JsonValueKind.Null
+                    || row.TryGetProperty("grant", out var grant) && grant.ValueKind == JsonValueKind.String
+                    && grant.GetString() == WorktreeRefusalGrant;
+            }))
             { return "audit-incomplete"; }
             return VerifyProfile(profile, launch, log, chainOnly: true).Intact ? fault
                 : ReadHead(folder, launch) is null ? "audit-incomplete" : "coverage-break";

@@ -146,6 +146,11 @@ public sealed record LaunchRequest
 // with, after the machine's defaults filled what the request left out.
 public sealed record LaunchResult(LaunchOutcome Outcome, string? Reason = null)
 {
+    // Host-only proof from the refusal writer; never accepted from or sent to a client.
+    [JsonIgnore]
+    public bool RefusalAudited { get; init; }
+    [JsonIgnore]
+    public string? WorktreeRefusalReason { get; init; }
     public string? Session { get; init; }
     public LaunchedWith? Launched { get; init; }
     // With unconfirmed or busy because a launched agent is asking whether to trust its folder:
