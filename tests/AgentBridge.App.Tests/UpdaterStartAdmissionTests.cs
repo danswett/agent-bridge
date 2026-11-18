@@ -13,22 +13,23 @@ public sealed class UpdaterStartAdmissionTests
     public async Task Cancellation_before_native_admission_never_invokes_the_native_start()
     {
         using var cancel = new CancellationTokenSource();
-        using var release = new ManualResetEventSlim();
-        using var held = new ManualResetEventSlim();
-        var holder = Task.Factory.StartNew(() =>
-        {
-            using var lease = ProcessLaunch.HoldInheritableHandles();
-            held.Set();
-            Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
-        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
-        Assert.True(held.Wait(TimeSpan.FromSeconds(5)));
         var calls = 0;
-        var start = Task.Run(() => ProcessLaunch.Start(new ProcessStartInfo("unused"),
-            _ => Interlocked.Increment(ref calls), cancel.Token));
-        cancel.Cancel();
-        release.Set();
-        await holder;
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start);
+        var result = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try { result.SetResult(ProcessLaunch.Start(new ProcessStartInfo("unused"),
+                _ => Interlocked.Increment(ref calls), cancel.Token)); }
+            catch (Exception error) { result.SetException(error); }
+        }) { IsBackground = true };
+        using (ProcessLaunch.HoldInheritableHandles())
+        {
+            thread.Start();
+            Assert.True(SpinWait.SpinUntil(() => (thread.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0,
+                TimeSpan.FromSeconds(5)));
+            cancel.Cancel();
+        }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => result.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(thread.Join(TimeSpan.FromSeconds(5)));
         Assert.Equal(0, calls);
     }
 

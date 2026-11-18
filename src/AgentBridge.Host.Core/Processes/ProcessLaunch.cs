@@ -8,9 +8,16 @@ public static class ProcessLaunch
 {
     static readonly object Gate = new();
 
-    public static Process? Start(ProcessStartInfo start)
+    public static Process? Start(ProcessStartInfo start) =>
+        Start(start, Process.Start, CancellationToken.None);
+
+    public static T Start<T>(ProcessStartInfo start, Func<ProcessStartInfo, T> nativeStart, CancellationToken cancel)
     {
-        lock (Gate) { return Process.Start(start); }
+        lock (Gate)
+        {
+            cancel.ThrowIfCancellationRequested();
+            return nativeStart(start);
+        }
     }
 
     // Release on the creating thread, before awaiting process completion.

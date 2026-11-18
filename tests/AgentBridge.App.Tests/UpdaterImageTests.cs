@@ -29,6 +29,7 @@ public sealed class UpdaterImageTests : IDisposable
         using (UpdaterImage.Pin(path, runtime))
             Assert.Throws<IOException>(() => File.OpenWrite(path).Dispose());
         Assert.Throws<InvalidDataException>(() => UpdaterImage.Pin(path, runtime == "win-x64" ? "win-arm64" : "win-x64"));
+        Assert.Throws<InvalidDataException>(() => UpdaterImage.Pin(path, "win-x86"));
 
         var bytes = File.ReadAllBytes(path);
         var optional = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(60)) + 24;
@@ -39,8 +40,11 @@ public sealed class UpdaterImageTests : IDisposable
         byte[] certificate = [16, 0, 0, 0, 0, 2, 2, 0, 1, 2, 3, 4, 5, 6, 7, 8];
         File.WriteAllBytes(path, [.. bytes, .. certificate]);
         using (UpdaterImage.Pin(path, runtime)) { }
+        File.WriteAllBytes(path, [.. bytes, .. certificate, 0]);
+        Assert.Throws<InvalidDataException>(() => UpdaterImage.Pin(path, runtime));
 
         var version = FileVersionInfo.GetVersionInfo(path).ProductVersion;
+        Assert.Equal("1.2.161", version);
         using (var pe = new PEReader(new MemoryStream(bytes)))
             bytes[pe.PEHeaders.SectionHeaders.Single(s => s.Name == ".text").PointerToRawData] ^= 1;
         File.WriteAllBytes(path, [.. bytes, .. certificate]);

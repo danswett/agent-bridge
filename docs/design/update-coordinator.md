@@ -59,6 +59,21 @@ late native respawn completion/errors. Respawn observation uses the same deadlin
 and releases the package lock on timeout/cancellation. An entered native start
 cannot be revoked: its late outcome stays unknown, never retry authority.
 
+### P3: native admission and updater image pins
+
+The shared process-launch gate checks cancellation inside native-start admission,
+not before waiting for that gate. An already admitted start cannot be revoked;
+its actual-exit custody is unchanged. Cancelled or timed-out queued work never starts.
+`build/updater-images.json` is embedded in the trusted current helper, never taken
+from the target package or an installed sidecar. Its per-architecture SHA-256 pins
+are reproduced from the SHA-512-pinned vpk 1.2.161 archive and the SHA-256-pinned
+product icon using that packer's `ResourceEdit.SetExeIcon`/`Commit`.
+x64 deliberately uses vpk's default x86 updater; Arm64 uses its Arm64 updater.
+Only the PE checksum, certificate-directory entry and bounded appended certificate
+are excluded from the image digest, so release signing preserves the pin.
+Code, headers and resources remain pinned through the retained read-only handle.
+An icon or packer change requires regenerated metadata and both reproduction tests.
+
 ### B3a: compatibility metadata only
 
 Read native VERSIONINFO/FileDescription from the retained image stream, with

@@ -21,7 +21,6 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
 {
     const string AppExe = "AgentBridge.exe";
     readonly Func<int, IUpdateCoordinatorProcess?> opener = open ?? Open;
-    readonly Func<ProcessStartInfo, IUpdateCoordinatorProcess> starter = start ?? Start;
     int running;
     public int? ApplyProcessId { get; private set; }
     public Task Ownership { get; private set; } = Task.CompletedTask;
@@ -58,9 +57,9 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
                 ?? throw new PackageMismatchException("coordinator package no longer matches its verified digest");
             ct.ThrowIfCancellationRequested();
             applyStep = "apply-start";
-            using var updater = (pinUpdater ?? PinUpdater)(Path.Combine(request.Root, "Update.exe"));
+            using var updater = (pinUpdater ?? (path => UpdaterImage.Pin(path)))(Path.Combine(request.Root, "Update.exe"));
             ct.ThrowIfCancellationRequested();
-            using var child = starter(ApplyStart());
+            using var child = Start(ApplyStart(), ct);
             ApplyProcessId = child.Id;
             applyStep = "apply-completion";
             await child.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
@@ -72,7 +71,7 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
             (generation, ct) => observation ??= Apply(generation, ct),
             () => new FileStream(Path.Combine(request.Packages, ".velopack_lock"),
                 FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None),
-            ReadVersion, () => { using var app = starter(AppStart()); }, time);
+            ReadVersion, () => { using var app = Start(AppStart()); }, time);
         try
         {
             var result = await flow.RunAsync(request.TargetVersion, cancel).ConfigureAwait(false);
@@ -124,18 +123,6 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
         return Value("version");
     }
 
-    static FileStream PinUpdater(string path)
-    {
-        var file = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        try
-        {
-            if (FileVersionInfo.GetVersionInfo(path) is not { ProductName: "Velopack", ProductVersion: "1.2.161" })
-                throw new InvalidDataException("unsupported updater completion contract");
-            return file;
-        }
-        catch { file.Dispose(); throw; }
-    }
-
     static IUpdateCoordinatorProcess? Open(int id)
     {
         Process process;
@@ -144,8 +131,9 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
         return Hold(process);
     }
 
-    static IUpdateCoordinatorProcess Start(ProcessStartInfo info) =>
-        Hold(ProcessLaunch.Start(info) ?? throw new InvalidOperationException("no process was created"));
+    IUpdateCoordinatorProcess Start(ProcessStartInfo info, CancellationToken cancel = default) =>
+        ProcessLaunch.Start(info, start ?? (i => Hold(Process.Start(i)
+            ?? throw new InvalidOperationException("no process was created"))), cancel);
 
     static IUpdateCoordinatorProcess Hold(Process process)
     {
