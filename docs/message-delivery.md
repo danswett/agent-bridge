@@ -1,6 +1,23 @@
 # Message delivery: envelope, lanes and journal (#2568)
 Status: design (slice 0), corrected 2026-11-14 PT per ruling 6870556195 (not yet accepted). Inputs: #2568
 rulings 6867525734, 6867631192, 6867667571, 6867669427; owner evidence 6867540072. **Change**: a departure.
+## Inactive qualification source (A-ii-1)
+The source-only producer remains unwired: no launch, reply, submit planner, hooks
+verification or API invokes it. The later authorized controller/SRE control entry
+(A-ii-2) and submit/delivery wiring (B) remain held. No live qualification was run.
+`WorkerInjector.CaptureIdentityAsync` uses a read-only worker handshake with the
+target process handle held and its PID/creation FILETIME checked. Its snapshot
+contains target and injector image paths, file versions/SHA-256, console window
+and owner-process incarnation, input mode and key-plan protocol. Missing evidence stays Unknown.
+`QueueQualification` captures that snapshot at launch through its host-only seam.
+A controller must supply a cursor-bound raw transcript reader for that same target
+and an explicit challenge lifetime. Only the exact host-generated, one-shot nonce
+in a main-target raw `user.message` with `data.delivery="queued"` while working,
+before monotonic expiry and with unchanged identity before/after reading, yields
+Verified. Replay, another host/target, stripped delivery, key-write success and
+hooks/provider confirmation cannot qualify. No caller supplies a Verified flag.
+The older design below does not authorize an idle-Enter fallback or capability table.
+
 ## Problem and cause
 Copilot CLI joins steers pending mid-turn with `\n\n` into one user turn (6 of 692 turns in one
 transcript). The host types bare text (`HaReplies.cs:26`) and only Lite and `RetryEpisode` set

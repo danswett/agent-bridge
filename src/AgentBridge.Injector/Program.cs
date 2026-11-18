@@ -1,10 +1,12 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace AgentBridge.Injector;
 
-// agent-bridge-injector <pid> [--screen | --widen <columns> <created>]
+// agent-bridge-injector <pid> [--screen | --widen <columns> <created> | --identity <created>]
 //
 // Reads a key plan on stdin (KeyPlan.ToWorkerScript in AgentBridge.Host.Delivery) and
 // types it into the console of <pid>, one attach-write-detach per send, the shape
@@ -47,7 +49,8 @@ internal static unsafe partial class Program
         output = Console.OpenStandardOutput();
         var columns = 0;
         long created = 0;
-        if (args.Length is not (1 or 2 or 4) || (args.Length == 2 && args[1] != "--screen")
+        if (args.Length is not (1 or 2 or 3 or 4) || (args.Length == 2 && args[1] != "--screen")
+            || (args.Length == 3 && (args[1] != "--identity" || !long.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out created) || created <= 0))
             || (args.Length == 4 && (args[1] != "--widen" || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out columns) || columns is < 1 or > short.MaxValue
                 || !long.TryParse(args[3], NumberStyles.None, CultureInfo.InvariantCulture, out created) || created <= 0))
             || !uint.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out var pid) || pid == 0)
@@ -56,6 +59,7 @@ internal static unsafe partial class Program
             return 2;
         }
         if (args.Length == 2) { return Screen(pid); }
+        if (args.Length == 3) { return Identity(pid, created); }
         if (args.Length == 4) { return Widen(pid, (short)columns, created); }
         var sends = Read(Console.OpenStandardInput());
         if (sends is null)
@@ -165,6 +169,67 @@ internal static unsafe partial class Program
         Say($"wrote {index}");
         if (send.PauseAfterMs > 0) { Thread.Sleep(send.PauseAfterMs); }
         return null;
+    }
+
+    static int Identity(uint pid, long created)
+    {
+        var process = OpenProcess(ProcessQueryLimitedInformation, false, pid);
+        if (process == 0) { Say($"fail process {Marshal.GetLastPInvokeError()}"); return 3; }
+        try
+        {
+            bool Current() => GetExitCodeProcess(process, out var code) && code == StillActive
+                && GetProcessTimes(process, out var actual, out _, out _, out _) && actual == created;
+            if (!Current()) { Say("fail process 0"); return 3; }
+            char* image = stackalloc char[32768];
+            uint length = 32768;
+            if (!QueryFullProcessImageNameW(process, 0, image, ref length)) { Say($"fail identity {Marshal.GetLastPInvokeError()}"); return 3; }
+            var executable = new string(image, 0, (int)length);
+            FreeConsole();
+            if (!AttachConsole(pid)) { Say($"fail attach {Marshal.GetLastPInvokeError()}"); return 3; }
+            Ignore();
+            try
+            {
+                var input = CreateFile("CONIN$", GenericRead, FileShareRead | FileShareWrite, 0, OpenExisting, 0, 0);
+                if (input == -1) { Say($"fail input {Marshal.GetLastPInvokeError()}"); return 3; }
+                try
+                {
+                    if (!GetConsoleMode(input, out var mode)) { Say($"fail input {Marshal.GetLastPInvokeError()}"); return 3; }
+                    var console = (ulong)(nuint)GetConsoleWindow();
+                    GetWindowThreadProcessId((nint)(nuint)console, out var consolePid);
+                    var consoleProcess = OpenProcess(ProcessQueryLimitedInformation, false, consolePid);
+                    if (console == 0 || consoleProcess == 0) { Say("fail identity 0"); return 3; }
+                    try
+                    {
+                        if (!GetProcessTimes(consoleProcess, out var consoleStart, out _, out _, out _)) { Say("fail identity 0"); return 3; }
+                        var cli = Fingerprint(executable);
+                        var injector = Fingerprint(Environment.ProcessPath ?? throw new InvalidDataException("missing worker image"));
+                        GetWindowThreadProcessId((nint)(nuint)console, out var stillOwner);
+                        if (!Current() || GetConsoleWindow() != (nint)(nuint)console || stillOwner != consolePid
+                            || !GetConsoleMode(input, out var actualMode) || actualMode != mode
+                            || !GetExitCodeProcess(consoleProcess, out var code) || code != StillActive) { Say("fail identity 0"); return 3; }
+                        Say(string.Create(CultureInfo.InvariantCulture, $"identity {pid} {created} {console}:{consolePid}:{consoleStart} {mode} {cli} {injector} {B64(Header)}"));
+                    }
+                    finally { CloseHandle(consoleProcess); }
+                    Say("ok");
+                    return 0;
+                }
+                finally { CloseHandle(input); }
+            }
+            finally { FreeConsole(); }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        { Say("fail identity 0"); return 3; }
+        finally { CloseHandle(process); }
+    }
+
+    static string B64(string value) => Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+
+    static string Fingerprint(string path)
+    {
+        using var file = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var version = FileVersionInfo.GetVersionInfo(path).FileVersion;
+        if (string.IsNullOrWhiteSpace(version)) { throw new InvalidDataException("missing image version"); }
+        return $"{B64(path)} {B64(version)} {Convert.ToHexString(SHA256.HashData(file))}";
     }
 
     static int Screen(uint pid)
@@ -411,6 +476,20 @@ internal static unsafe partial class Program
 
     const uint ProcessQueryLimitedInformation = 0x1000;
     const uint StillActive = 259;
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool QueryFullProcessImageNameW(nint process, uint flags, char* image, ref uint length);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetConsoleMode(nint input, out uint mode);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial nint GetConsoleWindow();
+
+    [LibraryImport("user32.dll")]
+    private static partial uint GetWindowThreadProcessId(nint window, out uint processId);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial nint OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint processId);
