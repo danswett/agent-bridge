@@ -7,6 +7,16 @@ $config = @{ clean_pr_threshold = 5; minutes_without_merge = 30 }
 $script:calls = [Collections.Generic.List[object]]::new()
 $script:reply = $null
 $script:failRead = $false
+$script:deliveries = [Collections.Generic.List[object]]::new()
+$script:replyExit = 0
+$mainGreen = 'agent_bridge_1111111111111111'; $chief = 'agent_bridge_2222222222222222'
+function pwsh {
+    Check ($args -contains '-NonInteractive' -and $args -contains (Join-Path $PSScriptRoot '..\tools\agents\reply-session.ps1')) 'Use the existing reply-session path.'
+    Check ($args[[Array]::IndexOf($args, '-Attempts') + 1] -eq 1) 'No multiplied reply attempts.'
+    $node = $args[[Array]::IndexOf($args, '-Session') + 1]
+    $script:deliveries.Add(@{ Node = $node; Text = $args[[Array]::IndexOf($args, '-Text') + 1] })
+    $global:LASTEXITCODE = if ($node -eq $mainGreen) { $script:replyExit } else { 0 }
+}
 function gh {
     $script:calls.Add(@($args))
     $global:LASTEXITCODE = 0
@@ -41,7 +51,7 @@ function Publish {
     [CmdletBinding()]
     param($snapshot)
     $script:reply = $snapshot
-    Invoke-StallAlarm -Repository example/repo -Config $config -Now $now -Mentions '@main-green @chief'
+    Invoke-StallAlarm -Repository example/repo -Config $config -Now $now -MainGreenNode $mainGreen -ChiefNode $chief
 }
 switch ($Case) {
     1 {
@@ -73,6 +83,7 @@ switch ($Case) {
         Check ($script:calls.Count -eq 3) 'Recovery must comment and close.'
         Check ($script:calls[1][2] -eq 'POST' -and $script:calls[1][3] -eq 'repos/example/repo/issues/42/comments') 'Recovery needs a comment.'
         Check ($script:calls[2][2] -eq 'PATCH' -and ($script:calls[2] -join ' ') -match 'state=closed') 'Recovery must close the same issue.'
+        Check ($script:deliveries.Count -eq 2) 'Recovery must reach both operational recipients.'
     }
     6 {
         $partial = Snapshot -Open; $partial.data.repository.queue.pageInfo.hasNextPage = $true
@@ -83,16 +94,18 @@ switch ($Case) {
         foreach ($s in @($partial, $errored, $mismatch, $history, @{ data = $null })) {
             $script:calls.Clear(); $warnings = @()
             Publish $s -WarningVariable warnings
-            Check ($warnings.Count -gt 0 -and $script:calls.Count -eq 1) 'Unknown data must warn, with no alert or close.'
+            Check ($warnings.Count -gt 0 -and $script:calls.Count -eq 1 -and $script:deliveries.Count -eq 0) 'Unknown data must warn, with no alert or close.'
         }
         $script:calls.Clear(); $script:failRead = $true; $warnings = @()
-        Invoke-StallAlarm -Repository example/repo -Config $config -Now $now -Mentions '@main-green @chief' -WarningVariable warnings
+        Invoke-StallAlarm -Repository example/repo -Config $config -Now $now -MainGreenNode $mainGreen -ChiefNode $chief -WarningVariable warnings
         Check ($warnings.Count -gt 0 -and $script:calls.Count -eq 1) 'A failed read must warn without writes.'
     }
     7 {
         Publish (Snapshot -Open)
         Check ($script:calls.Count -eq 2 -and $script:calls[1][3] -eq 'repos/example/repo/issues/42/comments') 'Repeated stalls update the one issue.'
-        Check (($script:calls[1] -join ' ') -match '@main-green @chief') 'Both intended recipients must be mentioned.'
+        Check (($script:calls[1] -join ' ') -notmatch '@') 'The ops issue must not mention the owner.'
+        Check ($script:deliveries.Count -eq 2 -and $script:deliveries[0].Node -ceq $mainGreen -and $script:deliveries[1].Node -ceq $chief) 'Notify only the exact Main-Green and Chief nodes.'
+        Check (-not @($script:deliveries | Where-Object { $_.Text -match '@' }).Count) 'Direct payloads must not add mentions.'
     }
     8 {
         Publish (Snapshot)
@@ -100,6 +113,10 @@ switch ($Case) {
         Check ($script:calls[1][3] -eq 'repos/example/repo/issues') 'The first stall opens one ops issue.'
         $query = $script:calls[0] -join ' '
         Check ($query -match 'baseRefName: "main"' -and $query -match 'mergedAt' -and $query -match 'merge-rule') 'The single read must contain queue and merge evidence.'
+        Check ($script:deliveries.Count -eq 2) 'Opening the issue must also notify both nodes.'
+        $script:calls.Clear(); $script:deliveries.Clear(); $script:replyExit = 2; $failure = $null
+        try { Publish (Snapshot) } catch { $failure = $_ }
+        Check ($null -ne $failure -and $script:calls.Count -eq 2 -and $script:deliveries.Count -eq 2) 'Unconfirmed delivery must fail visibly, still attempt the other node and never add another read or issue.'
     }
 }
 Write-Host "PASS: stall alarm case $Case"
