@@ -160,6 +160,8 @@ static class MergeRuleCommand
         public MergeRuleConfig Config { get; } = config;
         public string Slug { get; } = slug;
         public bool Arm64Waiver { get; } = arm64Waiver;
+        public DateTimeOffset Now { get; init; }
+        public string? InfraRecord { get; init; }
         public int GraphQLPoints { get; private set; }
         public int? GraphQLRemaining { get; private set; }
         public int RestCalls { get; private set; }
@@ -244,8 +246,14 @@ static class MergeRuleCommand
         var slug = options.GetValueOrDefault("slug") ?? Environment.GetEnvironmentVariable("GITHUB_REPOSITORY") ?? "danswett/agent-bridge";
         var post = options.ContainsKey("post");
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
-        var switchValue = (variable ?? Environment.GetEnvironmentVariable)("ARM64_WAIVER");
-        var session = new Session(github, config, slug, config.Arm64Waiver?.Active(now, switchValue) == true);
+        var readVariable = variable ?? Environment.GetEnvironmentVariable;
+        var switchValue = readVariable("ARM64_WAIVER");
+        var session = new Session(github, config, slug, config.Arm64Waiver?.Active(now, switchValue) == true)
+        {
+            Now = now,
+            InfraRecord = config.InfraNonblocking is { } infra && readVariable("FLEET_MERGERULE") != "off"
+                ? readVariable(infra.Switch) : null,
+        };
         var problems = 0;
 
         session.Main = ReadMain(session, out var mainLog);
@@ -435,16 +443,20 @@ static class MergeRuleCommand
                 log = $"Main: no completed non-cancelled product evidence in {config.MainGreen.Workflow}'s push history.";
                 return new("failure", $"no completed non-cancelled CI run on {config.Base}: waiting for one");
             }
-            var (run, latest) = evidence.Value;
+            var (run, latest, attempts) = evidence.Value;
             var sha = run.GetProperty("head_sha").GetString();
             if (!IsCommitSha(sha))
                 throw new InvalidOperationException("CI run has no valid commit SHA");
             var id = run.GetProperty("id").GetInt64();
             var attempt = RunAttempt(run);
+            var infraLog = "";
+            var nonblocking = config.InfraNonblocking?.Active(session.Now, session.InfraRecord, id, attempts, config.MainGreen.Jobs, out infraLog)
+                ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
             var planGreen = latest.TryGetValue("plan", out var plan)
                 && plan.GetProperty("status").GetString() == "completed" && plan.GetProperty("conclusion").GetString() == "success";
             bool Green(JsonElement job) => job.GetProperty("status").GetString() == "completed"
                 && (job.GetProperty("conclusion").GetString() is "success" or "skipped"
+                    || nonblocking.ContainsKey(job.GetProperty("name").GetString() ?? "")
                     || (session.Arm64Waiver && config.Arm64Waiver?.Allows(job.GetProperty("name").GetString() ?? "",
                         job.GetProperty("conclusion").GetString()) == true));
             bool Passed(string name)
@@ -478,8 +490,8 @@ static class MergeRuleCommand
                 else if (unexpected.Count > 0)
                     held.Add($"unexpected leg {string.Join(", ", unexpected)}");
                 else if (exact.Count == 1)
-                    held.AddRange(exact[0].Where(n => latest[n].GetProperty("status").GetString() != "completed"
-                        || latest[n].GetProperty("conclusion").GetString() != "success"));
+                    held.AddRange(exact[0].Where(n => !nonblocking.ContainsKey(n) && (latest[n].GetProperty("status").GetString() != "completed"
+                        || latest[n].GetProperty("conclusion").GetString() != "success")));
                 else if (exact.Count > 1)
                     held.Add("mixed or ambiguous leg families");
                 else if (possible.Count > 0)
@@ -489,6 +501,8 @@ static class MergeRuleCommand
             }
             log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {MergeRule.Short(sha!)}; "
                 + (held.Count == 0 ? "named jobs passed." : $"named jobs not green: {string.Join(", ", held)}.")
+                + (infraLog.Length == 0 ? "" : "\n" + infraLog)
+                + "\n" + string.Join("\n", nonblocking.Select(j => $"{j.Key}: non-blocking (infra, until {j.Value:O})."))
                 + "\n" + string.Join("\n", latest.OrderBy(j => j.Key, StringComparer.Ordinal).Select(j =>
                     $"Main job [{(j.Key == "plan" || present.Contains(j.Key) || config.MainGreen.Jobs.Any(n => n == j.Key || (!n.Contains(" (", StringComparison.Ordinal) && j.Key.StartsWith($"{n} (", StringComparison.Ordinal))) ? "required" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."));
             return held.Count == 0
@@ -502,7 +516,7 @@ static class MergeRuleCommand
         }
     }
 
-    static (JsonElement Run, Dictionary<string, JsonElement> Jobs)? CompletedMain(Session session)
+    static (JsonElement Run, Dictionary<string, JsonElement> Jobs, List<JsonElement> Attempts)? CompletedMain(Session session)
     {
         var config = session.Config;
         var seen = 0;
@@ -555,7 +569,7 @@ static class MergeRuleCommand
                     || config.MainGreen.LegFamilies.Any(f => f.Contains(j.Key, StringComparer.Ordinal)))
                     && (Incomplete(j.Value) || j.Value.GetProperty("conclusion").GetString() == "cancelled")))
                     continue;
-                return (run.Clone(), latest);
+                return (run.Clone(), latest, jobs);
             }
             seen += runs.GetArrayLength();
             if (seen >= doc.RootElement.GetProperty("total_count").GetInt32())

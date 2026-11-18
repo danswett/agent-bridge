@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
@@ -21,6 +22,7 @@ sealed class MergeRuleConfig
     public List<string> IgnoreWorkflows { get; set; } = [];
     public MainGreenConfig MainGreen { get; set; } = new();
     public Arm64WaiverConfig? Arm64Waiver { get; set; }
+    public InfraNonBlockingConfig? InfraNonblocking { get; set; }
     public CopilotWaiverConfig CopilotWaiver { get; set; } = new();
     public List<string> SensitivePaths { get; set; } = [];
 
@@ -72,6 +74,15 @@ sealed class MergeRuleConfig
             || arm64.Jobs is null || arm64.Jobs.Count != 3 || arm64.Jobs.Distinct(StringComparer.Ordinal).Count() != 3
             || !arm64.Jobs.All(name => arm64.Allows(name, "failure"))))
             throw new FormatException("arm64_waiver needs ARM64_WAIVER, an expiry and exactly the three arm64 jobs.");
+        if (config.InfraNonblocking is { } infra)
+        {
+            if (infra.Switch != "INFRA_NONBLOCK" || infra.WindowMinutes is < 1 or > 120
+                || infra.Signatures is not { Count: > 0 } || infra.Signatures.Any(string.IsNullOrWhiteSpace))
+                throw new FormatException("infra_nonblocking needs INFRA_NONBLOCK, a 1..120 minute window and infra signatures.");
+            foreach (var signature in infra.Signatures)
+                try { _ = new Regex(signature, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50)); }
+                catch (ArgumentException e) { throw new FormatException("Invalid infra signature.", e); }
+        }
         return config;
     }
 
@@ -116,6 +127,65 @@ sealed class Arm64WaiverConfig
     public bool Allows(string name, string? conclusion) => conclusion == "failure"
         && (name is "app (win-arm64)" or "app-installer (win-arm64)" or "product (windows-11-arm)")
         && Jobs is not null && Jobs.Contains(name, StringComparer.Ordinal);
+}
+
+sealed class InfraNonBlockingConfig
+{
+    public string Switch { get; set; } = "";
+    public int WindowMinutes { get; set; }
+    public List<string> Signatures { get; set; } = [];
+    const string ProductFailure = @"\b(test[s]?\s+(fail|error)|failed\s+\S+\.|fail(ed|ure)?\s*:|error\s+(MSB|CS|NETSDK)\d|build\s+fail|compil(e|ation)\s+error)";
+
+    sealed record Failure(string? Job, long RunId, int RunAttempt, DateTimeOffset Since, string? Signature, bool? TestFailure, bool? BuildFailure);
+
+    public Dictionary<string, DateTimeOffset> Active(DateTimeOffset now, string? record, long runId,
+        IReadOnlyList<JsonElement> attempts, IReadOnlyList<string> allowed, out string log)
+    {
+        var active = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        log = "Infra non-blocking: no active records.";
+        if (string.IsNullOrWhiteSpace(record)) return active;
+        try
+        {
+            var records = JsonSerializer.Deserialize<List<Failure?>>(record,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower });
+            if (records is null || records.Any(r => r is null) || records.Select(r => r!.Job).Distinct(StringComparer.Ordinal).Count() != records.Count)
+                throw new JsonException("Expected unique job records.");
+            foreach (var item in records)
+            {
+                var r = item!;
+                if (r.Job is not { Length: > 0 } || r.RunId != runId || r.TestFailure != false || r.BuildFailure != false
+                    || r.Since == default || r.Since > now || now - r.Since >= TimeSpan.FromMinutes(Math.Min(WindowMinutes, 120))
+                    || r.Job.Contains("publish", StringComparison.OrdinalIgnoreCase) || r.Job.Contains("sign", StringComparison.OrdinalIgnoreCase)
+                    || !allowed.Any(n => n == r.Job || (!n.Contains(" (", StringComparison.Ordinal) && r.Job.StartsWith(n + " (", StringComparison.Ordinal)))
+                    || r.Signature is not { Length: > 0 } || Match(r.Signature, ProductFailure)
+                    || !Signatures.Any(pattern => Match(r.Signature, pattern)))
+                    continue;
+                var history = attempts.Where(j => j.GetProperty("name").GetString() == r.Job)
+                    .OrderByDescending(j => j.GetProperty("run_attempt").GetInt32())
+                    .ThenByDescending(j => j.GetProperty("id").GetInt64()).Take(2).ToList();
+                if (history.Count != 2 || r.RunAttempt < 2 || history[0].GetProperty("run_attempt").GetInt32() != r.RunAttempt
+                    || history[1].GetProperty("run_attempt").GetInt32() < 1
+                    || history[0].GetProperty("run_attempt").GetInt32() != history[1].GetProperty("run_attempt").GetInt32() + 1
+                    || history.Any(j => j.GetProperty("status").GetString() != "completed" || j.GetProperty("conclusion").GetString() != "failure"
+                        || !j.TryGetProperty("steps", out var steps) || steps.ValueKind != JsonValueKind.Array
+                        || !steps.EnumerateArray().Any(s => s.GetProperty("conclusion").GetString() == "failure")
+                        || steps.EnumerateArray().Any(s => s.GetProperty("conclusion").GetString() == "failure"
+                            && Match(s.GetProperty("name").GetString() ?? "", @"\b(test|tests|build|compile|sign|publish)\b"))))
+                    continue;
+                active.Add(r.Job, r.Since.AddMinutes(Math.Min(WindowMinutes, 120)));
+            }
+            log = $"Infra non-blocking: {active.Count} active, {records.Count - active.Count} ignored record(s).";
+        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException or KeyNotFoundException or FormatException or RegexMatchTimeoutException)
+        {
+            active.Clear();
+            log = "Infra non-blocking: ignored unreadable or invalid evidence; jobs remain blocking.";
+        }
+        return active;
+    }
+
+    static bool Match(string value, string pattern) =>
+        Regex.IsMatch(value, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
 }
 
 /// <summary>

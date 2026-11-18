@@ -2089,17 +2089,23 @@ public class MergeRuleTests
     [InlineData("other-red", "failure")]
     [InlineData("plan-red", "failure")]
     [InlineData("pr-red", "failure")]
+    [InlineData("kill-switch", "failure")]
+    [InlineData("wrong-attempt", "failure")]
+    [InlineData("matrix", "success")]
+    [InlineData("network", "success")]
     public void Infra_nonblocking_is_run_bound_infra_only_and_expires_fail_closed(string scenario, string state)
     {
         var now = new DateTimeOffset(2026, 11, 18, 8, 0, 0, TimeSpan.Zero);
-        var failed = scenario is "publish" or "sign" ? scenario : "light";
+        var failed = scenario is "publish" or "sign" ? scenario : scenario == "matrix" ? "product (ubuntu-latest)" : "light";
         var record = new Dictionary<string, object?>
         {
             ["job"] = scenario == "unknown" ? "unlisted" : failed,
             ["run_id"] = scenario == "wrong-run" ? 4 : 5,
+            ["run_attempt"] = scenario == "wrong-attempt" ? 3 : 2,
             ["since"] = now.AddMinutes(scenario == "boundary" ? -120 : scenario == "expired" ? -121 : scenario == "future" ? 1 : -10),
             ["signature"] = scenario == "test" ? "Failed Example.Test" : scenario == "build" ? "error MSB1001"
-                : scenario == "mixed" ? "apt-get: Failed to fetch; Failed Example.Test" : "apt-get: Failed to fetch",
+                : scenario == "mixed" ? "apt-get: Failed to fetch; Failed Example.Test"
+                : scenario == "network" ? "network timeout" : "apt-get: Failed to fetch",
             ["test_failure"] = scenario == "test", ["build_failure"] = scenario == "build",
         };
         if (scenario == "test-unknown") record.Remove("test_failure");
@@ -2115,14 +2121,14 @@ public class MergeRuleTests
         var jobs = new List<object>
         {
             Entry(1, "plan", conclusion: scenario == "plan-red" ? "failure" : "success"),
-            Entry(2, "product (ubuntu-latest)"), Entry(3, "app (win-x64)"),
-            Entry(4, "app (win-arm64)"), Entry(5, "light", conclusion: scenario == "other-red" ? "failure" : "success"),
+            Entry(2, "product (ubuntu-latest)"), Entry(3, "app (win-x64)", conclusion: scenario == "other-red" ? "failure" : "success"),
+            Entry(4, "app (win-arm64)"), Entry(5, "light"),
         };
         jobs.RemoveAll(j => JsonSerializer.SerializeToElement(j).GetProperty("name").GetString() == failed);
-        jobs.Add(Entry(10, failed, conclusion: "failure",
+        jobs.Add(Entry(10, failed, scenario == "gap" ? 3 : 2, conclusion: "failure",
             step: scenario == "test-step" ? "Run tests" : scenario == "build-step" ? "Build" : "Install dependencies"));
         if (scenario != "one-failure")
-            jobs.Add(Entry(9, failed, scenario == "gap" ? 0 : 1, scenario == "prior-success" ? "success" : "failure"));
+            jobs.Add(Entry(9, failed, 1, scenario == "prior-success" ? "success" : "failure"));
         var github = new FakeGitHub(scenario == "pr-red" ? WaiverPullRequest("light") : GraphQLPullRequest(Head),
             mainRuns: MainRuns((5, "completed", "failure", 2)),
             mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Count, jobs }));
@@ -2141,9 +2147,15 @@ public class MergeRuleTests
             var output = new StringWriter();
             var reads = 0;
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain, () => now,
-                name => { if (name != "INFRA_NONBLOCK") return null; reads++; return value; });
+                name =>
+                {
+                    if (name == "FLEET_MERGERULE" && scenario == "kill-switch") return "off";
+                    if (name != "INFRA_NONBLOCK") return null;
+                    reads++; return value;
+                });
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            Assert.Equal(1, reads);
+            Assert.Equal(scenario == "kill-switch" ? 0 : 1, reads);
+            Assert.Equal(2, github.RestPaths.Count(p => p.Contains("/actions/", StringComparison.Ordinal)));
             if (scenario == "active")
                 Assert.Contains("light: non-blocking (infra, until 2026-11-18T09:50:00", output.ToString(), StringComparison.Ordinal);
             if (scenario is "malformed" or "wrong-type")
