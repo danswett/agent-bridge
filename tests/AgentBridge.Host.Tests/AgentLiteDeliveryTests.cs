@@ -120,9 +120,9 @@ public sealed class AgentLiteDeliveryTests
         Assert.Contains("\u0001＠x ＠y", f.Typed[^1].Text);
     }
     [Theory]
-    [InlineData(LaunchProtocol.AllowAll)]
-    [InlineData(null)]
-    public async Task An_allow_all_session_or_one_this_host_did_not_launch_is_refused_and_nothing_is_typed(string? permissions)
+    [InlineData(LaunchProtocol.AllowAll, true)]
+    [InlineData(null, false)]
+    public async Task An_allow_all_target_grant_requires_a_session_this_host_launched(string? permissions, bool allowed)
     {
         var f = new Fixture();
         if (permissions is not null) { f.Launch(permissions); }
@@ -131,6 +131,9 @@ public sealed class AgentLiteDeliveryTests
         f.AllowAllTargets = true;
         Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await Send(f));
         Assert.Empty(f.Typed);
+        f.AllowAllTargetSessions = [Target];
+        Assert.Equal(allowed ? new LiteDelivery(true, null) : new LiteDelivery(false, "notReplyTarget"), await Send(f));
+        Assert.Equal(allowed ? 1 : 0, f.Typed.Count);
     }
     [Theory]
     [InlineData("*")]
