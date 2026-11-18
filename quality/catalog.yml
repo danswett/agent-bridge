@@ -315,6 +315,18 @@ suites:
     where: ci.yml product
     status: exists
 
+  - id: product-crash-diagnostics
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [.github/workflows/ci.yml, quality/run.ps1, quality/dotnet-test-command.ps1, quality/test-product-crash.ps1]
+    command: pwsh -NoProfile -File quality/test-product-crash.ps1
+    where: ci.yml light
+    status: exists
+
   - id: catalog-check
     validation_plan: native
     kind: static
