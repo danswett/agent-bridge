@@ -194,6 +194,36 @@ public sealed class AutoRetryTests
         Assert.Single(h.Requests);
     }
 
+    [Theory]
+    [InlineData(null, 0)]
+    [InlineData("helper", 1)]
+    public async Task Only_a_main_turn_start_withdraws_retry_in_a_wide_input_box(string? agentId, int keys)
+    {
+        await using var h = new Harness(realReply: true) { Wide = true };
+        await h.Error(Empty);
+        await h.Watch.TickAsync();
+        h.BeforeKeys = () => h.Unprojected("assistant.turn_start", agentId);
+        h.F.Time.Advance(TimeSpan.FromSeconds(30));
+        await h.Watch.TickAsync();
+        Assert.Equal(keys, h.Keys);
+        Assert.Single(h.Requests);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_replacement_failure_before_the_first_delivery_snapshot_cannot_adopt_the_old_retry(bool sameTimestamp)
+    {
+        await using var h = new Harness(realReply: true);
+        await h.Error(Empty);
+        await h.Watch.TickAsync();
+        h.BeforeReply = () => h.ReplacementFailure(sameTimestamp);
+        h.F.Time.Advance(TimeSpan.FromSeconds(30));
+        await h.Watch.TickAsync();
+        Assert.Equal(0, h.Keys);
+        Assert.Single(h.Requests);
+    }
+
     [Fact]
     public void Auto_retry_starts_only_after_the_second_startup_Stop_check_and_Serving()
     {
@@ -260,7 +290,9 @@ public sealed class AutoRetryTests
         public bool Held;
         public AnswerOutcome Outcome = AnswerOutcome.Delivered;
         public int Keys;
+        public bool Wide;
         public Func<Task>? BeforeKeys;
+        public Func<Task>? BeforeReply;
         readonly ReplyService? real;
         readonly string events;
         int at = 3598;
@@ -302,15 +334,27 @@ public sealed class AutoRetryTests
             Fixture.Append(events, Copilot.Event("abort", new { reason = "user_initiated" }, at++));
             await Source.RefreshAsync();
         }
-        public Task Unprojected(string change)
+        public Task Unprojected(string change, string? agentId = null)
         {
-            Fixture.Append(events, change == "human" ? Copilot.User("stop retrying", at++)
-                : Copilot.Event(change, new { reason = "user_initiated" }, at++));
+            Fixture.Append(events, change switch
+            {
+                "human" => Copilot.User("stop retrying", at++, agentId),
+                "assistant.turn_start" => Copilot.TurnStart(at++, agentId),
+                _ => Copilot.Event(change, new { reason = "user_initiated" }, at++, agentId),
+            });
+            return Task.CompletedTask;
+        }
+        public Task ReplacementFailure(bool sameTimestamp)
+        {
+            var prompt = Copilot.User("different task", at++);
+            var stamp = sameTimestamp ? (int)(Source.Get(Id)!.Attention!.Since - Fixture.T0).TotalSeconds : at++;
+            Fixture.Append(events, prompt, Copilot.Event("session.error", JsonSerializer.Deserialize<JsonElement>(Empty), stamp));
             return Task.CompletedTask;
         }
         public async Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
         {
             Requests.Add(request);
+            if (BeforeReply is { } beforeReply) await beforeReply();
             if (real is not null) return await real.ReplyAsync(request, peer, cancellationToken, watch);
             if (BeforeKeys is { } before) await before();
             if (request.StillCurrent?.Invoke() != true) return new(AnswerOutcome.Stale);
@@ -326,7 +370,8 @@ public sealed class AutoRetryTests
             return new(InjectionStatus.Typed, "");
         }
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken ct = default) => Task.FromResult(new ConsoleScreen(
-            ["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580",
+            ["\u25CF Done.", "", Wide ? "\u257B" + new string('\u2584', 99) : "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584",
+             "\u2503", Wide ? "\u2579" + new string('\u2580', 99) : "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580",
              " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab"], null));
         public string? Active() => null;
         public string? Refuse(int processId) => null;
