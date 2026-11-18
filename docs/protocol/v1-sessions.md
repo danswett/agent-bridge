@@ -82,7 +82,7 @@ with the wrong type):
 |---|---|---|
 | `HelloResult` | `protocol` | |
 | `MachineInfo` | `id` | |
-| `Session` | `id` | |
+| `Session` | `id`, `machine` | |
 | `SessionLoad` ([v1-machine-load.md](v1-machine-load.md)) | `session` | |
 | `Subagent` | `id` | |
 | `ToolCall` | `id` | |
@@ -391,6 +391,17 @@ host sends:
      removed once its process has gone.
    * `discovery.changed`, with `{ "discoveryHeld": {…} }` when the host's discovery becomes
      held or what holds it changes, and `{}` when it clears. Sent once per change.
+
+These reads use the host's in-memory live source, also used by its fleet registry
+publisher, without Home Assistant reads or a separate roster store. Every `Session`
+is scoped to `hello.machine.id`.
+`owner`, `pr` and `finished` carry explicit evidence:
+unknown is not confirmed none or false. Idle does not mean work-finished.
+
+This cut emits `owner`, `pr` and `finished` as `{ "state": "unknown" }` on every
+host-bound row; discovering known values or confirmed none/false is out of scope.
+It does not complete the all-fields Done-when for
+[the host roster issue](https://github.com/danswett/agent-bridge/issues/2642).
 
 A session can change while the snapshot is being sent; its upsert then simply arrives
 again. When a channel closes, the client subscribes again on the new channel.
@@ -1904,6 +1915,10 @@ is for disposable evaluation, not production service enrollment.
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | The agent's own session id: the Copilot session-state folder name, or the Claude or Codex session id |
+| `machine` | string? | This host's `hello.machine.id`; absent from older hosts |
+| `owner` | object? | `{"state":"unknown"}` until known; otherwise `{"state":"known","principal":"..."}`. Not inferred from the current driver |
+| `pr` | object? | `{"state":"unknown"}`, confirmed `{"state":"none"}`, or `{"state":"known","number":...}` |
+| `finished` | object? | `{"state":"unknown"}` until known; otherwise `{"state":"known","value":true\|false}`. Idle, merged PRs and closed-unmerged PRs do not establish this evidence |
 | `agent` | `"copilot"` \| `"claude"` \| `"codex"` | Hosts send only these. A client reads anything else as `unknown` |
 | `title` | string? | The session's name if it has one (Copilot's `workspace.yaml` `name`). Otherwise the first user message, cut to 240 bytes |
 | `cwd` | string? | Working directory |
@@ -1914,7 +1929,7 @@ is for disposable evaluation, not production service enrollment.
 | `context` | string? | The agent's own context option id (as in `v1-launch.md` `contexts`, e.g. `1000000` or `long_context`), under the same rules as `effort`. Clients show it in Details after Model; a bare number is left out of the row, and a size such as `1M` reads `1M tokens` |
 | `status` | `"working"` \| `"waiting"` \| `"idle"` \| `"ending"` | `waiting` exactly when `question` is present, unless `ending`. `ending`: the host is ending the session (`session.stop`); it is removed once its process has gone, or shows its own status again if that fails. A client that does not know `ending` reads it as `idle` |
 | `statusSince` | time | When `status` last changed |
-| `startedAt` | time? | |
+| `startedAt` | time? | Omitted when the host cannot prove the session start. Process birth, workspace creation, `statusSince` and subscription cursors are not substitutes, including across resumes and host restarts |
 | `updatedAt` | time | When something a client shows last changed. Events that change nothing visible (hook runs, usage records, model internals) do **not** move it, so they never cause an upsert |
 | `processId` | number? | The agent's process, when known |
 | `transcript_bytes` | integer? | Session event-log file length in bytes, obtained from filesystem metadata only (#2739), never transcript contents or process memory. A measured empty file is zero; absence is unknown, never zero |

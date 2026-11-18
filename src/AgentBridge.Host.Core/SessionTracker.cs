@@ -344,6 +344,10 @@ internal sealed class SessionTracker
         return new Session
         {
             Id = d.Id,
+            Machine = _hostId,
+            Owner = _hostId is null ? null : new(),
+            Pr = _hostId is null ? null : new(),
+            Finished = _hostId is null ? null : new(),
             Agent = d.Agent,
             Title = Text.Title(title),
             Cwd = ws?.Cwd ?? _state.Cwd ?? reg?.WorkingDirectory,
@@ -354,7 +358,6 @@ internal sealed class SessionTracker
             Context = Text.NonBlank(_state.Context),
             Status = effective,
             StatusSince = since,
-            StartedAt = ws?.CreatedAt ?? _state.StartedAt,
             UpdatedAt = _state.UpdatedAt ?? reg?.Updated ?? ws?.UpdatedAt ?? _firstSeen,
             ProcessId = d.ProcessId,
             TranscriptBytes = _transcriptSize?.Bytes,
