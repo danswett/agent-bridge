@@ -28,8 +28,9 @@ public sealed class FleetProducerTests
             Copilot.Event("session.error", new { errorType = "session", message = "private-error" }, 3), Copilot.Assistant("\u26A0\uFE0F Turn error: private-error", 4), Copilot.TurnEnd(5)]);
         await using var source = f.Source(tailBytes: skim ? Encoding.UTF8.GetByteCount(Copilot.TurnEnd(5)) + Environment.NewLine.Length : 4 * 1024 * 1024); await source.RefreshAsync();
         var row = await Publish(source, f.Time);
-        Assert.Equal(0, row.GetProperty("openAsks").GetInt32());
-        Assert.Equal("unknown", row.GetProperty("attention").GetProperty("kind").GetString());
+        Assert.Equal(!skim, row.TryGetProperty("openAsks", out var asks));
+        if (!skim) { Assert.Equal(0, asks.GetInt32()); Assert.Equal("unknown", row.GetProperty("attention").GetProperty("kind").GetString()); }
+        else { Assert.False(row.TryGetProperty("attention", out _)); }
         Assert.Equal(Fixture.T0.AddSeconds(2), row.GetProperty("lastReplyAt").GetDateTimeOffset());
         Assert.Equal(f.Time.GetUtcNow(), row.GetProperty("observedAt").GetDateTimeOffset());
         Assert.False(row.GetProperty("stale").GetBoolean());
@@ -172,6 +173,56 @@ public sealed class FleetProducerTests
         var after = Assert.Single(await source.FleetSnapshotAsync());
         Assert.Equal(before.ObservedAt, after.ObservedAt);
         Assert.True((bool)FleetEvidenceCapture.Facts(after, f.Time.GetUtcNow())["stale"]);
+    }
+
+    [Theory, InlineData("cached"), InlineData("missing"), InlineData("locked")]
+    public async Task Rebound_process_drops_previous_observation_without_suppressing_publication(string mode)
+    {
+        using var f = new Fixture(); f.Processes.Run(AgentKind.Copilot, 101);
+        var path = f.CopilotSession(Id, 101);
+        File.WriteAllLines(path, [Copilot.Permission("first", "tool-1", Copilot.Prompts["commands"], 1)]);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(-10));
+        await using var source = f.Source(); await source.RefreshAsync();
+        Assert.NotNull(Assert.Single(await source.FleetSnapshotAsync()).ObservedAt);
+        using var held = mode == "locked" ? new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None) : null;
+        if (mode == "missing") { File.Delete(path); }
+        f.Processes.Run(AgentKind.Copilot, 101, startedAt: Fixture.T0);
+        await source.RefreshAsync();
+        var snapshot = Assert.Single(await source.FleetSnapshotAsync());
+        Assert.Equal(source.ProcessOf(Id), snapshot.Process);
+        Assert.Null(snapshot.ObservedAt); Assert.Null(snapshot.OpenAsks); Assert.Null(snapshot.Attention); Assert.Null(snapshot.LastReplyAt);
+        Assert.True(await new FleetPublisher(source, "fixture", observe: (_, _) => Task.FromResult<SessionEvidence?>(null))
+            .PublishAsync((r, _) => { Assert.Null(RosterFields.Check(r, "fixture", out _, out _, out _)); return Task.CompletedTask; }));
+    }
+
+    [Theory, InlineData(false), InlineData(true)]
+    public async Task Outstanding_asks_before_the_parsed_window_never_publish_false_absence(bool permission)
+    {
+        using var f = new Fixture(); f.Processes.Run(AgentKind.Copilot, 101);
+        var tail = Copilot.TurnEnd(3);
+        File.WriteAllLines(f.CopilotSession(Id, 101), [permission ? Copilot.Permission("first", "tool-1", Copilot.Prompts["commands"], 1)
+            : Copilot.ToolStart("ask", "ask_user", new { question = "private-question" }, 1), Copilot.Assistant("", 2, reasoning: "private-reasoning"), tail]);
+        await using var source = f.Source(tailBytes: Encoding.UTF8.GetByteCount(tail) + Environment.NewLine.Length);
+        await source.RefreshAsync();
+        var row = await Publish(source, f.Time);
+        Assert.False(row.TryGetProperty("openAsks", out _) || row.TryGetProperty("attention", out _));
+        Fixture.Append(source.Files(Id)!.Transcript!, Copilot.TurnEnd(4)); await source.RefreshAsync();
+        Assert.False((await Publish(source, f.Time)).TryGetProperty("openAsks", out _));
+    }
+
+    [Fact]
+    public async Task Evidence_rich_byte_truncation_below_the_session_limit_is_accepted_by_the_relay()
+    {
+        var source = new FleetPublisherTests.Source { Sessions = Enumerable.Range(1, 64).Select(FleetPublisherTests.NewSession).ToList() };
+        var evidence = SessionEvidence.Read(JsonSerializer.SerializeToElement(new { openAsks = 2, attention = new { kind = "question" },
+            observedAt = Fixture.T0, unsentLength = 1, unsentHash = new string('a', 64) }, ProtocolJson.Options));
+        var registry = new SessionRegistry(TimeProvider.System);
+        Assert.True(await new FleetPublisher(source, "fixture", _ => new string('a', 64), observe: (_, _) => Task.FromResult(evidence)).PublishAsync((r, _) =>
+        {
+            Assert.True(r.GetProperty("truncated").GetBoolean()); Assert.Equal(64, r.GetProperty("total").GetInt32());
+            Assert.InRange(r.GetProperty("sessions").GetArrayLength(), 1, 63);
+            Assert.Null(registry.Put("account", "fixture", r)); return Task.CompletedTask;
+        }));
     }
 
     static string[] Box(string content) => ["\u257B\u2584\u2584\u2584", "\u2503 " + content, "\u2579\u2580\u2580\u2580", " Interactive \u00B7 / commands \u00B7 @ files"];
