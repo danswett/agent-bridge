@@ -19,10 +19,10 @@ internal static class CoordinatorMode
 
     internal static UpdateCoordinatorAdapter SlotAdapter(UpdateCoordinatorRequest request, string runtime,
         Func<Stream, string?>? metadata = null, Func<int, IUpdateCoordinatorProcess?>? open = null,
-        Func<ProcessStartInfo, IUpdateCoordinatorProcess>? start = null) =>
-        new(request, open, start, slotApply: (apply, cancel) => Task.Run(() =>
+        Func<ProcessStartInfo, IUpdateCoordinatorProcess>? start = null, TimeProvider? time = null) =>
+        new(request, open, start, time, slotApply: (apply, cancel) => UpdateApplyRetry.BeforeCommitAsync(commit => Task.Run(() =>
             new SlotMigration(apply.Root, runtime, metadata).Activate(apply.Package, apply.TargetVersion,
-                apply.Digest, cancel: cancel), CancellationToken.None));
+                apply.Digest, beforeCommit: commit, cancel: cancel), CancellationToken.None), time, cancel));
 
     internal static async Task<int> RunAsync(string[] args, string imagePath, string runtimeTarget,
         Func<UpdateCoordinatorRequest, UpdateCoordinatorAdapter> factory,

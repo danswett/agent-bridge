@@ -138,6 +138,95 @@ public sealed class UpdateApplyRetryTests
         Assert.Equal(0, attempts);
     }
 
+    [Theory]
+    [InlineData(UpdateApplyEnd.Completed)]
+    [InlineData(UpdateApplyEnd.Unknown)]
+    [InlineData(UpdateApplyEnd.Failed)]
+    public async Task Cancellation_arriving_with_a_terminal_result_does_not_reinterpret_that_result(UpdateApplyEnd end)
+    {
+        using var cancel = new CancellationTokenSource();
+        var result = Result(end, 0);
+        var actual = await new UpdateApplyRetry(_ =>
+        {
+            cancel.Cancel();
+            return Task.FromResult(result);
+        }, time).RunAsync(cancel.Token);
+
+        Assert.Same(result, actual);
+        Assert.False(time.Delays.Reader.TryRead(out _));
+    }
+
+    static IOException Sharing(int code = 32) => new("fixture holder", unchecked((int)0x80070000) | code);
+
+    [Fact]
+    public async Task A_holder_released_during_backoff_allows_a_closed_precommit_attempt_to_succeed()
+    {
+        var held = true;
+        var run = UpdateApplyRetry.BeforeCommitAsync(commit =>
+        {
+            attempts++;
+            if (held) throw Sharing();
+            commit();
+            return Task.FromResult("verified target");
+        }, time);
+        await time.Delay(TimeSpan.FromSeconds(1));
+        held = false;
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        Assert.Equal("verified target", await run.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public async Task Repeated_precommit_holder_failure_is_rethrown_unchanged_without_a_third_attempt()
+    {
+        var error = Sharing();
+        var run = UpdateApplyRetry.BeforeCommitAsync<string>(_ =>
+        {
+            attempts++;
+            throw error;
+        }, time);
+        await time.Delay(TimeSpan.FromSeconds(1));
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        Assert.Same(error, await Assert.ThrowsAsync<IOException>(() => run));
+        Assert.Equal(2, attempts);
+        Assert.False(time.Delays.Reader.TryRead(out _));
+    }
+
+    [Theory]
+    [InlineData(true, 32)]
+    [InlineData(false, 5)]
+    public async Task Crossing_the_commit_boundary_or_an_unrecognized_failure_never_authorizes_retry(bool committed, int code)
+    {
+        var error = Sharing(code);
+        var run = UpdateApplyRetry.BeforeCommitAsync<string>(commit =>
+        {
+            attempts++;
+            if (committed) commit();
+            throw error;
+        }, time);
+
+        Assert.Same(error, await Assert.ThrowsAsync<IOException>(() => run));
+        Assert.Equal(1, attempts);
+        Assert.False(time.Delays.Reader.TryRead(out _));
+    }
+
+    [Fact]
+    public async Task An_unfinished_precommit_attempt_cannot_start_a_second_attempt_after_cancellation()
+    {
+        using var cancel = new CancellationTokenSource();
+        var finished = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var run = UpdateApplyRetry.BeforeCommitAsync(_ => { attempts++; return finished.Task; }, time, cancel.Token);
+        cancel.Cancel();
+        Assert.False(run.IsCompleted);
+        finished.SetException(Sharing());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        Assert.Equal(1, attempts);
+        Assert.False(time.Delays.Reader.TryRead(out _));
+    }
+
     sealed class Clock() : FakeTimeProvider(Make.T0)
     {
         public Channel<TimeSpan> Delays { get; } = Channel.CreateUnbounded<TimeSpan>();
