@@ -4,7 +4,7 @@ using Xunit;
 
 public sealed class ProcessTreeCollectionTests
 {
-    static IProcessControl Control(TreeRig rig, TimeProvider? time = null) => new ProcessTreeControl(rig.Open, rig.Evidence(), time);
+    static IProcessControl Control(TreeRig rig, TimeProvider? time = null) => new ProcessTreeControl(rig.Open, rig.Evidence(), time ?? new FakeTimeProvider());
     static IHeldProcess Open(TreeRig rig, TimeProvider? time = null) => Control(rig, time).Open(101, TreeRig.T0).Process!;
 
     [Theory]
@@ -16,6 +16,7 @@ public sealed class ProcessTreeCollectionTests
         if (older) { rig.Nodes[102].Started = TreeRig.T0.AddSeconds(-1); }
         using (var held = Open(rig))
         {
+            Assert.Equal(older ? 2 : 3, rig.Handles);
             Assert.Null(held.Terminate());
             Assert.Null(held.Terminate());
             Assert.True(await held.WaitForExitAsync(TimeSpan.Zero));
@@ -148,5 +149,25 @@ public sealed class ProcessTreeCollectionTests
         Assert.InRange(rig.MaxHandles, 1, wide ? 64 : 2);
         Assert.False(await held.WaitForExitAsync(TimeSpan.Zero));
         Assert.NotNull(held.ExitProblem);
+    }
+
+    [Fact]
+    public async Task An_unpinned_older_creation_read_cannot_hide_a_vanished_replacement_and_its_child()
+    {
+        var rig = new TreeRig();
+        rig.Nodes.Remove(103);
+        rig.Nodes[102].Started = TreeRig.T0.AddSeconds(-1);
+        rig.AfterCreated = id =>
+        {
+            if (id != 102) { return; }
+            rig.Nodes[id] = new TreeNode(101, TreeRig.T0.AddSeconds(1)) { Running = false };
+            rig.Nodes.Add(103, new TreeNode(102, TreeRig.T0.AddSeconds(2)));
+        };
+        var opened = Control(rig).Open(101, TreeRig.T0);
+        using var held = opened.Process;
+        held?.Terminate();
+        Assert.False(held is not null && await held.WaitForExitAsync(TimeSpan.Zero));
+        Assert.NotNull(opened.Refusal ?? held?.ExitProblem);
+        Assert.True(rig.Nodes[103].Running);
     }
 }

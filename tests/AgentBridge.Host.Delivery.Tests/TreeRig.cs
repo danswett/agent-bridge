@@ -21,7 +21,7 @@ internal sealed class TreeRig
     };
     public List<int> Terminated { get; } = [];
     public int Handles, MaxHandles, SnapshotError = 18, SnapshotFailures = 0;
-    public Action<int>? BeforeOpen, AfterOpen, BeforeCreated;
+    public Action<int>? BeforeOpen, AfterOpen, BeforeCreated, AfterCreated;
     public Action? AfterScan = null;
     public ProcessTreeEvidence Evidence() => new(Open, Scan, Created);
     public IHeldProcess OpenRoot() => Open(101, T0).Process!;
@@ -39,7 +39,9 @@ internal sealed class TreeRig
     DateTimeOffset? Created(int id)
     {
         BeforeCreated?.Invoke(id);
-        return Nodes.TryGetValue(id, out var n) && n.Running && !n.UnknownStart ? n.Started : null;
+        var at = Nodes.TryGetValue(id, out var n) && n.Running && !n.UnknownStart ? n.Started : (DateTimeOffset?)null;
+        AfterCreated?.Invoke(id);
+        return at;
     }
 
     public HeldOpen Open(int id, DateTimeOffset started)

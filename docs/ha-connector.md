@@ -724,8 +724,10 @@ The graceful budget covers typing admission and `/exit`; a blocked typing slot o
 exclusion skips typing and forces termination. Injector errors also force termination, while
 the typing fence and PID handle remain held until the worker's exit is proven.
 
-Held-descendant and complete-snapshot evidence primitives are prepared separately.
-They do not yet enable descendant-tree termination in the Windows Stop path.
+Held-descendant evidence and a bounded tree-control adapter are prepared separately.
+The adapter caps each collection pass at 64 handles and 250 ms, retains lost-ancestry
+uncertainty and can terminate its verified root despite incomplete snapshots.
+It is not yet activated in the Windows Stop path.
 
 Pre-Ending hypotheses for [2910](https://github.com/danswett/agent-bridge/issues/2910),
 not established incident causes:
