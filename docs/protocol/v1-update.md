@@ -464,6 +464,8 @@ host's own text (#826). "Bridge", never "host".
   way there"; `busy` "Another update or restart is under way there"; `restart-cap` "Updates when
   its sessions are quiet", with **Update when idle** sending one ordinary `update.install`
   request, without signing or confirming. No restart allowance or deadline is shown.
+  The accepted note follows only that request and release; a newer terminal result,
+  changed release or unavailable app clears it. Identical quiet wording is shown only once.
   A read-only machine already says "View only", and offers neither. Install keeps
   its words and its wait.
 * **A failed download** (`last.outcome: failed`, `last.step: downloading`) with an installed app,
@@ -507,7 +509,7 @@ host's own text (#826). "Bridge", never "host".
   | `not-quiet` | a message was being delivered there the whole time |
   | `changed` | something changed on the machine; try again |
   | `release-changed` | a newer update arrived; try again |
-  | `rate-limited` | too many presses just now; try again in a few minutes |
+  | `rate-limited` | Not updated yet. Try again after *viewer-local time*, with the date when it is not today; without `retryAt`, Try again in a few minutes |
   | `restart-cap` | Not updated yet. Try Update when idle. (a refusal at departure or from an older host) |
   | `busy` | another update or restart is under way there |
   | `sign-in` | an agent sign-in is under way there |

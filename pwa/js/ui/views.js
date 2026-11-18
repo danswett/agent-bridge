@@ -1134,7 +1134,7 @@ function updateRow(updates, id, name, now) {
       last ? h('p', { class: 'machine-update-last' }, last) : null,
       why ? h('p', { class: 'machine-update-why' }, why) : null,
       ...details.map((text) => h('p', { class: 'machine-update-detail', id: checkFailed ? `update-check-${id}` : null }, text)),
-      note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
+      note && note !== why ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
       s.installer ? h('div', { class: 'machine-actions machine-update-actions' },
         !offerNow ? button('machine-update-check', checkLabel, `${checkLabel} on ${name}`, check, () => updates.press(id, 'check')) : null,
         s.available && !offerNow ? button('machine-update-install', retry ? 'Try again now' : 'Install',

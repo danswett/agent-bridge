@@ -10,7 +10,7 @@
 // sessions the bridge can't read, asks first, listing what it would go over, and the press carries
 // what was shown (accept). Every word about it is this file's, from the machine's codes, never the
 // machine's own text (#826).
-import { ago } from './ui/time.js';
+import { ago, localTime } from './ui/time.js';
 import { clockTime, plainText } from './auth-state.js';
 
 export const UPDATE = Object.freeze({
@@ -211,7 +211,7 @@ function nowWaiting(s) {
 // Why an Update now didn't happen, from its code, as a whole line: "Not updated: …" (v1-update.md
 // "What the person sees", with Creative's three on #1185). An unknown code is "the machine
 // refused it", never what the machine wrote.
-export function notUpdated(why, { retryAt = null, failed = false } = {}) {
+export function notUpdated(why, { retryAt = null, failed = false, now = Date.now() } = {}) {
   if (failed) { return "Not updated: the update didn't take."; }
   switch (why) {
     case 'expired': return 'Not updated: not done within 15 minutes. Press Update now again.';
@@ -220,7 +220,8 @@ export function notUpdated(why, { retryAt = null, failed = false } = {}) {
     case 'restart-cap': return 'Not updated yet. Try Update when idle.';
     case 'rate-limited': {
       const time = clockTime(retryAt);
-      return `Not updated yet. ${time ? `Try again after ${time}` : 'Try again in a few minutes'}.`;
+      const when = time && new Date(retryAt).toDateString() !== new Date(now).toDateString() ? localTime(retryAt) : time;
+      return `Not updated yet. ${when ? `Try again after ${when}` : 'Try again in a few minutes'}.`;
     }
     default: break;
   }
@@ -361,6 +362,7 @@ export function nowAnnouncement(s, said = null) {
 export class UpdateControl {
   #busy = new Set();
   #notes = new Map();
+  #idleNotes = new Map();
   #listeners = new Set();
   // Machines whose Update now confirmation is open.
   #asking = new Set();
@@ -394,9 +396,26 @@ export class UpdateControl {
 
   // { busy, asking, note } for one machine's row.
   stateOf(id) {
-    const note = this.#notes.get(id) ?? null;
+    const idleNote = this.#idleNote(id);
     return { busy: this.#busy.has(id), asking: this.#asking.has(id),
-      note: note === WHEN_IDLE && !this.fleet.update(id)?.available ? null : note };
+      note: this.#notes.get(id) ?? idleNote };
+  }
+
+  #idleNote(id) {
+    const note = this.#idleNotes.get(id);
+    if (!note) { return null; }
+    const s = this.fleet.update(id);
+    const changedLast = ['outcome', 'from', 'to', 'reason', 'request', 'at', 'code', 'step']
+      .some((field) => (s?.last?.[field] ?? null) !== (note.last?.[field] ?? null));
+    if (!s?.installer || s.unavailable || s.available !== note.release
+      || !['idle', 'downloading', 'waiting'].includes(s.phase) || s.requestNow
+      || (s.request ? s.request !== note.request : note.seen)
+      || s.last?.request === note.request || changedLast) {
+      this.#idleNotes.delete(id);
+      return null;
+    }
+    if (s.request === note.request) { note.seen = true; }
+    return note.accepted ? WHEN_IDLE : null;
   }
 
   // Whether this device can offer Update now at all (it has a key to sign with).
@@ -410,20 +429,27 @@ export class UpdateControl {
     if (this.#busy.has(id) || this.#asking.has(id)) { return; }
     this.#busy.add(id);
     this.#notes.delete(id);
+    this.#idleNotes.delete(id);
     this.#emit();
     try {
       const before = this.fleet.update(id);
-      const result = readUpdateCommandResult(await this.fleet.call(id, kind === 'install' ? UPDATE.install : UPDATE.check, { request: this.newRequest() }));
+      const request = this.newRequest();
+      const idleNote = kind === 'install' && canUpdateWhenIdle(before)
+        ? { request, release: before.available, last: before.last ? { ...before.last } : null, seen: false, accepted: false } : null;
+      if (idleNote) { this.#idleNotes.set(id, idleNote); }
+      const result = readUpdateCommandResult(await this.fleet.call(id, kind === 'install' ? UPDATE.install : UPDATE.check, { request }));
       // The state as the press found it: older than an update.state that came meanwhile, which
       // it must not replace.
       if (result.state && this.fleet.update(id) === before) { this.fleet.noteUpdate(id, result.state); }
       if (result.outcome === 'accepted') {
-        if (kind === 'install' && canUpdateWhenIdle(before)) { this.#notes.set(id, WHEN_IDLE); }
+        if (idleNote) { idleNote.accepted = true; }
         this.fleet.watch?.(id);
       } else {
-        this.#notes.set(id, result.code === 'rate-limited' ? notUpdated(result.code, { retryAt: result.retryAt }) : line(result.reason ?? 'it refused'));
+        this.#idleNotes.delete(id);
+        this.#notes.set(id, result.code === 'rate-limited' ? notUpdated(result.code, { retryAt: result.retryAt, now: this.now() }) : line(result.reason ?? 'it refused'));
       }
     } catch (e) {
+      this.#idleNotes.delete(id);
       this.#notes.set(id, `It did not take it: ${sentence(e?.message ?? 'the machine could not be reached')}`);
     } finally {
       this.#busy.delete(id);
@@ -446,6 +472,7 @@ export class UpdateControl {
     const release = s.available;
     const generation = this.#generation;
     this.#notes.delete(id);
+    this.#idleNotes.delete(id);
     let busy = s.busy ?? CANT_TELL;
     let ask = !quiet(busy);
     for (;;) {
@@ -493,7 +520,7 @@ export class UpdateControl {
         this.#nowRequests = [...this.#nowRequests.slice(-31), request];
         this.fleet.watch?.(id);
       } else if (result.outcome === 'refused') {
-        this.#notes.set(id, notUpdated(result.code, { retryAt: result.retryAt }));
+        this.#notes.set(id, notUpdated(result.code, { retryAt: result.retryAt, now: this.now() }));
       }
       return result;
     } catch (e) {
@@ -548,6 +575,7 @@ export class UpdateControl {
   forget(id) {
     this.#confirming.get(id)?.abort();
     this.#notes.delete(id);
+    this.#idleNotes.delete(id);
     this.#said.delete(id);
     clearTimeout(this.#leaving.get(id)?.timer);
     this.#leaving.delete(id);
@@ -559,6 +587,7 @@ export class UpdateControl {
     for (const abort of this.#confirming.values()) { abort.abort(); }
     this.#confirming.clear();
     this.#notes.clear();
+    this.#idleNotes.clear();
     this.#said.clear();
     for (const l of this.#leaving.values()) { clearTimeout(l.timer); }
     this.#leaving.clear();

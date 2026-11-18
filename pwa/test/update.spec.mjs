@@ -154,6 +154,21 @@ test('a restart cap shows quiet wording before the press, never a deadline or an
   expect(await page.evaluate(() => window.agentBridgeDemo.updateLog)).toEqual([]);
 });
 
+test('a capped update shows quiet wording once and never revives its note after a failure or a new release', async ({ page }) => {
+  await openDemo(page, '&updateNow=1');
+  await page.evaluate(() => { window.agentBridgeDemo.host.updateStepMs = 60000; });
+  await setUpdate(page, { canUpdateNow: false, updateNowWhy: 'restart-cap' });
+  const row = rowOf(page);
+  await updateOf(page).getByRole('button', { name: /^Update when idle:/ }).click();
+  await expect(row.getByText('Updates when its sessions are quiet', { exact: true })).toHaveCount(1);
+  await setUpdate(page, { phase: 'idle', request: null, last: { outcome: 'failed', reason: 'connection reset' } });
+  await expect(updateOf(page).locator('.machine-update-last')).toHaveText('The update failed: connection reset.');
+  await expect(row.getByRole('alert')).toHaveCount(0);
+  await setUpdate(page, { available: null });
+  await setUpdate(page, { available: '0.3.0', updateNowWhy: null });
+  await expect(row.getByText('Updates when its sessions are quiet', { exact: true })).toHaveCount(0);
+});
+
 test('Check leaves the card and Check all leaves the rows for their respective menus', async ({ page }) => {
   await openDemo(page);
   const row = rowOf(page);

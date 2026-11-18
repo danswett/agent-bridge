@@ -335,6 +335,69 @@ test('the restart cap is worded as an idle update, not an allowance or a retry d
   }), 'Updates when its sessions are quiet');
 });
 
+test('a delayed capped acceptance never adds a quiet note over a newer failed update', async () => {
+  const capped = { ...ready, canUpdateNow: false, updateNowWhy: 'restart-cap' };
+  let accept;
+  const fleet = nowFleet(capped, [new Promise((resolve) => { accept = resolve; })]);
+  const control = new UpdateControl({ fleet, newRequest: () => 'r-idle' });
+  const pressing = control.pressNow('a');
+  const failed = { ...capped, last: { outcome: 'failed', reason: 'connection reset' } };
+  fleet.states.set('a', failed);
+  accept({ outcome: 'accepted', state: capped });
+  await pressing;
+  assert.equal(fleet.update('a'), failed);
+  assert.equal(lastLine(failed, NOW), 'The update failed: connection reset.');
+  assert.equal(control.stateOf('a').note, null);
+});
+
+test('a capped acceptance note is cleared permanently by a terminal or incompatible state', async () => {
+  const capped = { ...ready, canUpdateNow: false, updateNowWhy: 'restart-cap' };
+  for (const change of [
+    ...['failed', 'refused', 'updated', 'current'].map((outcome) => ({ last: { outcome, request: 'r-idle' } })),
+    { last: { outcome: 'failed', reason: 'connection reset' } },
+    { installer: false }, { unavailable: 'app stopped' }, { available: null }, { available: '0.6.0' },
+    { request: 'another-press' }, { requestNow: true }, { phase: 'installing' }, { phase: 'checking' },
+  ]) {
+    const fleet = nowFleet(capped, []);
+    const control = new UpdateControl({ fleet, newRequest: () => 'r-idle' });
+    await control.pressNow('a');
+    assert.match(control.stateOf('a').note, /updates when its sessions are quiet/i);
+    fleet.states.set('a', { ...capped, ...change });
+    assert.equal(control.stateOf('a').note, null, JSON.stringify(change));
+    fleet.states.set('a', capped);
+    assert.equal(control.stateOf('a').note, null, 'the invalidated note must not return');
+  }
+});
+
+test('a capped note follows only its request and release, not an older outcome or a later press', async () => {
+  const capped = { ...ready, canUpdateNow: false, updateNowWhy: 'restart-cap',
+    last: { outcome: 'failed', request: 'older', reason: 'old failure' } };
+  const fleet = nowFleet(capped, []);
+  const control = new UpdateControl({ fleet, newRequest: () => 'r-idle' });
+  await control.pressNow('a');
+  for (const phase of ['downloading', 'waiting']) {
+    fleet.states.set('a', { ...capped, phase, request: 'r-idle', last: { ...capped.last } });
+    assert.match(control.stateOf('a').note, /updates when its sessions are quiet/i);
+  }
+  fleet.states.set('a', { ...capped, request: null });
+  assert.equal(control.stateOf('a').note, null);
+  await control.pressNow('a');
+  control.clear();
+  assert.equal(control.stateOf('a').note, null);
+});
+
+test('a later different release never revives a capped note hidden when no release was available', async () => {
+  const capped = { ...ready, canUpdateNow: false, updateNowWhy: 'restart-cap' };
+  const fleet = nowFleet(capped, []);
+  const control = new UpdateControl({ fleet, newRequest: () => 'r-idle' });
+  await control.pressNow('a');
+  assert.match(control.stateOf('a').note, /updates when its sessions are quiet/i);
+  fleet.states.set('a', { ...capped, available: null });
+  assert.equal(control.stateOf('a').note, null);
+  fleet.states.set('a', { ...capped, available: '0.6.0' });
+  assert.equal(control.stateOf('a').note, null);
+});
+
 test('only an explicit settled download failure offers a retry, never a held check or an unknown step', () => {
   const failed = { ...found, last: { outcome: 'failed', step: 'downloading' } };
   assert.ok(canRetryDownload(readUpdateState(failed)));
@@ -365,17 +428,26 @@ test('cap fallback is single flight without a signing key and preserves a refuse
 });
 
 for (const kind of ['ordinary', 'signed']) {
-  const press = async (answer) => {
+  const press = async (answer, now = NOW) => {
     const fleet = kind === 'ordinary' ? fakeFleet(() => answer) : nowFleet(ready, [answer]);
-    const control = new UpdateControl({ fleet, newRequest: () => 'r1', sign: fakeSign });
+    const control = new UpdateControl({ fleet, newRequest: () => 'r1', sign: fakeSign, now: () => now });
     if (kind === 'ordinary') { await control.press('a', 'install'); } else { await control.pressNow('a'); }
     return control.stateOf('a').note;
   };
   test(`retryAt on ${kind} update refusals uses the viewer clock`, async () => {
-    const retryAt = '2026-11-02T20:12:00.000Z';
+    const local = new Date(NOW);
+    local.setHours(20, 12, 0, 0);
+    const retryAt = local.toISOString();
     const answer = { outcome: 'refused', code: 'rate-limited', retryAt, reason: 'host words nobody sees' };
     const time = new Date(retryAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     assert.equal(await press(answer), `Not updated yet. Try again after ${time}.`);
+  });
+  test(`retryAt on ${kind} update refusals includes the viewer-local date when it is not today`, async () => {
+    const now = new Date(2026, 10, 17, 23, 55).getTime();
+    for (const local of [new Date(2026, 10, 18, 0, 5), new Date(2027, 0, 1, 0, 5)]) {
+      const answer = { outcome: 'refused', code: 'rate-limited', retryAt: local.toISOString() };
+      assert.equal(await press(answer, now), `Not updated yet. Try again after ${local.toLocaleString()}.`);
+    }
   });
   test(`retryAt missing or invalid on ${kind} update refusals gets a plain fallback`, async () => {
     for (const retryAt of [undefined, null, 'not a time', 123]) {
