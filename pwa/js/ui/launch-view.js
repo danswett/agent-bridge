@@ -25,7 +25,7 @@ import { ago } from './time.js';
 import { ASK, ALLOW_ALL, MAX_PROMPT, TRUST, checkLaunch } from '../launch.js';
 import { LaunchFollow, sameQuestion, samePrompt } from '../launch-follow.js';
 import { LINGER_READ_MS } from './receipt.js';
-import { whileVisible } from './ticker.js';
+import { isPageHidden, whileVisible } from './ticker.js';
 
 export const APPROVE_HINT = 'agent-bridge-host workspace add <folder>';
 export const RESUMABLE_INCOMPLETE_NOTE = "Some sessions weren't checked in time. Reload choices to try again.";
@@ -397,7 +397,7 @@ export class LaunchPanel {
 
   #probe(hostId, load, due = false) {
     // Nobody is looking at a hidden tab: its machines aren't asked until it shows again.
-    if (!this.#target || hostId === this.#target.hostId || globalThis.document?.visibilityState === 'hidden') { return; }
+    if (!this.#target || hostId === this.#target.hostId || isPageHidden(globalThis.document)) { return; }
     const last = this.#probes.get(hostId);
     if (last && !due && Date.now() - last.at < LaunchPanel.recheckMs) { return; }
     const token = ++this.#probeSeq;
@@ -976,11 +976,11 @@ export class LaunchPanel {
     this.#cancelJump();
     const wanted = () => this.#open && this.#target?.hostId === hostId && (!request || this.service.get(hostId)?.request === request);
     if (!wanted()) { return; }
-    if (!globalThis.document?.hidden && this.jump(id, hostId)) { return; }
+    if (!isPageHidden(globalThis.document) && this.jump(id, hostId)) { return; }
     const until = Date.now() + 15000;
     this.#jumpTimer = whileVisible(() => {
       if (!wanted() || Date.now() > until) { this.#cancelJump(); return; }
-      if (globalThis.document?.hidden) { return; }
+      if (isPageHidden(globalThis.document)) { return; }
       if (this.jump(id, hostId)) { this.#cancelJump(); }
     }, 250);
   }

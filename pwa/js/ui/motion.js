@@ -8,6 +8,8 @@
 // before anything moves, nothing is made inert or untappable while it moves, and a second
 // change interrupts the first rather than waiting behind it.
 
+import { isPageHidden, watchPageVisibility } from './ticker.js';
+
 const MS = /^(-?[\d.]+)(ms|s)$/;
 
 function length(value) {
@@ -94,7 +96,7 @@ export function stopTravel(el) {
 
 // What the motions drew, by entry, as Animation.id: the tests read them back.
 function run(el, keyframes, entry, t, options = {}) {
-  if (!el?.isConnected || el.ownerDocument?.visibilityState === 'hidden' || typeof el.animate !== 'function' || !(t.duration > 0)) { return null; }
+  if (!el?.isConnected || isPageHidden(el.ownerDocument) || typeof el.animate !== 'function' || !(t.duration > 0)) { return null; }
   try {
     const a = el.animate(keyframes, { duration: t.duration, easing: t.easing, fill: 'backwards', ...options });
     a.id = `ab-motion-${entry}`;
@@ -171,7 +173,7 @@ export const PRESSABLE = '.button, .icon-button, .row-main, .nav-item, .view-tab
 function watchVisibility(doc) {
   const paused = new Set();
   const changed = () => {
-    const hidden = doc.visibilityState === 'hidden';
+    const hidden = isPageHidden(doc);
     // CSS also covers animations created while hidden, including pseudo-elements.
     doc.documentElement.toggleAttribute('data-motion-hidden', hidden);
     if (hidden) {
@@ -185,7 +187,7 @@ function watchVisibility(doc) {
       paused.clear();
     }
   };
-  doc.addEventListener('visibilitychange', changed);
+  watchPageVisibility(changed, doc);
   changed();
 }
 
@@ -245,7 +247,7 @@ const flips = new WeakMap();
 // Keep it running through mutate(): a leaving item's copy must see that same drawn position.
 export function flip(container, mutate, { entry = 'shift', viewport = false } = {}) {
   const doc = container.ownerDocument;
-  if (doc.visibilityState === 'hidden') {
+  if (isPageHidden(doc)) {
     const pending = flips.get(container);
     if (pending) { pending.hidden = true; }
     return mutate();
@@ -265,13 +267,13 @@ export function flip(container, mutate, { entry = 'shift', viewport = false } = 
       }
     }
     flips.set(container, state);
-    const visibility = () => { state.hidden ||= doc.visibilityState === 'hidden'; };
-    doc.addEventListener?.('visibilitychange', visibility);
+    const visibility = () => { state.hidden ||= isPageHidden(doc); };
+    const unwatch = watchPageVisibility(visibility, doc);
     doc.defaultView.requestAnimationFrame(() => {
-      doc.removeEventListener?.('visibilitychange', visibility);
+      unwatch();
       flips.delete(container);
       for (const a of state.animations) { a.cancel(); }
-      if (!container.isConnected || state.hidden || doc.visibilityState === 'hidden') { return; }
+      if (!container.isConnected || state.hidden || isPageHidden(doc)) { return; }
       const origin = state.viewport ? state.origin : container.getBoundingClientRect();
       const after = new Map([...container.children].filter((el) => el.getClientRects().length).map((el) => [el, el.getBoundingClientRect()]));
       const slotsChanged = state.before.size !== after.size || [...after.keys()].some((el) => !state.before.has(el));
@@ -335,7 +337,7 @@ export function select(to, entry, from, { pseudo = null, axis = 'xy', scaleX = f
 export function leave(el, entry, { dy = 0 } = {}) {
   const doc = el?.ownerDocument;
   const t = timing(entry, { exit: true, doc });
-  if (!el?.isConnected || !(t.duration > 0) || !doc?.body?.attachShadow || doc.visibilityState === 'hidden') { return null; }
+  if (!el?.isConnected || !(t.duration > 0) || !doc?.body?.attachShadow || isPageHidden(doc)) { return null; }
   const r = el.getBoundingClientRect();
   if (!r.width || !r.height) { return null; }
   // Only what showed of it: a row half scrolled out of its list, or a glyph under the end of a

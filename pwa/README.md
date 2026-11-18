@@ -42,8 +42,9 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 
 ## Modules
 
-Periodic UI clocks pause while the document is hidden and refresh once on return,
-including launch probes and pending session jumps. Glyphs, spinners and running
+Periodic UI clocks pause while the document is hidden or on `pagehide` and refresh once
+on return, including a persisted `pageshow`. Launch probes and pending session jumps
+resume without renewing the original jump deadline. Glyphs, spinners and running
 motion pause too; hidden updates do not start transient motion. The sessions timing
 report, sign-in banner refresh and stop confirmation countdown already used
 visibility-aware clocks. One-shot busy/linger deadlines remain one-shot, and sign-in
