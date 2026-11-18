@@ -26,11 +26,6 @@ function Get-FailedJobs([long]$RunId, [string]$Repository) {
     }
 }
 
-function Get-MainRedIssue([string]$Repository) {
-    Invoke-Gh issue list --repo $Repository --label main-red --author 'github-actions[bot]' --state open --limit 1 --json 'number,body' |
-        ConvertFrom-Json | Select-Object -First 1
-}
-
 function Format-MainRedBody($Run, [string]$Repository, $Jobs) {
     # Never publish raw logs or exception text. Names are untrusted, even inside fences.
     function Safe-Name([string]$Text) {

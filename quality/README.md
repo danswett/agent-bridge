@@ -893,6 +893,16 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   in the retry run's summary, before posting issue comments. GitHub retains the next attempt
   on the source run. Attempt 2 is never re-run, so repeated timeouts or failures remain red.
   Offline test: `quality/test-rerun-known-flakes.ps1` (catalog suite `rerun-known-flakes`).
+- **Main-red auto-rerun once** ([S2](https://github.com/danswett/agent-bridge/issues/3070),
+  owner order Nov 17, 2026): the workflow opts into `-AutoRerun`, superseding the
+  known-only restriction above. Any first-attempt main CI failure or timeout gets
+  one failed-jobs rerun, including unfiled tests and build errors. Cancelled jobs,
+  foreign/non-main runs, newer pushes and attempts beyond two refuse. S1 records
+  the incident first; a run/SHA-bound reservation prevents duplicate dispatch.
+  Attempt-two success labels that incident and matched flake issues `flaky` and
+  records `rerun-flake:` with original failures, even if S1 already closed it.
+  Red records `rerun-failed:` with the actual test intersection for S3, never a
+  third attempt. No polling, mentions, assignees or phone notification are added.
 - **Main-red detection** ([S1](https://github.com/danswett/agent-bridge/issues/3074)):
   `main-red.yml` handles completed main CI pushes without polling, using main's trusted script.
   Failure, timeout and startup failure open/update one Actions-authored `main-red` issue with
