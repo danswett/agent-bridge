@@ -113,6 +113,31 @@ public sealed class RunMarkerTests : IDisposable
         finally { (live as object as IDisposable)?.Dispose(); (next as object as IDisposable)?.Dispose(); }
     }
 
+    [Fact]
+    public void Competing_start_cannot_recover_the_same_record_while_the_first_start_saves()
+    {
+        Start("abandoned").Dispose();
+        PreviousRun? competing = null;
+        RunMarker.WriteFileOverride = (target, bytes) =>
+        {
+            RunMarker.WriteFileOverride = null;
+            var other = Start("competing");
+            competing = other.Previous;
+            other.Complete();
+            File.WriteAllBytes(target, bytes);
+        };
+        try
+        {
+            var recovered = Start("recovering");
+            Assert.Equal("abandoned", recovered.Previous.Version);
+            Assert.NotNull(competing);
+            Assert.False(competing.Unclean);
+            recovered.Complete();
+            Assert.False(RunMarker.ReadPrevious(folder).Unclean);
+        }
+        finally { RunMarker.WriteFileOverride = null; }
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("{broken")]
