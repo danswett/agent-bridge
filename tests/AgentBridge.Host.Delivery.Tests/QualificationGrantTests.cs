@@ -4,6 +4,7 @@ using Xunit;
 
 public sealed class QualificationGrantTests
 {
+    sealed class WallClock(DateTimeOffset now) : TimeProvider { public override DateTimeOffset GetUtcNow() => now; }
     internal sealed class Trust : IQualificationTrust
     {
         public QualificationAccess Access { get; set; } = QualificationAccess.SreCli;
@@ -120,8 +121,22 @@ public sealed class QualificationGrantTests
         var current = Assert.IsType<QualificationGrant>(other.Grants().Consume(other.Id).Grant);
         other.Clock.Advance(TimeSpan.FromMinutes(60));
         Assert.False(other.Grants().IsCurrent(current));
-        other.Clock.SetUtcNow(current.Issued.AddSeconds(-1));
-        Assert.False(other.Grants().IsCurrent(current));
+        Assert.False(new QualificationGrants(other.Trust, other.Journal, new WallClock(current.Issued.AddSeconds(-1))).IsCurrent(current));
+    }
+
+    [Fact]
+    public void Empty_approval_or_incomplete_binding_is_refused_and_only_SRE_can_revoke()
+    {
+        var run = new Run();
+        Assert.NotNull(run.Grants().Issue(Guid.Empty, TimeSpan.FromMinutes(1)).Refusal);
+        run.Trust.Binding = run.Trust.Binding with { Vm = Guid.Empty };
+        Assert.NotNull(run.Grants().Issue(run.Id, TimeSpan.FromMinutes(1)).Refusal);
+        run.Trust.Binding = run.Trust.Binding with { Vm = Guid.NewGuid(), Head = "not-a-sha" };
+        Assert.NotNull(run.Grants().Issue(run.Id, TimeSpan.FromMinutes(1)).Refusal);
+        run.Trust.Binding = run.Trust.Binding with { Head = new string('a', 40) }; run.Issue();
+        run.Trust.Access = QualificationAccess.OwnerApproval;
+        Assert.NotNull(run.Grants().Revoke(run.Id).Refusal);
+        Assert.Single(run.Journal.Entries);
     }
 
     [Fact]
