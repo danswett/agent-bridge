@@ -33,10 +33,10 @@ public static class SlotPreparation
         using var held = DownloadMark.Hold(package, digest)
             ?? throw new PackageMismatchException("Slot preparation refused: package bytes do not match the release digest.");
         using var zip = new ZipArchive(held, ZipArchiveMode.Read);
-        var (files, manifestIdentity) = Payload(zip, version, releaseIdentity);
+        var (files, manifestIdentity, runtime, bundledHostw) = Payload(zip, version, releaseIdentity);
         Prepared Winner()
         {
-            Validate(destination, files);
+            Validate(destination, files, runtime, bundledHostw);
             return new(relative, version, digest, manifestIdentity);
         }
         if (Directory.Exists(destination)) { return Winner(); }
@@ -58,7 +58,7 @@ public static class SlotPreparation
                 input.CopyTo(output);
                 output.Flush(flushToDisk: true);
             }
-            Validate(staging, files);
+            Validate(staging, files, runtime, bundledHostw);
             NoLinks(destination);
             try { Directory.Move(staging, destination); }
             catch (IOException) when (Directory.Exists(destination)) { return Winner(); }
@@ -70,7 +70,7 @@ public static class SlotPreparation
         }
     }
 
-    static (Dictionary<string, ZipArchiveEntry> Files, string Identity) Payload(ZipArchive zip, string version, Func<string, string?> releaseIdentity)
+    static (Dictionary<string, ZipArchiveEntry> Files, string Identity, string Runtime, bool BundledHostw) Payload(ZipArchive zip, string version, Func<string, string?> releaseIdentity)
     {
         const string prefix = "lib/app/";
         if (zip.Entries.Count > 10000) { throw new InvalidDataException("Slot archive exceeds the entry limit."); }
@@ -90,7 +90,9 @@ public static class SlotPreparation
             if (!entry.FullName.StartsWith(prefix, StringComparison.Ordinal) || entry.FullName.EndsWith('/')) { continue; }
             files.Add(entry.FullName[prefix.Length..].Replace('/', Path.DirectorySeparatorChar), entry);
         }
-        foreach (var required in Required) { Require(files, required); }
+        var hostwSidecars = Required.Where(n => n.StartsWith("agent-bridge-hostw.", StringComparison.Ordinal) && !n.EndsWith(".exe", StringComparison.Ordinal)).ToArray();
+        var bundledHostw = hostwSidecars.All(n => !files.ContainsKey(n));
+        foreach (var required in Required.Where(n => !bundledHostw || !hostwSidecars.Contains(n))) { Require(files, required); }
         var manifests = zip.Entries.Where(e => !e.FullName.Contains('/') && e.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase)).ToArray();
         if (manifests.Length != 1) { throw new InvalidDataException("Slot package requires its release manifest."); }
         using var manifest = new PayloadStream(manifests[0]);
@@ -102,24 +104,54 @@ public static class SlotPreparation
         string? runtimeTarget = null;
         foreach (var executable in new[] { "AgentBridge", "agent-bridge-host", "agent-bridge-hostw" })
         {
+            if (executable == "agent-bridge-hostw" && bundledHostw) { continue; } // Its embedded closure is mandatory after extraction.
             using var stream = new PayloadStream(files[executable + ".deps.json"]);
-            using var deps = JsonDocument.Parse(stream);
+            using var deps = JsonDocument.Parse(stream, new() { AllowDuplicateProperties = false });
             var target = deps.RootElement.GetProperty("runtimeTarget").GetProperty("name").GetString()!;
             if ((!target.EndsWith("/win-x64", StringComparison.Ordinal) && !target.EndsWith("/win-arm64", StringComparison.Ordinal))
                 || (runtimeTarget is not null && runtimeTarget != target))
             { throw new InvalidDataException("Slot runtime closures must target the same Windows architecture."); }
             runtimeTarget = target;
-            foreach (var library in deps.RootElement.GetProperty("targets").GetProperty(target).EnumerateObject())
+            foreach (var (name, _) in RuntimeAssets(deps.RootElement, target)) { Require(files, name); }
+        }
+        return (files, "AgentBridgeApp/" + actualVersion, runtimeTarget!, bundledHostw);
+    }
+
+    internal static IEnumerable<(string Name, byte Type)> RuntimeAssets(JsonElement deps, string target)
+    {
+        var libraries = deps.GetProperty("targets").GetProperty(target);
+        var graph = libraries.EnumerateObject().ToDictionary(l => l.Name, _ => new List<string>(), StringComparer.Ordinal);
+        var incoming = graph.Keys.ToDictionary(n => n, _ => 0, StringComparer.Ordinal);
+        foreach (var library in libraries.EnumerateObject())
+        {
+            if (library.Value.TryGetProperty("dependencies", out var dependencies))
+            foreach (var dependency in dependencies.EnumerateObject())
+            {
+                var name = dependency.Name + "/" + dependency.Value.GetString();
+                if (!incoming.ContainsKey(name)) { throw new InvalidDataException("Missing runtime dependency: " + dependency.Name); }
+                graph[library.Name].Add(name); incoming[name]++;
+            }
+        }
+        var ready = new Queue<string>(incoming.Where(n => n.Value == 0).Select(n => n.Key));
+        var visited = 0;
+        while (ready.TryDequeue(out var node))
+        {
+            visited++;
+            foreach (var child in graph[node]) { if (--incoming[child] == 0) { ready.Enqueue(child); } }
+        }
+        if (visited != graph.Count) { throw new InvalidDataException("Cyclic runtime dependency graph."); }
+        foreach (var library in libraries.EnumerateObject())
+        {
             foreach (var group in library.Value.EnumerateObject().Where(g => g.Name is "runtime" or "native" or "resources" or "runtimeTargets"))
             foreach (var asset in group.Value.EnumerateObject())
             {
                 if (group.Name == "runtimeTargets" && asset.Value.GetProperty("rid").GetString() != target.Split('/')[^1]) { continue; }
                 var name = asset.Name.Split('/')[^1];
                 if (name == "_._") { continue; }
-                Require(files, group.Name == "resources" ? asset.Value.GetProperty("locale").GetString() + "/" + name : name);
+                yield return (group.Name == "resources" ? asset.Value.GetProperty("locale").GetString() + "/" + name : name,
+                    group.Name == "native" || group.Name == "runtimeTargets" && asset.Value.GetProperty("assetType").GetString() == "native" ? (byte)2 : (byte)1);
             }
         }
-        return (files, "AgentBridgeApp/" + actualVersion);
     }
 
     static void Require(Dictionary<string, ZipArchiveEntry> files, string name)
@@ -128,12 +160,12 @@ public static class SlotPreparation
         { throw new InvalidDataException($"Slot payload is incomplete: missing or empty {name}."); }
     }
 
-    static bool SafeRelative(string path) => path.Length > 0 && !path.Contains('\\')
+    internal static bool SafeRelative(string path) => path.Length > 0 && !path.Contains('\\')
         && path.Split('/').All(p => p.Length > 0 && p is not "." and not ".." && !p.EndsWith('.')
             && !p.EndsWith(' ') && !p.Any(c => c < 32 || "<>:\"|?*~".Contains(c))
             && !Regex.IsMatch(p, @"\A(?:CON(?:IN\$|OUT\$)?|PRN|AUX|NUL|(?:COM|LPT)[0-9\u00B9\u00B2\u00B3])(?:\.|\z)", RegexOptions.IgnoreCase));
 
-    static void Validate(string directory, Dictionary<string, ZipArchiveEntry> expected)
+    static void Validate(string directory, Dictionary<string, ZipArchiveEntry> expected, string runtime, bool bundledHostw)
     {
         var pending = new Stack<string>([directory]);
         var count = 0;
@@ -154,8 +186,10 @@ public static class SlotPreparation
                 { throw new InvalidDataException($"Existing slot has an unexpected file: {name}"); }
                 using var actual = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
                 using var source = new PayloadStream(entry);
-                if (actual.Length != entry.Length || !SHA256.HashData(actual).AsSpan().SequenceEqual(SHA256.HashData(source)))
+                var digest = new PackageDigest(PackageDigest.Sha256, Convert.ToHexString(SHA256.HashData(source)));
+                if (actual.Length != entry.Length || !digest.Matches(actual))
                 { throw new InvalidDataException($"Slot payload differs from the verified package: {name}"); }
+                if (bundledHostw && string.Equals(name, "agent-bridge-hostw.exe", StringComparison.OrdinalIgnoreCase)) { HostwBundle.Verify(actual, digest, runtime); }
                 count++;
             }
         }
