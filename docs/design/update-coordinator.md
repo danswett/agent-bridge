@@ -143,3 +143,13 @@ are checksum-bound copies, with repeat/interrupted preparation safe while legacy
 `current` stays intact. A missing pointer still routes to legacy. No pointer is
 published here; D3b/D3c must complete locator/coordinator and non-stopping handover
 before enabling activation. Existing ancestry/power-loss limitations remain.
+
+### D3b: slot-aware completion and installed identity, disabled
+
+The adapter accepts an explicit managed-apply operation, records the pointer
+rather than a fictional native process, and retains one fresh verified snapshot
+through version confirmation and respawn. The default production factory still
+uses native apply. `SlotVelopackLocator` is also not wired yet: it preserves the
+legacy installation's package/channel identity but reports the running immutable
+slot's own version/content, never the latest pointer's version. D3c must wire both
+with non-stopping caller behavior and the single publication point.

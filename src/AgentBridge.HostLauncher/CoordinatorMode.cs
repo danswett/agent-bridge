@@ -73,7 +73,7 @@ internal static class CoordinatorMode
                 result = await adapter.RunAsync().ConfigureAwait(false);
                 var payload = JsonSerializer.SerializeToNode(result)!.AsObject();
                 payload["ApplyProcessId"] = adapter.ApplyProcessId;
-                payload["ApplyPath"] = Path.Combine(root, "Update.exe");
+                payload["ApplyPath"] = adapter.ApplyPath;
                 PrivateFolder.WriteNew(resultPath, JsonSerializer.SerializeToUtf8Bytes(payload));
                 report?.Invoke(result);
             }

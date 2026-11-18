@@ -17,13 +17,15 @@ public interface IUpdateCoordinatorProcess : IDisposable
 public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
     Func<int, IUpdateCoordinatorProcess?>? open = null,
     Func<ProcessStartInfo, IUpdateCoordinatorProcess>? start = null,
-    TimeProvider? time = null, Func<string, IDisposable>? pinUpdater = null)
+    TimeProvider? time = null, Func<string, IDisposable>? pinUpdater = null,
+    Func<UpdateCoordinatorRequest, CancellationToken, Task>? slotApply = null)
 {
     const string AppExe = "AgentBridge.exe";
     readonly Func<int, IUpdateCoordinatorProcess?> opener = open ?? Open;
     readonly Func<ProcessStartInfo, IUpdateCoordinatorProcess> starter = start ?? Start;
     int running;
     public int? ApplyProcessId { get; private set; }
+    public string ApplyPath => Path.Combine(request.Root, slotApply is null ? "Update.exe" : "active-slot.json");
     public Task Ownership { get; private set; } = Task.CompletedTask;
 
     public Task<UpdateApplyResult> RunAsync(CancellationToken cancel = default)
@@ -37,6 +39,7 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
     {
         ApplyProcessId = null;
         Task<UpdateApplyEvidence>? observation = null;
+        SlotPointer.Snapshot? active = null;
         var applyStep = "apply-start";
         async Task WaitOriginal(CancellationToken ct)
         {
@@ -57,6 +60,12 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
             using var package = DownloadMark.Hold(request.Package, request.Digest)
                 ?? throw new PackageMismatchException("coordinator package no longer matches its verified digest");
             ct.ThrowIfCancellationRequested();
+            if (slotApply is not null)
+            {
+                applyStep = "slot-activation";
+                await slotApply(request, ct).ConfigureAwait(false);
+                return new(true, 0, null, generation);
+            }
             applyStep = "apply-start";
             using var updater = (pinUpdater ?? PinUpdater)(Path.Combine(request.Root, "Update.exe"));
             ct.ThrowIfCancellationRequested();
@@ -72,7 +81,12 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
             (generation, ct) => observation ??= Apply(generation, ct),
             () => new FileStream(Path.Combine(request.Packages, ".velopack_lock"),
                 FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None),
-            ReadVersion, () => { using var app = starter(AppStart()); }, time);
+            () =>
+            {
+                if (slotApply is null) { return ReadVersion(); }
+                active = new SlotPointer(request.Root).Read() ?? throw new InvalidDataException("Missing activated slot.");
+                return active.Target.Slot.Version;
+            }, () => { using var app = starter(AppStart(active)); }, time);
         try
         {
             var result = await flow.RunAsync(request.TargetVersion, cancel).ConfigureAwait(false);
@@ -81,9 +95,17 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
         }
         finally
         {
-            Ownership = Task.WhenAll(observation ?? Task.CompletedTask, flow.RespawnFinished);
-            _ = Ownership.ContinueWith(_ => Volatile.Write(ref running, 0), CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            Ownership = Drain();
+            async Task Drain()
+            {
+                try
+                {
+                    try { await flow.ObservationFinished.ConfigureAwait(false); }
+                    catch (OperationCanceledException) { } // The result already records observation timeout/cancellation.
+                    await Task.WhenAll(observation ?? Task.CompletedTask, flow.RespawnFinished).ConfigureAwait(false);
+                }
+                finally { active?.Dispose(); Volatile.Write(ref running, 0); }
+            }
         }
     }
 
@@ -98,9 +120,9 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
         return info;
     }
 
-    ProcessStartInfo AppStart()
+    ProcessStartInfo AppStart(SlotPointer.Snapshot? active)
     {
-        var current = Path.Combine(request.Root, "current");
+        var current = active?.Directory ?? Path.Combine(request.Root, "current");
         var info = new ProcessStartInfo(Path.Combine(current, AppExe))
         {
             UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = current

@@ -11,6 +11,7 @@ public sealed class SlotLocatorTests : IDisposable
     [InlineData("agent-bridge-host.exe")]
     public void A_running_slot_reports_its_own_version_not_legacy_or_the_latest_pointer(string entry)
     {
+        if (!OperatingSystem.IsWindows()) { return; }
         var current = Directory.CreateDirectory(Path.Combine(root, "current")).FullName;
         var slot = Directory.CreateDirectory(Path.Combine(root, "slots", "0.1.200-preview.1-" + new string('a', 64))).FullName;
         File.WriteAllText(Path.Combine(root, "Update.exe"), "fixture");
@@ -23,7 +24,7 @@ public sealed class SlotLocatorTests : IDisposable
 
         Assert.Equal(root, locator.RootAppDir);
         Assert.Equal(slot, locator.AppContentDir);
-        Assert.Equal("0.1.200-preview.1", locator.CurrentlyInstalledVersion.ToString());
+        Assert.Equal("0.1.200-preview.1", locator.CurrentlyInstalledVersion!.ToString());
         Assert.Equal("AgentBridgeApp", locator.AppId);
         Assert.Equal("win-arm64", locator.Channel);
         Assert.Equal(Path.Combine(root, "packages"), locator.PackagesDir);
@@ -32,8 +33,10 @@ public sealed class SlotLocatorTests : IDisposable
     }
 
     [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public void A_malformed_slot_name_fails_closed_instead_of_becoming_an_uninstalled_native_copy()
     {
+        if (!OperatingSystem.IsWindows()) { return; }
         var slot = Directory.CreateDirectory(Path.Combine(root, "slots", "bad-slot")).FullName;
         Assert.Throws<InvalidDataException>(() => SlotVelopackLocator.Create(new Process(Path.Combine(slot, "AgentBridge.exe"))));
     }
