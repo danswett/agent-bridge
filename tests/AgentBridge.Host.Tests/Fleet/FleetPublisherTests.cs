@@ -110,6 +110,25 @@ public sealed class FleetPublisherTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
+    public async Task Relay_refusal_logs_its_reason_without_snapshot_content_and_success_clears_it()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "publisher", "host");
+        var logs = new List<string>();
+        var publication = new FleetPublication(source, host.Id, share: true, time: time, log: logs.Add);
+        var invalid = JsonSerializer.SerializeToElement(new { prompt = "private snapshot marker" });
+        Assert.False(await publication.PollAsync((_, ct) => host.Relay.RegistryPutAsync(invalid, ct)));
+        Assert.Equal("refused", publication.Status.Failure);
+        Assert.DoesNotContain("private", Assert.Single(logs));
+        Assert.EndsWith("; refused; reason bad-record", logs[0]);
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.True(await publication.PollAsync(host.Relay.RegistryPutAsync));
+        Assert.DoesNotContain("; reason ", logs[^1]);
+        Assert.Equal(0, publication.Status.Failures);
+    }
+
+    [Fact]
     public async Task A_bad_id_is_skipped_counted_in_host_status_and_does_not_refuse_healthy_sessions()
     {
         using var fixture = new Fixture();
