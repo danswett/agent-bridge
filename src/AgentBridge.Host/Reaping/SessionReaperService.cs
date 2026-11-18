@@ -37,15 +37,22 @@ public sealed partial class SessionReaperService : IAsyncDisposable
         if (!await gate.WaitAsync(0, ct)) { return null; }
         try
         {
+            var began = clock.GetTimestamp();
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2), clock);
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct, stop.Token, timeout.Token);
+            var token = limit.Token;
             var receipt = new SessionReaperReceipt(1, Guid.NewGuid().ToString("N"), machine, clock.GetUtcNow(), "dry-run", [], []);
             try
             {
                 var config = settings();
                 if (pendingRead is { IsCompleted: false }) { throw new InvalidOperationException("previous read still pending"); }
-                pendingRead = read(limit.Token);
-                var snapshot = await pendingRead.WaitAsync(limit.Token);
+                pendingRead = Task.Run(() => read(token), token);
+                // Observe abandoned faults without publishing late evidence or awaiting the read at shutdown.
+                _ = pendingRead.ContinueWith(task => { _ = task.Exception; }, CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                var snapshot = await pendingRead.WaitAsync(token);
+                token.ThrowIfCancellationRequested();
+                if (clock.GetElapsedTime(began) >= TimeSpan.FromMinutes(2)) { throw new TimeoutException(); }
                 if (snapshot.Machine != machine) { throw new InvalidDataException("wrong machine"); }
                 snapshot = snapshot with { IsVm = config.MachineId == machine ? config.IsVm : null,
                     OwnerLaptop = config.MachineId == machine ? config.OwnerLaptop : null };

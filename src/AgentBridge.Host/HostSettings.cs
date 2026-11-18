@@ -46,8 +46,9 @@ namespace AgentBridge.Host;
 // KeepAwakeService). Off unless turned on; a file that cannot be read leaves it off.
 //
 // agentMessaging (#728): the temporary AP5-lite mode (AgentMessagingSettings). remote "off" (the
-// default) or "own-account"; allowAllTargets false (the default) or true. Anything else, or a file
-// that cannot be read, is off and false. Read afresh by CurrentAgentMessaging: no restart needed.
+// default) or "own-account"; allowAllTargets false (the default) or true, with allow-all sessions
+// also requiring an exact id in allowAllTargetSessions. Invalid values fail closed. Read afresh by
+// CurrentAgentMessaging: no restart needed.
 //
 // agents (#1295): the agents policy (AgentPolicy, docs/host-config.md). Absent means agents are off;
 // a section that cannot be read denies everything and is said; a bad key takes its narrowest value.

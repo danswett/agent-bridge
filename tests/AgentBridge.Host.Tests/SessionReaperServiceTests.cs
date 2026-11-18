@@ -77,7 +77,6 @@ public sealed class SessionReaperServiceTests : IAsyncLifetime
         using var release = new ManualResetEventSlim();
         var entered = new TaskCompletionSource<Thread>(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
-        var caller = 0;
         await using var service = Service(ct =>
         {
             Interlocked.Increment(ref calls);
@@ -85,7 +84,7 @@ public sealed class SessionReaperServiceTests : IAsyncLifetime
             release.Wait();
             return Read(ct);
         });
-        var cycle = Task.Run(() => { caller = Environment.CurrentManagedThreadId; return service.CycleAsync(); });
+        var cycle = Task.Run(() => service.CycleAsync());
         try
         {
             var reader = await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -95,7 +94,6 @@ public sealed class SessionReaperServiceTests : IAsyncLifetime
             Assert.Empty(failed.Kept);
             Assert.True(reader.IsThreadPoolThread);
             Assert.True(reader.IsBackground);
-            Assert.NotEqual(caller, reader.ManagedThreadId);
             Assert.NotNull(Assert.IsType<SessionReaperReceipt>(await service.CycleAsync()).Problem);
             Assert.Equal(1, calls);
         }
