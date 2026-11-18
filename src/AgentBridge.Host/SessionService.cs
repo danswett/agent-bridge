@@ -32,6 +32,7 @@ public sealed class SessionService
     readonly UsageService? usage;
     readonly ISessionLauncher? launcher;
     readonly SessionTransfers? transfers;
+    internal EndSelfService SelfEnd { get; }
     readonly ConcurrentDictionary<IProtocolChannel, Subscriber> subscribers = new();
 
     // What a device asking this machine for notifications hears when it sends none.
@@ -185,6 +186,7 @@ public sealed class SessionService
         this.usage = usage;
         this.launcher = launcher;
         this.transfers = transfers;
+        SelfEnd = new(source, launcher, stops, () => Time.GetUtcNow());
         if (push is not null)
         {
             push.Watching = Watching;
@@ -309,7 +311,7 @@ public sealed class SessionService
 
     Session WithRole(Session session) => SessionBudget.Fit(session with
     {
-        Role = SessionRoles.Known(launcher?.RoleOf(session.Id, source.ProcessOf(session.Id))),
+        Role = SessionRoles.Known(launcher?.TrustedRoleOf(session.Id, source.ProcessOf(session.Id))),
     });
 
     // session.history (docs/protocol/v1-history.md), read strictly as every request a client sends:

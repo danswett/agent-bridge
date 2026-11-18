@@ -7,6 +7,7 @@ using AgentBridge.Host.Lite;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed class EndSelfTests : IDisposable
@@ -17,9 +18,11 @@ public sealed class EndSelfTests : IDisposable
     readonly Actions actions = new();
     readonly AgentCredentials credentials;
     readonly AgentAuditLog audit;
-    readonly SessionService service;
+    SessionService service;
+    readonly StopService stops;
     readonly Chan agent = new(), person = new();
     readonly Sender sender = new();
+    readonly FakeTimeProvider clock = new(DateTimeOffset.UtcNow);
     SessionProcess process = new(700, DateTimeOffset.UtcNow.AddMinutes(-1));
 
     public EndSelfTests()
@@ -31,9 +34,9 @@ public sealed class EndSelfTests : IDisposable
         audit = new(f.Root);
         Hello(agent, Self, process.Id);
         actions.BeforeStop = () => Assert.Contains(GateAuditProjection.Load(f.Root).Rows, r => r.Gate?.Phase == "intent");
-        service = new(source, new("fixture", "Fixture", "windows", "test"), launcher: actions,
-            stops: new StopService(source, f.Processes, actions, actions, actions,
-                new StopOptions { CopilotHome = f.CopilotHome, PlatformSupported = true }));
+        stops = new(source, f.Processes, actions, actions, actions,
+            new StopOptions { CopilotHome = f.CopilotHome, PlatformSupported = true });
+        service = new(source, new("fixture", "Fixture", "windows", "test"), launcher: actions, stops: stops) { Time = clock };
     }
 
     void Hello(Chan channel, string session, int pid)
@@ -64,11 +67,13 @@ public sealed class EndSelfTests : IDisposable
     [InlineData("sender")]
     [InlineData("machine")]
     [InlineData("target")]
+    [InlineData("expired")]
     public async Task Receipt_queries_refuse_missing_unconfirmed_or_wrong_sender_and_target(string fault)
     {
         if (!OperatingSystem.IsWindows()) { return; }
         if (fault == "unconfirmed") { sender.Kind = LiteKind.Unconfirmed; }
         var receipt = await Send();
+        if (fault == "expired") { clock.Advance(TimeSpan.FromMinutes(11)); }
         if (fault == "missing") { receipt = Guid.NewGuid().ToString(); }
         if (fault == "forged")
         { receipt = Guid.NewGuid().ToString(); Assert.True(audit.Append(new("out", receipt, "agent:fixture/" + Self, [], "agent.send", "target/" + Node, "delivered"))); }
@@ -118,7 +123,10 @@ public sealed class EndSelfTests : IDisposable
     [InlineData("other-session")]
     [InlineData("incarnation")]
     [InlineData("dispatch-race")]
+    [InlineData("dispatch-expired")]
     [InlineData("credential")]
+    [InlineData("expired")]
+    [InlineData("restart")]
     public async Task A_grant_cannot_be_forged_retargeted_or_used_after_its_binding_changes(string fault)
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -126,7 +134,10 @@ public sealed class EndSelfTests : IDisposable
         if (fault == "absent") { grant = Guid.NewGuid().ToString(); }
         if (fault == "incarnation") { process = process with { StartedAt = process.StartedAt!.Value.AddSeconds(2) }; }
         if (fault == "credential") { credentials.RevokeSession(Self, "test"); }
+        if (fault == "expired") { clock.Advance(TimeSpan.FromMinutes(2)); }
+        if (fault == "restart") { service = new(source, new("fixture", "Fixture", "windows", "test"), launcher: actions, stops: stops); }
         if (fault == "dispatch-race") { actions.OnOpen = () => process = process with { Id = 701 }; }
+        if (fault == "dispatch-expired") { actions.OnOpen = () => clock.Advance(TimeSpan.FromMinutes(2)); }
         if (fault == "other-session")
         { await Assert.ThrowsAsync<InvalidOperationException>(() => Call("EndSelf", new { grant, request = Guid.NewGuid().ToString(), session = Guid.NewGuid().ToString() })); }
         else
@@ -140,17 +151,21 @@ public sealed class EndSelfTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Receipts_and_grants_are_one_use_even_if_execution_is_interrupted_after_the_durable_intent(bool crash)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Receipts_and_grants_are_one_use_even_if_the_audit_fails_or_execution_is_interrupted(bool crash, bool unwritable)
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var receipt = await Send();
+        Assert.True(JsonSerializer.SerializeToElement(await Call("agent.receipt",
+            new { receipt, machine = "target", target = Node }, CallerKind.Agent, agent)).GetProperty("confirmed").GetBoolean());
         var grant = await Admit(receipt);
+        if (unwritable) { Directory.Move(Path.Combine(f.Root, "audit"), Path.Combine(f.Root, "audit-held")); File.WriteAllText(Path.Combine(f.Root, "audit"), "blocked"); }
         actions.Crash = crash;
-        Assert.Equal(crash ? StopOutcome.Failed : StopOutcome.Ended, Assert.IsType<StopResult>(await End(grant)).Outcome);
-        Assert.Equal(crash ? 0 : 1, actions.Stops);
-        Assert.Contains(GateAuditProjection.Load(f.Root).Rows, r => r.Gate?.Phase == "intent" && r.Principal == "agent:fixture/" + Self);
+        Assert.Equal(unwritable ? StopOutcome.Refused : crash ? StopOutcome.Failed : StopOutcome.Ended, Assert.IsType<StopResult>(await End(grant)).Outcome);
+        Assert.Equal(crash || unwritable ? 0 : 1, actions.Stops);
+        if (!unwritable) { Assert.Contains(GateAuditProjection.Load(f.Root).Rows, r => r.Gate?.Phase == "intent" && r.Principal == "person:local" && r.Target == Self); }
         await Assert.ThrowsAsync<InvalidOperationException>(() => End(grant));
         await Assert.ThrowsAsync<InvalidOperationException>(() => Admit(receipt));
     }

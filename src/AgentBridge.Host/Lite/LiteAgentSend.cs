@@ -14,7 +14,8 @@ public static partial class LiteAgentSend
     public const string Op = "agent.send";
     public const int MaxText = 4096;
 
-    public static async Task<object?> HandleAsync(AgentCredentials? credentials, ILiteSender? sender, IProtocolChannel channel, JsonElement data, CancellationToken ct = default, bool? windows = null, Func<AgentAuditEntry, string?, bool>? appendAttempt = null)
+    public static async Task<object?> HandleAsync(AgentCredentials? credentials, ILiteSender? sender, IProtocolChannel channel, JsonElement data, CancellationToken ct = default, bool? windows = null, Func<AgentAuditEntry, string?, bool>? appendAttempt = null,
+        Action<AgentCredential, LiteSendInput, LiteOutcome>? receipt = null)
     {
         credentials?.CheckScriptOperation(channel, Op);
         if (credentials is null || !(windows ?? OperatingSystem.IsWindows()))
@@ -53,13 +54,14 @@ public static partial class LiteAgentSend
             throw;
         }
         var name = outcome.Kind.ToString().ToLowerInvariant();
-        AppendTerminal(name);
+        AppendTerminal(name, outcome.Request);
+        receipt?.Invoke(caller, new(machine, session, text), outcome);
         return new LiteSendReply(name, outcome.Code, outcome.Request);
 
-        void AppendTerminal(string terminal)
+        void AppendTerminal(string terminal, string? delivery = null)
         {
             bool terminalWritten;
-            try { terminalWritten = appendAttempt?.Invoke(attempt with { Outcome = terminal }, text) == true; }
+            try { terminalWritten = appendAttempt?.Invoke(attempt with { Outcome = terminal, Grant = delivery }, text) == true; }
             catch (Exception) { throw TerminalAuditUnavailable(); }
             if (!terminalWritten) { throw TerminalAuditUnavailable(); }
         }
