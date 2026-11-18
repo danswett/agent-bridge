@@ -10,6 +10,28 @@ namespace AgentBridge.App;
 
 static partial class SelfTest
 {
+    public static async Task RunEarlierHistoryAsync(MainWindow window, MainViewModel main, string outFile, Action<int> exit)
+    {
+        var passed = new List<string>();
+        var failed = new List<string>();
+        void Check(bool ok, string what)
+        {
+            (ok ? passed : failed).Add(what);
+            if (!ok) { AppLog.Write($"self-test: failed: {what}"); }
+        }
+        try
+        {
+            if (!await Until(() => window.RootElement.XamlRoot is not null && main.AllCards.Any(c => c.Id == "demo-approval"), TimeSpan.FromSeconds(10)))
+            {
+                throw new InvalidOperationException("The demo conversation window did not load.");
+            }
+            await CheckEarlierHistory(window, main, Check);
+        }
+        catch (Exception e) { Check(false, $"earlier history crashed: {e}"); }
+        await Write(outFile, new Dictionary<string, object?>(), passed, failed, null);
+        exit(failed.Count == 0 ? 0 : 1);
+    }
+
     static async Task CheckEarlierHistory(MainWindow window, MainViewModel main, Action<bool, string> check)
     {
         var view = await Choose(window, main, "demo-approval", "Response");
@@ -140,9 +162,22 @@ static partial class SelfTest
             lock (requests) { check(requests.TakeLast(2).SequenceEqual(new[] { "20", "20" }), "Try again asks the real loader for the failed cursor again"); }
 
             Volatile.Write(ref limited, 1);
-            view.Card = new SessionCardViewModel(card.Session with { Id = "limited" },
-                new CardContext { Host = host, Deliveries = new Deliveries(host, ui), Folds = new FoldStore(null), Capabilities = () => host.Capabilities });
-            await Until(() => view.Card.Stored?.State == HistoryLoad.StartReached && line.Text == "Start of available history", TimeSpan.FromSeconds(10));
+            var prematureStart = false;
+            void WatchStart(object? sender, object args)
+            {
+                if (view.Card?.Stored is { State: HistoryLoad.StartReached } stored && rows.ItemsSourceView.Count < stored.Turns.Count
+                    && line.Visibility == Visibility.Visible && line.Text == "Start of available history") { prematureStart = true; }
+            }
+            view.LayoutUpdated += WatchStart;
+            try
+            {
+                view.Card = new SessionCardViewModel(card.Session with { Id = "limited" },
+                    new CardContext { Host = host, Deliveries = new Deliveries(host, ui), Folds = new FoldStore(null), Capabilities = () => host.Capabilities });
+                await Until(() => view.Card.Stored?.State == HistoryLoad.StartReached && rows.ItemsSourceView.Count == 20, TimeSpan.FromSeconds(10));
+                await Task.Delay(200);
+            }
+            finally { view.LayoutUpdated -= WatchStart; }
+            check(!prematureStart, "the start row waits until the oldest held turn is drawn");
             check(line.Visibility == Visibility.Visible && line.Text == "Start of available history"
                 && Find<TextBlock>(view).Count(b => b.Visibility == Visibility.Visible && b.Text == "Start of available history") == 1,
                 "a limited last page shows exactly one Start of available history row");
