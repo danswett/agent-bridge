@@ -535,7 +535,7 @@ public sealed class SignInTests
         Assert.False(main.SignInSheet!.HasCode);
         Assert.False(start.IsCompleted);
 
-        channel.StartResult.SetResult(Json("""{"outcome":"started","flow":"flow-1"}"""));
+        channel.StartResult.SetResult(Json("""{"ok":true,"result":{"outcome":"started","flow":"flow-1"}}"""));
         await start;
         var sheet = Assert.IsType<SignInSheetViewModel>(main.SignInSheet);
         Assert.True(sheet.HasCode);
@@ -560,8 +560,8 @@ public sealed class SignInTests
             op switch
             {
                 Ops.Hello => Task.FromResult(JsonSerializer.SerializeToElement(
-                    new HelloResult(1, new MachineInfo(PeerId, PeerName, "windows", "0.1.0"),
-                        [Capabilities.SessionsRead, Capabilities.HelloChanged, AuthState.Capability]), ProtocolJson.Options)),
+                    new { ok = true, result = new HelloResult(1, new MachineInfo(PeerId, PeerName, "windows", "0.1.0"),
+                        [Capabilities.SessionsRead, Capabilities.HelloChanged, AuthState.Capability]) }, ProtocolJson.Options)),
                 AuthState.Start => StartResult.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(15), clock, ct),
                 _ => throw new InvalidOperationException($"Unexpected request: {op}"),
             };
