@@ -155,6 +155,12 @@ mode changed at the machine in that moment is not seen. The
 screens the tests read are in `tests/fixtures/screens/copilot-input-box.json`, built from
 the captured live screen and the CLI's rendering code, each naming its source.
 
+Before typing, `CopilotInput` keeps unanswered questions and permissions between transcript
+reads, reading only appended lines. Each read checks the file's identity and bounded hashes
+of its head and read boundary (`JsonlMark`). A replacement, even one of equal or greater
+length or a byte-identical file moved into place, drops all cached prompts (resumed ones
+included) and is rescanned from the start. An unreadable transcript keeps replies out.
+
 ## Attachments (Copilot)
 
 Ported from agent-ha-bridge (`hooks/daemon-replies.ps1`: `New-BridgeAttachmentPrompt`,
