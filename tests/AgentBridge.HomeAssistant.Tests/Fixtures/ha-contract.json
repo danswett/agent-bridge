@@ -1166,7 +1166,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Renamed"
           },
           "icon": "mdi:robot",
@@ -1194,7 +1194,7 @@
               "agent_bridge_6fcbab0c1d2e4f50"
             ],
             "manufacturer": "AI CLI bridge",
-            "model": "DSWETT-DEV-VM1",
+            "model": "machine-a",
             "name": "Copilot: Renamed"
           },
           "icon": "mdi:pulse",
@@ -1426,7 +1426,7 @@
         "payload": {
           "background_agents": 2,
           "compactions": 2,
-          "machine": "DSWETT-DEV-VM1",
+          "machine": "machine-a",
           "model": "gpt-6.1-sol",
           "process_id": 4242,
           "session": "Copilot: Fixture session",
@@ -1454,7 +1454,7 @@
             "Running: view",
             "Done."
           ],
-          "machine": "DSWETT-DEV-VM1",
+          "machine": "machine-a",
           "response": "Thinking hard",
           "response_kind": "reasoning",
           "session": "Copilot: Fixture session",
@@ -1474,40 +1474,40 @@
     ],
     "onlineConfig": [
       {
-        "topic": "homeassistant/binary_sensor/agent_bridge_dswett_dev_vm1/online/config",
+        "topic": "homeassistant/binary_sensor/agent_bridge_machine_a/online/config",
         "retain": true,
         "qos": 1,
         "json": true,
         "payload": {
           "device": {
             "identifiers": [
-              "agent_bridge_dswett_dev_vm1"
+              "agent_bridge_machine_a"
             ],
             "manufacturer": "AI CLI bridge",
-            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+            "name": "AI Agent Bridge (machine-a)"
           },
           "device_class": "connectivity",
           "expire_after": 180,
-          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/online/attr",
+          "json_attributes_topic": "copilot/cli/machine/machine_a/online/attr",
           "name": "Online",
-          "object_id": "agent_bridge_dswett_dev_vm1_online",
+          "object_id": "agent_bridge_machine_a_online",
           "payload_off": "offline",
           "payload_on": "online",
-          "state_topic": "copilot/cli/machine/dswett_dev_vm1/online/state",
-          "unique_id": "agent_bridge_dswett_dev_vm1_online"
+          "state_topic": "copilot/cli/machine/machine_a/online/state",
+          "unique_id": "agent_bridge_machine_a_online"
         }
       }
     ],
     "heartbeat": [
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/online/state",
+        "topic": "copilot/cli/machine/machine_a/online/state",
         "retain": false,
         "qos": 1,
         "json": false,
         "payload": "online"
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/online/attr",
+        "topic": "copilot/cli/machine/machine_a/online/attr",
         "retain": false,
         "qos": 1,
         "json": true,
@@ -1518,35 +1518,35 @@
     ],
     "globalStatus": [
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/sessions/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/sessions/config",
         "retain": true,
         "qos": 1,
         "json": true,
         "payload": {
           "device": {
             "identifiers": [
-              "agent_bridge_dswett_dev_vm1"
+              "agent_bridge_machine_a"
             ],
             "manufacturer": "AI CLI bridge",
-            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+            "name": "AI Agent Bridge (machine-a)"
           },
           "icon": "mdi:robot-happy",
-          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/global/attr",
+          "json_attributes_topic": "copilot/cli/machine/machine_a/global/attr",
           "name": "Sessions",
-          "object_id": "agent_bridge_dswett_dev_vm1_sessions",
-          "state_topic": "copilot/cli/machine/dswett_dev_vm1/global/state",
-          "unique_id": "agent_bridge_dswett_dev_vm1_sessions"
+          "object_id": "agent_bridge_machine_a_sessions",
+          "state_topic": "copilot/cli/machine/machine_a/global/state",
+          "unique_id": "agent_bridge_machine_a_sessions"
         }
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/global/state",
+        "topic": "copilot/cli/machine/machine_a/global/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": "2"
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/global/attr",
+        "topic": "copilot/cli/machine/machine_a/global/attr",
         "retain": true,
         "qos": 1,
         "json": true,
@@ -1565,19 +1565,19 @@
             "tuning": false
           },
           "discovery_held": "",
-          "machine": "DSWETT-DEV-VM1",
-          "machine_slug": "dswett_dev_vm1",
+          "machine": "machine-a",
+          "machine_slug": "machine_a",
           "resumable": [],
           "sessions": [
             {
               "kind": "copilot",
-              "machine": "DSWETT-DEV-VM1",
+              "machine": "machine-a",
               "name": "Copilot: Fixture session",
               "node": "agent_bridge_6fcbab0c1d2e4f50"
             },
             {
               "kind": "claude",
-              "machine": "DSWETT-DEV-VM1",
+              "machine": "machine-a",
               "name": "Claude: agent-bridge",
               "node": "agent_bridge_c1a2b3c4d5e64f70"
             }
@@ -1588,37 +1588,37 @@
     ],
     "usage": [
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/usage_copilot/config",
         "retain": true,
         "qos": 1,
         "json": true,
         "payload": {
           "device": {
             "identifiers": [
-              "agent_bridge_dswett_dev_vm1"
+              "agent_bridge_machine_a"
             ],
             "manufacturer": "AI CLI bridge",
-            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+            "name": "AI Agent Bridge (machine-a)"
           },
           "icon": "mdi:gauge",
-          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot/attr",
+          "json_attributes_topic": "copilot/cli/machine/machine_a/usage/copilot/attr",
           "name": "GitHub Copilot usage",
-          "object_id": "agent_bridge_dswett_dev_vm1_usage_copilot",
+          "object_id": "agent_bridge_machine_a_usage_copilot",
           "state_class": "measurement",
-          "state_topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot/state",
-          "unique_id": "agent_bridge_dswett_dev_vm1_usage_copilot",
+          "state_topic": "copilot/cli/machine/machine_a/usage/copilot/state",
+          "unique_id": "agent_bridge_machine_a_usage_copilot",
           "unit_of_measurement": "%"
         }
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot/state",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": "42.3"
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot/attr",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot/attr",
         "retain": true,
         "qos": 1,
         "json": true,
@@ -1628,8 +1628,8 @@
           "client": "copilot",
           "error": "",
           "label": "GitHub Copilot",
-          "machine": "DSWETT-DEV-VM1",
-          "machine_slug": "dswett_dev_vm1",
+          "machine": "machine-a",
+          "machine_slug": "machine_a",
           "measured_at": "2026-10-29T19:00:00.0000000+00:00",
           "plan": "business",
           "source": "api",
@@ -1648,37 +1648,37 @@
         }
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_claude/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/usage_claude/config",
         "retain": true,
         "qos": 1,
         "json": true,
         "payload": {
           "device": {
             "identifiers": [
-              "agent_bridge_dswett_dev_vm1"
+              "agent_bridge_machine_a"
             ],
             "manufacturer": "AI CLI bridge",
-            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+            "name": "AI Agent Bridge (machine-a)"
           },
           "icon": "mdi:gauge",
-          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/usage/claude/attr",
+          "json_attributes_topic": "copilot/cli/machine/machine_a/usage/claude/attr",
           "name": "Claude Code usage",
-          "object_id": "agent_bridge_dswett_dev_vm1_usage_claude",
+          "object_id": "agent_bridge_machine_a_usage_claude",
           "state_class": "measurement",
-          "state_topic": "copilot/cli/machine/dswett_dev_vm1/usage/claude/state",
-          "unique_id": "agent_bridge_dswett_dev_vm1_usage_claude",
+          "state_topic": "copilot/cli/machine/machine_a/usage/claude/state",
+          "unique_id": "agent_bridge_machine_a_usage_claude",
           "unit_of_measurement": "%"
         }
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/claude/state",
+        "topic": "copilot/cli/machine/machine_a/usage/claude/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": "61"
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/claude/attr",
+        "topic": "copilot/cli/machine/machine_a/usage/claude/attr",
         "retain": true,
         "qos": 1,
         "json": true,
@@ -1688,8 +1688,8 @@
           "client": "claude",
           "error": "",
           "label": "Claude Code",
-          "machine": "DSWETT-DEV-VM1",
-          "machine_slug": "dswett_dev_vm1",
+          "machine": "machine-a",
+          "machine_slug": "machine_a",
           "measured_at": "2026-10-29T19:00:01.0000000+00:00",
           "plan": "max",
           "source": "api",
@@ -1712,37 +1712,37 @@
         }
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_codex/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/usage_codex/config",
         "retain": true,
         "qos": 1,
         "json": true,
         "payload": {
           "device": {
             "identifiers": [
-              "agent_bridge_dswett_dev_vm1"
+              "agent_bridge_machine_a"
             ],
             "manufacturer": "AI CLI bridge",
-            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+            "name": "AI Agent Bridge (machine-a)"
           },
           "icon": "mdi:gauge",
-          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/usage/codex/attr",
+          "json_attributes_topic": "copilot/cli/machine/machine_a/usage/codex/attr",
           "name": "Codex usage",
-          "object_id": "agent_bridge_dswett_dev_vm1_usage_codex",
+          "object_id": "agent_bridge_machine_a_usage_codex",
           "state_class": "measurement",
-          "state_topic": "copilot/cli/machine/dswett_dev_vm1/usage/codex/state",
-          "unique_id": "agent_bridge_dswett_dev_vm1_usage_codex",
+          "state_topic": "copilot/cli/machine/machine_a/usage/codex/state",
+          "unique_id": "agent_bridge_machine_a_usage_codex",
           "unit_of_measurement": "%"
         }
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/codex/state",
+        "topic": "copilot/cli/machine/machine_a/usage/codex/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": "unknown"
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/codex/attr",
+        "topic": "copilot/cli/machine/machine_a/usage/codex/attr",
         "retain": true,
         "qos": 1,
         "json": true,
@@ -1752,8 +1752,8 @@
           "client": "codex",
           "error": "The Codex usage could not be read: no rollout",
           "label": "Codex",
-          "machine": "DSWETT-DEV-VM1",
-          "machine_slug": "dswett_dev_vm1",
+          "machine": "machine-a",
+          "machine_slug": "machine_a",
           "measured_at": "2026-10-29T19:00:02.0000000+00:00",
           "plan": "",
           "source": "none",
@@ -1762,37 +1762,37 @@
         }
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_2/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_2/config",
         "retain": true,
         "qos": 1,
         "json": true,
         "payload": {
           "device": {
             "identifiers": [
-              "agent_bridge_dswett_dev_vm1"
+              "agent_bridge_machine_a"
             ],
             "manufacturer": "AI CLI bridge",
-            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+            "name": "AI Agent Bridge (machine-a)"
           },
           "icon": "mdi:gauge",
-          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/attr",
+          "json_attributes_topic": "copilot/cli/machine/machine_a/usage/copilot_2/attr",
           "name": "GitHub Copilot usage (hubot)",
-          "object_id": "agent_bridge_dswett_dev_vm1_usage_copilot_2",
+          "object_id": "agent_bridge_machine_a_usage_copilot_2",
           "state_class": "measurement",
-          "state_topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/state",
-          "unique_id": "agent_bridge_dswett_dev_vm1_usage_copilot_2",
+          "state_topic": "copilot/cli/machine/machine_a/usage/copilot_2/state",
+          "unique_id": "agent_bridge_machine_a_usage_copilot_2",
           "unit_of_measurement": "%"
         }
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/state",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot_2/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": "42.3"
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/attr",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot_2/attr",
         "retain": true,
         "qos": 1,
         "json": true,
@@ -1802,8 +1802,8 @@
           "client": "copilot",
           "error": "",
           "label": "GitHub Copilot",
-          "machine": "DSWETT-DEV-VM1",
-          "machine_slug": "dswett_dev_vm1",
+          "machine": "machine-a",
+          "machine_slug": "machine_a",
           "measured_at": "2026-10-29T19:00:03.0000000+00:00",
           "plan": "individual",
           "source": "api",
@@ -1822,37 +1822,37 @@
         }
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_4/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_4/config",
         "retain": true,
         "qos": 1,
         "json": true,
         "payload": {
           "device": {
             "identifiers": [
-              "agent_bridge_dswett_dev_vm1"
+              "agent_bridge_machine_a"
             ],
             "manufacturer": "AI CLI bridge",
-            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+            "name": "AI Agent Bridge (machine-a)"
           },
           "icon": "mdi:gauge",
-          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/attr",
+          "json_attributes_topic": "copilot/cli/machine/machine_a/usage/copilot_4/attr",
           "name": "GitHub Copilot usage (monalisa)",
-          "object_id": "agent_bridge_dswett_dev_vm1_usage_copilot_4",
+          "object_id": "agent_bridge_machine_a_usage_copilot_4",
           "state_class": "measurement",
-          "state_topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/state",
-          "unique_id": "agent_bridge_dswett_dev_vm1_usage_copilot_4",
+          "state_topic": "copilot/cli/machine/machine_a/usage/copilot_4/state",
+          "unique_id": "agent_bridge_machine_a_usage_copilot_4",
           "unit_of_measurement": "%"
         }
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/state",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot_4/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": "unknown"
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/attr",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot_4/attr",
         "retain": true,
         "qos": 1,
         "json": true,
@@ -1862,8 +1862,8 @@
           "client": "copilot",
           "error": "No Copilot credential was available for monalisa (gh has no token for monalisa - run gh auth login).",
           "label": "GitHub Copilot",
-          "machine": "DSWETT-DEV-VM1",
-          "machine_slug": "dswett_dev_vm1",
+          "machine": "machine-a",
+          "machine_slug": "machine_a",
           "measured_at": "2026-10-29T19:00:04.0000000+00:00",
           "plan": "",
           "source": "none",
@@ -1874,31 +1874,31 @@
     ],
     "update": [
       {
-        "topic": "homeassistant/update/agent_bridge_dswett_dev_vm1/update/config",
+        "topic": "homeassistant/update/agent_bridge_machine_a/update/config",
         "retain": true,
         "qos": 1,
         "json": true,
         "payload": {
           "availability_template": "{{ 'online' if value_json.get('latest_version') else 'offline' }}",
-          "availability_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "availability_topic": "copilot/cli/machine/machine_a/update/state",
           "device": {
             "identifiers": [
-              "agent_bridge_dswett_dev_vm1"
+              "agent_bridge_machine_a"
             ],
             "manufacturer": "AI CLI bridge",
-            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+            "name": "AI Agent Bridge (machine-a)"
           },
           "device_class": "firmware",
           "icon": "mdi:package-up",
-          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+          "json_attributes_topic": "copilot/cli/machine/machine_a/update/attributes",
           "name": "Update",
-          "object_id": "agent_bridge_dswett_dev_vm1_update",
-          "state_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
-          "unique_id": "agent_bridge_dswett_dev_vm1_update"
+          "object_id": "agent_bridge_machine_a_update",
+          "state_topic": "copilot/cli/machine/machine_a/update/state",
+          "unique_id": "agent_bridge_machine_a_update"
         }
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+        "topic": "copilot/cli/machine/machine_a/update/state",
         "retain": true,
         "qos": 1,
         "json": true,
@@ -1912,7 +1912,7 @@
         }
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+        "topic": "copilot/cli/machine/machine_a/update/attributes",
         "retain": true,
         "qos": 1,
         "json": true,
@@ -1922,364 +1922,364 @@
         }
       },
       {
-        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
+        "topic": "homeassistant/button/agent_bridge_machine_a/install_update/config",
         "retain": true,
         "qos": 1,
         "json": true,
         "payload": {
-          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/install",
+          "command_topic": "copilot/cli/machine/machine_a/update/install",
           "device": {
             "identifiers": [
-              "agent_bridge_dswett_dev_vm1"
+              "agent_bridge_machine_a"
             ],
             "manufacturer": "AI CLI bridge",
-            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+            "name": "AI Agent Bridge (machine-a)"
           },
           "icon": "mdi:download",
           "name": "Install Bridge Update",
-          "object_id": "agent_bridge_dswett_dev_vm1_install_update",
-          "unique_id": "agent_bridge_dswett_dev_vm1_install_update"
+          "object_id": "agent_bridge_machine_a_install_update",
+          "unique_id": "agent_bridge_machine_a_install_update"
         }
       },
       {
-        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
+        "topic": "homeassistant/button/agent_bridge_machine_a/check_updates/config",
         "retain": true,
         "qos": 1,
         "json": true,
         "payload": {
-          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/check",
+          "command_topic": "copilot/cli/machine/machine_a/update/check",
           "device": {
             "identifiers": [
-              "agent_bridge_dswett_dev_vm1"
+              "agent_bridge_machine_a"
             ],
             "manufacturer": "AI CLI bridge",
-            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+            "name": "AI Agent Bridge (machine-a)"
           },
           "icon": "mdi:cloud-refresh",
           "name": "Check for Bridge Update",
-          "object_id": "agent_bridge_dswett_dev_vm1_check_updates",
-          "unique_id": "agent_bridge_dswett_dev_vm1_check_updates"
+          "object_id": "agent_bridge_machine_a_check_updates",
+          "unique_id": "agent_bridge_machine_a_check_updates"
         }
       }
     ],
     "machineRemove": [
       {
-        "topic": "homeassistant/update/agent_bridge_dswett_dev_vm1/update/config",
+        "topic": "homeassistant/update/agent_bridge_machine_a/update/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
+        "topic": "homeassistant/button/agent_bridge_machine_a/install_update/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
+        "topic": "homeassistant/button/agent_bridge_machine_a/check_updates/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/text/agent_bridge_dswett_dev_vm1/new_prompt/config",
+        "topic": "homeassistant/text/agent_bridge_machine_a/new_prompt/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/new_prompt_payload/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/new_prompt_payload/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/transfer_request/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/transfer_request/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/select/agent_bridge_dswett_dev_vm1/new_workspace/config",
+        "topic": "homeassistant/select/agent_bridge_machine_a/new_workspace/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/select/agent_bridge_dswett_dev_vm1/new_profile/config",
+        "topic": "homeassistant/select/agent_bridge_machine_a/new_profile/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/select/agent_bridge_dswett_dev_vm1/new_agent/config",
+        "topic": "homeassistant/select/agent_bridge_machine_a/new_agent/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/select/agent_bridge_dswett_dev_vm1/new_model/config",
+        "topic": "homeassistant/select/agent_bridge_machine_a/new_model/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/select/agent_bridge_dswett_dev_vm1/new_effort/config",
+        "topic": "homeassistant/select/agent_bridge_machine_a/new_effort/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/select/agent_bridge_dswett_dev_vm1/new_context/config",
+        "topic": "homeassistant/select/agent_bridge_machine_a/new_context/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/select/agent_bridge_dswett_dev_vm1/new_resume/config",
+        "topic": "homeassistant/select/agent_bridge_machine_a/new_resume/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/select/agent_bridge_dswett_dev_vm1/new_permissions/config",
+        "topic": "homeassistant/select/agent_bridge_machine_a/new_permissions/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/new_session/config",
+        "topic": "homeassistant/button/agent_bridge_machine_a/new_session/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/new_session_result/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/new_session_result/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/sessions/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/sessions/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/binary_sensor/agent_bridge_dswett_dev_vm1/online/config",
+        "topic": "homeassistant/binary_sensor/agent_bridge_machine_a/online/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+        "topic": "copilot/cli/machine/machine_a/update/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+        "topic": "copilot/cli/machine/machine_a/update/attributes",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/newsession/result",
+        "topic": "copilot/cli/machine/machine_a/newsession/result",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/newsession/outcome",
+        "topic": "copilot/cli/machine/machine_a/newsession/outcome",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/newsession/promptpayload",
+        "topic": "copilot/cli/machine/machine_a/newsession/promptpayload",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/transfer/request",
+        "topic": "copilot/cli/machine/machine_a/transfer/request",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/online/state",
+        "topic": "copilot/cli/machine/machine_a/online/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/online/attr",
+        "topic": "copilot/cli/machine/machine_a/online/attr",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/global/state",
+        "topic": "copilot/cli/machine/machine_a/global/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/global/attr",
+        "topic": "copilot/cli/machine/machine_a/global/attr",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/usage_copilot/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot/state",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot/attr",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot/attr",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_claude/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/usage_claude/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/claude/state",
+        "topic": "copilot/cli/machine/machine_a/usage/claude/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/claude/attr",
+        "topic": "copilot/cli/machine/machine_a/usage/claude/attr",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_codex/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/usage_codex/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/codex/state",
+        "topic": "copilot/cli/machine/machine_a/usage/codex/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/codex/attr",
+        "topic": "copilot/cli/machine/machine_a/usage/codex/attr",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_2/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_2/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/state",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot_2/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/attr",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot_2/attr",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_3/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_3/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/state",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot_3/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/attr",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot_3/attr",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_4/config",
+        "topic": "homeassistant/sensor/agent_bridge_machine_a/usage_copilot_4/config",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/state",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot_4/state",
         "retain": true,
         "qos": 1,
         "json": false,
         "payload": ""
       },
       {
-        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/attr",
+        "topic": "copilot/cli/machine/machine_a/usage/copilot_4/attr",
         "retain": true,
         "qos": 1,
         "json": false,
