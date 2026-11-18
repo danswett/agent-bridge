@@ -115,6 +115,13 @@ try {
     Assert (Test-Path (Join-Path $script:first 'Example.Tests.trx')) 'original failure evidence is retained'
     $r = Run-Case 'solution' 'all.slnx'
     Assert ($r.Code -eq 0 -and $r.Calls.Count -eq 2) 'whole-solution and selected-solution targets both retry'
+    $runnerTemp = New-Item -ItemType Directory (Join-Path $scratch 'runner-temp')
+    $absoluteTarget = Join-Path $runnerTemp.FullName 'selected.slnf'
+    @{ solution = @{ path = (Resolve-Path 'all.slnx').Path; projects = @('Example.Tests.csproj', 'Other.Tests.csproj') } } |
+        ConvertTo-Json -Depth 3 | Set-Content $absoluteTarget
+    $r = Run-Case 'absolute-solution' $absoluteTarget
+    Assert ($r.Calls.Count -ge 1 -and $r.Calls[0][-1].Contains("dotnet test `"$absoluteTarget`"")) 'a workflow-shaped filter with an absolute solution path reaches dotnet'
+    Assert ($r.Code -eq 0 -and $r.Calls.Count -eq 2 -and $r.Calls[1][1] -eq (Join-Path $scratch 'Example.Tests.csproj')) 'an absolute solution path resolves retry projects beside the solution, not the filter'
     $r = Run-Case 'multiple'
     Assert ($r.Code -eq 0 -and $r.Calls.Count -eq 3 -and $r.Summary.Contains('Other.Tests:')) 'failures in two projects each get one serial retry and a ledger entry'
     foreach ($name in 'no-trx', 'bad-exit', 'no-failed-tests', 'ambiguous-case', 'coverage-error', 'malformed', 'aborted', 'run-error', 'missing-project') {
