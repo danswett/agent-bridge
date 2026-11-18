@@ -136,7 +136,7 @@ reset() {
 check() {
   local name="$1" want="$2" calls="$3" code=0 browsers; shift 3
   # A successful download must now also leave the dependencies installed, offline.
-  if [ "$want" -eq 0 ] && [[ "$calls" == *"--download-only"* ]]; then calls+=$'\n'"$cached"; fi
+  if [ "$want" -eq 0 ] && [[ "$calls" == *"$download"* ]]; then calls+=$'\n'"$cached"; fi
   read -ra browsers <<< "${CHECK_BROWSERS:-chromium webkit}"
   bash "$here/download.sh" "${browsers[@]}" > "$work/out" 2>&1 || code=$?
   local problems=()
