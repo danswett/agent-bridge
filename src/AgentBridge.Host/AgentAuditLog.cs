@@ -101,6 +101,13 @@ public sealed class AgentAuditLog
                     metadata = metadata with { Sequence = checked(new[] { LastGateSequence(folder, false), LastGateSequence(folder, true),
                         ReadHead(folder, false)?.Sequence ?? 0, ReadHead(folder, true)?.Sequence ?? 0 }.Max() + 1) };
                     if (!metadata.Valid(entry.Action, entry.Target, entry.Outcome)) { throw new IOException("invalid gate audit metadata"); }
+                    if (entry.Action == "gate.start" && entry.Outcome == "pending")
+                    {
+                        long retained = 0;
+                        var prior = GateAuditProjection.Load(profile, alreadyLocked: true, boundary: (floor, _) => retained = floor);
+                        if (!prior.Complete || retained > 0 || prior.Rows.Any(r => r.Action == entry.Action && r.Request == entry.Request))
+                        { throw new IOException("the gate preparation request is already audited or its evidence is incomplete"); }
+                    }
                     if (entry.Action == "session.launch" && metadata is { Phase: "intent", LaunchBinding: not null })
                     {
                         var prior = GateAuditProjection.Load(profile, alreadyLocked: true);
