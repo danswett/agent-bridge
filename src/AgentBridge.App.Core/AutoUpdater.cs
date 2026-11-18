@@ -973,6 +973,7 @@ public sealed class AutoUpdater
             // has succeeded since.
             if (lastCheckAt is { } at && lastCheckSource == updater.Source && now - at < CheckAgainAfter)
             {
+                updater.RefuseHalted();
                 if (lastCheckFailed is { } failed && !(updater.CheckedAt >= at)) { throw new InvalidOperationException(failed); }
                 found = updater.Found;
             }
@@ -981,8 +982,8 @@ public sealed class AutoUpdater
                 // Held off after the feed's rate limit: asking again only extends it (#800).
                 if (checksHeldUntil is { } until && now < until) { throw new InvalidOperationException(checksHeld); }
                 var from = updater.Source;
-                try { found = await updater.CheckAsync(); }
-                catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+                try { found = await updater.CheckForUpdateAsync(); }
+                catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException or UpdateHaltedException))
                 {
                     if (RateLimited(e, out var retryAt))
                     {
@@ -1002,9 +1003,10 @@ public sealed class AutoUpdater
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            var outcome = checksHeldUntil is { } until && now < until && KnownCurrent(prefs().LastUpdate) ? UpdateOutcome.Refused : UpdateOutcome.Failed;
-            Finish(ref checkRequest, check, outcome, e.Message);
-            Finish(ref installRequest, install, outcome, e.Message);
+            var code = e is UpdateHaltedException ? "halted" : null;
+            var outcome = code is not null || checksHeldUntil is { } until && now < until && KnownCurrent(prefs().LastUpdate) ? UpdateOutcome.Refused : UpdateOutcome.Failed;
+            Finish(ref checkRequest, check, outcome, e.Message, code: code);
+            Finish(ref installRequest, install, outcome, e.Message, code: code);
             throw;
         }
         if (found is not null) { Downloaded(found); }
@@ -1028,11 +1030,13 @@ public sealed class AutoUpdater
     async Task DownloadAsync(string? check, string? install)
     {
         var to = updater.Found;
-        try { await updater.DownloadAsync(_ => { }); }
+        try { await updater.DownloadForUpdateAsync(_ => { }); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            Finish(ref checkRequest, check, UpdateOutcome.Failed, e.Message, to, step: "downloading");
-            Finish(ref installRequest, install, UpdateOutcome.Failed, e.Message, to, step: "downloading");
+            var code = e is UpdateHaltedException ? "halted" : null;
+            var outcome = code is not null ? UpdateOutcome.Refused : UpdateOutcome.Failed;
+            Finish(ref checkRequest, check, outcome, e.Message, to, code: code, step: "downloading");
+            Finish(ref installRequest, install, outcome, e.Message, to, code: code, step: "downloading");
             throw;
         }
     }

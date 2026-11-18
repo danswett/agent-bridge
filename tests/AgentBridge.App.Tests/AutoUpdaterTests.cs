@@ -1017,7 +1017,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await StartAsync();
         auto = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, _ => null, time);
 
-        await auto.Ask(UpdateAskKind.Install, Press);
+        await NowAsync();
 
         Assert.Null(auto.State.Available);
         Assert.Equal(0, updater.Downloads);

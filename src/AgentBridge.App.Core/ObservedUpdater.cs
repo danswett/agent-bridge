@@ -13,8 +13,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
     Func<Task<HaltPolicySnapshot>>? readHaltPolicy = null, Action<string>? log = null) : IUpdater
 {
     readonly TimeProvider time = time ?? TimeProvider.System;
-    internal Func<Task<HaltPolicySnapshot>> ReadHaltPolicy { get; set; } =
-        readHaltPolicy ?? (() => Task.FromResult(new HaltPolicySnapshot(null, null, false)));
+    internal Func<Task<HaltPolicySnapshot>>? ReadHaltPolicy { get; set; } = readHaltPolicy;
     readonly SemaphoreSlim policyTurn = new(1, 1);
     HaltPolicySnapshot policy = new(null, null, false);
     bool policyRead;
@@ -22,9 +21,11 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
     internal async Task RefreshHaltPolicyAsync()
     {
         await policyTurn.WaitAsync();
+        var changed = false;
         try
         {
-            try { policy = await ReadHaltPolicy(); }
+            var before = policy;
+            try { policy = ReadHaltPolicy is { } read ? await read() : inner.HaltPolicy ?? policy with { Fresh = false }; }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or HttpRequestException
                 or System.Text.Json.JsonException or InvalidOperationException or ReleaseDiscoveryException
                 or FormatException or System.Security.Cryptography.CryptographicException or OperationCanceledException)
@@ -32,17 +33,19 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
                 log?.Invoke($"update policy: protection could not be read ({e.GetType().Name}); known halts retained");
                 policy = policy with { Fresh = false };
             }
+            changed = !policyRead || before != policy;
             policyRead = true;
         }
         finally { policyTurn.Release(); }
+        if (changed) { Raise(); }
     }
 
     internal bool Halted(string? version) => version is not null
-        && policy.Policy?.Halted?.Contains(version, StringComparer.Ordinal) == true;
-    internal bool PolicyFresh => policy.Fresh && policy.Policy is { Body.Length: > 0 } && policy.At is { } at
+        && HaltPolicy.Policy?.Halted?.Contains(version, StringComparer.Ordinal) == true;
+    internal bool PolicyFresh => HaltPolicy is { Fresh: true, Policy.Body.Length: > 0, At: { } at }
         && at <= time.GetUtcNow() && time.GetUtcNow() - at < ReleaseDiscovery.GithubRevalidateEvery;
     internal UpdatePolicy Policy => new(PolicyFresh ? UpdatePolicyState.Ok
-        : policy.Policy is { Body.Length: > 0 } ? UpdatePolicyState.Stale : UpdatePolicyState.Unreadable, policy.At);
+        : HaltPolicy.Policy is { Body.Length: > 0 } ? UpdatePolicyState.Stale : UpdatePolicyState.Unreadable, HaltPolicy.At);
     internal const string HaltedReason = "this release has been halted";
     // One download at a time: Velopack's takes a global update lock and fails, rather than waits,
     // when another holds it, so Settings' and the automatic one's overlapping made the second fail
@@ -89,7 +92,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
     public int? GitHubRemaining => inner.GitHubRemaining;
     public DateTimeOffset? GitHubQuotaAt => inner.GitHubQuotaAt;
     public DateTimeOffset? DiscoveredAt => inner.DiscoveredAt;
-    public HaltPolicySnapshot? HaltPolicy => inner.HaltPolicy;
+    public HaltPolicySnapshot HaltPolicy => ReadHaltPolicy is null ? inner.HaltPolicy ?? policy : policy;
     public UpdatePhase Phase => Volatile.Read(ref downloads) > 0 ? UpdatePhase.Downloading : Volatile.Read(ref checks) > 0 ? UpdatePhase.Checking : UpdatePhase.Idle;
     public int? Progress { get; private set; }
     public long? Bytes { get; private set; }
@@ -98,9 +101,16 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
 
     public string? InstalledVersion => inner.InstalledVersion;
     public string? PendingNotes => inner.PendingNotes;
-    public string? Ready => policyRead && !Halted(inner.Ready) ? inner.Ready : null;
+    public string? Ready => (policyRead || ReadHaltPolicy is null) && !Halted(inner.Ready) ? inner.Ready : null;
 
     public async Task<string?> CheckAsync()
+    {
+        try { return await CheckForUpdateAsync(); }
+        catch (UpdateHaltedException) { return null; }
+    }
+
+    // Keep IUpdater's manual-check contract; remote presses need the typed refusal, not "current".
+    internal async Task<string?> CheckForUpdateAsync()
     {
         Interlocked.Increment(ref checks);
         Raise();
@@ -110,10 +120,11 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
             await RefreshHaltPolicyAsync();
             var from = Bound();
             var found = await inner.CheckAsync();
+            await RefreshHaltPolicyAsync();
             if (Halted(found))
             {
                 foundRelease = null;
-                throw new InvalidOperationException(HaltedReason);
+                throw new UpdateHaltedException();
             }
             // A check that finished after its source changed answers for the old one.
             if (Bound() != from) { return found; }
@@ -134,6 +145,17 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
 
     public async Task DownloadAsync(Action<int> progress)
     {
+        try { await DownloadForUpdateAsync(progress); }
+        catch (UpdateHaltedException e) { throw new InvalidOperationException(e.Message, e); }
+    }
+
+    internal void RefuseHalted()
+    {
+        if (Halted(foundRelease ?? inner.Ready)) { throw new UpdateHaltedException(); }
+    }
+
+    internal async Task DownloadForUpdateAsync(Action<int> progress)
+    {
         Interlocked.Increment(ref downloads);
         Progress ??= 0;
         Raise();
@@ -143,7 +165,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
             await downloading.WaitAsync();
             held = true;
             await RefreshHaltPolicyAsync();
-            if (Halted(foundRelease ?? inner.Ready)) { throw new InvalidOperationException(HaltedReason); }
+            RefuseHalted();
             // The one waited for downloaded the release the last check found: nothing to do.
             if (inner.Ready is not null) { return; }
             var from = Source;
@@ -170,9 +192,9 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
                     Raise();
                 });
                 await RefreshHaltPolicyAsync();
-                if (Halted(release)) { throw new InvalidOperationException(HaltedReason); }
+                if (Halted(release)) { throw new UpdateHaltedException(); }
             }
-            catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+            catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException or UpdateHaltedException))
             {
                 // Held against this source only: one that changed meanwhile owes it nothing.
                 if (Source == from) { failed = (release, time.GetUtcNow(), failed is { } before && before.Release == release ? before.Times + 1 : 1); }
@@ -190,12 +212,12 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
         }
     }
 
-    public void ApplyAndRestart(string version, Action? handedOver = null) => ApplyConfirmed(version, false, handedOver);
+    public void ApplyAndRestart(string version, Action? handedOver = null) => ApplyConfirmed(version, ReadHaltPolicy is null, handedOver);
 
     internal void ApplyConfirmed(string version, bool uncheckedPolicy, Action? handedOver)
     {
         if (Halted(version)) { throw new InvalidOperationException(HaltedReason); }
-        if (!policyRead || (!PolicyFresh && !uncheckedPolicy)) { throw new InvalidOperationException("bad-release protection is stale or unreadable"); }
+        if ((!policyRead && ReadHaltPolicy is not null) || (!PolicyFresh && !uncheckedPolicy)) { throw new InvalidOperationException("bad-release protection is stale or unreadable"); }
         inner.ApplyAndRestart(version, handedOver);
     }
 
@@ -239,3 +261,5 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
 
 // A download not tried, its release's having failed a moment ago (ObservedUpdater.DownloadAgainAfter).
 public sealed class DownloadHeldException(string message) : InvalidOperationException(message);
+
+internal sealed class UpdateHaltedException() : InvalidOperationException(ObservedUpdater.HaltedReason);
