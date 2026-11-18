@@ -63,6 +63,11 @@ public sealed class AgentAuditLog
     internal AgentBridge.Host.Delivery.DeliveryGate Admission { get; }
     readonly Lazy<GateRunPause> runPause;
     internal GateRunPause RunPause => runPause.Value;
+    internal void ControlUnavailable()
+    {
+        ControlWriterRun = null;
+        log("gate enrollment observation is incomplete; qualifying activation remains held");
+    }
     internal void ControlFault()
     {
         log("gate control invalidated; its audit marker could not be written");
@@ -124,12 +129,14 @@ public sealed class AgentAuditLog
                     metadata = metadata with { Sequence = checked(new[] { LastGateSequence(folder, false), LastGateSequence(folder, true),
                         ReadHead(folder, false)?.Sequence ?? 0, ReadHead(folder, true)?.Sequence ?? 0 }.Max() + 1) };
                     if (!metadata.Valid(entry.Action, entry.Target, entry.Outcome)) { throw new IOException("invalid gate audit metadata"); }
-                    if (entry.Action == "gate.start" && entry.Outcome == "prepared")
+                    if (entry.Action is "gate.start" or "gate.reset" && entry.Outcome is "prepared" or "reset")
                     {
                         long retained = 0;
                         var prior = GateAuditProjection.Load(profile, alreadyLocked: true, boundary: (floor, _) => retained = floor);
                         if (!prior.Complete || retained > 0 || prior.Rows.Any(r => r.Action == entry.Action && r.Request == entry.Request))
                         { throw new IOException("gate request already audited or evidence incomplete"); }
+                        if (entry.Action == "gate.reset" && prior.Rows.Where(GateRunPreparation.IsBegin).MaxBy(r => r.Gate!.Sequence)?.Gate?.Run != metadata.PreviousRun)
+                        { throw new IOException("gate reset parent changed before append"); }
                     }
                     if (entry.Action == "session.launch" && metadata is { Phase: "intent", LaunchBinding: not null })
                     {

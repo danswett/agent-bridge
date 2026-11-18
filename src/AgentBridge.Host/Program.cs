@@ -465,9 +465,10 @@ async Task<int> ServeAsync(HostHandover handover)
     // Instance: this run's own id. A client that lost an outcome sends the request again only to
     // the run that may have acted on it, which remembers the request; never to a fresh one.
     var machine = new MachineInfo(Wire.DeviceId(identity.Key.Public), name, OsName(), HostVersion(), Dev: IsDevBuild() ? true : null, Instance: Guid.NewGuid().ToString("N"));
+    var gateEnrollment = new HeldGateRunEnrollmentProvider();
     using var trustedPeers = new RemoteAuthorization(settings.TrustedPeers,
         new TrustedPeerStore(identity.Folder, identity.Key.Public, () => identity.Account?.AccountId,
-            log: settings.TrustedPeers ? Log : null), enrollment: new HeldGateRunEnrollmentProvider());
+            log: settings.TrustedPeers ? Log : null), enrollment: gateEnrollment);
     if (trustedPeers.Enabled) { Log("trusted-peer enforcement is on; only explicit full-key pins grant remote authority"); }
 
     using var stop = new CancellationTokenSource();
@@ -605,6 +606,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
     var agentAudit = new AgentAuditLog(identity.Folder, log: Log, admission: deliveryGate);
     using var gatePause = agentAudit.RunPause;
+    using var gateRoster = GateRunPreparation.Observe(agentAudit, source, gateEnrollment);
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit);
     launcher.SessionStarted += restore.Launched;
     launcher.StartScanning();

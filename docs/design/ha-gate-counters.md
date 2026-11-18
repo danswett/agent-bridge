@@ -325,6 +325,29 @@ This view proves item 2 only. Quality retains gates and retirement sign-off.
 
 ## 7. Later slices and rehearsal dependencies
 
+Slice 5 is split into 5A (trusted begin/start), 5B (bounded local admission pause)
+and 5C (new-ID reset and roster-change void), each capped at 400 WHOLE changed
+lines against its immediate parent. The injected trusted-enrollment
+provider supplies approved host/profile identities, instrumentation, starting audit
+heads and the existing recorder identity/cursor/digest; request bodies supply none
+of these. Its production default refuses. The real signed provider belongs to
+blocked [capSign enrollment, #2385](https://github.com/danswett/agent-bridge/issues/2385).
+Qualifying activation remains **HELD** on that dependency and the all-host barrier;
+these local markers never assign an active qualifying run context.
+
+Pause markers retain the original UTC deadline; a live monotonic timer bounds
+admission to five minutes. Resume inside the bound keeps the run. Restart
+deliberately voids a paused run fail-closed, preserving its original marker and
+deadline, rather than assuming live control survived. Queued actions revalidate.
+A reset appends a fresh begin identity and its previous-run link in one durable
+record: that link voids the old run even across a crash, without erasing its
+observed evidence. Duplicate reset requests reuse that new ID. Approved roster
+membership/profile or instrumentation changes void the run through the explicit
+SessionSource gate-roster signal, not ordinary local session discovery. Fresh
+enrollment is required for reset; changing recorder cursors alone is not a roster
+change. These cuts do not supply a signed provider, seal, fleet barrier or a PASS.
+[Slice 6](https://github.com/danswett/agent-bridge/issues/2526) follows 5C.
+
 Estimates include focused failing tests; each PR must measure at most 250 lines.
 Split further before implementation if an estimate does not fit. No code ships here.
 Required for measurement: schema/reader, launch, approval, stop, run lifecycle,

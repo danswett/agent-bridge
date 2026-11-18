@@ -17,6 +17,7 @@ public sealed partial class RemoteAuthorizationTests : IAsyncLifetime
     readonly FakeTimeProvider time = new(new DateTimeOffset(2026, 11, 3, 0, 0, 0, TimeSpan.Zero));
     readonly SessionDrivers drivers = new();
     readonly List<Device> devices = [];
+    readonly List<IDisposable> gateObservers = [];
     SessionSource source = null!;
     TestRelay relay = null!;
     Device host = null!;
@@ -123,6 +124,7 @@ public sealed partial class RemoteAuthorizationTests : IAsyncLifetime
         authorization = new RemoteAuthorization(true, store, time, enrollment);
         authorization.Attach(host.Hub);
         var audit = new AgentAuditLog(Path.Combine(fixture.Root, "gate"), clock ?? time);
+        gateObservers.Add(GateRunPreparation.Observe(audit, source, enrollment));
         host.Hub.Handler = authorization.Handler(service, audit);
         var peer = await PeerAsync();
         Pin(peer, TrustedPeerStore.Person);
@@ -779,6 +781,7 @@ public sealed partial class RemoteAuthorizationTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        foreach (var observer in gateObservers) { observer.Dispose(); }
         authorization.Dispose();
         await relay.DisposeAsync();
         await source.DisposeAsync();

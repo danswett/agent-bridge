@@ -70,4 +70,24 @@ public sealed partial class RemoteAuthorizationTests
         Assert.Single(GateAuditProjection.Load(audit.Profile).Rows);
         Assert.False(GateAuditProjection.Read(audit.Profile, run).Invalidated);
     }
+
+    [Fact]
+    public async Task Gate_roster_observation_does_not_turn_unrelated_incomplete_history_into_coverage_loss()
+    {
+        var (_, audit, enrollment) = await GateAsync();
+        var entry = new AgentAuditEntry("in", Guid.NewGuid().ToString(), "person:fixture", [], "agent.send", "fleet", "attempted");
+        Assert.True(audit.Append(entry));
+        Assert.True(audit.Bootstrap());
+        var file = Assert.Single(Directory.GetFiles(Path.Combine(audit.Profile, "audit"), "agents-*.jsonl"));
+        File.WriteAllText(file, File.ReadAllText(file).TrimEnd('\n'));
+        Assert.True(audit.Append(entry with { Request = Guid.NewGuid().ToString() }));
+        var before = new List<string>();
+        GateAuditProjection.Load(audit.Profile, before.Add);
+        Assert.Contains("audit-incomplete", before);
+        Assert.DoesNotContain("coverage-break", before);
+        enrollment.Change(enrollment.Value);
+        var after = new List<string>();
+        GateAuditProjection.Load(audit.Profile, after.Add);
+        Assert.DoesNotContain("coverage-break", after);
+    }
 }

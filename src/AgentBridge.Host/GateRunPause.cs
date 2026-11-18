@@ -39,8 +39,8 @@ internal sealed class GateRunPause : IDisposable
         {
             CheckClock();
             var rows = GateRunPreparation.Read(audit);
-            var begin = rows.SingleOrDefault(r => r.Action == "gate.start" && r.Outcome == "prepared" && r.Gate?.Run == run);
-            if (begin?.Principal != principal || rows.Any(r => r.Gate?.Run == run && r.Outcome == "invalidated"))
+            var begin = rows.SingleOrDefault(r => GateRunPreparation.IsBegin(r) && r.Gate?.Run == run);
+            if (begin?.Principal != principal || GateRunPreparation.Voided(rows, run))
             { throw new InvalidOperationException("gate pause refused: unknown, foreign or invalidated run"); }
             if (resume)
             {
