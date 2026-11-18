@@ -102,6 +102,28 @@ public sealed class HostRosterPinTests : IDisposable
     }
 
     [Fact]
+    public async Task Connected_membership_refresh_verifies_each_new_snapshot_and_refuses_a_missing_roster()
+    {
+        var reader = PinnedReader();
+        var trust = new FleetTrust(reader, folder, () => RosterFixture.Account);
+        RelayRoster? latest = Relay("G", "B", "H");
+        Task Refresh() => trust.RefreshAsync(_ => Task.FromResult(latest), RosterFixture.Account, default);
+        await Refresh();
+        Assert.Contains(w.Id("H"), trust.VerifiedRoster()!.Serving.Keys);
+        w.Add("join", "G", "J", "H", kind: "host");
+        latest = Relay("G", "B", "H", "join");
+        await Refresh();
+        Assert.Contains(w.Id("J"), trust.VerifiedRoster()!.Serving.Keys);
+        w.Remove("leave", "G", "join", "join");
+        latest = Relay("G", "B", "H", "join", "leave");
+        await Refresh();
+        Assert.DoesNotContain(w.Id("J"), trust.VerifiedRoster()!.Serving.Keys);
+        latest = null;
+        await Assert.ThrowsAsync<InvalidOperationException>(Refresh);
+        Assert.Null(trust.VerifiedRoster());
+    }
+
+    [Fact]
     public void Matching_pin_retains_the_verified_reader_without_changing_the_pin()
     {
         Pin();

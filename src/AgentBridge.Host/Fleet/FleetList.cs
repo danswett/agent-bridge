@@ -36,21 +36,62 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
 {
     RelayClient? relay;
     readonly Func<RosterVerifier?>? verifiedRoster;
+    readonly Func<RelayClient, CancellationToken, Task>? refresh;
+    readonly TimeProvider clock;
+    readonly Dictionary<string, (FleetMachine Machine, long Seen)> cache = new(StringComparer.Ordinal);
 
-    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null) =>
+    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null,
+        Func<RelayClient, CancellationToken, Task>? refresh = null)
+    {
         this.verifiedRoster = verifiedRoster;
+        this.refresh = refresh;
+        clock = time ?? TimeProvider.System;
+    }
 
     public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames)
     {
-        if (verifiedRoster is null) { return Parse(frames); }
-        var roster = verifiedRoster() ?? throw new InvalidOperationException("refused: the fleet registry needs a verified device roster");
-        var hosts = roster.Serving.Where(pair => roster.Graph[pair.Value].Body.Device?.Kind == "host")
-            .Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
-        // Membership is not record-signature verification: these rows remain unverified.
-        return Parse(frames, hosts);
+        lock (cache)
+        {
+            var roster = verifiedRoster?.Invoke();
+            if (verifiedRoster is not null && roster is null)
+            {
+                cache.Clear();
+                throw new InvalidOperationException("refused: the fleet registry needs a verified device roster");
+            }
+            var hosts = roster is null ? null : Hosts(roster);
+            var now = clock.GetTimestamp();
+            foreach (var id in cache.Keys.Where(id => hosts is not null && !hosts.Contains(id) ||
+                clock.GetElapsedTime(cache[id].Seen, now) >= TimeSpan.FromHours(24)).ToArray()) { cache.Remove(id); }
+            var machines = Parse(frames, hosts).ToList();
+            foreach (var machine in machines.Where(m => m.Online && m.HasRegistryRecord))
+            {
+                cache[machine.Id] = (machine with { LastSeen = machine.LastSeen ?? clock.GetUtcNow() }, now);
+            }
+            foreach (var (id, held) in cache)
+            {
+                var index = machines.FindIndex(m => m.Id == id);
+                if (index >= 0 && machines[index].Online && machines[index].HasRegistryRecord) { continue; }
+                var stale = held.Machine with { Online = false, Verified = false, HasRegistryRecord = false };
+                if (index < 0) { machines.Add(stale); }
+                else { machines[index] = stale with { Name = machines[index].Name ?? stale.Name, LastSeen = machines[index].LastSeen ?? stale.LastSeen }; }
+            }
+            return machines;
+        }
     }
 
-    public void Attach(RelayClient? connection) => Volatile.Write(ref relay, connection);
+    static IReadOnlySet<string> Hosts(RosterVerifier roster)
+    {
+        lock (roster)
+        {
+            return roster.Serving.Where(pair => roster.Graph[pair.Value].Body.Device?.Kind == "host")
+                .Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
+        }
+    }
+
+    public void Attach(RelayClient? connection)
+    {
+        lock (cache) { cache.Clear(); Volatile.Write(ref relay, connection); }
+    }
 
     public async Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => (await ReadScopedAsync(ct)).Machines;
 
@@ -59,8 +100,12 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
         var current = Volatile.Read(ref relay) ?? throw new InvalidOperationException("refused: this host isn't connected to the relay");
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
         var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
-        if (!ReferenceEquals(current, Volatile.Read(ref relay))) { throw new InvalidOperationException("refused: the fleet connection changed during lookup"); }
-        return new(current.AccountId, Read(frames));
+        if (refresh is not null) { await refresh(current, ct); }
+        lock (cache)
+        {
+            if (!ReferenceEquals(current, Volatile.Read(ref relay))) { throw new InvalidOperationException("refused: the fleet connection changed during lookup"); }
+            return new(current.AccountId, Read(frames));
+        }
     }
 
     // Known-only machines have no sessions; registry liveness and supplied metadata take precedence.
@@ -146,7 +191,11 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
 
 public sealed record FleetListSession(string Machine, string Node, string State, DateTimeOffset Since, long SecondsInState, bool MachineOnline,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Stale => !MachineOnline;
+}
 
 public sealed record FleetListMachine(string Machine, string State,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,

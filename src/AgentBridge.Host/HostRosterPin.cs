@@ -17,6 +17,7 @@ public sealed partial class HostRosterReader
     readonly string? problem;
     readonly Func<TimeSpan> clock;
     readonly object sync = new();
+    bool membershipAvailable;
 
     public HostRosterReader(string pinPath, Func<TimeSpan> clock)
     {
@@ -29,7 +30,18 @@ public sealed partial class HostRosterReader
 
     public RosterCheck Update(RelayRoster? relay, string account)
     {
-        lock (sync) { return UpdateCore(relay, account); }
+        lock (sync)
+        lock (Verified ?? sync)
+        {
+            var check = UpdateCore(relay, account);
+            membershipAvailable = pin is not null && check.Outcome == "verified";
+            return check;
+        }
+    }
+
+    internal RosterVerifier? PinnedMembership(string account)
+    {
+        lock (sync) { return membershipAvailable && pin?.Account == account ? Verified : null; }
     }
 
     RosterCheck UpdateCore(RelayRoster? relay, string account)
