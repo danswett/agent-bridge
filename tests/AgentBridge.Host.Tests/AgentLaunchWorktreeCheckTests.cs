@@ -27,7 +27,7 @@ public sealed class AgentLaunchWorktreeCheckTests : IDisposable
         created = new(tree, tree, null, "");
     }
 
-    string Marker => Path.Combine(Git.Run(tree, ["rev-parse", "--absolute-git-dir"]).Output.Trim(), Worktrees.Marker);
+    string Marker => Path.Combine(Run(tree, "rev-parse", "--absolute-git-dir").Trim(), Worktrees.Marker);
     string? Check(WorkspaceConfig? workspace = null, WorktreeResult? result = null, string agent = "claude") =>
         AgentLaunchWorktreeCheck.Check(workspace ?? Workspace, result ?? created, agent);
 
@@ -159,10 +159,13 @@ public sealed class AgentLaunchWorktreeCheckTests : IDisposable
         Assert.True(Directory.Exists(outside));
     }
 
-    static void Run(string directory, params string[] arguments)
+    static string Run(string directory, params string[] arguments)
     {
-        var result = Git.Run(directory, arguments);
-        Assert.True(result.Ok, result.Said);
+        // The hunt timed out creating the seed commit on a loaded Windows runner (#2733).
+        // Fixture setup is not testing git's 30-second production deadline.
+        var result = Git.Run(directory, arguments, timeout: TimeSpan.FromMinutes(2));
+        Assert.True(result.Ok, $"git {string.Join(' ', arguments)}: {result.Said}");
+        return result.Output;
     }
 
     public void Dispose()
