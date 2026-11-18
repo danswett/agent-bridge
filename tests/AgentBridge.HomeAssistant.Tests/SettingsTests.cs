@@ -49,6 +49,18 @@ public sealed class SettingsTests : IDisposable
         Assert.Equal("REHEARSAL-VM", ok.MachineName);
     }
 
+    [Theory]
+    [InlineData("\"false\"")]
+    [InlineData("0")]
+    [InlineData("{}")]
+    public void An_invalid_durable_ingress_switch_turns_the_connector_off_instead_of_ignoring_rollback(string value)
+    {
+        var (settings, problems) = Read($$"""{"enabled":true,"baseUrl":"https://ha.test","durableReplyIngress":{{value}}}""");
+
+        Assert.False(settings.Enabled);
+        Assert.Contains(problems, p => p.StartsWith("homeAssistant.durableReplyIngress", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Update_checks_are_on_every_half_hour_unless_set_and_a_wrong_setting_turns_the_connector_off()
     {

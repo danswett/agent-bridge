@@ -34,6 +34,7 @@ public sealed record HaSettings
     // What a card carries when the machine's Detailed activity switch does not exist
     // (detailedActivity there).
     public bool DetailedActivity { get; init; } = true;
+    public bool DurableReplyIngress { get; init; } = true;
     // The machine name the contract is keyed on. agent-ha-bridge uses the computer's name, so
     // this is only for a rehearsal that must pose as another machine on a disposable HA.
     public string? MachineName { get; init; }
@@ -82,6 +83,7 @@ public sealed record HaSettings
         {
             Enabled = Bool("enabled", false),
             DetailedActivity = Bool("detailedActivity", true),
+            DurableReplyIngress = Bool("durableReplyIngress", true),
             Disposable = Bool("disposable", false),
             DashboardUrlPath = Text("dashboardUrlPath") ?? DefaultDashboard,
             MachineName = Text("machineName"),

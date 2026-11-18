@@ -79,6 +79,7 @@ public sealed class HaRunning : IAsyncDisposable
             DetailedActivityFallback = ha.DetailedActivity,
             DashboardUrlPath = ha.DashboardUrlPath,
             StateFile = Path.Combine(folder, "ha-connector.json"),
+            DurableReplyIngress = ha.DurableReplyIngress,
             AgentUserIds = ha.AgentUserIds,
             Drivers = drivers,
             Notify = ha.Notify,
