@@ -453,6 +453,8 @@ public sealed record Attention
 {
     [JsonIgnore]
     public bool AutoRetryable { get; init; }
+    [JsonIgnore]
+    public string? RetryFailureId { get; init; }
     public required AttentionKind Kind { get; init; }
     // When it began: the error's time, or for NotResponding the last event's.
     public required DateTimeOffset Since { get; init; }
@@ -843,6 +845,9 @@ public sealed record ReplyRequest
     // Host-only final-effect fence; never supplied by a protocol caller.
     [JsonIgnore]
     public Func<bool>? StillCurrent { get; init; }
+    // Host-only identity of the failure admitted before delivery, not the latest projection.
+    [JsonIgnore]
+    public string? RetryFailureId { get; init; }
     // Host-only provenance, rechecked when consumed. No producer means Unknown, not Steer;
     // Mode, RequireIdle, sender labels and message text cannot supply this authority.
     [JsonIgnore]

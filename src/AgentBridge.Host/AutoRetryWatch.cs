@@ -127,7 +127,7 @@ internal sealed class AutoRetryWatch(ISessionSource source, ISessionReplier repl
             enabled() && serving?.Invoke() != false && Reason(s) == "no-response" && s.Status == SessionStatus.Idle && s.Question is null
                 && s.Activity.CurrentTool is not { Status: ToolStatus.Running } && s.Activity.Background is null
                 && s.Subagents?.Any(a => !a.Finished) != true,
-            error.AutoRetryable);
+            error.AutoRetryable, error.RetryFailureId);
     }
 
     static string? MainResponse(Activity a) => a.Source?.Response is null ? a.Response ?? a.Own?.Response : a.Own?.Response;

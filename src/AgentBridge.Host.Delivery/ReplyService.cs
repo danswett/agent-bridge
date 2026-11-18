@@ -265,7 +265,7 @@ public sealed class ReplyService : ISessionReplier
                     if (problem is not null) { return Refused(problem); }
                 }
                 var outcome = session.Agent == AgentKind.Copilot
-                    ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent)
+                    ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request.RetryFailureId)
                     : await AgentAsync(session, request.Text ?? "", claim, timeline);
                 keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result; }
@@ -374,7 +374,7 @@ public sealed class ReplyService : ISessionReplier
     // KeysWent: some or all of the reply may have reached the session, whatever the result.
     sealed record Attempt(ReplyResult? Result, Typed? Typed, bool KeysWent = false);
 
-    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle, Func<bool>? stillCurrent)
+    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle, Func<bool>? stillCurrent, string? retryFailureId)
     {
         // The session id names a folder; only the agent's own id shape is accepted.
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Done(Refused("the session's id is not a Copilot session id")); }
@@ -406,7 +406,11 @@ public sealed class ReplyService : ISessionReplier
         // long transcript reads it without holding up every other delivery; the read in the
         // turn only covers what has been written since.
         var input = inputs.GetOrAdd(transcript, path => new CopilotInput(path));
-        input.Read();
+        var observed = input.Read();
+        const string retryChangedReason = "the retry is no longer current, so nothing was typed";
+        bool Admitted(CopilotInputState state) => retryFailureId is not null && state.Readable && state.Retryable
+            && state.RetryFailureId == retryFailureId;
+        if (stillCurrent is not null && !Admitted(observed)) return Done(Stale(retryChangedReason));
 
         // One delivery typed at a time across sessions, and the last checks are made once its
         // turn has come, not when it arrived.
@@ -416,7 +420,6 @@ public sealed class ReplyService : ISessionReplier
         long from;
         InjectionResult result;
         bool working;
-        const string retryChangedReason = "the retry is no longer current, so nothing was typed";
         var retryChanged = false;
         try
         {
@@ -456,6 +459,8 @@ public sealed class ReplyService : ISessionReplier
                 return Done(Refused("the session was resumed in a new Copilot while a question or approval was open, and its window may still show it, where a reply would answer it; answer or dismiss it at the machine (or type there), then reply") with { Refusal = ReplyRefusal.Asking });
             }
             if (before.Asking && !noTranscriptYet) { return Done(Asking()); }
+            if (stillCurrent is not null && (!Admitted(before) || before.RetryGeneration != observed.RetryGeneration))
+                return Done(Stale(retryChangedReason));
             from = before.ScannedTo;
             // Typed only into Copilot's input box, empty and outside shell mode, as the screen
             // shows it now: words left in it would go with the reply, and in shell mode Enter runs
@@ -504,7 +509,8 @@ public sealed class ReplyService : ISessionReplier
                         || !processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid && p.StartedAt == process.StartedAt))
                         return Changed();
                     var latest = input.Read();
-                    if (!latest.Readable || latest.Asking || latest.Resumed) return Changed();
+                    if (!Admitted(latest) || latest.Asking || latest.Resumed
+                        || latest.RetryGeneration != observed.RetryGeneration) return Changed();
                     return stillCurrent() ? null : Changed();
                     string Changed() { retryChanged = true; return retryChangedReason; }
                 }
