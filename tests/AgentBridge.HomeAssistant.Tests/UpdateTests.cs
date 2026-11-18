@@ -12,7 +12,7 @@ using Xunit;
 // takes the host through a check, a download and the hand-over to its updater.
 public sealed class UpdateTests : IDisposable
 {
-    const string Machine = "DSWETT-DEV-VM1";
+    const string Machine = "machine-a";
     const string Releases = "https://github.com/danswett/agent-bridge/releases";
     static readonly string Slug = HaContract.MachineSlug(Machine);
 
