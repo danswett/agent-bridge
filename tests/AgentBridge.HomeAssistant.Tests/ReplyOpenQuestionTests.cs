@@ -1,5 +1,6 @@
 using AgentBridge.HomeAssistant;
 using AgentBridge.Protocol;
+using System.Text.Json;
 using Xunit;
 
 // Agent messages wait for the owner question; they never become its answer.
@@ -31,6 +32,121 @@ public sealed partial class ReplyTests
         await Pass(c, 20);
         await c.DeliveredAsync();
         await Pass(c);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_agent_payload_and_companion_press_cannot_confirm_the_owners_completed_form(bool together)
+    {
+        await using var c = await Ready("agent-user");
+        Idle(question: Pick());
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        var payload = ha.SendFromCard(Node, "agent message", driver: "agent", rid: "r-agent");
+        if (together) { c.Observe(payload); }
+        else { await Do(c, payload); }
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        Assert.Empty(answered);
+        Assert.Equal("queued", Ack.GetProperty("outcome").GetString());
+        await Pass(c, 20);
+        Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+        await CardCloses(c);
+        Assert.Equal("agent message", Assert.Single(replied).Text);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_question_clear_captures_outstanding_agent_payloads_before_baselining(bool watched)
+    {
+        await using var c = await Asking();
+        for (var n = 1; n <= (watched ? 3 : 1); n++)
+        {
+            var hit = ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n);
+            if (watched) { c.Observe(hit); }
+        }
+        await CardCloses(c);
+        for (var n = 0; n < 3; n++) { await c.DeliveredAsync(); await Pass(c); }
+        Assert.Equal(Enumerable.Range(1, watched ? 3 : 1).Select(n => "message " + n), replied.Select(r => r.Text));
+        Assert.Empty(answered);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_semantically_invalid_snapshot_refuses_queueing_without_starving_owner_answers(bool startup)
+    {
+        Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, "ha-connector.json.inbox");
+        if (startup) { File.WriteAllText(path, """{"Version":2,"Messages":[]}"""); }
+        await using var c = await Asking();
+        if (!startup) { File.WriteAllText(path, """{"Version":2,"Messages":[]}"""); }
+        var mark = ha.Log.Count;
+        c.Observe(ha.SendFromCard(Node, "message", driver: "agent", rid: "r-invalid"));
+        c.Observe(ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        c.Observe(ha.Press(SessionEntities.Submit(Node)));
+        await Pass(c);
+        Assert.Single(answered);
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        Assert.Contains(NotesSince(mark), n => n.Attributes.TryGetProperty("error", out var error)
+            && error.GetString()!.Contains("queue unavailable", StringComparison.Ordinal));
+        Assert.Empty(replied);
+    }
+
+    [Fact]
+    public async Task Retirement_preserves_entries_through_discovery_holds_and_restart_then_forgets_both_pending_and_receipts()
+    {
+        var path = Path.Combine(folder, "ha-connector.json.inbox");
+        await using (var c = await Asking())
+        {
+            await Do(c, ha.SendFromCard(Node, "old delivered", driver: "agent", rid: "r-done"));
+            await CardCloses(c);
+            Idle(question: Pick());
+            await Pass(c);
+            await Do(c, ha.SendFromCard(Node, "old pending", driver: "agent", rid: "r-pending"));
+            sessions.Held = new DiscoveryHeld("incomplete discovery", [AgentKind.Copilot]);
+            sessions.End(A);
+            await Pass(c);
+        }
+        await using (var c = Connector())
+        {
+            await Pass(c);
+            Assert.Equal(2, new DurableInbox(path).Read().Count);
+            Idle(question: Pick());
+            await Pass(c);
+            Assert.Equal(2, new DurableInbox(path).Read().Count);
+            sessions.Held = null;
+            sessions.End(A);
+            await Pass(c);
+            Assert.Empty(new DurableInbox(path).Read());
+        }
+        replied.Clear();
+        Idle();
+        await using var restarted = Connector();
+        await Pass(restarted);
+        await Pass(restarted, 20);
+        Assert.Empty(replied);
+        await Do(restarted, ha.SendFromCard(Node, "new delivered", driver: "agent", rid: "r-done"));
+        await Do(restarted, ha.SendFromCard(Node, "new pending", driver: "agent", rid: "r-pending"));
+        Assert.Equal(["new delivered", "new pending"], replied.Select(r => r.Text));
+    }
+
+    [Fact]
+    public async Task Startup_reclaims_shared_capacity_from_sessions_that_ended_while_the_connector_was_down()
+    {
+        Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, "ha-connector.json.inbox");
+        var messages = Enumerable.Range(0, 1000).Select(n =>
+            new InboxMessage("gone-" + n / 100, "r-" + n, "sender", "old", FakeSessions.T0, null)).ToList();
+        File.WriteAllText(path, JsonSerializer.Serialize(new { Version = 1, Messages = messages }));
+        await using var c = Connector();
+        await Pass(c);
+        var store = new DurableInbox(path);
+        Assert.Empty(store.Read());
+        Assert.Equal("new", store.Enqueue(A, "new", "sender", "new", FakeSessions.T0).Rid);
     }
 
     [Fact]
