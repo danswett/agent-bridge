@@ -405,15 +405,21 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      together the seven run every spec. The one PWA job these replace took a median of 15
      minutes. Each `pwa-ui` leg, `pwa-e2e` and `spikes-linux` downloads and offline-installs
      Playwright's system packages through `.github/actions/playwright-system-packages`.
-     Network attempts have a 60-second bound; an Azure timeout switches to the runner's Canonical fallback,
+     Update attempts have a 60-second bound; downloads get 180 seconds per attempt,
+     independently of cache state. An Azure timeout switches to the runner's Canonical fallback,
      `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
      100 kB/s, and main run 41952998347 `pwa-e2e`). Before updating apt, a five-second Azure
      DNS probe switches immediately if lookup fails; an Azure DNS error during update or
      download also switches without backoff. An update timeout now switches rather than
-     repeating the same mirror. Classified connection/5xx failures and Canonical timeouts get three attempts,
-     waiting 5 then 20 seconds, before switching. Canonical gets the same bounded network
+     repeating the same mirror. Downloads get three attempts with 5/20-second backoff.
+     Updates get an initial attempt plus three retries with 15/30/60-second backoff for
+     classified network errors and HTTP 429; this also admits transient errors from the
+     runner's existing `https://packages.microsoft.com/` feed, only during updates.
+     Exhausted throttling or Microsoft-feed errors fail closed, even with cached debs,
+     without switching Ubuntu mirrors. Mixed signature, hash, lock or other fatal errors
+     still fail immediately. Canonical gets the same bounded network
      retries, then fails loudly with the attempt log; it never switches back to Azure.
-     A non-forced debs cache hit uses 20-second attempts within a two-minute whole-update
+     A non-forced debs cache hit uses 20-second update attempts within a two-minute whole-update
      budget. Only classified network exhaustion or a timeout without other errors warns
      and skips the network download, then requires `apt-get install --no-download`;
      offline install failure is fatal, without a network fallback. After failed updates only,

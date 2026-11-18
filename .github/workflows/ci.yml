@@ -1568,8 +1568,8 @@ jobs:
     # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
     # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
     # mirror held webkit 3/3 in that download past 20 minutes, twice, before a test ran; Chromium's
-    # come from the same mirror. 35 leaves room for the five minutes the download step below gives
-    # that mirror, a full download from Canonical's archive and the shard's tests. It bounds a
+    # come from the same mirror. 35 leaves room for bounded update and download retries,
+    # Canonical fallback and the shard's tests. It bounds a
     # stuck job, not a test: a leg that passes takes as long as before.
     timeout-minutes: 35
     defaults:
@@ -1600,10 +1600,10 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-${{ matrix.project }}
       # Playwright's system packages, downloaded before its install so a slow apt mirror can be
-      # left after five minutes for Canonical's HTTPS archive (#799; the action's download.sh says
+      # left after a bounded attempt for Canonical's HTTPS archive (#799; the action's download.sh says
       # how). The install below then finds them all downloaded; it, and the packages, are as before.
-      # force-apt-fallback (workflow_dispatch, a branch only; quality/README.md §4.7) skips the five
-      # minutes and takes that fallback before any package is downloaded, to prove it once; the
+      # force-apt-fallback (workflow_dispatch, a branch only; quality/README.md §4.7) skips the first
+      # mirror's download and takes that fallback before any package is downloaded, to prove it once; the
       # WebKit legs are the proof, so one that downloads nothing from Canonical fails. It is
       # false on every push and pull request run, which run the action exactly as before.
       - name: Download Playwright's system packages
@@ -1680,7 +1680,7 @@ jobs:
     # 35, as every job that runs `playwright install --with-deps` gets (#689): main run
     # 41952998347 cancelled this job at its old 15 inside that install, fetching 126 of Chromium's
     # and WebKit's packages from azure.archive.ubuntu.com at about 100 kB/s. Room for the download
-    # step's five minutes on that mirror and a full download from Canonical's archive.
+    # step's bounded retries on that mirror and a full download from Canonical's archive.
     timeout-minutes: 35
     defaults:
       run:
