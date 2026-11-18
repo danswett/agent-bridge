@@ -1,14 +1,17 @@
 namespace AgentBridge.Host;
 
 public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Sequence, string Phase, string Path,
-    string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null)
+    string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null,
+    DateTimeOffset? PauseDeadline = null)
 {
     internal bool Valid(string action, string? target, string outcome) =>
         V == 1 && Operation != Guid.Empty && (Run != Guid.Empty || action is ("session.launch" or "session.answer" or "session.stop") && Phase != "control") && Sequence > 0
         && Phase is "intent" or "terminal" or "control" && Path is "relay" or "local" or "legacy-ha"
         && ActorKind is "person-client" or "agent" or "ha-component"
+        && (PauseDeadline is null || Phase == "control" && action == "gate.pause" && outcome == "paused")
         && (LaunchBinding is null || action == "session.launch" && LaunchBinding.Length == 64 && LaunchBinding.All(char.IsAsciiHexDigit))
         && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled" or "forced"
+            or "pause-timeout" or "control-lost" or "clock-uncertain" or "restart"
         && (Phase == "control" ? target == "profile" && (action is "gate.start" or "gate.pause" or "gate.reset" or "gate.seal")
             && (outcome is "prepared" or "paused" or "reset" or "sealed" or "invalidated"
                 || action == "gate.start" && outcome == "pending" && Path == "relay" && ActorKind == "person-client")
@@ -62,7 +65,8 @@ internal static class GateAuditProjection
         if (selected.Length == 0) { reasons.Add("missing-run-evidence"); }
         var totals = new Dictionary<(string Action, string Path, string ActorKind), int>();
         var identities = new HashSet<(string Action, string? Target, Guid Incarnation, Guid? Question)>();
-        var invalidated = coverage;
+        var invalidated = coverage || onlyOperation is null
+            && rows.Any(r => r.Gate is { Phase: "control" } g && g.Run == run && r.Outcome == "invalidated");
         foreach (var operation in selected.GroupBy(r => r.Gate!.Operation))
         {
             var first = operation.First();

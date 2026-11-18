@@ -25,6 +25,7 @@ public static class LocalApi
     {
         if (GateRunPreparation.IsControl(op))
         { throw Refuse(op, callers.Classify(channel, fresh: true), GateRunPreparation.PersonRequired, log); }
+        if (audit is not null && Acts.Contains(op)) { await audit.RunPause.WaitAsync(); }
         if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
         {
             if (credentials.Of(channel)?.FleetLaunch != true) { credentials.CheckScriptOperation(channel, op, log); }

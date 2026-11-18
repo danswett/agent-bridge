@@ -105,10 +105,10 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(false), InlineData(true)]
-    public async Task Gate_pause_invalidates_on_restart_or_an_earlier_control_clock(bool restart)
+    [InlineData("restart"), InlineData("earlier"), InlineData("unreadable"), InlineData("later")]
+    public async Task Gate_pause_invalidates_on_restart_or_an_uncertain_control_clock(string cause)
     {
-        var clock = new FakeTimeProvider(time.GetUtcNow());
+        var clock = new GateClock(time.GetUtcNow());
         var profile = Path.Combine(fixture.Root, "gate");
         var audit = new AgentAuditLog(profile, clock);
         host.Hub.Handler = authorization.Handler(service, audit);
@@ -117,13 +117,41 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         var channel = await peer.Hub.OpenAsync(host.Id, Patience);
         var run = Result(await channel.RequestAsync("gate.start", new { request = Guid.NewGuid() }, Patience)).GetProperty("run").GetGuid();
         Result(await channel.RequestAsync("gate.pause", new { request = Guid.NewGuid(), run }, Patience));
-        if (restart) { host.Hub.Handler = authorization.Handler(service, new AgentAuditLog(profile, clock)); }
-        else { clock.AdjustTime(clock.GetUtcNow().AddSeconds(-1)); }
+        if (cause == "restart") { host.Hub.Handler = authorization.Handler(service, new AgentAuditLog(profile, clock)); }
+        else if (cause == "earlier") { clock.AdjustTime(clock.GetUtcNow().AddSeconds(-1)); }
+        else if (cause == "later") { clock.AdjustTime(clock.GetUtcNow().AddDays(1)); }
+        else { clock.Unreadable = true; }
         var refused = await channel.RequestAsync("gate.pause", new { request = Guid.NewGuid(), run }, Patience);
         Assert.False(refused.GetProperty("ok").GetBoolean());
         Assert.True(GateAuditProjection.Read(profile, run).Invalidated);
         Assert.Null(audit.ControlWriterRun);
+        clock.Unreadable = false;
         clock.Advance(TimeSpan.FromMinutes(5));
+    }
+
+    sealed class GateClock(DateTimeOffset now) : FakeTimeProvider(now)
+    {
+        internal bool Unreadable;
+        public override DateTimeOffset GetUtcNow() => Unreadable ? throw new IOException("clock unavailable") : base.GetUtcNow();
+    }
+
+    [Fact]
+    public async Task Gate_pause_releases_admission_when_its_control_channel_is_revoked()
+    {
+        var audit = new AgentAuditLog(Path.Combine(fixture.Root, "gate"), time);
+        host.Hub.Handler = authorization.Handler(service, audit);
+        var peer = await PeerAsync();
+        Pin(peer, TrustedPeerStore.Person);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var run = Result(await channel.RequestAsync("gate.start", new { request = Guid.NewGuid() }, Patience)).GetProperty("run").GetGuid();
+        Result(await channel.RequestAsync("gate.pause", new { request = Guid.NewGuid(), run }, Patience));
+        var resumed = audit.Admission.WaitForAdmissionAsync();
+        Assert.False(resumed.IsCompleted);
+        store.Revoke(peer.Key.Public);
+        authorization.Revalidate();
+        await resumed.WaitAsync(Patience);
+        audit.RunPause.Dispose();
+        Assert.True(GateAuditProjection.Read(audit.Profile, run).Invalidated);
     }
 
     sealed class GateReplies : ISessionReplier
@@ -164,7 +192,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         var conflict = await otherChannel.RequestAsync("gate.start", new { request }, Patience);
         Assert.False(conflict.GetProperty("ok").GetBoolean());
         Assert.Contains("conflicting request binding", conflict.GetProperty("error").GetString());
-        foreach (var op in new[] { "gate.pause", "gate.reset", "gate.seal" })
+        foreach (var op in new[] { "gate.reset", "gate.seal" })
         {
             var unavailable = await channel.RequestAsync(op, new { }, Patience);
             Assert.False(unavailable.GetProperty("ok").GetBoolean());

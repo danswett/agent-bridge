@@ -19,6 +19,7 @@ public sealed class DeliveryGate
     readonly List<Task> failedWorkers = [];
     Exclusion? exclusion;
     StopLease? stopping;
+    AdmissionPause? pause;
 
     public DeliveryGate(TimeProvider? time = null) => this.time = time ?? TimeProvider.System;
 
@@ -40,14 +41,53 @@ public sealed class DeliveryGate
     }
 
     // Admission must precede OutcomeMemory's Task.Run, not just the later session claim.
-    public IDisposable? TryEnterDelivery()
+    public IDisposable? TryEnterDelivery() => TryEnterDelivery(out _);
+
+    internal IDisposable? TryEnterDelivery(out Task? resume)
     {
         lock (state)
         {
+            resume = pause?.Released.Task;
+            if (resume is not null) { return null; }
             Expire();
             if (exclusion is not null || stopping is not null) { return null; }
             deliveries++;
             return new Delivery(this);
+        }
+    }
+
+    public Task WaitForAdmissionAsync()
+    {
+        lock (state) { return pause?.Released.Task ?? Task.CompletedTask; }
+    }
+
+    public AdmissionPause PauseAdmission()
+    {
+        lock (state)
+        {
+            Expire();
+            if (pause is not null || stopping is not null || exclusion is not null)
+            { throw new InvalidOperationException("another admission barrier is in progress"); }
+            pause = new AdmissionPause(this);
+            if (deliveries == 0) { pause.Quiet.TrySetResult(); }
+            return pause;
+        }
+    }
+
+    public sealed class AdmissionPause(DeliveryGate owner) : IDisposable
+    {
+        internal TaskCompletionSource Quiet { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task Drained => Quiet.Task;
+        public Task Resumed => Released.Task;
+        public void Dispose()
+        {
+            lock (owner.state)
+            {
+                if (!ReferenceEquals(owner.pause, this)) { return; }
+                owner.pause = null;
+                Released.TrySetResult();
+            }
         }
     }
 
@@ -70,7 +110,7 @@ public sealed class DeliveryGate
             lock (owner.state)
             {
                 owner.deliveries--;
-                if (owner.deliveries == 0) { owner.stopping?.Quiet.TrySetResult(); }
+                if (owner.deliveries == 0) { owner.stopping?.Quiet.TrySetResult(); owner.pause?.Quiet.TrySetResult(); }
             }
             owner.AdmissionReleased?.Invoke();
         }
@@ -104,6 +144,7 @@ public sealed class DeliveryGate
                     released = stopping?.Released.Task;
                     if (released is null)
                     {
+                        if (pause is not null) { return null; }
                         stopping = mine = new StopLease(this);
                         if (deliveries == 0) { mine.Quiet.SetResult(); }
                     }
@@ -159,7 +200,7 @@ public sealed class DeliveryGate
             Expire();
             blocker = uncertain ? Blocker.JournalUncertain : isTyping ? Blocker.Typing
                 : deliveries > 0 || !sessions.IsEmpty ? Blocker.DeliveryInFlight : Blocker.LifecycleInProgress;
-            if (uncertain || isTyping || deliveries > 0 || !sessions.IsEmpty || exclusion is not null || stopping is not null) { return null; }
+            if (uncertain || isTyping || deliveries > 0 || !sessions.IsEmpty || exclusion is not null || stopping is not null || pause is not null) { return null; }
             return exclusion = new Exclusion(this, lifetime);
         }
     }
@@ -351,6 +392,7 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
         bool repeat = false;
         bool divert = false;
         IDisposable? delivery = null;
+        Task? resume = null;
         Task<T>? rechecked = null;
         // An outcome remembered from before a restart (remembered), with nothing in memory for it.
         (bool Known, T Value) prior = default;
@@ -368,7 +410,7 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
                 if (!repeat && remembered is not null) { prior = remembered(key); }
                 if (!prior.Known)
                 {
-                    if (!repeat && deliveryGate is not null && (delivery = deliveryGate.TryEnterDelivery()) is null)
+                    if (!repeat && deliveryGate is not null && (delivery = deliveryGate.TryEnterDelivery(out resume)) is null && resume is null)
                     {
                         // Never remembered: nothing was admitted or typed, and a receipt would refuse the
                         // same request for RememberFor even after a stop that did not happen.
@@ -406,6 +448,18 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
         {
             try
             {
+                while (resume is not null)
+                {
+                    await resume;
+                    delivery = deliveryGate!.TryEnterDelivery(out resume);
+                    if (delivery is null && resume is null)
+                    {
+                        lock (gate) { requests.Remove(key); }
+                        entry.Timeline?.Settled();
+                        entry.Outcome.SetResult(blocked!());
+                        return;
+                    }
+                }
                 var result = await deliver(entry.Timeline);
                 if (remember is not null) { result = remember(key, result, entry.Owner); }
                 lock (gate) { entry.Settled = time.GetUtcNow(); }

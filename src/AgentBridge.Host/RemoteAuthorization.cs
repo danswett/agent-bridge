@@ -90,9 +90,14 @@ public sealed class RemoteAuthorization : IDisposable
         if (GateRunPreparation.IsControl(op))
         {
             if (!IsPinnedPerson(channel)) { throw new InvalidOperationException(GateRunPreparation.PersonRequired); }
+            launchAudit?.RunPause.ValidateClock();
+            if (op == "gate.pause")
+            { return (launchAudit ?? throw new InvalidOperationException("gate pause refused: audit unavailable")).RunPause.Pause($"person:{channel.PeerId}", data, channel.Closed); }
             if (op != "gate.start") { throw new InvalidOperationException("gate lifecycle control is unavailable until the prepare barrier is implemented"); }
             return GateRunPreparation.Prepare(launchAudit, $"person:{channel.PeerId}", data);
         }
+        if (launchAudit is not null && op is Ops.SessionAnswer or Ops.SessionReply or Ops.SessionStop or LaunchProtocol.Launch
+            && (!Enabled || IsPinnedPerson(channel))) { await launchAudit.RunPause.WaitAsync(); }
         var audit = op == LaunchProtocol.Launch ? launchAudit : null;
         var ingress = audit is null ? null : new GateLaunchIngress("relay", "person-client", $"person:{channel.PeerId}", audit.ControlWriterRun);
         if (!Enabled) { return await sessions.HandleAsync(channel, op, data, hello => DiagnosticsFor(channel, hello), op == Ops.SessionStop ? launchAudit : audit, ingress); }
