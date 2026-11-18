@@ -1133,6 +1133,8 @@
             }
           ],
           "command_topic": "copilot/cli/agent_bridge_6fcbab0c1d2e4f50/stop/set",
+          "json_attributes_topic": "copilot/cli/agent_bridge_6fcbab0c1d2e4f50/activity/attr",
+          "json_attributes_template": "{{ {'last_rid': value_json.get('last_rid')} | tojson }}",
           "device": {
             "identifiers": [
               "agent_bridge_6fcbab0c1d2e4f50"

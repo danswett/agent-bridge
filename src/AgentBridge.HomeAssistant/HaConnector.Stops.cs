@@ -57,6 +57,8 @@ public sealed partial class HaConnector
         public DateTimeOffset RetryAt;
         // A press being acted on.
         public bool Busy;
+        public string? LastRid;
+        public readonly JsonArray Acks = [];
 
         public bool Asking(DateTimeOffset now) => Token is not null && now < Until;
     }
@@ -64,7 +66,8 @@ public sealed partial class HaConnector
     // Status: what the card showed when the press came, for the hint. Ending: whether the card
     // was already told the session is ending. Sent: when the request went to the host, which
     // starts any confirmation window no later than that.
-    sealed record StopDone(string SessionId, string Node, string Name, Session? Session, string Status, bool Ending, DateTimeOffset Sent, StopResult Result);
+    sealed record StopDone(string SessionId, string Node, string Name, Session? Session, string Status, bool Ending,
+        DateTimeOffset Sent, StopResult Result, Published Card, string Rid, bool TimedOut);
 
     readonly Func<StopRequest, CancellationToken, Task<StopResult>>? stopper;
     readonly ConcurrentQueue<StopDone> stopsDone = new();
@@ -100,14 +103,6 @@ public sealed partial class HaConnector
             return;
         }
         if (!press.Present || press.Value == p.Stop.Handled) { return; }
-        // A press while the session is being ended is not a second end, and is used up here: left
-        // unread, it would be taken once the first is done, retrying an end that failed or was
-        // refused without anyone pressing again.
-        if (p.Stop.Busy)
-        {
-            p.Stop.Handled = press.Value;
-            return;
-        }
         // A press is a time; anything else on the button is not one.
         if (!DateTimeOffset.TryParse(press.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var pressedAt))
         {
@@ -118,6 +113,15 @@ public sealed partial class HaConnector
         // The session's own state, as the host judges it: one idle after a failed turn still ends
         // at one press, whatever its card says over it (#800).
         var status = session is null ? "" : HaPayloads.BaseStatus(session);
+        var rid = RequestId(sessionId, "stop", press.Value);
+        if (p.Stop.Busy)
+        {
+            p.Stop.LastRid = rid;
+            RecordStopAck(p, rid, status, "ending", false, "an earlier stop request is still in progress");
+            await PublishStopDetailsAsync(p, ct);
+            p.Stop.Handled = press.Value;
+            return;
+        }
         // A second press within the window sends the first's token; after it, a press is a first
         // press again.
         var token = p.Stop.Asking(now) ? p.Stop.Token : null;
@@ -130,11 +134,16 @@ public sealed partial class HaConnector
             if (card.Kind == "unknown") { return; }
             if (card.Snapshot is not { State: HaStop.ConfirmNote, LastChanged: { } asked } || pressedAt < asked)
             {
+                p.Stop.LastRid = rid;
+                RecordStopAck(p, rid, status, "refused", false, "the press arrived before the card asked for confirmation");
+                await PublishStopDetailsAsync(p, ct);
                 p.Stop.Handled = press.Value;
                 log($"Home Assistant connector: a press of end for {sessionId[..Math.Min(8, sessionId.Length)]} came before its card asked for it; not taken as the confirmation");
                 return;
             }
         }
+        p.Stop.LastRid = rid;
+        await PublishStopDetailsAsync(p, ct);
         // What the host will do: end an idle session, or one confirmed; anything else asks. Said
         // first, as the daemon says it, when it is about to end it; corrected if the host asks.
         var ending = token is not null || status == "idle";
@@ -154,19 +163,21 @@ public sealed partial class HaConnector
         // lapsed while the host ends the session (which can take longer than the window).
         if (token is not null) { p.Stop.Token = null; }
         p.Stop.Busy = true;
-        var request = new StopRequest { Id = sessionId, Request = RequestId(sessionId, "stop", press.Value), Confirm = token };
+        var request = new StopRequest { Id = sessionId, Request = rid, Confirm = token };
         var cancel = replyStop.Token;
         log($"Home Assistant connector: end requested for {sessionId[..Math.Min(8, sessionId.Length)]}{(token is null ? "" : " (confirmed)")}");
         Track(Task.Run(async () =>
         {
             StopResult result;
+            var timedOut = false;
             // Read here, not from the pass: what the pass did before this took time the host's
             // window does not.
             var sent = time.GetUtcNow();
             try { result = await stopper!(request, cancel); }
+            catch (TimeoutException) { timedOut = true; result = new StopResult(StopOutcome.Failed, "the host timed out while ending the session"); }
             catch (OperationCanceledException) when (cancel.IsCancellationRequested) { result = new StopResult(StopOutcome.Failed, "the host stopped while ending the session"); }
             catch (Exception e) { result = new StopResult(StopOutcome.Failed, $"ending failed: {e.GetType().Name}"); }
-            stopsDone.Enqueue(new StopDone(sessionId, p.Node, p.Name, session, status, ending, sent, result));
+            stopsDone.Enqueue(new StopDone(sessionId, p.Node, p.Name, session, status, ending, sent, result, p, rid, timedOut));
         }, CancellationToken.None));
     }
 
@@ -185,13 +196,15 @@ public sealed partial class HaConnector
                 // question about to be put nor retries an end that failed. Read first, so a press
                 // made once the card has said so is taken as ever.
                 before = await ObserveAsync(SessionEntities.Stop(p.Node), ct);
+                await EndAckAsync(p, done, ct);
                 await StopDoneAsync(p, done, now, ct);
             }
-            else if (done.Result.Outcome == StopOutcome.Ended && IsRetiring(done.Node))
+            else if (IsRetiring(done.Node))
             {
+                await EndAckAsync(done.Card, done, ct);
                 // Ended and already gone from the list, as the host drops it at once: the card says
                 // so until it goes (Invoke-PendingStops publishes "ended" before the retire).
-                await PublishEndedAsync(done.Node, done.Name, done.Session, now, ct);
+                if (done.Result.Outcome == StopOutcome.Ended) { await PublishEndedAsync(done.Node, done.Name, done.Session, now, ct); }
             }
             stopsDone.TryDequeue(out _);
             if (p is not null)

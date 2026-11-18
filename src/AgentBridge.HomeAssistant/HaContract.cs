@@ -362,6 +362,8 @@ public static partial class HaContract
             ["name"] = "End session",
             ["unique_id"] = $"{t.Node}_stop",
             ["command_topic"] = t.StopCommand,
+            ["json_attributes_topic"] = t.ActivityAttributes,
+            ["json_attributes_template"] = "{{ {'last_rid': value_json.get('last_rid')} | tojson }}",
             ["icon"] = "mdi:stop-circle-outline",
             ["device"] = SessionDevice(t.Node, sessionName, machineName),
             ["availability"] = SessionAvailability(t),

@@ -872,6 +872,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         if (p.Stop.Asking(now)) { summary = HaStop.ConfirmNote; detail["hint"] = p.Stop.Hint; }
         // The last delivered reply id stays on the card, so a sender can read it after the session moves on.
         if (p.Reply.Ack is { } replyAck) { detail["reply_ack"] = replyAck.DeepClone(); }
+        AddStopAcks(p, detail);
         var activitySignature = summary + "\n" + Signature(detail);
         if (activitySignature != p.Activity)
         {

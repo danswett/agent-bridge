@@ -85,12 +85,15 @@ public sealed partial class StopTests
         await using var c = await Ready(SessionStatus.Idle);
         try
         {
+            c.Observe(ha.SendFromCard(Node, "hello", rid: "reply-rid"));
+            await Pass(c);
             c.Observe(ha.Press(SessionEntities.Stop(Node)));
             await Pass(c);
             c.Observe(ha.Press(SessionEntities.Stop(Node)));
             await Pass(c);
             var laterRid = EndAck.GetProperty("rid").GetString();
             Assert.Equal("ending", EndAck.GetProperty("outcome").GetString());
+            Assert.Equal("reply-rid", Detail.GetProperty("reply_ack").GetProperty("rid").GetString());
             release.SetResult(new StopResult(StopOutcome.Refused, "cannot end"));
             await c.DeliveredAsync();
             await Pass(c);
