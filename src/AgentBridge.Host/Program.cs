@@ -104,6 +104,7 @@ var isolatedRead = Flag("--read-root");
 
 if (command == "audit")
 {
+    if (arguments.ElementAtOrDefault(1) == "archive" && Refused("archive the audit log")) { return 4; }
     return AuditCommands.Run(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
 }
 
