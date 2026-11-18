@@ -1718,7 +1718,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   delegate events and questions are still to come. The Windows app loads earlier turns a page
   at a time through "Load earlier messages" or scrolling upward within a screen of the top
   (#1593 W2b-1). Both use the history client's cursor and deduplication; the first visible
-  stored turn keeps its screen position as a page is inserted above it. With history, a
+  stored turn keeps its screen position as a page is inserted above it. The Windows start line
+  waits until the oldest held turn is drawn, rather than labelling an incomplete drawn subset
+  as the start (#1593 W2b). The focused fake-host check runs with
+  `AgentBridge.exe --self-test-earlier-history <result.json>`.
+  With history, a
   session's whole conversation is the one
   column, oldest at the top, in the app and the PWA alike.
   - **H0 A turn** is one prompt and everything until the next: the prompt (the person's, or a

@@ -77,7 +77,6 @@ public sealed partial class SessionView
         }
         var rows = HistoryDraw.Rows(turns.Skip(from).ToArray(), Card?.UserMessage, openPrompts, liveTurn: liveTurn);
         historyVisible = Math.Max(1, turns.Count - from);
-        var line = history is null ? null : HistoryDraw.Line(history.State, rows.Count, !string.IsNullOrEmpty(Card?.UserMessage), history.Start);
         var scroll = ConversationScroll;
         // Measured before the rows change: the pane collapsing under the view must not read as scrolled back.
         var atEnd = pinEnd || !panning && !scrolling && keyTarget is null && scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
@@ -87,8 +86,7 @@ public sealed partial class SessionView
         rowsOf = shownHistory;
         // Nothing moved when no row changed, and a scroller left from another session says nothing of where this one is.
         if (changed) { if (atEnd) { pinEnd = true; anchor = null; } KeepPlace(atEnd, offset, reading); }
-        HistoryLine.Text = line ?? "";
-        HistoryLine.Visibility = line is null ? Visibility.Collapsed : Visibility.Visible;
+        ShowHistoryLine(from);
         HistoryRetry.Visibility = history?.State == HistoryLoad.Failed ? Visibility.Visible : Visibility.Collapsed;
         HistoryEarlier.Visibility = Ui.Show(history?.HasOlder == true && history.State != HistoryLoad.Failed);
         HistoryEarlier.Content = history?.State == HistoryLoad.Loading ? "Loading earlier messages…" : "Load earlier messages";
@@ -125,6 +123,15 @@ public sealed partial class SessionView
         else { historyDraw?.Stop(); }
     }
 
+    void ShowHistoryLine(int from)
+    {
+        // The host can reach the start before incremental drawing reaches the oldest held turn.
+        var line = history is null || history.State == HistoryLoad.StartReached && from > 0
+            ? null : HistoryDraw.Line(history.State, historyShown.Count, !string.IsNullOrEmpty(Card?.UserMessage), history.Start);
+        HistoryLine.Text = line ?? "";
+        HistoryLine.Visibility = line is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
     void DrawEarlier()
     {
         if (!IsLoaded || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
@@ -143,6 +150,7 @@ public sealed partial class SessionView
         if (atEnd) { anchor = null; }
         for (var i = rows.Count - 1; i >= 0; i--) { historyShown.Insert(0, rows[i]); }
         historyVisible = turns.Count - from;
+        if (from == 0) { ShowHistoryLine(from); }
         KeepPlace(atEnd, offset, reading, extent);
         if (atEnd) { KeepPlace(true, 0); }
         if (from == 0) { historyDraw?.Stop(); }
