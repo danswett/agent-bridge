@@ -420,6 +420,7 @@ public static class ProtocolVectors
             .Valid("ending", MinimalSession with { Agent = AgentKind.Codex, Status = SessionStatus.Ending })
             // Idle, as its turn ended, with why beside it (#800): an older client reads only that.
             .Valid("signed-out", MinimalSession with { Agent = AgentKind.Copilot, Attention = SignInNeeded })
+            .Reads("idle-does-not-confirm-finished", $$$"""{"id":"{{{SessionId}}}","agent":"copilot","status":"idle","statusSince":"2026-10-28T04:25:43.182Z","startedAt":"2026-10-28T04:22:43.182Z","updatedAt":"2026-10-28T04:25:43.182Z","activity":{},"owner":{"state":"unknown"},"pr":{"state":"unknown"},"finished":{"state":"unknown"}}""")
             .Reads("unknown-values-and-fields-from-a-newer-host", """{"id":"x","agent":"gemini","status":"thinking","driver":"robot","statusSince":"2026-10-28T04:22:43.182Z","updatedAt":"2026-10-28T04:22:43.182Z","activity":{"mood":"good"},"somethingNew":{"a":1}}""")
             // A field that cannot be read is absent, and a required one its default, as the reads say.
             .Reads("a-title-that-is-not-text-and-no-status", Broken(MinimalSession with { Title = "Fix the build" }, j => { j["title"] = 5; j.Remove("status"); }))
