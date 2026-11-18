@@ -376,7 +376,10 @@ cannot be moved aside is left as it is and never written over: the record does n
 | Otherwise | Died with the host |
 
 The cause is `reboot` across boots or logons; on the same boot, `restart` if the last run wrote `stopped`, else
-`crash`. A Copilot session a person closed while the host was down, with nothing its agent records, reads
+`crash`. That legacy wire name means an unexpected stop, not a confirmed crash: an external stop
+or the launcher's job closing leaves the same record. Continue says "the host stopping unexpectedly";
+an unrecognized in-memory cause uses "an interruption", never a guessed crash.
+A Copilot session a person closed while the host was down, with nothing its agent records, reads
 as died: it is offered, never typed into. A Claude or Codex one whose registration is gone reads as
 uncertain (above): not offered, its folder kept.
 

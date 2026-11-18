@@ -1004,6 +1004,39 @@ public sealed class RestoreTests : IDisposable
 
     // ---- Host B: restoring (#780) ----
 
+    [Fact]
+    public async Task A_restore_after_an_external_stop_or_job_close_does_not_claim_a_host_crash()
+    {
+        // Both forced teardown paths leave the same record: no clean-stop marker.
+        Previous(Fixture.T0, false, E("a", turn: RestoreTurn.Working));
+        await using var r = Recorder(resumer: new Resumer());
+        r.Start();
+        await Until(() => told.Count == 1);
+
+        var text = marks.Of["a"]!.Continue!;
+        Assert.DoesNotContain("a host crash", text);
+        Assert.Equal("You were interrupted by the host stopping unexpectedly at 04:55; carry on where you left off", text);
+    }
+
+    [Theory]
+    [InlineData(RestoreCause.Reboot, "a reboot")]
+    [InlineData(RestoreCause.Restart, "a host restart")]
+    [InlineData((RestoreCause)int.MaxValue, "an interruption")]
+    public void Continue_names_only_a_known_cause_and_otherwise_uses_neutral_words(RestoreCause cause, string what)
+    {
+        Assert.Equal($"You were interrupted by {what} at 04:00; carry on where you left off",
+            RestoreRecorder.ContinueText(cause, Fixture.T0, TimeZoneInfo.Utc));
+    }
+
+    [Fact]
+    public void Continue_for_an_unknown_wire_cause_does_not_diagnose_a_crash()
+    {
+        var cause = System.Text.Json.JsonSerializer.Deserialize<RestoreCause>("\"future-cause\"", ProtocolJson.Options);
+
+        Assert.Equal("You were interrupted by the host stopping unexpectedly at 04:00; carry on where you left off",
+            RestoreRecorder.ContinueText(cause, Fixture.T0, TimeZoneInfo.Utc));
+    }
+
     // Engineering, TKQ_ on #837 (#855): every session is judged before the newest is restored, but
     // only until NoticeAfter. A discovery that stayed held kept every restore back for as long as it
     // did; past it, what is decided is restored, and the held one once it is judged.
@@ -1085,7 +1118,7 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal((2, 0, RestoreCause.Crash), (n.Restored, n.Offered.Count, n.Cause));
         // Continue's words for the one that went mid-turn only, with the time it went in the machine's
         // zone (the record was last written five minutes before this start, at 04:55).
-        Assert.Equal(((bool?)true, (bool?)null, (string?)"You were interrupted by a host crash at 04:55; carry on where you left off"), (marks.Of["a"]!.MidTurn, marks.Of["a"]!.QuestionLost, marks.Of["a"]!.Continue));
+        Assert.Equal(((bool?)true, (bool?)null, (string?)"You were interrupted by the host stopping unexpectedly at 04:55; carry on where you left off"), (marks.Of["a"]!.MidTurn, marks.Of["a"]!.QuestionLost, marks.Of["a"]!.Continue));
         Assert.Equal(((bool?)null, true, (string?)null), (marks.Of["b"]!.MidTurn, marks.Of["b"]!.QuestionLost, marks.Of["b"]!.Continue));
         // Stamped, so a restore is never started twice, and one that dies soon is not restored again.
         Time.Advance(RestoreRecorder.Coalesce);
@@ -1257,7 +1290,7 @@ public sealed class RestoreTests : IDisposable
 
         Assert.Equal(LaunchOutcome.Started, result.Outcome);
         Assert.Equal(("s", "host-signin"), (resumer.Asked[0].Id, resumer.Asked[0].By));
-        Assert.Equal("You were interrupted by a host crash at 04:58; carry on where you left off", marks.Of["s"]!.Continue);
+        Assert.Equal("You were interrupted by the host stopping unexpectedly at 04:58; carry on where you left off", marks.Of["s"]!.Continue);
 
         await using var readOnly = Recorder(resumer: resumer, readOnly: () => "agent-ha-bridge is running for this user");
         readOnly.Start();

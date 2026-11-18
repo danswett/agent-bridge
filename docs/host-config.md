@@ -33,6 +33,21 @@ never create the key.
 
 ## Schema, version 1
 
+### Session reaper
+
+The host's compiled reaper uses Fleet's lifecycle policy, with one idle reviewer
+kept on each machine. `reaper.live` defaults to false. `reaper.machineId` must
+match this host, with explicit `isVm: true` and `ownerLaptop: false`; unknown
+classification never permits ending. Keep the actual IDs and `protectedIds` /
+`protectedNames` lists in this private profile config, never in the repository.
+`approvedReceipt` and `approvedSha256` bind SRE approval to a first dry-run receipt.
+Missing tool, custody, completion or PR evidence means KEEP, not a safe default.
+Builders require clean, unstashed, non-operation git state and HEAD contained in
+the fresh same-name origin branch; no tracking upstream is required. Reviewers
+need explicit CLEAN, or NOT CLEAN at least 60 minutes old, and 60 idle minutes.
+The host lifetime/receipts and existing `session.stop` adapter are subsequent
+stack cuts; this policy cut installs no timer, task or live action.
+
 
 ```jsonc
 {
