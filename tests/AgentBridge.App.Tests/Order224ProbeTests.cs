@@ -3,21 +3,38 @@ using Xunit;
 
 public sealed partial class SlotPreparationTests
 {
-    [Fact]
-    public async Task Order224_invalid_pointer_reaches_the_production_failure_filter()
+    [Theory]
+    [InlineData("missing-fields")]
+    [InlineData("empty")]
+    [InlineData("oversized")]
+    [InlineData("syntax")]
+    [InlineData("bad-reference")]
+    [InlineData("corrupt-slot")]
+    public async Task Order224_invalid_pointer_reaches_the_production_failure_filter(string damage)
     {
         LegacyFile();
         File.WriteAllText(Path.Combine(Root, "Update.exe"), "fixture");
-        File.WriteAllText(PointerFile, "{}");
-        var started = false;
-        var error = await Record.ExceptionAsync(async () =>
+        if (damage is "bad-reference" or "corrupt-slot")
         {
-            await StableEntryMode.RunAsync(Path.Combine(Root, "AgentBridge.exe"), [],
-                _ => { started = true; return Task.FromResult(0); });
-        });
+            var target = PointerTarget("retained");
+            new AgentBridge.App.Core.SlotPointer(Root).Publish(target);
+            if (damage == "bad-reference")
+                File.WriteAllText(PointerFile, File.ReadAllText(PointerFile)
+                    .Replace(target.Package, "../outside.nupkg", StringComparison.Ordinal));
+            else { File.WriteAllText(Path.Combine(Root, target.Slot.RelativePath, "AgentBridge.exe"), "corrupt"); }
+        }
+        else
+        {
+            File.WriteAllText(PointerFile, damage switch
+            { "empty" => "", "oversized" => new string(' ', 8193), "syntax" => "{", _ => "{}" });
+        }
+        var started = false;
+        var logs = new List<string>();
+        var code = await StableEntryMode.RunGuardedAsync(Path.Combine(Root, "AgentBridge.exe"), [], logs.Add,
+            _ => { started = true; return Task.FromResult(0); });
         Assert.False(started);
-        Assert.IsType<InvalidDataException>(error);
-        Assert.True(error is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException,
-            "InvalidDataException bypasses the stable-entry diagnostic and return 1.");
+        Assert.Equal(1, code);
+        Assert.StartsWith("stable-entry failed: ", Assert.Single(logs));
+        Assert.Contains(damage == "syntax" ? "Json" : nameof(InvalidDataException), logs[0]);
     }
 }

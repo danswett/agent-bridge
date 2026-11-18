@@ -232,7 +232,19 @@ public sealed class HostManager
 
     public InstallLayout Layout => layout;
     public string TaskName => LogonTaskXml.TaskName(layout.Profile, userSid);
-    public bool HostInstalled => File.Exists(layout.HostExe) && File.Exists(layout.LauncherExe);
+    string? LauncherPath
+    {
+        get
+        {
+            try { return layout.LauncherExe; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                Log($"stable-entry failed: {e.GetType().Name}: {e.Message}");
+                return null;
+            }
+        }
+    }
+    public bool HostInstalled => File.Exists(layout.HostExe) && File.Exists(LauncherPath);
     public bool StartsAtSignIn => tasks.Exists(TaskName);
 
     // The unattended-start switch (#1624). Null where it is not offered, which refuses like a laptop.
@@ -270,8 +282,10 @@ public sealed class HostManager
     {
         if (on)
         {
-            if (!HostInstalled) { throw new InvalidOperationException($"the host is not beside the app ({layout.HostExe})"); }
-            tasks.Register(TaskName, LogonTaskXml.Build(userId, layout.LauncherExe, layout.ServeArguments, $"{Product.Name} host for profile \"{layout.Profile}\": shows this machine's agent sessions to the {Product.App} and the user's devices."));
+            var launcher = LauncherPath;
+            if (launcher is null || !File.Exists(layout.HostExe) || !File.Exists(launcher))
+                throw new InvalidOperationException($"the host is not beside the app ({layout.HostExe})");
+            tasks.Register(TaskName, LogonTaskXml.Build(userId, launcher, layout.ServeArguments, $"{Product.Name} host for profile \"{layout.Profile}\": shows this machine's agent sessions to the {Product.App} and the user's devices."));
         }
         else if (tasks.Exists(TaskName)) { tasks.Delete(TaskName); }
     }
@@ -386,7 +400,8 @@ public sealed class HostManager
     // and nothing starts, or writes once the launcher exists, which keeps it. Held only while the
     // process is created, and let go as Start returns: the launcher waits for it (2 s) to clear an
     // earlier marker. Not had within 2 s, nothing starts.
-    void StartLauncher() => UnlessStopped(() => launcher = processes.Start(layout.LauncherExe, layout.ServeArguments));
+    void StartLauncher() => UnlessStopped(() => launcher = processes.Start(LauncherPath
+        ?? throw new HostRefusedException("Stable launcher is unavailable; repair the installation."), layout.ServeArguments));
 
     // The look for a marker and the start, under the marker's lock, as above.
     void UnlessStopped(Action start)

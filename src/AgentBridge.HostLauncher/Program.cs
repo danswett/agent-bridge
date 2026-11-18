@@ -3,16 +3,8 @@ using System.ComponentModel;
 using AgentBridge.HostLauncher;
 
 if (CoordinatorMode.Requested(args)) return await CoordinatorMode.RunAsync(args);
-try
-{
-    if (await StableEntryMode.RunAsync(Environment.ProcessPath
-        ?? throw new InvalidOperationException("Missing launcher image path."), args) is { } code) { return code; }
-}
-catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException)
-{
-    LauncherLog.For(LauncherLog.ProfileFolder(args))($"stable-entry failed: {e.GetType().Name}: {e.Message}");
-    return 1;
-}
+if (await StableEntryMode.RunGuardedAsync(Environment.ProcessPath, args,
+    LauncherLog.For(LauncherLog.ProfileFolder(args))) is { } code) { return code; }
 
 // agent-bridge-hostw: starts agent-bridge-host beside it with no console window and waits for
 // it, returning its exit code. The logon task runs this, so nothing flashes on screen at
