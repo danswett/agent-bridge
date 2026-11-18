@@ -51,10 +51,16 @@ public sealed partial class SlotPreparationTests
         var target = PointerTarget("new");
         var legacy = new InstallLayout(Path.Combine(Root, "current"), temp, "fixture");
         var slot = new InstallLayout(Path.Combine(Root, target.Slot.RelativePath), temp, "fixture");
-        Assert.Equal(Path.Combine(legacy.AppFolder, "agent-bridge-hostw.exe"), legacy.LauncherExe);
+        Assert.Null(SlotEntry.StablePath(legacy.AppFolder, "agent-bridge-hostw.exe"));
         File.WriteAllText(Path.Combine(Root, "agent-bridge-hostw.exe"), "installed stable helper");
-        Assert.Equal(Path.Combine(Root, "agent-bridge-hostw.exe"), legacy.LauncherExe);
-        Assert.Equal(legacy.LauncherExe, slot.LauncherExe);
+        Assert.Equal(Path.Combine(Root, "agent-bridge-hostw.exe"), SlotEntry.StablePath(legacy.AppFolder, "agent-bridge-hostw.exe"));
+        Assert.Equal(SlotEntry.StablePath(legacy.AppFolder, "agent-bridge-hostw.exe"),
+            SlotEntry.StablePath(slot.AppFolder, "agent-bridge-hostw.exe"));
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal(Path.Combine(Root, "agent-bridge-hostw.exe"), legacy.LauncherExe);
+            Assert.Equal(legacy.LauncherExe, slot.LauncherExe);
+        }
         Assert.Null(SlotEntry.RootForPayload(temp));
     }
 
@@ -92,6 +98,7 @@ public sealed partial class SlotPreparationTests
     {
         LegacyFile();
         File.WriteAllText(Path.Combine(Root, "Update.exe"), "fixture");
+        File.WriteAllText(Path.Combine(Root, "current", "Update.exe"), "not an install root");
         Assert.Null(await StableEntryMode.RunAsync(Path.Combine(Root, "current", "agent-bridge-hostw.exe"), [],
             _ => throw new InvalidOperationException("must not start")));
     }

@@ -17,7 +17,9 @@ public sealed record InstallLayout(string AppFolder, string DataRoot, string Pro
 {
     public string ProfileFolder => Path.Combine(DataRoot, Profile);
     public string HostExe => Path.Combine(AppFolder, OperatingSystem.IsWindows() ? "agent-bridge-host.exe" : "agent-bridge-host");
-    public string LauncherExe => Path.Combine(AppFolder, OperatingSystem.IsWindows() ? "agent-bridge-hostw.exe" : "agent-bridge-hostw");
+    public string LauncherExe => OperatingSystem.IsWindows()
+        ? SlotEntry.StablePath(AppFolder, "agent-bridge-hostw.exe") ?? Path.Combine(AppFolder, "agent-bridge-hostw.exe")
+        : Path.Combine(AppFolder, "agent-bridge-hostw");
     public string AppDataFolder => Path.Combine(DataRoot, "app");
     public string LogFile => Path.Combine(ProfileFolder, "logs", "host.log");
     public IReadOnlyList<string> ServeArguments => ["serve", "--profile", Profile];

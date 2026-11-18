@@ -8,6 +8,13 @@ internal static class CoordinatorImage
 {
     static readonly UnicodeEncoding Unicode = new(false, true, true);
 
+    internal static void RequireSlotEntryV1(Stream image, Func<Stream, string?>? metadata = null)
+    {
+        var description = metadata is null ? ReadDescription(image) : metadata(image);
+        if (description?.EndsWith(" [slot-entry-v1] [coordinator-v1]", StringComparison.Ordinal) != true)
+            throw new InvalidDataException("slot-entry-protocol-unavailable: helper lacks slot-entry-v1.");
+    }
+
     internal static void RequireV1(Stream image, Func<Stream, string?>? metadata = null)
     {
         var description = metadata is null ? ReadDescription(image) : metadata(image);
