@@ -25,6 +25,17 @@ public class AnswerTests
         Fields = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(fieldsJson),
     };
 
+    static (Question Question, AnswerRequest Answer)[] TextAnswers(string text) =>
+    [
+        (Form(), new AnswerRequest { Id = "s1", Question = "q1", Request = "r1", Text = text }),
+        (Form(new Field { Name = "answer", Type = FieldType.Text }),
+            Answer(JsonSerializer.Serialize(new { answer = text }))),
+        (Form(Choice("answer", other: true)),
+            Answer(JsonSerializer.Serialize(new { answer = new { other = text } }))),
+        (Form(new Field { Name = "answer", Type = FieldType.Multi, Options = [new("a")], AllowOther = true }),
+            Answer(JsonSerializer.Serialize(new { answer = new[] { new { other = text } } }))),
+    ];
+
     static Field Number(FieldConstraints limits) => new() { Name = "n", Type = FieldType.Number, Constraints = limits };
 
     static JsonElement Num(string raw) => JsonDocument.Parse(raw).RootElement.Clone();
@@ -112,7 +123,7 @@ public class AnswerTests
         Assert.Null(Answers.Check(q, Answer("""{"answer":{"other":"neither, use c"}}""")));
         Assert.Contains("empty", Answers.Check(q, Answer("""{"answer":{"other":"  "}}""")));
         var tooLong = JsonSerializer.Serialize(new { answer = new { other = new string('x', Limits.AnswerText + 1) } });
-        Assert.Contains("longer than 4 KiB", Answers.Check(q, Answer(tooLong)));
+        Assert.Contains("longer than 16 KiB", Answers.Check(q, Answer(tooLong)));
     }
 
     [Fact]
@@ -156,14 +167,54 @@ public class AnswerTests
         Assert.Contains("not a text answer", Answers.Check(Form(Choice("answer")), new AnswerRequest { Id = "s1", Question = "q1", Request = "r1", Text = "a" }));
     }
 
-    [Fact]
-    public void A_request_over_16_KiB_is_refused_even_when_each_text_is_within_its_own_limit()
+    [Theory]
+    [InlineData(4 * 1024 + 1)]
+    [InlineData(16 * 1024)]
+    public void Free_text_answers_accept_more_than_4_KiB_through_16_KiB(int bytes)
     {
-        var fields = Enumerable.Range(0, 5).Select(i => new Field { Name = $"t{i}", Type = FieldType.Text }).ToArray();
+        foreach (var (question, answer) in TextAnswers(new string('x', bytes)))
+        {
+            Assert.Null(Answers.Check(question, answer));
+        }
+    }
+
+    [Theory]
+    [InlineData("\"", 16 * 1024)]
+    [InlineData("\u00e9", 8 * 1024)]
+    [InlineData("\U0001f600", 4 * 1024)]
+    public void The_request_envelope_fits_16_KiB_of_escaped_or_multibyte_text(string unit, int count)
+    {
+        var text = string.Concat(Enumerable.Repeat(unit, count));
+        foreach (var (question, answer) in TextAnswers(text))
+        {
+            Assert.Null(Answers.Check(question, answer));
+        }
+        Assert.All(TextAnswers(text + "x"),
+            item => Assert.Contains("send as a reply instead", Answers.Check(item.Question, item.Answer)));
+    }
+
+    [Fact]
+    public void Text_over_16_KiB_is_refused_with_an_offer_to_send_as_a_reply_instead()
+    {
+        foreach (var (question, answer) in TextAnswers(new string('x', 16 * 1024 + 1)))
+        {
+            var reason = Answers.Check(question, answer);
+            Assert.Contains("16 KiB", reason);
+            Assert.Contains("send as a reply instead", reason);
+        }
+    }
+
+    [Fact]
+    public void A_request_over_its_envelope_is_refused_with_a_reply_offer_even_when_each_text_fits()
+    {
+        var fields = Enumerable.Range(0, Limits.AnswerRequest / Limits.AnswerText + 1)
+            .Select(i => new Field { Name = $"t{i}", Type = FieldType.Text }).ToArray();
         var text = new string('x', Limits.AnswerText);
         var each = JsonSerializer.Serialize(fields.ToDictionary(f => f.Name, _ => text));
 
-        Assert.Contains("larger than 16 KiB", Answers.Check(Form(fields), Answer(each)));
+        var reason = Answers.Check(Form(fields), Answer(each));
+        Assert.Contains($"larger than {Limits.AnswerRequest / 1024} KiB", reason);
+        Assert.Contains("send as a reply instead", reason);
         Assert.Null(Answers.Check(Form(fields.Take(3).ToArray()), Answer(JsonSerializer.Serialize(fields.Take(3).ToDictionary(f => f.Name, _ => text)))));
     }
 
