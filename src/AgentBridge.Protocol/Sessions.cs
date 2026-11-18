@@ -844,7 +844,13 @@ public sealed record ReplyRequest
     public Func<ReplyIntent>? IntentSource { get; init; }
     [JsonIgnore]
     public ReplyIntent Intent => IntentSource?.Invoke() ?? ReplyIntent.Unknown;
+    // Host-only verified person confirmation, bound to the whole escaped composer digest.
+    // No production producer until the signed relay ingress and policy land (#804).
+    [JsonIgnore]
+    public Func<string, string?>? ClearConfirmation { get; init; }
 }
+
+public sealed record ClearedComposer(string Text, IReadOnlyList<IReadOnlyList<int>> Marks, bool Truncated = false);
 
 // The same outcomes as an answer, read the same way.
 public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
@@ -855,11 +861,12 @@ public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }
     public IReadOnlyList<ReplyAttachmentBinding>? Attachments { get; init; }
+    public ClearedComposer? Cleared { get; init; }
     [JsonIgnore]
     public ReplyRefusal Refusal { get; init; }
     // Refusal is advice to callers, not part of the result's identity.
-    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Mode == other.Mode && Stage == other.Stage && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments);
-    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments);
+    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Mode == other.Mode && Stage == other.Stage && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments) && Equals(Cleared, other.Cleared);
+    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments, Cleared);
 }
 
 public enum ReplyRefusal { Other, Asking, ComposerUnverified, Busy }

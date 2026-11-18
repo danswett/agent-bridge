@@ -155,6 +155,24 @@ mode changed at the machine in that moment is not seen. The
 screens the tests read are in `tests/fixtures/screens/copilot-input-box.json`, built from
 the captured live screen and the CLI's rendering code, each naming its source.
 
+## Guarded clear foundation ([#804](https://github.com/danswett/agent-bridge/issues/804))
+
+The host-only `ReplyRequest.ClearConfirmation` seam accepts a verifier bound to the
+whole escaped composer digest, rechecked with person intent, process incarnation,
+G5, elevation, launch and transcript guards before clearing and again before replying.
+No wire field supplies it. There is deliberately **no production producer or advertised
+capability yet**: signed relay-only confirmation, default-off policy and PWA/app UI
+remain follow-up slices. The pipe, HA, MCP and agent paths cannot enable it.
+
+This first cut permits only complete, single-row, non-shell Copilot drafts that can be
+returned whole within 500 escaped characters. Everything else is refused before keys.
+The clear (Ctrl+End, Ctrl+U) is held to the original rows and safe footer in the worker.
+Within the same typing slot, two consecutive empty reads must arrive within two seconds,
+then the normal guarded reply path runs. Any attempted deletion returns `cleared`
+(`text`, host escape `marks`, `truncated: false`), even if later guards refuse the reply.
+It is never logged. Request memory prevents a duplicate clear. No live key validation
+or production enablement is claimed by this foundation.
+
 ## Attachments (Copilot)
 
 Ported from agent-ha-bridge (`hooks/daemon-replies.ps1`: `New-BridgeAttachmentPrompt`,

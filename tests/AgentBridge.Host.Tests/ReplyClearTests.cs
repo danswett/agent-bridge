@@ -8,15 +8,19 @@ public sealed class ReplyClearTests
 {
     const string Id = "99999999-9999-4999-8999-999999999999";
 
-    [Fact]
-    public async Task A_confirmed_person_clear_checks_empty_twice_then_sends_once_and_remembers_the_deleted_draft()
+    [Theory]
+    [InlineData("unfinished draft")]
+    [InlineData("draft \u202e")]
+    public async Task A_confirmed_person_clear_checks_empty_twice_then_sends_once_and_remembers_the_deleted_draft(string draft)
     {
         await using var h = await Harness.Create();
+        h.Draft = draft;
         h.DelayedEmpty = 2;
         var request = h.Request();
         var result = await h.Replier.ReplyAsync(request);
         Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
-        Assert.Equal("unfinished draft", result.Cleared?.Text);
+        Assert.Equal(ShownText.Reveal(draft, rightToLeft: true), result.Cleared?.Text);
+        if (draft.Contains('\u202e')) Assert.Single(result.Cleared!.Marks);
         Assert.Equal(1, h.Clears);
         Assert.Equal(1, h.Replies);
         Assert.True(h.EmptyReads >= 2);
@@ -67,12 +71,14 @@ public sealed class ReplyClearTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_failed_clear_or_a_question_after_clearing_returns_the_draft_without_sending(bool question)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task A_failed_clear_or_a_question_after_clearing_returns_the_draft_without_sending(bool question, bool unresponsive)
     {
         await using var h = await Harness.Create();
         h.Stuck = !question;
+        h.Unresponsive = unresponsive;
         h.AfterClear = question ? h.Ask : null;
         var result = await h.Replier.ReplyAsync(h.Request());
         Assert.Equal(AnswerOutcome.Refused, result.Outcome);
@@ -105,7 +111,7 @@ public sealed class ReplyClearTests
         public readonly ReplyService Replier;
         public readonly List<string> Log = [];
         public string Draft = "unfinished draft";
-        public bool Shell, Stuck;
+        public bool Shell, Stuck, Unresponsive;
         public int Clears, Replies, EmptyReads, DelayedEmpty;
         public Action? BeforeKeys;
         public Func<Task>? AfterClear;
@@ -127,12 +133,16 @@ public sealed class ReplyClearTests
             await h.source.RefreshAsync();
             return h;
         }
-        public ReplyRequest Request() => new()
+        public ReplyRequest Request()
         {
-            Id = Id, Request = Guid.NewGuid().ToString(), Text = "go on",
-            IntentSource = () => ReplyIntent.Steer,
-            ClearConfirmation = digest => digest == EscapedApproval.Shown(ShownText.Reveal("unfinished draft", rightToLeft: true)) ? null : "changed composer",
-        };
+            var expected = EscapedApproval.Shown(ShownText.Reveal(Draft, rightToLeft: true));
+            return new()
+            {
+                Id = Id, Request = Guid.NewGuid().ToString(), Text = "go on",
+                IntentSource = () => ReplyIntent.Steer,
+                ClearConfirmation = digest => digest == expected ? null : "changed composer",
+            };
+        }
         public async Task Ask()
         {
             Fixture.Append(events, Copilot.Event("permission.requested",
@@ -169,6 +179,7 @@ public sealed class ReplyClearTests
              Shell ? " Shell \u00B7 Allow All" : Draft.Length == 0 ? " Interactive \u00B7 / commands \u00B7 ? help" : " Interactive \u00B7 @ files \u00B7 # issues"];
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken ct = default)
         {
+            if (Clears > 0 && Unresponsive) return new TaskCompletionSource<ConsoleScreen>().Task;
             if (Clears > 0 && DelayedEmpty > 0 && --DelayedEmpty == 0) Draft = "";
             if (Draft.Length == 0) EmptyReads++;
             return Task.FromResult(new ConsoleScreen(Rows(), null));

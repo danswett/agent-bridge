@@ -1046,6 +1046,15 @@ Hosts emit `stage` only on `unconfirmed`: `typed`, `recorded`, or `queued` below
 unknown reads as `typed`, never as delivery. Tolerant records may retain a stage on
 another outcome; clients ignore it there rather than override the outcome.
 
+The [guarded-clear foundation](../host-replies.md#guarded-clear-foundation-804)
+adds optional `cleared: { text, marks, truncated }`: text that a clear attempt may
+have deleted, escaped with host-only `[start, length]` marks in UTF-16 units.
+It is returned even if the reply is later refused, and is never logged. This cut
+refuses before keys unless the complete single-row draft fits 500 escaped characters;
+it therefore always returns `truncated: false`. There is no wire confirmation field,
+production clear producer or capability in this cut. Signed person relay confirmation,
+policy and PWA/app presentation follow separately; existing clients are unchanged.
+
 `attachments: [{ "id": "<client attachment UUID>", "ref": "@<staged absolute path>" }]`
 binds each attachment to exactly the reference token in the recorded prompt, in the
 request's attachment order. It is returned only for **delivered Copilot and Claude**
