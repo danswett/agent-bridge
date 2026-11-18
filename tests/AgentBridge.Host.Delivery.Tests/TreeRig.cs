@@ -36,7 +36,7 @@ internal sealed class TreeRig
         return error;
     }
 
-    DateTimeOffset? Created(int id)
+    public DateTimeOffset? Created(int id)
     {
         BeforeCreated?.Invoke(id);
         var at = Nodes.TryGetValue(id, out var n) && n.Running && !n.UnknownStart ? n.Started : (DateTimeOffset?)null;
