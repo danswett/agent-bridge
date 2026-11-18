@@ -391,6 +391,7 @@ internal sealed class BackgroundWork
 
     // Whether an agent can never run again, so nothing it asked is still asked.
     public bool HasEnded(string agentId) => _agents.TryGetValue(agentId, out var agent) && agent.Ended;
+    public IEnumerable<string> EndedAgents => _agents.Values.Where(agent => agent.Ended).Select(agent => agent.Id);
 
     // The main agent's turn was interrupted: a task agent it started is part of that turn, and
     // so is one such an agent started, so they went with it. A background agent carries on,

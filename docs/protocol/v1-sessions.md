@@ -284,7 +284,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 | Field | Notes |
 |---|---|
 | `at` | When this run of the host started and compared |
-| `cause` | `reboot` (the machine started again, or the person signed out, so every agent went with it), `crash` (the host stopped without saying so, on the same boot) or `restart` (it stopped cleanly, on the same boot, and sessions went while it was away). A client reads a cause it doesn't know as `crash` |
+| `cause` | `reboot` (the machine started again, or the person signed out, so every agent went with it), `crash` (the host stopped without saying so, on the same boot) or `restart` (it stopped cleanly, on the same boot, and sessions went while it was away). `crash` is a legacy wire name, not a diagnosis: an external stop or launcher job close leaves the same record. A client reads a cause it doesn't know as `crash`; Continue uses neutral wording, "the host stopping unexpectedly", rather than claiming a crash |
 | `since` | When the earlier run last wrote down what was live: about when the sessions went |
 | `restored`, `loops` | Sessions restored, idle, through the resume path, and seen ready, and those not restored again because they died again within 10 minutes of a restore (offered, and among `offered`) |
 | `waiting` | Sessions still being judged: their agent's discovery is held ([Discovery held](#discovery-held)), or its hooks' endings are not yet taken in, so whether they still run, or ended, cannot be told yet. They are never read as gone; once judged, `restore` changes and `hello.changed` says so |
