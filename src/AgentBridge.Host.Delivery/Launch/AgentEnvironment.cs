@@ -15,7 +15,12 @@ public static class AgentEnvironment
         else if (!Folders.Same(claudeHome, inherited.ClaudeHome)) { environment["CLAUDE_CONFIG_DIR"] = claudeHome; }
         if (!Folders.Same(codexHome, inherited.CodexHome)) { environment["CODEX_HOME"] = codexHome; }
         if (path is not null) { environment["PATH"] = path; }
-        if (homeAssistantBaseUrl is not null) { environment["AGENT_HA_URL"] = homeAssistantBaseUrl.AbsoluteUri.TrimEnd('/') + "/api"; }
+        if (homeAssistantBaseUrl is not null)
+        {
+            var baseUrl = homeAssistantBaseUrl.AbsoluteUri.TrimEnd('/');
+            if (baseUrl.EndsWith("/api", StringComparison.Ordinal)) { baseUrl = baseUrl[..^4]; }
+            environment["AGENT_HA_URL"] = baseUrl + "/api";
+        }
         return environment;
     }
 }

@@ -862,6 +862,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             {
                 return Refused("Home Assistant reply path is not ready: homeAssistant.baseUrl is not configured on this host");
             }
+            if (options.HomeAssistantEnabled && options.HomeAssistantBaseUrl is { } baseUrl &&
+                (!baseUrl.IsAbsoluteUri || baseUrl.Query.Length > 0 || baseUrl.Fragment.Length > 0 || baseUrl.UserInfo.Length > 0))
+            {
+                return Refused("Home Assistant reply path is not ready: homeAssistant.baseUrl must be an absolute URL without a query, fragment or userinfo");
+            }
             if (LaunchProtocol.Check(request) is { } invalid) { return Refused(invalid); }
             var settings = string.Join(", ", new[] { ("agent", request.Agent), ("workspace", request.Workspace), ("resume", request.Resume), ("profile", request.Profile), ("model", request.Model), ("effort", request.Effort), ("context", request.Context), ("permissions", request.Permissions) }
                 .Where(x => x.Item2 is not null).Select(x => $"{x.Item1}={x.Item2}"));
@@ -1303,7 +1308,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 try { environment[Launchers.TokenVariable] = fleet ? credentials.PrepareFleet(sessionId, launchId) : credentials.Prepare(sessionId, launchId); credentialIssued = environment[Launchers.TokenVariable] is not null; }
                 catch (Exception e) when (e is InvalidOperationException or ArgumentException or IOException or UnauthorizedAccessException)
                 {
-                    log($"launch {Short(key)}: no agent credential was issued: {e.Message}");
+                    log($"launch {Short(key)}: no agent credential was issued: {e.GetType().Name}");
                 }
             }
             if (fleet && !credentialIssued) { provenance.Abandon(key); return Refused("a read+reply fleet worker credential could not be issued"); }
@@ -1313,7 +1318,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             {
                 if (credentialIssued) { credentials!.Abandon(launchId); }
                 provenance.Abandon(key);
-                log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
+                log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.GetType().Name}");
                 return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} couldn't be started") { Launched = launched };
             }
             if (credentialIssued) { credentials!.Bind(launchId, started.ProcessId, started.StartedAt); }
