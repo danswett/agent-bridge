@@ -34,7 +34,7 @@ Rules:
 7. Groups (#767): names and membership roam with Your order, one set for the account.
    **Collapsed or expanded stays on each device.** This device's order keeps its own copy of
    group membership from the moment it is copied.
-8. Moves stay within a row's group, as today (`ui.md` §6.1).
+8. Key and Move up/down actions cross expanded group edges, never Pinned (`ui.md` §6.1).
 
 ## 3. What roams
 
@@ -99,6 +99,12 @@ non-mutating name validation, shared with create/rename, and counts of current u
 rows. It adds no storage key or membership record; edits still use the existing order API.
 
 Windows G4 (#1617) keeps the same registers locally in `SessionOrder`, with group operations in `SessionGroups`; nothing syncs yet.
+
+Windows G5c (#1617) moves across group edges through the same `CanMove`/`Move` used by
+`RowActions`, persisting membership and landing at the next group's top or previous group's foot.
+The group projection supplies `SessionOrder.IsGroupCollapsed` with effective display state;
+collapsed groups are skipped, empty expanded groups can be entered, and Pinned stays separate.
+Headers and collapse storage remain G5a's responsibility; G5c adds no UI or menu items.
 
 G2 (#1615) draws those groups between Pinned and Sessions. Collapse is kept only in the device's
 local order, outside the group registers. Collapsed groups retain visible needs-you rows; search

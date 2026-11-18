@@ -231,13 +231,16 @@ public sealed class MainTests : IAsyncLifetime
             var old = Card("old");
             var asking = Card("asking");
             var a = main.CreateGroup("A");
+            var hidden = main.CreateGroup("Hidden");
             var b = main.CreateGroup("B");
+            main.Order.IsGroupCollapsed = id => id == hidden;
             main.MoveToGroup(asking, a);
             main.MoveToGroup(old, b);
             old.Editing = true;
             Assert.True(asking.Row!.CanMoveDown);
             Assert.True(asking.Row.MoveDown());
             Assert.Equal(b, main.Order.Groups.GroupOf(main.KeyOf(asking)));
+            Assert.Equal(2, main.GroupCounts[b]);
             Assert.True(asking.Row.CanMoveUp);
             Assert.True(asking.Row.MoveUp());
             Assert.Equal(a, main.Order.Groups.GroupOf(main.KeyOf(asking)));

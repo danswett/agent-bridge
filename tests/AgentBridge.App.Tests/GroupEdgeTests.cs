@@ -73,6 +73,57 @@ public sealed class GroupEdgeTests : IDisposable
     }
 
     [Fact]
+    public void Collapsed_groups_are_skipped_both_ways_without_changing_their_members()
+    {
+        var order = new SessionOrder(null);
+        OrderEntry[] rows = [E("a"), E("b"), E("c")];
+        order.Arrange(rows);
+        var a = order.Groups.Create("A");
+        var hidden = order.Groups.Create("Hidden");
+        var b = order.Groups.Create("B");
+        order.Groups.SetGroup(K("a"), a);
+        order.Groups.SetGroup(K("b"), hidden);
+        order.Groups.SetGroup(K("c"), b);
+        order.IsGroupCollapsed = id => id == hidden;
+
+        Assert.True(order.Move(K("a"), 1));
+        Assert.Equal(b, order.Groups.GroupOf(K("a")));
+        order.Arrange(rows);
+        Assert.True(order.Move(K("a"), -1));
+        Assert.Equal(a, order.Groups.GroupOf(K("a")));
+        Assert.Equal(hidden, order.Groups.GroupOf(K("b")));
+        Assert.False(order.CanMove(K("b"), 1));
+        Assert.False(order.Move(K("b"), -1));
+        order.IsGroupCollapsed = _ => false;
+        Assert.True(order.Move(K("a"), 1));
+        Assert.Equal(hidden, order.Groups.GroupOf(K("a")));
+    }
+
+    [Theory]
+    [InlineData(SessionSort.Yours)]
+    [InlineData(SessionSort.Recent)]
+    [InlineData(SessionSort.Machine)]
+    public void An_edge_move_never_passes_a_pending_row_or_runs_in_a_sorted_view(SessionSort sort)
+    {
+        var order = new SessionOrder(null);
+        var a = order.Groups.Create("A");
+        var b = order.Groups.Create("B");
+        var saved = E("a");
+        var pending = new OrderEntry("other", Make.Session("b"));
+        order.Groups.SetGroup(saved.Key, a);
+        order.Groups.SetGroup(pending.Key, b);
+        order.Arrange([saved]);
+        order.Sort = sort;
+        order.Arrange([saved, pending], settled: machine => machine != "other");
+
+        Assert.False(order.CanMove(saved.Key, 1));
+        Assert.False(order.Move(saved.Key, 1));
+        Assert.False(order.Move(pending.Key, -1));
+        Assert.Equal(a, order.Groups.GroupOf(saved.Key));
+        Assert.Equal(b, order.Groups.GroupOf(pending.Key));
+    }
+
+    [Fact]
     public void Pinned_edges_are_refused_in_both_directions_even_for_group_members()
     {
         var order = new SessionOrder(null);

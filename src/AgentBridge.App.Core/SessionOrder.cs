@@ -90,6 +90,10 @@ public sealed class SessionOrder
 
     public SessionGroups Groups { get; }
 
+    // The group projection supplies effective collapse (including temporary filter expansion).
+    // Collapse storage and headers belong to the view, not the roaming group registers.
+    public Func<string, bool>? IsGroupCollapsed { get; set; }
+
     public static string KeyOf(string machine, string session) => $"{machine}\n{session}";
 
     // Whether the order can be kept. When it can't, the list is Most recent.
@@ -230,22 +234,39 @@ public sealed class SessionOrder
     List<string>? GroupOf(string key) => shownPinned.Contains(key, StringComparer.Ordinal) ? shownPinned
         : shownSessions.Contains(key, StringComparer.Ordinal) ? shownSessions.Where(k => Groups.GroupOf(k) == Groups.GroupOf(key)).ToList() : null;
 
-    // Whether a row on screen can move by one (-1 up, 1 down) within its group: not a row its machine
-    // hasn't finished sending, nor past one.
-    public bool CanMove(string key, int delta)
+    (string? Group, string? Target, bool After)? MoveTarget(string key, int delta)
     {
-        if (Sort != SessionSort.Yours || GroupOf(key) is not { } g || pending.Contains(key)) { return false; }
+        if (delta is not (-1 or 1) || Sort != SessionSort.Yours || GroupOf(key) is not { } g || pending.Contains(key)) { return null; }
+        var pinned = IsPinned(key);
+        var group = Groups.GroupOf(key);
+        if (!pinned && group is not null && IsGroupCollapsed?.Invoke(group) == true) { return null; }
         var i = g.IndexOf(key) + delta;
-        return i >= 0 && i < g.Count && !pending.Contains(g[i]);
+        if (i >= 0 && i < g.Count)
+        {
+            return pending.Contains(g[i]) ? null : (group, g[i], delta > 0);
+        }
+        if (pinned) { return null; }
+        var groups = Groups.Items.Where(g => IsGroupCollapsed?.Invoke(g.Id) != true)
+            .Select(g => (string?)g.Id).Append(null).ToList();
+        var at = groups.IndexOf(group) + delta;
+        if (at < 0 || at >= groups.Count) { return null; }
+        var destination = groups[at];
+        var rows = shownSessions.Where(k => Groups.GroupOf(k) == destination);
+        var target = delta > 0 ? rows.FirstOrDefault() : rows.LastOrDefault();
+        return target is not null && pending.Contains(target) ? null : (destination, target, delta < 0);
     }
 
-    // Moves a row past its neighbour on screen. Rows remembered for sessions not shown keep
-    // their places relative to each other.
+    // One visible step, across expanded group edges but never across Pinned or a pending row.
+    public bool CanMove(string key, int delta) => MoveTarget(key, delta) is not null;
+
+    // Moves past a neighbour or across a group edge. Rows remembered for sessions not shown
+    // keep their places relative to each other.
     public bool Move(string key, int delta)
     {
-        if (!CanMove(key, delta)) { return false; }
-        var g = GroupOf(key)!;
-        Insert(key, g[g.IndexOf(key) + delta], delta > 0);
+        if (MoveTarget(key, delta) is not { } to) { return false; }
+        var regroup = !IsPinned(key) && Groups.GroupOf(key) != to.Group;
+        if (to.Target is { } target) { Insert(key, target, to.After, save: !regroup); }
+        if (regroup) { Groups.SetGroup(key, to.Group); }
         return true;
     }
 
@@ -259,13 +280,13 @@ public sealed class SessionOrder
         return true;
     }
 
-    void Insert(string key, string target, bool after)
+    void Insert(string key, string target, bool after, bool save = true)
     {
         Drop(key);
         var list = state.Pinned.Contains(target, StringComparer.Ordinal) ? state.Pinned : state.Order;
         var at = list.IndexOf(target);
         list.Insert(at < 0 ? list.Count : after ? at + 1 : at, key);
-        Save();
+        if (save) { Save(); }
     }
 
     void Drop(string key)
