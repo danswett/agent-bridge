@@ -28,6 +28,10 @@ EOF
 cat > "$work/bin/timeout" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$TIMEOUT_LOG"
+if [ "${3:-}" = apt-get ] && [ "${4:-}" = install ] &&
+  [ "${APT_DOWNLOAD_SECONDS:-0}" -gt "${2%s}" ]; then
+  echo "${*:4}" >> "$APT_LOG"; exit 124
+fi
 if [ "${3:-}" = apt-get ] && [ -n "${APT_TIMEOUT_EXIT:-}" ]; then
   shift 2; "$@"; exit "$APT_TIMEOUT_EXIT"
 fi
@@ -110,6 +114,7 @@ reset() {
   unset APT_ERROR APT_FAIL_COUNT APT_AZURE_ONLY
   unset APT_DNS_EXIT APT_DNS_OUTPUT APT_UPDATE_ERROR
   unset DEBS_CACHE_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
+  unset APT_DOWNLOAD_SECONDS
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
 # download.sh is given CHECK_BROWSERS, chromium and webkit unless set.
@@ -131,6 +136,23 @@ check() {
     echo "ok: $name"
   fi
 }
+
+check_warm_download() (
+  local failures=0
+  export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
+  reset "$canonical"; export DEBS_CACHE_HIT=true APT_NEW_VERSION=2 APT_DOWNLOAD_SECONDS=21
+  unset PLAYWRIGHT_APT_LIMIT
+  check "a warm index refresh gives missing packages the full download window before the mandatory offline install" \
+    0 "$(printf 'update\n%s' "$download")" "$canonical"
+  reset "$canonical"; export DEBS_CACHE_HIT=true APT_NEW_VERSION=2 APT_DOWNLOAD_SECONDS=21 PLAYWRIGHT_APT_LIMIT=20s
+  check "an explicit download deadline still fails without an incomplete offline install" \
+    124 "$(printf 'update\n%s' "$download")" "$canonical"
+  [ "$failures" -eq 0 ]
+)
+if [ "${1:-}" = --warm-download-only ]; then
+  check_warm_download
+  [ "$failures" -eq 0 ]; exit
+fi
 
 reset "$azure" "$canonical"
 check "a download that finishes in time fetches the packages Playwright names, from the mirror list as it stands" \
@@ -276,6 +298,7 @@ cp "$HOME/.cache/playwright-apt-debs/libgtk-4-1_1_amd64.deb" "$PLAYWRIGHT_APT_AR
 check "a fresh index selecting version two downloads it when only version one is cached" \
   0 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
 [ ! -s "$GITHUB_OUTPUT" ] || { echo "FAIL: refreshing a hit authorized replacing its immutable cache"; failures=$((failures + 1)); }
+check_warm_download
 reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Hash Sum mismatch'
 check "a cached install failure after fresh download fails without network fallback" \
   100 "$(printf 'update\n%s\n%s' "$download" "$cached")" "$azure" "$canonical"
