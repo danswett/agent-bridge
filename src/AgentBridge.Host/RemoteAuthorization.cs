@@ -11,7 +11,7 @@ public sealed class RemoteAuthorization : IDisposable
     static readonly HashSet<string> HostOperations = [Ops.Hello, UsageProtocol.Get, TransferProtocol.Op, Lite.LiteReceiver.Op];
     static readonly HashSet<string> PersonOperations =
     [
-        .. Reads, Ops.SessionsFocus, Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop,
+        .. Reads, Ops.SessionsFocus, Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop, Ops.SessionTitle,
         // A session's earlier turns: a person's devices only, never the HA connector's service role,
         // whose connector-read profile is the latest exchange (docs/protocol/v1-history.md).
         HistoryProtocol.Op,
@@ -89,6 +89,7 @@ public sealed class RemoteAuthorization : IDisposable
     {
         var audit = op == LaunchProtocol.Launch ? launchAudit : null;
         var ingress = audit is null ? null : new GateLaunchIngress("relay", "person-client", $"person:{channel.PeerId}", audit.ControlWriterRun);
+        if (op == Ops.SessionTitle && !IsPinnedPerson(channel)) { throw new InvalidOperationException("the peer role does not allow this operation"); }
         if (!Enabled) { return await sessions.HandleAsync(channel, op, data, hello => DiagnosticsFor(channel, hello), op == Ops.SessionStop ? launchAudit : audit, ingress); }
         if (!Allows(channel) || !leases.TryGetValue(channel, out var lease)) { throw new InvalidOperationException("the peer is not authorized"); }
         var operations = lease.Role switch

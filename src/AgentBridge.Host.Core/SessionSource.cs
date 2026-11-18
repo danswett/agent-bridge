@@ -46,6 +46,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // a source that does not say.
     readonly SessionDrivers? _drivers;
     readonly Func<Session, bool>? _answerAttempted;
+    readonly Func<Session, Session>? _presentation;
     readonly List<FileSystemWatcher> _watchers = [];
     readonly CancellationTokenSource _stop = new();
     readonly Task _dispatch;
@@ -106,7 +107,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         public long? Pending;
         // What the last commit was made from: Commit made again from the same is the same.
         public Session? CommittedFull;
-        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt, SessionRestored? Restored, DateTimeOffset? Boundary, bool Prompted, SessionStatus Turn, bool PhoneSignIn, bool Attempted) CommittedWith;
+        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt, SessionRestored? Restored, DateTimeOffset? Boundary, bool Prompted, SessionStatus Turn, bool PhoneSignIn, bool Attempted, string? DisplayTitle, DateTimeOffset UpdatedAt) CommittedWith;
         // The turns whose prompt the host showed as an agent's (#489), newest last, as many as
         // history serves: the transcript does not mark them, and history shows them as live did.
         // Under the gate.
@@ -122,7 +123,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     }
 
     public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null,
-        Func<Session, bool>? answerAttempted = null, string? hostId = null)
+        Func<Session, bool>? answerAttempted = null, string? hostId = null, Func<Session, Session>? presentation = null)
     {
         _options = options;
         _hostId = hostId;
@@ -131,6 +132,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         _unaccounted = new Unaccounted(_time, Log);
         _drivers = drivers;
         _answerAttempted = answerAttempted;
+        _presentation = presentation;
         if (_drivers is not null)
         {
             _drivers.SourceObserves = true;
@@ -932,6 +934,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // it is something a client shows.
     void OnDriverChanged(string id) => _ = RecommitDriverAsync(id);
 
+    public Task RefreshPresentationAsync(string id) => RecommitDriverAsync(id);
+
     public async Task SetSignInRecoveryAsync(string id, DateTimeOffset errorAt, string generation, RecoveryState state, bool begin = false, CancellationToken cancellationToken = default)
     {
         await _pass.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -1116,7 +1120,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         var phoneSignIn = full.Attention is { Kind: AttentionKind.SignInNeeded, SignIn: null } failing
             && _options.PhoneSignIn.Contains(failing.Agent ?? full.Agent) && PhoneSignInPinned();
         var attempted = _answerAttempted?.Invoke(full) == true;
-        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt, restored, boundary, prompted, turn, phoneSignIn, attempted);
+        var presented = _presentation?.Invoke(full) ?? full;
+        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt, restored, boundary, prompted, turn, phoneSignIn, attempted, presented.DisplayTitle, presented.UpdatedAt);
         // The tracker hands back the very session it built last when nothing it reads changed.
         // Fitting and serialising it again (about 37 MB/min, #608) found the same JSON every time.
         // Never while a sign-in recovery overlay is held (#800): each step of it (Checking, then
@@ -1130,7 +1135,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 if (_entries.TryGetValue(full.Id, out var current) && current == entry && !_recovery.ContainsKey(full.Id)) { return; }
             }
         }
-        var shown = entry.Touched is { } touched && touched > full.UpdatedAt ? full with { UpdatedAt = touched } : full;
+        var shown = entry.Touched is { } touched && touched > presented.UpdatedAt ? presented with { UpdatedAt = touched } : presented;
         shown = shown with { StartedAt = null };
         lock (_gate)
         {

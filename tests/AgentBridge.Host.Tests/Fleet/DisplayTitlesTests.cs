@@ -8,10 +8,13 @@ using Xunit;
 public sealed partial class FleetNamesTests
 {
     AgentCredentials? titleCredentials;
+    SessionDisplayTitles? displayTitles;
     async Task UseDisplayTitleStateAsync()
     {
         await source.DisposeAsync();
-        source = fixture.Source(stateFile: Path.Combine(fixture.Root, "sessions-listed.json"));
+        displayTitles = new(fixture.Root);
+        source = new SessionSource(fixture.Options(stateFile: Path.Combine(fixture.Root, "sessions-listed.json")),
+            fixture.Processes, fixture.Time, presentation: displayTitles.Apply);
         await source.RefreshAsync();
         service = MakeService();
     }

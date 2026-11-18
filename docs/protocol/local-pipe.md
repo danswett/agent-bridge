@@ -157,7 +157,7 @@ host, and there is no app there to do it.
 and `rollback` must restart the host to hand agent-ha-bridge's hook spool over and back
 ([migration.md](../migration.md)), and they are run by a person, from a terminal of their own.
 So a caller that is this host's own executable, beside it, with its whole ancestry read and no
-agent in it, may call `host.restart`, `session.rename`, `agent.adopt`, `agent.revoke`, `scripts.add` and `scripts.revoke` (below),
+agent in it, may call `host.restart`, `session.rename`, `session.title`, `agent.adopt`, `agent.revoke`, `scripts.add` and `scripts.revoke` (below),
 but no other app-only op. It is the same rail as the
 app's: the same ancestry check refuses it inside an agent session, and the commands themselves
 refuse first, with exit 4, before reading anything. A copy of the program elsewhere, or one whose
@@ -165,13 +165,22 @@ ancestry is read only in part, is anything else of the user's. An agent that sta
 detached from itself gets past this as it could past the app's check; restarting is the only
 host-management op it gains.
 
-## Person-set fleet names (`session.rename`, #1777)
+## Person-set display titles (`session.title`)
 
 The fleet name and the display title are separate. `Session.displayTitle` is held once by
 the host in `display-titles.json` beside `fleet-names.json`, keyed by session id, with its
 change time; neither transcripts nor `workspace.yaml` populate it. Set and clear survive
 restart. It grants no trust or routing authority and is never published to the fleet registry.
-The field/store cut does not yet expose the follow-on `session.title` operation.
+`session.title` accepts `{ "id": "<listed session id>", "title": "<display title>" }`
+and returns `{ "id", "displayTitle" }`, explicitly null when empty/blank input clears it.
+Nonempty titles are 1 to 120 Unicode code points of visible plain text, ordinary spaces allowed.
+Only the app or host CLI with fresh classification and no credentialed connection may set it.
+Agents, MCP children, scripts and untraced callers are refused, including expired credentials.
+The relay separately permits only a currently pinned person device; pinning off is a refusal.
+The host advances `updatedAt` and broadcasts through the normal session upsert/patch feed.
+A session's name is identical on every device; renaming on any device changes it everywhere.
+
+## Person-set fleet names (`session.rename`, #1777)
 
 | Op | Data | Result |
 |---|---|---|

@@ -878,6 +878,7 @@ public static class Ops
     public const string SessionAnswer = "session.answer";
     public const string SessionReply = "session.reply";
     public const string SessionStop = "session.stop";
+    public const string SessionTitle = "session.title";
     public const string PushSubscribe = "push.subscribe";
     public const string PushUnsubscribe = "push.unsubscribe";
     public const string PushList = "push.list";

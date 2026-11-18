@@ -41,6 +41,13 @@ public static class LocalApi
                 actual => credentials.FleetGrant.CheckDispatch(actual, request));
         }
         credentials?.CheckScriptOperation(channel, op, log);
+        if (op == Ops.SessionTitle)
+        {
+            var caller = callers.Classify(channel, fresh: true);
+            if (caller.Kind is not (CallerKind.App or CallerKind.HostCli) || credentials?.IsCredentialed(channel) == true)
+            { throw Refuse(op, caller, "only the app or host command line without an agent credential may set a display title", log); }
+            return await sessions.HandleAsync(channel, op, data);
+        }
         if (op == FleetWorkerSettings.Op)
         {
             var caller = callers.Classify(channel, fresh: true);

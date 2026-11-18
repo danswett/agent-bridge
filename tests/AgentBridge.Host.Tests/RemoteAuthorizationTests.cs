@@ -70,9 +70,12 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
     public async Task Display_title_changes_from_either_transport_reach_every_client_and_a_later_snapshot()
     {
         await source.DisposeAsync();
-        source = fixture.Source(stateFile: Path.Combine(fixture.Root, "sessions-listed.json"));
+        var displayTitles = new SessionDisplayTitles(fixture.Root);
+        source = new SessionSource(fixture.Options(stateFile: Path.Combine(fixture.Root, "sessions-listed.json")),
+            fixture.Processes, TimeProvider.System, presentation: displayTitles.Apply);
         await source.RefreshAsync();
-        service = new SessionService(source, new MachineInfo(host.Id, "Fixture", "windows", "0.1.0"));
+        service = new SessionService(source, new MachineInfo(host.Id, "Fixture", "windows", "0.1.0"))
+        { DisplayTitles = displayTitles };
         host.Hub.Handler = authorization.Handler(service);
         var b = await PeerAsync("pwa");
         var c = await PeerAsync("phone");
@@ -89,7 +92,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
             Stop = () => { }, Restart = () => { },
         });
         var pipe = LocalApi.Handler(service, control, new FixedCallerGuard(new Caller(CallerKind.App, "app")));
-        await pipe(local, Ops.SessionsSubscribe, Json(new { }));
+        var localFeed = Assert.IsType<ChannelReply>(await pipe(local, Ops.SessionsSubscribe, Json(new { }))).Then(local);
         Result(await bChannel.RequestAsync(Ops.SessionsSubscribe, new { }, Patience));
         Result(await cChannel.RequestAsync(Ops.SessionsSubscribe, new { }, Patience));
         await HostWait.UntilAsync(() => service.Subscribers == 3, "three display-title feeds", Patience);
@@ -134,6 +137,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Assert.False(current.TryGetProperty("displayTitle", out _));
         Assert.Equal("Read without taking over", current.GetProperty("title").GetString());
         local.Closing.TrySetResult();
+        await localFeed.WaitAsync(Patience);
     }
 
     [Theory]
