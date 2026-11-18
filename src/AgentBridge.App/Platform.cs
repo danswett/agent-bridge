@@ -1,6 +1,8 @@
 using AgentBridge.App.Core;
 using AgentBridge.Host;
 using AgentBridge.Host.Core.Updates;
+using AgentBridge.Host.Core.Processes;
+using System.Diagnostics;
 using Microsoft.Win32;
 using Velopack;
 using Velopack.Locators;
@@ -13,8 +15,8 @@ namespace AgentBridge.App;
 // The app's updates through Velopack. The host is in the same package, so this updates both.
 // Releases come from the repository's GitHub releases; a feed.txt beside the app's data (a
 // folder or URL holding releases.<channel>.json) overrides that, for a test VM or a private channel.
-// profileFolder: this profile's own folder, where the installer's copy of the package is made
-// (PackageHandoff); null for a copy that only reads its version. log: where which source answered
+// profileFolder: this profile's private coordinator staging root; null for a copy that only
+// reads its version. log: where which source answered
 // a check (the CDN or GitHub, #927) is said.
 sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string profile, string? profileFolder = null, Action<string>? log = null) : IUpdater
 {
@@ -26,7 +28,6 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     UpdateInfo? pending;
     string? source;
     readonly DownloadMark mark = new(Path.Combine(Paths.AppData, "update-downloaded.txt"));
-    PackageHandoff? Handoff => profileFolder is null ? null : new(mark, Path.Combine(profileFolder, "app-update"));
 
     public static string FeedFile => Path.Combine(Paths.AppData, "feed.txt");
 
@@ -75,8 +76,6 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         // No channel named: the installed package's own decides, `win` for x64 and `win-arm64` for
         // Arm64 (build/app-channels.ps1), so a copy is only ever offered its own architecture.
         var first = manager is null;
-        // A copy an earlier run handed the installer (installed since, or refused) is not kept.
-        if (first) { Handoff?.Clear(); }
         manager = new UpdateManager(from, AppPackages.Options);
         // Only for the source this start began with: a change of feed or of "Include pre-releases"
         // drops what was downloaded, which must not come back as ready from the packages folder,
@@ -93,10 +92,9 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
             ? Path.Combine(folder, name)
             : null;
 
-    // The installer's copy of the package (PackageHandoff), held open, read-only to everyone else,
-    // until this process ends. It is in this profile's own folder, which no other profile's updater
-    // writes, so the bytes checked are the ones Update.exe opens once the app has exited (#984).
-    static FileStream? handedOver;
+    // Keep the staged current helper, target and manifest read-only until this process exits.
+    // The coordinator validates and retains its own leases through the real updater exit.
+    static CoordinatorHandoff.Copy? handedOver;
 
     // A release an earlier run downloaded and nobody has restarted into yet (#516): ready from this
     // start on, before any check, so the app offers Restart to update offline, or while the feed
@@ -194,31 +192,36 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         if (ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded ({ready} is); nothing was installed"); }
         var release = pending?.TargetFullRelease ?? local ?? throw new InvalidOperationException("no downloaded update to install; check for updates again");
         if (release.Version.ToString() != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded; nothing was installed"); }
-        // Not Velopack's ApplyUpdatesAndRestart, which names the shared packages folder's file to
-        // Update.exe (#984): the bytes verified and marked, copied into this profile's own folder
-        // and checked again from the handle that keeps them until this process ends, then
-        // Update.exe started as ApplyUpdatesAndRestart starts it, but silent (#1167), with --package naming the copy
-        // and the shared --packageDir, where its install lock is.
         Manager();
-        var handoff = Handoff ?? throw new InvalidOperationException("this copy of the app has no profile folder to hand an update over from; nothing was installed");
+        if (profileFolder is null) throw new InvalidOperationException("this copy has no private coordinator folder; nothing was installed");
         if (!VelopackLocator.IsCurrentSet) { throw new InvalidOperationException("Velopack's locator is not set, so the installer can't be found; nothing was installed"); }
         var locator = VelopackLocator.Current;
         if (locator.UpdateExePath is not { Length: > 0 } updateExe || !File.Exists(updateExe)) { throw new FileNotFoundException("Cannot find Update.exe to apply updates.", locator.UpdateExePath); }
-        if (locator.RootAppDir is not { Length: > 0 } root || locator.PackagesDir is not { Length: > 0 } packages || PackageFile(release) is not { } file)
+        if (locator.RootAppDir is not { Length: > 0 } root || locator.PackagesDir is not { Length: > 0 } packages
+            || locator.AppId is not { Length: > 0 } id || PackageFile(release) is not { } file)
         {
             throw new InvalidOperationException("the installation's folders can't be told, so nothing was installed");
         }
         handedOver?.Dispose();
         handedOver = null;
-        var copy = handoff.Prepare(file, version, source!);
-        // DefaultProcessImpl uses Process.Start directly, so this app is Update.exe's parent.
-        handedOver = handoff.Launch(copy, root, packages, new[] { "--background", "--profile", profile },
-            args => locator.Process.StartProcess(updateExe, args, Path.GetDirectoryName(updateExe)!, false));
-        // Update.exe has started: the next start may say the install didn't take (#1167). Best
-        // effort; it must not keep this process from exiting.
+        var digest = mark.DigestFor(version, source!)
+            ?? throw new PackageMismatchException("package-custody: no verified cached package for the selected source.");
+        using var self = Process.GetCurrentProcess();
+        var request = new UpdateCoordinatorRequest(root, packages, file, digest, id, version,
+            ["--background", "--profile", profile], self.Id, self.StartTime.ToUniversalTime().Ticks);
+        handedOver = new CoordinatorHandoff(Path.Combine(profileFolder, "app-update-coordinator"), CoordinatorHandoff.RuntimeTarget)
+            .Prepare(request, Path.Combine(AppContext.BaseDirectory, "agent-bridge-hostw.exe"));
+        var start = new ProcessStartInfo(handedOver.ImagePath)
+        {
+            UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = handedOver.Directory
+        };
+        start.ArgumentList.Add("--coordinator-v1");
+        start.ArgumentList.Add(handedOver.ManifestPath);
+        start.Environment["DOTNET_BUNDLE_EXTRACT_BASE_DIR"] = handedOver.ExtractionDirectory;
+        using var coordinator = ProcessLaunch.Start(start) ?? throw new InvalidOperationException("coordinator-start: no process was created.");
+        // The helper waits for this PID plus creation time, not --wait or parent ancestry.
         try { handedOverTo?.Invoke(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { log?.Invoke($"update: the hand-over could not be recorded: {e.Message}"); }
-        // As ApplyUpdatesAndRestart ends: Update.exe waits for this process to exit (--wait).
         locator.Process.Exit(0);
     }
 }

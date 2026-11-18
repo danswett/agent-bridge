@@ -372,6 +372,26 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
 
 ### Updates: Velopack, one version for app and host
 
+**Completion evidence** ([updater follow-up](https://github.com/danswett/agent-bridge/issues/2869)):
+`UpdateApplyCompletion` is a platform-neutral observer seam, not yet wired to apply or
+respawn. Its adapter must track the actual apply operation, including delegated workers,
+and freshly read the active installation's normalized version. A launcher exit, target
+files appearing, or a cached locator version does not establish worker completion.
+Each run supplies a new operation generation; evidence with another (or no) generation
+is `Unknown`. Adapters must bind it to that operation's actual process, never re-tag a
+cached snapshot, and sample the active manifest after completion. Release identity
+uses the shared `UpdateVersions` normalizer (whitespace, one optional `v`, metadata
+ignored; case-insensitive comparison; `0.0.0` unknown).
+Only authoritative worker completion, a known zero apply exit code, and the matching
+active version produce `Completed`. A known nonzero worker exit produces `Failed`.
+Missing evidence, unreadable state, a timeout or a version mismatch stays `Unknown`;
+none authorizes a retry or claims app/host convergence. Any result arriving at or after
+the observation window is `Unknown`, even success. Cancellation stops observation,
+not the updater. The asynchronous probe must return promptly and cancel only its wait.
+Results retain the operation step, target/observed versions, actual exit/native error
+code when available, offset-bearing observation time and monotonic elapsed time,
+without copying exception messages or inventing holder PID/path evidence.
+
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
 into one folder with one version. An app update is a host update, so they never skew.
@@ -698,10 +718,16 @@ controls consume that same contract; this extraction does not disable or remove 
     which refuses while another profile's app or host runs from this installation (below), asking
     the host for its own pid first. The banner offers only a release the updater has ready: while a
     newer one found since is still downloading, or held after a failed download, it offers nothing.
-  * **Files held by Windows** (#2345, #2353): before stopping the host, wait at most two minutes
-    for Restart Manager's holders to release, with checks backing off to ten seconds.
+  * **Files held by Windows** (#2345, #2353, [timeout fix](https://github.com/danswett/agent-bridge/issues/2866)):
+    before stopping the host, check only locked executable images (`.exe`/`.dll`) with Restart
+    Manager. Reuse a completed clear scan throughout that install attempt; cheap file checks
+    invalidate it if the locked-file set changes, including during confirmation or departure.
+    Each scan has its own two-minute deadline, independent of the two-minute release wait
+    (checks back off to ten seconds). A scan started within that wait may finish afterwards.
     An unreadable/changing holder list is unknown, never permission to install. A SYSTEM service
-    is named even when its image is unreadable. Waiting carries no Installing credit; timeout
+    is named even when its image is unreadable; known holders include PID and image path when
+    readable. A scan timeout names Restart Manager and 120 s, never claiming a confirmed holder.
+    Waiting carries no Installing credit; timeout
     keeps the old install intact with recovery text and the existing 10/20/40/60-minute backoff.
     This path never stops a service or self-elevates; it does not replace the later slot design.
   * **Usage probes hold the host's stop** (#238): before the host is stopped, for an install or

@@ -81,7 +81,7 @@ if ($PackOnly) {
     $hostFlags = @('--self-contained')
     if ($Release) { $hostFlags += '-p:AgentBridgeRelease=true' }
     Publish 'src/AgentBridge.Host/AgentBridge.Host.csproj' $hostFlags
-    Publish 'src/AgentBridge.HostLauncher/AgentBridge.HostLauncher.csproj' @('--self-contained')
+    Publish 'src/AgentBridge.HostLauncher/AgentBridge.HostLauncher.csproj' @('--self-contained', '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true')
     Publish 'src/AgentBridge.Injector/AgentBridge.Injector.csproj' @()
     Publish 'src/AgentBridge.Hook/AgentBridge.Hook.csproj' @()
     Publish 'src/AgentBridge.App/AgentBridge.App.csproj' @()
