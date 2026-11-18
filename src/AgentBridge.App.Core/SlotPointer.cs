@@ -9,6 +9,10 @@ public sealed class SlotPointer(string root)
 {
     public sealed record Target(SlotPreparation.Prepared Slot, string Package);
     sealed record State(Target Current, Target? Previous);
+    sealed record StateLease(State State, FileStream File) : IDisposable
+    {
+        public void Dispose() => File.Dispose();
+    }
     readonly string root = Path.GetFullPath(root);
     string Pointer => Path.Combine(root, "active-slot.json");
     static readonly JsonSerializerOptions Json = new() { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow };
@@ -16,7 +20,6 @@ public sealed class SlotPointer(string root)
     public sealed class Snapshot : IDisposable
     {
         internal readonly List<IDisposable> Held = [];
-        internal Target? Previous { get; set; }
         public Target Target { get; }
         public string Directory { get; }
         internal Snapshot(Target target, string directory) { Target = target; Directory = directory; }
@@ -32,6 +35,19 @@ public sealed class SlotPointer(string root)
 
     public Snapshot? Read()
     {
+        var held = LoadState();
+        if (held is null) { return null; }
+        try
+        {
+            var snapshot = Pin(held.State.Current);
+            snapshot.Held.Add(held);
+            return snapshot;
+        }
+        catch { held.Dispose(); throw; }
+    }
+
+    StateLease? LoadState()
+    {
         SlotPreparation.NoLinks(Pointer);
         FileStream pointer;
         try { pointer = new(Pointer, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete); }
@@ -43,10 +59,9 @@ public sealed class SlotPointer(string root)
             using var document = JsonDocument.Parse(pointer, new() { AllowDuplicateProperties = false, MaxDepth = 8 });
             var state = document.RootElement.Deserialize<State>(Json);
             if (state?.Current is null) { throw new InvalidDataException("Missing current slot reference."); }
-            var snapshot = Pin(state.Current);
-            snapshot.Previous = state.Previous;
-            snapshot.Held.Add(pointer);
-            return snapshot;
+            CheckReference(state.Current);
+            if (state.Previous is not null) { CheckReference(state.Previous); }
+            return new(state, pointer);
         }
         catch { pointer.Dispose(); throw; }
     }
@@ -60,10 +75,10 @@ public sealed class SlotPointer(string root)
         var lockPath = Path.Combine(root, ".active-slot.lock");
         SlotPreparation.NoLinks(lockPath);
         using var writer = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        using var old = Read();
-        target = rollback ? old?.Previous ?? throw new InvalidDataException("No previous slot to restore.") : target;
+        using var old = LoadState();
+        target = rollback ? old?.State.Previous ?? throw new InvalidDataException("No previous slot to restore.") : target;
         using var next = Pin(target ?? throw new InvalidDataException("Missing target slot."));
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(new State(next.Target, old?.Target), Json);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new State(next.Target, old?.State.Current), Json);
         if (bytes.Length > 8192) { throw new InvalidDataException("Slot pointer exceeds its limit."); }
         var staging = Path.Combine(root, ".active-slot-" + Guid.NewGuid().ToString("N") + ".tmp");
         try
@@ -82,7 +97,7 @@ public sealed class SlotPointer(string root)
         finally { File.Delete(staging); }
     }
 
-    Snapshot Pin(Target target)
+    static void CheckReference(Target target)
     {
         if (target?.Slot is not { RelativePath: not null, Version: not null, Digest.Hex: not null } slot
             || target.Package is null || !SlotPreparation.SafeRelative(target.Package)
@@ -90,6 +105,12 @@ public sealed class SlotPointer(string root)
             || !SlotPreparation.SafeRelative(slot.RelativePath.Replace('\\', '/'))
             || slot.RelativePath != Path.Combine("slots", $"{slot.Version}-{slot.Digest.Hex.ToLowerInvariant()}"))
         { throw new InvalidDataException("Invalid relative slot/package reference."); }
+    }
+
+    Snapshot Pin(Target target)
+    {
+        CheckReference(target);
+        var slot = target.Slot;
         var directory = Path.Combine(root, slot.RelativePath);
         SlotPreparation.NoLinks(directory);
         if (!System.IO.Directory.Exists(directory)) { throw new InvalidDataException("Prepared slot is missing."); }

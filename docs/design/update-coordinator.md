@@ -116,6 +116,8 @@ through `File.Replace`. Readers retain one pointer generation and payload leases
 replacement does not invalidate their old slot. Rollback revalidates the previous
 slot and replaces only the pointer. Faults before publication leave the old pointer
 or absent-pointer legacy layout unchanged. Payload/legacy directories never move.
+Recovery loads strict bounded pointer metadata without resolving the damaged
+current payload; only its destination is revalidated and pinned. Reads fail closed.
 Directory ancestry is checked, not handle-pinned; the existing same-user ancestor
 rename race remains. Power-loss directory durability is not claimed. D2/D3 must
 prove stable routing and migration before enabling production activation.
