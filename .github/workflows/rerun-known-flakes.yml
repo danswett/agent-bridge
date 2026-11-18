@@ -35,14 +35,14 @@ jobs:
       actions: write
       issues: write
     concurrency:
-      group: main-red-ci
+      # Only duplicate deliveries may share a pending slot, never S1 or another completion.
+      group: main-red-rerun-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Record incident before dispatching its rerun
-        if: github.event.workflow_run.run_attempt == 1
+      - name: Record incident before handling the completion
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
