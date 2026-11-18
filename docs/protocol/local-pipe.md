@@ -167,6 +167,12 @@ host-management op it gains.
 
 ## Person-set fleet names (`session.rename`, #1777)
 
+The fleet name and the display title are separate. `Session.displayTitle` is held once by
+the host in `display-titles.json` beside `fleet-names.json`, keyed by session id, with its
+change time; neither transcripts nor `workspace.yaml` populate it. Set and clear survive
+restart. It grants no trust or routing authority and is never published to the fleet registry.
+The field/store cut does not yet expose the follow-on `session.title` operation.
+
 | Op | Data | Result |
 |---|---|---|
 | `session.rename` | `{ "id": "<listed session id>", "name": "<fleet name>" }` | `{ "id", "name", "duplicateStatus": "present" \| "absent" \| "unknown" }`, after saving; empty/blank name clears |

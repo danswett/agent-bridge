@@ -380,6 +380,10 @@ public sealed record Session
     public required string Id { get; init; }
     public required AgentKind Agent { get; init; }
     public string? Title { get; init; }
+    public string? DisplayTitle { get => displayTitle; init => displayTitle = IsDisplayTitle(value) ? value : null; }
+    string? displayTitle;
+    public static bool IsDisplayTitle(string? value) => value is { Length: > 0 } && !Invisible.Blank(value)
+        && value.EnumerateRunes().Count() <= 120 && value.EnumerateRunes().All(r => r.Value == ' ' || !Invisible.Is(r));
     public string? Cwd { get; init; }
     public string? Repository { get; init; }
     public string? Branch { get; init; }

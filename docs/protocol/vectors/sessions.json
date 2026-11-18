@@ -3649,14 +3649,6 @@
             "updatedAt": "2026-10-28T04:22:43.182Z",
             "activity": {},
             "displayTitle": "日本語"
-          },
-          "reads": {
-            "id": "b7e1c2d3-0000-4000-8000-000000000001",
-            "agent": "claude",
-            "status": "idle",
-            "statusSince": "2026-10-28T04:22:43.182Z",
-            "updatedAt": "2026-10-28T04:22:43.182Z",
-            "activity": {}
           }
         },
         {

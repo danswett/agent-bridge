@@ -1906,6 +1906,7 @@ is for disposable evaluation, not production service enrollment.
 | `id` | string | The agent's own session id: the Copilot session-state folder name, or the Claude or Codex session id |
 | `agent` | `"copilot"` \| `"claude"` \| `"codex"` | Hosts send only these. A client reads anything else as `unknown` |
 | `title` | string? | The session's name if it has one (Copilot's `workspace.yaml` `name`). Otherwise the first user message, cut to 240 bytes |
+| `displayTitle` | string? | Person-set, host-held plain text, 1-120 Unicode code points; ordinary spaces are allowed, other `Invisible.Is` characters and controls are not. Invalid values (including non-strings) read as absent. Clients show this, else `title`; `title` remains the agent's own title. The fleet name and the display title are separate |
 | `cwd` | string? | Working directory |
 | `repository` | string? | `owner/name`, if known |
 | `branch` | string? | |
