@@ -111,3 +111,7 @@ end 6c1d2e3f for 0a528be9: ended
 A session that ignores `/exit` logs `ended …: did not exit within 12 s; terminated pid …`
 and `… : ended (terminated)`; one asking a question logs `… is asking a question, so /exit
 is not typed`.
+
+A failed `TerminateProcess` reports fixed words and the numeric Windows error code,
+never the OS message text. `StopService` logs that diagnostic; the person's failure
+reason stays "the machine couldn't end the session".

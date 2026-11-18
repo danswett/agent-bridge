@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
@@ -104,7 +103,7 @@ public sealed class WindowsProcessControl : IProcessControl
             var error = Marshal.GetLastWin32Error();
             // ERROR_ACCESS_DENIED is also what terminating a process that is already exiting
             // returns; the wait that follows tells the two apart.
-            return $"the host could not terminate the session's process ({new Win32Exception(error).Message})";
+            return $"the host could not terminate the session's process (error {error})";
         }
 
         public void Dispose() => handle.Dispose();
