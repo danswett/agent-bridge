@@ -884,9 +884,9 @@ test.describe('the session pane after #221\'s review', () => {
     await openDemo(page);
     const v = await open(page, COPILOT);
     const session = page.locator(`.session[data-id="${COPILOT}"]`);
-    await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name: 'x, idle, DEV-VM2' }, DELEGATES[1]] });
-    await expect(session.locator('.row-status')).toHaveText('Delegate x, idle, DEV-VM2 asks');
-    await expect(session.locator('.row-main .glyph')).toHaveAccessibleName(/^[^,]+, Delegate x idle DEV-VM2 asks(, [^,]+)?$/);
+    await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name: 'x, idle, BUILD-2' }, DELEGATES[1]] });
+    await expect(session.locator('.row-status')).toHaveText('Delegate x, idle, BUILD-2 asks');
+    await expect(session.locator('.row-main .glyph')).toHaveAccessibleName(/^[^,]+, Delegate x idle BUILD-2 asks(, [^,]+)?$/);
     await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name: 'Delegate \u201cMain agent\u201d' }, DELEGATES[1]] });
     await expect(v.locator('.question .question-head')).toHaveText('Delegate \u201cMain agent\u201d asks');
     await expect(session.locator('.row-status')).toHaveText('Delegate \u201cMain agent\u201d asks');

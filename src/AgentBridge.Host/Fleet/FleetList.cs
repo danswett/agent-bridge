@@ -113,6 +113,12 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     {
         var current = Volatile.Read(ref relay) ?? throw new InvalidOperationException("refused: this host isn't connected to the relay");
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
+        if (refreshRoster is not null)
+        {
+            // A roster that can't be read leaves the lookup on the one it already holds.
+            try { await refreshRoster(current, ct); }
+            catch (Exception e) when (e is not OperationCanceledException) { }
+        }
         var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
         lock (cache)
         {
