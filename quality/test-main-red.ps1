@@ -29,28 +29,44 @@ function Reset-Scenario {
     $script:s = @{ conclusion = 'failure'; attempt = 1; newest = 100; status = 'completed'; event = 'push'
         branch = 'main'; repo = 'o/r'; path = '.github/workflows/ci.yml'; open = $false
         log = '  Failed A.B.C.Method [1 s]'; unreadable = $false; jobName = 'product'; jobConclusion = 'failure'
-        body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = '' }
+        body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = ''
+        attempts = @{}; listedAttempt = 0; previousJobName = 'product' }
+}
+function Fake-Run($Id, $Attempt, $Status, $Conclusion) {
+    @{ id = $Id; run_number = $Id; conclusion = $Conclusion; status = $Status; run_attempt = $Attempt
+        head_sha = 'abcdef0123456789'; head_branch = $s.branch; event = $s.event; path = $s.path
+        head_repository = @{ full_name = $s.repo } }
 }
 function Fake-Gh {
     $a = $args -join ' '
     $s.calls += ,@($args)
     if ($args[0] -eq 'issue' -and $args[1] -in @('list', 'view')) {
-        $fields = if ($args[1] -eq 'list') { 'number,body,author' } else { 'comments' }
+        $fields = if ($args[1] -eq 'list') { @('number,body,author', 'number,body,author,title') } else { @('comments') }
         $json = [array]::IndexOf($args, '--json')
         if ($json -lt 0 -or $args.Count -ne $json + 2 -or $args[$json + 1] -isnot [string] -or
-            $args[$json + 1] -cne $fields) {
+            $args[$json + 1] -cnotin $fields) {
             throw "Expected --json '$fields' as one final string argument"
         }
     }
     switch -Regex ($a) {
         '^api repos/o/r/actions/runs/100$' {
-            @{ id = 100; conclusion = $s.conclusion; status = $s.status; run_attempt = $s.attempt
-                head_sha = 'abcdef0123456789'; head_branch = $s.branch; event = $s.event; path = $s.path
-                head_repository = @{ full_name = $s.repo } } | ConvertTo-Json; return
+            Fake-Run 100 $s.attempt $s.status $s.conclusion | ConvertTo-Json; return
+        }
+        '^api repos/o/r/actions/runs/100/attempts/(\d+)$' {
+            $attempt = [int]$Matches[1]
+            if ($s.attempts.ContainsKey($attempt)) { $s.attempts[$attempt] | ConvertTo-Json; return }
+            if ($attempt -ge $s.attempt) { throw 'Unexpected future attempt read' }
+            Fake-Run 100 $attempt 'completed' 'failure' | ConvertTo-Json; return
         }
         '^api repos/o/r/actions/workflows/ci.yml/runs\?' {
             if ($a -notmatch 'status=completed' -or $a -notmatch 'per_page=1') { throw 'Require one newest finished run' }
-            @{ workflow_runs = @(@{ id = $s.newest; run_attempt = $s.attempt }) } | ConvertTo-Json; return
+            $attempt = if ($s.listedAttempt) { $s.listedAttempt } else { $s.attempt }
+            $runs = @(if ($s.newest) { Fake-Run $s.newest $attempt 'completed' $s.conclusion })
+            @{ workflow_runs = $runs } | ConvertTo-Json -Depth 5; return
+        }
+        '^api repos/o/r/actions/runs/100/attempts/(\d+)/jobs\?per_page=100 --paginate --slurp$' {
+            $name = if ([int]$Matches[1] -lt $s.attempt) { $s.previousJobName } else { $s.jobName }
+            @{ jobs = @(@{ id = 7; name = $name; conclusion = $s.jobConclusion }) + $s.extraJobs } | ConvertTo-Json; return
         }
         '^api repos/o/r/actions/runs/100/jobs' {
             @{ jobs = @(@{ id = 7; name = $s.jobName; conclusion = $s.jobConclusion }) + $s.extraJobs } | ConvertTo-Json; return
@@ -62,7 +78,7 @@ function Fake-Gh {
         '^issue list ' {
             $found = @()
             if ($s.foreign) { $found += @{ number = 5; body = ''; author = @{ login = 'stranger' } } }
-            if ($s.open) { $found += @{ number = 9; body = $s.body; author = @{ login = 'app/github-actions' } } }
+            if ($s.open) { $found += @{ number = 9; body = $s.body; title = $s.title; author = @{ login = 'app/github-actions' } } }
             ConvertTo-Json -InputObject $found -Depth 5; return
         }
         '^issue view 9 ' { @{ comments = $s.comments } | ConvertTo-Json -Depth 5; return }
@@ -75,6 +91,9 @@ function Fake-Gh {
             $s.writes += 'comment'
             $s.comments += @{ body = $args[([array]::IndexOf($args, '--body') + 1)]; author = @{ login = 'github-actions' } }
             return
+        }
+        '^issue edit 9 ' {
+            $s.writes += 'edit'; $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; return
         }
         '^issue close 9 ' { $s.writes += 'close'; $s.open = $false; return }
         default { throw "Unexpected fake gh request: $a" }
@@ -147,6 +166,11 @@ Assert ($s.body -match 'post-merge tier only' -and $s.body -match 'merge verdict
 $s.attempt = 2; Detect
 Assert (($s.writes -join ',') -eq 'label,create,comment' -and $s.open -and
     $s.comments[0].body -match '(?m)^Job \(post-merge-tier\): pwa-ui') 'a second post-merge tier flake adds another labelled entry and leaves the issue open'
+$s.attempt = 3; $s.jobName = 'product'; Detect
+Assert (($s.writes -join ',') -eq 'label,create,comment,edit,comment' -and
+    $s.title -match '^Main red: CI failing' -and $s.comments[-1].body -match '(?m)^Job: product$') 'a later blocking failure promotes an existing post-merge-only issue title before commenting'
+Detect
+Assert (($s.writes -join ',') -eq 'label,create,comment,edit,comment') 'a duplicate blocking event neither re-edits the title nor repeats evidence'
 Reset-Scenario; $s.extraJobs = @(@{ id = 8; name = 'pwa-e2e'; conclusion = 'failure' }); Detect
 Assert ($s.title -match '^Main red: CI failing' -and $s.body -match '(?m)^Job: product$' -and
     $s.body -match '(?m)^Job \(post-merge-tier\): pwa-e2e$' -and $s.body -notmatch 'post-merge tier only') 'a blocking failure beside a post-merge one stays an ordinary main-red entry'
@@ -156,6 +180,31 @@ Reset-Scenario; $s.jobName = 'light'; Detect
 Assert ($s.body -match '(?m)^Job: light$' -and $s.body -notmatch 'post-merge tier only') 'a comma inside a quoted tier job name invents no post-merge job'
 Reset-Scenario; $s.jobName = 'pwa-ui (webkit 1/3)'; $script:CatalogPath = "$tierPath.missing"; Detect; $script:CatalogPath = $tierPath
 Assert ($s.title -match '^Main red: CI failing' -and $s.body -match '(?m)^Job: pwa-ui') 'without catalog tier data every failed job stays blocking'
+Reset-Scenario; $s.jobName = 'pwa-ui (webkit 1/3)'; $catalogError = $null
+$lock = [IO.File]::Open($tierPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+try { Detect } catch [IO.IOException] { $catalogError = $_.Exception } finally { $lock.Dispose() }
+Assert ($null -eq $catalogError -and $s.writes -contains 'create' -and
+    $s.title -match '^Main red: CI failing' -and $s.body -match '(?m)^Job: pwa-ui') 'a locked catalog still writes an issue with every failure blocking'
+foreach ($status in 'queued', 'in_progress') {
+    Reset-Scenario; $s.attempt = 2; $s.status = $status; $s.conclusion = $null; $s.newest = 99
+    $s.jobName = 'running rerun job'; Detect
+    Assert ($s.writes -contains 'create' -and $s.body -match 'run=100 attempt=1' -and
+        $s.body -match '(?m)^Job: product$') "an attempt-two $status rerun reports the last completed red attempt immediately"
+    Assert (@($s.calls | Where-Object { ($_ -join ' ') -match '/attempts/1/jobs\?' }).Count -eq 1) 'red evidence is pinned to completed attempt one, not the live rerun'
+    Detect
+    Assert (($s.writes -join ',') -eq 'label,create') 'duplicate rerun event does not repeat the completed red attempt'
+}
+Reset-Scenario; $s.attempt = 2; $s.status = 'in_progress'; $s.conclusion = $null; $s.newest = 0; Detect
+Assert ($s.writes -contains 'create' -and $s.body -match 'attempt=1') 'a rerun hiding the only completed run still reports its completed red attempt'
+Reset-Scenario; $s.attempt = 3; $s.status = 'queued'; $s.conclusion = $null; $s.newest = 99
+$s.attempts[2] = Fake-Run 100 2 'completed' 'failure'; Detect
+Assert ($s.body -match 'attempt=2') 'the most recent completed rerun is selected, not always attempt one'
+Reset-Scenario; $s.attempt = 2; $s.status = 'in_progress'; $s.conclusion = $null; $s.newest = 99; $s.open = $true
+$s.attempts[1] = Fake-Run 100 1 'completed' 'success'; Detect
+Assert (($s.writes -join ',') -eq 'comment,close' -and $s.comments[0].body -match 'attempt=1') 'an incomplete rerun preserves the last completed green result'
+Reset-Scenario; $s.listedAttempt = 2; $s.open = $true
+$s.attempts[2] = Fake-Run 100 2 'completed' 'success'; Detect
+Assert (($s.writes -join ',') -eq 'comment,close' -and $s.comments[0].body -match 'attempt=2') 'a newer completed attempt discovered during detection supersedes the initial red snapshot'
 $names = @((Get-PostMergeJobs $tierPath) | Sort-Object)
 $expected = @('pwa-ui (webkit 1/3)', 'pwa-e2e', 'probe, light') | Sort-Object
 Assert (($names -join '|') -eq ($expected -join '|')) "only post-merge suites' tier_jobs are post-merge ($($names -join '|'))"
