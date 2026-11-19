@@ -13,6 +13,11 @@ public sealed class InstallBlockerDiagnosticsTests : IDisposable
     bool unreadable;
     bool reusedPid;
     int queries;
+    // Never this process's own id, which a fixed fake id could be on Linux runners.
+    static readonly int External = Environment.ProcessId + 1;
+    string? vanishing;
+    bool vanishThrows;
+    int calls;
 
     public InstallBlockerDiagnosticsTests()
     {
@@ -27,13 +32,18 @@ public sealed class InstallBlockerDiagnosticsTests : IDisposable
         var file = Path.Combine(root, "current", name);
         File.WriteAllText(file, "old install");
         locks.Add(new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read));
-        holders[file] = holder ?? new(4242, 1, "fixture holder", "", Path.Combine(Path.GetTempPath(), "external", "fixture.exe"));
+        holders[file] = holder ?? new(External, 1, "fixture holder", "", Path.Combine(Path.GetTempPath(), "external", "fixture.exe"));
         return file;
     }
 
     List<InstallBlockers.Holder> Query(List<string> files)
     {
         if (unreadable) { throw new UnauthorizedAccessException("private-probe-path"); }
+        if (calls++ > 0 && vanishing is { } gone && files.Contains(gone))
+        {
+            if (!vanishThrows) { files = files.Where(f => f != gone).ToList(); }
+            else if (files.Count == 1) { throw new UnauthorizedAccessException("private-probe-path"); }
+        }
         var generation = reusedPid && ++queries > 1 ? 2 : 1;
         return files.Where(holders.ContainsKey).Select(file => holders[file] with { Started = generation }).Distinct().ToList();
     }
@@ -55,7 +65,7 @@ public sealed class InstallBlockerDiagnosticsTests : IDisposable
         Hold(name);
         var blockers = Probe();
         Assert.NotNull(blockers);
-        Assert.Contains("fixture holder (pid 4242)", blockers, StringComparison.Ordinal);
+        Assert.Contains($"fixture holder (pid {External})", blockers, StringComparison.Ordinal);
         Assert.Contains(Path.Combine("current", name), blockers, StringComparison.Ordinal);
         Assert.DoesNotContain("own-runtime.dll", blockers, StringComparison.Ordinal);
         Assert.DoesNotContain(root, blockers, StringComparison.Ordinal);
@@ -91,6 +101,22 @@ public sealed class InstallBlockerDiagnosticsTests : IDisposable
         Hold("blocked-runtime.dll");
         reusedPid = true;
         Assert.Equal(InstallationFiles.Unknown, Probe());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_holder_that_cannot_be_confirmed_keeps_the_confirmed_holders_name_and_file_and_stays_blocked(bool verifyThrows)
+    {
+        Hold("blocked-runtime.dll");
+        vanishing = Hold("second.dll", new(External + 1, 1, "second holder", "", Path.Combine(Path.GetTempPath(), "external", "second.exe")));
+        vanishThrows = verifyThrows;
+        var blockers = Probe();
+        Assert.NotNull(blockers);
+        Assert.Contains($"fixture holder (pid {External}) holding {Path.Combine("current", "blocked-runtime.dll")}", blockers, StringComparison.Ordinal);
+        Assert.Contains(InstallationFiles.Unknown, blockers, StringComparison.Ordinal);
+        Assert.DoesNotContain("second.dll", blockers, StringComparison.Ordinal);
+        Assert.DoesNotContain(root, blockers, StringComparison.Ordinal);
     }
 }
 
