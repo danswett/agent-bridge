@@ -161,9 +161,11 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
     # B3b: the same single post-merge test failing in two entries in a row proposes one quarantine, once
     # per open issue. It is a line in this alert and a generator call, never a status, check or label.
     $test = Get-QuarantineTest $body
+    $generate = $false
     if ($test -and $issue) {
         $entries = @(@($issue.body) + @($comments | ForEach-Object { $_.body }) | Where-Object { $_ -clike 'main-red: *' })
-        $lines = @($entries -split '\r?\n')
+        # Intent and completion lines live in separate bot comments, so read them from every body, not only entries.
+        $lines = @(@($issue.body) + @($comments | ForEach-Object { $_.body }) -split '\r?\n')
         $intent = @($lines | Where-Object { $_ -clike 'quarantine-request: test=*' } | Select-Object -First 1)
         $eligible = $entries.Count -gt 0 -and [string]::Equals((Get-QuarantineTest $entries[-1]), $test, [StringComparison]::Ordinal)
         $flag = if ($intent.Count) { $intent[0] } else { "quarantine-request: test=$test" }
@@ -173,16 +175,19 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
         }
         $completed = "quarantine-completed: test=$test"
         # A refusal leaves the one issue-wide intent pending for a later eligible attempt.
-        if ($eligible -and [string]::Equals($flag, "quarantine-request: test=$test", [StringComparison]::Ordinal) -and
-            [Array]::IndexOf([string[]]$lines, $completed) -lt 0 -and (Request-Quarantine $RunId $test $Repository)) {
-            $body += "`n$completed"
-        }
+        $generate = $eligible -and [string]::Equals($flag, "quarantine-request: test=$test", [StringComparison]::Ordinal) -and
+            [Array]::IndexOf([string[]]$lines, $completed) -lt 0
     }
     if ($issue) { Invoke-Gh issue comment $issue.number --repo $Repository --body $body | Out-Null }
     else {
         $title = if ($postMergeOnly) { "Main red, post-merge tier only ($sha)" } else { "Main red: CI failing on main ($sha)" }
         Invoke-Gh label create main-red --repo $Repository --color B60205 --description 'CI is red on main' --force | Out-Null
         Invoke-Gh issue create --repo $Repository --title $title --label main-red --body $body | Out-Null
+    }
+    # The intent is stored first: a failed write must not leave a generator run that no later tick can see.
+    # Completion is its own write, so a failure there only retries the generator on a later attempt.
+    if ($generate -and (Request-Quarantine $RunId $test $Repository)) {
+        Invoke-Gh issue comment $issue.number --repo $Repository --body $completed | Out-Null
     }
 }
 
