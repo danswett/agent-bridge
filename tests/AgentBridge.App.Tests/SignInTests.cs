@@ -333,8 +333,13 @@ public sealed class SignInTests
         Assert.Equal(("confirming", "Copilot on node-a: Signed in · waiting for 2 sessions to confirm"), SignInBanners.Said(b));
         var pending = Banners([Needing("a", recovery: "pending"), Needing("b", recovery: "pending")], flows: held).Single();
         Assert.Equal(("confirming", "confirming", (string?)null), (pending.State, SignInBanners.Said(pending).State, SignInBanners.Verb(pending)));
-        // With no marker the banner follows the host, as before.
+        // With no marker, or once the hold has lapsed with no pending, the banner follows the host again.
         Assert.Equal("Show code", SignInBanners.Verb(Banners([Needing("a", recovery: "signingIn")]).Single()));
+        SignInBanners.Flow Stamped(string at) => new("done", Outcome: "signedIn", SignedInAt: DateTimeOffset.Parse(at));
+        var within = Banners([Needing("a", recovery: "signingIn")], flows: new() { [key] = Stamped("2026-11-05T00:44:56Z") }).Single();
+        Assert.Equal(("Signed in · waiting for 1 session to confirm", "Sign in"), (SignInBanners.Words(within).Line, SignInBanners.Verb(within)));
+        var lapsed = Banners([Needing("a", recovery: "signingIn")], flows: new() { [key] = Stamped("2026-11-05T00:44:54Z") }).Single();
+        Assert.Equal(("Waiting for sign-in", "Show code"), (SignInBanners.Words(lapsed).Line, SignInBanners.Verb(lapsed)));
     }
 
     // The demo's other machine, as the app reaches it, running #800's scenario.
