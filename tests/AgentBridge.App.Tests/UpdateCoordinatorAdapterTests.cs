@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using AgentBridge.App.Core;
@@ -96,18 +97,62 @@ public sealed class UpdateCoordinatorAdapterTests : IDisposable
         var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         worker.Wait = exited.Task;
         using var cancel = new CancellationTokenSource();
-        var gate = new ApplyGate();
+        var gate = new ApplyGate(original.WaitStarted.Task, started.Task);
         var adapter = Adapter();
-        var flowing = new AsyncLocal<bool>(c => { if (c.ThreadContextChanged && c.CurrentValue) SynchronizationContext.SetSynchronizationContext(gate); });
-        var run = Task.Run(() => { flowing.Value = true; return adapter.RunAsync(cancel.Token); });
+        var run = Task.Run(() => { gate.Flow(); return adapter.RunAsync(cancel.Token); });
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var ownedAtStart = !adapter.Ownership.IsCompleted;
         cancel.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(5)));
         var retained = !adapter.Ownership.IsCompleted;
         gate.Release.Set();
         exited.SetResult();
         await adapter.Ownership.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(gate.Stalled);
+        Assert.True(ownedAtStart);
         Assert.True(retained);
+    }
+
+    [Fact]
+    public async Task A_late_apply_fault_after_cancellation_is_observed_by_the_adapter()
+    {
+        var fault = new IOException("late apply fault " + Guid.NewGuid());
+        var unobserved = 0;
+        EventHandler<UnobservedTaskExceptionEventArgs> seen = (_, e) =>
+        {
+            if (e.Exception.Flatten().InnerExceptions.Contains(fault)) Interlocked.Increment(ref unobserved);
+        };
+        TaskScheduler.UnobservedTaskException += seen;
+        try
+        {
+            var ownership = await LateApplyFault(fault);
+            for (var i = 0; i < 10 && ownership.IsAlive; i++) { GC.Collect(); GC.WaitForPendingFinalizers(); }
+            // A still-reachable Ownership would never be finalized, so the check below would pass vacuously.
+            Assert.False(ownership.IsAlive);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            Assert.Equal(0, Volatile.Read(ref unobserved));
+        }
+        finally { TaskScheduler.UnobservedTaskException -= seen; }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    async Task<WeakReference> LateApplyFault(Exception fault)
+    {
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        worker.Wait = exited.Task;
+        using var cancel = new CancellationTokenSource();
+        var adapter = Adapter();
+        var run = adapter.RunAsync(cancel.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(5)));
+        exited.SetException(fault);
+        var ownership = adapter.Ownership;
+        await ownership.ContinueWith(_ => { }, TaskScheduler.Default).WaitAsync(TimeSpan.FromSeconds(5));
+        // The drain still sees the fault; only the unobserved-exception escalation is removed.
+        Assert.True(ownership.IsFaulted);
+        return new WeakReference(ownership);
     }
 
     [Fact]
@@ -264,14 +309,25 @@ public sealed class UpdateCoordinatorAdapterTests : IDisposable
         }
     }
 
+    // Keyed on the test's own seams, not compiler-generated names: the first yield after the original's
+    // wait began and before the updater starts is the apply's entry, on the thread that would publish it.
     sealed class ApplyGate : SynchronizationContext
     {
+        readonly AsyncLocal<bool> flowing;
+        readonly Task armed, started;
+        int stalls;
+        public ApplyGate(Task armed, Task started)
+        {
+            (this.armed, this.started) = (armed, started);
+            flowing = new(c => { if (c.ThreadContextChanged && c.CurrentValue) SetSynchronizationContext(this); });
+        }
         public ManualResetEventSlim Release { get; } = new();
-        // Queues Apply's first continuation, then stalls the thread that would publish Apply's task.
+        public bool Stalled => Volatile.Read(ref stalls) > 0;
+        public void Flow() => flowing.Value = true;
         public override void Post(SendOrPostCallback callback, object? state)
         {
             ThreadPool.QueueUserWorkItem(_ => callback(state));
-            if (new StackTrace().GetFrames().Any(f => f.GetMethod()?.DeclaringType?.FullName?.Contains("g__Apply|") == true))
+            if (flowing.Value && armed.IsCompleted && !started.IsCompleted && Interlocked.Exchange(ref stalls, 1) == 0)
                 Release.Wait(TimeSpan.FromSeconds(10));
         }
     }
