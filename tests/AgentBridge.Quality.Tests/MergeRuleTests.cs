@@ -2016,6 +2016,66 @@ public class MergeRuleTests
         Assert.Contains(facts.Checks, c => c.Name == "CI" && c.State == "failure");
     }
 
+    const string TierCatalog = """
+        suites:
+          - id: arm
+            where: ci.yml app, product
+            tier: post-merge
+            tier_jobs: [app (win-arm64), product (windows-11-arm)]
+          - id: typo
+            where: ci.yml light
+            tier: postmerge
+            tier_jobs: [light]
+        """;
+
+    [Theory]
+    [InlineData("app (win-arm64)", "failure", true, "success")]
+    [InlineData("product (windows-11-arm)", "failure", true, "success")]
+    [InlineData("product (windows-11-arm)", null, true, "success")]
+    [InlineData("light", "failure", true, "failure")]
+    [InlineData("app (win-x64)", "failure", true, "failure")]
+    [InlineData("app (win-arm64)", "failure", false, "failure")]
+    public void Main_green_ignores_but_shows_post_merge_jobs_and_an_unknown_tier_or_no_catalog_still_holds(
+        string failed, string? conclusion, bool catalog, string state)
+    {
+        var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)", failed }.Distinct()
+            .Select((name, id) => new { id, name, status = name == failed && conclusion is null ? "in_progress" : "completed",
+                conclusion = name == failed ? conclusion : "success", run_attempt = 1 }).ToArray();
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
+        var folder = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, $"tier-{Guid.NewGuid():N}")).FullName;
+        var config = Path.Combine(folder, "merge-rule.yml");
+        File.Move(WriteConfig(), config);
+        if (catalog) File.WriteAllText(Path.Combine(folder, "catalog.yml"), TierCatalog);
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.Contains($"Main job [{(catalog && failed != "light" && failed != "app (win-x64)" ? "post-merge" : "required")}]: {failed}: ",
+                output.ToString(), StringComparison.Ordinal);
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("SUCCESS", null, true, "success")]
+    [InlineData("SUCCESS", "pwa-ui (chromium 1/3)", true, "failure")]
+    [InlineData("FAILURE", null, true, "failure")]
+    [InlineData("SUCCESS", null, false, "failure")]
+    public void A_pull_request_does_not_count_a_failed_post_merge_job_but_shows_it(string gate, string? alsoFailed, bool postMerge, string state)
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+        using var doc = JsonDocument.Parse(WaiverPullRequest("pwa-ui (webkit 1/3)", gate: gate,
+            extraJobs: alsoFailed is null ? [] : [Job(5002, alsoFailed, "COMPLETED", "FAILURE")]));
+        var facts = MergeRuleCommand.ParseFacts(doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), config,
+            postMerge: postMerge ? new HashSet<string> { "pwa-ui (webkit 1/3)" } : null);
+        var verdict = MergeRule.Evaluate(config, MainGreen, facts)!;
+        Assert.Equal(state, verdict.State);
+        Assert.Equal(postMerge, verdict.Reasons.Contains("post-merge, not counted: pwa-ui (webkit 1/3) failure"));
+        if (state == "success")
+            Assert.EndsWith("; post-merge, not counted: pwa-ui (webkit 1/3) failure", verdict.Description, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("app (win-arm64)", -1, "success")]
     [InlineData("product (windows-11-arm)", -1, "success")]
