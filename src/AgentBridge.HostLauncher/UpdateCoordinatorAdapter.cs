@@ -1,9 +1,12 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Xml;
 using System.Xml.Linq;
 using AgentBridge.App.Core;
 using AgentBridge.Host.Core.Processes;
 using static AgentBridge.HostLauncher.UpdateCoordinatorStartInfo;
+
+[assembly: InternalsVisibleTo("AgentBridge.App.Tests")]
 
 namespace AgentBridge.HostLauncher;
 
@@ -68,7 +71,7 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
             {
                 if (observation is not null || closed) return observation ?? Task.FromCanceled<UpdateApplyEvidence>(new(true));
                 var apply = new Task<Task<UpdateApplyEvidence>>(() => Apply(generation, ct));
-                observation = apply.Unwrap();
+                Ownership = observation = apply.Unwrap();
                 apply.Start(TaskScheduler.Default);
                 return observation;
             }
@@ -86,8 +89,13 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
         {
             lock (publication) closed = true;
             Ownership = Task.WhenAll(observation ?? Task.CompletedTask, flow.RespawnFinished);
-            _ = Ownership.ContinueWith(_ => Volatile.Write(ref running, 0), CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            _ = Ownership.ContinueWith(owned =>
+            {
+                // A late apply or respawn fault may never be drained; observing it here keeps it from escalating
+                // as unobserved, while a drain of Ownership still sees it.
+                _ = owned.Exception;
+                Volatile.Write(ref running, 0);
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
     }
 
@@ -130,11 +138,15 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
         Hold(ProcessLaunch.Start(info) ?? throw new InvalidOperationException("no process was created"))
             ?? throw new InvalidOperationException("process exited before its handle was held");
 
-    static IUpdateCoordinatorProcess? Hold(Process process)
+    static IUpdateCoordinatorProcess? Hold(Process process) =>
+        Hold(process, () => _ = process.Handle, () => process.HasExited, () => new Child(process));
+
+    internal static IUpdateCoordinatorProcess? Hold(IDisposable process, Action pin, Func<bool> exited,
+        Func<IUpdateCoordinatorProcess> held)
     {
-        try { _ = process.Handle; return new Child(process); }
+        try { pin(); return held(); }
         // An original gone between lookup and handle acquisition has exited; anything else stays an error.
-        catch (InvalidOperationException) when (process.HasExited) { process.Dispose(); return null; }
+        catch (InvalidOperationException) when (exited()) { process.Dispose(); return null; }
         catch { process.Dispose(); throw; }
     }
 

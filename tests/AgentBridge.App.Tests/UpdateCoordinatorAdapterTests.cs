@@ -1,5 +1,5 @@
+using System.ComponentModel;
 using System.Diagnostics;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -126,7 +126,13 @@ public sealed class UpdateCoordinatorAdapterTests : IDisposable
         try
         {
             var ownership = await LateApplyFault(fault);
-            for (var i = 0; i < 10 && ownership.IsAlive; i++) { GC.Collect(); GC.WaitForPendingFinalizers(); }
+            // Delay between attempts so the thread that completed Ownership can unwind and drop its stack reference.
+            for (var i = 0; i < 50 && ownership.IsAlive; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                if (ownership.IsAlive) await Task.Delay(20);
+            }
             // A still-reachable Ownership would never be finalized, so the check below would pass vacuously.
             Assert.False(ownership.IsAlive);
             GC.Collect();
@@ -158,14 +164,24 @@ public sealed class UpdateCoordinatorAdapterTests : IDisposable
     [Fact]
     public async Task An_original_gone_between_lookup_and_handle_acquisition_has_already_exited()
     {
-        if (!OperatingSystem.IsWindows()) { return; }
-        using var stale = new Process();
-        typeof(Process).GetField("_processId", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(stale, int.MaxValue);
-        typeof(Process).GetField("_haveProcessId", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(stale, true);
-        var hold = typeof(UpdateCoordinatorAdapter).GetMethod("Hold", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var gone = new Child(44);
         var adapter = new UpdateCoordinatorAdapter(new(root, Packages, Package, Digest, "AgentBridgeApp", Target, [], 11, 123),
-            _ => (IUpdateCoordinatorProcess?)hold.Invoke(null, [stale]), _ => new Child(33), pinUpdater: _ => new MemoryStream());
+            _ => UpdateCoordinatorAdapter.Hold(gone, () => throw new InvalidOperationException("exited"), () => true, () => original),
+            _ => new Child(33), pinUpdater: _ => new MemoryStream());
         Assert.Equal(UpdateApplyEnd.Completed, (await adapter.RunAsync()).End);
+        Assert.True(gone.Disposed);
+        Assert.False(original.WaitStarted.Task.IsCompleted);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_handle_failure_on_a_live_or_denied_original_stays_an_error(bool denied)
+    {
+        var live = new Child(44);
+        Exception error = denied ? new Win32Exception(5) : new InvalidOperationException("no handle");
+        Assert.Same(error, Assert.ThrowsAny<Exception>(() => UpdateCoordinatorAdapter.Hold(live, () => throw error, () => denied, () => original)));
+        Assert.True(live.Disposed);
     }
 
     [Fact]
@@ -326,9 +342,10 @@ public sealed class UpdateCoordinatorAdapterTests : IDisposable
         public void Flow() => flowing.Value = true;
         public override void Post(SendOrPostCallback callback, object? state)
         {
+            // Decide before queuing: the queued apply could otherwise start the updater first and skip the stall.
+            var stall = flowing.Value && armed.IsCompleted && !started.IsCompleted && Interlocked.Exchange(ref stalls, 1) == 0;
             ThreadPool.QueueUserWorkItem(_ => callback(state));
-            if (flowing.Value && armed.IsCompleted && !started.IsCompleted && Interlocked.Exchange(ref stalls, 1) == 0)
-                Release.Wait(TimeSpan.FromSeconds(10));
+            if (stall) Release.Wait(TimeSpan.FromSeconds(10));
         }
     }
 
