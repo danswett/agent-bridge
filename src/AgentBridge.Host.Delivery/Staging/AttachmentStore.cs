@@ -257,7 +257,8 @@ public sealed partial class AttachmentStore : IDisposable
             {
                 await using (var file = PrivateFolder.CreateNew(h.File!))
                 {
-                    await blobs!.FetchAsync(blob, h.Start.Size, file, n => Interlocked.Exchange(ref h.Received, Math.Min(n, h.Start.Size)), ct);
+                    using var bounded = new BlobWriteStream(file, h.Start.Size);
+                    await blobs!.FetchAsync(blob, h.Start.Size, bounded, n => Interlocked.Exchange(ref h.Received, Math.Min(n, h.Start.Size)), ct);
                     if (file.Length != h.Start.Size) { throw new InvalidDataException("the blob held a different number of bytes than the attachment's size"); }
                 }
                 byte[] hash;
