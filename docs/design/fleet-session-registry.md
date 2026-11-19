@@ -303,6 +303,13 @@ A reader may keep its last copy of a machine's record as a **cache**, with a max
 (then deleted). Cached records are always marked `stale: true` and `online: false` in `fleet.list`
 and are never returned as live by `fleet.find`. The cache exists for two reasons only: showing
 "this session was on machine X, last seen at …", and the `ambiguous` and `offline` results in "Names and lookup".
+Only an accepted record within the 60 s freshness window refreshes the cache's observed time.
+A frozen record does not extend it, even when the relay still calls the machine online:
+at 24 h its session rows are dropped, while the offline machine metadata remains.
+Without cached history, a stale record's cache age starts at the beginning of its `at`
+freshness window, so replaying an expired record cannot recreate its session rows.
+An in-memory expired-machine marker prevents stale replays from rebuilding an expired cache;
+it clears when a fresh record arrives, the machine leaves the lists, or the relay connection changes.
 
 ## Names
 
