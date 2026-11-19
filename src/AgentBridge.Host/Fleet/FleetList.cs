@@ -34,7 +34,8 @@ public interface IScopedFleetRoster : IFleetRoster
 
 // Reads the registry over the host's relay connection, which is the host's own account: the relay
 // never sends another account's machines. Once this host holds a pinned, verified device roster,
-// only that roster's serving hosts are read (#2643); with no pin, rows pass unverified as before.
+// only that roster's serving hosts are read (#2643); a pin it can't use admits none. Only with no
+// pin at all do rows pass unverified, as before.
 public sealed class RelayFleetRoster : IScopedFleetRoster
 {
     public static readonly TimeSpan CacheAge = TimeSpan.FromHours(24);

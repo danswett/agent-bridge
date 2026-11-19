@@ -38,9 +38,16 @@ public sealed partial class HostRosterReader
     }
 
     // The pinned, verified roster, whatever the host-sign switch says: fleet membership (#2643).
-    internal RosterVerifier? Pinned(string account)
+    // Null only with no pin at all. A pin that is unreadable, another account's or not verified
+    // yet gives an empty roster, so it admits no machine rather than every one (#3245 review).
+    internal RosterVerifier? Pinned(string? account)
     {
-        lock (sync) { return problem is null && pin?.Account == account && Verified?.Account == account ? Verified : null; }
+        lock (sync)
+        {
+            if (pin is null && problem is null) { return null; }
+            return problem is null && account is not null && pin!.Account == account && Verified?.Account == account
+                ? Verified : new RosterVerifier(account ?? "", pin?.Generation ?? "", clock);
+        }
     }
 
     RosterCheck UpdateCore(RelayRoster? relay, string account)
