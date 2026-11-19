@@ -159,6 +159,48 @@ Assert ($s.title -match '^Main red: CI failing' -and $s.body -match '(?m)^Job: p
 $names = @((Get-PostMergeJobs $tierPath) | Sort-Object)
 $expected = @('pwa-ui (webkit 1/3)', 'pwa-e2e', 'probe, light') | Sort-Object
 Assert (($names -join '|') -eq ($expected -join '|')) "only post-merge suites' tier_jobs are post-merge ($($names -join '|'))"
+# Tiered gating B3b (#3210): the same post-merge test failing twice in a row proposes one quarantine.
+$genDir = Join-Path ([IO.Path]::GetTempPath()) "main-red-gen-$PID"
+New-Item -ItemType Directory -Path $genDir -Force | Out-Null
+$genLog = Join-Path $genDir 'calls.txt'
+Set-Content -LiteralPath (Join-Path $genDir 'quarantine-pr.ps1') -Value @'
+param([long]$RunId, [string]$TestName, [string]$Repository, [double]$Hours)
+Add-Content -LiteralPath (Join-Path $PSScriptRoot 'calls.txt') -Value "$RunId|$TestName|$Repository|$Hours"
+'@
+Set-Content -LiteralPath (Join-Path $genDir 'refusing.ps1') -Value "throw 'MAIN_RED_QUARANTINE is not on'"
+function Reset-Quarantine([string]$Script = 'quarantine-pr.ps1', [string]$Switch = 'on') {
+    Reset-Scenario; $s.jobName = 'pwa-e2e'; Remove-Item -LiteralPath $genLog -ErrorAction SilentlyContinue
+    $script:QuarantineScript = Join-Path $genDir $Script; $env:MAIN_RED_QUARANTINE = $Switch
+}
+function Get-Requests { @((@($s.body) + @($s.comments | ForEach-Object { $_.body })) -split '\r?\n' | Where-Object { $_ -clike 'quarantine-request: *' }) }
+function Get-GeneratorCalls { if (Test-Path -LiteralPath $genLog) { @(Get-Content -LiteralPath $genLog) } else { @() } }
+Reset-Quarantine; Detect
+Assert (@(Get-Requests).Count -eq 0 -and @(Get-GeneratorCalls).Count -eq 0) 'one post-merge tier flake proposes no quarantine'
+$s.attempt = 2; Detect
+Assert ((@(Get-Requests) -join '|') -ceq 'quarantine-request: test=A.B.C.Method' -and $s.comments[0].body -match 'quarantine-pr\.ps1 -RunId 100 -TestName A\.B\.C\.Method -Repository o/r -Hours 24') 'two post-merge tier flakes of one test propose exactly one quarantine request'
+Assert ((@(Get-GeneratorCalls) -join '|') -ceq '100|A.B.C.Method|o/r|24') 'that request goes once through the quarantine generator with a 24 hour expiry'
+Assert (-not (($s.calls | ForEach-Object { $_ -join ' ' }) -match 'statuses|check-runs|--add-label|pr create')) 'the request writes no status, check, label or pull request itself, so no merge verdict reads it'
+Detect; $s.attempt = 3; Detect
+Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1 -and $s.comments.Count -eq 2) 'a second tick and a third failure make no duplicate request'
+Reset-Quarantine -Switch ''; Detect; $s.attempt = 2; Detect
+Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 0) 'with MAIN_RED_QUARANTINE unset the request is recorded but the generator never runs'
+Reset-Quarantine -Switch "o$([char]0x200b)n"; Detect; $s.attempt = 2; Detect
+Assert (@(Get-GeneratorCalls).Count -eq 0) 'only the exact value on runs the generator'
+Reset-Quarantine -Script 'absent.ps1'; Detect; $s.attempt = 2; Detect
+Assert (@(Get-Requests).Count -eq 1 -and $LASTEXITCODE -eq 0) 'without the generator script the request is still recorded and detection succeeds'
+Reset-Quarantine -Script 'refusing.ps1'; Detect; $s.attempt = 2; $refused = $null
+try { Detect } catch { $refused = $_.Exception.Message }
+Assert ($null -eq $refused -and $s.comments.Count -eq 1 -and $LASTEXITCODE -eq 0) "a generator refusal never fails detection ($refused)"
+Reset-Quarantine; $s.jobName = 'product'; Detect; $s.attempt = 2; Detect
+Assert (@(Get-Requests).Count -eq 0 -and @(Get-GeneratorCalls).Count -eq 0) 'a blocking job failing twice proposes no quarantine'
+Reset-Quarantine; Detect; $s.attempt = 2; $s.log = '  Failed A.B.C.Other [1 s]'; Detect
+Assert (@(Get-Requests).Count -eq 0) 'two different post-merge tests in a row propose no quarantine'
+Reset-Quarantine; $s.log = "  Failed A.B.C.Method [1 s]`n  Failed A.B.C.Other [1 s]"; Detect; $s.attempt = 2; Detect
+Assert (@(Get-Requests).Count -eq 0) 'an entry naming more than one test proposes no quarantine'
+Reset-Quarantine; $s.log = "  1) [webkit] $([char]0x203a) login$([char]0x200b).spec.mjs:43:1 $([char]0x203a) t"; Detect
+$s.attempt = 2; $s.log = "  1) [webkit] $([char]0x203a) login.spec.mjs:43:1 $([char]0x203a) t"; Detect
+Assert (@(Get-Requests).Count -eq 0 -and $s.body.Contains('[sanitized]')) 'a name sanitized into another test name proposes no quarantine'
+Remove-Item -LiteralPath $genDir -Recurse; $env:MAIN_RED_QUARANTINE = $null
 Remove-Item -LiteralPath $tierPath
 if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 "main-red: $script:checks checks passed"

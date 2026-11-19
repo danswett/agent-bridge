@@ -448,11 +448,19 @@ public class CiPlanTests
     }
 
     [Fact, Trait("Category", "Process")]
-    public async Task Popup_preparation_parses_and_obeys_the_popup_and_probe_failure_rule_offline()
+    public Task Popup_preparation_parses_and_obeys_the_popup_and_probe_failure_rule_offline() =>
+        PassesOffline(".github", "actions", "arm64-foreground", "test-dismiss.ps1");
+
+    // #2026, PR 3239: against fake desktop boundaries; the real high contrast setting is never touched.
+    [Fact, Trait("Category", "Process")]
+    public Task A_self_test_retry_after_a_crash_starts_on_the_first_attempts_desktop_or_refuses() =>
+        PassesOffline("build", "test-app-self-test-desktop.ps1");
+
+    static async Task PassesOffline(params string[] script)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var start = new System.Diagnostics.ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", Path.Combine(root, ".github", "actions", "arm64-foreground", "test-dismiss.ps1") })
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", Path.Combine([root, .. script]) })
             start.ArgumentList.Add(arg);
         using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
         var output = process.StandardOutput.ReadToEndAsync();
@@ -468,7 +476,7 @@ public class CiPlanTests
             await process.WaitForExitAsync();
         }
         var diagnostics = $"stdout:{Environment.NewLine}{await output}{Environment.NewLine}stderr:{Environment.NewLine}{await error}";
-        Assert.True(completed, $"Offline popup checks timed out after 120 s.{Environment.NewLine}{diagnostics}");
+        Assert.True(completed, $"Offline checks in {Path.Combine(script)} timed out after 120 s.{Environment.NewLine}{diagnostics}");
         Assert.True(process.ExitCode == 0, diagnostics);
     }
 
