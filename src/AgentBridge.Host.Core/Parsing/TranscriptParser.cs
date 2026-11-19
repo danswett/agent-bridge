@@ -21,6 +21,7 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
     // and Count checks the parsed type anyway.
     public void Skim(ReadOnlyMemory<byte> line)
     {
+        S.AskStateComplete = false;
         // Every turn mark (TurnMarks) is a skim marker, so a line that may start a turn is parsed.
         if (!SkimWants(line.Span)) { return; }
         using var doc = TryParse(line);
@@ -53,6 +54,7 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
     // establishes it. History gives an unreadable prompt its own id, never the last prompt's.
     void Unreadable(ReadOnlySpan<byte> line)
     {
+        S.AskStateComplete = false;
         if (MayStartTurn(line)) { UnreadableTurn(); }
     }
 
@@ -64,6 +66,7 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
 
     void ILineSink.Skipped()
     {
+        S.AskStateComplete = false;
         // The latest turn may have begun in the bytes never read: its id is not known, and the
         // last one the skim saw is not it.
         S.TurnId = null;

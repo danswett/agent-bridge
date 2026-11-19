@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
 using AgentBridge.Protocol;
@@ -10,7 +11,7 @@ namespace AgentBridge.Host.Fleet;
 
 // Keep one instance for the host's lifetime, including across relay reconnects.
 public sealed class FleetPublisher(ISessionSource source, string machine, Func<string, string?>? name = null, TimeProvider? time = null,
-    Func<JsonElement, JsonElement>? sign = null)
+    Func<JsonElement, JsonElement>? sign = null, Func<FleetSessionSnapshot, CancellationToken, Task<SessionEvidence?>>? observe = null)
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
     readonly string epoch = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
@@ -30,26 +31,25 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
             var elapsed = lastSent is { } sent ? clock.GetElapsedTime(sent) : TimeSpan.MaxValue;
             if (!force && elapsed < TimeSpan.FromSeconds(2)) { return false; }
             if (share && source.Held is not null) { return false; }
-            IReadOnlyList<Session> snapshot = share ? source.Snapshot() : [];
+            IReadOnlyList<FleetSessionSnapshot> snapshot = share ? await source.FleetSnapshotAsync(ct) : [];
             if (share && source.Held is not null) { return false; }
-            var usable = snapshot.Select(s => (Session: s, Node: HaContract.NodeId(s.Id))).Where(entry =>
+            var usable = snapshot.Select(s => (Snapshot: s, Session: s.Session, Node: HaContract.NodeId(s.Session.Id))).Where(entry =>
                 entry.Node["agent_bridge_".Length..] is { Length: 16 } id
                 && id.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'))).ToArray();
             SkippedInvalidIds = snapshot.Count - usable.Length;
-            var sessions = usable.OrderByDescending(e => e.Session.StatusSince).ThenBy(e => e.Session.Id, StringComparer.Ordinal)
-                .Take(64).Select(entry =>
-                {
-                    var (s, node) = entry;
-                    var id = node["agent_bridge_".Length..];
-                    var displayName = name?.Invoke(s.Id)?.Trim();
-                    return new
-                    {
-                        id, node, name = displayName is not null && FleetNames.IsValidName(displayName) ? displayName : null,
-                        state = s.Status, since = s.StatusSince,
-                        startedAt = source.ProcessOf(s.Id) is { Id: > 0, StartedAt: { } started }
-                            ? started.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture) : null,
-                    };
-                }).ToList();
+            var sessions = new List<PublishedSession>();
+            foreach (var entry in usable.OrderByDescending(e => e.Session.StatusSince).ThenBy(e => e.Session.Id, StringComparer.Ordinal).Take(64))
+            {
+                var (_, s, node) = entry;
+                var displayName = name?.Invoke(s.Id)?.Trim();
+                var evidence = observe is null ? FleetEvidenceCapture.Evidence(FleetEvidenceCapture.Facts(entry.Snapshot, clock.GetUtcNow()))
+                    : await observe(entry.Snapshot, ct);
+                if (observe is not null && source.ProcessOf(s.Id) != entry.Snapshot.Process) { throw new InvalidOperationException("refused: fleet session binding changed during observation"); }
+                sessions.Add(new(node["agent_bridge_".Length..], node, displayName is not null && FleetNames.IsValidName(displayName) ? displayName : null,
+                    s.Status, s.StatusSince, entry.Snapshot.Process is { Id: > 0, StartedAt: { } processStarted }
+                        ? processStarted.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture) : null, evidence));
+            }
+            if (share && source.Held is not null) { return false; }
             var truncated = usable.Length > 64;
             int? total = truncated ? usable.Length : null;
             var content = JsonSerializer.Serialize(new { truncated, total, sessions }, ProtocolJson.Options);
@@ -78,5 +78,11 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
             return true;
         }
         finally { publishing.Release(); }
+    }
+
+    sealed record PublishedSession(string Id, string Node, string? Name, SessionStatus State, DateTimeOffset Since, string? StartedAt,
+        [property: JsonIgnore] SessionEvidence? Evidence)
+    {
+        [JsonExtensionData] public Dictionary<string, JsonElement>? EvidenceFields => Evidence?.Copy();
     }
 }

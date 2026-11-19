@@ -61,11 +61,14 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
     // Tests: the wall clock a look is timed by, compared with the file system's own times.
     internal Func<DateTime> UtcNow { get; set; } = static () => DateTime.UtcNow;
 
+    public bool ReadSucceeded { get; private set; }
     public TailOutcome Read(ILineSink sink)
     {
+        ReadSucceeded = false;
         var before = Stamp(out var at);
-        if (_started && before is { } now && _stamp is { } last && now == last && now.Written < _stampedAt - Racy) { return TailOutcome.Unchanged; }
+        if (_started && before is { } now && _stamp is { } last && now == last && now.Written < _stampedAt - Racy && at - _stampedAt < TimeSpan.FromMinutes(1)) { return TailOutcome.Unchanged; }
         var outcome = Open(sink);
+        ReadSucceeded = outcome is not (TailOutcome.Missing or TailOutcome.Unreadable);
         if (outcome is TailOutcome.Missing or TailOutcome.Unreadable) { _stamp = null; }
         else { (_stamp, _stampedAt) = (before, at); }
         return outcome;

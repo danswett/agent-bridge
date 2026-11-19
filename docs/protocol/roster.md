@@ -169,6 +169,7 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
   Optional session evidence is `stale, attention, openAsks, unsentLength, unsentHash,
   observedAt, lastReplyAt, provenance, senderVerified`, with the bounded types and
   rejection rules in [agent-operations.md](agent-operations.md#fleetlist).
+  The existing publisher's optional `startedAt` is also allowed as a UTC timestamp without fractional seconds.
 * **Same account only; memory only.** Records are never logged, never in the roster blob, and
   are dropped when the host's socket closes. `online` is false, and `record` null, when the host
   is gone or has sent nothing for 60 seconds.

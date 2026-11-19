@@ -246,6 +246,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     var content = MainText(data);
                     if (reasoning is not null) { S.OwnReasoning = Limits.KeepEnd(reasoning, Limits.Reasoning).Text; }
                     if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); S.ResponseTurn = S.TurnId is null ? null : _replyTurn ?? S.TurnId; }
+                    if (content is not null && !TurnErrorNotice(data)) { S.LastReplyAt = Json.Time(e, "timestamp"); }
                     if (reasoning is not null || content is not null) { S.OwnAt = Json.Time(e, "timestamp"); }
                     break;
                 }
@@ -354,6 +355,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         S.ResponseTurn = null;
         S.OwnReasoning = null;
         S.OwnAt = null;
+        S.LastReplyAt = null;
         S.Notice = null;
         _unknownReply = true;
         _replyTurn = null;
@@ -552,7 +554,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     if (!NoticeSaid(data, at))
                     {
                         var content = MainText(data);
-                        S.MainSaid(content, Text.NonBlank(Json.Str(data, "reasoningText")), at);
+                        S.MainSaid(content, Text.NonBlank(Json.Str(data, "reasoningText")), at, modelReply: !TurnErrorNotice(data));
                         if (content is not null) { S.ResponseTurn = S.TurnId is null ? null : _replyTurn ?? S.TurnId; }
                     }
                     // The CLI's notice of the error that ended the turn is written after it, and
