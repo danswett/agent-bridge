@@ -45,10 +45,15 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     readonly TimeProvider clock;
     readonly Dictionary<string, (FleetMachine Machine, long Seen)> cache = new(StringComparer.Ordinal);
 
-    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null)
+    readonly Func<RelayClient, CancellationToken, Task>? refreshRoster;
+
+    // refresh re-reads the signed device roster before each lookup, so who counts as a fleet host
+    // is never older than the lookup itself (#2643).
+    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null, Func<RelayClient, CancellationToken, Task>? refresh = null)
     {
         signedRoster = verifiedRoster;
         clock = time ?? TimeProvider.System;
+        refreshRoster = refresh;
     }
 
     // design/fleet-session-registry.md "Offline machines and the cache": a machine's last accepted

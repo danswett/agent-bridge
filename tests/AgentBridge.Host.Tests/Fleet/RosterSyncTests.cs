@@ -3,6 +3,8 @@ using AgentBridge.Host.Fleet;
 using AgentBridge.Protocol;
 using AgentBridge.Relay;
 using AgentBridge.Roster;
+using AgentBridge.Transport;
+using AgentBridge.Transport.Tests;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -198,6 +200,39 @@ public sealed class RosterSyncTests
         time.Advance(TimeSpan.FromMinutes(2));
         var stale = Rows(Assert.Single(reader.Read([Frame("H", online: false)])));
         Assert.True(stale[2].GetProperty("stale").GetBoolean() && stale[2].GetProperty("finished").GetProperty("value").GetBoolean());
+    }
+
+    [Fact, Trait("Category", "Network")]
+    public async Task Each_lookup_refreshes_the_signed_roster_first_so_a_host_that_left_is_gone_from_that_same_answer()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var own = await relay.ConnectAsync(relay.TokenFor(1, "own"), "own-host", "host");
+        await using var peer = await relay.ConnectAsync(relay.TokenFor(1, "own"), "peer-host", "host");
+        await own.Relay.WaitForPeerAsync(p => p.Id == peer.Id, TimeSpan.FromSeconds(10));
+        RosterVerifier? current = null;
+        var seen = new List<RelayClient>();
+        var roster = new RelayFleetRoster(() => current, time, (connection, _) =>
+        {
+            seen.Add(connection);
+            current = new RosterVerifier(world.AccountId, world.GenerationId, () => world.Now);
+            return Task.CompletedTask;
+        });
+        roster.Attach(own.Relay);
+        // Before the refresh no roster is held, so every host is read; after it, none is in the roster.
+        Assert.Empty((await roster.ReadScopedAsync(default)).Machines);
+        Assert.Same(own.Relay, Assert.Single(seen));
+    }
+
+    [Fact, Trait("Category", "Network")]
+    public async Task A_refresh_that_fails_leaves_the_lookup_on_the_roster_it_already_held()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var own = await relay.ConnectAsync(relay.TokenFor(1, "own"), "own-host", "host");
+        var tries = 0;
+        var roster = new RelayFleetRoster(() => null, time, (_, _) => { tries++; throw new InvalidOperationException("roster unavailable"); });
+        roster.Attach(own.Relay);
+        Assert.Equal(own.Id, Assert.Single((await roster.ReadScopedAsync(default)).Machines).Id);
+        Assert.Equal(1, tries);
     }
 
     static JsonElement Body(string json) => JsonDocument.Parse(json).RootElement.Clone();

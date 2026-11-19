@@ -23,11 +23,14 @@ public class MachineNameScanTests
     // left in it fails until it is removed.
     static readonly string[] NotYetCleaned =
     [
-        "design/", "pwa/",
+        "design/",
     ];
 
     static bool Names(string text) => MachineName.IsMatch(text) || UpperWord.Matches(text).Select(m => m.Value).Distinct(StringComparer.Ordinal)
         .Any(word => BareNames.Contains(Convert.ToHexStringLower(SHA256.HashData(Encoding.ASCII.GetBytes(word)))));
+
+    [Fact]
+    public void A_name_inside_an_underscore_slug_is_still_a_name() => Assert.True(Names("agent_" + "dswett" + "-box"));
 
     [Fact]
     public void Repo_scan_finds_no_machine_names_outside_fixtures()
