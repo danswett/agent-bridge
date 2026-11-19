@@ -245,23 +245,41 @@ re-serialized, so there is no canonical-JSON ambiguity: reformatting breaks the 
 **Verify.** `SignedHaltPolicy.OfferAsync` is the one door for every source. It reuses the roster's P-256 point and
 DER rules. `kid` is the first 16 hex digits of SHA-256(point), and it selects one of two key slots pinned in the
 build. Over 96 KiB, unsigned, malformed, wrong algorithm, unknown key, bad signature, not yet valid (5 minute
-skew), lifetime over 7 days, expired, older `seq`, and the same `seq` with other content: each is refused, logged
-with that reason, and leaves the stored policy and halts untouched. A refusal never counts as "no halts" or "ok".
+skew), lifetime over 7 days, expired, older `seq`, the same `seq` with other content, a retired key, a `seq` jump
+over the bound, and an unreadable floor: each is refused, logged with that reason, and leaves the stored policy
+and halts untouched. A refusal never counts as "no halts" or "ok".
 An accepted policy is fresh for 6 hours and never past `expires`. A replayed copy can refresh it only until
-`expires`. Only a higher `seq` may lift a halt. Once a signed policy is held, the legacy GitHub digest path is
-skipped.
+`expires`. Only a higher `seq` may lift a halt. Once any signed policy has been accepted, the legacy GitHub digest
+path is skipped.
+
+**Sequence floor.** The anti-rollback floor is kept in its own file, `halt-policy-floor.json` beside the shared
+`release-discovery.json`, as `{"v":1,"keys":[{"kid","seq"}]}`: each key's highest accepted `seq`, in the order
+each key was first accepted. No release before the verifier knows this file. Those releases do rewrite the shared
+cache in their own shape, which drops `seq`. So a floor kept in the cache was lost when a machine skipped the
+verifier release and rolled back below it, and an older, still-valid signed copy could then clear a halt. The
+verifier compares an incoming `seq` only with its own key's floor. It writes the floor (temp file, then replace)
+before the cache, so the floor is never behind what is held. Only the most recently first-accepted key is live:
+once a successor key is accepted, copies signed by earlier keys are refused as `retired key`, even if they are
+unexpired and above their own floor. One policy may raise its key's floor by at most `MaxSequenceJump` (100,000).
+At hourly signing that is over eleven years of headroom, and it stops a stolen key from pushing a floor to
+`long.MaxValue`. A floor file that cannot be read or parsed refuses every signed policy and keeps the legacy read
+closed. It is never read as zero. A missing file (first use, or deleted) starts from the signed policy still held,
+never below it. Any release may be a rollback target. There is no ordering rule for when keys may ship.
 
 **Keys.** SRE generates and holds the P-256 key and provides only the public point for a slot. Rotation: ship the
-next point in the second slot, sign with it, then retire the old point in a later build. Revocation means a build
-without that slot (no in-policy revoked list yet). Both production slots are empty until provisioned, so every
-signed copy is refused and the legacy path stays in use.
+next point in the second slot, then sign with it starting from its own `seq` 1. The first policy a machine accepts
+from the new key retires the old key on that machine. Drop the old point in a later build. Revocation means a
+build without that slot (no in-policy revoked list yet). Retiring a compromised key needs no migration: its floor
+stays bounded by the jump limit, and the successor key starts from its own floor. A key once retired is never
+reused; going back means a new key. Both production slots are empty until provisioned, so every signed copy is
+refused and the legacy path stays in use.
 
-**Not proven.** A local admin who edits the state file can forge a high `seq`, which only blocks later policies
-(fail closed). Revocation is no faster than a build. Delivery (publisher, CDN and relay fetch) is not built
-yet. Until it is, the legacy path still trusts GitHub TLS plus the asset digest.
-A build without this change drops `seq` when it rewrites the state file, so a rollback below it would reset
-the floor. Sequencing rule: embed a production key only in a release later than one that already carries this
-verifier, so every rollback target keeps `seq`.
+**Not proven.** A local admin is outside this protection. They can edit the floor file: a corrupt file fails
+closed, and a forged high `seq` only blocks later policies from that key until a successor key is accepted. Deleting
+both the floor file and the cache resets the floor, but such an admin could equally edit the halts or replace the
+binary. Revocation is no faster than a build. Delivery (publisher, CDN and relay fetch) is not built yet. Until it
+is, the legacy path still trusts GitHub TLS plus the asset digest.
+
 ## 5. One press, Update all, and limits
 
 **One machine.** Update now is the card's primary wherever `canUpdateNow`. A busy machine gets
