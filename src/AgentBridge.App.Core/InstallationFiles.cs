@@ -14,11 +14,18 @@ public static class InstallationFiles
                 || Path.GetExtension(f).Equals(".dll", StringComparison.OrdinalIgnoreCase)))
         {
             try { using var check = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None); }
-            catch (IOException e) when ((e.HResult & 0xffff) is 32 or 33) { locked.Add(file); }
+            catch (IOException e) when (IsSharingViolation(e)) { locked.Add(file); }
             catch (UnauthorizedAccessException) { locked.Add(file); }
         }
         return locked;
     }
+
+    // Windows reports a held file as ERROR_SHARING_VIOLATION or ERROR_LOCK_VIOLATION. .NET on Unix
+    // emulates FileShare.None with flock and reports a conflict as the raw errno EWOULDBLOCK
+    // (11 on Linux, 35 on macOS); missing it threw instead of reporting the lock (#2884 CI).
+    static bool IsSharingViolation(IOException e) => OperatingSystem.IsWindows()
+        ? (e.HResult & 0xffff) is 32 or 33
+        : e.HResult == (OperatingSystem.IsLinux() ? 11 : 35);
 
     public sealed class Budget(TimeProvider time)
     {
