@@ -52,7 +52,8 @@ public static class InstallationFiles
                 return await Task.Run(() =>
                 {
                     var files = LockedFiles?.Invoke();
-                    if (!fresh && clearProbe == probe && (files is null || clearFiles?.SetEquals(files) == true)) { return null; }
+                    // Without a footprint (no LockedFiles) nothing could invalidate a clear scan: none is reused.
+                    if (!fresh && clearProbe == probe && files is not null && clearFiles?.SetEquals(files) == true) { return null; }
                     var held = probe();
                     token.ThrowIfCancellationRequested();
                     clearProbe = held is null ? probe : null;

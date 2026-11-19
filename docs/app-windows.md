@@ -740,7 +740,10 @@ controls consume that same contract; this extraction does not disable or remove 
     started meanwhile is held too); one that cannot confirm, or a host of the package no pipe
     reaches, stops the update before anything is stopped. A host of the package that starts during
     the last file scan, after those holds, or one not confirmed as held by its start time, refuses
-    the update and this host is started again.
+    the update and this host is started again. Each held host's start time is read when it is
+    first held, through its own pipe, and checked once the holds are done: a host that took the pid
+    of one that ended while another was waited for is held in turn (another profile's) or refuses
+    the update (this profile's, already stopped) rather than being taken for the held one.
     Quitting gives up those waits, never a
     probe, so a host already stopped for the update is started again within Quit's 25 s.
   * **Never at startup:** Velopack applies a downloaded release by itself whenever the exe starts,
