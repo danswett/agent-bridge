@@ -11,17 +11,31 @@ public sealed partial class HaConnector
 
     static bool OwnerPress(RidLog log, string? press) => press is not null && log.Presses.TryGetValue(press, out var agent) && !agent;
 
+    static void ClassifyPress(RidLog log, string press, bool uncertain)
+    {
+        if (log.Presses.TryAdd(press, log.AgentSends.Count > 0 || uncertain) && log.AgentSends.Count > 0) { log.AgentSends.RemoveAt(0); }
+    }
+
+    static bool RememberPayload(RidLog log, string stamp)
+    {
+        if (log.PayloadStamps.Contains(stamp)) { return false; }
+        log.PayloadStamps.Add(stamp);
+        if (log.PayloadStamps.Count > 64) { log.PayloadStamps.RemoveAt(0); }
+        return true;
+    }
+
     // What reached the card since the question was armed, in order: each agent message is counted
     // (text alone queued), and each new Send press is the agent's while one of its messages still
     // owes one. A press read when the payload cannot be is taken as the agent's: the owner presses again.
-    async Task QueueAtQuestionAsync(Published p, Armed armed, IReadOnlyList<(long Seq, HaTrigger Hit)> seen, CancellationToken ct)
+    async Task QueueAtQuestionAsync(Published p, Armed armed, IReadOnlyList<(long Seq, HaTrigger Hit)> seen, CancellationToken ct, Observation? current = null, Observation? submit = null)
     {
         var payloadId = SessionEntities.ReplyPayload(p.Node);
         var submitId = SessionEntities.Submit(p.Node);
         var log = p.Reply.Log;
+        bool Known(string? stamp) => stamp is not null && (stamp == armed.PayloadBaseline.Value || p.Reply.IsHandled(stamp) || log.PayloadStamps.Contains(stamp));
         // Send first: an agent presses only after its message, so the payload read next shows it.
-        var submit = await ObserveAsync(submitId, ct);
-        var current = await ObserveAsync(payloadId, ct);
+        submit ??= await ObserveAsync(submitId, ct);
+        current ??= await ObserveAsync(payloadId, ct);
         var events = seen.Where(h => h.Seq > armed.Boundary && (h.Hit.EntityId == payloadId || h.Hit.EntityId == submitId)).Select(h => h.Hit).ToList();
         if (Changed(armed.PayloadBaseline, current) && !events.Any(h => h.EntityId == payloadId && h.State.State == current.Value))
         {
@@ -33,17 +47,33 @@ public sealed partial class HaConnector
             if (!IsStamp(state.State)) { continue; }
             if (entity == submitId)
             {
-                if (state.State == armed.SubmitBaseline.Value || !log.Presses.TryAdd(state.State, log.AgentSends > 0 || current.Kind == "unknown")) { continue; }
-                log.AgentSends = Math.Max(0, log.AgentSends - 1);
+                if (state.State != armed.SubmitBaseline.Value) { ClassifyPress(log, state.State, current.Kind == "unknown" || log.UncertainPayload is not null); }
                 continue;
             }
             var a = state.Attributes;
-            if ((armed.PayloadBaseline.Present && state.State == armed.PayloadBaseline.Value) || log.AgentStamps.Contains(state.State) || p.Reply.IsHandled(state.State)
-                || MixedReplyPayload(payloadId, state) || Str(a, "driver") != "agent" || !string.IsNullOrEmpty(Str(a, "decision_id"))) { continue; }
-            log.AgentStamps.Add(state.State);
-            if (log.AgentStamps.Count > 64) { log.AgentStamps.RemoveAt(0); }
-            log.AgentSends++;
-            if (!ServesReplies || CleanRid(Str(a, "rid")) is not { } rid || HasAttachments(state) || string.IsNullOrWhiteSpace(Str(a, "text"))) { continue; }
+            var mixed = MixedReplyPayload(payloadId, state);
+            var stamp = state.State;
+            if (mixed)
+            {
+                var at = Str(a, "at");
+                if (!IsStamp(at ?? "")) { at = null; }
+                if (Known(stamp) && Known(at)) { continue; }
+                log.UncertainPayload = (stamp, at, Known(stamp) ? stamp : Known(at) ? at : null);
+                if (Known(stamp) && at is not null) { stamp = at; }
+            }
+            // Either half may arrive first. Only the newer complete payload (or its replacement),
+            // never a lagging previous snapshot, discharges the uncertainty.
+            else if (log.UncertainPayload is { } split && stamp != split.Before
+                && (split.Before is not null || split.At is null || (stamp != split.State && stamp != split.At))) { log.UncertainPayload = null; }
+            if (!mixed && Str(a, "driver") != "agent") { log.AgentSends.Remove(stamp); }
+            if (!mixed && ((armed.PayloadBaseline.Present && stamp == armed.PayloadBaseline.Value) || p.Reply.IsHandled(stamp))) { continue; }
+            var fresh = RememberPayload(log, stamp);
+            if (mixed && log.UncertainPayload is { Before: null, At: { } other }) { RememberPayload(log, other); }
+            // Press accounting is independent of payload acceptance and its fallible acknowledgement.
+            if (!mixed && Str(a, "decision_id") == armed.Question.Id) { log.AgentSends.Remove(stamp); }
+            if (fresh && (mixed || (Str(a, "driver") == "agent" && Str(a, "decision_id") != armed.Question.Id))) { log.AgentSends.Add(stamp); }
+            if (mixed || Str(a, "driver") != "agent" || !string.IsNullOrEmpty(Str(a, "decision_id")) || !ServesReplies || CleanRid(Str(a, "rid")) is not { } rid
+                || HasAttachments(state) || string.IsNullOrWhiteSpace(Str(a, "text"))) { continue; }
             var queue = log.Queued;
             var known = queue.Any(q => CleanRid(Str(q.Attributes, "rid")) == rid) ? "queued"
                 : p.Reply.Rids.TryGetValue(rid, out var prior) ? prior ?? "unconfirmed" : null;

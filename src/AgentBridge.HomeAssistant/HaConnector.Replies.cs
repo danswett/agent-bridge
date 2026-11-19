@@ -78,15 +78,17 @@ public sealed partial class HaConnector
         // #3204: agent messages waiting for an open question to close, oldest first; those still owed
         // their own Send press, the ones counted; and each Send press read with whether it was the agent's.
         public readonly List<HaState> Queued = [];
-        public int AgentSends;
-        public readonly List<string> AgentStamps = [];
+        public readonly List<string> AgentSends = [];
+        public (string State, string? At, string? Before)? UncertainPayload;
+        public readonly List<string> PayloadStamps = [];
         public readonly Dictionary<string, bool> Presses = new(StringComparer.Ordinal);
 
         public void Drop()
         {
             Queued.Clear();
-            AgentSends = 0;
-            AgentStamps.Clear();
+            AgentSends.Clear();
+            UncertainPayload = null;
+            PayloadStamps.Clear();
             Presses.Clear();
         }
         // The last acknowledgement: which rid the host delivered, published with the card's activity.
@@ -321,8 +323,8 @@ public sealed partial class HaConnector
         var payload = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
         var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
         // Agent messages that reached the closing question are kept, even when Send cannot be read.
-        if (p.Armed is { } armed) { await QueueAtQuestionAsync(p, armed, [.. hits.Where(h => h.Seq <= boundary)], ct); }
-        if (payload.Kind == "unknown" || submit.Kind == "unknown") { return false; }
+        if (p.Armed is { } armed) { await QueueAtQuestionAsync(p, armed, [.. hits.Where(h => h.Seq <= boundary)], ct, payload, submit); }
+        if (payload.Kind == "unknown" || submit.Kind == "unknown" || p.Reply.Log.UncertainPayload is not null) { return false; }
         if (payload.Present) { p.Reply.Handle(payload.Value); }
         p.Reply.HandledPress = submit.Present ? submit.Value : null;
         p.Reply.PendingPress = null;
@@ -343,10 +345,16 @@ public sealed partial class HaConnector
             await BaselineRepliesAsync(p, ct);
             return;
         }
+        var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
+        foreach (var press in seen.Where(h => h.Hit.EntityId == SessionEntities.Submit(p.Node)).Select(h => h.Hit.State.State)
+            .Append(submit.Value).Where(s => IsStamp(s) && s != p.Reply.HandledPress))
+        {
+            ClassifyPress(p.Reply.Log, press, false);
+        }
         foreach (var (seq, hit) in seen)
         {
             if (seq <= p.Reply.Boundary || hit.EntityId != SessionEntities.ReplyPayload(p.Node) || !IsStamp(hit.State.State) || p.Reply.IsHandled(hit.State.State)
-                || p.Reply.Waiting.Any(w => w.State == hit.State.State))
+                || MixedReplyPayload(hit.EntityId, hit.State) || p.Reply.Waiting.Any(w => w.State == hit.State.State))
             {
                 continue;
             }
@@ -389,7 +397,7 @@ public sealed partial class HaConnector
     // or is being delivered.
     async Task<CardRead> CardReplyAsync(string sessionId, Published p, HaState state, CancellationToken ct, bool queued = false)
     {
-        if (!IsStamp(state.State) || (!queued && p.Reply.IsHandled(state.State))) { return CardRead.Nothing; }
+        if (!IsStamp(state.State) || (!queued && p.Reply.IsHandled(state.State)) || MixedReplyPayload(SessionEntities.ReplyPayload(p.Node), state)) { return CardRead.Nothing; }
         var stamp = state.State;
         var a = state.Attributes;
         var attributes = a.ValueKind == JsonValueKind.Object;

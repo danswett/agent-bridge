@@ -588,11 +588,17 @@ delivered), and so does the session ending; a session back under the same id sta
 that see `queued` and then a count that drops without their rid being acked `delivered` send again.
 An agent's own Send press is not taken as the owner's confirmation, by count: while an agent
 message still owes its press, the next new Send press is taken as the agent's, and a press read when the payload
-cannot be read is too (fail closed). That debt outlives a question being replaced or cleared, and an
-agent message with attachments still owes its press though it is refused, not queued. An owner whose
+cannot be read is too (fail closed). A mixed watched stamp remains uncertain even if REST still
+shows the previous complete payload. That debt outlives a question being replaced or cleared;
+an idle Send consumes it too. Refused agent payloads, including stale question tags and attachments,
+still owe their companion press. An owner whose
 press lands there presses Send again. Known limit: if the owner's press lands between an agent's
 message and its own Send, the owner's press is taken as the agent's and the agent's later press
-confirms the form as it then stands.
+confirms the form as it then stands. Another limit: messages overwritten before either the watch
+or a read observes them cannot be counted; their extra Send presses cannot be distinguished from
+the owner's. An unreadable closing boundary is retained until its split payload completes or is
+replaced by a newer complete publish. Both split orders are tracked against the previously
+observed payload, so a lagging snapshot cannot end that uncertainty.
 
 **Durable inbox foundation.** `DurableInbox` is an internal, not-yet-connected store: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,

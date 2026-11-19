@@ -98,7 +98,6 @@ public sealed partial class HaConnector
     internal void Observe(HaTrigger hit)
     {
         if (LaunchHit(hit) || UpdateHit(hit)) { return; }
-        if (MixedReplyPayload(hit.EntityId, hit.State)) { return; }
         hits.Enqueue((Interlocked.Increment(ref hitSeq), hit));
     }
 
@@ -204,7 +203,11 @@ public sealed partial class HaConnector
             // What the reply controls hold as the question goes: an answer, or words given while it
             // was asked, never a reply after it. Read before the card is cleared, so anything sent
             // once it shows no question is.
-            if (ServesReplies && p.Armed is not null && !await BaselineRepliesAsync(p, ct)) { p.Reply.Baselined = false; }
+            if (ServesReplies && p.Armed is { } closing)
+            {
+                closing.Superseded = true;
+                if (!await BaselineRepliesAsync(p, ct)) { lock (gate) { dirty.Add(full.Id); } return; }
+            }
             await RunAsync(HaDecision.Clear(p.Node, name, options.MachineName, slots), p.Node, ct);
             await ClearButtonsAsync(full.Id, p.Notify, forget: true, ct);
             p.Armed = null;
@@ -822,6 +825,7 @@ public sealed partial class HaConnector
     // per press, rather than dropped.
     async Task UnservedAsync(Published p, HaTrigger hit, CancellationToken ct)
     {
+        if (MixedReplyPayload(hit.EntityId, hit.State)) { return; }
         var words = hit.EntityId == SessionEntities.ReplyPayload(p.Node)
             ? (hit.State.Attributes is { ValueKind: JsonValueKind.Object } a && a.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null)
               ?? (HasAttachments(hit.State) ? "(attachments)" : null)
@@ -866,7 +870,7 @@ public sealed partial class HaConnector
         var tag = Str(state.Attributes, "decision_id");
         var fromAgent = Str(state.Attributes, "driver") == SessionDrivers.Agent;
         // An agent's message is counted first (QueueAtQuestionAsync), so its own Send is never taken for the owner's.
-        if (fromAgent && tag is not { Length: > 0 } && !p.Reply.Log.AgentStamps.Contains(current.Value)) { return false; }
+        if (fromAgent && tag != armed.Question.Id && !p.Reply.Log.PayloadStamps.Contains(current.Value)) { return true; }
         var takesNoWords = ServesReplies && (armed.Plan.UsesFieldSlots || armed.Plan.AnswerOnTap) && !armed.Plan.TakesTypedAnswer;
         // Words tagged for a question are that question's own. An agent's are also refused when untagged or tagged for another card.
         if (tag is { Length: > 0 } ? !(fromAgent && tag != armed.Question.Id) : !(takesNoWords || fromAgent)) { return false; }
