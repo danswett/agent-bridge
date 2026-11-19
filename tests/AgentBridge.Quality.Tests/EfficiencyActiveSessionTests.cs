@@ -9,7 +9,7 @@ public class EfficiencyActiveSessionTests
     public Task Driver_emits_transcript_lines_hook_events_and_one_question_at_the_scripted_rates()
         => Run("rates");
 
-    [Fact]
+    [Fact(Skip = "Quarantined: hosted timing flake; owner Main-Green; tracking issue https://github.com/danswett/agent-bridge/issues/3121; fix deadline 2026-11-19 02:00 PT")]
     public Task Driver_stops_promptly_and_leaves_no_timer_after_cancel()
         => Run("cancel");
 

@@ -159,7 +159,7 @@ public sealed class MarkdownTests
     [Fact]
     public void A_long_command_is_copied_exactly_as_one_line()
     {
-        const string command = "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\me\\repos\\agent-bridge\\tools\\rehearsal\\run-rehearsal.ps1\" -Profile dev -Machine DEV-VM2 -Checklist docs\\parity-checklist.md -Evidence out\\evidence -Verbose  ";
+        const string command = "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\me\\repos\\agent-bridge\\tools\\rehearsal\\run-rehearsal.ps1\" -Profile dev -Machine node-b -Checklist docs\\parity-checklist.md -Evidence out\\evidence -Verbose  ";
 
         Assert.Equal(command, CopyOf($"Run this:\n\n```powershell\n{command}\n```\n"));
     }
@@ -904,7 +904,7 @@ public sealed class UsageTests
         // #225: on a phone the login was cut to "d" while "read on <machine>" kept its space, and
         // the summary read "GitHub Copilot 12% · GitHub Copilot 0%".
         const string first = "danswett-with-a-much-longer-login", second = "dswett_microsoft-enterprise-managed";
-        var reader = new UsageReader(new string('b', 32), "DSWETT-DEV-VM1-WITH-A-LONG-NAME");
+        var reader = new UsageReader(new string('b', 32), "TEST-NODE-WITH-A-LONG-NEUTRAL-NAME");
         var vm = new UsageViewModel(new FakeTimeProvider(Now));
 
         vm.Update(new UsageReport([Agent("GitHub Copilot", 12) with { Account = first, Plan = null, ReadBy = reader },
@@ -915,7 +915,7 @@ public sealed class UsageTests
         Assert.Equal([first, second], vm.Rows.Select(r => r.Detail));
         Assert.All(vm.Rows, r => Assert.DoesNotContain("read on", r.Label + r.Detail + r.Age, StringComparison.Ordinal));
         // Kept for the age's tooltip and accessible description.
-        Assert.All(vm.Rows, r => Assert.Equal("read on DSWETT-DEV-VM1-WITH-A-LONG-NAME", r.ReadOn));
+        Assert.All(vm.Rows, r => Assert.Equal("read on TEST-NODE-WITH-A-LONG-NEUTRAL-NAME", r.ReadOn));
     }
 
     [Fact]

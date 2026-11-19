@@ -1650,16 +1650,20 @@ public sealed class UsageProbeTests : IDisposable
     {
         CodexUsed();
         Fixture.Append(f.CodexTranscript("t"), Codex.Event(new { type = "token_count", rate_limits = new { primary = new { used_percent = 33.0 } } }, 1));
-        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        var server = AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
         var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
         await codex.CollectAsync();
-        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        await Until(() => server.Answered >= 4);
+        await ProbeFinished(1);
         Assert.Equal(CodexUsageProbe.SignedOutError, (await codex.CollectAsync())!.Error);
 
         // Codex's sessions folder is gone, so no probe can say; a Codex session running here must.
         var sessionsFolder = Path.Combine(f.CodexHome, "sessions");
         var kept = Path.Combine(f.Root, "kept-sessions");
         Directory.Move(sessionsFolder, kept);
+        // Pace alone does not populate the probe's process list: without this session, restoring
+        // the folder could start another app-server and publish a new sign-out before the assertion.
+        f.Processes.Run(AgentKind.Codex, 9100, "codex");
         codex.Pace(sessionOpen: true, busy: false);
         time.Advance(TimeSpan.FromMinutes(16));
 
@@ -1669,7 +1673,21 @@ public sealed class UsageProbeTests : IDisposable
 
         // The folder back, with the transcript measured before the sign-out: never published in its place.
         Directory.Move(kept, sessionsFolder);
+        await codex.CollectAsync();
+        await ProbeFinished(2);
         Assert.Null(await codex.CollectAsync());
+        Assert.Single(launcher.Started);
+
+        async Task ProbeFinished(int count)
+        {
+            var waiting = System.Diagnostics.Stopwatch.StartNew();
+            while (codex.ProbesFinished < count && waiting.Elapsed < TimeSpan.FromSeconds(30))
+            {
+                time.Advance(TimeSpan.FromMilliseconds(100));
+                await Task.Delay(10);
+            }
+            Assert.Equal(count, codex.ProbesFinished);
+        }
     }
 
     [Fact]
