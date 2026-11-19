@@ -1,9 +1,7 @@
 using System.IO.Compression;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
-using AgentBridge.Host.Delivery.Staging;
 
 namespace AgentBridge.App.Core;
 
@@ -19,58 +17,7 @@ public static class SlotPreparation
         "Assets/Fonts/SlipgatesSans-OFL.txt", "Assets/Fonts/SlipgatesMono.ttc", "Assets/Fonts/SlipgatesMono-OFL.txt",
         "coreclr.dll", "hostfxr.dll", "hostpolicy.dll", "System.Private.CoreLib.dll"];
 
-    // Preparation has no activation side effects. Existing slots are only read, never repaired.
-    public static Prepared Prepare(string root, string version, string package, PackageDigest digest, Func<string, string?> releaseIdentity)
-    {
-        if (!Regex.IsMatch(version, @"\A[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?\z")
-            || version.Split('-')[0].Split('+')[0] == "0.0.0"
-            || !Regex.IsMatch(digest.Hex, digest.Algorithm switch { PackageDigest.Sha256 => @"\A[0-9a-fA-F]{64}\z", PackageDigest.Sha1 => @"\A[0-9a-fA-F]{40}\z", _ => @"\b\B" }))
-        { throw new InvalidDataException("A slot requires a known relative release identity and release package digest."); }
-        var relative = Path.Combine("slots", $"{version}-{digest.Hex.ToLowerInvariant()}");
-        var destination = Path.Combine(Path.GetFullPath(root), relative);
-        NoLinks(destination);
-        NoLinks(Path.GetFullPath(package));
-        using var held = DownloadMark.Hold(package, digest)
-            ?? throw new PackageMismatchException("Slot preparation refused: package bytes do not match the release digest.");
-        using var zip = new ZipArchive(held, ZipArchiveMode.Read);
-        var (files, manifestIdentity) = Payload(zip, version, releaseIdentity);
-        Prepared Winner()
-        {
-            Validate(destination, files);
-            return new(relative, version, digest, manifestIdentity);
-        }
-        if (Directory.Exists(destination)) { return Winner(); }
-        if (File.Exists(destination)) { throw new InvalidDataException("A file already occupies the slot path."); }
-        var slots = Path.GetDirectoryName(destination)!;
-        NoLinks(slots);
-        Directory.CreateDirectory(slots);
-        var staging = Path.Combine(slots, ".preparing-" + Guid.NewGuid().ToString("N"));
-        PrivateFolder.Ensure(staging, "slot staging", "no slot is prepared");
-        try
-        {
-            foreach (var (name, entry) in files)
-            {
-                var target = Path.Combine(staging, name);
-                NoLinks(target);
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                using var input = new PayloadStream(entry);
-                using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                input.CopyTo(output);
-                output.Flush(flushToDisk: true);
-            }
-            Validate(staging, files);
-            NoLinks(destination);
-            try { Directory.Move(staging, destination); }
-            catch (IOException) when (Directory.Exists(destination)) { return Winner(); }
-            return new(relative, version, digest, manifestIdentity);
-        }
-        finally
-        {
-            if (Directory.Exists(staging)) { Directory.Delete(staging, recursive: true); }
-        }
-    }
-
-    static (Dictionary<string, ZipArchiveEntry> Files, string Identity) Payload(ZipArchive zip, string version, Func<string, string?> releaseIdentity)
+    internal static (Dictionary<string, ZipArchiveEntry> Files, string Identity) Payload(ZipArchive zip, string version, Func<string, string?> releaseIdentity)
     {
         const string prefix = "lib/app/";
         if (zip.Entries.Count > 10000) { throw new InvalidDataException("Slot archive exceeds the entry limit."); }
@@ -133,35 +80,6 @@ public static class SlotPreparation
             && !p.EndsWith(' ') && !p.Any(c => c < 32 || "<>:\"|?*~".Contains(c))
             && !Regex.IsMatch(p, @"\A(?:CON(?:IN\$|OUT\$)?|PRN|AUX|NUL|(?:COM|LPT)[0-9\u00B9\u00B2\u00B3])(?:\.|\z)", RegexOptions.IgnoreCase));
 
-    static void Validate(string directory, Dictionary<string, ZipArchiveEntry> expected)
-    {
-        var pending = new Stack<string>([directory]);
-        var count = 0;
-        while (pending.TryPop(out var folder))
-        {
-            NoLinks(folder);
-            foreach (var path in Directory.EnumerateFileSystemEntries(folder))
-            {
-                NoLinks(path); // Check before descending: recursive enumeration would follow a junction.
-                var name = Path.GetRelativePath(directory, path);
-                if (Directory.Exists(path))
-                {
-                    if (!expected.Keys.Any(n => n.StartsWith(name + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
-                    { throw new InvalidDataException($"Existing slot has an unexpected directory: {name}"); }
-                    pending.Push(path); continue;
-                }
-                if (!expected.TryGetValue(name, out var entry))
-                { throw new InvalidDataException($"Existing slot has an unexpected file: {name}"); }
-                using var actual = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                using var source = new PayloadStream(entry);
-                if (actual.Length != entry.Length || !SHA256.HashData(actual).AsSpan().SequenceEqual(SHA256.HashData(source)))
-                { throw new InvalidDataException($"Slot payload differs from the verified package: {name}"); }
-                count++;
-            }
-        }
-        if (count != expected.Count) { throw new InvalidDataException("Slot payload is incomplete."); }
-    }
-
     sealed class PayloadStream(ZipArchiveEntry entry) : Stream
     {
         readonly Stream source = entry.Open();
@@ -186,18 +104,5 @@ public static class SlotPreparation
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-    }
-
-    static void NoLinks(string path)
-    {
-        for (string? current = path; current is not null; current = Path.GetDirectoryName(current))
-        {
-            FileAttributes attributes;
-            try { attributes = File.GetAttributes(current); }
-            catch (FileNotFoundException) { continue; }
-            catch (DirectoryNotFoundException) { continue; }
-            if ((attributes & FileAttributes.ReparsePoint) != 0)
-            { throw new InvalidDataException($"Slot preparation refuses reparse points: {current}"); }
-        }
     }
 }
