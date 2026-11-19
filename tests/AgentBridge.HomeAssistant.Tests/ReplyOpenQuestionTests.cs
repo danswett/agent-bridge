@@ -141,6 +141,24 @@ public sealed partial class ReplyTests
         Assert.Equal("q2", Assert.Single(answered).Question);
     }
 
+    [Fact]
+    public async Task Sends_counted_as_a_question_closes_are_not_counted_again_against_a_later_messages_press()
+    {
+        await using var c = await Asking();
+        for (var n = 1; n <= 3; n++)
+        {
+            c.Observe(ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
+            if (n < 3) { c.Observe(ha.Press(SessionEntities.Submit(Node), "agent-user")); }
+        }
+        Idle(turn: 2); await Pass(c);
+        Idle(question: Pick() with { Id = "q2" }); await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal("q2", Assert.Single(answered).Question);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
