@@ -8,7 +8,8 @@
 #
 #   pwsh quality/revert-culprit.ps1 -Repository danswett/agent-bridge
 #
-# Needs a checkout of the repository with enough main history to hold the culprit, and GH_TOKEN with contents,
+# Needs a checkout of the repository with enough main history to hold the culprit (when it holds too little, one issue
+# says so), and GH_TOKEN with contents,
 # pull-requests and issues write; the push authenticates from GH_TOKEN. State lives only on GitHub: the branch, PR and issue.
 [CmdletBinding()]
 param([string]$Repository = $env:GITHUB_REPOSITORY, [int]$Minutes = 15, [datetime]$Now = [datetime]::UtcNow)
@@ -22,6 +23,12 @@ function Invoke-Git {
     $out = & $script:GitCommand @args
     if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') failed with exit code $LASTEXITCODE" }
     $out
+}
+
+# A null value must remove the variable: PowerShell turns a plain $null argument into an empty string, which stays set.
+function Set-ProcessEnv([string]$Name, $Value) {
+    if ($null -eq $Value) { [Environment]::SetEnvironmentVariable($Name, [NullString]::Value) }
+    else { [Environment]::SetEnvironmentVariable($Name, [string]$Value) }
 }
 
 # The checkout keeps no credentials (persist-credentials: false), so the push authenticates itself from GH_TOKEN.
@@ -40,12 +47,12 @@ function Invoke-GitPush([string]$Branch) {
         GIT_TRACE2_CONFIG_PARAMS = $null; GIT_TRACE2_ENV_VARS = $null }
     $saved = @{}; foreach ($k in $set.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
     try {
-        foreach ($k in $set.Keys) { [Environment]::SetEnvironmentVariable($k, $set[$k]) }
+        foreach ($k in $set.Keys) { Set-ProcessEnv $k $set[$k] }
         $global:LASTEXITCODE = 0
         $out = & $script:GitCommand push --quiet origin "HEAD:refs/heads/$Branch" 2>&1
         $code = $LASTEXITCODE
     } catch { $out = $_.Exception.Message; $code = -1 }
-    finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) } }
+    finally { foreach ($k in $saved.Keys) { Set-ProcessEnv $k $saved[$k] } }
     if ($code -ne 0) {
         throw ("git push failed with exit code ${code}: " + (@($out | Select-Object -Last 3) -join ' ')).Replace($basic, '***').Replace($token, '***')
     }
@@ -131,9 +138,11 @@ function Invoke-RevertCulprit([string]$Repository, [int]$Minutes, [datetime]$Now
         Invoke-Git fetch --quiet origin '+refs/heads/main:refs/remotes/origin/main' | Out-Null
         # A shallow checkout makes the culprit a root commit, and reverting a root deletes the whole tree.
         $parent = try { Invoke-Git rev-parse --verify --quiet "$redSha^1" } catch { $global:LASTEXITCODE = 0 }
-        if ("$parent" -ne $green[-1].head_sha) { throw "The culprit's parent is not in the local history; check out more of main." }
-        $global:LASTEXITCODE = 0; & $script:GitCommand ls-remote --exit-code --heads origin $branch | Out-Null
-        if ($LASTEXITCODE -eq 0) { $why = "branch $branch exists without a pull request" }
+        if ("$parent" -ne $green[-1].head_sha) { $why = "the culprit's parent is not in the local history, so the checkout holds too little of main to revert it" }
+        else {
+            $global:LASTEXITCODE = 0; & $script:GitCommand ls-remote --exit-code --heads origin $branch | Out-Null
+            if ($LASTEXITCODE -eq 0) { $why = "branch $branch exists without a pull request" }
+        }
     }
     if (-not $why) {
         Invoke-Git switch --quiet -C $branch origin/main | Out-Null

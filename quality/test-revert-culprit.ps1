@@ -142,7 +142,7 @@ Assert ($s.pushAuth -ceq "3|core.keep|$header=True|$header=AUTHORIZATION: basic 
 $seen = $log + (Seen)
 # Variables that were unset before the push are unset again, not left empty.
 $names = 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_CONFIG_KEY_1', 'GIT_CONFIG_VALUE_1', 'GIT_TRACE2_CONFIG_PARAMS', 'GIT_TRACE2_ENV_VARS'
-foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $null) }
+foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, [NullString]::Value) }
 Reset-Scenario; Tick
 Assert (@($names | Where-Object { $null -ne [Environment]::GetEnvironmentVariable($_) }).Count -eq 0 -and ($s.writes -join ',') -eq 'label,push,pr') 'the push leaves git variables that were unset unset, not empty'
 $env:GIT_CONFIG_COUNT = '1'; $env:GIT_CONFIG_KEY_0 = 'core.keep'; $env:GIT_CONFIG_VALUE_0 = 'kept'; $env:GIT_TRACE2_CONFIG_PARAMS = 'http.*'
