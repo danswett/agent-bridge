@@ -3,6 +3,22 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'main-red.ps1')
 $script:GhCommand = 'Fake-Gh'
+# A fake catalog: header comments and non-post-merge suites' tier_jobs must not count.
+$tierPath = [IO.Path]::GetTempFileName()
+Set-Content -LiteralPath $tierPath -Value @'
+#   tier_jobs: [product]
+suites:
+  - id: pwa-ui
+    where: ci.yml pwa-ui
+    tier: post-merge  # WebKit after merge
+    tier_jobs: ['pwa-ui (webkit 1/3)', pwa-e2e, "probe, light"]
+  - id: product
+    tier_jobs: [product]
+  - id: lab
+    tier: blocking
+    tier_jobs: [spikes]
+'@
+$script:CatalogPath = $tierPath
 $script:failures = 0
 $script:checks = 0
 function Assert([bool]$Ok, [string]$Name) {
@@ -13,7 +29,7 @@ function Reset-Scenario {
     $script:s = @{ conclusion = 'failure'; attempt = 1; newest = 100; status = 'completed'; event = 'push'
         branch = 'main'; repo = 'o/r'; path = '.github/workflows/ci.yml'; open = $false
         log = '  Failed A.B.C.Method [1 s]'; unreadable = $false; jobName = 'product'; jobConclusion = 'failure'
-        body = ''; comments = @(); writes = @(); calls = @(); foreign = $false }
+        body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = '' }
 }
 function Fake-Gh {
     $a = $args -join ' '
@@ -37,9 +53,9 @@ function Fake-Gh {
             @{ workflow_runs = @(@{ id = $s.newest; run_attempt = $s.attempt }) } | ConvertTo-Json; return
         }
         '^api repos/o/r/actions/runs/100/jobs' {
-            @{ jobs = @(@{ id = 7; name = $s.jobName; conclusion = $s.jobConclusion }) } | ConvertTo-Json; return
+            @{ jobs = @(@{ id = 7; name = $s.jobName; conclusion = $s.jobConclusion }) + $s.extraJobs } | ConvertTo-Json; return
         }
-        '^api repos/o/r/actions/jobs/7/logs --allow-escape-sequences$' {
+        '^api repos/o/r/actions/jobs/\d+/logs --allow-escape-sequences$' {
             if ($s.unreadable) { $global:LASTEXITCODE = 1; return }
             $s.log; return
         }
@@ -52,7 +68,8 @@ function Fake-Gh {
         '^issue view 9 ' { @{ comments = $s.comments } | ConvertTo-Json -Depth 5; return }
         '^label create main-red ' { $s.writes += 'label'; return }
         '^issue create ' {
-            $s.writes += 'create'; $s.open = $true; $s.body = $args[([array]::IndexOf($args, '--body') + 1)]; return
+            $s.writes += 'create'; $s.open = $true; $s.body = $args[([array]::IndexOf($args, '--body') + 1)]
+            $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; return
         }
         '^issue comment 9 ' {
             $s.writes += 'comment'
@@ -119,5 +136,29 @@ foreach ($over in @(@{ event = 'pull_request' }, @{ branch = 'topic' }, @{ repo 
     Reset-Scenario; foreach ($k in $over.Keys) { $s[$k] = $over[$k] }; Detect
     Assert ($s.writes.Count -eq 0) 'only finished same-repository CI pushes on main can act'
 }
+# Tiered gating B3a (#3210): a post-merge tier failure alerts, labelled, and never feeds a PR verdict.
+Reset-Scenario; $s.conclusion = 'success'; $s.jobConclusion = 'success'; $s.jobName = 'pwa-ui (webkit 1/3)'; Detect
+Assert ($s.writes.Count -eq 0) 'a passing post-merge tier job raises no alert'
+Reset-Scenario; $s.jobName = 'pwa-ui (webkit 1/3)'; Detect
+Assert (($s.writes -join ',') -eq 'label,create' -and $s.title -match 'post-merge tier only' -and
+    $s.body -match '(?m)^Job \(post-merge-tier\): pwa-ui \(webkit 1/3\)$') 'one post-merge tier flake writes a main-red entry labelled post-merge-tier'
+Assert ($s.body -match 'post-merge tier only' -and $s.body -match 'merge verdict' -and
+    -not (($s.calls | ForEach-Object { $_ -join ' ' }) -match 'statuses|check-runs|--add-label|fixes-main')) 'that entry says it never feeds a pull request merge verdict and sets no status or label'
+$s.attempt = 2; Detect
+Assert (($s.writes -join ',') -eq 'label,create,comment' -and $s.open -and
+    $s.comments[0].body -match '(?m)^Job \(post-merge-tier\): pwa-ui') 'a second post-merge tier flake adds another labelled entry and leaves the issue open'
+Reset-Scenario; $s.extraJobs = @(@{ id = 8; name = 'pwa-e2e'; conclusion = 'failure' }); Detect
+Assert ($s.title -match '^Main red: CI failing' -and $s.body -match '(?m)^Job: product$' -and
+    $s.body -match '(?m)^Job \(post-merge-tier\): pwa-e2e$' -and $s.body -notmatch 'post-merge tier only') 'a blocking failure beside a post-merge one stays an ordinary main-red entry'
+Reset-Scenario; $s.jobName = 'pwa-e2e'; $s.extraJobs = @(@{ id = 8; name = 'quality-gate'; conclusion = 'failure' }); Detect
+Assert ($s.title -match 'post-merge tier only' -and $s.body -match '(?m)^Job: quality-gate$') 'the quality-gate aggregate echoing a post-merge failure keeps it post-merge only'
+Reset-Scenario; $s.jobName = 'light'; Detect
+Assert ($s.body -match '(?m)^Job: light$' -and $s.body -notmatch 'post-merge tier only') 'a comma inside a quoted tier job name invents no post-merge job'
+Reset-Scenario; $s.jobName = 'pwa-ui (webkit 1/3)'; $script:CatalogPath = "$tierPath.missing"; Detect; $script:CatalogPath = $tierPath
+Assert ($s.title -match '^Main red: CI failing' -and $s.body -match '(?m)^Job: pwa-ui') 'without catalog tier data every failed job stays blocking'
+$names = @((Get-PostMergeJobs $tierPath) | Sort-Object)
+$expected = @('pwa-ui (webkit 1/3)', 'pwa-e2e', 'probe, light') | Sort-Object
+Assert (($names -join '|') -eq ($expected -join '|')) "only post-merge suites' tier_jobs are post-merge ($($names -join '|'))"
+Remove-Item -LiteralPath $tierPath
 if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 "main-red: $script:checks checks passed"
