@@ -2,14 +2,16 @@
 $ErrorActionPreference = 'Stop'
 $subject = Join-Path $PSScriptRoot 'merge-shepherd.ps1'
 $script:passed = 0; $script:failed = 0
+$script:deployedRule = Get-Content -Raw (Join-Path $PSScriptRoot 'merge-rule.yml')
+function Get-Content { $global:MergeShepherdFake.localRule }
 function gh {
     if ($args.Count -ne 4 -or $args[0] -cne 'api' -or $args[1] -cne 'graphql' -or
         $args[2] -cne '-f' -or $args[3] -notmatch '^query=query\b' -or $args[3] -match '\bmutation\b') {
         throw 'Only the single read-only GraphQL query is allowed.'
     }
-    $script:calls++
-    $global:LASTEXITCODE = $script:exitCode
-    $script:response | ConvertTo-Json -Depth 30 -Compress
+    $global:MergeShepherdFake.calls++
+    $global:LASTEXITCODE = $global:MergeShepherdFake.exitCode
+    $global:MergeShepherdFake.response | ConvertTo-Json -Depth 30 -Compress
 }
 function Status($context, $creator, $description = 'gpt-6.1-sol CLEAN', $state = 'SUCCESS') {
     @{ context = $context; creator = @{ login = $creator }; description = $description; state = $state
@@ -29,13 +31,14 @@ function Case($name, [scriptblock]$change, $eligible = $false, $action = 'HOLD',
         ) } } }) }
     }
     $script:response = @{ data = @{ rateLimit = @{ remaining = 4800; limit = 5000 }
-        repository = @{ pullRequests = @{ pageInfo = @{ hasNextPage = $false }; nodes = @($script:pr) } } } }
-    $script:calls = 0; $script:exitCode = 0
+        repository = @{ rule = @{ text = $script:deployedRule; oid = 'd' * 40 }; pullRequests = @{ pageInfo = @{ hasNextPage = $false }; nodes = @($script:pr) } } } }
+    $script:exitCode = 0; $script:localRule = $script:deployedRule
     try {
         & $change
+        $global:MergeShepherdFake = @{ calls = 0; exitCode = $script:exitCode; response = $script:response; localRule = $script:localRule }
         $rows = @(& $subject | ConvertFrom-Json)
         if ($Reject) { throw 'Expected a read failure, not a plan.' }
-        if ($rows[0].eligible -ne $eligible -or $rows[0].action -cne $action -or $script:calls -ne 1) {
+        if ($rows[0].eligible -ne $eligible -or $rows[0].action -cne $action -or $global:MergeShepherdFake.calls -ne 1) {
             throw "Unexpected plan: $($rows | ConvertTo-Json -Compress)"
         }
         if ($eligible -and $action -eq 'WOULD_MERGE' -and $rows[0].command -cne
@@ -70,6 +73,11 @@ Case 'a later failed receipt replaces an old success' {
 }
 Case 'a pending merge-rule holds' { $pr.commits.nodes[0].commit.status.contexts[0].state = 'PENDING' }
 Case 'sensitive files require a second family even with green merge-rule' { $pr.files.nodes[0].path = 'quality/run.ps1' }
+Case 'untrusted local rules cannot remove the second reader' { $pr.files.nodes[0].path = 'quality/run.ps1'; $script:localRule = $script:deployedRule.Replace('  - quality/**', '') }
+Case 'the configured status-row exception still permits one reader' { $pr.files.nodes[0].path = 'docs/status.md' } $true 'WOULD_MERGE'
+Case 'a security title requires two families' { $pr.title = 'Security: ordinary path' }
+Case 'a security label requires two families' { $pr.labels.nodes = @(@{ name = 'security' }); $pr.labels.totalCount = 1 }
+Case 'a failed second receipt also holds ordinary changes' { $pr.commits.nodes[0].commit.status.contexts += Status 'independent-review-2' 'danswett' 'claude-sonnet-5.5 P1' 'FAILURE' }
 Case 'sensitive two-family exact-head receipts pass' {
     $pr.files.nodes[0].path = 'quality/run.ps1'
     $pr.commits.nodes[0].commit.status.contexts += Status 'independent-review-2' 'agent-bridge-receipts' 'claude-sonnet-5.5 CLEAN'
@@ -89,5 +97,6 @@ Case 'a partial open list fails closed' { $response.data.repository.pullRequests
 Case 'GraphQL partial errors fail closed' { $response.errors = @(@{ message = 'unavailable' }) } -Reject
 Case 'an exhausted budget fails closed' { $response.data.rateLimit.remaining = 499 } -Reject
 Case 'gh failure is not an empty queue' { $script:exitCode = 1 } -Reject
+Case 'missing deployed rules cannot fall back to local rules' { $response.data.repository.rule.text = $null } -Reject
 "Tests: $script:passed passed, $script:failed failed"
 if ($script:failed) { throw "$script:failed merge-shepherd checks failed" }
