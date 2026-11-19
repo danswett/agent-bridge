@@ -3,7 +3,8 @@ using System.Text.Json;
 
 namespace AgentBridge.HomeAssistant;
 
-internal sealed record InboxMessage(string Node, string Rid, string Sender, string Payload, DateTimeOffset QueuedAt, DateTimeOffset? DeliveredAt);
+internal sealed record InboxMessage(string Node, string Rid, string Sender, string Payload, DateTimeOffset QueuedAt, DateTimeOffset? DeliveredAt,
+    DateTimeOffset? StartedAt = null, string? Outcome = null);
 
 internal sealed class DurableInbox
 {
@@ -49,10 +50,44 @@ internal sealed class DurableInbox
         return Load().Find(m => m.Node == node && m.DeliveredAt is null);
     }
 
-    public InboxMessage Deliver(string node, string rid, DateTimeOffset at)
+    public InboxMessage? Find(string node, string rid)
+    {
+        using var held = Lock();
+        return Load().Find(m => m.Node == node && m.Rid == rid);
+    }
+
+    public void ForgetExcept(IReadOnlySet<string> nodes)
+    {
+        using var held = Lock();
+        var messages = Load();
+        if (messages.RemoveAll(m => !nodes.Contains(m.Node)) > 0) { Save(messages); }
+    }
+
+    public void Start(string node, string rid, DateTimeOffset at)
+    {
+        using var held = Lock();
+        var messages = Load();
+        var index = messages.FindIndex(m => m.Node == node && m.DeliveredAt is null);
+        if (index < 0 || messages[index].Rid != rid || messages[index].StartedAt is not null)
+        {
+            throw new InvalidOperationException("Only an unclaimed FIFO head can start delivery.");
+        }
+        messages[index] = messages[index] with { StartedAt = at };
+        Save(messages);
+    }
+
+    public void Forget(string node, string? rid = null)
+    {
+        using var held = Lock();
+        var messages = Load();
+        if (messages.RemoveAll(m => m.Node == node && (rid is null || m.Rid == rid)) > 0) { Save(messages); }
+    }
+
+    public InboxMessage Deliver(string node, string rid, DateTimeOffset at, string outcome = "delivered")
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(node);
         ArgumentException.ThrowIfNullOrWhiteSpace(rid);
+        if (outcome is not ("delivered" or "unconfirmed")) { throw new ArgumentOutOfRangeException(nameof(outcome)); }
         using var held = Lock();
         var messages = Load();
         var index = messages.FindIndex(m => m.Node == node && m.Rid == rid);
@@ -63,7 +98,7 @@ internal sealed class DurableInbox
         {
             throw new InvalidOperationException("Only the oldest queued message can be delivered.");
         }
-        var delivered = message with { Payload = "", DeliveredAt = at };
+        var delivered = message with { Payload = "", DeliveredAt = at, Outcome = outcome };
         messages[index] = delivered;
         Save(messages);
         return delivered;
@@ -95,6 +130,7 @@ internal sealed class DurableInbox
         if (snapshot is null || snapshot.Version != 1 || snapshot.Messages is null ||
             snapshot.Messages.Any(m => m is null || string.IsNullOrWhiteSpace(m.Node) || string.IsNullOrWhiteSpace(m.Rid) ||
                 string.IsNullOrWhiteSpace(m.Sender) || m.Payload is null || (m.DeliveredAt is null && string.IsNullOrWhiteSpace(m.Payload))) ||
+            snapshot.Messages.Any(m => m.Outcome is not (null or "delivered" or "unconfirmed") || (m.DeliveredAt is null && m.Outcome is not null)) ||
             snapshot.Messages.Select(m => (m.Node, m.Rid)).Distinct().Count() != snapshot.Messages.Count)
         {
             throw new InvalidDataException("Invalid durable inbox snapshot.");

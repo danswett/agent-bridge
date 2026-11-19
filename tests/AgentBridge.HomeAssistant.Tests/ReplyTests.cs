@@ -255,7 +255,7 @@ public sealed partial class ReplyTests : IDisposable
         {
             await Pass(c);
             await c.DeliveredAsync();
-            if (Detail.TryGetProperty("reply_ack", out var ack) && acks.LastOrDefault() != ack.GetProperty("rid").GetString())
+            if (Detail.TryGetProperty("reply_ack", out var ack) && ack.GetProperty("outcome").GetString() == "delivered" && acks.LastOrDefault() != ack.GetProperty("rid").GetString())
             {
                 Assert.Equal("delivered", ack.GetProperty("outcome").GetString());
                 acks.Add(ack.GetProperty("rid").GetString()!);
@@ -375,7 +375,7 @@ public sealed partial class ReplyTests : IDisposable
         {
             await Pass(c);
             await c.DeliveredAsync();
-            if (Detail.TryGetProperty("reply_ack", out var a) && acks.LastOrDefault() != a.GetProperty("rid").GetString()) { acks.Add(a.GetProperty("rid").GetString()!); }
+            if (Detail.TryGetProperty("reply_ack", out var a) && a.GetProperty("outcome").GetString() == "delivered" && acks.LastOrDefault() != a.GetProperty("rid").GetString()) { acks.Add(a.GetProperty("rid").GetString()!); }
         }
 
         Assert.Equal(["from A", "from B"], replied.Select(r => r.Text));
