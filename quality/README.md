@@ -948,6 +948,10 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   it would ship nothing, or an untested build, to Arm64 copies. But one self-test flake (#2026) should not
   hold a release: the smallest safe change, proposed to Quality in the B3b PR, retries only that step,
   once, on win-arm64, with a warning naming #2026. `publish-gate` is unchanged; two failures still block.
+  A crash can leave high contrast on, so the retry would skip the contrast transition: on CI,
+  `build/app-self-test.ps1` records the setting before the first attempt, and a later attempt stops
+  what is left of the app, puts the setting back and refuses to run if it cannot
+  (`build/test-app-self-test-desktop.ps1`, fake boundaries).
   Offline test: `quality/test-arm64-waiver.ps1` (catalog suite `arm64-waiver-script`).
 - **The weekly report** (`weekly-report`, [weekly-report.yml](../.github/workflows/weekly-report.yml))
   is how the flake record gets read, so flakes are fixed rather than re-run. Every Monday at 08:00
