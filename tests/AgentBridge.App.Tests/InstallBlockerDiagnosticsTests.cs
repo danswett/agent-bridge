@@ -104,19 +104,37 @@ public sealed class InstallBlockerDiagnosticsTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void A_holder_that_cannot_be_confirmed_keeps_the_confirmed_holders_name_and_file_and_stays_blocked(bool verifyThrows)
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void A_holder_that_cannot_be_confirmed_keeps_the_confirmed_holders_name_and_file_and_stays_blocked(bool verifyThrows, bool reverseHolders)
     {
-        Hold("blocked-runtime.dll");
+        var confirmed = Hold("blocked-runtime.dll");
         vanishing = Hold("second.dll", new(External + 1, 1, "second holder", "", Path.Combine(Path.GetTempPath(), "external", "second.exe")));
         vanishThrows = verifyThrows;
-        var blockers = Probe();
+        // An unreadable first partition would prevent either holder from being confirmed.
+        var blockers = InstallBlockers.Find(root, () => [confirmed, vanishing], files =>
+        {
+            var result = Query(files);
+            if (reverseHolders) { result.Reverse(); }
+            return result;
+        });
         Assert.NotNull(blockers);
         Assert.Contains($"fixture holder (pid {External}) holding {Path.Combine("current", "blocked-runtime.dll")}", blockers, StringComparison.Ordinal);
         Assert.Contains(InstallationFiles.Unknown, blockers, StringComparison.Ordinal);
         Assert.DoesNotContain("second.dll", blockers, StringComparison.Ordinal);
         Assert.DoesNotContain(root, blockers, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_unreadable_first_partition_does_not_name_a_holder_that_was_never_confirmed()
+    {
+        var confirmed = Hold("blocked-runtime.dll");
+        vanishing = Hold("second.dll", new(External + 1, 1, "second holder", "", Path.Combine(Path.GetTempPath(), "external", "second.exe")));
+        vanishThrows = true;
+        var blockers = InstallBlockers.Find(root, () => [vanishing, confirmed], Query);
+        Assert.Equal(InstallationFiles.Unknown, blockers);
     }
 }
 
