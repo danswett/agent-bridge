@@ -13,19 +13,20 @@ public static class InstallationFiles
         public TimeSpan Elapsed => Time.GetElapsedTime(Began) - excluded;
         public TimeSpan Remaining => ReleaseWait - Elapsed;
         public void ExcludeSince(long timestamp) => excluded += Time.GetElapsedTime(timestamp);
-        public async Task<string?> ProbeOnceAsync(Func<string?>? probe, CancellationToken cancellation)
+        public async Task<string?> ProbeOnceAsync(Func<CancellationToken, string?>? probe, CancellationToken cancellation)
         {
             if (probe is null) { return null; }
             var left = Remaining;
             if (left <= TimeSpan.Zero) { return Unknown; }
             using var deadline = new CancellationTokenSource(left, Time);
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation, deadline.Token);
-            try { return await Task.Run(probe, stop.Token).WaitAsync(stop.Token); }
+            // Not resumed on the caller's context: startup waits on this from the UI thread.
+            try { return await Task.Run(() => probe(stop.Token), stop.Token).WaitAsync(stop.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellation.IsCancellationRequested) { return Unknown; }
         }
     }
 
-    public static async Task<string?> AwaitReleaseAsync(Func<string?>? probe, TimeProvider time,
+    public static async Task<string?> AwaitReleaseAsync(Func<CancellationToken, string?>? probe, TimeProvider time,
         CancellationToken cancellation, Action<string>? waiting = null, Action<string>? log = null, Budget? budget = null)
     {
         if (probe is null) { return null; }
@@ -41,7 +42,7 @@ public static class InstallationFiles
         {
             try
             {
-                var held = await Task.Run(probe, stop.Token).WaitAsync(stop.Token);
+                var held = await Task.Run(() => probe(stop.Token), stop.Token).WaitAsync(stop.Token);
                 if (budget.Elapsed >= ReleaseWait) { return last; }
                 if (held is null) { return null; }
                 last = string.IsNullOrWhiteSpace(held) ? Unknown : held;

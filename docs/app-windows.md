@@ -708,7 +708,10 @@ controls consume that same contract; this extraction does not disable or remove 
     releases between queries or changes creation time is unknown, never a guessed filename; holders
     already confirmed in the same check stay named beside it.
     Match PID plus creation time throughout. Include non-executable resources such as `.pri`
-    files, not only DLLs and executables.
+    files, not only DLLs and executables. Quit and the two-minute deadline stop a scan between
+    Restart Manager calls, so it neither bisects further nor names a file (unknown); a call already
+    in flight finishes on its own thread holding the scan, so scans never overlap. The first start
+    after an update that did not take names holders within the same two-minute budget.
     Waiting carries no Installing credit; timeout
     keeps the old install intact with recovery text and the existing 10/20/40/60-minute backoff.
     This path never stops a service or self-elevates; it does not replace the later slot design.
