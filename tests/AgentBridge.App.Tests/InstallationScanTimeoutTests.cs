@@ -118,6 +118,15 @@ public sealed class InstallationScanTimeoutTests
     }
 
     [Fact]
+    public void A_confirmed_holder_beside_an_unchecked_one_is_still_reported_as_a_held_file()
+    {
+        var mixed = new UpdateBlockedException($"fixture (pid 42) holding current\\a.dll; {InstallationFiles.Unknown} for 1 other").Message;
+        Assert.Equal("another program is holding a file in the installation", AppUpdateViewModel.Reason(mixed));
+        Assert.Equal("Windows file holders could not be checked; no file holder was confirmed",
+            AppUpdateViewModel.Reason(new UpdateBlockedException(InstallationFiles.Unknown).Message));
+    }
+
+    [Fact]
     public async Task A_rescan_timing_out_does_not_report_the_previous_holder_as_the_cause()
     {
         var clock = new FakeTimeProvider();
