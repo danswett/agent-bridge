@@ -167,8 +167,11 @@ sealed record ReviewFact(string Author, bool IsBot, string State, string? Commit
 /// <summary>A workflow run's or check run's progress, in GraphQL's words (COMPLETED, SUCCESS...).</summary>
 sealed record RunFact(string Status, string? Conclusion);
 
-/// <summary>A check run or status on the head: success, pending or failure, and GitHub's word for it.</summary>
-sealed record CheckFact(string Name, string State, string? Detail, long? WaivedRunId = null);
+/// <summary>
+/// A check run or status on the head: success, pending or failure, and GitHub's word for it.
+/// <c>PostMerge</c>: a post-merge tier job that hasn't passed, counted as success but shown.
+/// </summary>
+sealed record CheckFact(string Name, string State, string? Detail, long? WaivedRunId = null, bool PostMerge = false);
 
 sealed record PullRequestFacts(
     int Number,
@@ -373,6 +376,10 @@ static class MergeRule
         if (main.Alerts.Count > 0)
             description += $"; {main.Alerts[0]}{More(main.Alerts.Count)}";
         reasons.AddRange(main.Alerts);
+        var later = pr.Checks.Where(c => c.PostMerge).Select(c => $"post-merge, not counted: {c.Name} {c.Detail ?? "pending"}").ToList();
+        if (later.Count > 0)
+            description += $"; {later[0]}{More(later.Count)}";
+        reasons.AddRange(later);
         return new MergeVerdict(state, Truncate(Printable(description)), reasons, sensitive);
     }
 
