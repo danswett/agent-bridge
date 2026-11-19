@@ -432,6 +432,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      Install failure stays fatal. Successful cold downloads stage debs before install and save even on later failure.
      Keys include OS, arch, image, exact dry-run package-list hash and ref hash; restores share only image/list matches.
      PR entries stay PR-scoped; main seeds its own. Bad exact keys cannot be overwritten: `gh cache delete <key>`.
+     Invalid exact-key hits still require authenticated redownloads, but use apt `-qq` to suppress
+     repeated progress, not errors; one warning explains the immutable key and deletion recovery.
+     Prefix-hit downloads and forced fallback proof keep their normal output.
      Fakes model the trusted Release/index/archive chain; hosted Linux cache-hit proof is still required.
      The four subsequent browser
      installs omit `--with-deps`, so they cannot trigger another apt update.
@@ -439,9 +442,16 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      (#2025; outage runs 43039845647 and 43039976393). A healthy but slow cold update
      now has less time per attempt than the old five-minute limit. Forced-proof checks
      below are unchanged.
-     Each of those jobs gets 35 minutes, so a
-     fallback download still leaves time for the tests; the browsers' own download, on a cache
-     miss, is unchanged. To prove that fallback once without waiting for a slow mirror, once this
+     **Retry budget versus the 35-minute job cap:** limits apply per attempt and per mirror,
+     not to the total step. Conservatively including the 30-second kill grace on every attempt,
+     Canonical updates allow `4 * (60 + 30) + 15 + 30 + 60 = 465 s` (7m45s), and downloads
+     allow `3 * (600 + 30) + 5 + 20 = 1915 s` (31m55s). Combined, `2380 s` (39m40s)
+     already exceeds the job's `2100 s`; earlier Azure attempts and its up-to-seven-second
+     DNS probe can add more. The job timeout is the final bound, not a guarantee of test
+     headroom. Local planning/offline dpkg install, browser downloads, setup and tests are
+     outside these network retry budgets; dpkg is deliberately not wrapped in the network
+     timeout. These fakes establish bounds/branches, not hosted cold-run success.
+     To prove that fallback once without waiting for a slow mirror, once this
      `workflow_dispatch` trigger is on `main` (until then a branch's run by hand may not
      start): make a new commit of its own on a throwaway branch from `main` (an empty one,
      `git commit --allow-empty`, with the usual trailers), push the branch, never open a pull
