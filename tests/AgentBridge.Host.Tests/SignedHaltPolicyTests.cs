@@ -19,7 +19,7 @@ public sealed class SignedHaltPolicyTests : IDisposable
     readonly Requests http = new();
 
     public void Dispose() { if (Directory.Exists(folder)) { Directory.Delete(folder, recursive: true); } }
-    ReleaseDiscovery Discovery() => new(folder, http, time, random: () => 0, log: logs.Add);
+    ReleaseDiscovery Discovery(string? machine = null) => new(machine is null ? folder : Path.Combine(folder, machine), http, time, random: () => 0, log: logs.Add);
     static byte[] Point(ECDsa key) => key.ExportParameters(false).Q is var q ? [4, .. q.X!, .. q.Y!] : [];
     static string Pub(ECDsa key) => Codec.Base64Url(Point(key));
     static string Z(DateTimeOffset at) => at.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
@@ -175,6 +175,42 @@ public sealed class SignedHaltPolicyTests : IDisposable
         Assert.Equal((1L, "0.1.7"), (replay.Policy!.Sequence, Assert.Single(replay.Policy.Halted)));
         Assert.EndsWith("(retired key); stored policy kept", logs[^1], StringComparison.Ordinal);
         Assert.Equal(2, (await Trust.OfferAsync(discovery, "cdn", Envelope(TestOnlyKeyB, Payload(2, "")))).Policy!.Sequence);
+    }
+
+    // Retirement follows the pinned slot order, not the order copies reach a machine (#3326 review R3js).
+    [Fact]
+    public async Task R3js_fresh_machine_takes_successor_then_a_late_predecessor_copy_is_refused_and_successor_stays_live()
+    {
+        using var discovery = Discovery();
+        Assert.Equal(1, (await Trust.OfferAsync(discovery, "cdn", Envelope(TestOnlyKeyB, Payload(1, "\"0.1.9\"")))).Policy!.Sequence);
+        var late = await Trust.OfferAsync(discovery, "relay", Envelope(TestOnlyKeyA, Payload(5, "")));
+        Assert.Equal((1L, "0.1.9"), (late.Policy!.Sequence, Assert.Single(late.Policy.Halted)));
+        Assert.EndsWith("(retired key); stored policy kept", logs[^1], StringComparison.Ordinal);
+        Assert.Equal(2, (await Trust.OfferAsync(discovery, "cdn", Envelope(TestOnlyKeyB, Payload(2, "")))).Policy!.Sequence);
+    }
+
+    [Fact]
+    public async Task A_predecessor_only_machine_keeps_taking_it_and_a_successor_floor_still_retires_it_after_a_restart()
+    {
+        using (var onlyA = Discovery("a"))
+        {
+            await Trust.OfferAsync(onlyA, "cdn", Envelope(TestOnlyKeyA, Payload(5)));
+            Assert.Equal(6, (await Trust.OfferAsync(onlyA, "cdn", Envelope(TestOnlyKeyA, Payload(6)))).Policy!.Sequence);
+        }
+        using (var fresh = Discovery("b")) { await Trust.OfferAsync(fresh, "cdn", Envelope(TestOnlyKeyB, Payload(1, "\"0.1.9\""))); }
+        using var restarted = Discovery("b");
+        var late = await Trust.OfferAsync(restarted, "relay", Envelope(TestOnlyKeyA, Payload(7, "")));
+        Assert.Equal((1L, "0.1.9"), (late.Policy!.Sequence, Assert.Single(late.Policy.Halted)));
+        Assert.EndsWith("(retired key); stored policy kept", Assert.Single(logs), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_key_missing_from_the_pinned_slot_order_is_refused()
+    {
+        using var discovery = Discovery();
+        var offered = new VerifiedHaltPolicy(0, "{}", [], 1, time.GetUtcNow().AddDays(1), "k");
+        Assert.Null((await discovery.OfferSignedHaltPolicyAsync("relay", ["other"], _ => offered)).Policy);
+        Assert.EndsWith("(key slot unknown); stored policy kept", Assert.Single(logs), StringComparison.Ordinal);
     }
 
     [Theory]

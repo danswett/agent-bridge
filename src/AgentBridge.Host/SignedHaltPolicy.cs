@@ -13,26 +13,29 @@ public sealed class SignedHaltPolicy
 {
     public const string Domain = "agent-bridge signed halt policy v1\n";
     // Pinned public keys (base64url SEC1 points): two slots so the next key ships before the current one retires.
+    // Slot order is retirement order: a later slot is the successor, and once it is accepted every earlier slot is retired.
     // Empty until SRE provisions; an empty slot trusts nothing, so the legacy GitHub path stays in use.
     public static readonly string[] ProductionKeys = ["", ""];
     public static readonly TimeSpan MaxLifetime = TimeSpan.FromDays(7), Skew = TimeSpan.FromMinutes(5);
     const int Largest = 96 * 1024;
     readonly Dictionary<string, byte[]> keys;
+    readonly string[] slots;
 
     public SignedHaltPolicy(IEnumerable<string> trusted)
     {
         var points = trusted.Where(t => t.Length > 0).Select(t => P256.Point(t, "halt policy key")).ToArray();
         // A key pinned twice (or a key-id collision) is a provisioning error: trust no key rather than throw from
         // Production's static initializer, so signed policies are refused and the legacy path stays, as with empty slots.
-        keys = points.Select(KeyId).Distinct(StringComparer.Ordinal).Count() == points.Length
-            ? points.ToDictionary(KeyId, StringComparer.Ordinal) : new(StringComparer.Ordinal);
+        slots = points.Select(KeyId).ToArray();
+        if (slots.Distinct(StringComparer.Ordinal).Count() != slots.Length) { slots = []; }
+        keys = slots.Length == points.Length ? points.ToDictionary(KeyId, StringComparer.Ordinal) : new(StringComparer.Ordinal);
     }
 
     public static SignedHaltPolicy Production { get; } = new(ProductionKeys);
     public static string KeyId(byte[] point) => Codec.Hex(SHA256.HashData(point))[..16];
 
     public Task<HaltPolicySnapshot> OfferAsync(ReleaseDiscovery discovery, string source, byte[] envelope, CancellationToken cancellationToken = default) =>
-        discovery.OfferSignedHaltPolicyAsync(source, now => Verify(envelope, now), cancellationToken);
+        discovery.OfferSignedHaltPolicyAsync(source, [.. slots], now => Verify(envelope, now), cancellationToken);
 
     internal VerifiedHaltPolicy Verify(byte[] envelope, DateTimeOffset now)
     {

@@ -93,7 +93,8 @@ public sealed partial class ReleaseDiscovery
 
     // The one door for a signed policy from any source (GitHub asset, CDN, relay copy). `verify` throws InvalidDataException
     // naming the refusal; a refusal changes nothing stored, so it never lowers protection. Only a newer sequence lifts a halt.
-    public async Task<HaltPolicySnapshot> OfferSignedHaltPolicyAsync(string source, Func<DateTimeOffset, VerifiedHaltPolicy> verify, CancellationToken cancellationToken = default)
+    // `slots` is the verifier's pinned key ids, oldest slot first: the sole authority on which key retires which.
+    public async Task<HaltPolicySnapshot> OfferSignedHaltPolicyAsync(string source, string[] slots, Func<DateTimeOffset, VerifiedHaltPolicy> verify, CancellationToken cancellationToken = default)
     {
         await turn.WaitAsync(cancellationToken);
         try
@@ -111,10 +112,14 @@ public sealed partial class ReleaseDiscovery
                     var index = floors?.FindIndex(f => f.Kid == offered.Kid) ?? -1;
                     var floor = index >= 0 ? floors![index].Seq : 0;
                     var known = policy.Policy is { Sequence: > 0 } signed && signed.Kid == offered.Kid && signed.Sequence == offered.Sequence ? signed : null;
-                    // Only the key accepted most recently is live: once a successor key is accepted, the earlier key's
-                    // still-unexpired copies would otherwise pass their own floor and undo the successor's halts.
+                    // A key is retired once any key in a later pinned slot has been accepted here, whether or not this machine
+                    // ever saw the retired key: its still-unexpired copies would otherwise pass their own floor and undo the
+                    // successor's halts. Delivery order decided this before (#3326 R3js), so a late predecessor copy took over.
+                    // Keys in the floor that are no longer pinned cannot verify, so they rank nothing.
+                    var slot = Array.IndexOf(slots, offered.Kid);
                     why = offered.Sequence < 1 || offered.Kid is not { Length: > 0 } ? "unsigned" : floors is null ? "floor unreadable"
-                        : index >= 0 && index < floors.Count - 1 ? "retired key" : offered.Sequence < floor ? "older sequence"
+                        : slot < 0 || slots.Distinct(StringComparer.Ordinal).Count() != slots.Length ? "key slot unknown"
+                        : floors.Exists(f => Array.IndexOf(slots, f.Kid) > slot) ? "retired key" : offered.Sequence < floor ? "older sequence"
                         : offered.Sequence - floor > MaxSequenceJump ? "sequence jump too large"
                         : known is not null && (offered.Body != known.Body || offered.Expires != known.Expires) ? "sequence reused" : "";
                     if (why.Length == 0)
@@ -140,7 +145,7 @@ public sealed partial class ReleaseDiscovery
         finally { turn.Release(); }
     }
 
-    // {"v":1,"keys":[{"kid","seq"}]}: each key's highest accepted seq, in first-accepted order (the last is live). null
+    // {"v":1,"keys":[{"kid","seq"}]}: each key's highest accepted seq; list order means nothing (pinned slots rank keys). null
     // means unreadable, which refuses every signed policy: never read as zero. A missing file (first use, or deleted by a
     // local admin) starts from the signed policy still held, never below it.
     List<(string Kid, long Seq)>? Floors(HaltPolicyCache policy)
