@@ -19,8 +19,14 @@ public sealed class SignedHaltPolicy
     const int Largest = 96 * 1024;
     readonly Dictionary<string, byte[]> keys;
 
-    public SignedHaltPolicy(IEnumerable<string> trusted) => keys = trusted.Where(t => t.Length > 0)
-        .Select(t => P256.Point(t, "halt policy key")).ToDictionary(KeyId, StringComparer.Ordinal);
+    public SignedHaltPolicy(IEnumerable<string> trusted)
+    {
+        var points = trusted.Where(t => t.Length > 0).Select(t => P256.Point(t, "halt policy key")).ToArray();
+        // A key pinned twice (or a key-id collision) is a provisioning error: trust no key rather than throw from
+        // Production's static initializer, so signed policies are refused and the legacy path stays, as with empty slots.
+        keys = points.Select(KeyId).Distinct(StringComparer.Ordinal).Count() == points.Length
+            ? points.ToDictionary(KeyId, StringComparer.Ordinal) : new(StringComparer.Ordinal);
+    }
 
     public static SignedHaltPolicy Production { get; } = new(ProductionKeys);
     public static string KeyId(byte[] point) => Codec.Hex(SHA256.HashData(point))[..16];

@@ -98,6 +98,15 @@ public sealed class SignedHaltPolicyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_key_pinned_twice_trusts_no_key_instead_of_throwing()
+    {
+        using var discovery = Discovery();
+        var doubled = new SignedHaltPolicy([Pub(TestOnlyKeyA), Pub(TestOnlyKeyA)]);
+        Assert.Null((await doubled.OfferAsync(discovery, "cdn", Envelope(TestOnlyKeyA, Payload(5)))).Policy);
+        Assert.EndsWith("(unknown key); stored policy kept", Assert.Single(logs), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_replayed_copy_refreshes_until_it_expires_then_stays_stale_with_its_halts_until_a_newer_sequence()
     {
         using var discovery = Discovery();

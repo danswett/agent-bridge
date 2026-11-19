@@ -309,6 +309,25 @@ public sealed class UpdateNowTests : IAsyncLifetime
         Assert.False(restarted.Task.IsCompleted);
     }
 
+    // A signed policy's own expiry, not only the six-hour acceptance age, is checked again at the commit.
+    [Theory]
+    [InlineData(true, 1, UpdateDepartureOutcome.Refused, "policy-unreadable")]
+    [InlineData(false, 1, UpdateDepartureOutcome.Refused, "policy-unreadable")]
+    [InlineData(true, 3600, UpdateDepartureOutcome.Committed, null)]
+    [InlineData(false, 3600, UpdateDepartureOutcome.Committed, null)]
+    public async Task Signed_policy_expiry_during_departure_is_checked_at_commit(bool batch, int expiresInSeconds, UpdateDepartureOutcome outcome, string? code)
+    {
+        policy = new(new(0, """{"v":1,"halted":[]}""", [], Sequence: 1, Expires: Now.AddSeconds(expiresInSeconds)), Now, true);
+        var (phone, ch) = await OpenAsync();
+        var args = Args();
+        args["batch"] = batch;
+        var press = Sign(phone.Key, args);
+        Assert.Equal(UpdateAck.Accepted, (await PressAsync(ch, press)).Outcome);
+        composedOtherHosts = () => { time.Advance(TimeSpan.FromSeconds(2)); return null; };
+        var result = await updates.DepartAsync(RequestOf(press));
+        Assert.Equal((outcome, code), (result.Outcome, result.Code));
+    }
+
     [Fact]
     public async Task Update_now_on_a_quiet_machine_is_accepted_on_one_press()
     {
