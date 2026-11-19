@@ -484,6 +484,7 @@ public sealed class SessionRosterFixtureTests
     [InlineData(false)]
     [InlineData(true)]
     [InlineData(false, false)]
+    [InlineData(true, false)]
     public async Task An_overflowed_runtime_keeps_its_resume_guard_while_it_runs_across_passes_and_restarts(bool restart, bool dated = true)
     {
         using var f = new Fixture();
@@ -508,6 +509,7 @@ public sealed class SessionRosterFixtureTests
             f.Processes.Exit(AgentKind.Copilot, pid);
             await source.RefreshAsync();
             Assert.Null(source.Held);
+            Assert.Empty((HashSet<string>)typeof(SessionSource).GetField("_omitted", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(source)!);
         }
         finally { await source.DisposeAsync(); }
     }
