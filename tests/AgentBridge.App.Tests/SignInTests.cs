@@ -210,6 +210,30 @@ public sealed class SignInTests
     static IReadOnlyList<SignInBanners.Banner> Banners(IReadOnlyList<Session> sessions, bool canSignIn = true, Dictionary<string, SignInBanners.Flow>? flows = null, Dictionary<string, SignInBanners.Resolved>? resolved = null) =>
         SignInBanners.For([new SignInBanners.Source("m1", "node-a", sessions, canSignIn)], flows ?? [], resolved ?? [], DateTimeOffset.Parse("2026-11-05T00:45:00Z"));
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void An_expired_or_unshowable_code_fills_Cancel_not_Try_again_and_a_new_request_restores_the_code_rule(bool refused)
+    {
+        var code = AuthState.ReadCode(Json(Code()))!;
+        var key = SignInBanners.KeyOf("m1", AgentKind.Copilot, "octocat");
+        var banner = Banners([Needing("a")], flows: new() { [key] = new("pending", Code: code) }).Single();
+        var sheet = new SignInSheetViewModel(banner);
+        Assert.False(sheet.CancelIsDefault);
+        sheet.Update(banner with { Code = refused ? AuthState.ReadCode(Json(Code(uri: "https://evil.example/device"))) : null, Expired = !refused });
+        Assert.True(sheet.CancelIsDefault);
+        Assert.True(sheet.CanRetry);
+        Assert.False(sheet.HasCode);
+        sheet.Update(sheet.Banner with { CanSignIn = false });
+        Assert.True(sheet.CancelIsDefault);
+        Assert.False(sheet.CanRetry);
+        sheet.Update(banner with { Code = null });
+        Assert.False(sheet.CancelIsDefault);
+        sheet.Update(banner);
+        Assert.True(sheet.HasCode);
+        Assert.False(sheet.CancelIsDefault);
+    }
+
     [Fact]
     public void One_banner_per_machine_agent_and_account_lists_its_sessions()
     {

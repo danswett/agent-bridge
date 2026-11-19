@@ -1,7 +1,8 @@
 name: Main red
 
 on:
-  workflow_run:
+  # Only main's trusted script runs; the triggering run's code is never checked out.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [CI]
     types: [completed]
     branches: [main]
@@ -10,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: main-red-ci
+  group: main-red
   cancel-in-progress: false
 
 jobs:
@@ -25,11 +26,10 @@ jobs:
       actions: read
       issues: write
     steps:
-      # Only main's trusted copy; never the triggering run's head.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Record main CI verdict
+      - name: Record main CI state on GitHub only
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

@@ -11,9 +11,6 @@ rules:
       # Reads a finished CI run on main only; runs main's copy of the script and never checks
       # out or runs the triggering run's code (see the workflow's header).
       - rerun-known-flakes.yml:14
-      # Main's checkout reads CI metadata/logs only, never the triggering head or artifacts;
-      # the label/issue write is the intentional event-driven alert for S1.
-      - main-red.yml:4
   impostor-commit:
     ignore:
       # Deliberately pinned to #854's reviewed head, which lives on a branch rather than main,

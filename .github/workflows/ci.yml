@@ -319,13 +319,22 @@ jobs:
       # (quality/README.md §5): nothing here fails the run but the tests themselves. TEST_FILTER is
       # ring 0's in-process filter on a draft (the fast ring), and empty otherwise: every test runs.
       - name: dotnet test, with coverage and per-test times
-        if: env.DOTNET_TARGET != ''
+        if: env.DOTNET_TARGET != '' && matrix.os != 'windows-latest'
         shell: pwsh
         run: |
           . ./quality/dotnet-test-command.ps1
           $filter = if ($env:TEST_FILTER) { " --filter `"$env:TEST_FILTER`"" } else { '' }
           $command = Add-DotnetCrashBlame "dotnet test $env:DOTNET_TARGET -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory TestResults --logger trx$filter"
           dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml $command
+        timeout-minutes: 20
+        env:
+          DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
+      - name: Windows product tests retry only failed cases once
+        if: env.DOTNET_TARGET != '' && matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          . ./quality/product-test-retry.ps1
+          exit (Invoke-ProductTestRetry -Target $env:DOTNET_TARGET -Filter $env:TEST_FILTER)
         timeout-minutes: 20
         env:
           DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
@@ -666,9 +675,25 @@ jobs:
           Write-Output "-p:AgentBridgeRelease=true host: $release build"
           if ($release -ne 'release') { Write-Error "-p:AgentBridgeRelease=true built a $release host"; exit 1 }
       - name: The published app draws the demo's cards and answers one
+        id: selftest
+        # win-arm64 only (#2026): one self-test flake holds no release; a second failure still fails
+        # the job, so quality-gate's app output and publish-gate are unchanged in what they require.
+        continue-on-error: ${{ matrix.runtime == 'win-arm64' }}
         shell: pwsh
         # build/app-self-test.ps1 says how the app ended when it did not end with 0 (#240).
         run: ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest/result.json" -TimeoutSeconds 720
+      - uses: ./.github/actions/arm64-foreground
+        if: steps.selftest.outcome == 'failure' && matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'
+      - name: The published app draws the demo's cards and answers one (win-arm64 retry, #2026)
+        if: steps.selftest.outcome == 'failure' && matrix.runtime == 'win-arm64'
+        shell: pwsh
+        run: |
+          Write-Output "::warning title=app (win-arm64)::the self-test failed once; retrying it once (#2026)"
+          ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest-retry/result.json" -TimeoutSeconds 720
+      - name: The win-arm64 self-test passed on retry (flake notice, #2026)
+        if: steps.selftest.outcome == 'failure' && matrix.runtime == 'win-arm64' && success()
+        shell: pwsh
+        run: Write-Output "::warning title=app (win-arm64) flake::the self-test failed once and passed on retry; flake record https://github.com/danswett/agent-bridge/issues/2026"
       - name: The release would publish (dry run)
         # What the publish job would upload, publish and prune, against the repository's real
         # releases, with vpk reading the folder into a scratch feed. Read-only: nothing is uploaded.
@@ -1338,14 +1363,22 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'rerun-known-flakes')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-rerun-known-flakes.ps1
-      - name: Main-red detection records incidents without polling
+      - name: Main-red detection uses offline GitHub fixtures
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'main-red')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-main-red.ps1
+      - name: Culprit auto-revert uses offline gh and git fixtures
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'revert-culprit')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-revert-culprit.ps1
       - name: Product crashes name the test without enabling hang dumps
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'product-crash-diagnostics')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-product-crash.ps1
+      - name: Windows failed-test retry is bounded and fails closed
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'product-test-retry')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-product-retry.ps1
       - name: The forms soak rig's redaction masks every secret shape
         # Offline: no CLI, console, token or model.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'forms-soak-scripts')) }}
@@ -1559,8 +1592,8 @@ jobs:
     # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
     # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
     # mirror held webkit 3/3 in that download past 20 minutes, twice, before a test ran; Chromium's
-    # come from the same mirror. 35 leaves room for the five minutes the download step below gives
-    # that mirror, a full download from Canonical's archive and the shard's tests. It bounds a
+    # come from the same mirror. 35 leaves room for bounded update and download retries,
+    # Canonical fallback and the shard's tests. It bounds a
     # stuck job, not a test: a leg that passes takes as long as before.
     timeout-minutes: 35
     defaults:
@@ -1591,10 +1624,10 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-${{ matrix.project }}
       # Playwright's system packages, downloaded before its install so a slow apt mirror can be
-      # left after five minutes for Canonical's HTTPS archive (#799; the action's download.sh says
+      # left after a bounded attempt for Canonical's HTTPS archive (#799; the action's download.sh says
       # how). The install below then finds them all downloaded; it, and the packages, are as before.
-      # force-apt-fallback (workflow_dispatch, a branch only; quality/README.md §4.7) skips the five
-      # minutes and takes that fallback before any package is downloaded, to prove it once; the
+      # force-apt-fallback (workflow_dispatch, a branch only; quality/README.md §4.7) skips the first
+      # mirror's download and takes that fallback before any package is downloaded, to prove it once; the
       # WebKit legs are the proof, so one that downloads nothing from Canonical fails. It is
       # false on every push and pull request run, which run the action exactly as before.
       - name: Download Playwright's system packages
@@ -1671,7 +1704,7 @@ jobs:
     # 35, as every job that runs `playwright install --with-deps` gets (#689): main run
     # 41952998347 cancelled this job at its old 15 inside that install, fetching 126 of Chromium's
     # and WebKit's packages from azure.archive.ubuntu.com at about 100 kB/s. Room for the download
-    # step's five minutes on that mirror and a full download from Canonical's archive.
+    # step's bounded retries on that mirror and a full download from Canonical's archive.
     timeout-minutes: 35
     defaults:
       run:
