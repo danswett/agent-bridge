@@ -110,6 +110,30 @@ public sealed class PackageProcessesTests
         Assert.Equal("bridge profile unknown host (pid 4242) runs from this installation", why);
     }
 
+    // Windows reads `"C:\Agent Data\\"` as one argument ending in a backslash and `"--pro""file"`
+    // as `--pro"file`, and splits only on spaces and tabs; CommandLine.Split reads each of them
+    // differently, so a near miss must not pass another profile as ours.
+    [Theory]
+    [InlineData("agent-bridge-host", "serve --copilot-home \"C:\\Agent Data\\\\\" --profile work", "default", "host")]
+    [InlineData("agent-bridge-hostw", "serve --copilot-home \"C:\\Agent Data\\\\\" --profile work", "default", "launcher")]
+    [InlineData("AgentBridge", "--background --log \"C:\\Agent Data\\\\\" --profile work", "default", "app")]
+    [InlineData("agent-bridge-host", "serve \"--pro\"\"file\" work", "work", "host")]
+    [InlineData("agent-bridge-host", "serve x\u00A0--profile\u00A0work", "work", "host")]
+    public void A_command_line_windows_reads_differently_cannot_pass_another_profile_as_ours(string name, string args, string updating, string kind)
+    {
+        var why = PackageProcesses.Others(Root, updating, 10, null, [Process(4242, name, args)]);
+
+        Assert.Equal($"bridge profile unknown {kind} (pid 4242) runs from this installation", why);
+    }
+
+    [Fact]
+    public void Our_own_host_with_an_unquoted_program_and_tabs_still_does_not_block()
+    {
+        var observed = Process(20, "agent-bridge-host") with { CommandLine = "agent-bridge-host.exe serve\t--profile  default" };
+
+        Assert.Null(PackageProcesses.Others(Root, "default", 10, null, [observed]));
+    }
+
     [Fact]
     public void An_unreadable_image_still_refuses_even_when_the_arguments_name_our_profile()
     {
