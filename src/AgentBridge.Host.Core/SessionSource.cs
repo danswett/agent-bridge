@@ -74,6 +74,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // read there (for that pass only), and what was last written to it.
     bool _restored;
     List<DiscoveredSession>? _remembered;
+    readonly HashSet<string> _omitted = new(StringComparer.Ordinal); // omitted this run: guards even undated
     string? _saved;
     string? _saveProblem;
 
@@ -420,6 +421,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         var release = false;
         DiscoveryHeld? held = null;
         var overflow = new List<AgentKind>();
+        var replaced = new HashSet<string>(StringComparer.Ordinal);
         if (discover)
         {
             lock (_gate) { _lastDiscovery = _time.GetTimestamp(); }
@@ -453,6 +455,11 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                     found.Add(e.Tracker.Discovered);
                 }
                 gone = [.. _entries.Keys.Where(id => Ended(_entries[id]) || (!live.Contains(id) && !holding.Contains(_entries[id].Tracker.Discovered.Agent)))];
+                // An ended generation whose proven successor was found keeps its row until the
+                // successor's commit replaces it: removed first, a reader saw it neither listed
+                // nor held, and a resume started a second CLI on the successor's transcript.
+                replaced.UnionWith(gone.Where(live.Contains));
+                gone.RemoveAll(replaced.Contains);
                 // Reserve admissions before exposing row changes: readers and launch do not
                 // take _pass, so every omitted live session must already hold its agent.
                 var listed = _entries.Keys.Except(gone).ToHashSet(StringComparer.Ordinal);
@@ -462,6 +469,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 {
                     if (!listed.Contains(candidate.Id))
                     {
+                        // An omitted process stays a resume guard while it runs, across passes and restarts (Save).
+                        if (slots == 0 && _hostId is not null) { (_remembered ??= []).RemoveAll(s => s.Id == candidate.Id); _remembered.Add(candidate); _omitted.Add(candidate.Id); }
                         if (slots == 0) { overflow.Add(candidate.Agent); continue; }
                         slots--;
                     }
@@ -481,6 +490,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             if (!release) { SetHeld(held); }
             else if (held is not null) { SetHeld(Widened(held)); }
             foreach (var id in gone) { Remove(id); }
+            foreach (var id in replaced) { Remove(id, keepRow: true); }
         }
         else
         {
@@ -491,10 +501,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         foreach (var discovered in found.DistinctBy(f => f.Id))
         {
             Entry? entry;
-            lock (_gate)
-            {
-                _entries.TryGetValue(discovered.Id, out entry);
-            }
+            lock (_gate) { entry = replaced.Contains(discovered.Id) ? null : _entries.GetValueOrDefault(discovered.Id); }
             var tracker = entry?.Tracker ?? new SessionTracker(discovered, _options, _time, _hostId);
             // A restored session's boundary, before the transcript is read: what the interrupted run
             // left asking is set aside before the status and its times are worked out (#780).
@@ -567,7 +574,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         // an undated one could be any process given its pid.
         foreach (var s in _remembered ?? [])
         {
-            if (s.ProcessId is not { } pid || s.ProcessStartedAt is null) { continue; }
+            if (s.ProcessId is not { } pid || (s.ProcessStartedAt is null && !_omitted.Contains(s.Id))) { continue; }
             if (!previous.TryGetValue(s.Agent, out var list)) { previous[s.Agent] = list = []; }
             list.Add(new AgentProcess(pid, s.ProcessStartedAt, null));
         }
@@ -1309,11 +1316,12 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         _changes.Writer.TryWrite(new SessionChange(SessionChangeKind.Upserted, session.Id, session, _revision));
     }
 
-    void Remove(string id)
+    // keepRow: a replaced generation's state goes, but its row stays until its successor's commit (Pass).
+    void Remove(string id, bool keepRow = false)
     {
         lock (_gate)
         {
-            if (!_entries.Remove(id, out var entry)) { return; }
+            if (!(keepRow ? _entries.TryGetValue(id, out var entry) : _entries.Remove(id, out entry))) { return; }
             _lastActivity = _time.GetTimestamp();
             _ending.Remove(id);
             _recovery.Remove(id);
@@ -1322,6 +1330,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             _drivers?.Forget(id);
             entry.Timer?.Dispose();
             entry.Timer = null;
+            if (keepRow) { return; }
             _revision++;
             var mark = Watermark();
             foreach (var s in _subscribers) { s.Channel.Writer.TryWrite(new SessionEvent(Events.SessionRemove, new SessionRemoved(id), mark)); }

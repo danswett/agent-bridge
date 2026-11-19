@@ -770,19 +770,13 @@ internal static class RegistrationDiscovery
         var live = new List<DiscoveredSession>();
         foreach (var r in best.Values)
         {
-            if (r.ProcessId <= 0) { if (r.Ended) { ended?.Add(r.SessionId, r); } continue; }
-            if (!running.TryGetValue(r.ProcessId, out var process))
-            {
-                // The current registration says it ended, and its runtime is gone or unreadable: it stays
-                // ended, or a restart's first pass would bring back what it remembered of it (#147).
-                // Only the current one: an older ended copy in another root says nothing.
-                if (r.Ended && (!unread.TryGetValue(r.ProcessId, out var runtime) || OfGeneration(r, runtime))) { ended?.Add(r.SessionId, r); }
-                continue;
-            }
-            if (!OfGeneration(r, process)) { continue; }
-            // An ended session whose process still runs is not a session, and other ways of
-            // finding one (a thread lock) are told so rather than bringing it back.
+            // The current registration says it ended: whatever runs under its pid now (its own runtime,
+            // an unreadable one, or a reused pid), it stays ended, and other ways of finding it (a
+            // thread lock) are told so; only a proven later generation is admitted again
+            // (SessionSource.Successor). Checked before the pid's generation, or a reused pid left the
+            // ended row listed. Only the current one: an older ended copy in another root says nothing.
             if (r.Ended) { ended?.Add(r.SessionId, r); continue; }
+            if (r.ProcessId <= 0 || !running.TryGetValue(r.ProcessId, out var process) || !OfGeneration(r, process)) { continue; }
             // Claude creates its transcript at the first message, so a missing file is a
             // live session with nothing to show yet, not a dead one.
             var transcript = string.IsNullOrWhiteSpace(r.TranscriptPath) ? findTranscript(r.SessionId) : r.TranscriptPath;

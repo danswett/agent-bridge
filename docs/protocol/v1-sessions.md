@@ -396,7 +396,7 @@ These reads use the host's in-memory live source, also used by its fleet registr
 publisher, without Home Assistant reads or a separate roster store. Every `Session`
 is scoped to `hello.machine.id`. The in-memory roster is bounded to 250 sessions;
 overflow holds discovery for the affected agent until a slot is freed, without
-evicting a live row or silently allowing an omitted session to resume.
+evicting a live row or allowing an omitted session to resume: its process stays a resume guard.
 `owner`, `pr` and `finished` carry explicit evidence:
 unknown is not confirmed none or false. Idle does not mean work-finished. Removal bypasses
 upsert coalescing and quiet-session holding once discovery drops a row; list/get and new
@@ -632,8 +632,8 @@ Host-bound roster membership is memory-only: each row requires fresh live discov
 never disk membership to fill in an incomplete pass. `sessions-listed.json` keeps only
 process-generation resume guards: a previously known unreadable runtime holds its agent
 across passes and restarts, without supplying a row. A positively exited or replaced
-process releases that guard. Native discovery may supersede an ended registration only
-with a process proven to have started after that registration's last update.
+process releases that guard. Native discovery supersedes an ended registration only with a
+process born after its last update, the row staying listed until the successor replaces it.
 
 Sessions of the other agents are removed and resumed as usual. `reason` says what holds it, in
 words for a person, at most 512 bytes; a client shows it as it is ("discovery held: …", as the

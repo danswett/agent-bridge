@@ -483,14 +483,16 @@ public sealed class SessionRosterFixtureTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task An_overflowed_runtime_keeps_its_resume_guard_while_it_runs_across_passes_and_restarts(bool restart)
+    [InlineData(false, false)]
+    public async Task An_overflowed_runtime_keeps_its_resume_guard_while_it_runs_across_passes_and_restarts(bool restart, bool dated = true)
     {
         using var f = new Fixture();
         var ids = Enumerable.Range(0, 251).Select(i => $"{i:D8}-0000-4000-8000-000000000000").ToArray();
         for (var i = 0; i < ids.Length; i++)
         {
             f.CopilotSession(ids[i], null);
-            f.Processes.Run(AgentKind.Copilot, 1000 + i, $"node C:/npm/node_modules/@github/copilot/index.js --session-id {ids[i]}");
+            var line = $"node C:/npm/node_modules/@github/copilot/index.js --session-id {ids[i]}";
+            if (dated) { f.Processes.Run(AgentKind.Copilot, 1000 + i, line); } else { f.Processes.RunUndated(AgentKind.Copilot, 1000 + i, line); }
         }
         var options = f.Options(stateFile: Path.Combine(f.Root, "sessions-listed.json"));
         var source = new SessionSource(options, f.Processes, f.Time, hostId: "host-id");
