@@ -19,7 +19,7 @@ using Xunit;
 // writes the prompt the session would record. Real keys into a real console are in
 // InjectorIntegrationTests.
 [Trait("Category", "Network")]
-public sealed class ReplyFlowTests : IAsyncLifetime
+public sealed partial class ReplyFlowTests : IAsyncLifetime
 {
     const string Id = "99999999-9999-4999-8999-999999999999";
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
@@ -30,6 +30,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     readonly FakeInjector injector = new();
     readonly DeliveryGate gate = new();
     readonly SessionDrivers drivers = new();
+    readonly CancellationTokenSource stopping = new();
     readonly ConcurrentQueue<string> channelRejections = new();
     TestRelay relay = null!;
     SessionSource source = null!;
@@ -60,20 +61,27 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        stopping.Cancel();
         await relay.DisposeAsync();
         await source.DisposeAsync();
         f.Dispose();
     }
 
-    ReplyService Replier(bool platform = true, IAgentHaBridgeProbe? g5 = null, TimeProvider? time = null, TranscriptWrites? writes = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new ReplyOptions
-    {
-        CopilotHome = f.CopilotHome,
-        PlatformSupported = platform,
-        ConfirmTimeout = ReplyConfirmation,
-        PollInterval = TimeSpan.FromMilliseconds(25),
-        Time = time ?? TimeProvider.System,
-        Writes = writes,
-    }, gate: gate);
+    ReplyService Replier(bool platform = true, IAgentHaBridgeProbe? g5 = null, TimeProvider? time = null, TranscriptWrites? writes = null,
+        int capacity = 8, TimeSpan? lifetime = null, TimeSpan? submitPatience = null, Action<string>? log = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new ReplyOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = platform,
+            ConfirmTimeout = ReplyConfirmation,
+            PollInterval = TimeSpan.FromMilliseconds(25),
+            Time = time ?? TimeProvider.System,
+            Writes = writes,
+            QueueCapacity = capacity,
+            QueueLifetime = lifetime ?? TimeSpan.FromMinutes(2),
+            SubmitPatience = submitPatience ?? TimeSpan.FromSeconds(1),
+            SubmitAfter = TimeSpan.FromMilliseconds(25),
+        }, log: log, gate: gate)
+        { Stopping = stopping.Token };
 
     AnswerService Answerer(IAgentHaBridgeProbe? g5 = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new AnswerOptions
     {
@@ -471,18 +479,13 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     [InlineData("esc interrupt")]
     [InlineData("ctrl+c interrupt")]
     [InlineData("ctrl+c stop agents")]
-    public async Task A_reply_to_a_working_session_is_delivered_once_copilot_takes_it_at_its_next_step(string hint)
+    public async Task A_reply_to_a_working_session_waits_for_the_turn_to_end_before_typing(string hint)
     {
         Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
         await source.RefreshAsync();
         Assert.Equal(SessionStatus.Working, source.Get(Id)!.Status);
         // While the turn runs, the footer's place holds the turn's own row (#843 review).
         injector.Screen = _ => Working(80, $" \u25D0 Working {hint}");
-        // Copilot writes a steering prompt when its next round starts, after the running tool.
-        injector.OnInject = plan => _ = Task.Delay(700).ContinueWith(_ => Fixture.Append(events,
-            Copilot.ToolDone("t1", second++), Copilot.TurnStart(second++), Prompt(plan.Sends[0].Text, "steering")), TaskScheduler.Default);
-        // The prompt lands 700 ms after the send; the shared 2 s confirm left too little on a loaded
-        // windows-11-arm runner (#1477). A passing run confirms at once, so the wait can be long.
         Serve(Answerer(), new ReplyService(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
         {
             CopilotHome = f.CopilotHome,
@@ -492,7 +495,13 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         }, gate: gate));
         var ch = await OpenAsync();
 
-        Assert.Equal(("delivered", (string?)null), await ReplyAsync(ch, "also run the e2e tests"));
+        var reply = ReplyAsync(ch, "also run the e2e tests");
+        await Task.Delay(150);
+        Assert.Empty(injector.Plans);
+        Fixture.Append(events, Copilot.ToolDone("t1", second++), Copilot.TurnEnd(second++));
+        injector.Screen = _ => CopilotIdle;
+        await source.RefreshAsync();
+        Assert.Equal(("delivered", (string?)null), await reply.WaitAsync(Patience));
     }
 
     // ---- progress (sessions.progress) ----
@@ -546,7 +555,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_reply_typed_into_a_working_session_says_so_the_client_can_show_it_queued()
+    public async Task A_reply_waiting_host_side_reports_typed_only_after_the_session_is_idle()
     {
         Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
         await source.RefreshAsync();
@@ -554,9 +563,15 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text, "steering"));
         var ch = await OpenAsync();
 
-        var (heard, _) = await HearAsync(ch, Ops.SessionReply, new { id = Id, request = Guid.NewGuid().ToString(), text = "and the e2e tests", progress = true });
+        var reply = HearAsync(ch, Ops.SessionReply, new { id = Id, request = Guid.NewGuid().ToString(), text = "and the e2e tests", progress = true });
+        await Task.Delay(150);
+        Assert.Empty(injector.Plans);
+        Fixture.Append(events, Copilot.ToolDone("t1", second++), Copilot.TurnEnd(second++));
+        injector.Screen = _ => CopilotIdle;
+        await source.RefreshAsync();
+        var (heard, _) = await reply.WaitAsync(Patience);
 
-        Assert.Equal([Received, """{"stage":"typed","working":true}"""], heard);
+        Assert.Equal([Received, """{"stage":"typed","working":false}"""], heard);
     }
 
     [Fact]
@@ -730,6 +745,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     {
         // About 2 MB of history from before the host took the session.
         Fixture.Append(events, [.. Enumerable.Range(0, 2000).Select(_ => Copilot.Assistant(new string('x', 1000), second))]);
+        Fixture.Append(events, Copilot.TurnEnd(second++));
         await source.RefreshAsync();
         var replier = Replier();
         Serve(Answerer(), replier);
@@ -837,7 +853,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.DoesNotContain("at the machine", reason);
 
         injector.OnInject = null;
-        (outcome, reason) = await ReplyAsync(ch, "carry on");
+        (outcome, reason) = await ReplyAsync(ch, "another task");
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("did not record the reply", reason);
         Assert.DoesNotContain("at the machine", reason);
@@ -846,7 +862,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         injector.OnInject = plan => Fixture.Append(events,
             Copilot.Event("user.message", new { content = plan.Sends[0].Text, source = "schedule-1" }, second++),
             Copilot.User(plan.Sends[0].Text, second++, agentId: "helper"));
-        Assert.Equal("unconfirmed", (await ReplyAsync(ch, "carry on")).Outcome);
+        Assert.Equal("unconfirmed", (await ReplyAsync(ch, "third task")).Outcome);
         Assert.Equal(3, injector.Plans.Count);
     }
 
@@ -870,7 +886,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         // Writes wake confirmation; only the final explicit tick spends its unchanged budget.
         var clock = new ReplyClock();
         var writes = new TranscriptWrites();
-        Serve(Answerer(), Replier(time: clock, writes: writes));
+        var replier = Replier(time: clock, writes: writes);
+        Serve(Answerer(), replier);
         var confirming = clock.NextTimer();
 
         // Both are typed into a working session before it takes either, and it records one.
@@ -881,7 +898,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         await confirming.WaitAsync(Patience);
         var next = clock.NextTimer();
         if (recordDuringInjection) { injector.OnInject = _ => RecordPrompt(); }
-        var second = ReplyAsync(ch, "yes");
+        var second = OtherProducerAsync();
         await next.WaitAsync(Patience);
         if (!recordDuringInjection)
         {
@@ -897,6 +914,12 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         // That prompt is the record of one of them, never of both.
         Assert.Equal(["delivered", "unconfirmed"], new[] { (await first).Outcome, (await second).Outcome }.Order());
+
+        async Task<(string Outcome, string? Reason)> OtherProducerAsync()
+        {
+            var result = await replier.ReplyAsync(new() { Id = Id, Request = Guid.NewGuid().ToString(), Text = "yes" }, "other producer");
+            return (result.Outcome.ToString().ToLowerInvariant(), result.Reason);
+        }
 
         void RecordPrompt()
         {
@@ -920,7 +943,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
             var timer = base.CreateTimer(callback, state, dueTime, period);
-            Interlocked.Exchange(ref next, null)?.TrySetResult();
+            if (dueTime <= ReplyConfirmation) Interlocked.Exchange(ref next, null)?.TrySetResult();
             return timer;
         }
     }
@@ -1070,7 +1093,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     ];
 
     [Fact]
-    public async Task A_reply_while_an_answer_to_that_session_is_being_typed_is_busy_as_is_one_behind_another_reply()
+    public async Task A_reply_does_not_answer_a_question_and_one_behind_another_reply_waits_host_side()
     {
         Fixture.Append(events, Ask("q1", second++));
         await source.RefreshAsync();
@@ -1083,12 +1106,12 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         injector.Screen = pid => pid == 100 ? CopilotAsking : null;
         var answer = ch.RequestAsync(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), fields = new { pick = "b" } });
         await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the answer to start typing", Patience);
-        Assert.Equal(("busy", "another answer or reply to this session is being delivered"), await ReplyAsync(ch, "hello"));
+        Assert.Equal("refused", (await ReplyAsync(ch, "hello")).Outcome);
         release.SetResult();
         Assert.Equal("delivered", (await answer).GetProperty("result").GetProperty("outcome").GetString());
 
         // And a reply behind a reply.
-        Fixture.Append(events, Copilot.ToolDone("q1", second++));
+        Fixture.Append(events, Copilot.ToolDone("q1", second++), Copilot.TurnEnd(second++));
         injector.Screen = pid => pid == 100 ? CopilotIdle : null;
         await source.RefreshAsync();
         release = new TaskCompletionSource();
@@ -1097,10 +1120,13 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var first = ReplyAsync(ch, "first");
         // After the answer's two writes: its walk, then its Enter (#510).
         await HostWait.UntilAsync(() => injector.Plans.Count == 3, "the first reply to start typing", Patience);
-        Assert.Equal("busy", (await ReplyAsync(ch, "second")).Outcome);
+        var secondReply = ReplyAsync(ch, "second");
+        await Task.Delay(150);
+        Assert.False(secondReply.IsCompleted);
         release.SetResult();
         Assert.Equal("delivered", (await first).Outcome);
-        Assert.Equal(3, injector.Plans.Count);
+        Assert.Equal("delivered", (await secondReply.WaitAsync(Patience)).Outcome);
+        Assert.Equal(4, injector.Plans.Count);
     }
 
     [Fact]
@@ -1373,7 +1399,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Empty(Directory.Exists(Staging) ? Directory.GetFiles(Staging) : []);
         Assert.Equal(1, store.Count);
 
-        Fixture.Append(events, Copilot.Answered("q1", second++), Copilot.ToolDone("q1", second++));
+        Fixture.Append(events, Copilot.Answered("q1", second++), Copilot.ToolDone("q1", second++), Copilot.TurnEnd(second++));
         await source.RefreshAsync();
         Assert.Equal("delivered", (await ReplyAsync(ch, "look", attachments: Files(id))).Outcome);
         Assert.Single(Directory.GetFiles(Staging));
@@ -1438,8 +1464,15 @@ public sealed class ReplyFlowTests : IAsyncLifetime
             lock (Plans) { Plans.Add((processId, plan)); }
             await Gate;
             Holding?.Invoke();
+            if (plan.Proceed?.Invoke() is { } stopped)
+            {
+                lock (Plans) { Plans.RemoveAt(Plans.FindLastIndex(p => ReferenceEquals(p.Plan, plan))); Refused.Add(plan); }
+                return new InjectionResult(InjectionStatus.NothingTyped, "stopped before typing: " + stopped);
+            }
             // As the worker does: the rows each send is held to, read in the same attach, just
             // before its first key; nothing of it, or after it, typed if they read otherwise.
+            var written = 0;
+            var entered = false;
             for (var i = 0; i < plan.Sends.Count; i++)
             {
                 var send = plan.Sends[i];
@@ -1448,15 +1481,25 @@ public sealed class ReplyFlowTests : IAsyncLifetime
                         || (send.Expect ?? []).Any(e => e.Row >= rows.Count || rows[e.Row].TrimEnd(' ') != e.Text.TrimEnd(' '))
                         || (send.Checks ?? []).Any(c => !c.Passes(rows))))
                 {
-                    if (i > 0) { return new InjectionResult(InjectionStatus.Interrupted, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChangedPartway); }
+                    if (i > 0) { return Evidence(new InjectionResult(InjectionStatus.Interrupted, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChangedPartway), written, entered); }
                     lock (Plans) { Plans.RemoveAt(Plans.FindLastIndex(p => ReferenceEquals(p.Plan, plan))); Refused.Add(plan); }
                     return new InjectionResult(InjectionStatus.NothingTyped, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChanged);
                 }
+                written += send.Text.Length;
+                entered |= send.Enter;
                 Sent?.Invoke(i);
+                if (Result is { Status: InjectionStatus.Interrupted, TextWritten: { } count }) return Evidence(Result, count, Result.EnterWritten);
             }
             // A form's answer goes in parts (#510): its walk records nothing, its Enter does.
             if (Result.Status == InjectionStatus.Typed && plan.Sends.Any(s => s.Enter)) { OnInject?.Invoke(plan); }
-            return Result;
+            return Evidence(Result, written, entered);
+
+            InjectionResult Evidence(InjectionResult result, int count, bool? enter) => result with
+            {
+                TextWritten = count,
+                EnterWritten = enter,
+                TextFingerprint = InjectionResult.Fingerprint(string.Concat(plan.Sends.Select(s => s.Text))[..count]),
+            };
         }
 
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
@@ -1486,7 +1529,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     [InlineData("esc interrupt")]
     [InlineData("ctrl+c interrupt")]
     [InlineData("ctrl+c stop agents")]
-    public async Task A_reply_to_a_working_Copilot_in_a_window_under_80_columns_is_refused_and_nothing_is_typed(string hint)
+    public async Task A_reply_to_a_working_Copilot_in_a_narrow_window_waits_for_idle(string hint)
     {
         // There the turn's row shows no shell or vim label, and a box holding only spaces in
         // shell mode draws as empty: the reply could run as a shell command.
@@ -1495,11 +1538,13 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         injector.Screen = _ => Working(79, $" \u25D0 Working {hint}");
         var ch = await OpenAsync();
 
-        var (outcome, reason) = await ReplyAsync(ch, "also run the e2e tests");
-
-        Assert.Equal("refused", outcome);
-        Assert.Contains("reply once the turn ends", reason);
+        var reply = ReplyAsync(ch, "also run the e2e tests");
+        await Task.Delay(150);
         Assert.Empty(injector.Plans);
+        Fixture.Append(events, Copilot.ToolDone("t1", second++), Copilot.TurnEnd(second++));
+        injector.Screen = _ => CopilotIdle;
+        await source.RefreshAsync();
+        Assert.Equal("delivered", (await reply.WaitAsync(Patience)).Outcome);
     }
 
     [Theory]
@@ -1603,7 +1648,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var (outcome, reason) = await ReplyAsync(ch, "go on");
 
         Assert.Equal("unconfirmed", outcome);
-        Assert.Equal("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent and its words are still in the box", reason);
+        Assert.Equal("reply delivery is uncertain after the input box changed; automatic recovery has ended and will not type further keys", reason);
         Assert.Single(injector.Plans);
         Assert.Empty(injector.Refused);
     }
@@ -1693,11 +1738,11 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     // refuses a turn's row there outright, as the reader does one running at the read; at 80 it
     // would show the label, and a row without one is safe (Trust's #843 re-review).
     [InlineData(70, false)]
-    [InlineData(80, true)]
+    [InlineData(80, false)]
     [InlineData(70, false, "ctrl+c interrupt")]
-    [InlineData(80, true, "ctrl+c interrupt")]
+    [InlineData(80, false, "ctrl+c interrupt")]
     [InlineData(70, false, "ctrl+c stop agents")]
-    [InlineData(80, true, "ctrl+c stop agents")]
+    [InlineData(80, false, "ctrl+c stop agents")]
     public async Task A_turn_that_starts_after_the_read_in_a_narrow_window_gets_none_of_the_reply(int width, bool typed, string hint = "esc interrupt")
     {
         const string Idle = " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help";
@@ -1747,7 +1792,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         if (afterWords)
         {
             Assert.Equal("unconfirmed", outcome);
-            Assert.StartsWith("the reply was typed into Copilot's input box, but the box changed before its Enter", reason);
+            Assert.StartsWith("reply delivery is uncertain after the input box changed", reason);
             Assert.False(Assert.Single(injector.Plans).Plan.Sends[0].Enter);
             return;
         }
@@ -1757,16 +1802,13 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     [Theory]
-    // The same, a turn starting after the words went: Home then '!' puts the box in shell mode
-    // and takes the '!' away, so only the footer changes, and under 80 columns the turn's row
-    // says nothing of the mode. No Enter there; at 80 the row would show the label, and the
-    // Enter goes (#843 review, Copilot 4477100508).
+    // A turn starting after the paste prevents Enter at every width, not just narrow windows.
     [InlineData(70, false)]
-    [InlineData(80, true)]
+    [InlineData(80, false)]
     [InlineData(70, false, "ctrl+c interrupt")]
-    [InlineData(80, true, "ctrl+c interrupt")]
+    [InlineData(80, false, "ctrl+c interrupt")]
     [InlineData(70, false, "ctrl+c stop agents")]
-    [InlineData(80, true, "ctrl+c stop agents")]
+    [InlineData(80, false, "ctrl+c stop agents")]
     public async Task A_turn_that_starts_before_the_Enter_in_a_narrow_window_gets_no_Enter(int width, bool entered, string hint = "esc interrupt")
     {
         const string Idle = " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help";
@@ -1783,7 +1825,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
             return;
         }
         Assert.Equal("unconfirmed", outcome);
-        Assert.StartsWith("the reply was typed into Copilot's input box, but the box changed before its Enter", reason);
+        Assert.StartsWith("reply delivery is uncertain after the input box changed", reason);
         Assert.False(Assert.Single(injector.Plans).Plan.Sends[0].Enter);
     }
 
@@ -1842,7 +1884,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var (outcome, reason) = await ReplyAsync(ch, "go on");
 
         Assert.Equal("unconfirmed", outcome);
-        Assert.StartsWith("the reply was typed into Copilot's input box, but the box changed before its Enter", reason);
+        Assert.StartsWith("reply delivery is uncertain after the input box changed", reason);
         Assert.False(Assert.Single(injector.Plans).Plan.Sends[0].Enter);
     }
 

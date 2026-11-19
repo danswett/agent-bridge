@@ -18,6 +18,37 @@ one session at once.
 
 ## The keys (Copilot)
 
+**Idle-only delivery (#2808).** The host keeps ordinary Copilot replies in a per-session,
+in-memory queue while a turn is running or a preceding reply is being pasted/submitted.
+It never uses Copilot's input box as that queue. This safety rule supersedes the
+working-session Enter behavior and the proposed CLI-queue behavior described below.
+Fenced internal retry requests still fail closed rather than waiting past their fence.
+A genuine pre-existing draft retains its distinct refusal; the host never erases it.
+Defaults: eight outstanding fingerprints per session, 64 sessions, two minutes to
+reach the first key. Waiting honors request cancellation and host shutdown. Retries
+with the same peer, text, attachment references and mode share one pending delivery,
+even with new UUIDs; uncertain fingerprints remain deduplicated for two minutes.
+Queue logs correlate request/session IDs, a payload fingerprint and character count,
+never reply or draft text. Queued work and deduplication are **lost on host restart**.
+
+If a paste reflows the box before Enter, the host retains responsibility for it and
+re-reads the box. It submits only an exact matching reply in a complete, anchored,
+non-shell, non-vim-normal box while idle, with fresh transcript and worker screen guards.
+A dialog gets no keys; later replies wait behind recovery instead of being refused
+because the agent's text is pending. Recovery stays inside delivery admission and
+has a submit-patience deadline (15 seconds by default), or ends on shutdown/process change.
+For a native partial write, only the exact prefix proven by the worker's key-record
+count may be cleared with Ctrl+E, Ctrl+U, guarded by its exact screen rows. An edited
+draft or unknown write count gets no recovery keys. Transcript text, including a late
+identical record, never decides whether recovery may submit this delivery's text.
+While queued/recovering the request remains pending; no negative receipt precedes
+later submission. An uncertain final receipt means recovery has ended: no later
+background keys. Dialogs/unknown writes can require inspection at the machine.
+Bounded ownership metadata lets a later reply clear a still-exact host-written prefix
+under its own admission, never submit the old reply. Edited drafts remain untouched.
+A successful clear consumes that ownership and ends recovery immediately; matching
+text typed afterwards belongs to the person and cannot authorize another clear.
+
 Ported from agent-ha-bridge (`hooks/decision-inject.ps1`, `Send-CopilotSessionPrompt`):
 the words as one burst, 300 ms, then a submit key of its own. The CLI takes a burst
 as a paste. Enter submits as before; #2468's queue path uses Ctrl+Q while working.
