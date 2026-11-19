@@ -2021,7 +2021,7 @@ public class MergeRuleTests
           - id: arm
             where: ci.yml app, product
             tier: post-merge
-            tier_jobs: [app (win-arm64), product (windows-11-arm)]
+            tier_jobs: [app (win-arm64), product (windows-11-arm), product]
           - id: typo
             where: ci.yml light
             tier: postmerge
@@ -2034,6 +2034,7 @@ public class MergeRuleTests
     [InlineData("product (windows-11-arm)", null, true, "success")]
     [InlineData("light", "failure", true, "failure")]
     [InlineData("app (win-x64)", "failure", true, "failure")]
+    [InlineData("product (ubuntu-latest)", "failure", true, "failure")]
     [InlineData("app (win-arm64)", "failure", false, "failure")]
     public void Main_green_ignores_but_shows_post_merge_jobs_and_an_unknown_tier_or_no_catalog_still_holds(
         string failed, string? conclusion, bool catalog, string state)
@@ -2051,7 +2052,8 @@ public class MergeRuleTests
             var output = new StringWriter();
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            Assert.Contains($"Main job [{(catalog && failed != "light" && failed != "app (win-x64)" ? "post-merge" : "required")}]: {failed}: ",
+            // A bare family name in tier_jobs never excuses a failed blocking instance of it.
+            Assert.Contains($"Main job [{(catalog && failed.Contains("arm", StringComparison.Ordinal) ? "post-merge" : "required")}]: {failed}: ",
                 output.ToString(), StringComparison.Ordinal);
         }
         finally { Directory.Delete(folder, recursive: true); }
@@ -2198,8 +2200,9 @@ public class MergeRuleTests
     {
         var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
+        // A blocking shard: pwa-ui's WebKit shards are post-merge in the catalog beside these rules.
         var target = scenario is "product-infra" or "build-failure" or "prior-test-failure" || scenario.EndsWith("then-cancelled", StringComparison.Ordinal) ? "product (ubuntu-latest)"
-            : scenario == "wrong-job" ? "light" : "pwa-ui (webkit 3/3)";
+            : scenario == "wrong-job" ? "light" : "pwa-ui (chromium 3/3)";
         var attempt = scenario is "rerun-used" or "prior-test-failure" or "infra-then-infra" or "skipped-after-failure" ? 2 : 1;
         object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
         var setup = target.StartsWith("product", StringComparison.Ordinal) ? "Run actions/setup-dotnet@v6"

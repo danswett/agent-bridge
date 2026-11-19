@@ -278,7 +278,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    run and why.
 7. **GitHub mechanics:** ci.yml's `plan` job checks the catalog, then runs the selector through
    `quality/plan.ps1`: ring 1 on a pull request and on `main`, and on a draft the fast ring
-   (`-FastRing`: ring 0, Linux only, §2).
+   (`-FastRing`: ring 0, Linux only, §2). Its `tiers` output and the summary's Tier column give
+   each gated job's tier, blocking or post-merge, and each post-merge leg by exact name (item 9).
 
    **Main: first attempts coalesce, re-runs run apart.** First attempts of pushes to `main` share
    the concurrency group `ci-main`, which never cancels a run in progress: at most one of them
@@ -610,6 +611,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      label (`main_green.exempt_labels`) from Quality, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.
+   - Tiers (#3208): a catalog suite with `tier: post-merge` names exact ci.yml job display names
+     in `tier_jobs` (Arm64 packaging and product's `windows-11-arm` leg, both installers, pwa-ui's
+     WebKit shards and pwa-e2e). The merge rule reads `catalog.yml` beside its rules and counts
+     only blocking jobs: on main a post-merge job never holds, alerts or keeps evidence unusable,
+     and the log marks it `[post-merge]`; on a pull request's CI run a post-merge job that
+     failed or is running counts as passed and the description adds `post-merge, not counted:`.
+     Any other tier, a renamed job, or a missing or unreadable catalog blocks. The arm64 waiver
+     applies first, so a waived job still needs its receipt. ci.yml's own gate (quality-gate)
+     still waits on those jobs until B2.
    - The standing rule (owner decision 2026-11-08, replacing the 2026-11-05 label of #955):
      Copilot and Codex reviews are optional extras, and the receipts are the gate. A PR needs a
      success independent-review receipt on its head from a listed poster and no Copilot review,

@@ -161,6 +161,8 @@ static class MergeRuleCommand
         public MergeRuleConfig Config { get; } = config;
         public string Slug { get; } = slug;
         public bool Arm64Waiver { get; } = arm64Waiver;
+        /// <summary>The catalog's post-merge job names (quality/README.md §4.9): shown, never counted.</summary>
+        public IReadOnlySet<string> PostMerge { get; init; } = new HashSet<string>();
         public int GraphQLPoints { get; private set; }
         public int? GraphQLRemaining { get; private set; }
         public int RestCalls { get; private set; }
@@ -213,7 +215,7 @@ static class MergeRuleCommand
         {
             baseCommit = null;
         }
-        var dirty = ChangedFiles.Git(root, "status", "--porcelain", "--", "quality/merge-rule.yml", "tools/AgentBridge.Quality").Trim().Length > 0;
+        var dirty = ChangedFiles.Git(root, "status", "--porcelain", "--", "quality/merge-rule.yml", "quality/catalog.yml", "tools/AgentBridge.Quality").Trim().Length > 0;
         return new(head, baseCommit, dirty, otherRules);
     }
 
@@ -246,7 +248,10 @@ static class MergeRuleCommand
         var post = options.ContainsKey("post");
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         var switchValue = (variable ?? Environment.GetEnvironmentVariable)("ARM64_WAIVER");
-        var session = new Session(github, config, slug, config.Arm64Waiver?.Active(now, switchValue) == true);
+        var session = new Session(github, config, slug, config.Arm64Waiver?.Active(now, switchValue) == true)
+        {
+            PostMerge = PostMergeJobs(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, "catalog.yml"), output),
+        };
         var problems = 0;
 
         session.Main = ReadMain(session, out var mainLog);
@@ -424,6 +429,22 @@ static class MergeRuleCommand
     }
 
     /// <summary>
+    /// The catalog beside the rules' post-merge job names. Missing or unreadable, every job blocks.
+    /// </summary>
+    static IReadOnlySet<string> PostMergeJobs(string path, TextWriter output)
+    {
+        try
+        {
+            return Catalog.Load(path).PostMergeJobs();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or FormatException or YamlDotNet.Core.YamlException)
+        {
+            output.WriteLine($"::warning::merge-rule: no post-merge tier ({e.Message}); every job counts.");
+            return new HashSet<string>();
+        }
+    }
+
+    /// <summary>
     /// Main's newest completed product evidence, with each named job's latest attempt.
     /// Missing or unreadable facts never grant green.
     /// </summary>
@@ -472,13 +493,17 @@ static class MergeRuleCommand
             bool Holds(string name, JsonElement? real) => real is { } r && r.GetProperty("conclusion").GetString() is var c && c != "success" && !Waived(name, c);
             bool Unresolved(JsonElement job) => Holds(job.GetProperty("name").GetString()!, LastReal(job.GetProperty("name").GetString()!, all));
             bool Exempt(JsonElement job) => Infra(job) && !Unresolved(job);
-            bool Green(JsonElement job) => job.GetProperty("status").GetString() == "completed"
+            bool Green(JsonElement job) => session.PostMerge.Contains(job.GetProperty("name").GetString() ?? "")
+                || (job.GetProperty("status").GetString() == "completed"
                 && (job.GetProperty("conclusion").GetString() == "success"
                     || (job.GetProperty("conclusion").GetString() == "skipped" && !Unresolved(job))
                     || Exempt(job)
-                    || Waived(job.GetProperty("name").GetString() ?? "", job.GetProperty("conclusion").GetString()));
+                    || Waived(job.GetProperty("name").GetString() ?? "", job.GetProperty("conclusion").GetString())));
             bool Passed(string name)
             {
+                // An exact post-merge job never holds main, run or not; a family name still checks its instances.
+                if (session.PostMerge.Contains(name) && !latest.Keys.Any(k => k.StartsWith($"{name} (", StringComparison.Ordinal)))
+                    return true;
                 if (!name.Contains(" (", StringComparison.Ordinal))
                 {
                     var instances = latest.Where(j => j.Key == name || j.Key.StartsWith($"{name} (", StringComparison.Ordinal)).ToList();
@@ -509,16 +534,16 @@ static class MergeRuleCommand
                     held.Add($"unexpected leg {string.Join(", ", unexpected)}");
                 else if (exact.Count == 1)
                     held.AddRange(exact[0].Where(n => latest[n].GetProperty("conclusion").GetString() != "success"
-                        && !Exempt(latest[n])));
+                        && !Exempt(latest[n]) && !session.PostMerge.Contains(n)));
                 else if (exact.Count > 1)
                     held.Add("mixed or ambiguous leg families");
                 else if (possible.Count > 0)
-                    held.AddRange(possible.SelectMany(f => f).Except(present, StringComparer.Ordinal));
+                    held.AddRange(possible.SelectMany(f => f).Except(present, StringComparer.Ordinal).Where(n => !session.PostMerge.Contains(n)));
                 else
                     held.Add("mixed leg families");
             }
-            bool Required(string name) => present.Contains(name) || config.MainGreen.Jobs.Any(n =>
-                n == name || (!n.Contains(" (", StringComparison.Ordinal) && name.StartsWith($"{n} (", StringComparison.Ordinal)));
+            bool Required(string name) => !session.PostMerge.Contains(name) && (present.Contains(name) || config.MainGreen.Jobs.Any(n =>
+                n == name || (!n.Contains(" (", StringComparison.Ordinal) && name.StartsWith($"{n} (", StringComparison.Ordinal))));
             var alerts = latest.Where(j => Required(j.Key) && Exempt(j.Value))
                 .OrderBy(j => !RerunUsed(j.Value)).ThenBy(j => j.Key, StringComparer.Ordinal)
                 .Select(j => RerunUsed(j.Value) ? $"INFRA-PERSISTENT {j.Key}: rerun used, open an issue" : $"ALERT infra-only {j.Key}: rerun needed (once)")
@@ -542,7 +567,7 @@ static class MergeRuleCommand
             log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {MergeRule.Short(sha!)}; "
                 + (held.Count == 0 ? "named jobs passed." : $"named jobs not green: {string.Join(", ", held)}.")
                 + "\n" + string.Join("\n", latest.OrderBy(j => j.Key, StringComparer.Ordinal).Select(j =>
-                    $"Main job [{(j.Key == "plan" || Required(j.Key) ? "required" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."))
+                    $"Main job [{(j.Key == "plan" || Required(j.Key) ? "required" : session.PostMerge.Contains(j.Key) ? "post-merge" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."))
                 + string.Concat(alerts.Select(a => $"\n{a}"));
             var fact = held.Count == 0
                 ? new("success", $"{config.Base}'s CI {MergeRule.Short(sha!)} named jobs passed")
@@ -602,12 +627,13 @@ static class MergeRuleCommand
                 var product = latest.Where(j => Product(j.Key)).ToList();
                 if (usable && product.Count == 0)
                     throw new InvalidOperationException("CI job list has no product family");
-                // A classification-skipped family passes over; a retry skipped after any instance ran doesn't.
-                usable = usable && !product.Any(j => Incomplete(j.Value)) && (product.All(j => j.Value.GetProperty("conclusion").GetString() != "skipped")
+                // A classification-skipped family passes over; a retry skipped after any instance ran
+                // doesn't. A post-merge instance still running doesn't hold the evidence back.
+                usable = usable && !product.Any(j => Incomplete(j.Value) && !session.PostMerge.Contains(j.Key)) && (product.All(j => j.Value.GetProperty("conclusion").GetString() != "skipped")
                     || jobs.Any(a => Product(a.GetProperty("name").GetString()) && a.GetProperty("conclusion").GetString() != "skipped"));
                 usable = usable && !latest.Any(j => (config.MainGreen.Jobs.Any(n => n.Split(" (", StringSplitOptions.None)[0] == j.Key.Split(" (", StringSplitOptions.None)[0])
                     || config.MainGreen.LegFamilies.Any(f => f.Contains(j.Key, StringComparer.Ordinal)))
-                    && Incomplete(j.Value));
+                    && Incomplete(j.Value) && !session.PostMerge.Contains(j.Key));
                 yield return (run.Clone(), latest, jobs, usable);
             }
             seen += runs.GetArrayLength();
@@ -722,7 +748,7 @@ static class MergeRuleCommand
         var node = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
         if (node.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException($"{session.Slug} has no pull request #{number}.");
-        var facts = ParseFacts(node, session.Config, session.Arm64Waiver);
+        var facts = ParseFacts(node, session.Config, session.Arm64Waiver, session.PostMerge);
         return history ? WithReceiptHistory(session, facts) : facts;
     }
 
@@ -848,7 +874,7 @@ static class MergeRuleCommand
     /// One pull request's facts from the GraphQL fragment above. Its files come from FetchFull;
     /// read without checks, it's marked not fully read, which can fail it but never pass it.
     /// </summary>
-    internal static PullRequestFacts ParseFacts(JsonElement pr, MergeRuleConfig config, bool arm64Waiver = false)
+    internal static PullRequestFacts ParseFacts(JsonElement pr, MergeRuleConfig config, bool arm64Waiver = false, IReadOnlySet<string>? postMerge = null)
     {
         var head = pr.GetProperty("headRefOid").GetString()!;
         var reviews = pr.GetProperty("reviews").GetProperty("nodes").EnumerateArray()
@@ -881,7 +907,7 @@ static class MergeRuleCommand
                     .ToList();
             checksRead = commit.TryGetProperty("checkSuites", out var suites);
             if (checksRead)
-                (run, codeScanning, checks) = ReadChecks(suites, config, arm64Waiver);
+                (run, codeScanning, checks) = ReadChecks(suites, config, arm64Waiver, postMerge);
             // Every other status counts like a check; merge-rule is this verdict, and the receipts
             // are judged on their own terms above.
             var receiptContexts = ReceiptContexts(config);
@@ -919,7 +945,7 @@ static class MergeRuleCommand
     /// rule's own workflows are left out (they're running while it judges), and CodeQL's workflow
     /// and code scanning's check are read apart, for their own messages.
     /// </summary>
-    static (RunFact? CodeQlRun, RunFact? CodeQlCheck, List<CheckFact> Checks) ReadChecks(JsonElement connection, MergeRuleConfig config, bool arm64Waiver)
+    static (RunFact? CodeQlRun, RunFact? CodeQlCheck, List<CheckFact> Checks) ReadChecks(JsonElement connection, MergeRuleConfig config, bool arm64Waiver, IReadOnlySet<string>? postMerge)
     {
         var suites = connection.GetProperty("nodes");
         RunFact? codeqlRun = null, codeqlCheck = null;
@@ -993,9 +1019,15 @@ static class MergeRuleCommand
                     && suite.GetProperty("app") is { ValueKind: JsonValueKind.Object } source
                     && source.GetProperty("slug").GetString() == "github-actions"
                     && c.State == "failure" && config.Arm64Waiver?.Allows(c.Name, c.Detail) == true
-                        ? c with { State = "success", WaivedRunId = id } : c).ToList();
+                        ? c with { State = "success", WaivedRunId = id } : c)
+                // A post-merge CI job (the catalog's tier) is shown, not counted: after the waiver,
+                // so a waived job still needs its receipt.
+                .Select(c => c.State != "success" && workflow == "CI" && postMerge?.Contains(c.Name) == true
+                    && suite.GetProperty("app") is { ValueKind: JsonValueKind.Object } source
+                    && source.GetProperty("slug").GetString() == "github-actions"
+                        ? c with { State = "success", PostMerge = true } : c).ToList();
             checks.AddRange(jobs);
-            var waivedFailure = conclusion == "FAILURE" && jobs.Any(c => c.WaivedRunId is not null)
+            var waivedFailure = conclusion == "FAILURE" && jobs.Any(c => c.WaivedRunId is not null || c.PostMerge)
                 && jobs.All(c => c.State == "success")
                 && jobs.Any(c => c.Name == "quality-gate" && c.Detail == "success")
                 && !Truncated(suite.GetProperty("checkRuns"), runs.Count);
