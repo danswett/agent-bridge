@@ -29,7 +29,18 @@ public sealed partial class HostRosterReader
 
     public RosterCheck Update(RelayRoster? relay, string account)
     {
-        lock (sync) { return UpdateCore(relay, account); }
+        // Also the verifier's own lock, which the fleet reader takes to read its serving hosts.
+        lock (sync)
+        lock (Verified ?? sync)
+        {
+            return UpdateCore(relay, account);
+        }
+    }
+
+    // The pinned, verified roster, whatever the host-sign switch says: fleet membership (#2643).
+    internal RosterVerifier? Pinned(string account)
+    {
+        lock (sync) { return problem is null && pin?.Account == account && Verified?.Account == account ? Verified : null; }
     }
 
     RosterCheck UpdateCore(RelayRoster? relay, string account)

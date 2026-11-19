@@ -69,6 +69,19 @@ public sealed class HostRosterPinTests : IDisposable
     }
 
     [Fact]
+    public void Fleet_membership_comes_from_the_pinned_roster_whatever_the_host_sign_switch_says()
+    {
+        Assert.Null(new FleetTrust(new HostRosterReader(PathName, () => w.Now), folder, () => RosterFixture.Account).Membership());
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
+        Assert.False(reader.Verified!.AcceptHostSign);
+        Assert.Same(reader.Verified, new FleetTrust(reader, folder, () => RosterFixture.Account).Membership());
+        Assert.Null(new FleetTrust(reader, folder, () => "another-account").Membership());
+        Assert.Null(new FleetTrust(reader, folder, () => null).Membership());
+    }
+
+    [Fact]
     public void Matching_pin_retains_the_verified_reader_without_changing_the_pin()
     {
         Pin();

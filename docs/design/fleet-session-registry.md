@@ -253,9 +253,10 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
 
 ## Freshness and replay (5 s and 60 s)
 
-The reader checks/cache below are target RC behavior, not implemented by `FleetList.Parse`.
 The relay's own received-time/sequence checks are not independent reader verification
-(`RosterFields.cs:110-141`).
+(`RosterFields.cs:110-141`). `RelayFleetRoster.Read` now implements the order rule, the
+in-memory cache, the purge of unlisted machines, and pinned-roster membership (#2643). The 60 s
+`at` rule, `registry-subscribe` and signature checks are still to come.
 
 * A host sends a new snapshot when any listed field changes, debounced to at most one per 2 s,
   plus a heartbeat every 20 s even if nothing changed. A heartbeat is a new snapshot: `seq` rises
@@ -291,7 +292,7 @@ The relay's own received-time/sequence checks are not independent reader verific
 
 ## Offline machines and the cache
 
-This cache is planned RC work; today's fleet op reads the connected relay, not a disk cache.
+The host's fleet reader keeps this cache in memory only (#2643), cleared on each new relay connection.
 
 An offline machine appears in the list (name, `online: false`, last seen) so a reader can say
 "machine is off". Its sessions are not served as live: the relay drops them from memory when the
