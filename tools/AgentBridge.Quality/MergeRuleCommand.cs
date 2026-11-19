@@ -462,11 +462,20 @@ static class MergeRuleCommand
                 return infra;
             }
             // A job's last real result in one run, across its attempts: a success, or a failure that
-            // isn't infra-only. Null when every attempt was infra-only, skipped or neutral.
-            JsonElement? LastReal(string name, List<JsonElement> jobs) => jobs
-                .Where(j => j.GetProperty("name").GetString() == name && (j.GetProperty("conclusion").GetString() == "success"
-                    || (j.GetProperty("conclusion").GetString() is not (null or "skipped" or "neutral") && !Infra(j))))
-                .OrderBy(RunAttempt).ThenBy(j => j.GetProperty("id").GetInt64()).Cast<JsonElement?>().LastOrDefault();
+            // isn't infra-only. Null when every attempt was infra-only, skipped or neutral. Newest
+            // first, stopping at the first real result, so a superseded failure's annotations are
+            // never read (an unreadable obsolete note must not turn a successful retry red).
+            JsonElement? LastReal(string name, List<JsonElement> jobs)
+            {
+                foreach (var j in jobs.Where(j => j.GetProperty("name").GetString() == name)
+                    .OrderByDescending(RunAttempt).ThenByDescending(j => j.GetProperty("id").GetInt64()))
+                {
+                    var conclusion = j.GetProperty("conclusion").GetString();
+                    if (conclusion == "success" || (conclusion is not (null or "skipped" or "neutral") && !Infra(j)))
+                        return j;
+                }
+                return null;
+            }
             bool Waived(string name, string? conclusion) => session.Arm64Waiver && config.Arm64Waiver?.Allows(name, conclusion) == true;
             // A real result holds unless it passed or is a waived arm64 failure, wherever it was found.
             bool Holds(string name, JsonElement? real) => real is { } r && r.GetProperty("conclusion").GetString() is var c && c != "success" && !Waived(name, c);
@@ -680,9 +689,12 @@ static class MergeRuleCommand
         using var notes = session.Rest($"repos/{session.Slug}/check-runs/{job.GetProperty("id").GetInt64()}/annotations?per_page=100");
         if (notes.RootElement.ValueKind != JsonValueKind.Array || notes.RootElement.GetArrayLength() >= 100)
             return false;
-        var failures = notes.RootElement.EnumerateArray().Where(n => n.ValueKind != JsonValueKind.Object
-            || !n.TryGetProperty("annotation_level", out var level) || level.ValueKind != JsonValueKind.String || level.GetString() == "failure").ToList();
-        return failures.Count > 0 && failures.All(n => n.ValueKind == JsonValueKind.Object && n.TryGetProperty("message", out var message)
+        // A missing or non-string level is malformed, not a lesser note: it can't vouch for the failure.
+        if (notes.RootElement.EnumerateArray().Any(n => n.ValueKind != JsonValueKind.Object
+            || !n.TryGetProperty("annotation_level", out var level) || level.ValueKind != JsonValueKind.String))
+            return false;
+        var failures = notes.RootElement.EnumerateArray().Where(n => n.GetProperty("annotation_level").GetString() == "failure").ToList();
+        return failures.Count > 0 && failures.All(n => n.TryGetProperty("message", out var message)
             && message.ValueKind == JsonValueKind.String && InfraEvidence.IsMatch(message.GetString()!));
     }
 
