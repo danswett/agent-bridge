@@ -545,7 +545,8 @@ public sealed class HostManager
     // before its begin (what the new version announces) is recorded over the first's.
     // preflight: names what already keeps the update from replacing the installation, or null; asked
     // before anything is recorded or stopped, so an update that cannot finish costs no host stop
-    // (#1092: a service holding a file made a retry loop that dropped the relay every 3 minutes).
+    // (#1092: a service holding a file made a retry loop that dropped the relay every 3 minutes),
+    // and asked again after the stop, before apply, for what took a file during the stop's waits.
     public async Task WaitForInstallationFilesAsync(Func<string?>? preflight, Action<string>? waiting = null, TimeProvider? time = null, InstallationFiles.Budget? fileBudget = null)
     {
         fileBudget ??= new InstallationFiles.Budget(time ?? Time);
@@ -585,6 +586,9 @@ public sealed class HostManager
         try
         {
             await stop;
+            // The stop waits for probes and other profiles, minutes at most, after the last scan;
+            // a process taking an image meanwhile refuses here and the host comes back (#2884 review).
+            await CheckInstallationFilesAsync(preflight, fileBudget, fresh: true);
             // Held while applying, so a Quit on another thread waits for it rather than finding the
             // host stopped and starting it under the update.
             lock (updating)
@@ -613,10 +617,17 @@ public sealed class HostManager
         finally { lock (updating) { installing = false; } }
     }
 
-    public async Task CheckInstallationFilesAsync(Func<string?>? preflight, InstallationFiles.Budget budget)
+    public async Task CheckInstallationFilesAsync(Func<string?>? preflight, InstallationFiles.Budget budget, bool fresh = false)
     {
         budget.LockedFiles ??= () => InstallationFiles.LockedImages(layout.AppFolder);
-        if (await budget.ProbeOnceAsync(preflight, quit.Token) is { } blockers) { throw new UpdateBlockedException(blockers); }
+        string? blockers;
+        try { blockers = await budget.ProbeOnceAsync(preflight, quit.Token, fresh); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            Log($"installation file holders could not be checked: {e.Message}");
+            blockers = InstallationFiles.Unknown;
+        }
+        if (blockers is not null) { throw new UpdateBlockedException(blockers); }
     }
 
     // The app quitting: an update that had stopped the host, or was stopping it, and not applied,
