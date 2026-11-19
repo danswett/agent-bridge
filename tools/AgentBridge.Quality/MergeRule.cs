@@ -45,6 +45,7 @@ sealed class MergeRuleConfig
         config.MainGreen.ExemptPaths ??= [];
         config.MainGreen.Jobs ??= [];
         config.MainGreen.LegFamilies ??= [];
+        config.MainGreen.InfraSteps ??= [];
         config.CopilotWaiver ??= new();
         config.CopilotWaiver.Labels ??= [];
         config.CopilotWaiver.OneReviewPaths ??= [];
@@ -62,6 +63,9 @@ sealed class MergeRuleConfig
         if (config.MainGreen.LegFamilies.Any(f => f is null || f.Count == 0 || f.Any(string.IsNullOrWhiteSpace)
             || f.Distinct(StringComparer.Ordinal).Count() != f.Count))
             missing.Add("valid main_green.leg_families");
+        if (config.MainGreen.InfraSteps.Any(p => string.IsNullOrWhiteSpace(p.Key)
+            || p.Value is null || p.Value.Count == 0 || p.Value.Any(string.IsNullOrWhiteSpace)))
+            missing.Add("valid main_green.infra_steps");
         if (config.SensitivePaths.Count == 0) missing.Add("sensitive_paths");
         // With nowhere to read the second review from, one review would stand in for two on a
         // sensitive change, so the config refuses to load rather than guess.
@@ -106,6 +110,7 @@ sealed class MainGreenConfig
     public List<string> ExemptPaths { get; set; } = [];
     public List<string> Jobs { get; set; } = [];
     public List<List<string>> LegFamilies { get; set; } = [];
+    public Dictionary<string, List<string>> InfraSteps { get; set; } = [];
 }
 
 sealed class Arm64WaiverConfig
@@ -145,7 +150,10 @@ sealed class CopilotWaiverConfig
 /// run) or error (couldn't be read), and the reason, which a blocked pull request's description
 /// starts with.
 /// </summary>
-sealed record MainFact(string State, string Reason);
+sealed record MainFact(string State, string Reason)
+{
+    public IReadOnlyList<string> Alerts { get; init; } = [];
+}
 
 /// <summary>A commit status on the head: GitHub keeps every one posted, newest last by time.</summary>
 sealed record StatusFact(string Context, string State, string? Description, string? Creator, DateTimeOffset CreatedAt);
@@ -360,6 +368,11 @@ static class MergeRule
         var description = state == "success"
             ? $"{(copilot ? $"Copilot reviewed {sha}" : needsSecond ? "Two model families' reviews on file" : "Independent review on file")}; every check passed{(copilot ? "; independent review on file" : "")}{(main.State != "success" ? $"; fixes-main tests-only bypass used" : "")}"
             : Capitalize(string.Join("; ", reasons));
+        // Blocking reasons first: alerts are informational, and the 140-character cut must never
+        // drop a hold. The detailed log names every alert.
+        if (main.Alerts.Count > 0)
+            description += $"; {main.Alerts[0]}{More(main.Alerts.Count)}";
+        reasons.AddRange(main.Alerts);
         return new MergeVerdict(state, Truncate(Printable(description)), reasons, sensitive);
     }
 

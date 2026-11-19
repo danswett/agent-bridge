@@ -618,6 +618,18 @@ suites:
     where: ci.yml light; main-red.yml
     status: exists
 
+  - id: revert-culprit
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/revert-culprit.ps1, quality/test-revert-culprit.ps1, quality/main-red.ps1, quality/red-minutes.ps1, .github/workflows/revert-culprit.yml]
+    command: pwsh -NoProfile -File quality/test-revert-culprit.ps1
+    where: ci.yml light; revert-culprit.yml
+    status: exists
+
   - id: beta-acceptance
     validation_plan: native
     kind: e2e
@@ -879,8 +891,8 @@ suites:
     runner: hosted
     # The system-package download and offline install before browser-only installs (#799, #689):
     # against stand-ins for npx, sudo and apt-get, it leaves the Azure mirror for Canonical's
-    # archive on Azure DNS/update timeout or exhausted network retries; cache warnings require
-    # the offline install to succeed, and package errors fail at once.
+    # archive on Azure DNS/update timeout or exhausted network retries; cached debs install only
+    # after matching live signed indexes, and package errors fail at once.
     triggers: [.github/actions/playwright-system-packages/**]
     command: bash .github/actions/playwright-system-packages/test.sh
     where: ci.yml light

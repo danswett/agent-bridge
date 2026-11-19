@@ -32,7 +32,7 @@ static class InstallBlockers
             if (!OperatingSystem.IsWindows()) { return null; }
             if (!VelopackLocator.IsCurrentSet) { return InstallationFiles.Unknown; }
             if (VelopackLocator.Current.RootAppDir is not { Length: > 0 } root) { return InstallationFiles.Unknown; }
-            return Find(root, () => Directory.EnumerateFiles(Path.Combine(root, "current"), "*", SearchOption.AllDirectories).ToList(), Held);
+            return Find(root, () => InstallationFiles.LockedImages(Path.Combine(root, "current")).ToList(), Held);
         }
         catch (InvalidOperationException e)
         {
