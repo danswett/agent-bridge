@@ -2121,8 +2121,10 @@ public class MergeRuleTests
     [InlineData("runner-never-started", "success")]
     [InlineData("no-step-data", "failure")]
     [InlineData("empty-step-data", "failure")]
-    [InlineData("rerun-used", "failure")]
+    [InlineData("rerun-used", "success")]
+    [InlineData("infra-then-infra", "success")]
     [InlineData("prior-test-failure", "failure")]
+    [InlineData("no-evidence", "failure")]
     [InlineData("npm-ci", "failure")]
     [InlineData("system-packages", "failure")]
     [InlineData("product-infra", "success")]
@@ -2134,7 +2136,7 @@ public class MergeRuleTests
         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
         var target = scenario is "product-infra" or "build-failure" or "prior-test-failure" ? "product (ubuntu-latest)"
             : scenario == "wrong-job" ? "light" : "pwa-ui (webkit 3/3)";
-        var attempt = scenario is "rerun-used" or "prior-test-failure" ? 2 : 1;
+        var attempt = scenario is "rerun-used" or "prior-test-failure" or "infra-then-infra" ? 2 : 1;
         object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
         var setup = target.StartsWith("product", StringComparison.Ordinal) ? "Run actions/setup-dotnet@v6"
             : scenario == "npm-ci" ? "Run npm ci"
@@ -2168,30 +2170,41 @@ public class MergeRuleTests
             }).ToArray();
         if (scenario != "no-step-data")
             jobs.Single(j => (string)j["name"]! == target)["steps"] = scenario == "empty-step-data" ? [] : steps;
-        // Attempt 1 failed its tests; the rerun then failed in setup, before the tests ran.
-        if (scenario == "prior-test-failure")
+        // Attempt 1 failed its tests (or, for infra-then-infra, its setup); the rerun then failed in
+        // setup, before the tests ran.
+        if (scenario is "prior-test-failure" or "infra-then-infra")
             jobs = [.. jobs, new Dictionary<string, object?>
             {
                 ["id"] = 99, ["name"] = target, ["status"] = "completed", ["conclusion"] = "failure",
-                ["run_attempt"] = 1, ["runner_id"] = 1, ["steps"] = new[] { Step(setup, "success"), Step("Run tests", "failure") },
+                ["run_attempt"] = 1, ["runner_id"] = 1, ["steps"] = scenario == "infra-then-infra"
+                    ? new[] { Step(setup, "failure"), Step("Run tests", "skipped") }
+                    : new[] { Step(setup, "success"), Step("Run tests", "failure") },
             }];
+        // A step's name says where it failed, never why: only network or runner evidence exempts it.
+        var evidence = scenario switch
+        {
+            "no-evidence" => "Process completed with exit code 1.",
+            "product-infra" => "Process completed with exit code 124.",
+            _ => "Response status code does not indicate success: 503 (Service Unavailable).",
+        };
         var github = new FakeGitHub(GraphQLPullRequest(Head),
             mainRuns: MainRuns((5, "completed", scenario == "cancelled-run" ? "cancelled" : "failure", attempt)),
-            mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
+            mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }),
+            annotations: JsonSerializer.Serialize(new[] { new { annotation_level = "failure", message = evidence } }));
         var output = new StringWriter();
         MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
         var posted = Assert.Single(github.Posted);
         Assert.Contains($" {state} merge-rule ", posted, StringComparison.Ordinal);
-        if (state == "success")
+        if (state == "failure")
+            Assert.DoesNotContain("INFRA", posted, StringComparison.Ordinal);
+        else if (attempt > 1)
+            Assert.Contains($"INFRA-PERSISTENT {target}: rerun used, open an issue", posted, StringComparison.Ordinal);
+        else
         {
             Assert.Contains("ALERT infra-only", posted, StringComparison.Ordinal);
             Assert.Contains("rerun needed (once)", posted, StringComparison.Ordinal);
             Assert.Contains(target, output.ToString(), StringComparison.Ordinal);
         }
-        else
-            Assert.DoesNotContain("ALERT infra-only", posted, StringComparison.Ordinal);
-        if (attempt > 1)
-            Assert.Contains($"HOLD infra-only {target}: it failed again after its one rerun", output.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2203,6 +2216,7 @@ public class MergeRuleTests
         Assert.Equal("Held by the label 'hold'; ALERT infra-only pwa-ui (webkit 1/3): rerun needed (once) (+2 more)", held.Description);
         Assert.Equal("held", WeeklyReport.Category(held.Description));
         Assert.Equal("held", WeeklyReport.Category("ALERT infra-only light: rerun needed (once); Held by the label 'hold'"));
+        Assert.Equal("held", WeeklyReport.Category("INFRA-PERSISTENT light: rerun used, open an issue; Held by the label 'hold'"));
     }
 
     static string WriteConfig(bool arm64Waiver = false)
@@ -2303,7 +2317,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]") : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -2377,6 +2391,8 @@ public class MergeRuleTests
                     }),
                 }));
             }
+            if (path.Contains("/check-runs/", StringComparison.Ordinal) && path.Contains("/annotations", StringComparison.Ordinal))
+                return JsonDocument.Parse(annotations);
             if (failStatuses && path.Contains("/statuses", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             return JsonDocument.Parse(path.Contains("/statuses", StringComparison.Ordinal)
