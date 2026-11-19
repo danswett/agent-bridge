@@ -9,6 +9,9 @@ public sealed partial class HaConnector
 {
     int QueueCount(string sessionId) => ridLogs.TryGetValue(sessionId, out var log) ? log.Queued.Count : 0;
 
+    // The Send presses remembered for a session. For tests.
+    internal int PressesKept(string sessionId) => ridLogs.TryGetValue(sessionId, out var log) ? log.Presses.Count : 0;
+
     static bool OwnerPress(RidLog log, string? press) => press is not null && log.Presses.TryGetValue(press, out var agent) && !agent;
 
     static void ClassifyPress(RidLog log, string press, bool uncertain)

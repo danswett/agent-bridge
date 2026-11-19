@@ -472,4 +472,93 @@ public sealed partial class ReplyTests
         }
         Assert.Equal(["message 1", "message 2", "message 3"], replied.Select(r => r.Text));
     }
+
+    // #3224: an agent payload the watch missed and REST could not read is reconciled, once read, with the Send
+    // already taken as the agent's meanwhile. A press made before that payload went in is never its companion.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_recovered_payload_settles_its_unread_companion_press_but_never_an_earlier_one(bool ownerFirst)
+    {
+        await using var c = await Asking();
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        ha.GetFailsFor = id => id == SessionEntities.ReplyPayload(Node);
+        if (ownerFirst) { await Do(c, ha.Press(SessionEntities.Submit(Node))); }
+        ha.SendFromCard(Node, "agent message", driver: "agent", rid: "r-1");
+        if (!ownerFirst) { await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user")); }
+        ha.GetFailsFor = null;
+        await Pass(c, 20);
+        if (ownerFirst) { await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user")); }
+        Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+        await CardCloses(c);
+        Assert.Equal("agent message", Assert.Single(replied).Text);
+    }
+
+    // #3224: a split of two missed publishes (the older's stamp, the newer's attributes) clears once the newer
+    // completes later on Home Assistant's clock, not only on an unrelated third publish.
+    [Fact]
+    public async Task A_split_of_two_missed_publishes_clears_when_the_newer_one_completes()
+    {
+        await using var c = await Asking();
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        var older = ha.SendFromCard(Node, "older", driver: "agent", rid: "r-1");
+        var newer = ha.SendFromCard(Node, "newer", driver: "agent", rid: "r-2");
+        var split = newer.State with { State = older.State.State, LastChanged = older.State.LastChanged, LastUpdated = newer.State.LastUpdated!.Value.AddMilliseconds(-500) };
+        ha.States[newer.EntityId] = split;
+        await Do(c, new HaTrigger(newer.EntityId, split));
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        ha.States[newer.EntityId] = newer.State;
+        await Do(c, newer);
+        Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+        await CardCloses(c);
+        Assert.Equal("newer", Assert.Single(replied).Text);
+    }
+
+    // #3224: a watch report of the new stamp with the previous message's attributes does not hide the complete
+    // payload REST reads at that stamp: it is queued and acknowledged, never refused.
+    [Fact]
+    public async Task A_split_watch_report_does_not_hide_the_complete_payload_read_at_the_same_stamp()
+    {
+        await using var c = await Asking();
+        var first = ha.SendFromCard(Node, "first", driver: "agent", rid: "r-1");
+        await Do(c, first);
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        var second = ha.SendFromCard(Node, "second", driver: "agent", rid: "r-2");
+        await Do(c, second with { State = second.State with { Attributes = first.State.Attributes } });
+        Assert.Equal(("r-2", "queued"), (Ack.GetProperty("rid").GetString(), Ack.GetProperty("outcome").GetString()));
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+        await CardCloses(c);
+        Assert.Equal(["first", "second"], replied.Select(r => r.Text));
+    }
+
+    // #3224: Send presses are remembered up to a bound; an older one read again is never taken anew, so an
+    // agent's press forgotten that way can never become the owner's.
+    [Fact]
+    public async Task Send_presses_are_kept_bounded_and_an_evicted_agent_press_read_again_is_never_the_owners()
+    {
+        await using var c = await Asking();
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        var presses = new List<HaTrigger>();
+        for (var n = 1; n <= 70; n++)
+        {
+            c.Observe(ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
+            presses.Add(ha.Press(SessionEntities.Submit(Node), "agent-user"));
+            c.Observe(presses[^1]);
+            await Pass(c);
+        }
+        Assert.InRange(c.PressesKept(A), 1, 64);
+        c.Observe(presses[0]);
+        await Pass(c);
+        Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+    }
 }
