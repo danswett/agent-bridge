@@ -57,21 +57,29 @@ static class InstallBlockers
                     ? InstallationFiles.Unknown : null;
             }
             var names = new List<string>();
+            var unconfirmed = 0;
             foreach (var p in found.Take(MostNamed))
             {
-                var file = HeldFile(files, p, query);
-                if (file is null) { return InstallationFiles.Unknown; }
+                // One holder that releases or can't be re-queried must not hide another's confirmed file.
+                string? file = null;
+                try { file = HeldFile(files, p, query); }
+                catch (Exception e) when (Unreadable(e)) { AppLog.Write($"installation file holder {p.Name} (pid {p.Pid}) could not be confirmed: {e.Message}"); }
+                if (file is null) { unconfirmed++; continue; }
                 names.Add($"{p.Name} ({(p.Service.Length > 0 ? p.Service + ", " : "")}pid {p.Pid}) holding {Path.GetRelativePath(root, file)}");
             }
-            return string.Join(", ", names) + (found.Count > MostNamed ? $" and {found.Count - MostNamed} more" : "");
+            if (names.Count == 0) { return InstallationFiles.Unknown; }
+            return string.Join(", ", names) + (found.Count > MostNamed ? $" and {found.Count - MostNamed} more" : "")
+                + (unconfirmed > 0 ? $"; {InstallationFiles.Unknown} for {unconfirmed} other" : "");
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception
-            or InvalidOperationException or ArgumentException or NotSupportedException or DllNotFoundException or EntryPointNotFoundException)
+        catch (Exception e) when (Unreadable(e))
         {
             AppLog.Write($"installation file holders could not be checked: {e.Message}");
             return InstallationFiles.Unknown;
         }
     }
+
+    static bool Unreadable(Exception e) => e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception
+        or InvalidOperationException or ArgumentException or NotSupportedException or DllNotFoundException or EntryPointNotFoundException;
 
     // OpenProcess with limited query rights works for elevated and other users' processes, which
     // Process.MainModule does not; null when the path still can't be read.
