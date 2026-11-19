@@ -382,10 +382,16 @@ public partial class App : Application
     // Closing the window keeps the app in the notification area, where its toasts come from.
     void OnWindowClosing(Microsoft.UI.Windowing.AppWindowClosingEventArgs e)
     {
-        if (quitting || tray is null) { return; }
-        e.Cancel = true;
-        window?.HideToTray();
+        if (!quitting && tray is not null)
+        {
+            e.Cancel = true;
+            window?.HideToTray();
+            return;
+        }
+        CompleteRun();
     }
+
+    void CompleteRun() => Program.CompleteRun();
 
     void Quit()
     {
@@ -413,7 +419,7 @@ public partial class App : Application
             if (d is not null) { await d.DisposeAsync(); }
         });
         if (options.SelfTest is not null) { AppLog.Write("self-test: closing the window and exiting"); }
-        if (window is null) { Exit(); return; }
+        if (window is null) { CompleteRun(); Exit(); return; }
         // Window.Close disconnects UI Automation, and that cross-apartment call pumps messages: a
         // window-position message still waiting is then handled by a window already half torn down,
         // and WinUI faults in CWindowChrome::UpdateBridgeWindowSizePosition (0xC0000005, #1537, seen
@@ -421,9 +427,10 @@ public partial class App : Application
         // left waiting to be delivered mid-close.
         var closing = window;
         closing.AppWindow.Hide();
-        if (!closing.DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { closing.Close(); Exit(); }))
+        if (!closing.DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { closing.Close(); CompleteRun(); Exit(); }))
         {
             closing.Close();
+            CompleteRun();
             Exit();
         }
     }
