@@ -18,6 +18,14 @@ function Reset-Scenario {
 function Fake-Gh {
     $a = $args -join ' '
     $s.calls += ,@($args)
+    if ($args[0] -eq 'issue' -and $args[1] -in @('list', 'view')) {
+        $fields = if ($args[1] -eq 'list') { 'number,body,author' } else { 'comments' }
+        $json = [array]::IndexOf($args, '--json')
+        if ($json -lt 0 -or $args.Count -ne $json + 2 -or $args[$json + 1] -isnot [string] -or
+            $args[$json + 1] -cne $fields) {
+            throw "Expected --json '$fields' as one final string argument"
+        }
+    }
     switch -Regex ($a) {
         '^api repos/o/r/actions/runs/100$' {
             @{ id = 100; conclusion = $s.conclusion; status = $s.status; run_attempt = $s.attempt
@@ -56,6 +64,18 @@ function Fake-Gh {
     }
 }
 function Detect { Invoke-MainRed -RunId 100 -Repository 'o/r' | Out-Null }
+foreach ($fields in @(@('number', 'body', 'author'), @('number body author'))) {
+    Reset-Scenario; $rejected = $false
+    try { Fake-Gh issue list --repo o/r --state open --label main-red --limit 100 --json @fields | Out-Null }
+    catch {
+        if ($_.Exception.Message -notlike 'Expected --json *') { throw }
+        $rejected = $true
+    }
+    Assert $rejected "fake refuses malformed JSON fields: $($fields -join ' ')"
+}
+Reset-Scenario; $lookupError = $null
+try { Get-MainRedIssue 'o/r' | Out-Null } catch { $lookupError = $_.Exception.Message }
+Assert ($null -eq $lookupError) "issue lookup sends one comma-joined JSON field argument ($lookupError)"
 Reset-Scenario; Detect
 Assert (($s.writes -join ',') -eq 'label,create') 'red creates one labelled issue'
 Assert ($s.body -match 'product' -and $s.body -match 'A.B.C.Method' -and $s.body -match 'https://github.com/o/r/actions/runs/100') 'issue names failed jobs, tests and run'
