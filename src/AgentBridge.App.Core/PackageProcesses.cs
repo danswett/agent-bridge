@@ -43,14 +43,31 @@ public static partial class PackageProcesses
     static string? Profile(string? commandLine, string kind, out bool demo)
     {
         demo = false;
-        if (string.IsNullOrWhiteSpace(commandLine)) { return null; }
-        var args = CommandLine.Split(commandLine).Skip(1).ToArray();
+        if (PlainArguments(commandLine) is not { } args) { return null; }
         demo = kind == "app" && args.Any(a => a is "--demo" or "--self-test" or "--self-test-history-scroll" or "--self-test-live-list");
         if (kind != "app" && args.FirstOrDefault() != "serve") { return null; }
         var options = args.Select((a, i) => (a, i)).Where(x => x.a.StartsWith("--profile", StringComparison.Ordinal)).ToArray();
         if (options.Length == 0) { return "default"; }
         if (options is not [{ a: "--profile", i: var at }] || at + 1 >= args.Length || !ProfileFolders.IsValidProfile(args[at + 1])) { return null; }
         return args[at + 1];
+    }
+
+    // The arguments after the program, read exactly as Windows would only in the plain form our
+    // own launches use: no quotes after the program, separated by spaces and tabs. CommandLine.Split
+    // is only close to Windows (`"C:\dir\\"`, `"--pro""file"`, other whitespace), and a near miss
+    // could read another profile as ours, so any other form is unreadable identity.
+    static string[]? PlainArguments(string? commandLine)
+    {
+        if (string.IsNullOrEmpty(commandLine) || commandLine[0] is ' ' or '\t') { return null; }
+        var quoted = commandLine[0] == '"';
+        var end = quoted ? commandLine.IndexOf('"', 1) + 1 : commandLine.IndexOfAny([' ', '\t']);
+        if (quoted && end == 0) { return null; }
+        if (end < 0) { end = commandLine.Length; }
+        var rest = commandLine.AsSpan(end);
+        if ((!quoted && commandLine.AsSpan(0, end).Contains('"')) || rest.Contains('"')
+            || (rest.Length > 0 && rest[0] is not (' ' or '\t'))) { return null; }
+        foreach (var c in rest) { if (char.IsWhiteSpace(c) && c is not (' ' or '\t')) { return null; } }
+        return rest.ToString().Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
     }
 
     static IEnumerable<Observed> Running()
