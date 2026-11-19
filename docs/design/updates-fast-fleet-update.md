@@ -234,6 +234,34 @@ updater without it remains policy unknown. `ObservedUpdater` uses known halts, e
 to hide offers and refuse downloads and installation, re-reading the snapshot at each boundary.
 This shared guard does not replace the host's signed admission and departure checks.
 
+### 4.1 Signed policy (#3307)
+
+The owner approved a signed update policy, the same bytes from any source (GitHub asset, CDN, relay copy). The
+envelope is `{"alg":"ES256","kid","payload","sig"}`. `payload` is base64url of exact JSON bytes
+`{"v":1,"seq","issued","expires","halts"}` (`halts` is the `ops/halts.json` object). `sig` is strict low-S DER
+P-256 over `"agent-bridge signed halt policy v1\n" + kid + "\n" + payload bytes`. The signed bytes are never
+re-serialized, so there is no canonical-JSON ambiguity: reformatting breaks the signature.
+
+**Verify.** `SignedHaltPolicy.OfferAsync` is the one door for every source. It reuses the roster's P-256 point and
+DER rules. `kid` is the first 16 hex digits of SHA-256(point), and it selects one of two key slots pinned in the
+build. Over 96 KiB, unsigned, malformed, wrong algorithm, unknown key, bad signature, not yet valid (5 minute
+skew), lifetime over 7 days, expired, older `seq`, and the same `seq` with other content: each is refused, logged
+with that reason, and leaves the stored policy and halts untouched. A refusal never counts as "no halts" or "ok".
+An accepted policy is fresh for 6 hours and never past `expires`. A replayed copy can refresh it only until
+`expires`. Only a higher `seq` may lift a halt. Once a signed policy is held, the legacy GitHub digest path is
+skipped.
+
+**Keys.** SRE generates and holds the P-256 key and provides only the public point for a slot. Rotation: ship the
+next point in the second slot, sign with it, then retire the old point in a later build. Revocation means a build
+without that slot (no in-policy revoked list yet). Both production slots are empty until provisioned, so every
+signed copy is refused and the legacy path stays in use.
+
+**Not proven.** A local admin who edits the state file can forge a high `seq`, which only blocks later policies
+(fail closed). Revocation is no faster than a build. Delivery (publisher, CDN and relay fetch) is not built
+yet. Until it is, the legacy path still trusts GitHub TLS plus the asset digest.
+A build without this change drops `seq` when it rewrites the state file, so a rollback below it would reset
+the floor. Sequencing rule: embed a production key only in a release later than one that already carries this
+verifier, so every rollback target keeps `seq`.
 ## 5. One press, Update all, and limits
 
 **One machine.** Update now is the card's primary wherever `canUpdateNow`. A busy machine gets
