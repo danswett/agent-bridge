@@ -1551,6 +1551,14 @@ three-rejection budget (the real HA ban count is unknown). Only an explicit `yes
 and authorizes one attempt; a rejection stops it until consent is given again, even after
 restart. Neither this command nor a declined prompt contacts HA; malformed input changes nothing.
 
+If the masked prompt receives zero characters, it reports "Nothing was entered (0 characters)"
+instead of a JWT-format error. In PowerShell, the installed host can also read a pasted token
+without requiring its executable on PATH:
+
+```powershell
+Get-Clipboard | & "$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe" ha token set
+```
+
 ## Troubleshooting
 
 ### Refused tokens are never repeated into a ban
