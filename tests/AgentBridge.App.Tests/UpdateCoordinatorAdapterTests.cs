@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using AgentBridge.App.Core;
@@ -87,6 +88,39 @@ public sealed class UpdateCoordinatorAdapterTests : IDisposable
         }
         Assert.True(worker.Disposed);
         Assert.False(pin.CanRead);
+    }
+
+    [Fact]
+    public async Task Cancellation_cannot_release_ownership_before_the_apply_is_published()
+    {
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        worker.Wait = exited.Task;
+        using var cancel = new CancellationTokenSource();
+        var gate = new ApplyGate();
+        var adapter = Adapter();
+        var flowing = new AsyncLocal<bool>(c => { if (c.ThreadContextChanged && c.CurrentValue) SynchronizationContext.SetSynchronizationContext(gate); });
+        var run = Task.Run(() => { flowing.Value = true; return adapter.RunAsync(cancel.Token); });
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(5)));
+        var retained = !adapter.Ownership.IsCompleted;
+        gate.Release.Set();
+        exited.SetResult();
+        await adapter.Ownership.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(retained);
+    }
+
+    [Fact]
+    public async Task An_original_gone_between_lookup_and_handle_acquisition_has_already_exited()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        using var stale = new Process();
+        typeof(Process).GetField("_processId", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(stale, int.MaxValue);
+        typeof(Process).GetField("_haveProcessId", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(stale, true);
+        var hold = typeof(UpdateCoordinatorAdapter).GetMethod("Hold", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var adapter = new UpdateCoordinatorAdapter(new(root, Packages, Package, Digest, "AgentBridgeApp", Target, [], 11, 123),
+            _ => (IUpdateCoordinatorProcess?)hold.Invoke(null, [stale]), _ => new Child(33), pinUpdater: _ => new MemoryStream());
+        Assert.Equal(UpdateApplyEnd.Completed, (await adapter.RunAsync()).End);
     }
 
     [Fact]
@@ -227,6 +261,18 @@ public sealed class UpdateCoordinatorAdapterTests : IDisposable
             var timer = base.CreateTimer(callback, state, dueTime, period);
             if (dueTime == TimeSpan.FromMilliseconds(250)) Polling.TrySetResult();
             return timer;
+        }
+    }
+
+    sealed class ApplyGate : SynchronizationContext
+    {
+        public ManualResetEventSlim Release { get; } = new();
+        // Queues Apply's first continuation, then stalls the thread that would publish Apply's task.
+        public override void Post(SendOrPostCallback callback, object? state)
+        {
+            ThreadPool.QueueUserWorkItem(_ => callback(state));
+            if (new StackTrace().GetFrames().Any(f => f.GetMethod()?.DeclaringType?.FullName?.Contains("g__Apply|") == true))
+                Release.Wait(TimeSpan.FromSeconds(10));
         }
     }
 
