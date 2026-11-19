@@ -411,8 +411,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      together the seven run every spec. The one PWA job these replace took a median of 15
      minutes. Each `pwa-ui` leg, `pwa-e2e` and `spikes-linux` downloads and offline-installs
      Playwright's system packages through `.github/actions/playwright-system-packages`.
-     Update attempts have a 60-second bound; downloads get 180 seconds per attempt,
-     independently of cache state. An Azure timeout switches to the runner's Canonical fallback,
+     Update attempts have a 60-second bound; downloads get 180 seconds on Azure and 600 on
+     Canonical per attempt, allowing cold WebKit/e2e downloads. An Azure timeout switches to the runner's Canonical fallback,
      `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
      100 kB/s, and main run 41952998347 `pwa-e2e`). Before updating apt, a five-second Azure
      DNS probe switches immediately if lookup fails; an Azure DNS error during update or
@@ -425,16 +425,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      without switching Ubuntu mirrors. Mixed signature, hash, lock or other fatal errors
      still fail immediately. Canonical gets the same bounded network
      retries, then fails loudly with the attempt log; it never switches back to Azure.
-     A non-forced debs cache hit uses 20-second update attempts within a two-minute whole-update
-     budget. Only classified network exhaustion or a timeout without other errors warns
-     and skips the network download, then requires `apt-get install --no-download`;
-     offline install failure is fatal, without a network fallback. After failed updates only,
-     the hit restores its matching signed indexes with sudo before installing; successful
-     updates keep their fresh indexes. Debs without indexes count as a miss. The versioned
-     paired key includes the runner image, Playwright lockfile and browsers. Only successful
-     cold runs save indexes and debs, on any ref; PR entries are scoped to that PR, and main
-     must seed its own entry. Cold seeding needs one successful Ubuntu update. Failed-update
-     restoration is proven offline; hosted proof needs a real failed update meeting a hit.
+     Archives only: cached apt lists are never restored. Every run requires live signed
+     `apt-get update` with runner keys, including Microsoft's feed; failed updates never install.
+     On non-forced hits, apt `--print-uris` with SHA256 and an empty archive directory supplies
+     authenticated sizes/hashes. Verify ALL required debs, then copy ONLY those for `apt-get install --no-download`.
+     Missing/invalid archives, weak hashes or planning failure discard the cache for authenticated downloads.
+     Install failure stays fatal. Successful cold downloads stage debs before install and save even on later failure.
+     Keys include OS, arch, image, exact dry-run package-list hash and ref hash; restores share only image/list matches.
+     PR entries stay PR-scoped; main seeds its own. Bad exact keys cannot be overwritten: `gh cache delete <key>`.
+     Fakes model the trusted Release/index/archive chain; hosted Linux cache-hit proof is still required.
      The four subsequent browser
      installs omit `--with-deps`, so they cannot trigger another apt update.
      Missing, corrupt or unrecognized errors fail at once, even alongside network errors
@@ -465,14 +464,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
      timeout, on any run, is the one above (#817 first proposed failing
      that one on an Azure fetch too, and dropped it). A run by hand runs every
-     job (the whole ring), but is never a release; only the paired apt cache above may be saved.
+     job (the whole ring), but is never a release; only the archives-only apt cache above may be saved.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
      tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
      `pwa-e2e`, keyed by Playwright's version. Only `main` saves these caches; a pull request
-     restores main's, and the nearest older NuGet key when its projects differ. The paired
+     restores main's, and the nearest older NuGet key when its projects differ. The archives-only
      apt cache above is the exception, and a PR's entry cannot seed what main restores.
      `app` and `publish` restore nothing:
      the package main publishes is built from what the feeds serve.
@@ -940,6 +939,37 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   in the retry run's summary, before posting issue comments. GitHub retains the next attempt
   on the source run. Attempt 2 is never re-run, so repeated timeouts or failures remain red.
   Offline test: `quality/test-rerun-known-flakes.ps1` (catalog suite `rerun-known-flakes`).
+- **Main-red detection** ([issue 3074](https://github.com/danswett/agent-bridge/issues/3074)):
+  `main-red.yml` handles completed CI push runs on main using main's trusted script, with no polling.
+  Failure, timeout and startup failure open or update one bot-authored `main-red` issue; success
+  closes it, including reruns. Cancelled, skipped, stale and duplicate events make no changes.
+  Evidence contains capped, mention-neutralised job/test names, never raw logs; unreadable logs are noted.
+  GitHub issues and the label are the only alert channel: no assignee, owner mention or phone notification.
+  Tiered gating B3 ([issue 3210](https://github.com/danswett/agent-bridge/issues/3210)): a failed job named
+  in a `tier: post-merge` suite's `tier_jobs` in `catalog.yml` is listed as `Job (post-merge-tier)`. When
+  only such jobs failed (the `quality-gate` aggregate aside), the entry says so: an alert that never feeds
+  a pull request's merge verdict. The issue stays open until main's CI is green. Missing tier data means blocking.
+  B3b: when two entries in a row (no green between) name the same single test, and every failed job in
+  each but `quality-gate` is post-merge tier, the second entry adds one `quarantine-request: test=<name>`
+  line, once per open issue, with the [S3b generator](https://github.com/danswett/agent-bridge/pull/3078)
+  command. `main-red.ps1` then calls `quarantine-pr.ps1` by path (24 h expiry, draft `fixes-main` PR), but
+  only while `MAIN_RED_QUARANTINE` is exactly `on` in its environment and the script exists (until PR 3078
+  lands, the request is only recorded). The generator keeps its own fences: the repository variable rechecked
+  before each write, and only attempt 2 of one failed run; a refusal is a warning, never a failed detection.
+  Nothing here posts a status, check or label, so no merge verdict reads it.
+  Offline test: `quality/test-main-red.ps1` (catalog suite `main-red`).
+- **Culprit auto-revert** ([issue 3211](https://github.com/danswett/agent-bridge/issues/3211)):
+  `pwsh quality/revert-culprit.ps1 -Repository <owner/repo>` acts once main has been red for 15 minutes
+  (`red-minutes.ps1`'s rule) and the `main-red` issue's entry for the newest run names a failed test with no
+  open `quarantined` issue. Failures that name no test (infra, setup, build) do nothing. If one such test failed in
+  the current attempt of every red run since the spell's first (a run with no entry leaves the culprit unknown),
+  and exactly one commit, from exactly one merged PR, separates the last
+  green run from that first red run, it pushes a revert to its own `revert-culprit/<sha>` branch (never main)
+  and opens one PR linking the `main-red` issue and the culprit PR. Otherwise, including a revert that conflicts
+  or a leftover branch with no PR, it opens one `revert-culprit` issue. Both carry the `revert-culprit` label; once
+  either exists for that culprit or `main-red` issue, later runs do nothing. It refuses to revert from a shallow history. It never arms or merges: Quality gates the revert like
+  any PR. It runs in a GitHub Actions job, so no machine owns it; its state is the branch, PR and issue on GitHub.
+  Offline test: `quality/test-revert-culprit.ps1`.
 - **Red minutes on main** (owner target, 2026-11-09): `pwsh quality/red-minutes.ps1` prints how long
   main's CI was red over the last 24 h, the same way the main guardian counts it (a spell runs from a
   failed push run of `ci.yml` to the next success; cancelled and running runs say nothing). Target:
@@ -961,6 +991,15 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   `app`'s raw result, so main doesn't publish while app legs fail. Remove it (script, test, catalog suite,
   the gate's two steps) once #2563 and the self-test fix are on main and three main push runs in a
   row show all three jobs green; extending it needs a new owner decision.
+  **Should win-arm64 gate publishing? Yes** (B3b, #3210): a release ships and signs both architectures
+  whole, and the Arm64 package is uploaded only after its own self-test passes, so publishing without
+  it would ship nothing, or an untested build, to Arm64 copies. But one self-test flake (#2026) should not
+  hold a release: the smallest safe change, proposed to Quality in the B3b PR, retries only that step,
+  once, on win-arm64, with a warning naming #2026. `publish-gate` is unchanged; two failures still block.
+  A crash can leave high contrast on, so the retry would skip the contrast transition: on CI,
+  `build/app-self-test.ps1` records the setting before the first attempt, and a later attempt stops
+  what is left of the app, puts the setting back and refuses to run if it cannot
+  (`build/test-app-self-test-desktop.ps1`, fake boundaries).
   Offline test: `quality/test-arm64-waiver.ps1` (catalog suite `arm64-waiver-script`).
 - **The weekly report** (`weekly-report`, [weekly-report.yml](../.github/workflows/weekly-report.yml))
   is how the flake record gets read, so flakes are fixed rather than re-run. Every Monday at 08:00

@@ -510,6 +510,7 @@ const NOT_REPLAYED = {
   RestoreRunSession: 'the PWA does not read restore.run yet (#948 slice 2)',
   RestoreRunResult: 'the PWA does not read restore.run yet (#948 slice 2)',
   RestoreRunProgress: 'the PWA does not read restore.run yet (#948 slice 2)',
+  ClearedComposer: 'a guarded clear\'s host-only escrow: no producer or PWA presentation yet (#804)',
 };
 
 // ---- the replay ----

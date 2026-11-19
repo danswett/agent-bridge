@@ -394,7 +394,9 @@ host sends:
 
 These reads use the host's in-memory live source, also used by its fleet registry
 publisher, without Home Assistant reads or a separate roster store. Every `Session`
-is scoped to `hello.machine.id`.
+is scoped to `hello.machine.id`. The in-memory roster is bounded to 250 sessions;
+overflow holds discovery for the affected agent until a slot is freed, without
+evicting a live row or allowing an omitted session to resume: its process stays a resume guard.
 `owner`, `pr` and `finished` carry explicit evidence:
 unknown is not confirmed none or false. Idle does not mean work-finished. Removal bypasses
 upsert coalescing and quiet-session holding once discovery drops a row; list/get and new
@@ -619,23 +621,19 @@ an absence, and never reads the failed look as "every session ended" (design §6
 agent-ha-bridge's "session discovery uncertain … absence-based work is held"). While an agent
 in `agents` is held:
 
-* its sessions are not removed for being missing, and those the host has go on updating;
+* its sessions are not removed merely for being missing, and those the host has go on
+  updating; positive ended evidence removes a session immediately, even during a hold;
 * none of them is offered for resume, a resume is `busy`, and no worktree is reclaimed
   ([v1-launch.md](v1-launch.md#while-discovery-is-held));
 * the Home Assistant connector retires no session's entities, of any agent
   ([ha-connector.md](../ha-connector.md#lifecycle)).
 
-A hold survives a restart of the host (#147). The serving host keeps the sessions it lists in
-`sessions-listed.json` in its profile's folder: each one's id, agent, pid and process start time,
-and never a path, which is found again as discovery finds it. To the first pass after it starts,
-their processes count as known, so one whose runtime cannot be read holds its agent as it would
-have before the restart. That pass brings back each of them of an agent it holds, as long as its
-own process is still running (the same pid, started at the same time) and no session found has
-that process now.
-A session such a pass cannot see, which only the hold was keeping, is therefore still listed
-after a restart, as it was before one. It is then kept like any other session a hold keeps, until
-a complete pass decides. A complete first pass is believed, as ever, and so is a registration
-that says the session ended, even when its runtime cannot be read.
+Host-bound roster membership is memory-only: each row requires fresh live discovery,
+never disk membership to fill in an incomplete pass. `sessions-listed.json` keeps only
+resume guards: a previously known unreadable runtime (dated, or one the 250 limit omitted)
+holds its agent across passes and restarts, without supplying a row. A positively exited or replaced
+process releases that guard. Native discovery supersedes an ended registration only with a
+process born after its last update, the row staying listed until the successor replaces it.
 
 Sessions of the other agents are removed and resumed as usual. `reason` says what holds it, in
 words for a person, at most 512 bytes; a client shows it as it is ("discovery held: …", as the
@@ -1061,6 +1059,18 @@ with `timings` for a request that asked for progress, and optional `attachments`
 Hosts emit `stage` only on `unconfirmed`: `typed`, `recorded`, or `queued` below;
 unknown reads as `typed`, never as delivery. Tolerant records may retain a stage on
 another outcome; clients ignore it there rather than override the outcome.
+
+The [guarded-clear foundation](../host-replies.md#guarded-clear-foundation-804)
+adds optional `cleared: { text, marks, truncated }`: text that a clear attempt may
+have deleted, escaped with host-only `[start, length]` marks in UTF-16 units.
+It is returned even if the reply is later refused, and is never logged. This cut
+refuses before keys unless the complete single-row draft fits 500 escaped characters;
+it therefore always returns `truncated: false`. Lossless host-only composer evidence
+is mandatory: display-normalized screen text alone cannot authorize deletion.
+Replay requires the original sender, session and still-current host authority callbacks;
+foreign replay receives no escrow or progress. There is no wire confirmation field,
+production clear producer or capability in this cut. Signed person relay confirmation,
+policy and PWA/app presentation follow separately; existing clients are unchanged.
 
 `attachments: [{ "id": "<client attachment UUID>", "ref": "@<staged absolute path>" }]`
 binds each attachment to exactly the reference token in the recorded prompt, in the

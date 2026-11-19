@@ -253,9 +253,10 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
 
 ## Freshness and replay (5 s and 60 s)
 
-The reader checks/cache below are target RC behavior, not implemented by `FleetList.Parse`.
 The relay's own received-time/sequence checks are not independent reader verification
-(`RosterFields.cs:110-141`).
+(`RosterFields.cs:110-141`). `RelayFleetRoster.Read` now implements the order rule, the
+in-memory cache, the purge of unlisted machines, and pinned-roster membership (#2643). The 60 s
+`at` rule, `registry-subscribe` and signature checks are still to come.
 
 * A host sends a new snapshot when any listed field changes, debounced to at most one per 2 s,
   plus a heartbeat every 20 s even if nothing changed. A heartbeat is a new snapshot: `seq` rises
@@ -270,8 +271,11 @@ The relay's own received-time/sequence checks are not independent reader verific
   within 60 s of the reader's own clock (earlier or later) **and** the relay says the machine is
   online. Anything else is stale: its sessions are shown as "last seen at …" and never returned as
   live by `fleet.find`. There is no separate 5-minute window.
-* **Order.** Within one `epoch` a reader rejects a record whose `seq` is not greater than the
-  last one it accepted from that machine. A new `epoch` is accepted when its `at` is later than the
+* **Order.** Within one `epoch` a reader rejects a record whose `seq` is lower than the
+  last one it accepted from that machine. Equal is accepted: the relay serves the same snapshot on
+  every read until the host's next heartbeat, and `seq` rises only with a new snapshot. Once a reader
+  holds an order for a machine, a record whose `epoch`, `seq` or `at` is missing or malformed is
+  rejected too (#3262). A new `epoch` is accepted when its `at` is later than the
   `at` of the last record accepted from that machine. So a restarted host (new epoch, `seq` back at
   1) is accepted without any state kept on disk, and an old epoch's records are refused after a
   newer one was seen.
@@ -291,7 +295,7 @@ The relay's own received-time/sequence checks are not independent reader verific
 
 ## Offline machines and the cache
 
-This cache is planned RC work; today's fleet op reads the connected relay, not a disk cache.
+The host's fleet reader keeps this cache in memory only (#2643), cleared on each new relay connection.
 
 An offline machine appears in the list (name, `online: false`, last seen) so a reader can say
 "machine is off". Its sessions are not served as live: the relay drops them from memory when the
@@ -299,7 +303,7 @@ host goes offline. A reconnecting host can appear online before its full snapsho
 no sessions are invented in that interval.
 
 A reader may keep its last copy of a machine's record as a **cache**, with a maximum age of 24 h
-(then deleted). Cached records are always marked `stale: true` and `online: false` in `fleet.list`
+measured on a monotonic clock (then deleted; a wall-clock correction does not change it, #3262). Cached records are always marked `stale: true` and `online: false` in `fleet.list`
 and are never returned as live by `fleet.find`. The cache exists for two reasons only: showing
 "this session was on machine X, last seen at …", and the `ambiguous` and `offline` results in "Names and lookup".
 
@@ -570,6 +574,7 @@ alone, observe mode or roster library support is not evidence those gates are de
 | Session name | Never | Relay sees (cap 64, optional) | Only person-set names; filter; per-machine off switch (Decision 2); not stored, not logged |
 | Session state and since | Never | Relay sees | Coarse enum only |
 | Process startedAt (#2360, planned) | Never | Relay sees | Optional process time only; signed before ranking |
+| Session owner principal, PR number, finished flag (#2643) | Never | Relay sees, only once known | Bounded closed shapes; unknown sent as absent; not stored, not logged |
 | Count of sessions per machine | Never | Relay sees | Capped at 64, `total` when more |
 | Prompts, questions, paths, repo, branch, model, first message, folder | Never | Never | Allow-list test on host and relay |
 | Storage | Machine blob, 30 s writes | Registry is **not** in the blob | Memory only; lost on relay restart, rebuilt from host heartbeats within 20 s |
