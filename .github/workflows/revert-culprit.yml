@@ -1,0 +1,36 @@
+name: Revert culprit
+
+on:
+  # Main's trusted script only; it checks out main, never a PR's code.
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: revert-culprit
+  cancel-in-progress: false
+
+jobs:
+  revert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          # The culprit and its parent must be local: a shallow root revert would delete the tree.
+          fetch-depth: 100
+      - name: Open one revert PR or issue for a culprit red 15 minutes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: pwsh -NoProfile -File quality/revert-culprit.ps1 -Repository $env:REPOSITORY
