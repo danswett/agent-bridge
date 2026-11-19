@@ -234,6 +234,14 @@ is among the caller's ancestors. Anything else is refused, and a token presented
 session is logged as `credential presented from outside its session`. `AGENT_BRIDGE_SESSION` is
 never proof. The reply is `{ "principal": "agent:<machine>/<session>", "scope": "read" }`.
 
+A script credential (`kind` `script`) has no session. Instead, its caller's ancestry must be
+read in full and contain no agent session, and the host checks for an agent first. A
+scheduled task on Windows is the one exception to reading in full. The Task Scheduler's
+service host may top the chain unread, but only when the service manager reports its id
+for `Schedule`, and only if everything below it was read in full
+([design/script-credentials.md §6](../design/script-credentials.md#6-limits-and-what-holds-them), rule 3).
+Anything else unreadable is refused with `the script caller's ancestry could not be traced in full`.
+
 This is a safety rail, not a boundary: a same-user process that spoofs its parent or joins the
 session's Job object gets through (design/agent-principals.md §3.4). A new credential for a
 session replaces its old one, so a resumed session's old token is dead. This slice only proves who

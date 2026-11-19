@@ -14,8 +14,9 @@ public sealed record PeerProcess(int Id, DateTimeOffset? StartedAt, string? Imag
 // stopped at a process it could not read, rather than at the top of the tree, a parent that
 // has gone, or one given a reused id: then an agent session may sit above what was read, and
 // whatever only a person may do is refused (fails closed). An agent found in what was read
-// still counts.
-public sealed record ProcessAncestry(IReadOnlyList<PeerProcess> Processes, bool Complete)
+// still counts. Scheduled is true when the walk ended at the Task Scheduler's service host, which
+// a user cannot open (ProcessChain.IsScheduler): the last process is then that host, unread.
+public sealed record ProcessAncestry(IReadOnlyList<PeerProcess> Processes, bool Complete, bool Scheduled = false)
 {
     public static readonly ProcessAncestry Unknown = new([], false);
 }
@@ -40,26 +41,38 @@ public static class ProcessChain
         return ProcessAncestry.Unknown;
     }
 
-    // One process as a whole-table listing gives it: its parent, start and image.
-    internal sealed record Listed(int Parent, DateTimeOffset? StartedAt, string? Image);
+    // One process as a whole-table listing gives it: its parent, start and image, and whether it
+    // is the Task Scheduler's service host (Windows only).
+    internal sealed record Listed(int Parent, DateTimeOffset? StartedAt, string? Image, bool Scheduler = false);
+
+    // The Task Scheduler's service host: an svchost the user cannot open (it runs as SYSTEM, so
+    // neither start nor path can be read), with the id the service manager says runs Schedule.
+    // A name can be copied to any program, and a process of the user's can deny its own handle;
+    // the service manager's answer cannot be made to name one of the user's.
+    internal static bool IsScheduler(int id, DateTimeOffset? started, string? image, string name, int scheduler) =>
+        scheduler > 0 && id == scheduler && started is null && image is null && string.Equals(name, "svchost.exe", StringComparison.OrdinalIgnoreCase);
 
     // Walks a table of every process from one to the top. Each step's parent must be in the
     // table and have started no later than its child (a second of slack): one that has gone, or
     // whose id was given to a later process, ends the chain there, which is its natural end.
-    // Stopping at MaxDepth with a parent still to read is not: an agent may be above it.
+    // Stopping at MaxDepth with a parent still to read is not: an agent may be above it. The
+    // scheduler's service host ends it too, as its top: what started that is the system's, not
+    // the caller's, and cannot be opened either.
     internal static ProcessAncestry Walk(int processId, IReadOnlyDictionary<int, Listed> table)
     {
         if (!table.TryGetValue(processId, out var self)) { return ProcessAncestry.Unknown; }
         var chain = new List<PeerProcess> { new(processId, self.StartedAt, self.Image) };
         var (current, entry) = (processId, self);
+        var scheduled = false;
         while (chain.Count < MaxDepth && entry.Parent > 0 && entry.Parent != current && table.TryGetValue(entry.Parent, out var parent))
         {
             if (entry.StartedAt is { } c && parent.StartedAt is { } p && p > c + TimeSpan.FromSeconds(1)) { break; }
             chain.Add(new PeerProcess(entry.Parent, parent.StartedAt, parent.Image));
             (current, entry) = (entry.Parent, parent);
+            if (parent.Scheduler) { scheduled = true; break; }
         }
-        var cut = chain.Count >= MaxDepth && entry.Parent > 0 && entry.Parent != current && table.ContainsKey(entry.Parent);
-        return new ProcessAncestry(chain, !cut);
+        var cut = !scheduled && chain.Count >= MaxDepth && entry.Parent > 0 && entry.Parent != current && table.ContainsKey(entry.Parent);
+        return new ProcessAncestry(chain, !cut, scheduled);
     }
 
     // A Toolhelp snapshot gives every process's parent and executable name in one read; the
@@ -74,13 +87,39 @@ public static class ProcessChain
         // Only the walk's own steps are opened, and one beyond, so Walk can tell a chain cut at
         // MaxDepth from one that ends there.
         var current = processId;
+        int? scheduler = null;
         for (var depth = 0; depth <= MaxDepth && snapshot.TryGetValue(current, out var entry) && !table.ContainsKey(current); depth++)
         {
             var (started, image) = Open(current);
-            table[current] = new Listed(entry.Parent, started, image ?? entry.Name);
+            // The service manager is asked only once a process will not open.
+            var isScheduler = started is null && image is null && IsScheduler(current, started, image, entry.Name, scheduler ??= SchedulerProcess());
+            table[current] = new Listed(entry.Parent, started, image ?? entry.Name, isScheduler);
             current = entry.Parent;
         }
         return Walk(processId, table);
+    }
+
+    // The id of the process running the Task Scheduler service, by the service manager's account
+    // (which a user may query), or 0 when it is not running or cannot be asked.
+    [SupportedOSPlatform("windows")]
+    static int SchedulerProcess()
+    {
+        var manager = OpenSCManagerW(null, null, ScManagerConnect);
+        if (manager == 0) { return 0; }
+        try
+        {
+            var service = OpenServiceW(manager, "Schedule", ServiceQueryStatus);
+            if (service == 0) { return 0; }
+            try
+            {
+                // SERVICE_STATUS_PROCESS: dwCurrentState at 4, dwProcessId at 28.
+                var status = new byte[36];
+                return QueryServiceStatusEx(service, 0, status, status.Length, out _) && BitConverter.ToInt32(status, 4) == ServiceRunning
+                    ? BitConverter.ToInt32(status, 28) : 0;
+            }
+            finally { CloseServiceHandle(service); }
+        }
+        finally { CloseServiceHandle(manager); }
     }
 
     [SupportedOSPlatform("windows")]
@@ -198,6 +237,21 @@ public static class ProcessChain
 
     const uint ProcessQueryLimitedInformation = 0x1000;
     const uint Th32csSnapProcess = 0x2;
+    const uint ScManagerConnect = 0x1;
+    const uint ServiceQueryStatus = 0x4;
+    const int ServiceRunning = 4;
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern nint OpenSCManagerW(string? machine, string? database, uint access);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern nint OpenServiceW(nint manager, string name, uint access);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool QueryServiceStatusEx(nint service, int level, byte[] buffer, int size, out int needed);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool CloseServiceHandle(nint handle);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     struct ProcessEntry32

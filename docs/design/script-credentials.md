@@ -129,6 +129,15 @@ token is accepted only from a person's device).
 3. **Not from inside an agent session.** The caller's ancestry must be read in full and must
    contain no agent session: the reverse of `agent.hello`'s rule, as agent-launch-scope.md §11
    states it. A partial or untraceable ancestry is refused, never treated as a script.
+   The one exception is a scheduled task on Windows. The host can't open the Task
+   Scheduler's service host, an svchost that runs as SYSTEM, so it can't read that
+   process's start time or path. The walk then ends at that svchost as its top, but only
+   when the service manager reports that process id for the `Schedule` service. Every
+   process below it must still be read in full (id, start time and image). An agent anywhere
+   in the chain is checked first and still refuses, including one a task starts. These are
+   all still refused: an unreadable process anywhere else, an svchost the service manager
+   doesn't name (a name alone, or a readable copy in a user folder, which is just another
+   process), a chain cut at the depth limit, and every other platform.
    **A script a coordinator starts does not pass this rule, on purpose.** A script started
    from inside a coordinator's session (a child of its shell) has an agent session in its
    ancestry and is refused. There are two ways to run such work:
@@ -137,7 +146,8 @@ token is accepted only from a person's device).
    * **Scheduled runs:** the owner starts the script from the machine's task scheduler (or by
      hand in a terminal), so its ancestry holds no agent session. A coordinator that wants one
      run now asks the scheduler to run the task. Its parent is then the scheduler, not the
-     session. This is the rail's known gap (a detached process has an agent-free ancestry),
+     session. This is the rail's known gap (a detached process has an agent-free ancestry, and
+     so does a task an agent registers as the same user),
      not a feature: it is why the credential file, not rule 3, is the real barrier.
    Running a script credential's file from a session by copying or exporting it is a
    leak (§8), not a supported path.

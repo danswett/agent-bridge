@@ -323,16 +323,20 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         if (match is null) { return Refused("no live credential matches that token"); }
         if (match.Kind == "script")
         {
-            if (!ancestry.Complete || ancestry.Processes.Count == 0
-                || ancestry.Processes.Any(p => p.Id <= 0 || p.StartedAt is null || string.IsNullOrWhiteSpace(p.Image)))
-            { return Outside(match, "the script caller's ancestry could not be traced in full"); }
             lock (gate)
             {
+                // An agent anywhere in what was read refuses first, whatever the rest of the chain.
                 var agents = records.Where(r => r.Credential.Kind == "session" && r.Credential.RootPid > 0)
                     .Select(r => new KnownProcess(r.Credential.RootPid, r.Credential.RootStartUtc, "a credentialed session"))
                     .Concat(pending.Select(p => new KnownProcess(p.RootPid, p.RootStartUtc, "an adopted session"))).ToArray();
                 if (agentCaller || AgentAncestry.Find(ancestry.Processes, agents) is not null)
                 { return Outside(match, "a script credential cannot be used inside an agent session"); }
+                // Every process must be read in full, except the Task Scheduler's service host at the
+                // top of a scheduled task's chain, which a user cannot open; all below it must be.
+                var below = ancestry.Scheduled ? ancestry.Processes.Take(ancestry.Processes.Count - 1).ToList() : ancestry.Processes;
+                if (!ancestry.Complete || below.Count == 0
+                    || below.Any(p => p.Id <= 0 || p.StartedAt is null || string.IsNullOrWhiteSpace(p.Image)))
+                { return Outside(match, "the script caller's ancestry could not be traced in full"); }
                 return IsLive(match) ? new AgentHelloDecision(match, null) : Refused("no live credential matches that token");
             }
         }

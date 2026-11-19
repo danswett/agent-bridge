@@ -311,6 +311,61 @@ public sealed class AgentCredentialsTests : IDisposable
         Assert.Null(store.Check(token, new([new PeerProcess(100, Started, "copilot.exe")], true)).Accepted);
     }
 
+    // What a scheduled task looks like to a user-level host: svchost (Schedule) > wscript > pwsh,
+    // the service host unreadable and recognised as the scheduler by the walk.
+    static ProcessAncestry FromScheduler(bool scheduled = true, bool complete = true, string? agent = null) =>
+        new([
+            new PeerProcess(50, Started.AddMinutes(2), @"C:\Program Files\PowerShell\7\pwsh.exe"),
+            .. agent is null ? Array.Empty<PeerProcess>() : [new PeerProcess(45, Started.AddMinutes(1), agent)],
+            new PeerProcess(40, Started.AddMinutes(1), @"C:\Windows\System32\wscript.exe"),
+            new PeerProcess(30, null, "svchost.exe"),
+        ], complete, scheduled);
+
+    [Fact]
+    public void A_script_credential_is_accepted_from_a_scheduled_task_whose_scheduler_cannot_be_opened()
+    {
+        var (token, credential) = ScriptRecord();
+        WriteCredential(credential);
+        var decision = Store(new Clock(Started)).Check(token, FromScheduler());
+        Assert.Equal("script:machine1/pump-wake", decision.Accepted?.Principal);
+    }
+
+    [Fact]
+    public void A_scheduled_chain_with_an_agent_in_it_is_still_refused_as_inside_an_agent_session()
+    {
+        var (token, credential) = ScriptRecord();
+        WriteCredential(credential);
+        var store = Store(new Clock(Started));
+        Assert.EndsWith("inside an agent session", store.Check(token, FromScheduler(agent: @"C:\Users\me\.local\bin\copilot.exe")).Refusal);
+        Assert.EndsWith("inside an agent session", store.Check(token, FromScheduler(complete: false, agent: "claude.exe")).Refusal);
+    }
+
+    [Fact]
+    public void An_unreadable_process_is_refused_unless_it_is_the_scheduler_at_the_top_of_a_whole_chain()
+    {
+        var (token, credential) = ScriptRecord();
+        WriteCredential(credential);
+        var store = Store(new Clock(Started));
+        const string Untraced = "credential presented from outside its session: the script caller's ancestry could not be traced in full";
+        // VM4's refusal: the same unreadable svchost by name alone.
+        Assert.Equal(Untraced, store.Check(token, FromScheduler(scheduled: false)).Refusal);
+        Assert.Equal(Untraced, store.Check(token, FromScheduler(complete: false)).Refusal);
+        Assert.Equal(Untraced, store.Check(token, new([new PeerProcess(30, null, "svchost.exe")], true, Scheduled: true)).Refusal);
+        // Unreadable below the scheduler: the middle, or the caller itself.
+        var middle = FromScheduler().Processes.ToArray();
+        middle[1] = middle[1] with { StartedAt = null };
+        Assert.Equal(Untraced, store.Check(token, new(middle, true, Scheduled: true)).Refusal);
+        middle = FromScheduler().Processes.ToArray();
+        middle[0] = middle[0] with { Image = "  " };
+        Assert.Equal(Untraced, store.Check(token, new(middle, true, Scheduled: true)).Refusal);
+        // A user's own svchost.exe is readable, so it is just another process; what started it still counts.
+        Assert.EndsWith("inside an agent session", store.Check(token, new([
+            new PeerProcess(50, Started.AddMinutes(2), @"C:\Program Files\PowerShell\7\pwsh.exe"),
+            new PeerProcess(30, Started.AddMinutes(1), @"C:\Users\me\AppData\Local\Temp\svchost.exe"),
+            new PeerProcess(20, Started, @"C:\Users\me\.local\bin\copilot.exe"),
+        ], true)).Refusal);
+    }
+
     [Theory]
     [InlineData("scope", "none")]
     [InlineData("scope", "read")]
