@@ -41,7 +41,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     RelayClient? relay;
     readonly Func<RosterVerifier?>? signedRoster;
     readonly TimeProvider clock;
-    readonly Dictionary<string, (FleetMachine Machine, DateTimeOffset Seen)> cache = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (FleetMachine Machine, long Seen)> cache = new(StringComparer.Ordinal);
 
     public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null)
     {
@@ -51,21 +51,24 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
 
     // design/fleet-session-registry.md "Offline machines and the cache": a machine's last accepted
     // rows stay, offline and stale, until it leaves the signed roster or the relay's lists, or for
-    // CacheAge. Within an epoch seq never falls (a jump is just a newer whole snapshot); a new epoch
-    // needs a later `at`. A refused record leaves the last accepted rows stale.
+    // CacheAge, measured on the monotonic clock so a wall-clock correction cannot stretch or cut it
+    // (`at` is protocol ordering only). Within an epoch seq never falls (a jump is just a newer whole
+    // snapshot); a new epoch needs a later `at`. Once an order is cached, a record whose own order is
+    // missing or malformed is refused too, so the relay cannot erase it. A refused record leaves the
+    // last accepted rows stale.
     public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames)
     {
         lock (cache)
         {
-            var now = clock.GetUtcNow();
+            var now = clock.GetTimestamp();
             var machines = Parse(frames, signedRoster?.Invoke() is { } roster ? Hosts(roster) : null).ToList();
             var listed = machines.Select(m => m.Id).ToHashSet(StringComparer.Ordinal);
-            foreach (var id in cache.Keys.Where(id => !listed.Contains(id) || now - cache[id].Seen >= CacheAge).ToList()) { cache.Remove(id); }
+            foreach (var id in cache.Keys.Where(id => !listed.Contains(id) || clock.GetElapsedTime(cache[id].Seen, now) >= CacheAge).ToList()) { cache.Remove(id); }
             for (var i = 0; i < machines.Count; i++)
             {
                 var m = machines[i];
                 FleetMachine? held = cache.TryGetValue(m.Id, out var c) ? c.Machine : null;
-                if (m.Online && m.HasRegistryRecord && (held?.Order is not { } a || m.Order is not { } b || (a.Epoch == b.Epoch ? b.Seq >= a.Seq : b.At > a.At)))
+                if (m.Online && m.HasRegistryRecord && (held?.Order is not { } a || m.Order is { } b && (a.Epoch == b.Epoch ? b.Seq >= a.Seq : b.At > a.At)))
                 {
                     cache[m.Id] = (m, now);
                 }
@@ -134,10 +137,12 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
             {
                 hasRegistryRecord = true;
                 truncated = rec.TryGetProperty("truncated", out var tr) && tr.ValueKind == JsonValueKind.True;
-                if (rec.TryGetProperty("epoch", out var ep) && ep.ValueKind == JsonValueKind.String && rec.TryGetProperty("seq", out var sq) && sq.ValueKind == JsonValueKind.Number
-                    && sq.TryGetInt64(out var seq) && rec.TryGetProperty("at", out var at) && at.ValueKind == JsonValueKind.String && at.TryGetDateTimeOffset(out var stamp))
+                // The relay's own format (RosterFields): a 16-digit lowercase hex epoch and seq from 1.
+                if (rec.TryGetProperty("epoch", out var ep) && ep.ValueKind == JsonValueKind.String && ep.GetString() is { Length: 16 } epoch && epoch.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'))
+                    && rec.TryGetProperty("seq", out var sq) && sq.ValueKind == JsonValueKind.Number
+                    && sq.TryGetInt64(out var seq) && seq >= 1 && rec.TryGetProperty("at", out var at) && at.ValueKind == JsonValueKind.String && at.TryGetDateTimeOffset(out var stamp))
                 {
-                    order = (ep.GetString()!, seq, stamp);
+                    order = (epoch, seq, stamp);
                 }
                 foreach (var s in list.EnumerateArray())
                 {

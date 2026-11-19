@@ -77,8 +77,24 @@ public sealed class HostRosterPinTests : IDisposable
         Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
         Assert.False(reader.Verified!.AcceptHostSign);
         Assert.Same(reader.Verified, new FleetTrust(reader, folder, () => RosterFixture.Account).Membership());
-        Assert.Null(new FleetTrust(reader, folder, () => "another-account").Membership());
-        Assert.Null(new FleetTrust(reader, folder, () => null).Membership());
+    }
+
+    [Fact]
+    public void A_pin_that_cannot_supply_verified_membership_refuses_fleet_reads_instead_of_passing_every_host()
+    {
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var before = new FleetTrust(reader, folder, () => RosterFixture.Account);
+        Assert.Contains("refused", Assert.Throws<InvalidOperationException>(() => before.Membership()).Message);
+        Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
+        Assert.Same(reader.Verified, before.Membership());
+        Assert.Throws<InvalidOperationException>(() => new FleetTrust(reader, folder, () => "another-account").Membership());
+        Assert.Throws<InvalidOperationException>(() => new FleetTrust(reader, folder, () => null).Membership());
+
+        File.Delete(PathName);
+        Write("{broken");
+        var unreadable = new FleetTrust(new HostRosterReader(PathName, () => w.Now), folder, () => RosterFixture.Account);
+        Assert.Throws<InvalidOperationException>(() => unreadable.Membership());
     }
 
     [Fact]

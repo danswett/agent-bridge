@@ -37,6 +37,13 @@
 #   security_sensitive
 #                 default false: a change reaching it adds the security suites and the
 #                 security-review label (quality/README.md §2, AGENTS.md rule 5)
+#   tier          blocking (the default) | post-merge. A post-merge suite's tier_jobs run as
+#                 selected, but neither a pull request's merge-rule verdict nor main-green counts
+#                 them; both still show them (quality/README.md §4.9). check reports an unknown
+#                 tier, which counts as blocking
+#   tier_jobs     required with tier: post-merge: the exact ci.yml job display names it makes
+#                 post-merge ("pwa-ui (webkit 1/3)"), each a job its where names. Any post-merge
+#                 suite naming a job makes it post-merge; a renamed job blocks again
 #
 # A suite with select: affected needs project, builds or triggers, or nothing can select it.
 #
@@ -238,6 +245,9 @@ suites:
     # Bounded by the MigrationTests and LaunchFlow classes, each split for parallelism (#496).
     command: dotnet test tests/AgentBridge.Host.Tests -c Release
     where: ci.yml product
+    # Product's Windows on Arm leg runs every product suite; it's named once, here (#3208).
+    tier: post-merge
+    tier_jobs: [product (windows-11-arm)]
     baseline: { tests: 609, seconds: 30 }
     status: exists
 
@@ -690,6 +700,9 @@ suites:
     triggers: [src/AgentBridge.App/**, src/AgentBridge.HostLauncher/**, src/AgentBridge.Injector/**, src/AgentBridge.Hook/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, build/notices/**, LICENSE, design/**]
     command: see ci.yml app and app-installer jobs
     where: ci.yml app, app-installer
+    # Arm64 packaging and both installers run after merge (#3208); app (win-x64) blocks.
+    tier: post-merge
+    tier_jobs: [app (win-arm64), app-installer (win-x64), app-installer (win-arm64)]
     status: exists
 
   - id: app-package-host
@@ -852,6 +865,9 @@ suites:
     # test/e2e out (PWA_SKIP_E2E) for pwa-e2e, the one job that builds the dev stack.
     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
     where: ci.yml pwa-ui
+    # WebKit runs after merge (#3208); Chromium blocks.
+    tier: post-merge
+    tier_jobs: [pwa-ui (webkit 1/3), pwa-ui (webkit 2/3), pwa-ui (webkit 3/3)]
     baseline: { files: 25 }
     status: exists
 
@@ -868,6 +884,9 @@ suites:
     triggers: [pwa/**, src/AgentBridge.Transport/**, src/AgentBridge.Relay/**, spikes/s4-relay/**, spikes/s2-noise-interop/dotnet/Noise.cs, spikes/s2-noise-interop/web/noise-p256.js, spikes/s6-tpm-keys/src/DeviceKeys.cs]
     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test test/e2e   # through the spike dev stack's relay
     where: ci.yml pwa-e2e
+    # The live browser suite, through the dev stack's relay: runs after merge (#3208).
+    tier: post-merge
+    tier_jobs: [pwa-e2e]
     status: exists
 
   - id: pwa-site-csp
