@@ -1472,9 +1472,9 @@ public sealed class AutoUpdater
                     if (vetted.Why is { } since) { throw new InstallRefusedException(since, vetted.Code); }
                 }
                 fileBudget.ExcludeSince(nonFileWork);
-                await manager.CheckInstallationFilesAsync(preflight, fileBudget);
+                await manager.CheckInstallationFilesAsync(preflight, fileBudget, fresh: true);
             }
-            else { await manager.CheckInstallationFilesAsync(preflight, fileBudget ?? new InstallationFiles.Budget(time)); }
+            else { await manager.CheckInstallationFilesAsync(preflight, fileBudget ?? new InstallationFiles.Budget(time), fresh: true); }
             Validate();
             updatingIn = open ? to : null;
             installingAt = null;

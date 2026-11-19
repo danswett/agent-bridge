@@ -613,10 +613,17 @@ public sealed class HostManager
         finally { lock (updating) { installing = false; } }
     }
 
-    public async Task CheckInstallationFilesAsync(Func<string?>? preflight, InstallationFiles.Budget budget)
+    public async Task CheckInstallationFilesAsync(Func<string?>? preflight, InstallationFiles.Budget budget, bool fresh = false)
     {
         budget.LockedFiles ??= () => InstallationFiles.LockedImages(layout.AppFolder);
-        if (await budget.ProbeOnceAsync(preflight, quit.Token) is { } blockers) { throw new UpdateBlockedException(blockers); }
+        string? blockers;
+        try { blockers = await budget.ProbeOnceAsync(preflight, quit.Token, fresh); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            Log($"installation file holders could not be checked: {e.Message}");
+            blockers = InstallationFiles.Unknown;
+        }
+        if (blockers is not null) { throw new UpdateBlockedException(blockers); }
     }
 
     // The app quitting: an update that had stopped the host, or was stopping it, and not applied,

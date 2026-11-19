@@ -38,11 +38,12 @@ public static class InstallationFiles
         internal Func<IReadOnlyList<string>>? LockedFiles { get; set; }
         Func<string?>? clearProbe;
         HashSet<string>? clearFiles;
-        public async Task<string?> ProbeOnceAsync(Func<string?>? probe, CancellationToken cancellation)
+        public async Task<string?> ProbeOnceAsync(Func<string?>? probe, CancellationToken cancellation, bool fresh = false)
         {
             if (probe is null) { return null; }
-            // A successful scan is shared by the duplicate preflight gates, not a deadline.
-            // A changed lock footprint invalidates it, including locks acquired in a dialog.
+            // A clear scan serves the duplicate check right after the wait, not a deadline; a changed
+            // lock footprint invalidates it. The last gate before stop and handoff scans fresh: an
+            // outside holder of an image the app already holds changes no file name (#2884 review).
             using var deadline = new CancellationTokenSource(ReleaseWait, Time);
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation, deadline.Token);
             var token = stop.Token;
@@ -51,7 +52,7 @@ public static class InstallationFiles
                 return await Task.Run(() =>
                 {
                     var files = LockedFiles?.Invoke();
-                    if (clearProbe == probe && (files is null || clearFiles?.SetEquals(files) == true)) { return null; }
+                    if (!fresh && clearProbe == probe && (files is null || clearFiles?.SetEquals(files) == true)) { return null; }
                     var held = probe();
                     token.ThrowIfCancellationRequested();
                     clearProbe = held is null ? probe : null;
