@@ -28,6 +28,7 @@ jobs:
           ref: main
           # The culprit and its parent must be local: a shallow root revert would delete the tree.
           fetch-depth: 100
+          persist-credentials: false
       - name: Open one revert PR or issue for a culprit red 15 minutes
         shell: pwsh
         env:
