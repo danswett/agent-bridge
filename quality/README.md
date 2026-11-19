@@ -286,8 +286,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
    so it runs beside them and can't take a waiting push run's place and leave that push's commit
    untested (#938's review). GitHub promises no
-   order between push runs: the merge rule ignores cancelled runs and unfinished product
-   evidence, judging the newest usable named-job result (item 9).
+   order between push runs: the merge rule inspects cancelled runs' job steps (item 9), passes
+   over unfinished product evidence, and judges the newest usable named-job result.
    So a main run's change is everything since the last commit main's CI
    passed on: the plan reads `ci.yml`'s passed push runs on `main` (the newest 100, through the
    `actions: read` token), takes the newest whose commit is an ancestor of this one, fetches
@@ -481,8 +481,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      of the same pull request, as ci.yml does. Only pull requests: these workflows group each
      push run on `main` by its own run id, so none is cancelled. ci.yml's push runs on `main`
      never cancel a run in progress either, but a first attempt still waiting can be replaced in
-     `ci-main` (item 7). A cancelled named test job on main's current push holds
-     merge-rule's main_green check until it succeeds (item 9).
+     `ci-main` (item 7). A named test job cancelled after its tests or build started holds
+     merge-rule's main_green check until it succeeds; one cancelled earlier is infra-only (item 9).
 
    A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
    cancelled, and if any job the plan selected didn't succeed: when the whole ring runs, that's
@@ -559,9 +559,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      share a head get the worst of their verdicts, since a status belongs to the commit.
    - Main must be green, since auto-merge doesn't pause while main's CI is red and would keep
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
-     walks main's `ci.yml` push runs newest first, across up to 100 runs. A cancelled run never
-     counts. A candidate needs a successful completed plan and completed product instances;
-     queued, in-progress or cancelled named jobs pass the run over. A failed plan or a
+     walks main's `ci.yml` push runs newest first, across up to 100 runs.
+     A candidate needs a successful completed plan and completed product instances;
+     queued or in-progress named jobs pass the run over. A failed plan or a
      classification-skipped product family also passes it over. A newer main head still running
      does not block; the pull request's own running checks still do. The single
      `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
@@ -577,12 +577,33 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      The aggregate quality-gate is excluded because it waits on installer. The plan job must
      succeed. Completed `skipped` siblings count as green, including GitHub's unexpanded
      matrix-family entry; a skipped product family is not product evidence. Every named job
-     that ran must succeed: a failed product or sibling holds main red, even beside skipped
+     that ran must succeed or have an infra-only failure: a test/build failure holds main red, even beside skipped
      siblings. Missing, renamed or neutral named jobs never grant green.
      Jobs are paged across all attempts, then judged by their own latest attempt (and job id
      within an attempt), so rerunning only failed jobs can free main without discarding earlier
      successful jobs. Installer, signing and publishing results do not hold, even if red or
      pending; the evaluator prints them as non-gating jobs for Quality's main-red log.
+     Owner decision Nov 18 15:05 PT: `main_green.infra_steps` lists case-sensitive infra step
+     names/globs per exact job or matrix family: checkout, setup, cache and job plumbing only,
+     never source-dependent installs such as `npm ci`, Playwright's pin or its system-packages
+     action. Those names only locate a failure: annotations don't name their step, so a job with
+     more than one failed step holds, and the job's failure annotations (one extra read) must all
+     show a network or runner cause, such as exit
+     code 124 or a timeout, HTTP 429/5xx, a connection reset, DNS failure or a lost runner. Unknown
+     failures and missing/empty step data hold. Cancellation needs evidence no test/build step
+     started, and a step that failed before it is judged like any other; a never-assigned runner
+     also needs a nonempty step manifest. Cancelled runs are
+     inspected rather than hiding a test failure behind older green evidence; a cancelled run
+     with no jobs (displaced in `ci-main`) is passed over.
+     An infra-only failure never holds. On a first attempt it adds `ALERT infra-only` to the
+     merge-rule description (after any blocking reason, compacted) and to the detailed log;
+     [S2](https://github.com/danswett/agent-bridge/pull/3079) is not on main: flag `rerun needed
+     (once)` rather than dispatching another rerun path. Once the rerun is used it adds
+     `INFRA-PERSISTENT <job>` instead (listed first), and the F5 guardian or Quality opens the
+     issue. A test/build failure in any attempt holds until a later attempt of that job
+     succeeds, even if a later attempt or newer run of that job is only infra-only or a skipped
+     retry: older runs are read back to its last real result, and a success there (or earlier in the
+     same run) stops the lookup. The arm64 waiver applies to that result as to the latest one.
      Unreadable history, plan or product data fails closed without fallback. No usable run in
      the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from Quality, since labels take triage
@@ -902,6 +923,25 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   in the retry run's summary, before posting issue comments. GitHub retains the next attempt
   on the source run. Attempt 2 is never re-run, so repeated timeouts or failures remain red.
   Offline test: `quality/test-rerun-known-flakes.ps1` (catalog suite `rerun-known-flakes`).
+- **Main-red detection** ([issue 3074](https://github.com/danswett/agent-bridge/issues/3074)):
+  `main-red.yml` handles completed CI push runs on main using main's trusted script, with no polling.
+  Failure, timeout and startup failure open or update one bot-authored `main-red` issue; success
+  closes it, including reruns. Cancelled, skipped, stale and duplicate events make no changes.
+  Evidence contains capped, mention-neutralised job/test names, never raw logs; unreadable logs are noted.
+  GitHub issues and the label are the only alert channel: no assignee, owner mention or phone notification.
+  Offline test: `quality/test-main-red.ps1` (catalog suite `main-red`).
+- **Culprit auto-revert** ([issue 3211](https://github.com/danswett/agent-bridge/issues/3211)):
+  `pwsh quality/revert-culprit.ps1 -Repository <owner/repo>` acts once main has been red for 15 minutes
+  (`red-minutes.ps1`'s rule) and the `main-red` issue's entry for the newest run names a failed test with no
+  open `quarantined` issue. Failures that name no test (infra, setup, build) do nothing. If one such test failed in
+  the current attempt of every red run since the spell's first (a run with no entry leaves the culprit unknown),
+  and exactly one commit, from exactly one merged PR, separates the last
+  green run from that first red run, it pushes a revert to its own `revert-culprit/<sha>` branch (never main)
+  and opens one PR linking the `main-red` issue and the culprit PR. Otherwise, including a revert that conflicts
+  or a leftover branch with no PR, it opens one `revert-culprit` issue. Both carry the `revert-culprit` label; once
+  either exists for that culprit or `main-red` issue, later runs do nothing. It refuses to revert from a shallow history. It never arms or merges: Quality gates the revert like
+  any PR. It runs in a GitHub Actions job, so no machine owns it; its state is the branch, PR and issue on GitHub.
+  Offline test: `quality/test-revert-culprit.ps1`.
 - **Red minutes on main** (owner target, 2026-11-09): `pwsh quality/red-minutes.ps1` prints how long
   main's CI was red over the last 24 h, the same way the main guardian counts it (a spell runs from a
   failed push run of `ci.yml` to the next success; cancelled and running runs say nothing). Target:
