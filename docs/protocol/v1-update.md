@@ -301,7 +301,8 @@ Absent flags are omitted, so old bodies and signatures remain unchanged. Present
 be booleans, not null, strings or numbers; duplicate flags are refused. Both flags are inside
 the exact signed body bytes, so adding, removing or changing either invalidates its MAC.
 Older hosts may refuse these new args; parsing support is not evidence that policy enforcement
-exists. Clients must not send them until the corresponding host behavior ships.
+exists. So the PWA sends `unchecked` only after that machine has refused the same press
+`policy-unreadable`, which only an enforcing host answers, and sends no `batch` yet (#3307).
 
 **Replay, durably** (security review, Medium 3). The host records each `request` it verifies in
 its profile folder (`update-now.json`, as `manage.json` keeps `manage.*`'s), written
@@ -493,6 +494,14 @@ host's own text (#826). "Bridge", never "host".
   line: "A question or approval waiting may have to be answered at the machine afterwards."
   Buttons **Update now** and **Cancel**, focus on Cancel. If the machine answers `confirm`, the
   dialog comes back with the sessions it names now.
+* **Bad-release protection stale or unreadable** (#3307). A single press refused
+  `policy-unreadable` brings the confirmation back once, quiet machine or not, with one more
+  line: "Bad-release protection could not be checked on this machine." Cancel sends nothing and
+  leaves no note; Update now there sends the press again signed `unchecked`. A second
+  `policy-unreadable`, or `halted`, is not asked again: it reads "Not updated: *reason*" (below).
+* **Forgetting the machine, or clearing the account, withdraws a press** (#3324): an open
+  confirmation closes as Cancel, a press still waiting for its channel is never signed, and a
+  late answer changes nothing: no confirmation, note, state or further press.
 * **Waiting for a quiet moment** (decision 3), on the update line, from `waitingCode`:
   `turn-running` "Update ready · waiting for the current turn to finish"; `question-waiting`
   "Update ready · waiting for a question to be answered" (the line #719 already uses);
