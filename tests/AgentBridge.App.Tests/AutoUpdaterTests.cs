@@ -4603,6 +4603,107 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task Try_again_now_downloads_once_before_the_hold_ends_without_replaying_the_press()
+    {
+        shared = new ObservedUpdater(updater, time);
+        updater.DownloadFails = new IOException("the connection was reset");
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        Assert.Equal(1, updater.Downloads);
+        Assert.NotNull(shared.RetryAt);
+
+        time.Advance(TimeSpan.FromMinutes(2));
+        updater.DownloadFails = null;
+        updater.CheckFails = new IOException("the feed is offline");
+        await auto.Ask(UpdateAskKind.Install, Press);
+        await auto.Ask(UpdateAskKind.Install, Press);
+        await auto.TickAsync();
+
+        Assert.Equal(2, updater.Downloads);
+        Assert.Equal(1, updater.Checks);
+        Assert.Equal("0.2.0", shared.Ready);
+        Assert.Equal((UpdatePhase.Waiting, Press), (auto.State.Phase, auto.State.Request));
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task Try_again_now_that_fails_keeps_background_retries_held_and_the_failure_backoff(bool signed)
+    {
+        shared = new ObservedUpdater(updater, time);
+        updater.DownloadFails = new IOException("the connection was reset");
+        await StartAsync();
+        await auto.TickAsync();
+        Assert.Equal(1, updater.Downloads);
+        time.Advance(TimeSpan.FromMinutes(2));
+        if (signed) { await NowAsync(); }
+        else { await auto.Ask(UpdateAskKind.Install, Press); }
+        var counts = new List<int> { updater.Downloads };
+        var retryAt = shared.RetryAt;
+        await auto.Ask(UpdateAskKind.Install, Press);
+        counts.Add(updater.Downloads);
+        time.Advance(TimeSpan.FromMinutes(8));
+        await auto.TickAsync();
+        counts.Add(updater.Downloads);
+        time.Advance(TimeSpan.FromMinutes(11));
+        await auto.TickAsync();
+        counts.Add(updater.Downloads);
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        counts.Add(updater.Downloads);
+
+        Assert.Equal([2, 2, 2, 2, 3], counts);
+        Assert.Equal(Make.T0 + TimeSpan.FromMinutes(22), retryAt);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task A_retry_stays_bound_to_the_release_selected_before_its_download_starts(bool anotherFailure)
+    {
+        shared = new ObservedUpdater(updater, time);
+        updater.DownloadFails = new IOException("the connection was reset");
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        Task<string?>? otherCheck = null;
+        Task? otherDownload = null;
+        var changed = false;
+        shared.Changed += () =>
+        {
+            if (changed || shared.Phase != UpdatePhase.Downloading) { return; }
+            changed = true;
+            // Settings finds another release after Install selected the failed one.
+            updater.Found = "0.3.0";
+            otherCheck = shared.CheckAsync();
+            if (anotherFailure) { otherDownload = shared.DownloadAsync(_ => { }); }
+            else { updater.DownloadFails = null; }
+        };
+        time.Advance(TimeSpan.FromMinutes(2));
+
+        await auto.Ask(UpdateAskKind.Install, Press);
+
+        Assert.NotNull(otherCheck);
+        Assert.Equal("0.3.0", await otherCheck);
+        if (anotherFailure)
+        {
+            Assert.NotNull(otherDownload);
+            await Assert.ThrowsAsync<IOException>(() => otherDownload);
+        }
+        Assert.Equal(anotherFailure ? 2 : 1, updater.Downloads);
+        Assert.Equal(anotherFailure ? Make.T0 + TimeSpan.FromMinutes(12) : (DateTimeOffset?)null, shared.RetryAt);
+        Assert.Null(shared.Ready);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_download_that_failed_in_Settings_is_not_tried_again_for_a_while_by_a_devices_press()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -4662,16 +4763,16 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
-    public async Task A_download_that_failed_is_not_tried_again_for_a_while_however_often_a_device_presses()
+    public async Task A_download_that_failed_is_not_tried_again_for_a_while_however_often_a_device_checks()
     {
         prefs = prefs with { AutoUpdate = false };
         updater.DownloadFails = new IOException("the connection was reset");
         await StartAsync();
-        await AskedAsync(UpdateAskKind.Install);
+        await AskedAsync(UpdateAskKind.Check);
         Assert.Equal(1, updater.Downloads);
 
         time.Advance(TimeSpan.FromMinutes(2));
-        await AskedAsync(UpdateAskKind.Install, "9b8c7d6e-5f40-4321-8abc-def012345678");
+        await AskedAsync(UpdateAskKind.Check, "9b8c7d6e-5f40-4321-8abc-def012345678");
         Assert.Equal(1, updater.Downloads);
         Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
         Assert.Contains("trying again soon", auto.State.Last.Reason);

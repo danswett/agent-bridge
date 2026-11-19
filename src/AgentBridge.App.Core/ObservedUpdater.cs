@@ -21,8 +21,8 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     // from the machine's shared copy, the other's fresh fetch time (Copilot on #709, r4487867309).
     readonly SemaphoreSlim checking = new(1, 1);
     // Which release's download last failed, when, and how many times in a row: not tried again
-    // until RetryAt, whoever asks (Settings, the automatic updates, a device's press, or one
-    // waiting above).
+    // until RetryAt, except for one explicit Install retry. Checks and background work keep
+    // the hold, including a download waiting above.
     (string? Release, DateTimeOffset At, int Times)? failed;
     int checks;
     int downloads;
@@ -105,7 +105,9 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         }
     }
 
-    public async Task DownloadAsync(Action<int> progress)
+    public Task DownloadAsync(Action<int> progress) => DownloadAsync(progress, retryRelease: null);
+
+    internal async Task DownloadAsync(Action<int> progress, string? retryRelease)
     {
         Interlocked.Increment(ref downloads);
         Progress ??= 0;
@@ -118,13 +120,17 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
             // Read after the queue wait: a halt may have arrived since the check.
             RefuseHalted(found);
             RefuseHalted(inner.Ready);
-            // The one waited for downloaded the release the last check found: nothing to do.
-            if (inner.Ready is not null) { return; }
             var from = Source;
             var release = Found;
+            if (retryRelease is not null && retryRelease != release)
+            {
+                throw new InvalidOperationException($"the update to {retryRelease} changed; check for updates again");
+            }
+            // The one waited for downloaded the release the last check found: nothing to do.
+            if (inner.Ready is not null) { return; }
             (Bytes, Total) = (null, null);
             var now = time.GetUtcNow();
-            if (failed is { } f && f.Release == release && now - f.At < HoldAfter(f.Times))
+            if (retryRelease is null && failed is { } f && f.Release == release && now - f.At < HoldAfter(f.Times))
             {
                 throw new DownloadHeldException($"downloading {release} failed {Words.Ago(f.At, now)}; trying again soon");
             }

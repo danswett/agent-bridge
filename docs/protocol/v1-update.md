@@ -52,7 +52,7 @@ longer, and the caveat stays until no such app is left.
 | Presses waiting | At most 8 wait for the machine's app at once; a new one is then refused (`"this machine has too many presses waiting for its app already; try again in a few minutes"`), never one already accepted dropped |
 | The same press | A request sent again is the same press, before and for ten minutes after the app took it, and the app remembers the last 32 it took across restarts: none is carried out twice |
 | The feed | A press within a minute of the app's last check is answered from that check (its release, or its failure) without asking the feed again |
-| Downloads | A release whose download failed is not downloaded again for ten minutes, whoever asks (the machine's own Settings and background downloads included), and for twice as long after each further failure in a row, up to four hours; the app tries it again in the background when that ends, without asking the feed again. The press is answered `failed`, saying when it is tried again |
+| Downloads | After a failed download, Checks, Settings and background downloads wait ten minutes, doubling after each further failure in a row up to four hours. An explicit Install (Try again now, including Update now) retries the known download once without asking the feed again or clearing the background hold or its failure count. That retry is bound to the release selected: if it changes before downloading, the press fails without downloading another release. A successful download ends the hold; another failure extends it as usual. Replaying a taken request starts nothing. The app retries in the background when the hold ends, without asking the feed again |
 
 ## Capability
 
