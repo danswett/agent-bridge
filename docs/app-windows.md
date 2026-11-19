@@ -703,7 +703,9 @@ controls consume that same contract; this extraction does not disable or remove 
     Manager. A completed clear scan serves only the duplicate check right after the wait (cheap
     file checks invalidate it if the locked-file set changes); the last check before the host stops,
     after any confirmation or departure, always scans again, since an outside process can take an
-    image the app already holds without changing which files are locked.
+    image the app already holds without changing which files are locked. A last scan runs after the
+    stop's probe and other-profile waits, right before the handoff; a holder found then is named,
+    the host is started again and the install refused.
     The cheap check opens each image exclusively for an instant, so a lazy assembly load in that
     instant could see a sharing violation; a shared open would miss holders that allow writes.
     Each scan has its own two-minute deadline, independent of the two-minute release wait

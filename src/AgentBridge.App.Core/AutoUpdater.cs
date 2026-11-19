@@ -1474,13 +1474,15 @@ public sealed class AutoUpdater
                 fileBudget.ExcludeSince(nonFileWork);
                 await manager.CheckInstallationFilesAsync(preflight, fileBudget, fresh: true);
             }
-            else { await manager.CheckInstallationFilesAsync(preflight, fileBudget ?? new InstallationFiles.Budget(time), fresh: true); }
+            else { await manager.CheckInstallationFilesAsync(preflight, fileBudget ??= new InstallationFiles.Budget(time), fresh: true); }
             Validate();
             updatingIn = open ? to : null;
             installingAt = null;
             installing = true;
             Changed();
             log($"auto-update: installing {to}, as {because}");
+            // The same budget, so the entry check reuses the clear scan just made; the last scan
+            // runs after the stop's waits, right before the handoff (#2884 review).
             await manager.StopAndApplyAsync(() =>
             {
                 Validate();
@@ -1494,7 +1496,7 @@ public sealed class AutoUpdater
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
                 if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
                 updater.ApplyAndRestart(to, HandedOver(prefs, save));
-            }, waitForFiles: false);
+            }, preflight, waitForFiles: false, fileBudget: fileBudget);
             return null;
         }
         // Replaced while the host stopped: nothing failed, and the host is back (HostManager). What
