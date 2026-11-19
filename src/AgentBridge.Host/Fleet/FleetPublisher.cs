@@ -18,6 +18,7 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
     long sequence;
     long? lastSent;
     string? lastContent;
+    HashSet<string> lastSessionIds = new(StringComparer.Ordinal);
     public int SkippedInvalidIds { get; private set; }
 
     // Called at least every two seconds; force the first snapshot on each new connection.
@@ -28,7 +29,6 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
         try
         {
             var elapsed = lastSent is { } sent ? clock.GetElapsedTime(sent) : TimeSpan.MaxValue;
-            if (!force && elapsed < TimeSpan.FromSeconds(2)) { return false; }
             if (share && source.Held is not null) { return false; }
             IReadOnlyList<Session> snapshot = share ? source.Snapshot() : [];
             if (share && source.Held is not null) { return false; }
@@ -36,6 +36,9 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
                 entry.Node["agent_bridge_".Length..] is { Length: 16 } id
                 && id.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'))).ToArray();
             SkippedInvalidIds = snapshot.Count - usable.Length;
+            // Ended rows must disappear even when ordinary changes are still being coalesced.
+            var removed = !lastSessionIds.IsSubsetOf(usable.Select(e => e.Node["agent_bridge_".Length..]));
+            if (!force && !removed && elapsed < TimeSpan.FromSeconds(2)) { return false; }
             var sessions = usable.OrderByDescending(e => e.Session.StatusSince).ThenBy(e => e.Session.Id, StringComparer.Ordinal)
                 .Take(64).Select(entry =>
                 {
@@ -76,6 +79,7 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
             await put(record, ct);
             lastSent = started;
             lastContent = content;
+            lastSessionIds = sessions.Select(s => s.id).ToHashSet(StringComparer.Ordinal);
             return true;
         }
         finally { publishing.Release(); }

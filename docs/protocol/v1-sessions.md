@@ -267,7 +267,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 ```json
 {
   "protocol": 1,
-  "machine": { "id": "53d1997f…", "name": "DSWETT-DEV-VM1", "os": "windows", "hostVersion": "0.1.0" },
+  "machine": { "id": "53d1997f…", "name": "Laptop", "os": "windows", "hostVersion": "0.1.0" },
   "capabilities": ["sessions.read"]
 }
 ```
@@ -1873,7 +1873,7 @@ service worker shows from the same fields everywhere else:
   "web_push": 8030,
   "notification": {
     "title": "Pick the session store",
-    "body": "DSWETT-DEV-VM1 · waiting on you\nWhich database should the session store use?",
+    "body": "Laptop · waiting on you\nWhich database should the session store use?",
     "navigate": "https://danswett.github.io/agent-bridge/app/?host=53d1997f…&session=0f3c…&question=toolu_01",
     "tag": "53d1997f…:0f3c…",
     "lang": "en",
@@ -2164,7 +2164,7 @@ status rather than instead of it.
   * `signInNeeded`: only when the model is seen answering, in a message of its own words or a
     tool it asked for, dated after the latest sign-in failure. A prompt, a turn starting or
     ending, a hook and anything the bridge typed are written whether the agent can reach its
-    model or not, so none of them clears it: on VM1 (#800) a session ended a turn between two
+    model or not, so none of them clears it: in #800's sample a session ended a turn between two
     sign-in failures 51 ms apart. A sign-in alone never clears it: once one finishes
     (`signin.done` `signedIn`, when `sessions.signin` comes) or a still-valid credential is found,
     it stays `signInNeeded` with `recovery` `pending` until that same evidence, and no newer
@@ -2179,7 +2179,7 @@ status rather than instead of it.
   `question`.
 
 **What a host sends today.** Copilot only, from the `session.error` record that ends a turn,
-read by its structured fields (VM1's sign-in failures, #800, carry all three):
+read by its structured fields (#800's sign-in failures carry all three):
 
 * `signInNeeded` (provider `github`) when `remediation` is `"sign_in"`, `errorType` is
   `"authorization"` or `statusCode` is 401;
