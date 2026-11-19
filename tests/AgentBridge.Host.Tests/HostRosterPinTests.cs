@@ -77,8 +77,29 @@ public sealed class HostRosterPinTests : IDisposable
         Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
         Assert.False(reader.Verified!.AcceptHostSign);
         Assert.Same(reader.Verified, new FleetTrust(reader, folder, () => RosterFixture.Account).Membership());
-        Assert.Null(new FleetTrust(reader, folder, () => "another-account").Membership());
-        Assert.Null(new FleetTrust(reader, folder, () => null).Membership());
+    }
+
+    // #3245 review: only a pin that is genuinely absent lets unverified rows through. A pin this
+    // host can't use must not widen the fleet list to every machine.
+    [Fact]
+    public void An_unreadable_other_account_or_unverified_pin_lets_no_machine_into_the_fleet_list()
+    {
+        w.Add("H", "G", "H", "B", kind: "host");
+        var row = JsonSerializer.SerializeToElement(new { machine = w.Id("H"), online = true, record = new { sessions = Array.Empty<object>() } });
+        int Listed(HostRosterReader reader, string? account) =>
+            new RelayFleetRoster(new FleetTrust(reader, folder, () => account).Membership).Read([row]).Count;
+
+        Assert.Equal(1, Listed(new HostRosterReader(PathName, () => w.Now), RosterFixture.Account));
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        Assert.Equal(0, Listed(reader, RosterFixture.Account));
+        Assert.Equal("verified", reader.Update(Relay("G", "B", "H"), RosterFixture.Account).Outcome);
+        Assert.Equal(1, Listed(reader, RosterFixture.Account));
+        Assert.Equal(0, Listed(reader, "another-account"));
+        Assert.Equal(0, Listed(reader, null));
+        File.Delete(PathName);
+        Write("{}");
+        Assert.Equal(0, Listed(new HostRosterReader(PathName, () => w.Now), RosterFixture.Account));
     }
 
     [Fact]

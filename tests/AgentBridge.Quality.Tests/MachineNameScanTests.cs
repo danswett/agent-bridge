@@ -23,7 +23,7 @@ public class MachineNameScanTests
     // left in it fails until it is removed.
     static readonly string[] NotYetCleaned =
     [
-        "design/", "pwa/", "tests/AgentBridge.HomeAssistant.Tests/", "tools/ha-contract/",
+        "design/", "pwa/",
     ];
 
     static bool Names(string text) => MachineName.IsMatch(text) || UpperWord.Matches(text).Select(m => m.Value).Distinct(StringComparer.Ordinal)
