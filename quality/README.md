@@ -587,16 +587,19 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      Owner decision Nov 18 15:05 PT: `main_green.infra_steps` lists case-sensitive infra step
      names/globs per exact job or matrix family: checkout, setup, cache and job plumbing only,
      never source-dependent installs such as `npm ci`, Playwright's pin or its system-packages
-     action. Only those failing steps are exempt; unknown
+     action. Those names only locate a failure: a failed step also needs a failure annotation
+     on its job (one extra read per such job) showing a network or runner cause, such as exit
+     code 124 or a timeout, HTTP 429/5xx, a connection reset, DNS failure or a lost runner. Unknown
      failures and missing/empty step data hold. Cancellation needs evidence no test/build step
      started; a never-assigned runner also needs a nonempty step manifest. Cancelled runs are
      inspected rather than hiding a test failure behind older green evidence.
-     Each exempt job adds `ALERT infra-only` to the merge-rule description (after any blocking
-     reason, compacted) and to the detailed log.
+     An infra-only failure never holds. On a first attempt it adds `ALERT infra-only` to the
+     merge-rule description (after any blocking reason, compacted) and to the detailed log;
      [S2](https://github.com/danswett/agent-bridge/pull/3079) is not on main: flag `rerun needed
-     (once)` rather than dispatching another rerun path. Only a job's first attempt is exempt:
-     at attempt two or later an infra-only failure holds, so a rerun failing in setup never
-     erases an earlier test failure, and a persistent one can't keep main green.
+     (once)` rather than dispatching another rerun path. Once the rerun is used it adds
+     `INFRA-PERSISTENT <job>` instead (listed first), and the F5 guardian or Quality opens the
+     issue. A test/build failure in any attempt holds until a later attempt of that job
+     succeeds, so a rerun failing in setup never erases it.
      Unreadable history, plan or product data fails closed without fallback. No usable run in
      the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from Quality, since labels take triage

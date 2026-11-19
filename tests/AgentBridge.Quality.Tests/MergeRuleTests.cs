@@ -2124,6 +2124,7 @@ public class MergeRuleTests
     [InlineData("rerun-used", "success")]
     [InlineData("infra-then-infra", "success")]
     [InlineData("prior-test-failure", "failure")]
+    [InlineData("skipped-after-failure", "failure")]
     [InlineData("no-evidence", "failure")]
     [InlineData("npm-ci", "failure")]
     [InlineData("system-packages", "failure")]
@@ -2136,7 +2137,7 @@ public class MergeRuleTests
         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
         var target = scenario is "product-infra" or "build-failure" or "prior-test-failure" ? "product (ubuntu-latest)"
             : scenario == "wrong-job" ? "light" : "pwa-ui (webkit 3/3)";
-        var attempt = scenario is "rerun-used" or "prior-test-failure" or "infra-then-infra" ? 2 : 1;
+        var attempt = scenario is "rerun-used" or "prior-test-failure" or "infra-then-infra" or "skipped-after-failure" ? 2 : 1;
         object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
         var setup = target.StartsWith("product", StringComparison.Ordinal) ? "Run actions/setup-dotnet@v6"
             : scenario == "npm-ci" ? "Run npm ci"
@@ -2160,6 +2161,11 @@ public class MergeRuleTests
             }
         }
         if (scenario == "build-failure") steps = [Step("Build", "failure")];
+        if (scenario == "skipped-after-failure")
+        {
+            conclusion = "skipped";
+            steps = [Step(setup, "skipped"), Step("Run tests", "skipped")];
+        }
         var jobs = required.Select(n => n == "product" ? "product (ubuntu-latest)" : n).Append("plan")
             .Select((name, id) => new Dictionary<string, object?>
             {
@@ -2171,8 +2177,8 @@ public class MergeRuleTests
         if (scenario != "no-step-data")
             jobs.Single(j => (string)j["name"]! == target)["steps"] = scenario == "empty-step-data" ? [] : steps;
         // Attempt 1 failed its tests (or, for infra-then-infra, its setup); the rerun then failed in
-        // setup, before the tests ran.
-        if (scenario is "prior-test-failure" or "infra-then-infra")
+        // setup, before the tests ran (or, for skipped-after-failure, was skipped).
+        if (scenario is "prior-test-failure" or "infra-then-infra" or "skipped-after-failure")
             jobs = [.. jobs, new Dictionary<string, object?>
             {
                 ["id"] = 99, ["name"] = target, ["status"] = "completed", ["conclusion"] = "failure",

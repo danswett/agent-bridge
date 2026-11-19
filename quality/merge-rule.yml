@@ -73,8 +73,8 @@ arm64_waiver:
 # run, every pull request fails. Main's commit, not run finish time, determines the run.
 # Plan must succeed. Only then may a skipped job (or unexpanded skipped family) count as green.
 # Exact display names pin every selected matrix instance: missing or renamed holds.
-# Owner decision Nov 18 15:05 PT: infra-only failures warn, rather than holding main red, on a
-# job's first attempt; once the one rerun is used they hold.
+# Owner decision Nov 18 15:05 PT: infra-only failures never hold main red. They need network or
+# runner evidence in the job's annotations; after the one rerun they escalate as INFRA-PERSISTENT.
 # Unknown failing steps and missing/empty step data hold. Cancellation needs proof tests never ran.
 # A bare name covers a dynamic family: at least one entry, and every present instance green.
 # The aggregate quality-gate waits on installer, so only its test inputs are listed.
@@ -104,7 +104,8 @@ main_green:
   # Exact job or matrix-family name -> case-sensitive step globs. Never list tests or builds, or
   # source-dependent installs (npm ci, Playwright's pin, its system-packages action), which fail
   # the same way on every attempt for a bad lockfile or pin.
-  # S2 is not on main yet: the evaluator flags one rerun; after it, an infra-only failure holds.
+  # Names only locate a failure; its annotations must show a network or runner cause (exit 124,
+  # timeout, HTTP 429/5xx, reset, DNS, runner lost). S2 is not on main: the evaluator flags one rerun.
   infra_steps:
     product: &dotnet_infra
       - Set up job

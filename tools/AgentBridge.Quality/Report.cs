@@ -304,12 +304,12 @@ static class WeeklyReport
     /// <summary>
     /// merge-rule's description (MergeRule.Evaluate) reduced to its first item's kind, passing over
     /// a red main to what's next, and "main red" when that's all it names. Informational
-    /// `ALERT infra-only` items never categorize a pull request.
+    /// `ALERT infra-only` and `INFRA-PERSISTENT` items never categorize a pull request.
     /// </summary>
     public static string Category(string description)
     {
         var items = Combined.Replace(description, "").Split("; ").Select(i => i.Trim().ToLowerInvariant())
-            .Where(i => !i.StartsWith("alert infra-only", StringComparison.Ordinal)).ToList();
+            .Where(i => !i.StartsWith("alert infra-only", StringComparison.Ordinal) && !i.StartsWith("infra-persistent", StringComparison.Ordinal)).ToList();
         var rest = items.Where(i => !MainItem.IsMatch(i)).ToList();
         if (rest.Count == 0 && items.Count > 0 && items[0].Length > 0)
             return "main red";
