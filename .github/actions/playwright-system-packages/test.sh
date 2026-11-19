@@ -46,13 +46,11 @@ cat > "$work/bin/apt-get" <<'EOF'
 #!/usr/bin/env bash
 # Model a runner-trusted signature, its signed index hash/size, and archive hashes.
 chain_index() {
-  if [ -f "$PLAYWRIGHT_APT_LISTS/cache_Packages" ]; then
-    echo "$PLAYWRIGHT_APT_LISTS/cache_Packages"
+  if [ -f "$PLAYWRIGHT_APT_LISTS/cache_Packages" ]; then echo "$PLAYWRIGHT_APT_LISTS/cache_Packages"
   else echo "$PLAYWRIGHT_APT_LISTS/image_Packages"; fi
 }
 archive_matches_index() {
-  local digest size
-  read -r digest size < "$(chain_index)"
+  local digest size; read -r digest size < "$(chain_index)"
   [ -f "$PLAYWRIGHT_APT_ARCHIVES/cached.deb" ] &&
     [ "$(wc -c < "$PLAYWRIGHT_APT_ARCHIVES/cached.deb")" -eq "$size" ] &&
     printf '%s  %s\n' "$digest" "$PLAYWRIGHT_APT_ARCHIVES/cached.deb" | sha256sum --check --status
@@ -158,8 +156,7 @@ reset() {
   mkdir -p "$PLAYWRIGHT_APT_LISTS" "$PLAYWRIGHT_APT_ARCHIVES" "$HOME/.cache/playwright-apt-lists" "$HOME/.cache/playwright-apt-debs"
   echo image > "$PLAYWRIGHT_APT_LISTS/image_Packages"; echo image-signature > "$PLAYWRIGHT_APT_LISTS/image_InRelease"
   echo cached > "$HOME/.cache/playwright-apt-lists/cache_Packages"; echo cached-signature > "$HOME/.cache/playwright-apt-lists/cache_InRelease"
-  printf 'valid deb\n' > "$HOME/.cache/playwright-apt-debs/cached.deb"
-  : > "$PLAYWRIGHT_APT_ARCHIVES/downloaded.deb"; : > "$GITHUB_OUTPUT"
+  printf 'valid deb\n' > "$HOME/.cache/playwright-apt-debs/cached.deb"; : > "$PLAYWRIGHT_APT_ARCHIVES/downloaded.deb"; : > "$GITHUB_OUTPUT"
   rm -rf "$PLAYWRIGHT_APT_ETC"; mkdir -p "$PLAYWRIGHT_APT_ETC/sources.list.d"
   printf '%s\n' "$@" > "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"
   printf 'Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\n' > "$PLAYWRIGHT_APT_ETC/sources.list.d/ubuntu.sources"
@@ -193,20 +190,16 @@ check() {
   fi
 }
 
-# Production never restores lists, so tampered/missing-InRelease, invalid-signature and size-mismatch
-# only guard against list promotion; the archive, tampered-Packages and live-* cases are the sensors.
+# Cached-list cases guard isolation only; archive, tampered-Packages and live-* cases are the sensors.
 cache_auth_cases() {
   local damage hash size calls want
   for damage in tampered-InRelease tampered-Packages missing-InRelease invalid-signature size-mismatch archive-size missing-archive weak-digest live-signature live-missing live-Packages live-size; do
     reset "$canonical"; export DEBS_CACHE_HIT=true PLAYWRIGHT_APT_LIMIT=10s
     export APT_CHAIN_SOURCE="$work/cache-fixture/repository" APT_TRUSTED_RELEASE="$work/cache-fixture/runner-trusted-InRelease"
     export APT_CHAIN_INSTALLED="$work/cache-fixture/installed.deb"
-    mkdir -p "$APT_CHAIN_SOURCE"
-    printf 'valid deb\n' > "$APT_CHAIN_SOURCE/cached.deb"
-    hash=$(sha256sum "$APT_CHAIN_SOURCE/cached.deb"); hash=${hash%% *}
-    printf '%s 10\n' "$hash" > "$APT_CHAIN_SOURCE/Packages"
-    hash=$(sha256sum "$APT_CHAIN_SOURCE/Packages"); hash=${hash%% *}
-    size=$(wc -c < "$APT_CHAIN_SOURCE/Packages")
+    mkdir -p "$APT_CHAIN_SOURCE"; printf 'valid deb\n' > "$APT_CHAIN_SOURCE/cached.deb"
+    hash=$(sha256sum "$APT_CHAIN_SOURCE/cached.deb"); printf '%s 10\n' "${hash%% *}" > "$APT_CHAIN_SOURCE/Packages"
+    hash=$(sha256sum "$APT_CHAIN_SOURCE/Packages"); hash=${hash%% *}; size=$(wc -c < "$APT_CHAIN_SOURCE/Packages")
     printf '%s %s Packages\nrunner-trusted-signature\n' "$hash" "$size" > "$APT_CHAIN_SOURCE/InRelease"
     cp "$APT_CHAIN_SOURCE/InRelease" "$APT_TRUSTED_RELEASE"
     cp "$APT_CHAIN_SOURCE/Packages" "$HOME/.cache/playwright-apt-lists/cache_Packages"
@@ -246,8 +239,7 @@ cache_auth_cases() {
   done
 }
 cache_ref_case() {
-  reset "$canonical"
-  local code=0 expected
+  local code=0 expected; reset "$canonical"
   GITHUB_REF='refs/heads/topic,comma' bash "$here/download.sh" --cache-key chromium > "$work/out" 2>&1 || code=$?
   expected=$(printf '%s' 'refs/heads/topic,comma' | sha256sum)
   if [ "$code" -eq 0 ] && [ "$(sed -n 's/^ref-hash=//p' "$GITHUB_OUTPUT")" = "${expected%% *}" ] &&

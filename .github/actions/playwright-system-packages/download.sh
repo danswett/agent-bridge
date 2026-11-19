@@ -9,7 +9,7 @@
 # and WebKit's packages. The runner's mirror list (/etc/apt/apt-mirrors.txt, from
 # actions/runner-images) puts that mirror first and Canonical's HTTPS archive after it, but apt
 # moves down the list only when a fetch fails, never when it is slow. Network attempts get
-# 60 seconds for updates and 180 seconds for downloads; an Azure timeout (124) or DNS failure
+# 60 seconds for updates; downloads get 180 seconds on Azure and 600 on Canonical. Azure timeout or DNS failure
 # immediately leaves Azure. The Azure mirror is taken off the list and apt fetches the rest
 # from https://archive.ubuntu.com,
 # keeping what it has. Nothing else changes: no source, key or trust setting is added, apt checks
@@ -40,17 +40,14 @@ if [ "${1:-}" = --cache-key ]; then key_only=true; shift; fi
 if [ "$#" -eq 0 ]; then
   echo "::error::name the browsers whose system packages to download"; exit 1
 fi
-# Use the actual dry-run package list, not a proxy such as the npm lockfile.
 list=$(npx playwright install-deps --dry-run "$@" | sed -n 's/.*--no-install-recommends \([^"]*\)".*/\1/p' | tr '\n' ' ')
 read -ra pkgs <<< "$list"
 if [ "${#pkgs[@]}" -eq 0 ]; then
   echo "::error::playwright install-deps --dry-run named no packages to download"; exit 1
 fi
 if [ "$key_only" = true ]; then
-  hash=$(printf '%s\n' "${pkgs[@]}" | sha256sum)
-  echo "packages-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
-  hash=$(printf '%s' "${GITHUB_REF:-}" | sha256sum)
-  echo "ref-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
+  hash=$(printf '%s\n' "${pkgs[@]}" | sha256sum); echo "packages-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
+  hash=$(printf '%s' "${GITHUB_REF:-}" | sha256sum); echo "ref-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
   exit 0
 fi
 apt_etc=${PLAYWRIGHT_APT_ETC:-/etc/apt}
@@ -99,6 +96,7 @@ network_error() {
 retry() {
   local phase="$1" n=1 rc=0 log wait max="$attempts" strict=false
   shift
+  if [ "$phase" = download ] && [ "$left_azure" = true ]; then limit=${PLAYWRIGHT_APT_LIMIT:-600s}; fi
   [ "$phase" != update ] || max=${PLAYWRIGHT_APT_ATTEMPTS:-4}
   network_failed=false
   log=$(mktemp)
@@ -179,8 +177,7 @@ if [ "$cache_hit" = true ]; then
   trap 'sudo rm -rf -- "$plan"' EXIT
   cache_valid=true
   verified=()
-  # Live apt update authenticated the indexes. An empty planning directory prevents apt from
-  # omitting size-matched archives; --no-download alone does not explicitly check their hashes.
+  # Empty planning archives defeat apt's size-only reuse; live update authenticated the indexes.
   sudo apt-get -o Dir::Cache::archives="$plan/" -o Acquire::ForceHash=sha256 --print-uris --download-only install -y --no-install-recommends "${pkgs[@]}" > "$plan/uris" || cache_valid=false
   while read -r uri file size hash extra; do
     [[ "$uri" == \'* ]] || continue
@@ -197,8 +194,7 @@ if [ "$cache_hit" = true ]; then
   sudo rm -rf -- "$plan"
   trap - EXIT
   if [ "$cache_valid" = true ]; then
-    # Copy only what was just verified, and only once every planned archive passed: apt treats
-    # any size-matching file here as complete without hashing it, also for a later invocation.
+    # Copy only after ALL planned archives pass: apt reuses size-matching files without hashing.
     [ "${#verified[@]}" -eq 0 ] || sudo cp -- "${verified[@]}" "$apt_archives/"
     install_offline
     exit 0
@@ -242,9 +238,9 @@ if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = t
 elif [ "$rc" -ne 0 ]; then
   fail download "$rc"
 fi
-install_offline
 if [ "$cache_available" = false ] && compgen -G "$apt_archives/*.deb" > /dev/null; then
   mkdir -p "$cache_debs"
   cp "$apt_archives"/*.deb "$cache_debs/"
   [ -z "${GITHUB_OUTPUT:-}" ] || echo 'cache-ready=true' >> "$GITHUB_OUTPUT"
 fi
+install_offline

@@ -409,8 +409,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      together the seven run every spec. The one PWA job these replace took a median of 15
      minutes. Each `pwa-ui` leg, `pwa-e2e` and `spikes-linux` downloads and offline-installs
      Playwright's system packages through `.github/actions/playwright-system-packages`.
-     Update attempts have a 60-second bound; downloads get 180 seconds per attempt,
-     independently of cache state. An Azure timeout switches to the runner's Canonical fallback,
+     Update attempts have a 60-second bound; downloads get 180 seconds on Azure and 600 on
+     Canonical per attempt, allowing cold WebKit/e2e downloads. An Azure timeout switches to the runner's Canonical fallback,
      `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
      100 kB/s, and main run 41952998347 `pwa-e2e`). Before updating apt, a five-second Azure
      DNS probe switches immediately if lookup fails; an Azure DNS error during update or
@@ -423,21 +423,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      without switching Ubuntu mirrors. Mixed signature, hash, lock or other fatal errors
      still fail immediately. Canonical gets the same bounded network
      retries, then fails loudly with the attempt log; it never switches back to Azure.
-     Only deb archives are cached, never apt lists: every run requires live `apt-get update`
-     with the runner's existing signing keys, including Microsoft's feed. This delegates the
-     signature-to-index chain to apt instead of trusting cache-controlled metadata.
-     For non-forced hits, apt's `--print-uris` with SHA256 and an empty planning archive
-     directory supplies every required archive's authenticated size/hash. Every required deb
-     must match before only those debs are copied to apt's archives for `apt-get install --no-download`.
-     Missing archives, weak hashes, size/hash mismatches or planning failures discard the
-     cache and take the normal authenticated download path; failed updates never install.
-     GitHub never overwrites a discarded exact-key entry, so delete it (`gh cache delete <key>`).
-     Installation failure is fatal. The versioned archives-only key includes runner OS,
-     architecture, image version, the exact dry-run package-list hash and ref hash. Restore keys
-     allow other refs' accessible entries only for that same image and package list. Only successful
-     cold runs save debs, on any ref; PR entries are scoped to that PR, and main
-     must seed its own entry. Command fakes model the trusted Release/index/archive chain;
-     hosted Linux cache-hit proof is still required.
+     Archives only: cached apt lists are never restored. Every run requires live signed
+     `apt-get update` with runner keys, including Microsoft's feed; failed updates never install.
+     On non-forced hits, apt `--print-uris` with SHA256 and an empty archive directory supplies
+     authenticated sizes/hashes. Verify ALL required debs, then copy ONLY those for `apt-get install --no-download`.
+     Missing/invalid archives, weak hashes or planning failure discard the cache for authenticated downloads.
+     Install failure stays fatal. Successful cold downloads stage debs before install and save even on later failure.
+     Keys include OS, arch, image, exact dry-run package-list hash and ref hash; restores share only image/list matches.
+     PR entries stay PR-scoped; main seeds its own. Bad exact keys cannot be overwritten: `gh cache delete <key>`.
+     Fakes model the trusted Release/index/archive chain; hosted Linux cache-hit proof is still required.
      The four subsequent browser
      installs omit `--with-deps`, so they cannot trigger another apt update.
      Missing, corrupt or unrecognized errors fail at once, even alongside network errors
