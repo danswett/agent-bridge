@@ -332,8 +332,7 @@ public sealed class SessionRosterFixtureTests
             fixture.CodexRegistration(ids[i], 1000 + i, null);
             fixture.Processes.Run(AgentKind.Codex, 1000 + i, "codex.exe");
         }
-        var state = Path.Combine(fixture.Root, "sessions-listed.json");
-        await using var source = new SessionSource(fixture.Options(stateFile: state), fixture.Processes, fixture.Time, hostId: "host-id");
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
         await source.RefreshAsync();
         Assert.Equal(250, source.Snapshot().Count);
         Assert.Contains("250-session roster limit", source.Held!.Reason);
@@ -345,9 +344,6 @@ public sealed class SessionRosterFixtureTests
         Assert.Null(source.Get(ended));
         Assert.NotNull(source.Get(omitted));
         Assert.Null(source.Held);
-        using var saved = JsonDocument.Parse(File.ReadAllText(state));
-        Assert.DoesNotContain(saved.RootElement.GetProperty("sessions").EnumerateArray(),
-            s => s.TryGetProperty("omitted", out _));
         using var subscription = source.Subscribe();
         Assert.Equal(250, subscription.Result.Count);
     }

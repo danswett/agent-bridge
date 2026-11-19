@@ -614,15 +614,24 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         var observed = _processes.Observe(agent);
         var holds = new List<string>();
         var accounted = new HashSet<int>();
-        var ended = new Dictionary<string, Registration>(StringComparer.OrdinalIgnoreCase);
+        var ended = new Dictionary<string, Registration>(StringComparer.Ordinal);
         var pidless = agent == AgentKind.Codex ? new List<Registration>() : null;
         IReadOnlyList<DiscoveredSession> sessions = RegistrationDiscovery.Find(agent, roots, observed.Processes, findTranscript, holds, accounted, _options.AfterRegistrationRead, observed.Unidentified, ended, pidless);
-        var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
         var pids = sessions.Select(s => s.ProcessId).ToHashSet();
         bool AdmitNative(DiscoveredSession s)
         {
-            if (ids.Contains(s.Id) || pids.Contains(s.ProcessId) ||
-                (ended.TryGetValue(s.Id, out var r) && !Successor(s, r))) { return false; }
+            if (ids.Contains(s.Id) || pids.Contains(s.ProcessId)) { return false; }
+            if (ended.TryGetValue(s.Id, out var r) && !Successor(s, r))
+            {
+                // Native discovery may already account for this process. Rejection alone then
+                // leaves it neither listed nor held once the ended generation is removed.
+                if (s.ProcessStartedAt is null || r.Updated is null)
+                {
+                    holds.Add($"a {agent.ToString().ToLowerInvariant()} native session could not be proved newer than its ended registration (pid {s.ProcessId})");
+                }
+                return false;
+            }
             ids.Add(s.Id);
             pids.Add(s.ProcessId);
             return true;

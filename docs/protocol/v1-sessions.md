@@ -400,10 +400,9 @@ evicting a live row or allowing an omitted session to resume: its process stays 
 `owner`, `pr` and `finished` carry explicit evidence:
 unknown is not confirmed none or false. Idle does not mean work-finished. Removal bypasses
 upsert coalescing and quiet-session holding once discovery drops a row; list/get and new
-subscriptions then exclude it. This slice retains missing rows while their agent's discovery
-is held, even with positive ended evidence. The
-[lifecycle child](https://github.com/danswett/agent-bridge/pull/3202) adds ended-over-hold
-removal. A discovery hold alone is not evidence that a session ended.
+subscriptions then exclude it. Missing rows are retained while their agent's discovery
+is held, but positive ended evidence removes a session immediately, even during a hold.
+A discovery hold alone is not evidence that a session ended.
 
 This cut emits `owner`, `pr` and `finished` as `{ "state": "unknown" }` on every
 host-bound row; discovering known values or confirmed none/false is out of scope.
@@ -634,6 +633,11 @@ resume guards: a previously known unreadable runtime (dated, or one the 250 limi
 holds its agent across passes and restarts, without supplying a row. A positively exited or replaced
 process releases that guard. Native discovery supersedes an ended registration only with a
 process born after its last update, the row staying listed until the successor replaces it.
+If either timestamp is unavailable, the native candidate is not admitted and its agent is
+held: removing the ended row must not allow a duplicate resume. The hold lasts until fresh
+evidence proves the successor, the registration changes, or the candidate process exits.
+Registration session ids are compared ordinally, including across registration roots;
+case-distinct ids remain distinct.
 
 Sessions of the other agents are removed and resumed as usual. `reason` says what holds it, in
 words for a person, at most 512 bytes; a client shows it as it is ("discovery held: …", as the

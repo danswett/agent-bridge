@@ -37,11 +37,13 @@ public sealed class SessionRosterRestartResumeTests : LaunchFlowFixture
                 roster = new SessionSource(options, f.Processes, f.Time, hostId: "host-id");
             }
             await roster.RefreshAsync();
+            Assert.Contains(AgentKind.Claude, Assert.IsType<DiscoveryHeld>(roster.Held).Agents);
+            starter.Throws = new InvalidOperationException("A duplicate resume must never reach the starter.");
             var launcher = Launcher(Config(), discovery: roster);
             var result = await launcher.LaunchAsync(new LaunchRequest
             {
                 Request = Guid.NewGuid().ToString(), Resume = Id,
-            }, "phone");
+            }, "phone").WaitAsync(Patience);
             Assert.Equal(LaunchOutcome.Busy, result.Outcome);
             Assert.Empty(starter.Specs);
             Assert.DoesNotContain((await launcher.OptionsAsync()).Resumable, s => s.Id == Id);
