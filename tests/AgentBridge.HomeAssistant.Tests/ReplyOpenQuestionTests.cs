@@ -584,4 +584,53 @@ public sealed partial class ReplyTests
         await Do(c, ha.Press(SessionEntities.Submit(Node)));
         Assert.Single(answered);
     }
+
+    // #3296: a split of two missed agent publishes owes both their Sends, whether they come after the newer
+    // completes or one before and one after: neither is ever the owner's answer to the completed form.
+    // With pressedUnread, both came while no payload could be read; they settle both halves, so the owner's
+    // first press answers.
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Both_agent_presses_of_an_unseen_split_stay_the_agents_once_it_completes(bool olderPressFirst, bool pressedUnread)
+    {
+        await using var c = await Asking("agent-user");
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        ha.GetFailsFor = id => pressedUnread && id == SessionEntities.ReplyPayload(Node);
+        var older = ha.SendFromCard(Node, "older", driver: "agent", rid: "r-1");
+        if (pressedUnread) { await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user")); }
+        var newer = ha.SendFromCard(Node, "newer", driver: "agent", rid: "r-2");
+        if (pressedUnread) { await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user")); }
+        ha.GetFailsFor = null;
+        var split = newer.State with { State = older.State.State, LastChanged = older.State.LastChanged, LastUpdated = newer.State.LastUpdated!.Value.AddMilliseconds(-500) };
+        ha.States[newer.EntityId] = split;
+        await Do(c, new HaTrigger(newer.EntityId, split));
+        if (olderPressFirst) { await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user")); }
+        ha.States[newer.EntityId] = newer.State;
+        await Do(c, newer);
+        if (!pressedUnread) { await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user")); }
+        if (!pressedUnread && !olderPressFirst) { await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user")); }
+        Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+    }
+
+    // #3298: a watch report of the first payload's stamp before its attributes arrived, delivered after the complete
+    // payload was queued and its Send spent, ends once that payload reads complete again, written later.
+    [Fact]
+    public async Task A_delayed_initial_split_of_a_queued_payload_clears_once_it_reads_complete_again()
+    {
+        await using var c = await Asking("agent-user");
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        var first = ha.SendFromCard(Node, "first", driver: "agent", rid: "r-1");
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        var initial = first.State with { Attributes = JsonSerializer.SerializeToElement(new { }), LastUpdated = first.State.LastUpdated!.Value.AddMilliseconds(-500) };
+        await Do(c, new HaTrigger(first.EntityId, initial));
+        Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+        await CardCloses(c);
+        Assert.Equal("first", Assert.Single(replied).Text);
+    }
 }
