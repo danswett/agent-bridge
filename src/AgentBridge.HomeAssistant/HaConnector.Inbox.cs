@@ -30,9 +30,9 @@ public sealed partial class HaConnector
     // #3224: an agent payload read only after its Send was taken, unmatched, while no payload could be read owes
     // nothing more, as if it had been read in time. Only a press at or after the payload changed, both on Home
     // Assistant's clock, can be its companion: an owner's press before it still leaves the agent's Send owed.
-    static bool SettledByEarlierPress(RidLog log, HaState payload)
+    static bool SettledByEarlierPress(RidLog log, DateTimeOffset? written)
     {
-        if (payload.LastChanged is not { } changed) { return false; }
+        if (written is not { } changed) { return false; }
         var i = log.Unmatched.FindIndex(press => DateTimeOffset.TryParse(press, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at) && at >= changed);
         if (i < 0) { return false; }
         log.Unmatched.RemoveAt(i);
@@ -87,18 +87,25 @@ public sealed partial class HaConnector
             }
             // Either half may arrive first. Only the newer complete payload (or its replacement),
             // never a lagging previous snapshot, discharges the uncertainty: with neither half known, a complete one
-            // Home Assistant wrote after the split is the newer (#3224).
-            else if (log.UncertainPayload is { } split && stamp != split.Before
-                && (split.Before is not null || split.At is null || (stamp != split.State && stamp != split.At) || state.LastUpdated > split.Updated)) { log.UncertainPayload = null; }
+            // Home Assistant wrote after the split is the newer (#3224). A split whose attributes held no stamp missed
+            // no publish, so its own stamp written complete later ends it too (#3298).
+            else if (log.UncertainPayload is { } split && (stamp != split.Before
+                ? split.Before is not null || split.At is null || (stamp != split.State && stamp != split.At) || state.LastUpdated > split.Updated
+                : split.At is null && state.LastUpdated > split.Updated)) { log.UncertainPayload = null; }
             if (!mixed && Str(a, "driver") != "agent") { log.AgentSends.Remove(stamp); }
             if (!mixed && ((armed.PayloadBaseline.Present && stamp == armed.PayloadBaseline.Value) || p.Reply.IsHandled(stamp))) { continue; }
             var fresh = RememberPayload(log, stamp);
-            if (mixed && log.UncertainPayload is { Before: null, At: { } other }) { RememberPayload(log, other); }
+            // #3296: a split of two unseen publishes owes a Send for each, not only its state's: remembering the
+            // attributes' stamp without its debt let its complete read clear the split and its agent Send answer.
+            var unseen = mixed && log.UncertainPayload is { Before: null, At: { } other } && RememberPayload(log, other) ? other : null;
+            var agent = mixed || Str(a, "driver") == "agent";
             // Press accounting is independent of payload acceptance and its fallible acknowledgement.
             // Every agent payload, even one naming the open question, owes its companion Send, unless an unread one
-            // already came (#3224), including when a split recorded the debt before this complete read.
-            if (!mixed && Str(a, "driver") == "agent" && (fresh || log.AgentSends.Contains(stamp)) && SettledByEarlierPress(log, state)) { log.AgentSends.Remove(stamp); }
-            else if (fresh && (mixed || Str(a, "driver") == "agent")) { log.AgentSends.Add(stamp); }
+            // already came (#3224), including when a split recorded the debt before this complete read. Each half of a
+            // split settles only a press at or after it was written: its stamp's last_changed, its attributes' last_updated.
+            if (agent && (fresh || (!mixed && log.AgentSends.Contains(stamp))) && SettledByEarlierPress(log, stamp == state.State ? state.LastChanged : state.LastUpdated)) { log.AgentSends.Remove(stamp); }
+            else if (fresh && agent) { log.AgentSends.Add(stamp); }
+            if (unseen is not null && !SettledByEarlierPress(log, state.LastUpdated)) { log.AgentSends.Add(unseen); }
             if (mixed || Str(a, "driver") != "agent" || !string.IsNullOrEmpty(Str(a, "decision_id")) || !ServesReplies || CleanRid(Str(a, "rid")) is not { } rid
                 || HasAttachments(state) || string.IsNullOrWhiteSpace(Str(a, "text"))) { continue; }
             var queue = log.Queued;
