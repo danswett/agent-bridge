@@ -4,6 +4,21 @@ public static class InstallationFiles
 {
     public const string Unknown = "Windows file holders could not be checked";
     public static readonly TimeSpan ReleaseWait = TimeSpan.FromMinutes(2);
+    public static readonly string TimedOut = $"the Windows installation file check (Restart Manager) timed out after {ReleaseWait.TotalSeconds:0} s; no file holder was confirmed";
+
+    public static IReadOnlyList<string> LockedImages(string folder)
+    {
+        var locked = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
+            .Where(f => Path.GetExtension(f).Equals(".exe", StringComparison.OrdinalIgnoreCase)
+                || Path.GetExtension(f).Equals(".dll", StringComparison.OrdinalIgnoreCase)))
+        {
+            try { using var check = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException e) when ((e.HResult & 0xffff) is 32 or 33) { locked.Add(file); }
+            catch (UnauthorizedAccessException) { locked.Add(file); }
+        }
+        return locked;
+    }
 
     public sealed class Budget(TimeProvider time)
     {
@@ -13,19 +28,35 @@ public static class InstallationFiles
         public TimeSpan Elapsed => Time.GetElapsedTime(Began) - excluded;
         public TimeSpan Remaining => ReleaseWait - Elapsed;
         public void ExcludeSince(long timestamp) => excluded += Time.GetElapsedTime(timestamp);
-        public async Task<string?> ProbeOnceAsync(Func<string?>? probe, CancellationToken cancellation)
+        internal Func<IReadOnlyList<string>>? LockedFiles { get; set; }
+        Func<CancellationToken, string?>? clearProbe;
+        HashSet<string>? clearFiles;
+        public async Task<string?> ProbeOnceAsync(Func<CancellationToken, string?>? probe, CancellationToken cancellation)
         {
             if (probe is null) { return null; }
-            var left = Remaining;
-            if (left <= TimeSpan.Zero) { return Unknown; }
-            using var deadline = new CancellationTokenSource(left, Time);
+            // A successful scan is shared by the duplicate preflight gates, not a deadline.
+            // A changed lock footprint invalidates it, including locks acquired in a dialog.
+            using var deadline = new CancellationTokenSource(ReleaseWait, Time);
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation, deadline.Token);
-            try { return await Task.Run(probe, stop.Token).WaitAsync(stop.Token); }
-            catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellation.IsCancellationRequested) { return Unknown; }
+            var token = stop.Token;
+            try
+            {
+                return await Task.Run(() =>
+                {
+                    var files = LockedFiles?.Invoke();
+                    if (clearProbe == probe && (files is null || clearFiles?.SetEquals(files) == true)) { return null; }
+                    var held = probe(token);
+                    token.ThrowIfCancellationRequested();
+                    clearProbe = held is null ? probe : null;
+                    clearFiles = held is null && files is not null ? new(files, StringComparer.OrdinalIgnoreCase) : null;
+                    return held;
+                }, token).WaitAsync(token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellation.IsCancellationRequested) { return TimedOut; }
         }
     }
 
-    public static async Task<string?> AwaitReleaseAsync(Func<string?>? probe, TimeProvider time,
+    public static async Task<string?> AwaitReleaseAsync(Func<CancellationToken, string?>? probe, TimeProvider time,
         CancellationToken cancellation, Action<string>? waiting = null, Action<string>? log = null, Budget? budget = null)
     {
         if (probe is null) { return null; }
@@ -33,22 +64,20 @@ public static class InstallationFiles
         time = budget.Time;
         var leftAtStart = budget.Remaining;
         if (leftAtStart <= TimeSpan.Zero) { return Unknown; }
-        using var deadline = new CancellationTokenSource(leftAtStart, time);
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation, deadline.Token);
         var delay = TimeSpan.FromSeconds(1);
         var last = Unknown;
-        while (!deadline.IsCancellationRequested && budget.Elapsed < ReleaseWait)
+        while (budget.Elapsed < ReleaseWait)
         {
             try
             {
-                var held = await Task.Run(probe, stop.Token).WaitAsync(stop.Token);
-                if (budget.Elapsed >= ReleaseWait) { return last; }
+                var held = await budget.ProbeOnceAsync(probe, cancellation);
+                if (held == TimedOut) { log?.Invoke(held); return held; }
                 if (held is null) { return null; }
                 last = string.IsNullOrWhiteSpace(held) ? Unknown : held;
             }
-            catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellation.IsCancellationRequested) { return last; }
             catch (OperationCanceledException) { throw; }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException or TimeoutException)
+            catch (TimeoutException) { return TimedOut; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException)
             {
                 log?.Invoke($"installation file holders could not be checked: {e.Message}");
                 last = Unknown;
@@ -56,8 +85,7 @@ public static class InstallationFiles
             waiting?.Invoke(last);
             var left = budget.Remaining;
             if (left <= TimeSpan.Zero) { break; }
-            try { await Task.Delay(delay < left ? delay : left, time, stop.Token); }
-            catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellation.IsCancellationRequested) { return last; }
+            await Task.Delay(delay < left ? delay : left, time, cancellation);
             delay = TimeSpan.FromSeconds(Math.Min(10, delay.TotalSeconds * 2));
         }
         return last;

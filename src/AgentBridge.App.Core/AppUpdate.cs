@@ -151,6 +151,8 @@ public sealed class AppUpdateViewModel : Observable
         _ when why.StartsWith("no update has been downloaded", StringComparison.Ordinal) || why.StartsWith("no downloaded update", StringComparison.Ordinal)
             => "nothing has been downloaded yet",
         _ when why.StartsWith("the host's status could not be read", StringComparison.Ordinal) => "the host didn't answer",
+        _ when why.Contains(InstallationFiles.TimedOut, StringComparison.Ordinal) => InstallationFiles.TimedOut,
+        _ when why.Contains(InstallationFiles.Unknown, StringComparison.Ordinal) => "Windows file holders could not be checked; no file holder was confirmed",
         _ when why.Contains(UpdateBlockedException.Prefix, StringComparison.Ordinal) => "another program is holding a file in the installation",
         _ when why.StartsWith("installing ", StringComparison.Ordinal) && why.Contains(" failed: ", StringComparison.Ordinal) => "the installer reported an error",
         _ => "of an unexpected error",

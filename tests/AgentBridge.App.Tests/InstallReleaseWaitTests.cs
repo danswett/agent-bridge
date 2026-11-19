@@ -57,7 +57,7 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         var applied = false;
         var probes = 0;
         var update = Manager(clock).StopAndApplyAsync(() => begun = true, () => applied = true,
-            () => { Interlocked.Increment(ref probes); return holder; });
+            _ => { Interlocked.Increment(ref probes); return holder; });
 
         var failed = await Assert.ThrowsAsync<UpdateBlockedException>(() => FinishAsync(update, () => true, clock));
 
@@ -77,7 +77,7 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         var clock = new FakeTimeProvider(Make.T0);
         var begun = false;
         var update = Manager(clock).StopAndApplyAsync(() => begun = true, () => begun = true,
-            () => throw new UnauthorizedAccessException("private-path must stay out of recovery text"));
+            _ => throw new UnauthorizedAccessException("private-path must stay out of recovery text"));
 
         var failed = await Assert.ThrowsAsync<UpdateBlockedException>(() => FinishAsync(update, () => true, clock));
 
@@ -91,23 +91,23 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task A_clear_scan_followed_by_a_stalled_final_probe_uses_the_remaining_deadline_and_can_be_quit(bool quitting)
+    public async Task A_changed_probe_gets_a_fresh_scan_deadline_and_can_be_quit(bool quitting)
     {
         var clock = new FakeTimeProvider(Make.T0);
         var manager = Manager(clock);
         var budget = new InstallationFiles.Budget(clock);
-        await manager.WaitForInstallationFilesAsync(() => null, fileBudget: budget);
+        await manager.WaitForInstallationFilesAsync(_ => null, fileBudget: budget);
         clock.Advance(TimeSpan.FromSeconds(90));
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var begun = false;
         var update = manager.StopAndApplyAsync(() => begun = true, () => begun = true,
-            () => { entered.TrySetResult(); release.Task.GetAwaiter().GetResult(); return null; }, waitForFiles: false, fileBudget: budget);
+            _ => { entered.TrySetResult(); release.Task.GetAwaiter().GetResult(); return null; }, waitForFiles: false, fileBudget: budget);
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             if (quitting) { manager.Quit(TimeSpan.FromSeconds(1), _ => { }); }
-            else { clock.Advance(TimeSpan.FromSeconds(30)); }
+            else { clock.Advance(InstallationFiles.ReleaseWait); }
             if (quitting) { await Assert.ThrowsAnyAsync<OperationCanceledException>(() => update.WaitAsync(TimeSpan.FromSeconds(5))); }
             else { await Assert.ThrowsAsync<UpdateBlockedException>(() => update.WaitAsync(TimeSpan.FromSeconds(5))); }
             Assert.False(begun);
@@ -138,7 +138,7 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         host.Start();
         var begun = false;
         var applied = false;
-        var update = Manager(clock).StopAndApplyAsync(() => begun = true, () => applied = true, Probe);
+        var update = Manager(clock).StopAndApplyAsync(() => begun = true, () => applied = true, _ => Probe());
         await Wait.UntilAsync(() => Volatile.Read(ref probes) > 0, "the held file being checked");
         Assert.Empty(host.Sent(HostOps.Stop));
         holder.Dispose();

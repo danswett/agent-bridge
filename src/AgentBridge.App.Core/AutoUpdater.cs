@@ -162,7 +162,7 @@ public sealed class AutoUpdater
     readonly IUiDispatcher ui;
     // Names what holds files in the installation, or null: asked before the host is stopped
     // (HostManager.StopAndApplyAsync), so an update that cannot replace them stops nothing.
-    readonly Func<string?>? preflight;
+    readonly Func<CancellationToken, string?>? preflight;
     DateTimeOffset? checkedAt;
     // The last check's end, and its failure if it failed, which a press soon after is answered with.
     DateTimeOffset? lastCheckAt;
@@ -255,7 +255,7 @@ public sealed class AutoUpdater
     // for what waits on the person, and an update can wait (Creative, #231 for a found agent).
     public AutoUpdater(IUpdater updater, HostConnection host, HostManager manager, Func<AppPreferences> prefs, Action<AppPreferences> save, Action<string> log,
         Func<int?, string?> othersInPackage,         TimeProvider? time = null, IUiDispatcher? ui = null,
-                Func<string?>? preflight = null)
+                Func<CancellationToken, string?>? preflight = null)
     {
                 this.preflight = preflight;
         this.updater = updater as ObservedUpdater ?? new ObservedUpdater(updater, time);
@@ -1343,7 +1343,8 @@ public sealed class AutoUpdater
                 code: UpdateCode.ReleaseChanged);
             return;
         }
-        try { await WaitForFilesAsync(); }
+        InstallationFiles.Budget fileBudget;
+        try { fileBudget = await WaitForFilesAsync(); }
         catch (UpdateBlockedException e)
         {
             if (DropExpired()) { return; }
@@ -1381,7 +1382,7 @@ public sealed class AutoUpdater
                 log($"update now: pressed on {by ?? "another device"}, going over {(accept is null ? "nothing busy" : $"{accept.Working} with a turn running and {accept.Waiting} with a question or approval waiting{(accept.Unknown == true ? ", with sessions not yet reported" : "")}")}");
                 // The host left for this press: it is the one installed and answered, even should
                 // another have replaced it while the host was asked.
-                await InstallAsync(because, (request, true));
+                await InstallAsync(because, (request, true), fileBudget: fileBudget);
                 return;
             case UpdateDepartOutcome.Waiting:
                 var code = UpdateProtocol.IsCode(left.Code) ? left.Code : UpdateWaitingCode.Unknown;
@@ -1421,7 +1422,7 @@ public sealed class AutoUpdater
         try
         {
             await manager.WaitForInstallationFilesAsync(preflight,
-                why => { fileWait = $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time, fileBudget);
+                why => { fileWait = why == InstallationFiles.Unknown ? why : $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time, fileBudget);
             await manager.CheckInstallationFilesAsync(preflight, fileBudget);
             return fileBudget;
         }
@@ -1438,7 +1439,7 @@ public sealed class AutoUpdater
     // not, still on this version with the host back. answers: the press this install answers, as
     // the tick decided it, and whether the host departed for it (an Update now), which it then
     // answers whatever press has come since; else the one being carried out now.
-    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null, Func<string, Task<bool>>? confirm = null)
+    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null, Func<string, Task<bool>>? confirm = null, InstallationFiles.Budget? fileBudget = null)
     {
         var to = Pending!;
         var source = updater.Source;
@@ -1455,7 +1456,7 @@ public sealed class AutoUpdater
         {
             if (departed is null)
             {
-                var fileBudget = await WaitForFilesAsync();
+                fileBudget ??= await WaitForFilesAsync();
                 var nonFileWork = time.GetTimestamp();
                 if (local && host.State == LinkState.Connected) { await manager.WaitForUsageProbesAsync(); }
                 if (!local && await ProbeBusyAsync() is { } probe) { lastProbe = probe; Changed(); return NotNow; }
@@ -1473,7 +1474,7 @@ public sealed class AutoUpdater
                 fileBudget.ExcludeSince(nonFileWork);
                 await manager.CheckInstallationFilesAsync(preflight, fileBudget);
             }
-            else { await manager.CheckInstallationFilesAsync(preflight, new InstallationFiles.Budget(time)); }
+            else { await manager.CheckInstallationFilesAsync(preflight, fileBudget ?? new InstallationFiles.Budget(time)); }
             Validate();
             updatingIn = open ? to : null;
             installingAt = null;
@@ -1618,7 +1619,7 @@ public sealed class AutoUpdater
     // or why it couldn't install, with Try again); otherwise a toast does (#1167). A failed install
     // is never silent: Update.exe, silent, says nothing itself, and restarts this old version.
     public static UpdateAnnouncement? Announce(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, IToastSink sink, Action<string> log,
-        TimeProvider? time = null, Func<string?>? blockers = null)
+        TimeProvider? time = null, Func<CancellationToken, string?>? blockers = null)
     {
         if (prefs().UpdatedFrom is not { } from) { return null; }
         var notes = prefs().UpdateNotes;
@@ -1664,9 +1665,15 @@ public sealed class AutoUpdater
             // holds the files is named, best effort.
             save(UpdateBackoff.Failed(prefs(), at, prefs().UpdateFailedRelease, out var retryAt));
             string? held = null;
-            try { held = blockers?.Invoke(); }
-            catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { }
-            log($"the update from {from} did not take: still {now ?? "not installed"}{(held is null ? "" : $"; {UpdateBlockedException.Prefix}{held}")}; update failed, retrying at {retryAt.ToLocalTime():t}");
+            try { held = new InstallationFiles.Budget(time ?? TimeProvider.System).ProbeOnceAsync(blockers, default).GetAwaiter().GetResult(); }
+            catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+            {
+                held = InstallationFiles.Unknown;
+                log($"installation file holders could not be checked: {e.Message}");
+            }
+            var detail = held is null ? "" : held == InstallationFiles.Unknown || held == InstallationFiles.TimedOut
+                ? $"; {held}" : $"; {UpdateBlockedException.Prefix}{held}";
+            log($"the update from {from} did not take: still {now ?? "not installed"}{detail}; update failed, retrying at {retryAt.ToLocalTime():t}");
             var failed = new UpdateAnnouncement(false, from, now ?? from, attempted, open);
             if (!open && prefs().Toasts) { sink.Show(new ToastNotice("agent-bridge-updated", ToastXml.CouldNotInstall(failed.Message), Quiet: true)); }
             return failed;

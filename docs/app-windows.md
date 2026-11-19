@@ -698,10 +698,23 @@ controls consume that same contract; this extraction does not disable or remove 
     which refuses while another profile's app or host runs from this installation (below), asking
     the host for its own pid first. The banner offers only a release the updater has ready: while a
     newer one found since is still downloading, or held after a failed download, it offers nothing.
-  * **Files held by Windows** (#2345, #2353): before stopping the host, wait at most two minutes
-    for Restart Manager's holders to release, with checks backing off to ten seconds.
+  * **Files held by Windows** (#2345, #2353, [timeout fix](https://github.com/danswett/agent-bridge/issues/2866)):
+    before stopping the host, check only locked executable images (`.exe`/`.dll`) with Restart
+    Manager. Reuse a completed clear scan throughout that install attempt; cheap file checks
+    invalidate it if the locked-file set changes, including during confirmation or departure.
+    Each scan has its own two-minute deadline, independent of the two-minute release wait
+    (checks back off to ten seconds). A scan started within that wait may finish afterwards.
     An unreadable/changing holder list is unknown, never permission to install. A SYSTEM service
-    is named even when its image is unreadable. Waiting carries no Installing credit; timeout
+    is named even when its image is unreadable; refusals include process/service name and PID,
+    never the absolute image path. Verify a confirmed external holder's association with one installation file
+    before naming that relative path ([holder diagnostics](https://github.com/danswett/agent-bridge/issues/2858));
+    the aggregate registered-file list is not proof of which file a process holds. A holder that
+    releases between queries or changes creation time is unknown, never a guessed filename.
+    Match PID plus creation time throughout. Quit and the scan deadline stop further bisection;
+    a native call already in flight is quarantined until it returns, without holding the scan
+    monitor or permitting overlapping native scans. Startup diagnostics use the same outer budget.
+    A scan timeout names Restart Manager and 120 s, never claiming a confirmed holder.
+    Waiting carries no Installing credit; timeout
     keeps the old install intact with recovery text and the existing 10/20/40/60-minute backoff.
     This path never stops a service or self-elevates; it does not replace the later slot design.
   * **Usage probes hold the host's stop** (#238): before the host is stopped, for an install or

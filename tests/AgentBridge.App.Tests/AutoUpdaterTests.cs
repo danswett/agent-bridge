@@ -150,7 +150,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Elevated = () => false,
             Time = held,
         };
-        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi, () => preflight?.Invoke())
+        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi, _ => preflight?.Invoke())
         {
             WindowOpen = () => windowOpen,
         };
@@ -1539,7 +1539,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("final-scan")]
+    [InlineData("scan")]
     [InlineData("usage-probe")]
     [InlineData("confirm")]
     [Trait("Category", "Network")]
@@ -1556,7 +1556,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Assert.True(TestUi.Read(() => connection.Sessions.All.Any(s => s.Id == "s2")));
         }
         var scans = 0;
-        preflight = () => { if (phase == "final-scan" && ++scans == 2) { Turn(); } return null; };
+        preflight = () => { if (phase == "scan" && ++scans == 1) { Turn(); } return null; };
         host.On(HostOps.ProbeHold, _ => { if (phase == "usage-probe") { Turn(); } return new ProbeHoldResult(false); });
 
         await auto.RestartToUpdateAsync(_ => { if (phase == "confirm") { Turn(); return Task.FromResult(true); } return Task.FromResult(false); });
@@ -1634,7 +1634,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
                 return Task.FromResult(true);
             });
             Assert.Contains("held-during-dialog.dll", why, StringComparison.Ordinal);
-            Assert.True(scans >= 3);
+            Assert.Equal(2, scans);
             Assert.False(updater.Applied);
             Assert.Null(prefs.UpdatedFrom);
             Assert.Empty(host.Sent(HostOps.Stop));
@@ -1736,10 +1736,34 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_failed_update_startup_finishes_when_the_holder_probe_exhausts_its_fake_clock_budget()
+    {
+        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateHandedOver = true };
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startup = Task.Run(() => AutoUpdater.Announce(() => prefs, p => prefs = p, updater,
+            new Toasts(), log.Add, time, _ =>
+            {
+                entered.SetResult();
+                release.Task.GetAwaiter().GetResult();
+                return null;
+            }));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            time.Advance(InstallationFiles.ReleaseWait);
+            Assert.NotNull(await startup.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.Contains(log, l => l.Contains("timed out", StringComparison.Ordinal));
+            Assert.DoesNotContain(log, l => l.Contains(UpdateBlockedException.Prefix, StringComparison.Ordinal));
+        }
+        finally { release.TrySetResult(); await startup.WaitAsync(TimeSpan.FromSeconds(5)); }
+    }
+
+    [Fact]
     public void An_update_that_did_not_take_is_counted_and_names_what_holds_the_installation_and_one_that_took_clears_the_count()
     {
         prefs = prefs with { UpdatedFrom = "0.1.0", UpdateHandedOver = true };
-        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time, () => "svchost.exe (DiagTrack, pid 4242)");
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time, _ => "svchost.exe (DiagTrack, pid 4242)");
 
         Assert.Equal(1, prefs.UpdateFailures);
         Assert.Equal(time.GetUtcNow() + UpdateBackoff.First, prefs.UpdateRetryAt);
@@ -3544,7 +3568,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         try
         {
             await NowAsync();
-            Assert.True(scans >= 3);
+            Assert.Equal(2, scans);
             Assert.False(updater.Applied);
             Assert.False(prefs.UpdateHandedOver);
             Assert.Null(prefs.UpdatedFrom);
