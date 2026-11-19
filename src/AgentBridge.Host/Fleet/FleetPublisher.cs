@@ -10,7 +10,7 @@ namespace AgentBridge.Host.Fleet;
 
 // Keep one instance for the host's lifetime, including across relay reconnects.
 public sealed class FleetPublisher(ISessionSource source, string machine, Func<string, string?>? name = null, TimeProvider? time = null,
-    Func<JsonElement, JsonElement>? sign = null, Func<string, SessionProcess?, string?>? role = null)
+    Func<JsonElement, JsonElement>? sign = null, Func<string, SessionProcess?, string?>? role = null, bool relaySupportsRoles = false)
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
     readonly string epoch = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
@@ -42,12 +42,13 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
                     var (s, node) = entry;
                     var id = node["agent_bridge_".Length..];
                     var displayName = name?.Invoke(s.Id)?.Trim();
+                    var process = source.ProcessOf(s);
                     return new
                     {
                         id, node, name = displayName is not null && FleetNames.IsValidName(displayName) ? displayName : null,
                         state = s.Status, since = s.StatusSince,
-                        role = SessionRoles.Known(role?.Invoke(s.Id, source.ProcessOf(s.Id))),
-                        startedAt = source.ProcessOf(s.Id) is { Id: > 0, StartedAt: { } started }
+                        role = relaySupportsRoles ? SessionRoles.Known(role?.Invoke(s.Id, process)) : null,
+                        startedAt = process is { Id: > 0, StartedAt: { } started }
                             ? started.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture) : null,
                     };
                 }).ToList();

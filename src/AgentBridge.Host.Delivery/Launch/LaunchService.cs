@@ -202,6 +202,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     readonly ILaunchCredentials? credentials;
     readonly ILaunchAccount? launchAccount;
     readonly List<Pending> pending = [];
+    sealed record RoleBinding(Pending Launch, string Session, SessionProcess? Observed);
+    readonly Dictionary<Guid, RoleBinding> roleBindings = [];
     // Every session id a launch has started an agent on (given, resumed, or the Codex session
     // bound to it), with its process: while that process runs, the session is not resumed
     // again, even after its launch has stopped being followed, and a Codex session bound to
@@ -234,6 +236,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         this.options = options;
         this.log = log ?? (_ => { });
         provenance = new LaunchProvenance(options.ProvenanceFile, this.log);
+        source.Changed += OnRoleBindingChange;
         this.attachments = attachments;
         resumable = new ResumableStore(options.CopilotHome, options.ClaudeHome, options.CodexHome, options.Time);
         var deliveryGate = gate ?? throw new ArgumentNullException(nameof(gate));
@@ -1684,16 +1687,65 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // was started with. Once per session id.
     void Noted(Pending p, string id)
     {
-        if (source.ProcessOf(id) is { StartedAt: not null } process)
+        var process = source.Get(id) is { } session ? source.ProcessOf(session) : null;
+        bool deferred;
+        lock (pendingGate)
         {
-            try { provenance.Bound(p.Key, id, process); }
-            catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
-            { log($"launch {Short(p.Key)}: process provenance could not be bound: {e.Message}"); }
+            deferred = roleBindings.ContainsKey(p.Key) || process is not { StartedAt: not null };
+            if (deferred) { roleBindings.TryAdd(p.Key, new(p, id, process)); }
         }
+        if (deferred) { RetryRoleBindings(id); }
+        else if (process is not null) { BindRole(p, id, process); }
         if (p.NotedId == id || SessionStarted is not { } started) { return; }
         p.NotedId = id;
         try { started(id, p.Launched); }
         catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the restore record could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
+    }
+
+    void OnRoleBindingChange(object? sender, SessionChange change)
+    {
+        if (change.Kind == SessionChangeKind.Upserted) { RetryRoleBindings(change.Id); }
+        else
+        {
+            lock (pendingGate)
+            {
+                foreach (var key in roleBindings.Where(x => x.Value.Session == change.Id).Select(x => x.Key).ToArray()) { roleBindings.Remove(key); }
+            }
+        }
+    }
+
+    void RetryRoleBindings(string id)
+    {
+        RoleBinding[] waiting;
+        lock (pendingGate)
+        {
+            if (roleBindings.Count == 0) { return; }
+            waiting = roleBindings.Values.Where(x => x.Session == id).ToArray();
+        }
+        if (waiting.Length == 0 || source.Get(id) is not { } session || source.ProcessOf(session) is not { StartedAt: { } at } process) { return; }
+        foreach (var binding in waiting)
+        {
+            var original = binding.Launch.Started;
+            if (process.Id != (binding.Observed?.Id ?? original.ProcessId)) { continue; }
+            // An undated PID is not an identity: verify the original root, or its still-owned child.
+            if (process.Id == original.ProcessId ? at != original.StartedAt
+                : at < original.StartedAt || !starter.Running(original) || starter.Owns(original, process.Id) != true) { continue; }
+            if (BindRole(binding.Launch, id, process)) { lock (pendingGate) { roleBindings.Remove(binding.Launch.Key); } }
+        }
+    }
+
+    bool BindRole(Pending p, string id, SessionProcess process)
+    {
+        try
+        {
+            if (provenance.Bound(p.Key, id, process)) { source.RoleChanged(id, process); }
+            return true;
+        }
+        catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            log($"launch {Short(p.Key)}: process provenance could not be bound: {e.Message}");
+            return false;
+        }
     }
 
     // agent-ha-bridge's Test-DaemonTrustAwaitingPress: a launched agent asking whether to trust

@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -28,6 +29,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     readonly SemaphoreSlim _pass = new(1, 1);
     readonly Lock _gate = new();
     readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
+    // Queued snapshots keep their incarnation without retaining snapshots after readers release them.
+    readonly ConditionalWeakTable<Session, SessionProcess> _bindings = new();
     readonly List<SessionSubscription> _subscribers = [];
     readonly Channel<SessionChange> _changes = Channel.CreateUnbounded<SessionChange>(new UnboundedChannelOptions { SingleReader = true });
     readonly Channel<bool> _wake = Channel.CreateBounded<bool>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
@@ -89,6 +92,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         public Session ListForm = null!;
         public Session GetForm = null!;
         public Session GuardForm = null!;
+        public SessionProcess? Process;
         // GetForm before SessionBudget.Fit (GetUnbudgeted), and its JSON when Fit changed it.
         public Session Unbudgeted = null!;
         public string? UnbudgetedJson;
@@ -235,7 +239,17 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     {
         lock (_gate)
         {
-            return _entries.TryGetValue(id, out var e) && e.Tracker.Discovered is { ProcessId: { } pid } d ? new SessionProcess(pid, d.ProcessStartedAt) : null;
+            return _entries.GetValueOrDefault(id)?.Process;
+        }
+    }
+
+    public SessionProcess? ProcessOf(Session session) => _bindings.TryGetValue(session, out var process) ? process : null;
+
+    public void RoleChanged(string id, SessionProcess process)
+    {
+        lock (_gate)
+        {
+            if (_entries.TryGetValue(id, out var entry) && entry.Process == process) { PublishChange(entry); }
         }
     }
 
@@ -1105,6 +1119,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     void Commit(Entry entry, Session full)
     {
         entry.Full = full;
+        var discovered = entry.Tracker.Discovered;
+        var process = discovered.ProcessId is { } pid ? new SessionProcess(pid, discovered.ProcessStartedAt) : null;
         DateTimeOffset? endingSince;
         SessionRestored? restored;
         DateTimeOffset? boundary = null;
@@ -1167,7 +1183,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         // Pending), and the clearing of one gone stale, is decided below and nowhere else, often
         // with the same session and the same time (#634 review, H2). It is held only while a
         // sign-in is under way.
-        if (ReferenceEquals(full, entry.CommittedFull) && inputs == entry.CommittedWith)
+        if (ReferenceEquals(full, entry.CommittedFull) && inputs == entry.CommittedWith && process == entry.Process)
         {
             lock (_gate)
             {
@@ -1246,7 +1262,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         lock (_gate)
         {
             entry.GuardForm = guardForm;
-            if (json == entry.Json && _entries.ContainsKey(full.Id))
+            if (json == entry.Json && process == entry.Process && _entries.ContainsKey(full.Id))
             {
                 if (unbudgetedJson == entry.UnbudgetedJson) { return; }
                 // Only what Fit trimmed changed: no client is sent anything new, so no revision and
@@ -1259,15 +1275,17 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             {
                 entry.GetForm = getForm;
                 entry.ListForm = listForm;
+                entry.Process = process;
+                if (process is not null)
+                {
+                    _bindings.AddOrUpdate(getForm, process);
+                    _bindings.AddOrUpdate(listForm, process);
+                }
                 entry.Unbudgeted = shown;
                 entry.UnbudgetedJson = unbudgetedJson;
                 entry.Json = json;
                 _entries[full.Id] = entry;
-                _revision++;
-                entry.Committed = _revision;
-                entry.Pending ??= _revision;
-                entry.Dirty = true;
-                ScheduleEmit(entry);
+                PublishChange(entry);
                 return;
             }
         }
@@ -1278,6 +1296,14 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             try { handler(this, full.Id); }
             catch (Exception) { }
         }
+    }
+
+    void PublishChange(Entry entry)
+    {
+        entry.Committed = ++_revision;
+        entry.Pending ??= _revision;
+        entry.Dirty = true;
+        ScheduleEmit(entry);
     }
 
     // At most one upsert per session per CoalesceInterval: the first change goes out at
