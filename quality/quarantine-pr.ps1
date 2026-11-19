@@ -44,6 +44,34 @@ function Get-QuarantineEdit([string]$Source, [string]$TestName, [string]$Reason)
     $attribute = '[' + $m.Groups['kind'].Value + '(' + $prefix + 'Skip = "' + $Reason + '")]'
     $Source.Remove($m.Index, $m.Length).Insert($m.Index, $attribute)
 }
+function Get-QuarantineResume([string]$Repository, [string]$Sha, [string]$Head, $Tree, $File, [string]$Source, [string]$TestName) {
+    $commit = Get-QuarantineApi $Repository "git/commits/$Sha"
+    if (@($commit.parents).Count -ne 1 -or $commit.parents[0].sha -cne $Head) { throw 'Existing quarantine ref is not a single child of current main.' }
+    $next = Get-QuarantineApi $Repository "git/trees/$($commit.tree.sha)?recursive=1"
+    if ($next.truncated) { throw 'Incomplete existing quarantine tree.' }
+    $changes = @(Compare-Object @($Tree.tree | Where-Object type -NE tree) @($next.tree | Where-Object type -NE tree) -Property path, mode, type, sha -CaseSensitive -PassThru)
+    if ($changes.Count -ne 2 -or @($changes | Where-Object { $_.path -cne $File.path -or $_.mode -cne '100644' -or $_.type -cne 'blob' }).Count) {
+        throw 'Existing quarantine ref must change only the expected test file.'
+    }
+    $entry = @($next.tree | Where-Object path -CEQ $File.path)
+    if ($entry.Count -ne 1) { throw 'Existing quarantine test file is ambiguous.' }
+    $blob = Get-QuarantineApi $Repository "git/blobs/$($entry[0].sha)"
+    if ($blob.encoding -ne 'base64') { throw 'Unsupported existing source encoding.' }
+    $current = [Text.UTF8Encoding]::new($false, $true).GetString([Convert]::FromBase64String($blob.content))
+    $reasons = @([regex]::Matches($current, 'quarantine-expires=([^;\r\n"]*); issue #([1-9]\d*)') |
+        Where-Object { $current -ceq (Get-QuarantineEdit $Source $TestName $_.Value) } | Sort-Object Value -Unique)
+    if ($reasons.Count -ne 1) { throw 'Existing quarantine expiry or tracking issue is absent or ambiguous.' }
+    $reason = $reasons[0]; $expiry = [DateTimeOffset]::MinValue; $now = [DateTimeOffset]::UtcNow
+    if (-not [DateTimeOffset]::TryParseExact($reason.Groups[1].Value, "yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$expiry) -or $expiry -le $now -or $expiry -gt $now.AddHours(24)) {
+        throw 'Existing quarantine expiry must be valid, unelapsed and within 24 hours.'
+    }
+    $number = [int]$reason.Groups[2].Value
+    if ($commit.message -cne "Quarantine $TestName (issue #$number)" -or $current -cne (Get-QuarantineEdit $Source $TestName $reason.Value)) {
+        throw 'Existing quarantine ref is not the expected Skip-only edit.'
+    }
+    [pscustomobject]@{ number = $number; expiry = $reason.Groups[1].Value; sha = $Sha }
+}
 function Invoke-QuarantinePr([long]$RunId, [string]$TestName, [string]$Repository, [double]$Hours = 24) {
     if ($RunId -le 0 -or $Repository -notmatch '^[\w.-]+(?:/[\w.-]+)?$' -or
         $TestName -notmatch '^(?:[A-Za-z_]\w*(?:\.[A-Za-z_]\w*){2,}|(?:[\w-]+/)*[\w-]+\.spec\.mjs:[1-9]\d*)$' -or
@@ -72,11 +100,10 @@ function Invoke-QuarantinePr([long]$RunId, [string]$TestName, [string]$Repositor
     }
     $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($TestName))).Substring(0, 16).ToLowerInvariant()
     $branch = "quarantine/main-red-$hash"; $marker = "quarantine-pr: test=$TestName issue="
-    $prs = @(Invoke-Gh pr list --repo $Repository --head $branch --state open --limit 2 --json 'number,url,isDraft,body,baseRefName' | ConvertFrom-Json)
+    $prs = @(Invoke-Gh pr list --repo $Repository --head $branch --state open --limit 2 --json 'number,url,isDraft,body,baseRefName,headRefOid' | ConvertFrom-Json)
     if ($prs.Count) {
         if ($prs.Count -ne 1 -or -not $prs[0].isDraft -or $prs[0].baseRefName -ne 'main' -or
             -not $prs[0].body.Contains($marker)) { throw 'Existing PR is not the expected draft quarantine.' }
-        return [pscustomobject]@{ Pr = $prs[0].url; Reused = $true }
     }
     $tree = Get-QuarantineApi $Repository "git/trees/${head}?recursive=1"
     if ($tree.truncated) { throw 'Incomplete tree; refuse ambiguous test lookup.' }
@@ -93,29 +120,44 @@ function Invoke-QuarantinePr([long]$RunId, [string]$TestName, [string]$Repositor
     $blob = Get-QuarantineApi $Repository "git/blobs/$($file.sha)"
     if ($blob.encoding -ne 'base64') { throw 'Unsupported source encoding.' }
     $source = [Text.UTF8Encoding]::new($false, $true).GetString([Convert]::FromBase64String($blob.content))
+    $refs = @(Get-QuarantineApi $Repository "git/matching-refs/heads/$branch" | Where-Object ref -CEQ "refs/heads/$branch")
+    if ($refs.Count -gt 1 -or ($refs.Count -eq 1 -and $refs[0].object.type -cne 'commit')) { throw 'Existing quarantine ref is ambiguous or not a commit.' }
+    $existing = if ($refs.Count) { Get-QuarantineResume $Repository $refs[0].object.sha $head $tree $file $source $TestName } else { $null }
+    if ($prs.Count) {
+        $deadlines = [regex]::Matches($prs[0].body, '(?m)^Expiry: ([^\r\n]*)\r?$')
+        if ($null -eq $existing -or $prs[0].headRefOid -cne $existing.sha -or
+            $prs[0].body -cnotmatch ('(?m)^' + [regex]::Escape("$marker$($existing.number)") + '\r?$') -or
+            $deadlines.Count -ne 1 -or $deadlines[0].Groups[1].Value -cne $existing.expiry) { throw 'Existing draft does not match its current quarantine Skip and expiry.' }
+        return [pscustomobject]@{ Pr = $prs[0].url; Reused = $true }
+    }
     $expiry = [DateTimeOffset]::UtcNow.AddHours($Hours).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    if ($null -ne $existing) { $expiry = $existing.expiry }
     $null = Get-QuarantineEdit $source $TestName "quarantine-expires=$expiry; issue #1"
-    $issues = @(Invoke-Gh issue list --repo $Repository --label flaky --state open --limit 200 --json 'number,title,body,author' | ConvertFrom-Json)
-    if ($issues.Count -ge 200) { throw 'Incomplete flake issue inventory.' }
-    $issue = Find-FlakyIssue $TestName $issues
     $evidence = "Test: $TestName`nSignature: Failed $TestName`nExpiry: $expiry`n" +
         "Run: https://github.com/$Repository/actions/runs/$RunId (attempts 1 and 2)`n" +
         "Owner: Quality, pending fix DRI assignment. To restore: revert this PR.`n" + ($receipts -join "`n")
-    Assert-QuarantineEnabled $Repository
-    if ($null -eq $issue) {
-        $url = Invoke-Gh issue create --repo $Repository --title "Quarantine $TestName (main-red)" --body $evidence --label 'quarantined,flaky,fixes-main,priority:P0'
-        if ($url -notmatch '/issues/(\d+)$') { throw 'Tracking issue creation was not confirmed.' }
-        $issue = [pscustomobject]@{ number = [int]$Matches[1] }
+    if ($null -eq $existing) {
+        $issues = @(Invoke-Gh issue list --repo $Repository --label flaky --state open --limit 200 --json 'number,title,body,author' | ConvertFrom-Json)
+        if ($issues.Count -ge 200) { throw 'Incomplete flake issue inventory.' }
+        $issue = Find-FlakyIssue $TestName $issues
+        Assert-QuarantineEnabled $Repository
+        if ($null -eq $issue) {
+            $url = Invoke-Gh issue create --repo $Repository --title "Quarantine $TestName (main-red)" --body $evidence --label 'quarantined,flaky,fixes-main,priority:P0'
+            if ($url -notmatch '/issues/(\d+)$') { throw 'Tracking issue creation was not confirmed.' }
+            $issue = [pscustomobject]@{ number = [int]$Matches[1] }
+        } else {
+            Invoke-Gh issue edit $issue.number --repo $Repository --add-label 'quarantined,flaky,fixes-main,priority:P0' | Out-Null
+        }
+        $number = $issue.number; $reason = "quarantine-expires=$expiry; issue #$number"
+        $edited = Get-QuarantineEdit $source $TestName $reason
+        Assert-QuarantineEnabled $Repository
+        Invoke-Gh issue comment $number --repo $Repository --body $evidence | Out-Null
+        $newTree = Write-QuarantineApi $Repository 'git/trees' @{ base_tree = $tree.sha; tree = @(@{ path = $file.path; mode = $file.mode; type = 'blob'; content = $edited }) }
+        $commit = Write-QuarantineApi $Repository 'git/commits' @{ message = "Quarantine $TestName (issue #$number)"; tree = $newTree.sha; parents = @($head) }
+        $null = Write-QuarantineApi $Repository 'git/refs' @{ ref = "refs/heads/$branch"; sha = $commit.sha }
     } else {
-        Invoke-Gh issue edit $issue.number --repo $Repository --add-label 'quarantined,flaky,fixes-main,priority:P0' | Out-Null
+        $number = $existing.number; $commit = $existing
     }
-    $number = $issue.number; $reason = "quarantine-expires=$expiry; issue #$number"
-    $edited = Get-QuarantineEdit $source $TestName $reason
-    Assert-QuarantineEnabled $Repository
-    Invoke-Gh issue comment $number --repo $Repository --body $evidence | Out-Null
-    $newTree = Write-QuarantineApi $Repository 'git/trees' @{ base_tree = $tree.sha; tree = @(@{ path = $file.path; mode = $file.mode; type = 'blob'; content = $edited }) }
-    $commit = Write-QuarantineApi $Repository 'git/commits' @{ message = "Quarantine $TestName (issue #$number)"; tree = $newTree.sha; parents = @($head) }
-    $null = Write-QuarantineApi $Repository 'git/refs' @{ ref = "refs/heads/$branch"; sha = $commit.sha }
     $body = "$marker$number`n$evidence`nTracking: https://github.com/$Repository/issues/$number`n" +
         "WHOLE vs parent: 2 (parent $head); exception: none`n" +
         'One Skip only. Required: independent Sol and Sonnet exact-head reviews; Quality alone readies, arms and merges. ' +

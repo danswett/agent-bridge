@@ -23,6 +23,15 @@ function Fake-QuarantineGh {
         '^api repos/r/actions/jobs/([12])/logs' { $s.logs[[int]$Matches[1] - 1]; return }
         '^api repos/r/git/ref/heads/main' { @{ object = @{ sha = $s.head } } | ConvertTo-Json; return }
         '^pr list' { ConvertTo-Json -InputObject @($s.prs) -Depth 4; return }
+        '^api repos/r/git/matching-refs/heads/(.+)$' {
+            $refs = if ($s.refExists) { @(@{ ref = "refs/heads/$($Matches[1])"; object = @{ type = 'commit'; sha = 'created' } }) } else { @() }
+            ConvertTo-Json -InputObject @($refs) -Depth 4; return }
+        '^api repos/r/git/commits/created$' {
+            @{ message = $s.refMessage; parents = @(@{ sha = $s.refParent }); tree = @{ sha = 'ref-tree' } } | ConvertTo-Json -Depth 4; return }
+        '^api repos/r/git/trees/ref-tree\?recursive=1$' {
+            @{ truncated = $false; tree = @(@{ path = $s.path; type = 'blob'; mode = '100644'; sha = 'current-blob' }) + @($s.extraFiles) } | ConvertTo-Json -Depth 4; return }
+        '^api repos/r/git/blobs/current-blob$' {
+            @{ encoding = 'base64'; content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s.refSource)) } | ConvertTo-Json; return }
         '^api repos/r/git/trees/head\?recursive=1' {
             $entries = @(@{ path = $s.path; type = 'blob'; mode = '100644'; sha = 'blob' })
             if ($s.ambiguous) {
@@ -35,23 +44,35 @@ function Fake-QuarantineGh {
         '^issue list' { ConvertTo-Json -InputObject @($s.issues) -Depth 4; return }
         '^issue create' { 'https://github.com/r/issues/42'; return }
         '^issue (comment|edit)' { return }
-        '^api repos/r/git/(trees|commits|refs) --method POST --input -$' { @{ sha = 'created' } | ConvertTo-Json; return }
-        '^pr create' { 'https://github.com/r/pull/43'; return }
+        '^api repos/r/git/trees --method POST --input -$' { $s.refSource = ($body | ConvertFrom-Json).tree[0].content; @{ sha = 'created' } | ConvertTo-Json; return }
+        '^api repos/r/git/refs --method POST --input -$' {
+            if ($s.refExists) { $global:LASTEXITCODE = 1; return }
+            $s.refExists = $true; @{ sha = 'created' } | ConvertTo-Json; return }
+        '^api repos/r/git/commits --method POST --input -$' { $s.refMessage = ($body | ConvertFrom-Json).message; @{ sha = 'created' } | ConvertTo-Json; return }
+        '^pr create' {
+            if ($s.failPrCreate) { $s.failPrCreate = $false; $global:LASTEXITCODE = 1; return }
+            'https://github.com/r/pull/43'; return }
         default { throw "Unexpected offline request: $a" }
     }
 }
-function Scenario($over = @{}, [double]$Hours = 24, [string]$TestName = 'A.B.C.Works') {
+function Scenario($over = @{}, [double]$Hours = 24, [string]$TestName = 'A.B.C.Works', [switch]$Retry) {
     $script:s = @{ enabled = 'on'; branch = 'main'; attempt = 2; head = 'head'; prs = @(); issues = @()
         ambiguous = $false; truncated = $false; source = $source; apiFailure = $false; disableAfter = 0
-        path = 'tests/C.cs'; jobCount = 1; jobConclusion = 'failure'; logs = @('  Failed A.B.C.Works [1 ms]', '  Failed A.B.C.Works [2 ms]') }
+        path = 'tests/C.cs'; jobCount = 1; jobConclusion = 'failure'; logs = @('  Failed A.B.C.Works [1 ms]', '  Failed A.B.C.Works [2 ms]')
+        refExists = $false; refSource = ''; failPrCreate = $false; extraFiles = @(); refParent = 'head'; refMessage = 'Quarantine A.B.C.Works (issue #42)' }
     foreach ($k in $over.Keys) { $script:s[$k] = $over[$k] }
     $script:calls = [Collections.Generic.List[string]]::new()
     $script:bodies = [Collections.Generic.List[object]]::new()
     $script:variableReads = 0
-    $errorText = $null; $result = $null
+    $errorText = $null; $result = $null; $firstError = $null
     try { $result = Invoke-QuarantinePr -RunId 100 -TestName $TestName -Repository r -Hours $Hours }
     catch { $errorText = $_.Exception.Message }
-    [pscustomobject]@{ Result = $result; Error = $errorText
+    if ($Retry) {
+        $firstError = $errorText; $errorText = $null
+        try { $result = Invoke-QuarantinePr -RunId 100 -TestName $TestName -Repository r -Hours $Hours }
+        catch { $errorText = $_.Exception.Message }
+    }
+    [pscustomobject]@{ Result = $result; Error = $errorText; FirstError = $firstError
         Writes = @($calls | Where-Object { $_ -match '^(issue (create|edit|comment)|pr create)|--method POST' }) }
 }
 $x = Scenario
@@ -96,9 +117,52 @@ Assert ($x.Error -and @($calls | Where-Object { $_ -like 'pr create*' }).Count -
 $issue = @{ number = 42; title = 'flaky A.B.C.Works'; body = ''; author = @{ login = 'danswett' } }
 $x = Scenario @{ issues = @($issue) }
 Assert (-not $x.Error -and @($calls | Where-Object { $_ -like 'issue create*' }).Count -eq 0) 'an existing trusted flake issue is reused'
-$x = Scenario @{ prs = @(@{ number = 43; url = 'https://github.com/r/pull/43'; isDraft = $true
-    baseRefName = 'main'; body = 'quarantine-pr: test=A.B.C.Works issue=42' }) }
+$deadline = [DateTimeOffset]::UtcNow.AddHours(4).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+$draft = @{ number = 43; url = 'https://github.com/r/pull/43'; isDraft = $true; headRefOid = 'created'
+    baseRefName = 'main'; body = "quarantine-pr: test=A.B.C.Works issue=42`nExpiry: $deadline" }
+$skipped = $source.Replace('[Fact]', "[Fact(Skip = `"quarantine-expires=$deadline; issue #42`")]")
+$reuse = @{ prs = @($draft); refExists = $true; refSource = $skipped }
+$x = Scenario $reuse
 Assert (-not $x.Error -and $x.Writes.Count -eq 0 -and $x.Result.Pr -eq 'https://github.com/r/pull/43') 'repeat invocation reuses the open draft without writes'
+$otherMarker = "`n// quarantine-expires=$deadline; issue #99"
+$case = $reuse.Clone(); $case.source = $source + $otherMarker; $case.refSource = $skipped + $otherMarker
+$x = Scenario $case
+Assert (-not $x.Error -and $x.Result.Reused -and $x.Writes.Count -eq 0) 'reuse validates the changed declaration without mistaking an unchanged expiry marker for its deadline'
+foreach ($body in @('quarantine-pr: test=A.B.C.Works issue=42', ($draft.body + "`nExpiry: invalid"))) {
+    $case = $reuse.Clone(); $pr = $draft.Clone(); $pr.body = $body; $case.prs = @($pr)
+    $x = Scenario $case
+    Assert ($x.Error -and $x.Writes.Count -eq 0) 'reuse refuses absent or ambiguous draft deadlines'
+}
+foreach ($bad in @('', 'invalid', '2020-01-01T00:00:00Z', [DateTimeOffset]::UtcNow.AddHours(25).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"))) {
+    $case = $reuse.Clone(); $case.refSource = $skipped.Replace($deadline, $bad)
+    $x = Scenario $case
+    Assert ($x.Error -and $x.Writes.Count -eq 0) "reuse refuses missing, malformed, elapsed or over-cap current Skip expiry: '$bad'"
+    $case = $reuse.Clone(); $pr = $draft.Clone(); $pr.body = $draft.body.Replace($deadline, $bad); $case.prs = @($pr)
+    $x = Scenario $case
+    Assert ($x.Error -and $x.Writes.Count -eq 0) "reuse refuses missing, malformed, elapsed or inconsistent draft expiry: '$bad'"
+}
+foreach ($bad in @($source, $skipped.Replace('issue #42', 'issue #99'), ($skipped + "`n// unrelated edit"))) {
+    $case = $reuse.Clone(); $case.refSource = $bad
+    $x = Scenario $case
+    Assert ($x.Error -and $x.Writes.Count -eq 0) 'reuse requires the current single Skip-only edit and matching tracking issue'
+}
+$x = Scenario @{ failPrCreate = $true } -Retry
+Assert ($x.FirstError -and -not $x.Error -and $x.Result.Pr -eq 'https://github.com/r/pull/43') "retry resumes an orphan after failed PR creation: $($x.Error)"
+Assert (@($calls | Where-Object { $_ -like 'pr create*' }).Count -eq 2 -and
+    @($calls | Where-Object { $_ -like 'api repos/r/git/refs --method POST*' }).Count -eq 1) 'retry reaches PR creation without rewriting or recreating the existing ref'
+Assert (@($calls | Where-Object { $_ -like 'issue create*' }).Count -eq 1 -and $x.Result.Expiry -and
+    $s.refSource.Contains("quarantine-expires=$($x.Result.Expiry); issue #$($x.Result.Issue)")) 'orphan resume preserves its original tracking issue and deadline'
+foreach ($bad in @(
+    @{ refSource = $source }, @{ refSource = $skipped.Replace($deadline, '2020-01-01T00:00:00Z') },
+    @{ refSource = $skipped; refParent = 'older-main' },
+    @{ refSource = $skipped; extraFiles = @(@{ path = '.github/workflows/ci.yml'; type = 'blob'; mode = '100644'; sha = 'other' }) }
+)) {
+    $case = $bad.Clone(); $case.refExists = $true
+    $x = Scenario $case
+    Assert ($x.Error -and $x.Writes.Count -eq 0) 'unsafe or stale orphan refs refuse without writes'
+}
+$x = Scenario @{ refExists = $true; refSource = $skipped; disableAfter = 1 }
+Assert ($x.Error -and $x.Writes.Count -eq 0) 'revocation before orphan PR creation leaves its ref untouched'
 $x = Scenario @{ source = $source.Replace('[Fact]', "[Theory]`n    [InlineData(1)]") }
 Assert (-not $x.Error -and @($bodies | Where-Object { $_.PSObject.Properties['base_tree'] })[0].tree[0].content -match '\[Theory\(Skip = "') 'Theory with data retains data and gains one Skip'
 $crlf = $source.Replace("`n", "`r`n").Replace('[Fact]', '[Fact(Timeout = 1000)]')
@@ -117,6 +181,9 @@ if (-not $x.Error) {
     $restored = ($content -replace 'test\.skip\(', 'test(') -replace ' // quarantine-expires=[^\r\n]+', ''
     Assert ($restored -ceq $pw) 'only the Playwright declaration line changes, preserving CRLF'
 }
+$case = $pwCase.Clone(); $case.failPrCreate = $true
+$x = Scenario $case -TestName 'test/a.spec.mjs:2' -Retry
+Assert ($x.FirstError -and -not $x.Error -and $x.Result.Pr -eq 'https://github.com/r/pull/43') 'Playwright orphan retry also validates and resumes the original Skip-only commit'
 foreach ($bad in @(
     @{ source = $pw.Replace('test(', 'test.skip(') }, @{ source = $pw.Replace('test(', 'test.fixme(') },
     @{ ambiguous = $true }, @{ source = $pw.Replace("test('works'", "// test('works'") },

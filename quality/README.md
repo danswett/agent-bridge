@@ -857,6 +857,10 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
     attribute or Playwright declaration-line `test.skip` edit through git data,
     no checkout/workflow changes. It never readies,
     arms or merges; independent Sol + Sonnet exact-head receipts remain mandatory.
+    Draft reuse verifies the current Skip-only commit against current main and
+    requires matching draft/Skip deadlines, valid and unelapsed within 24 hours.
+    After failed PR creation, a retry validates and resumes the orphaned ref with
+    its original issue and expiry; unsafe refs refuse, never force or overwrite.
     Owner/Chief can close the draft or disable the variable. Notify Main-Green
     and Chief only, never the owner's phone. Unsupported/ambiguous declarations refuse.
     `QuarantineExpiryTests` in the existing Quality project fails on expired or
