@@ -38,7 +38,7 @@ function Fake-Gh {
         '^issue list ' {
             $found = @()
             if ($s.foreign) { $found += @{ number = 5; body = ''; author = @{ login = 'stranger' } } }
-            if ($s.open) { $found += @{ number = 9; body = $s.body; author = @{ login = 'github-actions[bot]' } } }
+            if ($s.open) { $found += @{ number = 9; body = $s.body; author = @{ login = 'app/github-actions' } } }
             ConvertTo-Json -InputObject $found -Depth 5; return
         }
         '^issue view 9 ' { @{ comments = $s.comments } | ConvertTo-Json -Depth 5; return }
@@ -48,7 +48,7 @@ function Fake-Gh {
         }
         '^issue comment 9 ' {
             $s.writes += 'comment'
-            $s.comments += @{ body = $args[([array]::IndexOf($args, '--body') + 1)]; author = @{ login = 'github-actions[bot]' } }
+            $s.comments += @{ body = $args[([array]::IndexOf($args, '--body') + 1)]; author = @{ login = 'github-actions' } }
             return
         }
         '^issue close 9 ' { $s.writes += 'close'; $s.open = $false; return }
@@ -84,10 +84,10 @@ foreach ($c in 'failure', 'success') {
 }
 Reset-Scenario; $s.log = 'Build FAILED: error CS1002'; Detect
 Assert ($s.body -match 'product' -and $s.body -match 'no test name was found') 'build failure still lists its job'
-Reset-Scenario; $s.jobName = "@someone `````n# injected"; $s.log = '  1) [webkit] > ignored'
+Reset-Scenario; $s.jobName = "@someone `````n# injected"
 $s.log = "  1) [webkit] $([char]0x203a) @someone``````.spec.mjs:43:1 $([char]0x203a) title"
 Detect
-Assert (-not $s.body.Contains('@') -and ([regex]::Matches($s.body, '(?m)^```$')).Count -eq 2) 'mentions and backticks cannot escape the test code block'
+Assert (-not $s.body.Contains('@') -and $s.body.Contains('[at]someone') -and ([regex]::Matches($s.body, '(?m)^```$')).Count -eq 2) 'mentions and backticks cannot escape the test code block'
 $huge = [pscustomobject]@{ id = 100; run_attempt = 1; head_sha = 'abcdef0123456789' }
 $body = Format-MainRedBody $huge 'o/r' @([pscustomobject]@{ Name = 'x' * 20000; Tests = @('A.B.' + ('x' * 20000)) * 100; LogReadable = $true })
 Assert ($body.Length -le 12000 -and $body.EndsWith('```')) 'long evidence is capped without breaking its fence'
