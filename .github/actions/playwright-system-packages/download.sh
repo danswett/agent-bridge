@@ -204,7 +204,7 @@ if [ "$cache_hit" = true ]; then
   cache_available=false
 fi
 # Downloads have their own bound, independent of the update limit.
-limit=${PLAYWRIGHT_APT_LIMIT:-180s}
+limit=${PLAYWRIGHT_APT_LIMIT:-30s}
 rc=0
 if [ "$force" = true ]; then
   echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: taking the Azure mirror off apt's list before downloading anything; nothing timed out"
