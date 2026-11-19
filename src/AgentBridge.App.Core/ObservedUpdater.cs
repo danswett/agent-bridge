@@ -9,9 +9,43 @@ namespace AgentBridge.App.Core;
 // Settings is reported as one the AutoUpdater made would be: what the last check found (kept when
 // its download fails, so a release that is there is not reported as nothing newer), when, and
 // the download's progress.
-public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) : IUpdater
+public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null,
+    Func<Task<HaltPolicySnapshot>>? readHaltPolicy = null, Action<string>? log = null) : IUpdater
 {
     readonly TimeProvider time = time ?? TimeProvider.System;
+    internal Func<Task<HaltPolicySnapshot>> ReadHaltPolicy { get; set; } =
+        readHaltPolicy ?? (() => Task.FromResult(inner.HaltPolicy ?? new HaltPolicySnapshot(null, null, false)));
+    readonly SemaphoreSlim policyTurn = new(1, 1);
+    HaltPolicySnapshot policy = new(null, null, false);
+    bool policyRead;
+
+    internal async Task RefreshHaltPolicyAsync()
+    {
+        await policyTurn.WaitAsync();
+        try
+        {
+            try { policy = await ReadHaltPolicy(); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or HttpRequestException
+                or System.Text.Json.JsonException or InvalidOperationException or ReleaseDiscoveryException
+                or FormatException or System.Security.Cryptography.CryptographicException or OperationCanceledException)
+            {
+                log?.Invoke($"update policy: protection could not be read ({e.GetType().Name}); known halts retained");
+                policy = policy with { Fresh = false };
+            }
+            policyRead = true;
+        }
+        finally { policyTurn.Release(); }
+        Raise();
+    }
+
+    internal bool Halted(string? version) => version is not null
+        && (policy.Policy?.Halted?.Contains(version, StringComparer.Ordinal) == true
+            || inner.HaltPolicy?.Policy?.Halted?.Contains(version, StringComparer.Ordinal) == true);
+    internal bool PolicyFresh => policy.Fresh && policy.Policy is { Body.Length: > 0 } && policy.At is { } at
+        && at <= time.GetUtcNow() && time.GetUtcNow() - at < ReleaseDiscovery.GithubRevalidateEvery;
+    internal UpdatePolicy Policy => new(PolicyFresh ? UpdatePolicyState.Ok
+        : policy.Policy is { Body.Length: > 0 } ? UpdatePolicyState.Stale : UpdatePolicyState.Unreadable, policy.At);
+    internal const string HaltedReason = "this release has been halted";
     // One download at a time: Velopack's takes a global update lock and fails, rather than waits,
     // when another holds it, so Settings' and the automatic one's overlapping made the second fail
     // (reported to every device as a failed update).
@@ -57,7 +91,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public int? GitHubRemaining => inner.GitHubRemaining;
     public DateTimeOffset? GitHubQuotaAt => inner.GitHubQuotaAt;
     public DateTimeOffset? DiscoveredAt => inner.DiscoveredAt;
-    public HaltPolicySnapshot? HaltPolicy => inner.HaltPolicy;
+    public HaltPolicySnapshot? HaltPolicy => policyRead ? policy : inner.HaltPolicy;
     public UpdatePhase Phase => Volatile.Read(ref downloads) > 0 ? UpdatePhase.Downloading : Volatile.Read(ref checks) > 0 ? UpdatePhase.Checking : UpdatePhase.Idle;
     public int? Progress { get; private set; }
     public long? Bytes { get; private set; }
@@ -68,8 +102,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public string? PendingNotes => inner.PendingNotes;
     public string? Ready => Offered(inner.Ready);
 
-    string? Offered(string? release) =>
-        release is not null && HaltPolicy?.Policy?.Halted?.Contains(release, StringComparer.Ordinal) == true ? null : release;
+    string? Offered(string? release) => Halted(release) ? null : release;
 
     void RefuseHalted(string? release)
     {
@@ -86,6 +119,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         await checking.WaitAsync();
         try
         {
+            await RefreshHaltPolicyAsync();
             var from = Bound();
             var found = await inner.CheckAsync();
             // A check that finished after its source changed answers for the old one.
@@ -115,6 +149,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         {
             await downloading.WaitAsync();
             held = true;
+            await RefreshHaltPolicyAsync();
             // Read after the queue wait: a halt may have arrived since the check.
             RefuseHalted(found);
             RefuseHalted(inner.Ready);
@@ -143,6 +178,8 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
                     (Bytes, Total) = (bytes, total);
                     Raise();
                 });
+                await RefreshHaltPolicyAsync();
+                if (Halted(release)) { throw new InvalidOperationException(HaltedReason); }
             }
             catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
             {
@@ -165,6 +202,13 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public void ApplyAndRestart(string version, Action? handedOver = null)
     {
         RefuseHalted(version);
+        inner.ApplyAndRestart(version, handedOver);
+    }
+
+    internal void ApplyConfirmed(string version, bool uncheckedPolicy, Action? handedOver)
+    {
+        RefuseHalted(version);
+        if (!policyRead || (!PolicyFresh && !uncheckedPolicy)) { throw new InvalidOperationException("bad-release protection is stale or unreadable"); }
         inner.ApplyAndRestart(version, handedOver);
     }
 
@@ -198,7 +242,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     string Bound()
     {
         var now = inner.Source;
-        if (bound is not null && bound != now) { (Found, CheckedAt, FoundAsOf, CheckSource, failed, Bytes, Total) = (null, null, null, null, null, null, null); }
+        if (bound is not null && bound != now) { (found, CheckedAt, FoundAsOf, CheckSource, failed, Bytes, Total) = (null, null, null, null, null, null, null); }
         bound = now;
         return now;
     }

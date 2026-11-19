@@ -226,6 +226,7 @@ public sealed class AutoUpdater
     // new press replaces it there so the 11 minutes don't start again; and whether the host sent it
     // back to wait for the next quiet moment.
     UpdateNowAsk? installNow;
+    UpdatePolicyAllowance? installAllowance;
     string? installBy;
     string? nowWaiting;
     DateTimeOffset? usageHoldSince;
@@ -367,7 +368,7 @@ public sealed class AutoUpdater
             // failed, and gone when a later one found nothing newer.
             // A release an earlier run downloaded is available too, before any check, and while
             // the feed refuses (#530): the banner here offers it, so devices may press Install.
-            var available = updater.Found ?? updater.Ready;
+            var available = updater.Halted(updater.Found) ? null : updater.Found ?? updater.Ready;
             return UpdateProtocol.Fit(new UpdateState
             {
                 Current = installed,
@@ -377,6 +378,7 @@ public sealed class AutoUpdater
                 Notes = available is not null ? updater.PendingNotes : null,
                 CheckedAt = updater.FoundAsOf,
                 CheckSource = updater.CheckSource,
+                Policy = updater.Policy,
                 GitHubRemaining = updater.GitHubRemaining,
                 GitHubQuotaAt = updater.GitHubQuotaAt,
                 Phase = waiting ? UpdatePhase.Waiting : now,
@@ -525,7 +527,7 @@ public sealed class AutoUpdater
     // at: when the device pressed it, as the host says; one older than UpdateProtocol.Lapses has
     // lapsed at the host, and is refused rather than carried out late.
     // now: an Update now (#1159), with its terms; by: the device that pressed it, for the log.
-    public Task Ask(UpdateAskKind kind, string request, DateTimeOffset? at = null, UpdateNowAsk? now = null, string? by = null)
+    public Task Ask(UpdateAskKind kind, string request, DateTimeOffset? at = null, UpdateNowAsk? now = null, string? by = null, UpdatePolicyAllowance? whenIdle = null)
     {
         // Only an Install is ever an Update now.
         if (kind != UpdateAskKind.Install) { now = null; }
@@ -556,6 +558,7 @@ public sealed class AutoUpdater
                 var hold = now is not null && installNow is not null ? usageHoldSince : null;
                 installRequest = request;
                 installVetted = null;
+                installAllowance = now is null ? whenIdle : null;
                 (installNow, installBy, usageHoldSince, nowWaitsForQuiet, quietCode) = (now, now is null ? null : by, hold, false, null);
                 nowWaiting = hold is not null ? UpdateWaitingCode.UsageCheck : null;
             }
@@ -591,7 +594,7 @@ public sealed class AutoUpdater
             if (request == installRequest)
             {
                 now = installNow is not null;
-                (installNow, installBy, nowWaiting, usageHoldSince, nowWaitsForQuiet, quietCode) = (null, null, null, null, false, null);
+                (installNow, installAllowance, installBy, nowWaiting, usageHoldSince, nowWaitsForQuiet, quietCode) = (null, null, null, null, null, false, null);
             }
             field = null;
         }
@@ -781,6 +784,8 @@ public sealed class AutoUpdater
                 Finish(ref installRequest, Asked(UpdateAskKind.Install), UpdateOutcome.Refused, NotInstalled, code: ManageReason.Unavailable);
                 Finish(ref checkRequest, Asked(UpdateAskKind.Check), UpdateOutcome.Refused, NotInstalled);
             }
+            await updater.RefreshHaltPolicyAsync();
+            if (Pending is null && updater.Ready is { } ready) { Downloaded(ready); }
             DropExpired();
             // An install asked for is refused now, rather than after the download and the wait,
             // if it could never go ahead: the host gone, or another profile running from here.
@@ -859,6 +864,12 @@ public sealed class AutoUpdater
                 why = await WhyNotNowAsync();
             }
             if (Refused(why)) { idleSince = null; Changed(); return; }
+            if (!asked && !updater.PolicyFresh)
+            {
+                Refused("waiting to check for bad releases");
+                Changed();
+                return;
+            }
             // Set to Restart to update nothing installs by itself (#516): only an Install a device
             // pressed goes ahead here, and Restart to update at this machine (RestartToUpdateAsync).
             // Set to Install between turns, a gap does, or the backstop (GoAhead).
@@ -922,10 +933,11 @@ public sealed class AutoUpdater
             // Update now does, nor an Update now without its departure.
             string? go;
             UpdateNowAsk? goNow;
-            lock (asks) { (go, goNow) = (installRequest, installNow); }
+            UpdatePolicyAllowance? goAllowance;
+            lock (asks) { (go, goNow, goAllowance) = (installRequest, installNow, installAllowance); }
             asked = go is not null;
             if (Refused(WhyNot(asked)) || GoAhead(asked, time.GetUtcNow()) is not { } still || Stale()) { return; }
-            lock (asks) { if (installRequest != go || installNow != goNow) { return; } }
+            lock (asks) { if (installRequest != go || installNow != goNow || installAllowance != goAllowance) { return; } }
             because = still;
             // The person's Restart to update may have begun while those were asked: one install at
             // a time, claimed as Restart to update claims it.
@@ -933,7 +945,7 @@ public sealed class AutoUpdater
             try
             {
                 if (goNow is not null) { await DepartAsync(because); }
-                else { await InstallAsync(because, (go, false)); }
+                else { await InstallAsync(because, (go, false, goAllowance)); }
             }
             finally { Volatile.Write(ref claimed, 0); }
         }
@@ -1265,6 +1277,7 @@ public sealed class AutoUpdater
             await work.WaitAsync();
             held = true;
             if (installing || manager.UpdateUnderWay) { return "an update is already being installed"; }
+            await updater.RefreshHaltPolicyAsync();
             SourceMoved();
             // Downloaded by Settings since the last tick: that is the one to install.
             if (updater.Ready is { } downloaded && downloaded != Pending)
@@ -1381,7 +1394,7 @@ public sealed class AutoUpdater
                 log($"update now: pressed on {by ?? "another device"}, going over {(accept is null ? "nothing busy" : $"{accept.Working} with a turn running and {accept.Waiting} with a question or approval waiting{(accept.Unknown == true ? ", with sessions not yet reported" : "")}")}");
                 // The host left for this press: it is the one installed and answered, even should
                 // another have replaced it while the host was asked.
-                await InstallAsync(because, (request, true));
+                await InstallAsync(because, (request, true, new(terms.Release, terms.Unchecked, terms.Batch)));
                 return;
             case UpdateDepartOutcome.Waiting:
                 var code = UpdateProtocol.IsCode(left.Code) ? left.Code : UpdateWaitingCode.Unknown;
@@ -1438,7 +1451,7 @@ public sealed class AutoUpdater
     // not, still on this version with the host back. answers: the press this install answers, as
     // the tick decided it, and whether the host departed for it (an Update now), which it then
     // answers whatever press has come since; else the one being carried out now.
-    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null, Func<string, Task<bool>>? confirm = null)
+    async Task<string?> InstallAsync(string because, (string? Request, bool Departed, UpdatePolicyAllowance? Allowance)? answers = null, Func<string, Task<bool>>? confirm = null)
     {
         var to = Pending!;
         var source = updater.Source;
@@ -1446,13 +1459,23 @@ public sealed class AutoUpdater
         var departed = answers is { Departed: true } ? request : null;
         var local = answers is null;
         var asked = !local && request is not null;
+        var allowance = answers?.Allowance;
+        var allowedUnchecked = allowance is { Unchecked: true, Batch: false } && allowance.Release == to;
         string? confirmed = null;
+        var confirmedUnchecked = false;
+        var attemptRecorded = false;
         bool open;
         try { open = WindowOpen(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { open = false; }
         // The host comes back from a failed install, or from the app quitting mid-way (HostManager).
         try
         {
+            await updater.RefreshHaltPolicyAsync();
+            if (updater.Halted(to)) { throw new InstallRefusedException(ObservedUpdater.HaltedReason, "halted"); }
+            if (allowance is not null && allowance.Release != to)
+            { throw new InstallRefusedException("the release ready changed since the press", UpdateCode.ReleaseChanged); }
+            if (!local && !updater.PolicyFresh && !allowedUnchecked)
+            { throw new InstallRefusedException("bad-release protection is stale or unreadable", UpdateCode.PolicyUnreadable); }
             if (departed is null)
             {
                 var fileBudget = await WaitForFilesAsync();
@@ -1462,14 +1485,23 @@ public sealed class AutoUpdater
                 lastProbe = null;
                 var vetted = await VetAsync(asked, local);
                 if (vetted.Why is { } why) { throw new InstallRefusedException(why, vetted.Code); }
-                if (local && WaitingOnYou is { } warning)
+                var busyWarning = local ? WaitingOnYou : null;
+                var warning = busyWarning;
+                var uncheckedPolicy = local && !updater.PolicyFresh;
+                if (uncheckedPolicy)
+                {
+                    warning = string.Join(" ", new[] { warning, "Bad-release protection could not be checked on this machine." }.Where(s => s is not null));
+                }
+                if (local && warning is not null)
                 {
                     if (confirm is null) { return warning; }
                     if (!await confirm(warning)) { return NotNow; }
-                    confirmed = warning;
+                    confirmed = busyWarning;
+                    confirmedUnchecked = uncheckedPolicy;
                     vetted = await VetAsync(local: true);
                     if (vetted.Why is { } since) { throw new InstallRefusedException(since, vetted.Code); }
                 }
+                await updater.RefreshHaltPolicyAsync();
                 fileBudget.ExcludeSince(nonFileWork);
                 await manager.CheckInstallationFilesAsync(preflight, fileBudget);
             }
@@ -1484,6 +1516,7 @@ public sealed class AutoUpdater
             {
                 Validate();
                 Record(prefs, save, updater, request, open);
+                attemptRecorded = true;
                 installingAt = time.GetUtcNow();
                 Changed();
             }, () =>
@@ -1491,8 +1524,8 @@ public sealed class AutoUpdater
                 // Settings' checks and downloads do not wait for this one: one may have replaced the
                 // package while the host stopped, and Velopack applies whatever is ready. Only the
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
-                if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
-                updater.ApplyAndRestart(to, HandedOver(prefs, save));
+                Validate(handoff: true);
+                updater.ApplyConfirmed(to, allowedUnchecked || confirmedUnchecked, HandedOver(prefs, save));
             }, waitForFiles: false);
             return null;
         }
@@ -1500,7 +1533,7 @@ public sealed class AutoUpdater
         // is ready now is offered instead, with its own notes when it is installed.
         catch (PackageReplacedException e)
         {
-            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
+            ClearAttempt();
             installing = false;
             Pending = null;
             checkedAt = null;
@@ -1526,6 +1559,7 @@ public sealed class AutoUpdater
         catch (InstallRefusedException e)
         {
             installing = false;
+            if (attemptRecorded) { ClearAttempt(); }
             if (e.Hold) { HoldOver(); Changed(); return NotNow; }
             if (request is null) { Refused(e.Message); }
             else { End(UpdateOutcome.Refused, e.Message, e.Code); }
@@ -1536,7 +1570,7 @@ public sealed class AutoUpdater
             // Still this version: nothing to announce. Still offered while the updater has it
             // downloaded, for the person to try again when they choose; never tried again by itself.
             var step = prefs().UpdateHandedOver ? "restarting" : "installing";
-            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
+            ClearAttempt();
             if (updater.Ready != to) { Pending = null; }
             checkedAt = time.GetUtcNow();
             save(UpdateBackoff.Failed(prefs(), checkedAt.Value, to, out var retryAt));
@@ -1550,10 +1584,16 @@ public sealed class AutoUpdater
             return $"installing {to} failed: {e.Message}";
         }
 
-        void Validate()
+        void ClearAttempt() =>
+            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
+
+        void Validate(bool handoff = false)
         {
+            if (updater.Halted(to)) { throw new InstallRefusedException(ObservedUpdater.HaltedReason, "halted"); }
+            if (!updater.PolicyFresh && !allowedUnchecked && !(local && confirmedUnchecked))
+            { throw new InstallRefusedException("bad-release protection is stale or unreadable", UpdateCode.PolicyUnreadable); }
             if (updater.Ready != to || updater.Source != source || Stale()) { throw new PackageReplacedException("while preparing the install"); }
-            if (departed is not null) { return; }
+            if (departed is not null || handoff) { return; }
             if (!local && (Asked(UpdateAskKind.Install) != request || NowPress)) { throw new InstallRefusedException(NotNow); }
             if (othersInPackage(host.Status?.ProcessId) is { } other) { throw new InstallRefusedException(other, UpdateCode.OtherProfile); }
             if (WhyNot(asked || local) is { } why && !(local && why == HostGone)) { throw new InstallRefusedException(why, ManageReason.Unavailable); }

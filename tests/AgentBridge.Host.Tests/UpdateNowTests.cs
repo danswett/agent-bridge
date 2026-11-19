@@ -552,6 +552,7 @@ public sealed class UpdateNowTests : IAsyncLifetime
         var ask = Assert.Single(updates.Asks);
         Assert.Equal((request, UpdateAskKind.Install), (ask.Request, ask.Kind));
         Assert.Null(ask.Now);
+        Assert.Equal(new UpdatePolicyAllowance(Release, false, false), ask.WhenIdle);
         Assert.Equal(UpdateAck.Accepted, (await PressAsync(ch, press)).Outcome);
         Assert.Single(updates.Asks);
         Assert.Equal(counters, File.ReadAllText(Path.Combine(folder, ManageService.FileName)));

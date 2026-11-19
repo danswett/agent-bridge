@@ -2869,6 +2869,31 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal("Version 0.2.0 is no longer the newest; check for updates again.", page.UpdateStatus);
     }
 
+    [Fact]
+    public async Task A_halt_policy_refresh_removes_Settings_cached_offer_without_another_release_check()
+    {
+        await Connected();
+        var policy = new AgentBridge.Host.Core.Updates.HaltPolicySnapshot(
+            new(1, "{\"v\":1,\"halted\":[]}", []), DateTimeOffset.UtcNow, true);
+        var observed = new ObservedUpdater(updater, readHaltPolicy: () => Task.FromResult(policy));
+        var page = new SettingsViewModel(connection, manager, observed, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        observed.Changed += page.UpdatesChanged;
+        try
+        {
+            await page.CheckForUpdatesAsync();
+            Assert.True(page.UpdateAvailable);
+            policy = new(new(2, "{\"v\":1,\"halted\":[\"0.2.0\"]}", ["0.2.0"]), DateTimeOffset.UtcNow, true);
+
+            await observed.RefreshHaltPolicyAsync();
+
+            Assert.False(page.UpdateAvailable);
+            Assert.Equal(policy, ((IUpdater)observed).HaltPolicy);
+            Assert.Null(observed.Ready);
+            Assert.False(updater.Applied);
+        }
+        finally { observed.Changed -= page.UpdatesChanged; }
+    }
+
     // Copilot's summary of 5d32c599: what the last check found on the old source was still what the
     // machine reported as available to its devices after Include pre-releases changed.
     [Fact]
