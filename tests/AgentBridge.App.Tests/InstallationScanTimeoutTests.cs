@@ -102,6 +102,22 @@ public sealed class InstallationScanTimeoutTests
     }
 
     [Fact]
+    public void A_held_non_executable_resource_is_scanned_like_a_held_image()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "ab-scan-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        var resource = Path.Combine(folder, "resources.pri");
+        File.WriteAllText(resource, "old install");
+        File.WriteAllText(Path.Combine(folder, "free.dll"), "old install");
+        try
+        {
+            using var holder = new FileStream(resource, FileMode.Open, FileAccess.Read, FileShare.Read);
+            Assert.Equal([resource], InstallationFiles.LockedImages(folder));
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    [Fact]
     public async Task A_rescan_timing_out_does_not_report_the_previous_holder_as_the_cause()
     {
         var clock = new FakeTimeProvider();
