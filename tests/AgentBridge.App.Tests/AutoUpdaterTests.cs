@@ -471,25 +471,29 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     // #2884 review: a host started from the installation during the scan after the stop's waits was
     // never held, and that scan passes the package's own processes; the update would end it mid-probe.
+    // One whose pid was reused, or whose start time could not be read when held, is not confirmed.
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData("none", 0)]
+    [InlineData("arrives", 7171)]
+    [InlineData("restarted", 4242)]
+    [InlineData("unknown", 4242)]
     [Trait("Category", "Network")]
-    public async Task A_host_started_from_the_installation_during_the_last_scan_refuses_the_install_and_brings_the_host_back(bool arrives)
+    public async Task A_host_started_from_the_installation_during_the_last_scan_refuses_the_install_and_brings_the_host_back(string change, int refusedPid)
     {
         await StartAsync();
         processes.OnStart = () => host.Start();
         var started = false;
-        var updating = Manager(packageNow: () => Volatile.Read(ref started) ? [4242, 7171] : [4242]);
+        var updating = Manager(packageNow: () => Volatile.Read(ref started) ? [4242, 7171] : [4242], startsKnown: change != "unknown");
         var applied = false;
         string? Scan()
         {
-            if (arrives && host.Sent(HostOps.Stop).Count > 0) { Volatile.Write(ref started, true); }
+            if (host.Sent(HostOps.Stop).Count > 0 && change == "arrives") { Volatile.Write(ref started, true); }
+            if (host.Sent(HostOps.Stop).Count > 0 && change == "restarted") { processes.StartTimes[4242] = Make.T0.AddSeconds(5); }
             return null;
         }
 
         var update = updating.StopAndApplyAsync(() => { }, () => applied = true, Scan);
-        if (!arrives)
+        if (change == "none")
         {
             await update;
             Assert.True(applied);
@@ -498,7 +502,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         }
         var refused = await Assert.ThrowsAsync<HostBusyException>(() => update);
 
-        Assert.Contains("pid 7171", refused.Message, StringComparison.Ordinal);
+        Assert.Contains($"pid {refusedPid}", refused.Message, StringComparison.Ordinal);
         Assert.False(applied);
         Assert.Single(host.Sent(HostOps.Stop));
         Assert.Single(processes.Started);
@@ -614,7 +618,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
-    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null, TimeSpan? connectTimeout = null) =>
+    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null, TimeSpan? connectTimeout = null, bool startsKnown = true) =>
         new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
             ct => LocalClient.ConnectAsync(host.Endpoint, connectTimeout ?? TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
         {
@@ -626,7 +630,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             ProbeCallTimeout = callTimeout ?? TimeSpan.FromSeconds(5),
             OtherProfiles = () => others ?? [],
             ConnectTo = (folder, ct) => LocalClient.ConnectAsync(LocalEndpoint.For(folder), TimeSpan.FromMilliseconds(300), ct),
-            PackageHosts = packageNow ?? (() => package ?? []),
+            PackageHosts = () =>
+            {
+                var hosts = packageNow?.Invoke() ?? package ?? [];
+                // Known start times, as a reachable host's are; an update refuses a host it can't confirm.
+                if (startsKnown) { foreach (var pid in hosts) { processes.StartTimes.TryAdd(pid, Make.T0); } }
+                return hosts;
+            },
             Elevated = () => false,
             // As the fixture's manager: no wait runs out under a test on a slow runner, and one a
             // test needs to run out is advanced by hand.

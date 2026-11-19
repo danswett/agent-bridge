@@ -738,7 +738,10 @@ controls consume that same contract; this extraction does not disable or remove 
     waited for the same way, since Velopack ends them too, each held again every round and once
     more just before the hand-over, with the package looked at again once they are done (a host
     started meanwhile is held too); one that cannot confirm, or a host of the package no pipe
-    reaches, stops the update before anything is stopped. Quitting gives up those waits, never a
+    reaches, stops the update before anything is stopped. A host of the package that starts during
+    the last file scan, after those holds, or one not confirmed as held by its start time, refuses
+    the update and this host is started again.
+    Quitting gives up those waits, never a
     probe, so a host already stopped for the update is started again within Quit's 25 s.
   * **Never at startup:** Velopack applies a downloaded release by itself whenever the exe starts,
     by default, a second start that only shows the window included, stopping every process in the
