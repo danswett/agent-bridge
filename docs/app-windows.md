@@ -1362,6 +1362,11 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   Before native capture, two distinct XAML rendering ticks and another UI dispatcher turn
   let a preceding update cycle finish even when the page is already idle; the self-test
   fails if that frame barrier cannot complete within 10 seconds.
+  The independent F24 canary restores focus with bring-into-view held on the focused
+  control (or a link's visual parent), below its scroller, through the next captured
+  frame; a window-root handler is too late to prevent scrolling. Missing-key diagnostics
+  retain the target sampled before each press, including a posted fallback
+  ([input-path follow-up](https://github.com/danswett/agent-bridge/issues/2540)).
   The dark page pass reopens each output PNG and checks a page-background pixel is opaque
   and no lighter, in sRGB relative luminance, than the platform's dark layer token's straight
   colour (the upper bound for that layer over dark Mica). Encoded white and transparent
@@ -1372,6 +1377,12 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   200 ms, reader content within 1.5 DIP, and blocks unselected. Client drawing only, not host reads
   or physical input. Run published `AgentBridge.exe --self-test-history-scroll <result.json>`;
   normal `--self-test` includes it on both Windows CI architectures.
+  The regular `--self-test` also records the existing Latest history-scroll checks in
+  `latestTiming`: section `begin`/`end` entries and each `check`, including failed steps,
+  with `Seconds` since the previous check (or the section's duration for `end`),
+  `SectionSeconds` and `SelfTestSeconds` from monotonic elapsed time. The same entries
+  go to the app log; a missing check record fails the self-test. This is fixture-only,
+  read-only timing evidence, not a performance threshold or a change to scrolling/input.
   The sign-in row captures run `CheckSignInRowTypography` in Light, Dark and CI high contrast:
   the status run alone uses proportional figures for words-only text, fixing the bundled face's
   wide tabular hyphen (#903); any digit keeps the whole run tabular. The check measures the drawn

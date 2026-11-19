@@ -235,11 +235,12 @@ The person-class control entry points are `start`, `pause`, `reset` and `seal`.
 Each requires an authenticated person-class channel and host-side person
 authorization, never the local pipe or shared OS-user identity.
 Agents and read-only audit clients cannot start, reset, repair, pause or seal it.
-Record a host-generated run ID, fixed participating four Windows host/profile
-identities, deployed instrumentation version and starting heads in audit markers.
+Record a host-generated run ID and the host/profile identities of
+all active hosts in the approved fleet roster, pinned at run start.
+Record deployed instrumentation version and starting heads in audit markers.
 Include the existing message recorder identity and starting source cursor/digest.
-The four participating hosts come from the fleet roster source the person approves
-and pins at run start; any roster membership/identity change mid-run voids the run.
+Membership is fixed for the run; any roster membership/identity change mid-run voids the run.
+No host roles are assigned; coordinators can live anywhere.
 All participants must attest coverage of relay, local and legacy HA action
 entries before admission opens. Old daemon/private script bypasses must either
 be covered or disabled by the person; unobserved routes make the gate unavailable.
@@ -256,8 +257,9 @@ use a monotonic timer while live. An unreadable clock or one earlier than the
 last recorded control timestamp makes the deadline uncertain and voids the run.
 On timeout, control loss or restart with an uncertain deadline, void the run and
 resume admission. Retain every queued request for normal revalidation; drop none.
-Restart is allowed only with verified complete replay and unchanged coverage;
-missing/unreachable hosts or incomplete replay block the report.
+Restart is allowed only with verified complete replay and unchanged coverage.
+An offline pinned host or incomplete replay makes the report INCOMPLETE;
+missing/unreachable hosts cannot be omitted.
 
 Any fallback on any participant invalidates the whole run and resets eligible
 message/launch/approval/stop credit to zero, not just that action's counter.
@@ -278,7 +280,7 @@ totals, cached roster counts or unsigned imported JSON may certify the gate.
 Bind each host response to the requested run, membership, fresh reader challenge,
 instrumentation version, durable heads and verified read-through sequence.
 Reject duplicates, mismatched identities, replays, partial pages or stale replies.
-An offline host or missing fresh-challenge response yields INCOMPLETE naming
+An offline pinned host or missing fresh-challenge response yields INCOMPLETE naming
 that host, exit 2; never pass using only the reachable participants.
 The host verifies under its existing audit writer; the CLI read path must not
 instantiate a writer, create locks/profiles or repair files to obtain a verdict.
