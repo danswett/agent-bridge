@@ -283,6 +283,7 @@ followup_cases() {
   check "an invalid exact-key hit redownloads quietly after live verification" \
     0 "$(printf 'update\n%s\n-qq %s' "$verify" "$download")" "$canonical"
   ! grep -q '^Get:' "$work/out" && grep -q 'immutable exact-key cache' "$work/out" &&
+    grep -qF 'DEBS_CACHE_EXACT_HIT: ${{ steps.debs.outputs.cache-hit }}' "$here/action.yml" &&
     grep -q 'cache-ready=true' "$GITHUB_OUTPUT" \
     || { echo "FAIL: invalid exact-key recovery lost its quiet output, explanation or replacement archives"; failures=$((failures + 1)); }
 

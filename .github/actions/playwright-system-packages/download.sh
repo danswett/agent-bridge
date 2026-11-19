@@ -16,6 +16,11 @@
 # every package against the signed index either way. Azure DNS failures leave immediately;
 # Downloads get three attempts (5/20 s backoff). Updates get an initial attempt plus three
 # retries (15/30/60 s) for known-host network errors, including Microsoft's feed and HTTP 429.
+# Retry budget is per mirror, NOT a total deadline: allowing each 30 s kill grace, Canonical
+# update can take 4*(60+30)+105 = 465 s, downloads 3*(600+30)+25 = 1915 s.
+# Together that is 2380 s (39m40s), already beyond the 35m job cap, before install/tests.
+# Azure attempts and its up-to-7 s DNS probe can add more. The job cap is the final bound;
+# retries do not reserve test time. See quality/README.md for the budget and proof limits.
 # Exhausted throttling or Microsoft-feed errors are fatal even on a cache hit.
 # Cache only debs: every run authenticates live indexes with apt-get update. A non-forced hit
 # checks archive hashes/sizes against those indexes before installing with --no-download. If
@@ -59,6 +64,7 @@ force=false
 [ "${PLAYWRIGHT_APT_FORCE_FALLBACK:-}" != true ] || force=true
 cache_hit=false
 cache_available=false
+download_options=()
 if [ "${DEBS_CACHE_HIT:-}" = true ]; then
   if compgen -G "$cache_debs/*.deb" > /dev/null; then
     cache_available=true
@@ -199,17 +205,22 @@ if [ "$cache_hit" = true ]; then
     install_offline
     exit 0
   fi
-  echo "::warning::cached archives failed verification; discarding cache and using authenticated network downloads"
+  if [ "${DEBS_CACHE_EXACT_HIT:-}" = true ]; then
+    echo "::warning::cached archives failed verification; immutable exact-key cache cannot be replaced; discarding it locally and using quiet authenticated downloads (delete the cache key to recover)"
+    download_options=(-qq)
+  else
+    echo "::warning::cached archives failed verification; discarding cache and using authenticated network downloads"
+  fi
   find "$cache_debs" -maxdepth 1 -type f -name '*.deb' -delete
   cache_available=false
 fi
 # Downloads have their own bound, independent of the update limit.
-limit=${PLAYWRIGHT_APT_LIMIT:-30s}
+limit=${PLAYWRIGHT_APT_LIMIT:-180s}
 rc=0
 if [ "$force" = true ]; then
   echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: taking the Azure mirror off apt's list before downloading anything; nothing timed out"
 else
-  retry download bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
+  retry download bounded apt-get "${download_options[@]}" install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
 fi
 if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = true ]; }; then
   if [ "$rc" -eq 124 ]; then
@@ -220,7 +231,7 @@ if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = t
   leave_azure
   if [ "$force" = true ]; then
     got=$(mktemp)
-    retry download bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" | tee "$got"
+    retry download bounded apt-get "${download_options[@]}" install -y --download-only --no-install-recommends "${pkgs[@]}" | tee "$got"
     if grep -q '^Get:.*azure\.archive\.ubuntu\.com' "$got"; then
       echo "::error::apt still fetched packages from azure.archive.ubuntu.com after it was taken off $mirrors"; exit 1
     fi
@@ -233,7 +244,7 @@ if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = t
       echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: nothing was downloaded from https://archive.ubuntu.com, so this leg proves nothing about the fallback"
     fi
   else
-    retry download bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || fail download "$?"
+    retry download bounded apt-get "${download_options[@]}" install -y --download-only --no-install-recommends "${pkgs[@]}" || fail download "$?"
   fi
 elif [ "$rc" -ne 0 ]; then
   fail download "$rc"
