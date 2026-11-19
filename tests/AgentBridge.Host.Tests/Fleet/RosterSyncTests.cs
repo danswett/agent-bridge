@@ -124,6 +124,47 @@ public sealed class RosterSyncTests
     }
 
     [Fact]
+    public void A_record_without_epoch_seq_and_at_never_replaces_the_cached_order()
+    {
+        Assert.True(Assert.Single(reader.Read([Frame("H", seq: 5, ids: ["a"])])).Online);
+        var unordered = JsonSerializer.SerializeToElement(new
+        {
+            machine = world.Id("H"), online = true,
+            record = new { sessions = new[] { new { id = "x", node = "agent_bridge_x", state = "idle", since = Start } } },
+        });
+        var refused = Assert.Single(reader.Read([unordered]));
+        Assert.False(refused.Online);
+        Assert.Equal(["a"], Ids(refused));
+        // Had the unordered record been taken, nothing would be left to refuse this replay with.
+        var replay = Assert.Single(reader.Read([Frame("H", seq: 3, ids: ["old"])]));
+        Assert.False(replay.Online);
+        Assert.Equal(["a"], Ids(replay));
+    }
+
+    sealed class SteppedClock : TimeProvider
+    {
+        public DateTimeOffset Wall = Start;
+        public long Ticks;
+        public override DateTimeOffset GetUtcNow() => Wall;
+        public override long GetTimestamp() => Ticks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+    }
+
+    [Fact]
+    public void Cached_rows_age_by_the_monotonic_clock_whatever_the_wall_clock_does()
+    {
+        var clock = new SteppedClock();
+        var cached = new RelayFleetRoster(() => signed, clock);
+        Assert.True(Assert.Single(cached.Read([Frame("H", ids: ["a"])])).Online);
+        clock.Wall = Start.AddDays(2);
+        clock.Ticks += TimeSpan.FromMinutes(2).Ticks;
+        Assert.Equal(["a"], Ids(Assert.Single(cached.Read([Frame("H", online: false)]))));
+        clock.Wall = Start.AddDays(-2);
+        clock.Ticks += RelayFleetRoster.CacheAge.Ticks;
+        Assert.Empty(Assert.Single(cached.Read([Frame("H", online: false)])).Sessions);
+    }
+
+    [Fact]
     public async Task Peer_rows_from_a_host_in_the_signed_device_roster_appear_with_all_A1_fields()
     {
         var source = new FleetPublisherTests.Source();
