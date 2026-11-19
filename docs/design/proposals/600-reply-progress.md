@@ -117,12 +117,12 @@ own (principle 3), 14 px on the PWA and 16 px on Windows. The client states (`se
 | Up next | `typed`, `working: true` | **Up next** · after the agent's current step | ring | words text2, ring Bridge | "Reply up next, after the agent's current step" | as Sending | at `typed`; no stall timer |
 | Delivered | result `delivered` | **Delivered** | check | words and badge Bridge | "Reply delivered" | badge Highlight, words CanvasText · shows at once | at once, skipping any stage not yet shown |
 | Still sending | no `received` after 3 s | **Still sending…** | ring | words text2, ring Bridge | "Reply still sending" | as Sending | 3 s; words only, the resend policy is unchanged |
-| Sent, stalled | `received`, no `typed` after 5 s | **Sent** · still waiting on ULTRA | ring | words text2, ring Bridge | "Reply sent, still waiting on ULTRA" | as Sending | 5 s after `received` |
+| Sent, stalled | `received`, no `typed` after 5 s | **Sent** · still waiting on DESK | ring | words text2, ring Bridge | "Reply sent, still waiting on DESK" | as Sending | 5 s after `received` |
 | Passed, stalled | `typed`, idle, no result after 10 s | **Passed to the agent** · not picked up yet | ring | words text2, ring Bridge | "Reply passed to the agent, not picked up yet" | as Sending | 10 s after `typed` |
 | Still being delivered | client `waiting`, reason "still being delivered" (a resend met the first copy in flight) | the furthest stage reached, then · still being delivered, for example **Passed to the agent** · still being delivered | ring | words text2, ring Bridge | "Reply still being delivered" | as Sending | while the first copy is in flight (today: "The machine is still delivering it…") |
 | Still sending, no answer | client `waiting` for another reason while connected (a lost response, a timeout) | **Still sending…** | ring | words text2, ring Bridge | "Reply still sending" | as Sending | until the retry, as today |
-| Waiting for the machine | client `waiting` while ULTRA isn't connected (queued on this device) | **Waiting for ULTRA** · it goes when ULTRA is back | still ring | words text2, ring in Send's ink at full opacity | "Reply waiting for ULTRA" | ring in Send's own colours at full opacity (GrayText on Highlight is under 3:1), words CanvasText · already still | while disconnected |
-| Not confirmed | result `unconfirmed`, or the client gives up | **Sent, but not confirmed.** Check at ULTRA before sending it again. | none | Needs you text | the sentence | CanvasText | host 60 s (an answer: 15 s); client 9 min, as today |
+| Waiting for the machine | client `waiting` while DESK isn't connected (queued on this device) | **Waiting for DESK** · it goes when DESK is back | still ring | words text2, ring in Send's ink at full opacity | "Reply waiting for DESK" | ring in Send's own colours at full opacity (GrayText on Highlight is under 3:1), words CanvasText · already still | while disconnected |
+| Not confirmed | result `unconfirmed`, or the client gives up | **Sent, but not confirmed.** Check at DESK before sending it again. | none | Needs you text | the sentence | CanvasText | host 60 s (an answer: 15 s); client 9 min, as today |
 | Busy, stale | result `busy` or `stale` | today's words, for example **Not sent:** an answer or another reply to this session is being delivered. Try again in a moment. (shortened on the boards) | none | Needs you text | the words | CanvasText | at once |
 | Refused, failed | result `refused`; client `failed` | today's words: **The machine refused this reply:** *reason*; **Couldn't send it:** *reason* | none | Danger text | the words | CanvasText | at once |
 | Older host (decided) | no `sessions.progress` | **Sending…**, then **Still sending…** at 3 s and the waiting words, then **Delivered** with the check badge; never a stage it didn't report | ring, then check | as in-flight, then as Delivered | as in-flight, then the outcome | as in-flight, then as Delivered | 400 ms quiet window; 3 s stall |
@@ -180,7 +180,7 @@ says. There are five differences:
   - **Up next:** no threshold, because waiting is expected there.
 - **When the host times out,** it reports `unconfirmed` at 60 s for a reply, or 15 s after
   typing for an answer, and the receipt joins the
-  existing path: "Sent, but not confirmed. Check at ULTRA before sending it again." The words
+  existing path: "Sent, but not confirmed. Check at DESK before sending it again." The words
   stay in the reply box, as today, so nothing is lost.
 - **Refusals that arrive after Sent.** `received` comes before every check, so a reply can show
   "Sent" and then "The machine refused this reply" or "Not sent: …". That is honest: the
@@ -191,7 +191,7 @@ says. There are five differences:
     the furthest stage, adds "· still being delivered", and the ring keeps turning.
   - **Connected, but no answer.** A lost response or a timeout reads "Still sending…".
   - **Not connected.** Only a request queued on this device while there's no channel to the
-    machine reads "Waiting for ULTRA", with the ring drawn still in text3, because nothing is
+    machine reads "Waiting for DESK", with the ring drawn still in text3, because nothing is
     moving. The session's header keeps its own §2.2 state, independently of the receipt:
     "Offline" if the machine has left the relay's presence, "Reconnecting…" if it's still
     present and only the channel is coming back. The ring turns again when the connection
@@ -298,7 +298,7 @@ one machine with another.
 
 This is the text as proposed. The owner approved it on 2026-11-04 with every recommended
 option, and it is now in `ui.md`, where §6.5's "The receipt" and §9 carry it in full (using
-*machine* for ULTRA). Read `ui.md` for the spec.
+*machine* for DESK). Read `ui.md` for the spec.
 
 **§5.3, the "Send and Answer" catalogue entry, add:**
 
@@ -326,11 +326,11 @@ option, and it is now in `ui.md`, where §6.5's "The receipt" and §9 carry it i
 >
 > In-flight words are text2 with the ring in Bridge. Delivered is Bridge. If nothing
 > follows Send for 3 s, the receipt says *Still sending…* (words only; resends are
-> unchanged); if *Sent* has nothing after it for 5 s, *· still waiting on ULTRA*; if
+> unchanged); if *Sent* has nothing after it for 5 s, *· still waiting on DESK*; if
 > *Passed to the agent* has nothing after it for 10 s on an idle session, *· not picked
 > up yet*. *Up next* has no stall. A resend that meets the first copy in flight keeps
 > the stage and adds *· still being delivered*. Only a request held while the machine
-> isn't connected says *Waiting for ULTRA*, with the ring still. An outcome other
+> isn't connected says *Waiting for DESK*, with the ring still. An outcome other
 > than Delivered keeps the words in §8 and its colour role, with no shape. A host without
 > `sessions.progress` shows *Sending…* until the outcome, as before. (Superseded: see D7.)
 
@@ -416,7 +416,7 @@ one is labelled "Proposal #600 · Decided (owner, 2026-11-04)". Each frame is a 
 | [proposal-600-phone-reply.png](600-reply-progress/proposal-600-phone-reply.png) · [light](600-reply-progress/proposal-600-phone-reply-light.png) | PWA phone, a reply to a working session: Send's ring at 0 ms, Sent and Up next spoken but not drawn, Send's check on Delivered, then rest. Nothing appears under the box. |
 | [proposal-600-windows-reply.png](600-reply-progress/proposal-600-windows-reply.png) · [light](600-reply-progress/proposal-600-windows-reply-light.png) | The Windows app: Send's ProgressRing, the check on Delivered, rest, and the one exception, "Passed to the agent · not picked up yet". |
 | [proposal-600-answer.png](600-reply-progress/proposal-600-answer.png) · [light](600-reply-progress/proposal-600-answer-light.png) | An answer in the question card, as ui.md §6.4 "Answering" has it (#773): the option is chosen first, then Send answer carries the ring and its check while the choice stays selected and read-only; no option carries a ring. Then "You answered · Fixes first", on the phone and in a narrow Windows pane. The status line, left of Send answer, stays empty while the answer goes. Two more frames follow ui.md §6.4's outcome rules: not confirmed takes Send answer away and says today's "Sent, but not confirmed. Check at the machine.", since the answer is final and never resent; and a request the host answered with an error (failed) puts today's Try again in Send answer's place, which resends the same request; a lost connection instead waits and resends on its own. |
-| [proposal-600-paths.png](600-reply-progress/proposal-600-paths.png) · [light](600-reply-progress/proposal-600-paths-light.png) | The exceptions, the only time a line appears, in seven frames: Still sending…, Sent · still waiting, Passed to the agent · still being delivered, Waiting for ULTRA (Send's ring still), Not confirmed, Refused, and an older host. |
+| [proposal-600-paths.png](600-reply-progress/proposal-600-paths.png) · [light](600-reply-progress/proposal-600-paths-light.png) | The exceptions, the only time a line appears, in seven frames: Still sending…, Sent · still waiting, Passed to the agent · still being delivered, Waiting for DESK (Send's ring still), Not confirmed, Refused, and an older host. |
 | [proposal-600-access.png](600-reply-progress/proposal-600-access.png) · [light](600-reply-progress/proposal-600-access-light.png) | High contrast (Night sky on dark, Desert on light), with Send in its own system colours; reduced motion; and what a screen reader hears. |
 | [proposal-600-states.png](600-reply-progress/proposal-600-states.png) · [light](600-reply-progress/proposal-600-states-light.png) | Every state drawn as a table: what Send shows, and the line for the exceptions only. |
 | [proposal-600-decided.png](600-reply-progress/proposal-600-decided.png) · [light](600-reply-progress/proposal-600-decided-light.png) · [contrast](600-reply-progress/proposal-600-decided-contrast.png) · [contrast light](600-reply-progress/proposal-600-decided-contrast-light.png) · [reduced](600-reply-progress/proposal-600-decided-reduced.png) · [reduced light](600-reply-progress/proposal-600-decided-reduced-light.png) | "You answered · *value*" after Send answer's check: a choice's label, free text cut at about 40 characters, a form's bare "You answered", a Needs you entry, and the Windows card. |

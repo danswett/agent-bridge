@@ -42,7 +42,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     RelayClient? relay;
     readonly Func<RosterVerifier?>? signedRoster;
     readonly TimeProvider clock;
-    readonly Dictionary<string, (FleetMachine Machine, DateTimeOffset Seen)> cache = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (FleetMachine Machine, long Seen)> cache = new(StringComparer.Ordinal);
 
     public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null)
     {
@@ -53,7 +53,10 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     // design/fleet-session-registry.md "Offline machines and the cache": a machine's last accepted
     // rows stay, offline and stale, until it leaves the signed roster or the relay's lists, or for
     // CacheAge. Within an epoch seq never falls (a jump is just a newer whole snapshot); a new epoch
-    // needs a later `at`. A refused record leaves the last accepted rows stale. An accepted record
+    // needs a later `at`. A refused record leaves the last accepted rows stale. The relay requires
+    // epoch, seq and at, so a record without them never replaces an ordered one, which would leave
+    // nothing to refuse a later replay with. CacheAge runs on the monotonic clock: a wall-clock step
+    // must neither drop live rows early nor keep stale ones forever. An accepted record
     // is live only while its `at` is within Freshness of this clock, either way ("Freshness and
     // replay"): a silent host the relay still calls online goes stale, and an old replay never reads live.
     public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames)
@@ -61,16 +64,17 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
         lock (cache)
         {
             var now = clock.GetUtcNow();
+            var tick = clock.GetTimestamp();
             var machines = Parse(frames, signedRoster?.Invoke() is { } roster ? Hosts(roster) : null).ToList();
             var listed = machines.Select(m => m.Id).ToHashSet(StringComparer.Ordinal);
-            foreach (var id in cache.Keys.Where(id => !listed.Contains(id) || now - cache[id].Seen >= CacheAge).ToList()) { cache.Remove(id); }
+            foreach (var id in cache.Keys.Where(id => !listed.Contains(id) || clock.GetElapsedTime(cache[id].Seen, tick) >= CacheAge).ToList()) { cache.Remove(id); }
             for (var i = 0; i < machines.Count; i++)
             {
                 var m = machines[i];
                 FleetMachine? held = cache.TryGetValue(m.Id, out var c) ? c.Machine : null;
-                if (m.Online && m.HasRegistryRecord && (held?.Order is not { } a || m.Order is not { } b || (a.Epoch == b.Epoch ? b.Seq >= a.Seq : b.At > a.At)))
+                if (m.Online && m.HasRegistryRecord && (held?.Order is not { } a || (m.Order is { } b && (a.Epoch == b.Epoch ? b.Seq >= a.Seq : b.At > a.At))))
                 {
-                    cache[m.Id] = (m, now);
+                    cache[m.Id] = (m, tick);
                     if (m.Order is { } o && (now - o.At).Duration() > Freshness) { machines[i] = m with { Online = false, Verified = false, HasRegistryRecord = false }; }
                 }
                 else if (held is not null)

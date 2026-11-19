@@ -256,7 +256,8 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
 The relay's own received-time/sequence checks are not independent reader verification
 (`RosterFields.cs:110-141`). `RelayFleetRoster.Read` now implements the order rule, the 60 s `at`
 rule, the in-memory cache, the purge of unlisted machines, and pinned-roster membership (#2643).
-`registry-subscribe` and signature checks are still to come.
+A record without `epoch`, `seq` and `at` never replaces an ordered one, and the cache ages by the
+monotonic clock. `registry-subscribe` and signature checks are still to come.
 
 * A host sends a new snapshot when any listed field changes, debounced to at most one per 2 s
   (a session that ends is sent at once, never held for the debounce),
