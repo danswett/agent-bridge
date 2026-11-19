@@ -30,7 +30,7 @@ function Test-MergeRuleBackstop {
             if (-not $run.id -or -not $run.event -or -not $run.status) { throw 'Incomplete queued run.' }
             if ($run.id -eq $RunId -or $run.event -in 'schedule', 'workflow_dispatch' -or
                 $run.status -notin 'queued', 'pending', 'waiting', 'in_progress') { continue }
-            if ($run.event -notin 'status', 'pull_request_target', 'check_suite', 'workflow_run') {
+            if ($run.event -notin 'status', 'pull_request_target', 'check_suite', 'check_run', 'workflow_run') {
                 throw 'Unrecognised queued event; evaluation may still be needed.'
             }
             foreach ($job in @(Read-Pages "repos/$Repo/actions/runs/$($run.id)/jobs?filter=latest&per_page=100" 'jobs')) {

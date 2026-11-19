@@ -80,8 +80,42 @@ public sealed class ReportTests
     [InlineData("failure", "Main is red (CI abc1234): waiting for main to be fixed; Draft: mark it ready for review", "draft")]
     [InlineData("failure", "#7: Main's CI abc1234 is being re-run: waiting for main to be green; Waiting for a Copilot review of def5678", "Copilot review")]
     [InlineData("failure", "Main is red (CI abc1234): waiting for main to be fixed", "main red")]
+    [InlineData("failure", "No completed non-cancelled CI run on main: waiting for one; Held by the label 'hold'", "held")]
+    [InlineData("failure", "No completed non-cancelled CI run on main: waiting for one", "main red")]
     public void An_open_pull_request_is_stuck_on_the_first_item_merge_rule_names_after_a_red_main(string state, string description, string expected) =>
         Assert.Equal(expected, WeeklyReport.StuckOn(Open(1, rule: state, description: description), "main", mainRed: false));
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(false, 160)]
+    public void Second_receipt_blockers_are_reported_as_independent_review(bool sameFamily, int extraPathCharacters)
+    {
+        var config = MergeRuleConfig.Parse("""
+            base: main
+            status_poster: github-actions
+            copilot_reviewer: copilot-pull-request-reviewer
+            independent_review: { context: independent-review, posters: [danswett] }
+            codeql: { workflow: CodeQL, check: CodeQL }
+            main_green: { workflow: ci.yml, jobs: [product, light] }
+            copilot_waiver: { second_review: independent-review-2 }
+            sensitive_paths: [.github/**]
+            """);
+        var sha = new string('a', 40);
+        var review = new ReviewFact("copilot-pull-request-reviewer", true, "COMMENTED", sha, "<!-- ccr-overview-v2 -->\nComplete");
+        var first = new StatusFact("independent-review", "success", "CLEAN gpt-6.1-sol", "danswett", Now);
+        var second = new StatusFact("independent-review-2", "success", "CLEAN gpt-6.1-sol", "danswett", Now);
+        var path = ".github/workflows/" + new string('x', extraPathCharacters) + "ci.yml";
+        var pr = new PullRequestFacts(1, "OPEN", false, "main", sha, [], [path], true, [review],
+            [first], new("COMPLETED", "SUCCESS"), null);
+        if (sameFamily)
+            pr = pr with { Statuses = [first, second] };
+
+        var verdict = MergeRule.Evaluate(config, new("success", "green"), pr)!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Equal("independent review", WeeklyReport.Category(verdict.Description));
+    }
 
     [Theory]
     [InlineData("completed", "cancelled", 1, true)]

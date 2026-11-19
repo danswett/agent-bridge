@@ -222,7 +222,7 @@ public class CiPlanTests
     [Fact]
     public void A_check_job_missing_from_the_gate_is_reported_whether_or_not_it_reads_the_plan()
     {
-        const string Problem = " isn't in quality-gate's needs, so its result wouldn't count (only attest, publish, publish-gate, relay-image-sarif, sign may stay out)";
+        const string Problem = " isn't in quality-gate's needs, so its result wouldn't count (only attest, nudge-merge-rule, publish, publish-gate, relay-image-sarif, sign may stay out)";
 
         Assert.Equal(["ci.yml job ha-integration" + Problem], Check(Wired.Replace("needs: [plan, product, ha-integration, app]", "needs: [plan, product, app]")));
         Assert.Equal(["ci.yml job lint" + Problem], Check(Wired.Replace("  quality-gate:", "  lint:\n    runs-on: ubuntu-latest\n  quality-gate:")));

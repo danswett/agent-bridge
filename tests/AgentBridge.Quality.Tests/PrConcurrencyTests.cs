@@ -29,7 +29,6 @@ public class PrConcurrencyTests
 
     [Theory]
     [InlineData("weekly-report.yml", "pull_request")]
-    [InlineData("merge-rule-review.yml", "pull_request_review")]
     [InlineData("merge-rule.yml", "pull_request_target")]
     public void Superseded_heads_share_only_their_own_PR_slot(string file, string eventName)
     {
@@ -73,10 +72,6 @@ public class PrConcurrencyTests
         context["needs.report.outputs.post"] = "true";
         context["github.repository"] = "danswett/agent-bridge";
         Assert.False(MergeRuleTests.IfExpression.Evaluate(post["if"].ToString(), context));
-        var relay = Document("merge-rule-review.yml");
-        Assert.Empty(((YamlMappingNode)relay["permissions"]).Children);
-        var step = Assert.Single((YamlSequenceNode)((YamlMappingNode)((YamlMappingNode)relay["jobs"])["relay"])["steps"]);
-        Assert.StartsWith("echo ", ((YamlMappingNode)step)["run"].ToString(), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -90,7 +85,6 @@ public class PrConcurrencyTests
     [InlineData("relay.yml")]
     [InlineData("weekly-report.yml")]
     [InlineData("merge-rule.yml")]
-    [InlineData("merge-rule-review.yml")]
     public void Every_PR_workflow_preserves_non_PR_runs_and_limits_cancellation_to_its_own_PR(string file)
     {
         var yaml = Document(file);

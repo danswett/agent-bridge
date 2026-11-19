@@ -299,7 +299,7 @@ static class WeeklyReport
     static readonly Regex Combined = new(@"^#\d+:\s*", RegexOptions.CultureInvariant);
     // MergeRuleCommand's MainFact reasons: while main is red, merge-rule names that first on every
     // pull request, which would hide what each one waits on next.
-    static readonly Regex MainItem = new(@"^(.+ is red \(ci |.+'s ci .+ is being re-run|no finished ci run on |couldn't read .+'s ci:)", RegexOptions.CultureInvariant);
+    static readonly Regex MainItem = new(@"^(.+ is red \(ci |.+'s ci .+ is being re-run|no (finished|completed non-cancelled) ci run on |couldn't read .+'s ci:)", RegexOptions.CultureInvariant);
 
     /// <summary>
     /// merge-rule's description (MergeRule.Evaluate) reduced to its first item's kind, passing over
@@ -317,7 +317,9 @@ static class WeeklyReport
             "" => "merge-rule gave no reason",
             _ when first.StartsWith("draft", StringComparison.Ordinal) => "draft",
             _ when first.StartsWith("held by", StringComparison.Ordinal) || first.StartsWith("it has more labels", StringComparison.Ordinal) => "held",
-            _ when first.Contains("independent review", StringComparison.Ordinal) => "independent review",
+            _ when first.Contains("independent review", StringComparison.Ordinal)
+                || first.Contains("second review's receipt", StringComparison.Ordinal)
+                || first.StartsWith("the two receipts on ", StringComparison.Ordinal) => "independent review",
             _ when first.StartsWith("waiting for a copilot review", StringComparison.Ordinal) => "Copilot review",
             _ when first.Contains("codeql", StringComparison.Ordinal) || first.StartsWith("code scanning", StringComparison.Ordinal) => "CodeQL",
             _ when first.StartsWith("check ", StringComparison.Ordinal) && first.Contains(" ended ", StringComparison.Ordinal) => "a red check",

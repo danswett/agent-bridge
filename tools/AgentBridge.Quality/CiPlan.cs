@@ -27,6 +27,7 @@ static partial class CiPlan
         ["publish"] = [PublishGate, "sign"],
         ["attest"] = ["publish"],
         ["relay-image-sarif"] = ["product"],
+        ["nudge-merge-rule"] = ["product", "ha-integration", "spikes", "spikes-linux", "light", "pwa-ui", "pwa-e2e", "app"],
     };
     static readonly HashSet<string> Delivery = new(DeliveryNeeds.Keys, StringComparer.Ordinal);
     static readonly string[] ProductRunners = ["ubuntu-latest", "windows-latest", "windows-11-arm"];

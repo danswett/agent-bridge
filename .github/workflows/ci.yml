@@ -1853,3 +1853,25 @@ jobs:
           msg="Draft: only the fast ring ran (ring 0 on Linux, in-process tests). Ready for review runs ring 1, everything it selects."
           echo "::notice title=quality-gate (partial)::$msg"
           echo "### quality-gate: partial. $msg" >> "$GITHUB_STEP_SUMMARY"
+
+  # Asks merge-rule to judge again when the gating jobs (merge-rule's main_green.jobs) finish.
+  # GitHub starts no check_run, check_suite or workflow_run for checks Actions itself creates, but
+  # a workflow_dispatch made with GITHUB_TOKEN always starts a run. Main's copy of merge-rule.yml
+  # is dispatched (--ref main), so the pull request's code never judges itself. It's a delivery
+  # job: it needs no installer or publish job, and quality-gate doesn't wait on it. Main only: on a
+  # pull request the evaluator counts every CI job, so a queued or timed-out nudge would hold the gate.
+  nudge-merge-rule:
+    needs: [product, ha-integration, spikes, spikes-linux, light, pwa-ui, pwa-e2e, app]
+    if: >-
+      always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch merge-rule on main
+        continue-on-error: true # a missed nudge only waits for the schedule or CI's own completion
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run merge-rule.yml --repo "$GITHUB_REPOSITORY" --ref main

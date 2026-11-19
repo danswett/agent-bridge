@@ -106,15 +106,29 @@ public class MergeRuleTests
     }
 
     [Fact]
-    public void A_completed_Copilot_review_is_the_other_family_on_a_sensitive_change_but_the_first_receipt_is_still_required()
+    public void A_completed_Copilot_review_never_replaces_either_required_receipt_on_a_sensitive_change()
     {
         string[] files = [".github/workflows/ci.yml"];
 
         var copilotOnly = MergeRule.Evaluate(Config, MainGreen, Pr(files))!;
         var withReceipt = MergeRule.Evaluate(Config, MainGreen, Pr(files, statuses: [First()]))!;
+        var withBoth = MergeRule.Evaluate(Config, MainGreen, Pr(files, statuses: [First(), Second()]))!;
 
         Assert.Equal("failure", copilotOnly.State);
-        Assert.Equal("success", withReceipt.State);
+        Assert.Equal("failure", withReceipt.State);
+        Assert.Equal("success", withBoth.State);
+    }
+
+    [Theory]
+    [InlineData("COMMENTED")]
+    [InlineData("DISMISSED")]
+    [InlineData("PENDING")]
+    public void Optional_review_state_cannot_change_whether_the_two_receipt_gate_passes(string reviewState)
+    {
+        var pr = Pr([".github/workflows/ci.yml"], reviews: [Copilot with { State = reviewState }], statuses: [First()]);
+
+        Assert.Equal("failure", MergeRule.Evaluate(Config, MainGreen, pr)!.State);
+        Assert.Equal("success", MergeRule.Evaluate(Config, MainGreen, pr with { Statuses = [First(), Second()] })!.State);
     }
 
     [Fact]
@@ -296,7 +310,7 @@ public class MergeRuleTests
         var twoFamilies = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, statuses: [First(), Second()]))!;
 
         Assert.Equal("failure", oneFamily.State);
-        Assert.Equal(["It touches .github/workflows/ci.yml, so it needs a second review's receipt (independent-review-2) on abcdef0, from another model family"], oneFamily.Reasons);
+        Assert.Equal(["needs a second review's receipt (independent-review-2) on abcdef0, from another model family: it touches .github/workflows/ci.yml"], oneFamily.Reasons);
         Assert.Equal(("success", "Two model families' reviews on file; every check passed"), (twoFamilies.State, twoFamilies.Description));
     }
 
@@ -328,7 +342,7 @@ public class MergeRuleTests
     {
         var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], statuses: [First()]) with { Title = "Security: bind approvals to what was shown" })!;
 
-        Assert.Equal(["It's marked as a security change, so it needs a second review's receipt (independent-review-2) on abcdef0, from another model family"], verdict.Reasons);
+        Assert.Equal(["needs a second review's receipt (independent-review-2) on abcdef0, from another model family: it's marked as a security change"], verdict.Reasons);
     }
 
     [Fact]
@@ -421,12 +435,12 @@ public class MergeRuleTests
     }
 
     [Fact]
-    public void A_completed_Copilot_review_is_the_other_family_so_the_label_then_changes_nothing()
+    public void The_waiver_label_does_not_make_Copilot_a_substitute_for_the_second_receipt()
     {
         var labelled = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], labels: ["copilot-waived"], statuses: [First()]))!;
         var unlabelled = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], statuses: [First()]))!;
 
-        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file"), (labelled.State, labelled.Description));
+        Assert.Equal("failure", labelled.State);
         Assert.Equal((labelled.State, labelled.Description), (unlabelled.State, unlabelled.Description));
     }
 
@@ -448,7 +462,7 @@ public class MergeRuleTests
         var none = MergeRule.Evaluate(Config, MainGreen, Pr(files))!;
         // A workflow's token posting the receipt, as a pull request's own workflow could, counts for nothing.
         var byWorkflow = MergeRule.Evaluate(Config, MainGreen, Pr(files, statuses: [Receipt("success", "github-actions[bot]")]))!;
-        var byReviewer = MergeRule.Evaluate(Config, MainGreen, Pr(files, statuses: [Receipt("success")]))!;
+        var byReviewer = MergeRule.Evaluate(Config, MainGreen, Pr(files, statuses: [First(), Second()]))!;
 
         Assert.Equal("failure", none.State);
         Assert.Equal("Needs an independent review of abcdef0: it touches src/AgentBridge.Host/Pairing/Codes.cs", none.Description);
@@ -468,7 +482,7 @@ public class MergeRuleTests
     {
         var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
 
-        var verdict = MergeRule.Evaluate(config, MainGreen, Pr(["AGENTS.md"], statuses: [Receipt("success", poster)]))!;
+        var verdict = MergeRule.Evaluate(config, MainGreen, Pr(["AGENTS.md"], statuses: [First() with { Creator = poster }, Second(creator: poster)]))!;
 
         Assert.Equal(state, verdict.State);
     }
@@ -559,7 +573,8 @@ public class MergeRuleTests
         Assert.Equal(new RunFact("COMPLETED", "SUCCESS"), facts.CodeQlRun);
         // The workflow job named CodeQL is ignored; only code scanning's app speaks for it.
         Assert.Equal(new RunFact("COMPLETED", "NEUTRAL"), facts.CodeQlCheck);
-        Assert.Equal("success", Assert.Single(facts.Statuses).State);
+        Assert.Equal(["independent-review", "independent-review-2"], facts.Statuses.Select(s => s.Context));
+        Assert.All(facts.Statuses, s => Assert.Equal("success", s.State));
         Assert.True(facts.FullyRead);
         Assert.Equal("A change", facts.Title);
     }
@@ -604,13 +619,13 @@ public class MergeRuleTests
     [Fact]
     public void The_billing_error_Copilot_posted_on_406_and_358s_heads_no_longer_blocks_but_the_receipts_still_do()
     {
-        var github = new FakeGitHub(GraphQLPullRequest(Head, reviewBody: BillingError));
+        var github = new FakeGitHub(GraphQLPullRequest(Head, reviewBody: BillingError, secondReceipt: false));
         var config = WriteConfig();
         try
         {
             MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
-            Assert.StartsWith($"{Head} failure merge-rule It touches docs/old.md, so it needs a second review's receipt (independent-review-2) on abcdef0", Assert.Single(github.Posted));
+            Assert.StartsWith($"{Head} failure merge-rule Needs a second review's receipt (independent-review-2) on abcdef0, from another model family: it touches docs/old.md", Assert.Single(github.Posted));
         }
         finally
         {
@@ -718,7 +733,7 @@ public class MergeRuleTests
         var pr = Pr(labels: label is null ? [] : [label]) with { Title = title };
 
         var none = MergeRule.Evaluate(Config, MainGreen, pr)!;
-        var receipted = MergeRule.Evaluate(Config, MainGreen, pr with { Statuses = [Receipt("success")] })!;
+        var receipted = MergeRule.Evaluate(Config, MainGreen, pr with { Statuses = [First(), Second()] })!;
 
         Assert.Equal(("failure", "Needs an independent review of abcdef0: it's marked as a security change"), (none.State, none.Description));
         Assert.Equal("success", receipted.State);
@@ -935,7 +950,7 @@ public class MergeRuleTests
                 // No jobs: a workflow file that doesn't parse, a run not started, a run awaiting approval.
                 Suite("github-actions", Workflow(15, "Workflow lint"), "COMPLETED", "STARTUP_FAILURE"),
                 Suite("github-actions", Workflow(16, "Dependencies"), "QUEUED", null),
-                Suite("github-actions", Workflow(17, "Merge rule review relay"), "COMPLETED", "ACTION_REQUIRED"),
+                Suite("github-actions", Workflow(17, "Pages"), "COMPLETED", "ACTION_REQUIRED"),
             ],
             extraStatuses: [new { context = "ci/legacy", state = "ERROR", description = "broke", createdAt = "2026-11-03T20:02:00Z", creator = new { login = "someone" } }]));
 
@@ -1213,7 +1228,7 @@ public class MergeRuleTests
 
     [Theory]
     [InlineData(6, "in_progress", 1, "Main is red (CI c500000): named job light is not green")]
-    [InlineData(5, "queued", 2, "")]
+    [InlineData(5, "queued", 2, "Main's CI c500000 is being re-run: waiting for main to be green")]
     public void A_main_run_still_going_after_a_red_one_still_blocks(long id, string status, int attempt, string description)
     {
         var runs = new List<(long, string, string?, int)> { (id, status, null, attempt) };
@@ -1226,7 +1241,7 @@ public class MergeRuleTests
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
-            Assert.Contains(description.Length == 0 ? " success merge-rule " : description,
+            Assert.Contains(description,
                 Assert.Single(github.Posted), StringComparison.Ordinal);
         }
         finally
@@ -1242,8 +1257,8 @@ public class MergeRuleTests
         string[] files = ["tests/AgentBridge.Quality.Tests/MergeRuleTests.cs"];
 
         var unreviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["fixes-main", "security"]))!;
-        var reviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["Fixes-Main", "security"], statuses: [Receipt("success")]))!;
-        var unlabelled = MergeRule.Evaluate(Config, red, Pr(files, labels: ["security"], statuses: [Receipt("success")]))!;
+        var reviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["Fixes-Main", "security"], statuses: [First(), Second()]))!;
+        var unlabelled = MergeRule.Evaluate(Config, red, Pr(files, labels: ["security"], statuses: [First(), Second()]))!;
 
         Assert.Equal(("failure", "Needs an independent review of abcdef0: it's marked as a security change"), (unreviewed.State, unreviewed.Description));
         Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file; fixes-main tests-only bypass used"), (reviewed.State, reviewed.Description));
@@ -1315,8 +1330,10 @@ public class MergeRuleTests
     [InlineData("schedule", null, null, null, null, null, null, true)]
     [InlineData("workflow_dispatch", null, null, null, null, null, null, true)]
     [InlineData("pull_request_target", null, null, null, null, null, null, true)]
-    [InlineData("check_suite", null, null, "main", null, null, null, false)]
+    [InlineData("check_suite", null, null, "main", null, null, null, true)]
     [InlineData("check_suite", null, null, "topic", null, null, null, true)]
+    [InlineData("check_run", null, null, "main", null, null, null, true)]
+    [InlineData("check_run", null, null, "topic", null, null, null, true)]
     public void The_merge_rule_workflow_judges_again_when_CI_finishes_on_main(string eventName, string? action, string? workflow, string? branch, string? runEvent, string? headRepo, string? context, bool runs)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
@@ -1361,8 +1378,11 @@ public class MergeRuleTests
             github["github.event.check_suite.head_sha"] = eventName == "check_suite" ? head : null;
             github["github.event.check_suite.head_branch"] = branch;
             github["github.event.workflow_run.head_sha"] = eventName == "workflow_run" ? head : null;
+            github["github.event.check_run.check_suite.head_branch"] = eventName == "check_run" ? branch : null;
+            github["github.event.check_run.head_sha"] = eventName == "check_run" ? head : null;
             var sweep = eventName == "schedule" ? "backstop" : eventName == "workflow_dispatch" ? "dispatch"
-                : eventName == "workflow_run" && branch == "main" ? "sweep" : null;
+                : eventName == "workflow_run" && branch == "main" ? "sweep"
+                : (eventName == "check_run" || eventName == "check_suite") && branch == "main" ? "sweep" : null;
             Assert.Equal(!runs ? "run-" + head : sweep ?? head,
                 IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
             var name = Scalar(job, "name");
@@ -1373,6 +1393,35 @@ public class MergeRuleTests
         github["vars.FLEET_MERGERULE"] = "off";
         Assert.Equal(!runs ? "run-head-b" : eventName == "schedule" ? "backstop" : eventName == "workflow_dispatch" ? "dispatch" : "sweep",
             IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
+    }
+
+    [Fact]
+    public void CI_dispatches_main_s_merge_rule_after_the_gating_jobs_without_waiting_on_delivery()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        YamlMappingNode Load(params string[] path)
+        {
+            var yaml = new YamlStream();
+            yaml.Load(new StringReader(File.ReadAllText(Path.Combine(root, Path.Combine(path)))));
+            return (YamlMappingNode)yaml.Documents[0].RootNode;
+        }
+        var gating = ((YamlSequenceNode)((YamlMappingNode)Load("quality", "merge-rule.yml")["main_green"])["jobs"])
+            .Select(j => j.ToString().Split(" (")[0]).Distinct().Order(StringComparer.Ordinal).ToArray();
+        var job = (YamlMappingNode)((YamlMappingNode)Load(".github", "workflows", "ci.yml")["jobs"])["nudge-merge-rule"];
+        var needs = ((YamlSequenceNode)job["needs"]).Select(n => n.ToString()).Order(StringComparer.Ordinal).ToArray();
+
+        Assert.Equal(gating, needs);
+        Assert.DoesNotContain(needs, n => n is "app-installer" or "publish-gate" or "sign" or "publish" or "attest");
+        var permissions = (YamlMappingNode)job["permissions"];
+        Assert.Equal(["actions", "contents"], permissions.Children.Select(p => p.Key.ToString()).Order(StringComparer.Ordinal));
+        Assert.Equal("write", permissions["actions"].ToString());
+        Assert.Equal("read", permissions["contents"].ToString());
+        var condition = job["if"].ToString();
+        Assert.StartsWith("always()", condition, StringComparison.Ordinal);
+        Assert.Equal("always() && github.event_name == 'push' && github.ref == 'refs/heads/main'", condition);
+        var step = (YamlMappingNode)((YamlSequenceNode)job["steps"]).Single();
+        Assert.Equal("true", step["continue-on-error"].ToString());
+        Assert.Equal("gh workflow run merge-rule.yml --repo \"$GITHUB_REPOSITORY\" --ref main", step["run"].ToString());
     }
 
     [Theory]
@@ -1421,6 +1470,8 @@ public class MergeRuleTests
             var steps = (YamlSequenceNode)((YamlMappingNode)jobs["evaluate"])["steps"];
             Assert.Contains(steps.Cast<YamlMappingNode>(), step => step.Children.TryGetValue("run", out var run) &&
                 run.ToString().Contains("pull_request_target) [ -n \"$PR_NUMBER\" ] && scope=(--pr \"$PR_NUMBER\")", StringComparison.Ordinal));
+            Assert.Contains(steps.Cast<YamlMappingNode>(), step => step.Children.TryGetValue("run", out var run) &&
+                run.ToString().Contains("check_run) [ -n \"$CHECK_SHA\" ] && [ \"$CHECK_BRANCH\" != main ] && scope=(--sha \"$CHECK_SHA\")", StringComparison.Ordinal));
             MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github, OnMain);
             if (state is null) { Assert.Empty(github.Posted); }
             else { Assert.StartsWith($"{Older} {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal); }
@@ -1678,6 +1729,102 @@ public class MergeRuleTests
     }
 
     [Theory]
+    [InlineData("in_progress", null, "failure", "is being re-run")]
+    [InlineData("completed", "success", "success", "")]
+    public void A_newest_run_mid_rerun_waits_instead_of_falling_back_to_an_older_run(string armStatus, string? armConclusion, string state, string text)
+    {
+        object Job(int id, string name, string status = "completed", string? conclusion = "success", int attempt = 1) =>
+            new { id, name, status, conclusion, run_attempt = attempt };
+        var jobs = new[] { Job(0, "plan"), Job(1, "product (ubuntu-latest)"), Job(2, "light"), Job(3, "app (win-x64)"),
+            Job(4, "app (win-arm64)", conclusion: "failure"), Job(5, "app (win-arm64)", armStatus, armConclusion, attempt: 2) };
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, armStatus, armConclusion, 2), (5, "completed", "failure", 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }) });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            var posted = Assert.Single(github.Posted);
+            Assert.Contains($" {state} merge-rule ", posted, StringComparison.Ordinal);
+            Assert.Contains(text, posted, StringComparison.OrdinalIgnoreCase);
+            if (armStatus != "completed")
+                Assert.DoesNotContain(github.RestPaths, p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
+    [InlineData("queued", "success")]
+    [InlineData("queued", "failure")]
+    [InlineData("in_progress", "success")]
+    [InlineData("in_progress", "failure")]
+    public void A_newest_rerun_without_jobs_waits_instead_of_using_an_older_verdict(string status, string older)
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, status, null, 2), (5, "completed", older, 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = """{"total_count":0,"jobs":[]}""" });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            var posted = Assert.Single(github.Posted);
+            Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+            Assert.Contains("is being re-run", posted, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("no completed", posted, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
+    [InlineData("success")]
+    [InlineData("failure")]
+    public void A_newest_active_rerun_with_only_earlier_attempt_jobs_waits(string planConclusion)
+    {
+        var jobs = new[] { "plan", "product (ubuntu-latest)", "light", "app (win-x64)", "app (win-arm64)" }
+            .Select((name, id) => new { id, name, status = "completed",
+                conclusion = name == "plan" ? planConclusion : planConclusion == "failure" ? "skipped" : "success", run_attempt = 1 }).ToArray();
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, "in_progress", null, 2), (5, "completed", "success", 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }) });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            var posted = Assert.Single(github.Posted);
+            Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+            Assert.Contains("is being re-run", posted, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("held", WeeklyReport.Category(posted.Split(" merge-rule ", StringSplitOptions.None)[1] + "; held by the label 'hold'"));
+            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
+    [InlineData("success", false)]
+    [InlineData("failure", false)]
+    [InlineData("success", true)]
+    [InlineData("failure", true)]
+    public void An_empty_newest_first_attempt_does_not_make_an_older_rerun_the_newest(string older, bool emptyRerun)
+    {
+        var jobs = new[] { "plan", "product (ubuntu-latest)" }.Select((name, id) =>
+            new { id, name, status = name == "plan" ? "completed" : "in_progress",
+                conclusion = name == "plan" ? "success" : null, run_attempt = 2 }).ToArray();
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((7, "queued", null, 1), (6, "in_progress", null, 2), (5, "completed", older, 1)),
+            jobsByRun: new Dictionary<long, string> { [7] = """{"total_count":0,"jobs":[]}""",
+                [6] = emptyRerun ? """{"total_count":0,"jobs":[]}""" : JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }) });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            Assert.Contains($" {(older == "success" ? "success" : "failure")} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.Contains(github.RestPaths, p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
     [InlineData("queued", "success", "success")]
     [InlineData("queued", "failure", "failure")]
     [InlineData("pending", "failure", "failure")]
@@ -1752,6 +1899,30 @@ public class MergeRuleTests
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
             Assert.Contains(github.RestPaths, p => p.Contains("per_page=20&page=2", StringComparison.Ordinal));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
+    [InlineData("product")]
+    [InlineData("product (${{ matrix.os }})")]
+    [InlineData("product (ubuntu-latest)")]
+    public void A_newest_plan_retry_waits_for_a_skipped_products_retry_to_appear(string placeholder)
+    {
+        var jobs = new[] { placeholder, "plan", "light", "app (win-x64)", "app (win-arm64)" }.Select((name, id) =>
+            new { id, name, status = "completed", conclusion = name == "plan" ? "success" : "skipped",
+                run_attempt = name == "plan" ? 2 : 1 }).ToArray();
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, "in_progress", null, 2), (5, "completed", "success", 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }) });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            var posted = Assert.Single(github.Posted);
+            Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+            Assert.Contains("is being re-run", posted, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal));
         }
         finally { File.Delete(config); }
     }
@@ -1903,12 +2074,14 @@ public class MergeRuleTests
     }
 
     static string WaiverPullRequest(string name = "app (win-arm64)", string result = "FAILURE",
-        string workflow = "CI", string gate = "SUCCESS", string receipt = "CLEAN claude-opus-5.5 500",
+        string workflow = "CI", string gate = "SUCCESS", string receipt = "500",
         string runResult = "FAILURE", string slug = "github-actions", params object[] extraJobs) =>
         GraphQLPullRequest(Head, extraSuites: [Suite(slug, Workflow(500, workflow), "COMPLETED", runResult,
             [Job(5000, name, "COMPLETED", result), Job(5001, "quality-gate", "COMPLETED", gate), .. extraJobs])],
-            extraStatuses: [new { context = "independent-review", state = "SUCCESS", description = receipt,
-                createdAt = "2026-11-03T20:01:00Z", creator = new { login = "danswett" } }]);
+            extraStatuses: [new { context = "independent-review", state = "SUCCESS", description = $"CLEAN claude-opus-5.5 {receipt}",
+                createdAt = "2026-11-03T20:01:00Z", creator = new { login = "danswett" } },
+                new { context = "independent-review-2", state = "SUCCESS", description = "CLEAN gpt-6.1-sol",
+                    createdAt = "2026-11-03T20:01:00Z", creator = new { login = "danswett" } }]);
 
     [Theory]
     [InlineData("on", -1, "success")]
@@ -2145,12 +2318,14 @@ public class MergeRuleTests
 
     static object Job(long id, string name, string status, string? conclusion = null) => new { databaseId = id, name, status, conclusion };
 
-    static string GraphQLPullRequest(string head, string? commitOid = null, (string State, string Description)? mergeRule = null, string[]? labels = null, string receiptCreator = "danswett", string mergeRuleCreator = "github-actions", int number = 42, object[]? extraSuites = null, object[]? extraStatuses = null, int? labelsTotal = null, string title = "A change", string reviewBody = GenuineReview)
+    static string GraphQLPullRequest(string head, string? commitOid = null, (string State, string Description)? mergeRule = null, string[]? labels = null, string receiptCreator = "danswett", string mergeRuleCreator = "github-actions", int number = 42, object[]? extraSuites = null, object[]? extraStatuses = null, int? labelsTotal = null, string title = "A change", string reviewBody = GenuineReview, bool secondReceipt = true)
     {
         var statuses = new List<object>
         {
-            new { context = "independent-review", state = "SUCCESS", description = "sec-42 CLEAN", createdAt = "2026-11-03T20:00:00Z", creator = new { login = receiptCreator } },
+            new { context = "independent-review", state = "SUCCESS", description = "sec-42 CLEAN gpt-6.1-sol", createdAt = "2026-11-03T20:00:00Z", creator = new { login = receiptCreator } },
         };
+        if (secondReceipt)
+            statuses.Add(new { context = "independent-review-2", state = "SUCCESS", description = "sec-42 CLEAN claude-sonnet-5.5", createdAt = "2026-11-03T20:00:00Z", creator = new { login = receiptCreator } });
         if (mergeRule is { } m)
             statuses.Add(new { context = "merge-rule", state = m.State.ToUpperInvariant(), description = m.Description, createdAt = "2026-11-03T20:01:00Z", creator = new { login = mergeRuleCreator } });
         statuses.AddRange(extraStatuses ?? []);

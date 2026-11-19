@@ -351,7 +351,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    `windows-11-arm` product leg to `main`, #1249); the plan
    step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
    compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
-   delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, `sign`, each pinned to
+   delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, `sign`,
+   `nudge-merge-rule` (dispatches main's merge-rule workflow), each pinned to
    the jobs it follows), and its `if:` is
    `always()`; `publish-gate` needs `quality-gate` and requires its success as a top-level
    condition, `sign` needs `publish-gate` with exactly the condition
@@ -530,8 +531,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    head; GitHub merges when required checks pass. Builders never arm or merge.
    The [single Fleet pipeline register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
    owns standing decisions/exceptions; this section describes Bridge operations only.
-   **Reader enforcement is STALE:** the current evaluator/config can accept one
-   independent receipt plus completed Copilot instead of the required second family.
+   **Reader enforcement remains partial:** the evaluator requires both receipt
+   families where configured; Copilot cannot replace either receipt.
    Before arming or permitting merge, Quality MUST manually verify authorized
    posters and Quality-only posting; actual approved model/effort (or approved
    retained continuity); successful receipts backed by linked CLEAN review verdicts explicitly
@@ -563,8 +564,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      walks main's `ci.yml` push runs newest first, across up to 100 runs. A cancelled run never
      counts. A candidate needs a successful completed plan and completed product instances;
      queued, in-progress or cancelled named jobs pass the run over. A failed plan or a
-     classification-skipped product family also passes it over. A newer main head still running
-     does not block; the pull request's own running checks still do. The single
+     classification-skipped product family also passes it over. A newer main head's first
+     attempt still running does not block; the pull request's own running checks still do.
+     The newest non-cancelled run's active retry holds with an explicit re-run waiting reason
+     when its current-attempt jobs have not appeared, or its plan, product or named jobs
+     are unfinished. It never falls back to another run's verdict in that state.
+     An older skipped product does not permit fallback while the plan retry has finished
+     but its product retry has not appeared.
+     An empty first attempt still consumes the newest slot; an older retry does not acquire it.
+     The single
      `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
      light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
      dynamic family: at least one entry must exist and every present instance must pass; runners
@@ -607,15 +615,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      nothing. Bot-only threads, which would still block the ruleset's 0-unresolved-threads
      requirement, are resolved with `quality/resolve-bot-threads.ps1`.
    - A pull request can't loosen its own gate (#487, Finding 1): every trigger
-     (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
+     (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`,
+     `check_run`, a
      30-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
      and builds main and reads the pull request only through the API. Each run judges every open
      pull request, one run at a time, so a run starting turns a head pending, a late red flips the
      verdict, and no stale read lands last.
      Changing the rule means changing `quality/`, `.github/` or the tool,
-     all sensitive, so it takes an independent review and only applies once merged. Reviews reach
-     it through a relay workflow (`merge-rule-review.yml`), since `pull_request_review` runs the
-     pull request's copy. The schedule is a backstop only, Dependabot's pull requests included.
+     all sensitive, so it takes an independent review and only applies once merged. The schedule is a backstop only, Dependabot's pull requests included.
      This slows the same timer; it adds no new timer and does not replace event-driven evaluation.
    - CodeQL is judged here, not by a `code_scanning` rule: since #464 a pull request whose
      languages CodeQL skips uploads no results, and that rule would wait for them forever.
@@ -667,8 +674,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      a proposed deferral also reads one page of ten completed cron runs and at most ten job lists,
      stopping when recent writer evidence is found, otherwise warning and proceeding.
      It is not a resolver job per event. The PR dry run in
-     `.github/workflows/weekly-report.yml` and the review relay in
-     `.github/workflows/merge-rule-review.yml` also cancel in-progress runs per pull request
+     `.github/workflows/weekly-report.yml` also cancels in-progress runs per pull request
      (#2577). All triggers stay unchanged.
      Every admitted writer still waits in the shared `merge-rule` job group with
      `cancel-in-progress: false` and `queue: max`, reading main only after taking that lock.
