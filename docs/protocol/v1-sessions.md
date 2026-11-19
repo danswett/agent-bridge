@@ -22,6 +22,19 @@ clients restart paging without `before` and merge by turn id.
 
 ## Rules for every message
 
+`sessions.list`, `session.get` and subscription upserts may include an **advisory,
+display-only** `role`: `one-shot`, `lead`, or `preserved`. It originates in
+`LaunchRequest.SessionRole` (`sessionRole`), separate from the MCP `role`, and is
+persisted with the session/process incarnation, not read from workspace metadata.
+The same-user-writable `launch-provenance.json` can be edited by a session and read
+back after host restart: its role is NOT authoritative and MUST NOT authorize a stop
+or an EndSelf grant, even when it says `one-shot`. Missing, legacy, unknown, unbound
+or conflicting roles never imply eligibility. Unavailable provenance omits the role
+without failing reads. Slice A adds no EndSelf operation and leaves the existing
+agent `session.stop` refusal unchanged. Slice B must make roles
+authoritative from host-owned state that sessions cannot write before using them for
+EndSelf admission; A's persisted display role is never that authority.
+
 * JSON, UTF-8, `camelCase` names. A field that is absent and one that is `null` mean
   the same thing. Text in the Basic Multilingual Plane, accented letters and CJK
   included, is sent as raw UTF-8, not as `\u` escapes. Characters outside it, which are

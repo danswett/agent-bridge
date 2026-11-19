@@ -285,12 +285,16 @@ public sealed class SessionService
             case "load.get" or "load.subscribe" or "load.unsubscribe" when LoadEnabled() && Load is not null && channel is SecureChannel:
                 return await Load.HandleAsync(channel, op);
             case Ops.SessionsList:
-                return source.List(String(data, "cursor"));
+                var page = source.List(String(data, "cursor"));
+                var sessions = Paging.Pages(page.Sessions.Select(WithRole)).FirstOrDefault() ?? [];
+                return page with { Sessions = sessions, Next = sessions.Count < page.Sessions.Count
+                    ? (int.Parse(String(data, "cursor") ?? "0", System.Globalization.CultureInfo.InvariantCulture) + sessions.Count)
+                        .ToString(System.Globalization.CultureInfo.InvariantCulture) : page.Next };
             case Ops.SessionGet:
                 {
                     var id = String(data, "id") ?? throw new ArgumentException("session.get needs an id");
                     if (String(data, "agent") is { } agent) { return (object?)await source.GetAgentAsync(id, agent) ?? new { missing = true }; }
-                    return (object?)source.Get(id) ?? new { missing = true };
+                    return source.Get(id) is { } session ? WithRole(session) : new { missing = true };
                 }
             case Ops.SessionsSubscribe:
                 return await SubscribeAsync(channel, data);
@@ -302,6 +306,11 @@ public sealed class SessionService
                 return null;
         }
     }
+
+    Session WithRole(Session session) => SessionBudget.Fit(session with
+    {
+        Role = SessionRoles.Known(launcher?.RoleOf(session.Id, source.ProcessOf(session.Id))),
+    });
 
     // session.history (docs/protocol/v1-history.md), read strictly as every request a client sends:
     // a request with a field missing, of the wrong type or out of range fails as a request.
@@ -336,7 +345,7 @@ public sealed class SessionService
                 await old.StopAsync();
             }
             if (!channel.IsOpen) { throw new IOException("the channel is closed"); }
-            var feed = new Feed(source.Subscribe(since), request.Patch == true, state, Time, QuietInterval, request.Handles == true);
+            var feed = new Feed(source.Subscribe(since), request.Patch == true, state, Time, QuietInterval, request.Handles == true, WithRole);
             state.Feed = feed;
             FeedCreated?.Invoke(feed);
             // The snapshot waits until the response has gone (ChannelReply), so the client
@@ -794,7 +803,7 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data,
     static string? String(JsonElement data, string name) =>
         data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    internal sealed class Feed(SessionSubscription subscription, bool patch, Subscriber state, TimeProvider time, TimeSpan quiet, bool useHandles = false)
+    internal sealed class Feed(SessionSubscription subscription, bool patch, Subscriber state, TimeProvider time, TimeSpan quiet, bool useHandles = false, Func<Session, Session>? project = null)
     {
         // Put in the subscription's own queue, so what was held goes in order with everything else:
         // Tick when the quiet interval is up, Refocused when the client shows another session.
@@ -951,6 +960,7 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data,
 
         async Task SendAsync(IProtocolChannel channel, SessionEvent ev, Action<string> log)
         {
+            if (ev.Data is Session s && project is not null) { ev = ev with { Data = project(s) }; }
             var (name, data, id, json) = Shape(ev);
             if (name is null) { return; }
             try

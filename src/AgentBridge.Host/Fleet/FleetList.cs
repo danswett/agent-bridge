@@ -18,6 +18,7 @@ public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSes
 
 public sealed record FleetSession(string Node, string? Name, string State, DateTimeOffset Since, string? Id = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Role = null,
     [property: JsonIgnore] SessionEvidence? Evidence = null);
 
 public interface IFleetRoster
@@ -148,7 +149,9 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
                 {
                     sessions.Add(new FleetSession(s.GetProperty("node").GetString()!, s.TryGetProperty("name", out var n) ? n.GetString() : null,
                         s.GetProperty("state").GetString()!, s.GetProperty("since").GetDateTimeOffset(), s.TryGetProperty("id", out var sid) ? sid.GetString() : null,
-                        s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null, SessionEvidence.Read(s, futureAttention: true)));
+                        s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null,
+                        s.TryGetProperty("role", out var role) && role.ValueKind == JsonValueKind.String ? SessionRoles.Known(role.GetString()) : null,
+                        SessionEvidence.Read(s, futureAttention: true)));
                 }
             }
             machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name, LastSeen: LastSeen(f), HasRegistryRecord: hasRegistryRecord, Order: order));
@@ -198,6 +201,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
 public sealed record FleetListSession(string Machine, string Node, string State, DateTimeOffset Since, long SecondsInState, bool MachineOnline,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Role = null,
     [property: JsonIgnore] SessionEvidence? Evidence = null)
 {
     static readonly JsonElement True = JsonSerializer.SerializeToElement(true);
@@ -282,7 +286,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var live = hits.Where(h => h.Machine.Online).ToList();
         var stale = hits.Where(h => !h.Machine.Online).ToList();
         if (live.Any(h => !h.Machine.Verified)) { return new { result = "unverified", fleetScope, machines = live.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name, Online: true)) }; }
-        var cands = live.SelectMany(h => h.Sessions.Select(s => new FindSession(s.Id ?? s.Node, s.Node, h.Machine.Id, s.State, s.Since, true, h.Machine.Name, s.Model))).ToList();
+        var cands = live.SelectMany(h => h.Sessions.Select(s => new FindSession(s.Id ?? s.Node, s.Node, h.Machine.Id, s.State, s.Since, true, h.Machine.Name, s.Model, SessionRoles.Known(s.Role)))).ToList();
         if (cands.Count >= 2) { return new { result = "ambiguous", fleetScope, candidates = cands }; }
         if (cands.Count == 0)
         {
@@ -299,7 +303,8 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
 
     sealed record FindSession(string Id, string? Node, string Machine, string State, DateTimeOffset Since, bool Online,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Role);
 
     AgentCredential Authorize(IProtocolChannel channel, string op)
     {
@@ -324,7 +329,8 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         return new
         {
             sessions = machines.SelectMany(m => m.Sessions.Select(s => new FleetListSession(
-                m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name, s.Evidence))).ToList(),
+                m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name,
+                m.Online && m.Verified ? SessionRoles.Known(s.Role) : null, s.Evidence))).ToList(),
             machines = machines.OrderBy(m => m.Id, StringComparer.Ordinal).Select(m => new FleetListMachine(
                 m.Id, m.Online ? "online" : "offline", m.Name, m.LastSeen, m.Online && m.HasRegistryRecord && !m.Truncated)).ToList(),
         };

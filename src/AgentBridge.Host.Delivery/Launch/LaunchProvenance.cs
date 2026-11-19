@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Host.Core;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery.Launch;
 
@@ -13,7 +14,7 @@ internal sealed class LaunchProvenance
     readonly Lock gate = new();
     readonly Dictionary<Guid, Origin> origins = [];
     bool unavailable;
-    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null);
+    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, string? Role = null);
 
     public LaunchProvenance(string? path, Action<string> log)
     {
@@ -41,9 +42,9 @@ internal sealed class LaunchProvenance
         }
     }
 
-    public void Preparing(Guid request, string session = "", string? grant = null)
+    public void Preparing(Guid request, string session = "", string? grant = null, string? role = null)
     {
-        lock (gate) { Check(); origins[request] = new(session, null, grant); Save(); }
+        lock (gate) { Check(); origins[request] = new(session, null, grant, SessionRoles.Known(role)); Save(); }
     }
 
     public void Abandon(Guid request)
@@ -56,7 +57,8 @@ internal sealed class LaunchProvenance
         lock (gate)
         {
             Check();
-            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant);
+            var prior = origins.GetValueOrDefault(request);
+            var origin = new Origin(session, process, prior?.Grant, prior?.Role);
             if (origins.GetValueOrDefault(request) == origin) { return; }
             origins[request] = origin;
             Save();
@@ -84,6 +86,19 @@ internal sealed class LaunchProvenance
             { throw new InvalidOperationException("refused: a fleet launch has no durable process binding"); }
             return process is not null && origins.Values.Any(o => o.Grant == "fleet"
                 && string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase) && o.Process == process);
+        }
+    }
+
+    // Same-user-writable provenance is advisory display data, never stop authorization.
+    public string? RoleOf(string session, SessionProcess? process)
+    {
+        lock (gate)
+        {
+            if (unavailable || process is not { Id: > 0, StartedAt: not null }) { return null; }
+            var matches = origins.Values.Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Any(o => o.Process is null)) { return null; }
+            var roles = matches.Where(o => o.Process == process).Select(o => SessionRoles.Known(o.Role)).Distinct().ToArray();
+            return roles.Length == 1 ? roles[0] : null;
         }
     }
 

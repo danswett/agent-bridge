@@ -29,7 +29,7 @@ public static class LocalApi
             if (data.ValueKind != JsonValueKind.Object || System.Text.Encoding.UTF8.GetByteCount(data.GetRawText()) > LaunchProtocol.MaxRequest
                 || data.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() != 1)
                 || data.EnumerateObject().Any(p => p.Name is not ("request" or "agent" or "workspace" or "permissions"
-                    or "model" or "effort" or "context" or "prompt" or "role" or "fleetName")))
+                    or "model" or "effort" or "context" or "prompt" or "role" or "sessionRole" or "fleetName")))
             { throw Refuse(op, callers.Classify(channel), "fleet launch contains unsupported fields or exceeds its size limit", log); }
             var request = data.Deserialize<LaunchRequest>(ProtocolJson.Options) ?? throw new ArgumentException("fleet launch needs a request");
             string? Refusal() => credentials.Of(channel) is not { } script ? "the script credential is no longer live"

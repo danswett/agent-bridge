@@ -58,6 +58,7 @@ public static partial class LaunchProtocol
         // A role is matched exactly against launch.workerMcp and names MCP servers to start, so
         // only a plain name is taken.
         if (launch.Role is not null && !RoleName().IsMatch(launch.Role)) { return $"'{Cut(launch.Role)}' is not a role name; use letters, digits and hyphens, at most {MaxRole}"; }
+        if (launch.SessionRole is not null && SessionRoles.Known(launch.SessionRole) is null) { return "unknown sessionRole; use one-shot, lead or preserved"; }
         if (launch.Resume is not null && launch.Workspace is not null)
         {
             return "a resumed session reopens in its own folder; name a workspace or a session to resume, not both";
@@ -135,6 +136,7 @@ public sealed record LaunchRequest
     // with a role has its MCP servers narrowed, to those launch.workerMcp lists for that role
     // (none when it lists none); a launch without one is a person's and keeps their own.
     public string? Role { get; init; }
+    public string? SessionRole { get; init; }
     public string? Prompt { get; init; }
     public IReadOnlyList<AttachmentRef>? Attachments { get; init; }
     // With sessions.transfer: a session from another machine, resumed here as one of its own
