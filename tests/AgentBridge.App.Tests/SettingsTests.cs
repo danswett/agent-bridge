@@ -320,8 +320,34 @@ public sealed class SettingsTests : IAsyncLifetime
     {
         host.Status = status;
         await Connected();
+        var before = TestUi.Read(() => connection.Status);
         await host.SendAsync(HostOps.StatusEvent, status);
-        await Wait.UntilAsync(() => Equals(connection.Status?.Settings, status.Settings), "the host's status");
+        // Matching subscribe values do not prove this event has reached the UI.
+        await Wait.UntilAsync(() => !ReferenceEquals(connection.Status, before)
+            && Equals(connection.Status?.Settings, status.Settings), "the host's status event");
+    }
+
+    [Fact]
+    public async Task Status_setup_waits_for_its_event_to_be_applied_even_when_the_settings_already_match()
+    {
+        await Connected();
+        var status = connection.Status!;
+        ui.Hold();
+        Task? setup = null;
+        try
+        {
+            setup = ConnectedWith(status);
+            await Wait.UntilAsync(() => host.EventsSent.Any(e => e.Name == HostOps.StatusEvent), "the status event sent");
+            await connection.HostHasAllAsync();
+            await Wait.UntilAsync(() => ui.QueuedCount > 0, "the queued status event");
+
+            Assert.False(setup.IsCompleted);
+        }
+        finally
+        {
+            ui.Release();
+            if (setup is not null) { await setup; }
+        }
     }
 
     // As the host does: answers host.settings with what it saved, which its status says from then
