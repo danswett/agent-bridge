@@ -49,7 +49,7 @@ The base is strong. CI already tests what ships, not just the code:
 - **Relay:** smoke-tested on staging with a throwaway account, two Noise devices, push and
   blobs. Production is gated on approval.
 - **Live:** the migrate-and-rollback rehearsal on Azure VMs ([parity-checklist.md](../docs/parity-checklist.md),
-  automated in part by `agent-bridge-rehearsal`), and the shadow soak on VM-M driving real
+  automated in part by `agent-bridge-rehearsal`), and the shadow soak on a disposable Azure VM driving real
   Copilot, Claude and Codex sessions.
 
 The gaps this plan closes:
@@ -73,7 +73,7 @@ The gaps this plan closes:
    Axe.Windows scan, no keyboard-only pass and no screen-reader checklist.
 7. **macOS, iOS and Linux live.** The Apple clients' SwiftPM tests (about 35 files on
    `codex/apple-*`) and the macOS tmux delivery tests have no CI. The Linux host has unit
-   tests but no live run since `rehearsal-l` was deleted.
+   tests but no live run since the disposable Linux rehearsal VM was deleted.
 8. **Agents drift.** Copilot CLI, Claude Code and Codex change their transcript formats in
    new releases. Today we find out on a real machine.
 
@@ -373,7 +373,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      the build scripts, the relay container) and inside `light`: when the whole ring runs,
      every one of those steps runs;
    - `product`'s test projects, tested through a solution filter, still under
-     `dotnet-coverage` with TRX and `--blame-hang`. When the whole ring runs, it's
+     `dotnet-coverage` with TRX, `--blame-crash` and the existing `--blame-hang` watchdog.
+     The shared quality command builder also adds crash blame locally. Public crash diagnostics
+     remain execution-sequence XML only; private crash-dump upload is deferred.
+     Windows retries only failed cases once after checking complete TRX evidence.
+     xUnit's run-level `[FAIL]` error diagnostic is accepted only when its exact name
+     matches a failed result with error details; other run errors still fail closed.
+     Definitions are indexed by test ID, preserving missing/duplicate identity rejection.
+     When the whole ring runs, it's
      `AgentBridge.slnx` as before. The whole solution is always built, since projects no
      test references (the benchmarks) are compiled nowhere else on a pull request;
    - `product`'s runners, from its selected suites' `platforms` (all three when the whole
@@ -402,24 +409,29 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      together the seven run every spec. The one PWA job these replace took a median of 15
      minutes. Each `pwa-ui` leg, `pwa-e2e` and `spikes-linux` downloads and offline-installs
      Playwright's system packages through `.github/actions/playwright-system-packages`.
-     Network attempts have a 60-second bound; an Azure timeout switches to the runner's Canonical fallback,
+     Update attempts have a 60-second bound; downloads get 180 seconds on Azure and 600 on
+     Canonical per attempt, allowing cold WebKit/e2e downloads. An Azure timeout switches to the runner's Canonical fallback,
      `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
      100 kB/s, and main run 41952998347 `pwa-e2e`). Before updating apt, a five-second Azure
      DNS probe switches immediately if lookup fails; an Azure DNS error during update or
      download also switches without backoff. An update timeout now switches rather than
-     repeating the same mirror. Classified connection/5xx failures and Canonical timeouts get three attempts,
-     waiting 5 then 20 seconds, before switching. Canonical gets the same bounded network
+     repeating the same mirror. Downloads get three attempts with 5/20-second backoff.
+     Updates get an initial attempt plus three retries with 15/30/60-second backoff for
+     classified network errors and HTTP 429; this also admits transient errors from the
+     runner's existing `https://packages.microsoft.com/` feed, only during updates.
+     Exhausted throttling or Microsoft-feed errors fail closed, even with cached debs,
+     without switching Ubuntu mirrors. Mixed signature, hash, lock or other fatal errors
+     still fail immediately. Canonical gets the same bounded network
      retries, then fails loudly with the attempt log; it never switches back to Azure.
-     A non-forced debs cache hit uses 20-second attempts within a two-minute whole-update
-     budget. Only classified network exhaustion or a timeout without other errors warns
-     and skips the network download, then requires `apt-get install --no-download`;
-     offline install failure is fatal, without a network fallback. After failed updates only,
-     the hit restores its matching signed indexes with sudo before installing; successful
-     updates keep their fresh indexes. Debs without indexes count as a miss. The versioned
-     paired key includes the runner image, Playwright lockfile and browsers. Only successful
-     cold runs save indexes and debs, on any ref; PR entries are scoped to that PR, and main
-     must seed its own entry. Cold seeding needs one successful Ubuntu update. Failed-update
-     restoration is proven offline; hosted proof needs a real failed update meeting a hit.
+     Archives only: cached apt lists are never restored. Every run requires live signed
+     `apt-get update` with runner keys, including Microsoft's feed; failed updates never install.
+     On non-forced hits, apt `--print-uris` with SHA256 and an empty archive directory supplies
+     authenticated sizes/hashes. Verify ALL required debs, then copy ONLY those for `apt-get install --no-download`.
+     Missing/invalid archives, weak hashes or planning failure discard the cache for authenticated downloads.
+     Install failure stays fatal. Successful cold downloads stage debs before install and save even on later failure.
+     Keys include OS, arch, image, exact dry-run package-list hash and ref hash; restores share only image/list matches.
+     PR entries stay PR-scoped; main seeds its own. Bad exact keys cannot be overwritten: `gh cache delete <key>`.
+     Fakes model the trusted Release/index/archive chain; hosted Linux cache-hit proof is still required.
      The four subsequent browser
      installs omit `--with-deps`, so they cannot trigger another apt update.
      Missing, corrupt or unrecognized errors fail at once, even alongside network errors
@@ -450,14 +462,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
      timeout, on any run, is the one above (#817 first proposed failing
      that one on an Azure fetch too, and dropped it). A run by hand runs every
-     job (the whole ring), but is never a release; only the paired apt cache above may be saved.
+     job (the whole ring), but is never a release; only the archives-only apt cache above may be saved.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
      tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
      `pwa-e2e`, keyed by Playwright's version. Only `main` saves these caches; a pull request
-     restores main's, and the nearest older NuGet key when its projects differ. The paired
+     restores main's, and the nearest older NuGet key when its projects differ. The archives-only
      apt cache above is the exception, and a PR's entry cannot seed what main restores.
      `app` and `publish` restore nothing:
      the package main publishes is built from what the feeds serve.
@@ -803,7 +815,7 @@ request is otherwise reviewed.
 Receipts count only from `independent_review.posters` in `quality/merge-rule.yml`: `danswett`
 and the receipts GitHub App `agent-bridge-receipts`, written as GraphQL names it, without REST's
 `[bot]`. The App holds Commit statuses (write), Pull requests (read) and Metadata (read), and
-nothing else; its key stays on VM4. It has its own rate pool, so danswett's quota running out
+nothing else; its key stays on the authorized receipt host. It has its own rate pool, so danswett's quota running out
 doesn't stop receipts. danswett stays a poster as the fallback for when the App's machine is down.
 To roll back, revoke the App's key or suspend it in GitHub settings; nothing else depends on it.
 
@@ -978,7 +990,7 @@ They plan only and refuse execution; neither produces scenario evidence or `resu
   | `win-arm64` | Windows 11 Arm64 (Azure Cobalt or Ampere) | E2E |
   | `win10` | Windows 10 22H2 x64 | Compatibility |
   | `linux-x64`, `linux-arm64` | Ubuntu 24.04 | Host E2E, agent drift |
-  | `ha` | VM-W's role: disposable Home Assistant and Mosquitto | HA E2E and soak |
+  | `ha` | Disposable Home Assistant and Mosquitto | HA E2E and soak |
   | `perf` | A fixed-size VM kept only for benchmarks | §3.2 comparisons |
   | `macos` | See §9: hosted `macos-latest`, a self-hosted Mac mini, or EC2 Mac | macOS host and app E2E |
 - **`quality/lab/run.ps1 -Subscription <id> -Role <r> -Build <artifact> -Scenario <s> -Relay <staging|ppe>`:**
@@ -1018,8 +1030,11 @@ the PR gate can stop a regression. The rings only protect users if releases pass
 | Channel | Gets | Promoted when | Who runs it |
 |---|---|---|---|
 | `dev` | Every merge to `main` (today's behaviour) | Ring 2 green | Lab VMs, and any machine opted in |
-| `beta` | The newest `dev` build with a green ring 3 | Nightly, automatically | The owner's migrated machines (ULTRA, DEV-VM1, ARM8) |
-| `stable` | A `beta` build with ring 4 signed off | By the owner | Everyone else, and HOME once migrated |
+| `beta` | The newest `dev` build with a green ring 3 | Nightly, automatically | The owner's migrated machines |
+| `stable` | A `beta` build with ring 4 signed off | By the owner | Everyone else, including the publication writer once migrated |
+
+Fleet membership comes only from the relay roster. These channel audiences are
+not a hardcoded fleet list.
 
 Velopack channels already exist per architecture (`build/app-channels.ps1`). Promotion
 re-publishes the same bytes into the next channel's feed, with the same digest; it never
