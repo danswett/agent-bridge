@@ -64,8 +64,8 @@ The [pinned manifest parser](https://github.com/velopack/velopack/blob/92d6a1c91
 uses namespaced NuGet metadata. Read `current\sq.version` anew under the package lock
 and check package identity, main executable and release identity before respawn.
 Observation cancellation retains updater pin, package custody and the real process
-handle until actual exit. The future B3 entry point must drain adapter `Ownership`
-before exiting, including late native respawn completion/errors.
+handle until actual exit; an admitted apply joins adapter `Ownership` before it runs.
+The future B3 entry point must drain it before exiting, including late respawn completion/errors.
 Native starts remain injectable for in-process tests; no native binary is run locally.
 
 ## C/D: approved design basis, not activation proof
