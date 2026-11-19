@@ -108,7 +108,8 @@ public sealed class RosterSyncTests
     public void A_record_with_missing_or_malformed_order_never_erases_the_cached_order()
     {
         Assert.Equal(["a"], Ids(Assert.Single(reader.Read([Frame("H", seq: 5, ids: ["a"])]))));
-        foreach (var order in new[] { "", "\"epoch\":\"00000000000000e1\",\"seq\":\"x\",\"at\":\"2026-11-19T12:00:09Z\",", "\"epoch\":\"00000000000000e1\",\"seq\":6,\"at\":\"soon\"," })
+        foreach (var order in new[] { "", "\"epoch\":\"00000000000000e1\",\"seq\":\"x\",\"at\":\"2026-11-19T12:00:09Z\",", "\"epoch\":\"00000000000000e1\",\"seq\":6,\"at\":\"soon\",",
+            "\"epoch\":\"\",\"seq\":1,\"at\":\"2026-11-19T12:01:00Z\",", "\"epoch\":\"00000000000000E9\",\"seq\":1,\"at\":\"2026-11-19T12:01:00Z\",", "\"epoch\":\"00000000000000e1\",\"seq\":0,\"at\":\"2026-11-19T12:01:00Z\"," })
         {
             var unordered = Assert.Single(reader.Read([Body("{\"machine\":\"" + world.Id("H") + "\",\"online\":true,\"record\":{" + order + "\"sessions\":[{\"id\":\"evil\",\"node\":\"n\",\"state\":\"idle\",\"since\":\"2026-11-19T12:00:00Z\"}]}}")]));
             Assert.False(unordered.Online);
