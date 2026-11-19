@@ -60,8 +60,19 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
             // A failing parent may have timed out waiting for an elevated worker.
             return new(exit == 0 ? true : null, exit, null, generation);
         }
-        var flow = new UpdateCoordinator(WaitOriginal,
-            (generation, ct) => observation ??= Apply(generation, ct),
+        var (publication, closed) = (new object(), false);
+        // Publish the apply before any of it runs, so a racing cancellation still retains it in Ownership.
+        var flow = new UpdateCoordinator(WaitOriginal, (generation, ct) =>
+        {
+            lock (publication)
+            {
+                if (observation is not null || closed) return observation ?? Task.FromCanceled<UpdateApplyEvidence>(new(true));
+                var apply = new Task<Task<UpdateApplyEvidence>>(() => Apply(generation, ct));
+                observation = apply.Unwrap();
+                apply.Start(TaskScheduler.Default);
+                return observation;
+            }
+        },
             () => new FileStream(Path.Combine(request.Packages, ".velopack_lock"),
                 FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None),
             ReadVersion, () => { using var app = starter(AppStart(request)); }, time);
@@ -73,6 +84,7 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
         }
         finally
         {
+            lock (publication) closed = true;
             Ownership = Task.WhenAll(observation ?? Task.CompletedTask, flow.RespawnFinished);
             _ = Ownership.ContinueWith(_ => Volatile.Write(ref running, 0), CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
@@ -115,11 +127,14 @@ public sealed class UpdateCoordinatorAdapter(UpdateCoordinatorRequest request,
     }
 
     static IUpdateCoordinatorProcess Start(ProcessStartInfo info) =>
-        Hold(ProcessLaunch.Start(info) ?? throw new InvalidOperationException("no process was created"));
+        Hold(ProcessLaunch.Start(info) ?? throw new InvalidOperationException("no process was created"))
+            ?? throw new InvalidOperationException("process exited before its handle was held");
 
-    static IUpdateCoordinatorProcess Hold(Process process)
+    static IUpdateCoordinatorProcess? Hold(Process process)
     {
         try { _ = process.Handle; return new Child(process); }
+        // An original gone between lookup and handle acquisition has exited; anything else stays an error.
+        catch (InvalidOperationException) when (process.HasExited) { process.Dispose(); return null; }
         catch { process.Dispose(); throw; }
     }
 
