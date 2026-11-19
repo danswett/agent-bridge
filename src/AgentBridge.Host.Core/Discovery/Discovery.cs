@@ -770,11 +770,9 @@ internal static class RegistrationDiscovery
         var live = new List<DiscoveredSession>();
         foreach (var r in best.Values)
         {
-            // The current registration says it ended: whatever runs under its pid now (its own runtime,
-            // an unreadable one, or a reused pid), it stays ended, and other ways of finding it (a
-            // thread lock) are told so; only a proven later generation is admitted again
-            // (SessionSource.Successor). Checked before the pid's generation, or a reused pid left the
-            // ended row listed. Only the current one: an older ended copy in another root says nothing.
+            // The current registration (not an older copy elsewhere) says it ended: it stays ended whatever now runs
+            // under its pid (its runtime, an unreadable one, a reuse; checked first, or a reused pid kept it listed),
+            // and a thread lock is told so. Only a proven later generation is admitted again (SessionSource.Successor).
             if (r.Ended) { ended?.Add(r.SessionId, r); continue; }
             if (r.ProcessId <= 0 || !running.TryGetValue(r.ProcessId, out var process) || !OfGeneration(r, process)) { continue; }
             // Claude creates its transcript at the first message, so a missing file is a

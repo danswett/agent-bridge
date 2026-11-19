@@ -630,8 +630,8 @@ in `agents` is held:
 
 Host-bound roster membership is memory-only: each row requires fresh live discovery,
 never disk membership to fill in an incomplete pass. `sessions-listed.json` keeps only
-process-generation resume guards: a previously known unreadable runtime holds its agent
-across passes and restarts, without supplying a row. A positively exited or replaced
+resume guards: a previously known unreadable runtime (dated, or one the 250 limit omitted)
+holds its agent across passes and restarts, without supplying a row. A positively exited or replaced
 process releases that guard. Native discovery supersedes an ended registration only with a
 process born after its last update, the row staying listed until the successor replaces it.
 

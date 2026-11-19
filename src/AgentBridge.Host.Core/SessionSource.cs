@@ -74,7 +74,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // read there (for that pass only), and what was last written to it.
     bool _restored;
     List<DiscoveredSession>? _remembered;
-    readonly HashSet<string> _omitted = new(StringComparer.Ordinal); // omitted this run: guards even undated
+    readonly HashSet<string> _omitted = new(StringComparer.Ordinal); // overflowed; saved with its guard, which holds even undated
     string? _saved;
     string? _saveProblem;
 
@@ -433,6 +433,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 _remembered?.RemoveAll(s => !observed.Any(o => o.Agent == s.Agent && (!o.Observed.Listed ||
                     o.Observed.Processes.Concat(o.Observed.Unidentified).Any(p => s.ProcessId is { } pid &&
                         SameProcess(new AgentProcess(pid, s.ProcessStartedAt, null), p)))));
+                _omitted.IntersectWith(_remembered?.Select(s => s.Id) ?? []);
             }
             found = [.. observed.SelectMany(o => o.Sessions)];
             var live = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
@@ -455,13 +456,11 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                     found.Add(e.Tracker.Discovered);
                 }
                 gone = [.. _entries.Keys.Where(id => Ended(_entries[id]) || (!live.Contains(id) && !holding.Contains(_entries[id].Tracker.Discovered.Agent)))];
-                // An ended generation whose proven successor was found keeps its row until the
-                // successor's commit replaces it: removed first, a reader saw it neither listed
-                // nor held, and a resume started a second CLI on the successor's transcript.
+                // An ended generation with a proven successor keeps its row until the successor's commit: removed
+                // first, a reader saw it neither listed nor held, and a resume started a second CLI on its transcript.
                 replaced.UnionWith(gone.Where(live.Contains));
                 gone.RemoveAll(replaced.Contains);
-                // Reserve admissions before exposing row changes: readers and launch do not
-                // take _pass, so every omitted live session must already hold its agent.
+                // Admissions before row changes: readers and launch skip _pass, so an omitted live session already holds.
                 var listed = _entries.Keys.Except(gone).ToHashSet(StringComparer.Ordinal);
                 var slots = MaxSessions - listed.Count;
                 var admitted = new List<DiscoveredSession>();
@@ -854,6 +853,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 var agent = Json.Str(e, "agent") switch { "copilot" => AgentKind.Copilot, "claude" => AgentKind.Claude, "codex" => AgentKind.Codex, _ => (AgentKind?)null };
                 if (agent is null) { continue; }
                 sessions.Add(new DiscoveredSession(id, agent.Value, null, null, Json.Int(e, "pid"), ProcessStartedAt: Json.Time(e, "processStartedAt")));
+                if (_hostId is not null && Json.Bool(e, "omitted") == true) { _omitted.Add(id); }
             }
             return sessions;
         }
@@ -867,8 +867,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
 
     const long MaxStateBytes = 4 * 1024 * 1024;
 
-    // Process identities for restart guards; host-bound sources never use them as roster rows.
-    // Written whole and renamed into place. Only on the pass.
+    // Restart guards (host-bound: never roster rows), written whole and renamed into place. Only on the pass.
     void Save()
     {
         if (_options.StateFile is not { } path) { return; }
@@ -887,6 +886,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 w.WriteString("agent", d.Agent.ToString().ToLowerInvariant());
                 if (d.ProcessId is { } pid) { w.WriteNumber("pid", pid); }
                 if (d.ProcessStartedAt is { } started) { w.WriteString("processStartedAt", started.ToString("o", CultureInfo.InvariantCulture)); }
+                if (_omitted.Contains(d.Id)) { w.WriteBoolean("omitted", true); }
                 w.WriteEndObject();
             }
             w.WriteEndArray();
