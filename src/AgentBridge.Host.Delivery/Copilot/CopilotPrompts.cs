@@ -37,6 +37,7 @@ public sealed class CopilotInput(string path)
     // agent that asked it (null for the session's own, and for a permission request), so a helper's
     // abort or shutdown settles its own (Copilot on #837).
     readonly Dictionary<string, string?> stale = new(StringComparer.Ordinal);
+    readonly JsonlMark mark = new();
     long scannedTo;
 
     public string Path => path;
@@ -45,15 +46,18 @@ public sealed class CopilotInput(string path)
     {
         lock (gate)
         {
-            // The CLI only appends. A shorter file is a different one: start again.
-            if (Jsonl.Length(path) < scannedTo)
+            var end = Jsonl.Lines(path, scannedTo, skipFirst: false, Line, mark);
+            // A replacement can be just as long, or byte-identical but another file.
+            if (mark.Replaced)
             {
                 asks.Clear();
                 permissions.Clear();
                 stale.Clear();
                 scannedTo = 0;
+                mark.Reset();
+                end = Jsonl.Lines(path, scannedTo, skipFirst: false, Line, mark);
             }
-            if (Jsonl.Lines(path, scannedTo, skipFirst: false, Line) is not { } to)
+            if (end is not { } to)
             {
                 return new CopilotInputState(false, true, scannedTo);
             }
