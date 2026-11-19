@@ -427,18 +427,19 @@ for (const attempt of ['retry', 'start']) {
     await signIn(page).click();
     const retry = sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' });
     await expect(retry).toBeVisible();
+    // Freeze before sending the cancel, not after its response happens to arrive.
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
     // Hold the real cancel response until the capability change has reached the client.
     await page.evaluate(() => {
       const client = window.agentBridgeDemo.hosts.route('demo').client;
       const request = client.request.bind(client);
       const released = new Promise((resolve) => { window.__releaseSignInCancel = resolve; });
-      window.__signInCancelReplyHeld = new Promise((ready) => {
-        client.request = async (...args) => {
-          const result = await request(...args);
-          if (args[0] === 'signin.cancel') { ready(); await released; }
-          return result;
-        };
-      });
+      window.__signInCancelReplyHeld = false;
+      client.request = async (...args) => {
+        const result = await request(...args);
+        if (args[0] === 'signin.cancel') { window.__signInCancelReplyHeld = true; await released; }
+        return result;
+      };
     });
     if (attempt === 'retry') { await retry.click(); }
     else {
@@ -447,11 +448,17 @@ for (const attempt of ['retry', 'start']) {
       await signIn(page).click();
     }
     await expect(sheet(page).locator('.sign-in-starting')).toBeVisible();
-    await page.evaluate(() => window.__signInCancelReplyHeld);
-    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
+    await expect.poll(async () => {
+      await page.clock.runFor(1);
+      return page.evaluate(() => window.__signInCancelReplyHeld);
+    }).toBe(true);
     await page.evaluate(() => {
       const h = window.agentBridgeDemo.host;
-      h.frame({ ev: 'signin.code', seq: h.seq + 1, data: { flow: 'late-flow', agent: 'copilot', userCode: 'LATE-CODE', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() } });
+      const data = { flow: 'late-flow', agent: 'copilot', userCode: 'LATE-CODE', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() };
+      // Other channels need not have this subscription's sequence number.
+      for (const t of h.transports) {
+        if (t.subscribed) { t.deliver({ ev: 'signin.code', seq: ++t.seq, data }); }
+      }
     });
     await expect.poll(async () => {
       await page.clock.runFor(1);
