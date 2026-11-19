@@ -6,7 +6,7 @@ using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using Xunit;
 
-public sealed class FleetListTests : IDisposable
+public sealed partial class FleetListTests : IDisposable
 {
     readonly string root = Path.Combine(Path.GetTempPath(), "abfleet-" + Guid.NewGuid().ToString("N")[..8]);
     static readonly DateTimeOffset Started = new(2026, 11, 7, 12, 0, 0, TimeSpan.Zero);
@@ -442,7 +442,7 @@ public sealed class FleetListTests : IDisposable
         var chan = Hello(AgentProtocol.ScopeRead);
         var op = Op();
         var reply = JsonSerializer.SerializeToElement(await op.HandleAsync(chan, Body("{}")), Web);
-        var legacy = $$"""[{"machine":"m2","node":"n1","state":"working","since":"2026-11-07T12:00:00+00:00","secondsInState":90,"machineOnline":{{online.ToString().ToLowerInvariant()}}}]""";
+        var legacy = $$"""[{"machine":"m2","node":"n1","state":"working","since":"2026-11-07T12:00:00+00:00","secondsInState":90,"machineOnline":{{online.ToString().ToLowerInvariant()}}{{(online ? "" : ",\"stale\":true")}}}]""";
         Assert.Equal(legacy, reply.GetProperty("sessions").GetRawText());
         var found = JsonSerializer.SerializeToElement(await op.FindAsync(chan, Body("""{"name":"my project"}""")), Web);
         Assert.Equal(result, found.GetProperty("result").GetString());

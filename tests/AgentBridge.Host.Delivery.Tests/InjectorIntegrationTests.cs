@@ -59,28 +59,91 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
 
     // Starts the echo program in a console of its own (CREATE_NEW_CONSOLE), hidden, and waits
     // for it to say it is reading. With exitOn, it exits once that line is typed and entered.
-    Echo StartEcho(string? exitOn = null, IReadOnlyList<string>? show = null)
+    Echo StartEcho(string? exitOn = null, IReadOnlyList<string>? show = null, Func<string, nint, string?>? readiness = null)
     {
-        var log = Path.Combine(root, $"echo-{Guid.NewGuid():N}.log");
-        var exe = Path.Combine(AppContext.BaseDirectory, "agent-bridge-console-echo.exe");
-        var info = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>(), Flags = 1 /* STARTF_USESHOWWINDOW */, ShowWindow = 0 /* SW_HIDE */ };
-        var command = new StringBuilder($"\"{exe}\" \"{log}\"{(exitOn is null ? "" : $" --exit-on \"{exitOn}\"")}");
-        if (show is not null)
+        readiness ??= (log, handle) => EchoReady(log, handle);
+        var failures = new List<string>();
+        for (var attempt = 1; attempt <= 2; attempt++)
         {
-            var screen = Path.Combine(root, $"screen-{Guid.NewGuid():N}.txt");
-            File.WriteAllText(screen, string.Join("\n", show), new UTF8Encoding(false));
-            command.Append($" --show \"{screen}\"");
+            var log = Path.Combine(root, $"echo-{Guid.NewGuid():N}.log");
+            var exe = Path.Combine(AppContext.BaseDirectory, "agent-bridge-console-echo.exe");
+            var info = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>(), Flags = 1 /* STARTF_USESHOWWINDOW */, ShowWindow = 0 /* SW_HIDE */ };
+            var command = new StringBuilder($"\"{exe}\" \"{log}\"{(exitOn is null ? "" : $" --exit-on \"{exitOn}\"")}");
+            if (show is not null)
+            {
+                var screen = Path.Combine(root, $"screen-{Guid.NewGuid():N}.txt");
+                File.WriteAllText(screen, string.Join("\n", show), new UTF8Encoding(false));
+                command.Append($" --show \"{screen}\"");
+            }
+            Assert.True(CreateProcessW(null, command, 0, 0, false, 0x10 /* CREATE_NEW_CONSOLE */, 0, null, ref info, out var process), $"CreateProcess {Marshal.GetLastWin32Error()}");
+            CloseHandle(process.Thread);
+            started.Add(process.Process);
+            if (readiness(log, process.Process) is { } ready)
+            {
+                var parts = ready.Split(' ');
+                return new Echo(process.ProcessId, nint.Parse(parts[2], CultureInfo.InvariantCulture), log);
+            }
+            Assert.True(GetExitCodeProcess(process.Process, out var code), "could not read echo exit code");
+            var state = WaitForSingleObject(process.Process, 0) == 0 ? $"exit code {code} (0x{code:X8})" : $"still running (exit code {code})";
+            failures.Add($"attempt {attempt}: {state}");
+            output.WriteLine(failures[^1]);
+            // No test keys have been sent yet. Stop only this owned echo before starting afresh.
+            TerminateProcess(process.Process, 1);
+            Assert.Equal(0u, WaitForSingleObject(process.Process, 5000));
         }
-        Assert.True(CreateProcessW(null, command, 0, 0, false, 0x10 /* CREATE_NEW_CONSOLE */, 0, null, ref info, out var process), $"CreateProcess {Marshal.GetLastWin32Error()}");
-        CloseHandle(process.Thread);
-        started.Add(process.Process);
-        var ready = WaitFor(log, lines => lines.FirstOrDefault(l => l.StartsWith("ready ", StringComparison.Ordinal)));
-        var parts = ready.Split(' ');
-        return new Echo(process.ProcessId, nint.Parse(parts[2], CultureInfo.InvariantCulture), log);
+        throw new Xunit.Sdk.XunitException($"echo did not become ready after two starts; {string.Join("; ", failures)}");
+    }
+
+    string? EchoReady(string log, nint handle, int seconds = 60)
+    {
+        try { return WaitFor(log, lines => lines.FirstOrDefault(l => l.StartsWith("ready ", StringComparison.Ordinal)), seconds, process: handle); }
+        catch (Xunit.Sdk.TrueException e) { output.WriteLine(e.Message); return null; }
+    }
+
+    [WindowsFact]
+    public void An_echo_that_misses_startup_readiness_is_stopped_before_one_fresh_start()
+    {
+        var attempts = 0;
+        nint first = 0;
+        string? firstLog = null;
+        var echo = StartEcho(readiness: (log, handle) =>
+        {
+            if (++attempts == 1) { first = handle; firstLog = log; return null; }
+            Assert.Equal(0u, WaitForSingleObject(first, 0));
+            Assert.NotEqual(firstLog, log);
+            return WaitFor(log, lines => lines.FirstOrDefault(l => l.StartsWith("ready ", StringComparison.Ordinal)));
+        });
+
+        Assert.Equal(2, attempts);
+        Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+    }
+
+    [WindowsTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Two_echo_startup_misses_fail_with_each_process_state_and_no_third_start(bool exits)
+    {
+        var attempts = 0;
+        var failure = Assert.Throws<Xunit.Sdk.XunitException>(() => StartEcho(readiness: (_, handle) =>
+        {
+            attempts++;
+            if (exits)
+            {
+                Assert.True(TerminateProcess(handle, 42));
+                Assert.Equal(0u, WaitForSingleObject(handle, 5000));
+            }
+            return EchoReady(Path.Combine(root, "missing-ready.log"), handle, seconds: 0);
+        }));
+
+        Assert.Equal(2, attempts);
+        Assert.Contains("attempt 1", failure.Message);
+        Assert.Contains("attempt 2", failure.Message);
+        Assert.Contains(exits ? "exit code 42" : "still running", failure.Message);
+        Assert.All(started, handle => Assert.Equal(0u, WaitForSingleObject(handle, 0)));
     }
 
     // 60 s, not 15: a loaded windows-11-arm runner took 11 s for a lone Escape key (#1379).
-    static T WaitFor<T>(string log, Func<string[], T?> found, int seconds = 60)
+    static T WaitFor<T>(string log, Func<string[], T?> found, int seconds = 60, nint process = 0)
     {
         var deadline = Stopwatch.StartNew();
         while (true)
@@ -93,6 +156,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
             }
             catch (FileNotFoundException) { }
             if (found(lines) is { } result) { return result; }
+            Assert.True(process == 0 || WaitForSingleObject(process, 0) != 0, $"echo exited before readiness; the echo log held: {string.Join(" / ", lines)}");
             Assert.True(deadline.Elapsed < TimeSpan.FromSeconds(seconds), $"timed out; the echo log held: {string.Join(" / ", lines)}");
             Thread.Sleep(50);
         }
@@ -131,10 +195,13 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     // A reply reads the screen first and refuses, typing nothing, when the worker's 10 s read
     // came back empty on a loaded runner, so the test then waited out its echo log for keys that
     // were never sent (#1492). A read types nothing, so it is safe to ask again until it answers.
-    sealed class PatientScreens(WorkerInjector inner) : IConsoleInjector
+    sealed class PatientScreens(IConsoleInjector inner, Action? beforeInject = null) : IConsoleInjector
     {
-        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default) =>
-            inner.InjectAsync(processId, plan, cancellationToken);
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
+        {
+            beforeInject?.Invoke();
+            return inner.InjectAsync(processId, plan, cancellationToken);
+        }
 
         public Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
             inner.WidenAsync(processId, createdAt, columns, cancellationToken);
@@ -540,6 +607,76 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
     }
 
+    static ReplyService AttachmentReplies(Fixture f, AgentBridge.Host.Core.SessionSource source, IConsoleInjector injector,
+        AgentBridge.Host.Delivery.Staging.AttachmentStore store, Action? beforeInject = null) =>
+        new(source, f.Processes, new NoBridge(), new NoGuard(), new PatientScreens(injector, beforeInject),
+            new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) },
+            attachments: store);
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task The_attachment_reply_fixture_recovers_a_read_only_screen_miss_without_retyping(int missingRead)
+    {
+        using var f = new Fixture();
+        const string Id = "44444444-4444-4444-8444-444444444444";
+        var events = f.CopilotSession(Id, 100);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+        f.Processes.Run(AgentBridge.Protocol.AgentKind.Copilot, 100);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        using var store = new AgentBridge.Host.Delivery.Staging.AttachmentStore(new() { StagingRoot = Path.Combine(f.Root, "attachments") }, sweep: false);
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+        var file = Guid.NewGuid().ToString();
+        store.Start("phone", new() { Attachment = file, Name = "shot.png", Size = png.Length, Sha256 = AgentBridge.Protocol.Attachments.Base64Url(System.Security.Cryptography.SHA256.HashData(png)) });
+        store.Chunk("phone", new() { Attachment = file, Offset = 0, Data = Convert.ToBase64String(png) });
+        string? staged = null;
+        var injector = new AttachmentConsole(missingRead, plan =>
+        {
+            var words = string.Concat(plan.Sends.Select(send => send.Text));
+            staged = words.Split(' ')[0][1..];
+            Assert.Equal($"@{staged} what is this?", words);
+            Assert.Single(plan.Sends, send => send.Enter);
+            Fixture.Append(events, Copilot.Event("user.message", new { content = words, attachments = new[] { new { type = "file", path = staged, displayName = "@" + staged } }, delivery = "idle" }, 5));
+        });
+        var observers = 0;
+        var replies = AttachmentReplies(f, source, injector, store, () =>
+        {
+            Assert.Equal(3, injector.Reads);
+            observers++;
+        });
+        var request = new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = "what is this?", Attachments = [new() { Id = file }] };
+
+        var result = await replies.ReplyAsync(request, "phone");
+        var repeated = await replies.ReplyAsync(request, "phone");
+
+        Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Delivered, (string?)null), (result.Outcome, result.Reason));
+        Assert.Equal(result, repeated);
+        Assert.Equal(3, injector.Reads);
+        Assert.Equal(1, injector.Writes);
+        Assert.Equal(1, observers);
+        Assert.NotNull(staged);
+        Assert.Equal(png, File.ReadAllBytes(staged));
+    }
+
+    sealed class AttachmentConsole(int missingRead, Action<KeyPlan> typed) : IConsoleInjector
+    {
+        public int Reads { get; private set; }
+        public int Writes { get; private set; }
+
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(++Reads == missingRead
+                ? new ConsoleScreen(null, "the injector stopped responding while reading the screen")
+                : new ConsoleScreen(CopilotIdle, null));
+
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
+        {
+            Writes++;
+            typed(plan);
+            return Task.FromResult(new InjectionResult(InjectionStatus.Typed, "ok"));
+        }
+    }
+
     // A reply with a file: staged privately, its path typed as an @ mention ahead of the words
     // by the real worker, and delivered once the "CLI" records the prompt with it attached.
     [WindowsFact]
@@ -554,24 +691,24 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
         await source.RefreshAsync();
         using var store = new AgentBridge.Host.Delivery.Staging.AttachmentStore(new() { StagingRoot = Path.Combine(f.Root, "attachments") }, sweep: false);
-                var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
-            new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) },
-            attachments: store);
         byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
         var file = Guid.NewGuid().ToString();
         store.Start("phone", new() { Attachment = file, Name = "shot.png", Size = png.Length, Sha256 = AgentBridge.Protocol.Attachments.Base64Url(System.Security.Cryptography.SHA256.HashData(png)) });
         store.Chunk("phone", new() { Attachment = file, Offset = 0, Data = Convert.ToBase64String(png) });
-        var cli = Task.Run(() =>
+        // Screen reads may be retried for 90 s; the echo's key deadline starts only at injection.
+        Task<(string Words, string Path)>? cli = null;
+        var replies = AttachmentReplies(f, source, new WorkerInjector(Worker), store, () => cli = Task.Run(() =>
         {
             var downs = WaitFor(echo.Log, lines => Keys(lines).Where(k => k.StartsWith("key 1 ", StringComparison.Ordinal)).ToList() is { Count: > 0 } d && d[^1] == "key 1 13 13" ? d : null, seconds: 60);
             var words = new string([.. downs.SkipLast(1).Select(k => (char)int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture))]);
             var path = words.Split(' ')[0][1..];
             Fixture.Append(events, Copilot.Event("user.message", new { content = words, attachments = new[] { new { type = "file", path, displayName = "@" + path } }, delivery = "idle" }, 5));
             return (words, path);
-        });
+        }));
 
         var result = await replies.ReplyAsync(new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = "what is this?", Attachments = [new() { Id = file }] }, "phone");
 
+        if (cli is null) { throw new Xunit.Sdk.XunitException($"the reply did not reach injection: {result.Outcome}: {result.Reason}"); }
         var (typedWords, staged) = await cli;
         Assert.Equal($"@{staged} what is this?", typedWords);
         Assert.Equal(png, File.ReadAllBytes(staged));

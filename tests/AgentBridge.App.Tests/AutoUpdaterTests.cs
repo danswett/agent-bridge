@@ -469,6 +469,46 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.NotEmpty(late.Sent(HostOps.ProbeHold));
     }
 
+    // #2884 review: a host started from the installation during the scan after the stop's waits was
+    // never held, and that scan passes the package's own processes; the update would end it mid-probe.
+    // One whose pid was reused, or whose start time could not be read when held, is not confirmed.
+    [Theory]
+    [InlineData("none", 0)]
+    [InlineData("arrives", 7171)]
+    [InlineData("restarted", 4242)]
+    [InlineData("unknown", 4242)]
+    [Trait("Category", "Network")]
+    public async Task A_host_started_from_the_installation_during_the_last_scan_refuses_the_install_and_brings_the_host_back(string change, int refusedPid)
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        var started = false;
+        var updating = Manager(packageNow: () => Volatile.Read(ref started) ? [4242, 7171] : [4242], startsKnown: change != "unknown");
+        var applied = false;
+        string? Scan()
+        {
+            if (host.Sent(HostOps.Stop).Count > 0 && change == "arrives") { Volatile.Write(ref started, true); }
+            if (host.Sent(HostOps.Stop).Count > 0 && change == "restarted") { processes.StartTimes[4242] = Make.T0.AddSeconds(5); }
+            return null;
+        }
+
+        var update = updating.StopAndApplyAsync(() => { }, () => applied = true, Scan);
+        if (change == "none")
+        {
+            await update;
+            Assert.True(applied);
+            Assert.Empty(processes.Started);
+            return;
+        }
+        var refused = await Assert.ThrowsAsync<HostBusyException>(() => update);
+
+        Assert.Contains($"pid {refusedPid}", refused.Message, StringComparison.Ordinal);
+        Assert.False(applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.Single(processes.Started);
+        Assert.False(updating.UpdateUnderWay);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Quitting_while_an_update_waits_for_another_profiles_probe_after_stopping_this_host_starts_it_again_at_once()
@@ -578,7 +618,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
-    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null, TimeSpan? connectTimeout = null) =>
+    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null, TimeSpan? connectTimeout = null, bool startsKnown = true) =>
         new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
             ct => LocalClient.ConnectAsync(host.Endpoint, connectTimeout ?? TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
         {
@@ -590,7 +630,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             ProbeCallTimeout = callTimeout ?? TimeSpan.FromSeconds(5),
             OtherProfiles = () => others ?? [],
             ConnectTo = (folder, ct) => LocalClient.ConnectAsync(LocalEndpoint.For(folder), TimeSpan.FromMilliseconds(300), ct),
-            PackageHosts = packageNow ?? (() => package ?? []),
+            PackageHosts = () =>
+            {
+                var hosts = packageNow?.Invoke() ?? package ?? [];
+                // Known start times, as a reachable host's are; an update refuses a host it can't confirm.
+                if (startsKnown) { foreach (var pid in hosts) { processes.StartTimes.TryAdd(pid, Make.T0); } }
+                return hosts;
+            },
             Elevated = () => false,
             // As the fixture's manager: no wait runs out under a test on a slow runner, and one a
             // test needs to run out is advanced by hand.
@@ -2086,7 +2132,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Contains(log, l => l.Contains("does not answer on its pipe", StringComparison.Ordinal) && l.Contains("not starting it", StringComparison.Ordinal));
     }
 
-    // VM2's case (#800): the host alive, the app's link to it stuck in an attempt that never ends.
+    // node-b's case (#800): the host alive, the app's link to it stuck in an attempt that never ends.
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_link_stuck_while_its_host_answers_is_made_again_before_the_update_is_refused_again()
@@ -2275,7 +2321,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal((2, 2), (updater.Checks, github.Requests));
     }
 
-    // #800: VM2's app lost its link to a live host and sat on an old release for ~20 h, one log
+    // #800: node-b's app lost its link to a live host and sat on an old release for ~20 h, one log
     // line saying so. Since #516 nothing is forced, but the owner is told, once a day.
     [Fact]
     [Trait("Category", "Network")]

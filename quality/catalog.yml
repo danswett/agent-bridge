@@ -241,6 +241,19 @@ suites:
     baseline: { tests: 609, seconds: 30 }
     status: exists
 
+  - id: session-reaper
+    validation_plan: native
+    kind: component
+    ring: 0
+    select: affected
+    security_sensitive: true
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    triggers: [src/AgentBridge.Host/Reaping/**, tests/AgentBridge.Host.Tests/SessionReaper*]
+    command: dotnet test tests/AgentBridge.Host.Tests -c Release -m:1 --filter "FullyQualifiedName~SessionReaper"
+    where: ci.yml product
+    status: exists
+
   - id: hooks
     validation_plan: native
     kind: unit
@@ -313,6 +326,30 @@ suites:
     triggers: [tools/measure-ci-waste.ps1, tests/fixtures/ci-waste/runs.json]
     command: dotnet test tests/AgentBridge.Quality.Tests -c Release
     where: ci.yml product
+    status: exists
+
+  - id: product-crash-diagnostics
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [.github/workflows/ci.yml, quality/run.ps1, quality/dotnet-test-command.ps1, quality/test-product-crash.ps1]
+    command: pwsh -NoProfile -File quality/test-product-crash.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: product-test-retry
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [.github/workflows/ci.yml, quality/product-test-retry.ps1, quality/test-product-retry.ps1]
+    command: pwsh -NoProfile -File quality/test-product-retry.ps1
+    where: ci.yml light
     status: exists
 
   - id: catalog-check
@@ -567,6 +604,30 @@ suites:
     triggers: [quality/rerun-known-flakes.ps1, quality/test-rerun-known-flakes.ps1, .github/workflows/rerun-known-flakes.yml]
     command: pwsh -NoProfile -File quality/test-rerun-known-flakes.ps1
     where: ci.yml light; rerun-known-flakes.yml rerun
+    status: exists
+
+  - id: main-red
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/main-red.ps1, quality/test-main-red.ps1, .github/workflows/main-red.yml]
+    command: pwsh -NoProfile -File quality/test-main-red.ps1
+    where: ci.yml light; main-red.yml
+    status: exists
+
+  - id: revert-culprit
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/revert-culprit.ps1, quality/test-revert-culprit.ps1, quality/main-red.ps1, quality/red-minutes.ps1, .github/workflows/revert-culprit.yml]
+    command: pwsh -NoProfile -File quality/test-revert-culprit.ps1
+    where: ci.yml light; revert-culprit.yml
     status: exists
 
   - id: beta-acceptance
@@ -830,8 +891,8 @@ suites:
     runner: hosted
     # The system-package download and offline install before browser-only installs (#799, #689):
     # against stand-ins for npx, sudo and apt-get, it leaves the Azure mirror for Canonical's
-    # archive on Azure DNS/update timeout or exhausted network retries; cache warnings require
-    # the offline install to succeed, and package errors fail at once.
+    # archive on Azure DNS/update timeout or exhausted network retries; cached debs install only
+    # after matching live signed indexes, and package errors fail at once.
     triggers: [.github/actions/playwright-system-packages/**]
     command: bash .github/actions/playwright-system-packages/test.sh
     where: ci.yml light

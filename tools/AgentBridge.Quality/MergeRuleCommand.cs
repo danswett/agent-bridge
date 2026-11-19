@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace AgentBridge.Quality;
 
@@ -393,7 +394,9 @@ static class MergeRuleCommand
     static (PullRequestFacts Pr, MergeVerdict? Verdict) Assess(Session session, PullRequestFacts light)
     {
         var verdict = MergeRule.Evaluate(session.Config, session.Main, light);
-        if (verdict is null || (verdict.State is ("failure" or "error") && !ReceiptsHidden(session.Config, light)))
+        // A red main is lifted only by what the files show, so an exempt label needs the full read.
+        var needsFiles = session.Main.State != "success" && light.Labels.Any(l => session.Config.MainGreen.ExemptLabels.Contains(l, StringComparer.OrdinalIgnoreCase));
+        if (verdict is null || (verdict.State is ("failure" or "error") && !needsFiles && !ReceiptsHidden(session.Config, light)))
             return (light, verdict);
         try
         {
@@ -429,13 +432,16 @@ static class MergeRuleCommand
         var config = session.Config;
         try
         {
-            var evidence = CompletedMain(session);
-            if (evidence is null)
+            using var evidence = CompletedMain(session).GetEnumerator();
+            var found = false;
+            while (!found && evidence.MoveNext())
+                found = evidence.Current.Usable;
+            if (!found)
             {
-                log = $"Main: no completed non-cancelled product evidence in {config.MainGreen.Workflow}'s push history.";
-                return new("failure", $"no completed non-cancelled CI run on {config.Base}: waiting for one");
+                log = $"Main: no completed product evidence in {config.MainGreen.Workflow}'s push history.";
+                return new("failure", $"no completed CI product evidence on {config.Base}: waiting for one");
             }
-            var (run, latest) = evidence.Value;
+            var (run, latest, all, _) = evidence.Current;
             var sha = run.GetProperty("head_sha").GetString();
             if (!IsCommitSha(sha))
                 throw new InvalidOperationException("CI run has no valid commit SHA");
@@ -443,10 +449,34 @@ static class MergeRuleCommand
             var attempt = RunAttempt(run);
             var planGreen = latest.TryGetValue("plan", out var plan)
                 && plan.GetProperty("status").GetString() == "completed" && plan.GetProperty("conclusion").GetString() == "success";
+            // An infra-only failure never blocks: it alerts for the one rerun, then escalates as
+            // INFRA-PERSISTENT. A real failure in any attempt holds until a later attempt of that job
+            // succeeds, so a rerun failing in setup can't erase attempt 1's test failure.
+            bool RerunUsed(JsonElement job) => Math.Max(attempt, RunAttempt(job)) > 1;
+            var memo = new Dictionary<string, bool>(StringComparer.Ordinal);
+            bool Infra(JsonElement job)
+            {
+                var key = job.GetRawText();
+                if (!memo.TryGetValue(key, out var infra))
+                    memo[key] = infra = InfraOnly(session, job);
+                return infra;
+            }
+            // A job's last real result in one run, across its attempts: a success, or a failure that
+            // isn't infra-only. Null when every attempt was infra-only, skipped or neutral.
+            JsonElement? LastReal(string name, List<JsonElement> jobs) => jobs
+                .Where(j => j.GetProperty("name").GetString() == name && (j.GetProperty("conclusion").GetString() == "success"
+                    || (j.GetProperty("conclusion").GetString() is not (null or "skipped" or "neutral") && !Infra(j))))
+                .OrderBy(RunAttempt).ThenBy(j => j.GetProperty("id").GetInt64()).Cast<JsonElement?>().LastOrDefault();
+            bool Waived(string name, string? conclusion) => session.Arm64Waiver && config.Arm64Waiver?.Allows(name, conclusion) == true;
+            // A real result holds unless it passed or is a waived arm64 failure, wherever it was found.
+            bool Holds(string name, JsonElement? real) => real is { } r && r.GetProperty("conclusion").GetString() is var c && c != "success" && !Waived(name, c);
+            bool Unresolved(JsonElement job) => Holds(job.GetProperty("name").GetString()!, LastReal(job.GetProperty("name").GetString()!, all));
+            bool Exempt(JsonElement job) => Infra(job) && !Unresolved(job);
             bool Green(JsonElement job) => job.GetProperty("status").GetString() == "completed"
-                && (job.GetProperty("conclusion").GetString() is "success" or "skipped"
-                    || (session.Arm64Waiver && config.Arm64Waiver?.Allows(job.GetProperty("name").GetString() ?? "",
-                        job.GetProperty("conclusion").GetString()) == true));
+                && (job.GetProperty("conclusion").GetString() == "success"
+                    || (job.GetProperty("conclusion").GetString() == "skipped" && !Unresolved(job))
+                    || Exempt(job)
+                    || Waived(job.GetProperty("name").GetString() ?? "", job.GetProperty("conclusion").GetString()));
             bool Passed(string name)
             {
                 if (!name.Contains(" (", StringComparison.Ordinal))
@@ -478,8 +508,8 @@ static class MergeRuleCommand
                 else if (unexpected.Count > 0)
                     held.Add($"unexpected leg {string.Join(", ", unexpected)}");
                 else if (exact.Count == 1)
-                    held.AddRange(exact[0].Where(n => latest[n].GetProperty("status").GetString() != "completed"
-                        || latest[n].GetProperty("conclusion").GetString() != "success"));
+                    held.AddRange(exact[0].Where(n => latest[n].GetProperty("conclusion").GetString() != "success"
+                        && !Exempt(latest[n])));
                 else if (exact.Count > 1)
                     held.Add("mixed or ambiguous leg families");
                 else if (possible.Count > 0)
@@ -487,13 +517,37 @@ static class MergeRuleCommand
                 else
                     held.Add("mixed leg families");
             }
+            bool Required(string name) => present.Contains(name) || config.MainGreen.Jobs.Any(n =>
+                n == name || (!n.Contains(" (", StringComparison.Ordinal) && name.StartsWith($"{n} (", StringComparison.Ordinal)));
+            var alerts = latest.Where(j => Required(j.Key) && Exempt(j.Value))
+                .OrderBy(j => !RerunUsed(j.Value)).ThenBy(j => j.Key, StringComparer.Ordinal)
+                .Select(j => RerunUsed(j.Value) ? $"INFRA-PERSISTENT {j.Key}: rerun used, open an issue" : $"ALERT infra-only {j.Key}: rerun needed (once)")
+                .ToList();
+            // A job with no real result in this run (only infra-only or skipped after a retry) proved
+            // nothing about this commit: the newest older run with a real result decides, so a failure
+            // holds until a success, and a success stops the lookup.
+            var pending = latest.Where(j => Required(j.Key) && LastReal(j.Key, all) is null && (Infra(j.Value) || (j.Value.GetProperty("conclusion").GetString() == "skipped"
+                && all.Any(a => a.GetProperty("name").GetString() == j.Key && a.GetProperty("conclusion").GetString() != "skipped"))))
+                .Select(j => j.Key).ToHashSet(StringComparer.Ordinal);
+            while (pending.Count > 0 && evidence.MoveNext())
+                foreach (var name in pending.Where(evidence.Current.Jobs.ContainsKey).ToList())
+                {
+                    // An older run's unfinished retry is no result, but its earlier attempts still are.
+                    if (LastReal(name, evidence.Current.All) is not { } real)
+                        continue;
+                    pending.Remove(name);
+                    if (Holds(name, real))
+                        held.Add($"{name} (run {evidence.Current.Run.GetProperty("id").GetInt64()})");
+                }
             log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {MergeRule.Short(sha!)}; "
                 + (held.Count == 0 ? "named jobs passed." : $"named jobs not green: {string.Join(", ", held)}.")
                 + "\n" + string.Join("\n", latest.OrderBy(j => j.Key, StringComparer.Ordinal).Select(j =>
-                    $"Main job [{(j.Key == "plan" || present.Contains(j.Key) || config.MainGreen.Jobs.Any(n => n == j.Key || (!n.Contains(" (", StringComparison.Ordinal) && j.Key.StartsWith($"{n} (", StringComparison.Ordinal))) ? "required" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."));
-            return held.Count == 0
+                    $"Main job [{(j.Key == "plan" || Required(j.Key) ? "required" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."))
+                + string.Concat(alerts.Select(a => $"\n{a}"));
+            var fact = held.Count == 0
                 ? new("success", $"{config.Base}'s CI {MergeRule.Short(sha!)} named jobs passed")
-                : new("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green");
+                : new MainFact("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green");
+            return fact with { Alerts = alerts };
         }
         catch (Exception e) when (IsReadFailure(e))
         {
@@ -502,7 +556,7 @@ static class MergeRuleCommand
         }
     }
 
-    static (JsonElement Run, Dictionary<string, JsonElement> Jobs)? CompletedMain(Session session)
+    static IEnumerable<(JsonElement Run, Dictionary<string, JsonElement> Jobs, List<JsonElement> All, bool Usable)> CompletedMain(Session session)
     {
         var config = session.Config;
         var seen = 0;
@@ -512,8 +566,6 @@ static class MergeRuleCommand
             var runs = doc.RootElement.GetProperty("workflow_runs");
             foreach (var run in runs.EnumerateArray().OrderByDescending(r => r.GetProperty("id").GetInt64()))
             {
-                if (run.GetProperty("conclusion").GetString() == "cancelled")
-                    continue;
                 var id = run.GetProperty("id").GetInt64();
                 var jobs = new List<JsonElement>();
                 for (var jobPage = 1; ; jobPage++)
@@ -526,7 +578,8 @@ static class MergeRuleCommand
                     if (batch.GetArrayLength() == 0 || jobPage >= 20)
                         throw new InvalidOperationException("CI job list is incomplete");
                 }
-                if (jobs.Count == 0 && Incomplete(run))
+                // A concurrency-displaced run is cancelled before any job exists.
+                if (jobs.Count == 0 && (Incomplete(run) || run.GetProperty("conclusion").GetString() == "cancelled"))
                     continue;
                 // Failed-jobs-only reruns retain earlier successful instances.
                 var latest = jobs.GroupBy(j => j.GetProperty("name").GetString() ?? "", StringComparer.Ordinal)
@@ -543,26 +596,94 @@ static class MergeRuleCommand
                 var planConclusion = plan.GetProperty("conclusion").GetString();
                 if (!planPending && planConclusion is null)
                     throw new InvalidOperationException("completed plan has no conclusion");
-                if (planPending || planConclusion != "success")
-                    continue;
-                var product = latest.Where(j => j.Key == "product" || j.Key.StartsWith("product (", StringComparison.Ordinal)).ToList();
-                if (product.Count == 0)
+                // An unusable run (plan, product or required jobs) still answers an older-failure lookup.
+                var usable = !planPending && planConclusion == "success";
+                static bool Product(string? name) => name == "product" || name?.StartsWith("product (", StringComparison.Ordinal) == true;
+                var product = latest.Where(j => Product(j.Key)).ToList();
+                if (usable && product.Count == 0)
                     throw new InvalidOperationException("CI job list has no product family");
-                if (product.Any(j => Incomplete(j.Value)
-                    || j.Value.GetProperty("conclusion").GetString() is "cancelled" or "skipped"))
-                    continue;
-                if (latest.Any(j => (config.MainGreen.Jobs.Any(n => n.Split(" (", StringSplitOptions.None)[0] == j.Key.Split(" (", StringSplitOptions.None)[0])
+                // A classification-skipped family passes over; a retry skipped after any instance ran doesn't.
+                usable = usable && !product.Any(j => Incomplete(j.Value)) && (product.All(j => j.Value.GetProperty("conclusion").GetString() != "skipped")
+                    || jobs.Any(a => Product(a.GetProperty("name").GetString()) && a.GetProperty("conclusion").GetString() != "skipped"));
+                usable = usable && !latest.Any(j => (config.MainGreen.Jobs.Any(n => n.Split(" (", StringSplitOptions.None)[0] == j.Key.Split(" (", StringSplitOptions.None)[0])
                     || config.MainGreen.LegFamilies.Any(f => f.Contains(j.Key, StringComparer.Ordinal)))
-                    && (Incomplete(j.Value) || j.Value.GetProperty("conclusion").GetString() == "cancelled")))
-                    continue;
-                return (run.Clone(), latest);
+                    && Incomplete(j.Value));
+                yield return (run.Clone(), latest, jobs, usable);
             }
             seen += runs.GetArrayLength();
             if (seen >= doc.RootElement.GetProperty("total_count").GetInt32())
-                return null;
+                yield break;
             if (runs.GetArrayLength() == 0 || page >= 5)
                 throw new InvalidOperationException("CI run history is incomplete (100-run window)");
         }
+    }
+
+    // Network or runner evidence in a failed job's annotations; a step's name only locates the failure.
+    static readonly Regex InfraEvidence = new(@"exit code 124\b|timed out|ETIMEDOUT|exceeded the maximum execution time"
+        + @"|\b(?:HTTP|status|returned error)\b[^\n\d]{0,40}\b(?:429|5\d\d)\b|ECONNRESET|connection (?:was )?reset"
+        + @"|ENOTFOUND|EAI_AGAIN|name resolution|could not resolve host|lost communication with the server"
+        + @"|runner has received a shutdown signal", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    static bool InfraOnly(Session session, JsonElement job)
+    {
+        var config = session.Config.MainGreen;
+        if (job.GetProperty("status").GetString() != "completed"
+            || job.GetProperty("conclusion").GetString() is not ("failure" or "timed_out" or "cancelled" or "startup_failure")
+            || !job.TryGetProperty("steps", out var steps) || steps.ValueKind != JsonValueKind.Array || steps.GetArrayLength() == 0)
+            return false;
+        var name = job.GetProperty("name").GetString() ?? "";
+        if (!config.InfraSteps.TryGetValue(name, out var patterns)
+            && !config.InfraSteps.TryGetValue(name.Split(" (", StringSplitOptions.None)[0], out patterns))
+            return false;
+        var globs = patterns.Select(p => new Glob(p)).ToList();
+        var cancelled = job.GetProperty("conclusion").GetString() == "cancelled";
+        var failedInfra = 0;
+        var hasInfra = false;
+        var tested = false;
+        var allSkipped = true;
+        foreach (var step in steps.EnumerateArray())
+        {
+            if (step.ValueKind != JsonValueKind.Object
+                || !step.TryGetProperty("name", out var stepName) || stepName.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(stepName.GetString())
+                || !step.TryGetProperty("status", out var status) || status.GetString() != "completed"
+                || !step.TryGetProperty("conclusion", out var result) || result.ValueKind != JsonValueKind.String)
+                return false;
+            var infra = globs.Any(g => g.IsMatch(stepName.GetString()!));
+            hasInfra |= infra;
+            allSkipped &= result.GetString() == "skipped";
+            tested |= !infra && result.GetString() != "skipped";
+            if (result.GetString() is "success" or "neutral" or "skipped")
+                continue;
+            if (!infra || result.GetString() is not ("failure" or "timed_out" or "cancelled"))
+                return false;
+            // In a cancelled job the step running at the cancel shows cancelled; that is no failure.
+            if (!cancelled || result.GetString() != "cancelled")
+                failedInfra++;
+        }
+        // A cancellation can be exempt only before any test/build step started, and a step that failed
+        // before it is still judged by its own evidence below. A never-assigned runner still needs a
+        // nonempty step manifest; absent step data is not proof of infra.
+        if (cancelled && (!hasInfra || tested))
+            return false;
+        if (hasInfra && allSkipped && job.TryGetProperty("runner_id", out var runner)
+            && runner.TryGetInt64(out var runnerId) && runnerId == 0)
+            return true;
+        if (failedInfra == 0)
+            return cancelled;
+        // Annotations don't name their step, so one step's evidence can't vouch for another's: a job
+        // with more than one failed step holds.
+        if (failedInfra > 1)
+            return false;
+        // The job id is its check run id; a truncated list proves nothing. Every failure annotation
+        // needs infra evidence.
+        using var notes = session.Rest($"repos/{session.Slug}/check-runs/{job.GetProperty("id").GetInt64()}/annotations?per_page=100");
+        if (notes.RootElement.ValueKind != JsonValueKind.Array || notes.RootElement.GetArrayLength() >= 100)
+            return false;
+        var failures = notes.RootElement.EnumerateArray().Where(n => n.ValueKind != JsonValueKind.Object
+            || !n.TryGetProperty("annotation_level", out var level) || level.ValueKind != JsonValueKind.String || level.GetString() == "failure").ToList();
+        return failures.Count > 0 && failures.All(n => n.ValueKind == JsonValueKind.Object && n.TryGetProperty("message", out var message)
+            && message.ValueKind == JsonValueKind.String && InfraEvidence.IsMatch(message.GetString()!));
     }
 
     static bool Incomplete(JsonElement job) => job.GetProperty("status").GetString() switch

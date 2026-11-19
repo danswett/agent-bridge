@@ -36,9 +36,9 @@ const check = (name, ok, detail) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${na
 
 {
   const sw = load();
-  await sw.fire('push', push({ web_push: 8030, notification: { title: 'DSWETT-HOME asks', body: 'Which database?', navigate: `${scope}?q=ab&host=cd`, tag: 'qab' } }));
+  await sw.fire('push', push({ web_push: 8030, notification: { title: 'node-c asks', body: 'Which database?', navigate: `${scope}?q=ab&host=cd`, tag: 'qab' } }));
   const n = sw.shown[0];
-  check('a declarative payload shows its title, body and tag, and the tap goes to the question', n?.title === 'DSWETT-HOME asks' && n.body === 'Which database?' && n.tag === 'qab' && n.data.url === `${scope}?q=ab&host=cd`, JSON.stringify(n));
+  check('a declarative payload shows its title, body and tag, and the tap goes to the question', n?.title === 'node-c asks' && n.body === 'Which database?' && n.tag === 'qab' && n.data.url === `${scope}?q=ab&host=cd`, JSON.stringify(n));
 }
 {
   const sw = load();
