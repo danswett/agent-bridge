@@ -12,6 +12,8 @@ it costs. It also holds the plan for growing the tests into a harness we can rep
 developer's inner loop to a release. [catalog.yml](catalog.yml) lists every suite, existing and
 planned, and is the source of truth the tooling below reads.
 
+`stall-alarm.ps1` observes the review-clean queue once; [A-STALL](../ops/alerts.md#merge-stall) owns routing and recovery, and `test-stall-alarm.ps1 -Case 1` through `-Case 8` provide serial fake-only cases.
+
 | Read | For |
 |---|---|
 | [catalog.yml](catalog.yml) | Every suite: kind, ring, platforms, runner, triggers, command, baseline, status |

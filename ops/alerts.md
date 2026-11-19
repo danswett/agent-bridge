@@ -23,7 +23,7 @@ Insights component (#1311, [relay-deploy.md](../docs/relay-deploy.md#metrics-exp
 Thresholds are first estimates for one 0.25 vCPU / 0.5 GiB replica, with tens of devices.
 Revisit them after two weeks of data, and when capacity changes (CAP-1).
 
-**All alerts are email only, and none pages at night** (owner, #568, 2026-11-03). Severity sets
+**Relay alerts are email only, and none pages at night** (owner, #568, 2026-11-03). Severity sets
 the order to read them in, not who gets woken.
 
 **Cost shaped the availability design.** A standard availability test costs $0.0005 a run, so
@@ -75,10 +75,19 @@ Signals:
 
 | Id | Sev | Signal | Fires when | Runbook | Issue | Status |
 |---|---|---|---|---|---|---|
+| A-STALL | 3 | Stall alarm workflow | More than 5 review-clean PRs into main, no merge for 30 min; thresholds in `quality/merge-rule.yml` | [Merge stall](#merge-stall) | [3071](https://github.com/danswett/agent-bridge/issues/3071) | Built; Quality publishes workflow |
 | A-LOGCAP | 2 | LA `ingestion`, `cap-hit` | Today's billable ingestion > 80% of the daily cap (checked every 15 min over the day so far), or collection stopped (`_LogOperation` Ingestion OverQuota in the last hour) | [log-cap](runbooks/log-cap.md) | #571 | Built |
 | A-BUDGET | 3 | B | The resource group's month at 50%, 80% or 100% of the $40 budget, or forecast over 100%. Emailed by Cost Management, not the action group | [cost](runbooks/cost.md) | #575 | Built |
 | A-GHA | 3 | W `github-actions` | GitHub's status page shows Actions or Pages not operational, or a run here has been queued over 30 min, in 2 of the last 3 checks (every 5 min, from Azure). A source that can't be reached counts as no evidence, not an outage | [github-outage](runbooks/github-outage.md) | #658 | Built |
 | A-GHA-SILENT | 3 | LA `availabilityResults` | No fully read `github-actions` result in 30 min (none arrived, or one said `unreachable`, `unreadable` or `unknown`): the watch stopped or can't read a source, so A-GHA is blind | [github-outage](runbooks/github-outage.md) | #658 | Built |
+
+### Merge stall
+
+The workflow runs once every 10 minutes or on dispatch; it runs main's code only on a hosted runner. It does not observe `Merge rule` completion: that workflow observes the alarm, so a reverse trigger would create a cycle. Its state is one `area:ops` issue, found by exact title, with a comment per stalled run and a closing comment on recovery. Runner loss leaves that issue intact for the next run. One bounded GraphQL read supplies exact-head `merge-rule=success`, eligibility, merge history and open alerts; incomplete/error/truncated reads warn and neither alert nor close.
+
+Chief ruling, Nov 18, 00:19 PT: alerts go to Main-Green and the Chief through the existing `tools/agents/reply-session.ps1` path, plus the ops issue with **no owner @mention**. Quality configures `STALL_ALARM_MAIN_GREEN_NODE` and `STALL_ALARM_CHIEF_NODE` to the supplied distinct full nodes, and supplies the existing route's `AGENT_HA_URL` and `AGENT_HA_AGENT_TOKEN` secrets. No other recipients, phone or new endpoint; no dependency on [3057](https://github.com/danswett/agent-bridge/issues/3057). Payloads contain only PR numbers and ages, not titles or account data. Issue-write and node-delivery failures are surfaced after attempting both nodes; unconfirmed delivery is never reported as success. The alarm adds no retry loop.
+
+Main-Green checks the merge rule, queue and runner for the listed PRs; the Chief assigns mitigation. Confirm a merge resumed; the next complete clean observation closes the issue. If data is inconclusive, restore read visibility before treating the queue as healthy.
 
 ## Staging and PPE
 

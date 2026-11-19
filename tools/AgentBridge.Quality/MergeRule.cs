@@ -5,6 +5,12 @@ using YamlDotNet.Serialization.NamingConventions;
 
 namespace AgentBridge.Quality;
 
+sealed class StallAlarmConfig
+{
+    public int CleanPrThreshold { get; set; }
+    public int MinutesWithoutMerge { get; set; }
+}
+
 /// <summary>
 /// quality/merge-rule.yml: what a pull request into main needs before GitHub may merge it, beyond
 /// green CI and resolved threads, which main's ruleset checks itself (AGENTS.md, "Pull requests").
@@ -12,6 +18,7 @@ namespace AgentBridge.Quality;
 sealed class MergeRuleConfig
 {
     public string Base { get; set; } = "";
+    public StallAlarmConfig StallAlarm { get; set; } = new();
     public string StatusPoster { get; set; } = "";
     public string CopilotReviewer { get; set; } = "";
     public List<string> HoldLabels { get; set; } = [];
