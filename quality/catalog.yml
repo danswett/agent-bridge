@@ -891,8 +891,8 @@ suites:
     runner: hosted
     # The system-package download and offline install before browser-only installs (#799, #689):
     # against stand-ins for npx, sudo and apt-get, it leaves the Azure mirror for Canonical's
-    # archive on Azure DNS/update timeout or exhausted network retries; cache warnings require
-    # the offline install to succeed, and package errors fail at once.
+    # archive on Azure DNS/update timeout or exhausted network retries; cached debs install only
+    # after matching live signed indexes, and package errors fail at once.
     triggers: [.github/actions/playwright-system-packages/**]
     command: bash .github/actions/playwright-system-packages/test.sh
     where: ci.yml light
