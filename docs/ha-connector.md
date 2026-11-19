@@ -569,32 +569,32 @@ the cards neither empties it nor loses the rid of a delivery still running; a re
 is still dropped. When a session ends for good its history is dropped with its card (after any
 delivery still running for it finishes); a session that comes back under the same id starts empty.
 `sender` loses control, format and unassigned characters, whitespace is collapsed,
-and the cut at 64 never splits a character. Untagged agent replies carrying a valid `rid` now
-wait durably while a question is open ([#3204](https://github.com/danswett/agent-bridge/issues/3204)).
-The host acknowledges `queued` only after saving, and exposes `reply_queue_count` on the activity
-sensor. At most 16 messages wait per session; the store's 100-per-session/1000-total entry caps
-also apply, with completed receipts pruned first. Overflow refuses with `queue full`, never
-replacing accepted messages. Each payload is limited to 64 KiB. Owner answers remain separate
-and take priority: nothing drains until the question disappears from the host's session view.
-Then accepted messages go through the existing reply delivery, FIFO, one at a time.
-Human replies and agent publishes without a valid `rid` retain the existing question refusal.
-Question-tagged publishes are never queued.
-An agent's companion Submit press does not confirm the owner's form; the owner can still
-submit independently. Outstanding payloads are captured before a question-clear baseline.
-Confirmed absence from a complete discovery pass durably drops both pending messages and
-receipts, including after restart; discovery holds preserve them until absence is confirmed.
+and the cut at 64 never splits a character. A reply that arrives while a question card is open
+(single choice or field slots) is refused, unless queued as below: the host acks `refused` with the sender's rid,
+logs `refused a reply to <node> from <sender>` and types nothing, so the sender retries after the card
+closes. A reply already waiting when a question opens is refused the same way (#1634).
+Publishes without a `rid` behave as before.
 
-The host reuses `DurableInbox` at `<StateFile>.inbox`, alongside its existing connector state,
-without protocol or relay changes. Pending messages survive a host restart; payloads are cleared
-at dispatch and receipts survive within the store's retention caps. Before terminal delivery,
-the host durably marks the entry `unconfirmed`. A crash across typing cannot prove whether
-the terminal consumed the message: it is **not automatically replayed**, and a retry gets
-`unconfirmed`, not a false delivery claim. Normal completed delivery is once per retained rid.
-Unavailable/corrupt storage refuses queueing/dispatch. Completion/retirement write failures are logged and retried
-without starving owner answers or publishing; delivery-completion acknowledgements follow persistence. State stays host-local:
-stopping the host stops delivery; losing state loses queued messages, not an automatic handoff. No running host is installed or migrated.
+The one exception is an untagged agent text (`driver: agent`, a valid `rid`, no `decision_id`, words
+and no attachments)
+([#3204](https://github.com/danswett/agent-bridge/issues/3204)): it waits in a bounded **in-memory**
+FIFO, at most 16 per session, and is acked `queued` (a rid already waiting is re-acked `queued` with
+`duplicate: true`). A 17th is refused with `queue full`, never replacing one already waiting. The
+activity sensor shows `reply_queue_count`. A question that is replaced or cleared keeps what agents
+had already sent to it. Once no question is open, waiting messages go through the normal reply
+delivery, oldest first, one at a time, ahead of anything sent after. There is **no durable
+persistence**: a host restart drops the queue (the count shows 0 again, and nothing waiting is
+delivered), and so does the session ending; a session back under the same id starts empty. Senders
+that see `queued` and then a count that drops without their rid being acked `delivered` send again.
+An agent's own Send press is not taken as the owner's confirmation, by count: while an agent
+message still owes its press, the next new Send press is taken as the agent's, and a press read when the payload
+cannot be read is too (fail closed). That debt outlives a question being replaced or cleared, and an
+agent message with attachments still owes its press though it is refused, not queued. An owner whose
+press lands there presses Send again. Known limit: if the owner's press lands between an agent's
+message and its own Send, the owner's press is taken as the agent's and the agent's later press
+confirms the form as it then stands.
 
-**Durable inbox foundation.** `DurableInbox` is the internal store used by the host queue above: it
+**Durable inbox foundation.** `DurableInbox` is an internal, not-yet-connected store: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,
 and returns the original entry on a matching rid retry, even if a retry is restamped. It keeps
 at most 100 entries per node and 1000 total; when full, it prunes the oldest delivered entries
@@ -605,10 +605,10 @@ For #2780 integration, deduplication lasts only while that metadata is retained 
 delivered rid is accepted as new and may be delivered again; this is not permanent deduplication.
 Load and save remove this inbox's GUID-named crash-leftover temporary files under its lock,
 so obsolete copies cannot retain payloads after a later delivery.
-Power-loss durability is not established. The connector serializes dispatch through its passes
-and uses its existing state directory; native receipt and a distributed inbox remain later work.
-The host's pre-dispatch uncertainty record closes automatic replay, not the terminal's
-fundamental typing/receipt atomicity gap.
+Power-loss durability is not established. It does not change the live reply path, publish acks,
+or provide native receipt. A later slice must provide an access-controlled storage directory,
+one dispatcher per node (a peek does not reserve a message), and reconcile the crash window
+between typing and recording delivery before enabling it.
 
 **`tools/agents/reply-session.ps1`** is the in-repo sender. It posts the payload with a rid, waits
 for the reply sensor to show its own stamp (there is one slot per node, so rapid sends can overwrite

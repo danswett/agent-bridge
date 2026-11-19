@@ -29,7 +29,6 @@ public sealed partial class HaConnector
         // A press spent at an answer that was not complete yet, so the tap that completes it
         // is not taken for a Send (Set-DaemonPressSpent).
         public string? SpentPress;
-        public (long After, string? Editor)? AgentSend;
         // A press or a publish already used, so it is never delivered twice.
         public string? UsedPress;
         // The phone taps (by event) already given to the host for this question.
@@ -236,6 +235,8 @@ public sealed partial class HaConnector
         // Everything the card is told about this question is out; nothing reported before now was
         // made seeing it.
         var boundary = Interlocked.Read(ref hitSeq);
+        // Agent messages that reached the question going away are kept, not taken for this one's baseline.
+        if (p.Armed is { } previous) { await QueueAtQuestionAsync(p, previous, [.. hits.Where(h => h.Seq <= boundary)], ct); }
         p.ArmedSlots = plan.UsesFieldSlots ? plan.Fields.Count : 0;
         p.Cleared = false;
         // A Send waiting on the box's words was for a reply; the question takes the box now.
@@ -294,7 +295,6 @@ public sealed partial class HaConnector
         now.UsedPress = was.UsedPress;
         now.UsedStamp = was.UsedStamp;
         now.SpentPress = was.SpentPress;
-        now.AgentSend = was.AgentSend;
         now.PhoneTaps.UnionWith(was.PhoneTaps);
         // A tap that reached nothing (Busy, Refused), with the selector seen waiting under the new
         // arming: the same option may be tapped again, as after RearmAsync. Kept, it ignored the
@@ -694,7 +694,7 @@ public sealed partial class HaConnector
     async Task CardAsync(string sessionId, Published p, IReadOnlyList<(long Seq, HaTrigger Hit)> seen, DateTimeOffset now, CancellationToken ct)
     {
         var armed = p.Armed;
-        if (armed is not null) { await QueueAtQuestionAsync(sessionId, p, seen, ct); }
+        if (armed is not null) { await QueueAtQuestionAsync(p, armed, seen, ct); }
         if (armed is null && ServesReplies)
         {
             await ReplyAsync(sessionId, p, seen, now, ct);
@@ -865,6 +865,8 @@ public sealed partial class HaConnector
         if (current.Snapshot is not { Attributes.ValueKind: JsonValueKind.Object } state) { return false; }
         var tag = Str(state.Attributes, "decision_id");
         var fromAgent = Str(state.Attributes, "driver") == SessionDrivers.Agent;
+        // An agent's message is counted first (QueueAtQuestionAsync), so its own Send is never taken for the owner's.
+        if (fromAgent && tag is not { Length: > 0 } && !p.Reply.Log.AgentStamps.Contains(current.Value)) { return false; }
         var takesNoWords = ServesReplies && (armed.Plan.UsesFieldSlots || armed.Plan.AnswerOnTap) && !armed.Plan.TakesTypedAnswer;
         // Words tagged for a question are that question's own. An agent's are also refused when untagged or tagged for another card.
         if (tag is { Length: > 0 } ? !(fromAgent && tag != armed.Question.Id) : !(takesNoWords || fromAgent)) { return false; }
@@ -934,8 +936,8 @@ public sealed partial class HaConnector
         var node = p.Node;
         // A press of Send (or of the box) the watch reported after the last failure: what lets
         // words that failed be given again.
-        var fresh = armed.AgentSend is null && (since.Any(h => (h.EntityId == SessionEntities.Submit(node) || h.EntityId == SessionEntities.Reply(node)) && h.State.State != armed.SpentPress)
-            || await PressedSinceFailureAsync(node, armed, ct));
+        var fresh = since.Any(h => (h.EntityId == SessionEntities.Submit(node) && OwnerPress(p.Reply.Log, h.State.State)) || h.EntityId == SessionEntities.Reply(node))
+            || await PressedSinceFailureAsync(node, armed, p.Reply.Log, ct);
         var decision = await ha.GetStateAsync(SessionEntities.Decision(node), ct);
         if (!armed.WindowChecked && decision?.State == HaDecision.Awaiting && DecisionIdOf(decision) == armed.Question.Id)
         {
@@ -1134,7 +1136,8 @@ public sealed partial class HaConnector
         }
         // ...nor the Send the card showed when an answer failed: pressed while it was being
         // delivered, it belongs to the attempt that failed, not to a new one.
-        var pressed = armed.AgentSend is null && Changed(armed.SubmitBaseline, submit) && submit.Value != armed.SpentPress && submit.Value != armed.UsedPress
+        // ...nor an agent's own Send after its message (#3204), nor one not yet known to be the owner's.
+        var pressed = OwnerPress(p.Reply.Log, submit.Value) && Changed(armed.SubmitBaseline, submit) && submit.Value != armed.SpentPress && submit.Value != armed.UsedPress
             && !(armed.SubmitAtFailure is { Present: true } atFailure && atFailure.Value == submit.Value);
         var complete = missing.Count == 0;
         // A lone choice that takes another answer, typed into the reply box and sent with Send.
@@ -1267,11 +1270,11 @@ public sealed partial class HaConnector
 
     // Whether Send was pressed since the last failure, read over REST: the watch may have been
     // down. A press made while that answer was being delivered is part of the failure, not after it.
-    async Task<bool> PressedSinceFailureAsync(string node, Armed armed, CancellationToken ct)
+    async Task<bool> PressedSinceFailureAsync(string node, Armed armed, RidLog log, CancellationToken ct)
     {
         if (armed.Attempts == 0 || armed.SubmitAtFailure is not { } before || before.Kind == "unknown") { return false; }
         var now = await ObserveAsync(SessionEntities.Submit(node), ct);
-        return now.Present && now.Value != armed.SpentPress && (!before.Present || !string.Equals(now.Value, before.Value, StringComparison.Ordinal));
+        return now.Present && OwnerPress(log, now.Value) && (!before.Present || !string.Equals(now.Value, before.Value, StringComparison.Ordinal));
     }
 
     // Get-BridgeDriverFromState: "agent" when the account behind a press is one of the agents'

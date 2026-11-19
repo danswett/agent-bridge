@@ -1,6 +1,7 @@
 using AgentBridge.HomeAssistant;
 using AgentBridge.Protocol;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit;
 
 // #3204: agent messages wait in memory for the owner's question to close; neither they nor their
@@ -81,6 +82,35 @@ public sealed partial class ReplyTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task An_agent_press_is_never_the_owners_across_reads_clears_or_attachments(bool raced, bool attached)
+    {
+        await using var c = await Asking();
+        HaTrigger[] late = [];
+        ha.AfterRead = id =>
+        {
+            if (!raced || id != SessionEntities.ReplyPayload(Node)) { return; }
+            ha.AfterRead = null;
+            late = [ha.SendFromCard(Node, "first", driver: "agent", rid: "r-1"), ha.Press(SessionEntities.Submit(Node))];
+        };
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        foreach (var hit in late) { c.Observe(hit); }
+        if (!raced)
+        {
+            await Do(c, ha.SendFromCard(Node, "first", driver: "agent", rid: "r-1", files: attached ? [new JsonObject { ["name"] = "a.txt" }] : null));
+            if (!attached) { Idle(turn: 2); await Pass(c); Idle(question: Pick()); await Pass(c); await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now")); }
+            await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        }
+        await Pass(c, 3);
+        Assert.Empty(answered);
+        Assert.Equal(raced ? 1 : 0, Detail.GetProperty("reply_queue_count").GetInt32());
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task An_earlier_agent_payload_does_not_spend_a_later_form_submit(bool stale)
@@ -104,7 +134,7 @@ public sealed partial class ReplyTests
         for (var n = 1; n <= (watched ? 3 : 1); n++)
         {
             var hit = ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n);
-            if (watched) { c.Observe(hit); }
+            if (watched && n < 3) { c.Observe(hit); }
         }
         ha.GetFailsFor = id => submitUnreadable && id == SessionEntities.Submit(Node);
         Idle(turn: 2);
@@ -229,17 +259,19 @@ public sealed partial class ReplyTests
     [Fact]
     public async Task A_restart_drops_queued_messages_and_shows_an_empty_queue()
     {
+        HaTrigger? last = null;
         await using (var c = await Asking())
         {
             for (var n = 1; n <= 2; n++)
             {
-                await Do(c, ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
+                await Do(c, last = ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
             }
             Assert.Equal(2, Detail.GetProperty("reply_queue_count").GetInt32());
         }
 
         await using var restarted = Connector();
         await Pass(restarted);
+        await Do(restarted, last!);
         Assert.Equal(0, Detail.GetProperty("reply_queue_count").GetInt32());
         await CardCloses(restarted);
         await Pass(restarted, 20);

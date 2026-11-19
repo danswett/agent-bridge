@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace AgentBridge.HomeAssistant;
 
-internal sealed record InboxMessage(string Node, string Rid, string Sender, string Payload, DateTimeOffset QueuedAt, DateTimeOffset? DeliveredAt, string? Outcome = null);
+internal sealed record InboxMessage(string Node, string Rid, string Sender, string Payload, DateTimeOffset QueuedAt, DateTimeOffset? DeliveredAt);
 
 internal sealed class DurableInbox
 {
@@ -15,9 +15,6 @@ internal sealed class DurableInbox
     public DurableInbox(string path) => this.path = Path.GetFullPath(path);
 
     public InboxMessage Enqueue(string node, string? rid, string? sender, string payload, DateTimeOffset at)
-        => Enqueue(node, rid, sender, payload, at, out _);
-
-    public InboxMessage Enqueue(string node, string? rid, string? sender, string payload, DateTimeOffset at, out IReadOnlyList<InboxMessage> snapshot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(node);
         ArgumentException.ThrowIfNullOrWhiteSpace(payload);
@@ -25,7 +22,6 @@ internal sealed class DurableInbox
         sender = string.IsNullOrWhiteSpace(sender) ? "legacy" : sender;
         using var held = Lock();
         var messages = Load();
-        snapshot = messages;
         var prior = messages.Find(m => m.Node == node && m.Rid == rid);
         if (prior is not null) { return prior; }
         while (messages.Count(m => m.Node == node) >= MaxEntriesPerNode)
@@ -53,21 +49,7 @@ internal sealed class DurableInbox
         return Load().Find(m => m.Node == node && m.DeliveredAt is null);
     }
 
-    public IReadOnlyList<InboxMessage> Read()
-    {
-        using var held = Lock();
-        return Load();
-    }
-
-    public IReadOnlyList<InboxMessage> RetainNodes(IReadOnlySet<string> live)
-    {
-        using var held = Lock();
-        var messages = Load();
-        if (messages.RemoveAll(m => !live.Contains(m.Node)) > 0) { Save(messages); }
-        return messages;
-    }
-
-    public InboxMessage Deliver(string node, string rid, DateTimeOffset at, string outcome = "delivered")
+    public InboxMessage Deliver(string node, string rid, DateTimeOffset at)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(node);
         ArgumentException.ThrowIfNullOrWhiteSpace(rid);
@@ -81,21 +63,10 @@ internal sealed class DurableInbox
         {
             throw new InvalidOperationException("Only the oldest queued message can be delivered.");
         }
-        var delivered = message with { Payload = "", DeliveredAt = at, Outcome = outcome };
+        var delivered = message with { Payload = "", DeliveredAt = at };
         messages[index] = delivered;
         Save(messages);
         return delivered;
-    }
-
-    public void SetOutcome(string node, string rid, string outcome)
-    {
-        using var held = Lock();
-        var messages = Load();
-        var index = messages.FindIndex(m => m.Node == node && m.Rid == rid);
-        if (index < 0 || messages[index].DeliveredAt is null) { throw new InvalidOperationException("Request id was not dispatched."); }
-        if (outcome == "refused") { messages.RemoveAt(index); }
-        else { messages[index] = messages[index] with { Outcome = outcome }; }
-        Save(messages);
     }
 
     FileStream Lock()
@@ -123,8 +94,7 @@ internal sealed class DurableInbox
         using (file) { snapshot = JsonSerializer.Deserialize<Snapshot>(file); }
         if (snapshot is null || snapshot.Version != 1 || snapshot.Messages is null ||
             snapshot.Messages.Any(m => m is null || string.IsNullOrWhiteSpace(m.Node) || string.IsNullOrWhiteSpace(m.Rid) ||
-                string.IsNullOrWhiteSpace(m.Sender) || m.Payload is null || (m.DeliveredAt is null && string.IsNullOrWhiteSpace(m.Payload)) ||
-                m.Outcome is not (null or "delivered" or "unconfirmed" or "refused") || (m.DeliveredAt is null && m.Outcome is not null)) ||
+                string.IsNullOrWhiteSpace(m.Sender) || m.Payload is null || (m.DeliveredAt is null && string.IsNullOrWhiteSpace(m.Payload))) ||
             snapshot.Messages.Select(m => (m.Node, m.Rid)).Distinct().Count() != snapshot.Messages.Count)
         {
             throw new InvalidDataException("Invalid durable inbox snapshot.");

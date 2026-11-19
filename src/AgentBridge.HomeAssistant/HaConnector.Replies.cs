@@ -75,6 +75,20 @@ public sealed partial class HaConnector
     {
         public readonly Dictionary<string, string?> Rids = new(StringComparer.Ordinal);
         readonly List<string> ridOrder = [];
+        // #3204: agent messages waiting for an open question to close, oldest first; those still owed
+        // their own Send press, the ones counted; and each Send press read with whether it was the agent's.
+        public readonly List<HaState> Queued = [];
+        public int AgentSends;
+        public readonly List<string> AgentStamps = [];
+        public readonly Dictionary<string, bool> Presses = new(StringComparer.Ordinal);
+
+        public void Drop()
+        {
+            Queued.Clear();
+            AgentSends = 0;
+            AgentStamps.Clear();
+            Presses.Clear();
+        }
         // The last acknowledgement: which rid the host delivered, published with the card's activity.
         public JsonObject? Ack;
 
@@ -188,7 +202,7 @@ public sealed partial class HaConnector
                 // so what is sent after that is still new once the delivery is done.
                 if (!p.Reply.Baselined) { touched.TryAdd(p.Node, []); continue; }
                 if (underWay.ContainsKey(id)) { continue; }
-                if (sweep || p.Reply.ReadAgain || p.Reply.PendingPress is not null) { touched.TryAdd(p.Node, []); }
+                if (sweep || p.Reply.ReadAgain || p.Reply.PendingPress is not null || p.Reply.Log.Queued.Count > 0) { touched.TryAdd(p.Node, []); }
             }
         }
     }
@@ -200,7 +214,7 @@ public sealed partial class HaConnector
         {
             Published? p;
             lock (gate) { p = published.TryGetValue(done.SessionId, out var found) ? found : null; }
-            if (p is not null) { if (!await ReplyDoneAsync(p, done, now, ct)) { break; } }
+            if (p is not null) { await ReplyDoneAsync(p, done, now, ct); }
             else if (done.Result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { DeleteImages(done.Images); }
             // Only once said: a pass that fails part-way says it again rather than not at all.
             replies.TryDequeue(out _);
@@ -210,7 +224,7 @@ public sealed partial class HaConnector
         }
     }
 
-    async Task<bool> ReplyDoneAsync(Published p, ReplyDone done, DateTimeOffset now, CancellationToken ct)
+    async Task ReplyDoneAsync(Published p, ReplyDone done, DateTimeOffset now, CancellationToken ct)
     {
         var result = done.Result;
         var short8 = done.SessionId[..Math.Min(8, done.SessionId.Length)];
@@ -220,7 +234,6 @@ public sealed partial class HaConnector
         if (done.Rid is { } rid)
         {
             var outcome = result.Outcome switch { AnswerOutcome.Delivered => "delivered", AnswerOutcome.Unconfirmed => "unconfirmed", _ => "refused" };
-            if (!InboxOutcome(done.SessionId, rid, outcome)) { return false; }
             if (outcome == "refused") { p.Reply.ForgetRid(rid); }
             else if (p.Reply.Rids.ContainsKey(rid)) { p.Reply.Rids[rid] = outcome; }
             p.Reply.Ack = MakeAck(rid, done.Sender, outcome);
@@ -269,7 +282,6 @@ public sealed partial class HaConnector
             if (box.Present && box.Value == sent) { await ResetReplyBoxAsync(p.Node, ct); }
             else { log($"Home Assistant connector kept a follow-up reply typed for {short8} while the previous one was delivering"); }
         }
-        return true;
     }
 
     // Used images go from Home Assistant's store beside the passes, as deliveries run: each
@@ -308,16 +320,15 @@ public sealed partial class HaConnector
         var boundary = Interlocked.Read(ref hitSeq);
         var payload = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
         var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
+        // Agent messages that reached the closing question are kept, even when Send cannot be read.
+        if (p.Armed is { } armed) { await QueueAtQuestionAsync(p, armed, [.. hits.Where(h => h.Seq <= boundary)], ct); }
         if (payload.Kind == "unknown" || submit.Kind == "unknown") { return false; }
-        if (p.Armed is not null)
-        {
-            await QueueAtQuestionAsync(p.SessionId, p, hits.ToArray().Where(h => h.Seq <= boundary).ToArray(), ct, payload);
-        }
         if (payload.Present) { p.Reply.Handle(payload.Value); }
         p.Reply.HandledPress = submit.Present ? submit.Value : null;
         p.Reply.PendingPress = null;
         p.Reply.Waiting.Clear();
         p.Reply.Boundary = boundary;
+        p.Reply.Log.Presses.Clear();
         p.Reply.Baselined = true;
         return true;
     }
@@ -348,7 +359,7 @@ public sealed partial class HaConnector
         }
         if (underWay.ContainsKey(sessionId)) { return; }
         p.Reply.ReadAgain = false;
-        if (await DrainInboxAsync(sessionId, p, ct)) { p.Reply.ReadAgain = true; return; }
+        if (await DrainQueueAsync(sessionId, p, ct)) { p.Reply.ReadAgain = true; return; }
         while (p.Reply.Waiting.Count > 0)
         {
             var next = p.Reply.Waiting[0];
@@ -419,9 +430,9 @@ public sealed partial class HaConnector
         }
         var rid = attributes ? CleanRid(Str(a, "rid")) : null;
         var sender = attributes ? CleanSender(Str(a, "sender")) : null;
-        if (!queued && rid is not null && inbox.FirstOrDefault(i => i.Node == sessionId && i.Rid == rid) is { } accepted)
+        if (!queued && rid is not null && p.Reply.Log.Queued.Any(q => CleanRid(Str(q.Attributes, "rid")) == rid))
         {
-            p.Reply.Ack = MakeAck(rid, sender, InboxStatus(accepted), duplicate: true);
+            p.Reply.Ack = MakeAck(rid, sender, "queued", duplicate: true);
             await TransientAsync(p, "Duplicate reply dropped", [], ct);
             p.Reply.Handle(stamp);
             return CardRead.Taken;

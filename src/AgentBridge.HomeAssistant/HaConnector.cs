@@ -315,7 +315,6 @@ public sealed partial class HaConnector : IAsyncDisposable
         this.time = time ?? TimeProvider.System;
         Slug = HaContract.MachineSlug(options.MachineName);
         verbose = options.DetailedActivityFallback;
-        LoadInbox();
         source.Changed += OnChanged;
         source.UnbudgetedChanged += OnUnbudgetedChanged;
     }
@@ -704,12 +703,6 @@ public sealed partial class HaConnector : IAsyncDisposable
             allDirty = false;
         }
         var live = source.Snapshot().ToDictionary(s => s.Id, StringComparer.Ordinal);
-        // A complete discovery pass confirms ended lifetimes, even after restart and while
-        // their dashboard cards still await removal. Held discovery proves no such absence.
-        if (!RetirementHeld() && inbox.Any(i => !live.ContainsKey(i.Node)))
-        {
-            TryInbox(() => inbox = queuedInbox!.RetainNodes(live.Keys.ToHashSet(StringComparer.Ordinal)));
-        }
         List<string> work;
         List<(string Id, string Node)> gone;
         lock (gate)
@@ -748,6 +741,8 @@ public sealed partial class HaConnector : IAsyncDisposable
             foreach (var id in ridLogs.Keys)
             {
                 if (!live.ContainsKey(id) && !underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
+                // A delivery still running keeps the history, not the queue: the same id back is a new lifetime.
+                else if (!live.ContainsKey(id) && ridLogs.TryGetValue(id, out var ended)) { ended.Drop(); }
             }
         }
         if (gone.Count > 0) { WatchSetChanged(); }

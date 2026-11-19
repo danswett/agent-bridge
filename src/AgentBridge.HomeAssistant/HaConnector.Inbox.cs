@@ -1,104 +1,70 @@
-using System.Text;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace AgentBridge.HomeAssistant;
 
+// #3204: agent messages sent while a question is open wait in memory, in order, for it to close.
+// A restart or the session's end drops them; reply_queue_count says how many wait. The Send press
+// that follows each one is the agent's own, never the owner's confirmation of the form.
 public sealed partial class HaConnector
 {
-    DurableInbox? queuedInbox;
-    IReadOnlyList<InboxMessage> inbox = [];
-    int QueueCount(string sessionId) => inbox.Count(i => i.Node == sessionId && i.DeliveredAt is null);
-    static string InboxStatus(InboxMessage item) => item.Outcome ?? (item.DeliveredAt is null ? "queued" : "delivered");
+    int QueueCount(string sessionId) => ridLogs.TryGetValue(sessionId, out var log) ? log.Queued.Count : 0;
 
-    void LoadInbox()
+    static bool OwnerPress(RidLog log, string? press) => press is not null && log.Presses.TryGetValue(press, out var agent) && !agent;
+
+    // What reached the card since the question was armed, in order: each agent message is counted
+    // (text alone queued), and each new Send press is the agent's while one of its messages still
+    // owes one. A press read when the payload cannot be is taken as the agent's: the owner presses again.
+    async Task QueueAtQuestionAsync(Published p, Armed armed, IReadOnlyList<(long Seq, HaTrigger Hit)> seen, CancellationToken ct)
     {
-        if (options.StateFile is not { } path) { return; }
-        TryInbox(() =>
+        var payloadId = SessionEntities.ReplyPayload(p.Node);
+        var submitId = SessionEntities.Submit(p.Node);
+        var log = p.Reply.Log;
+        // Send first: an agent presses only after its message, so the payload read next shows it.
+        var submit = await ObserveAsync(submitId, ct);
+        var current = await ObserveAsync(payloadId, ct);
+        var events = seen.Where(h => h.Seq > armed.Boundary && (h.Hit.EntityId == payloadId || h.Hit.EntityId == submitId)).Select(h => h.Hit).ToList();
+        if (Changed(armed.PayloadBaseline, current) && !events.Any(h => h.EntityId == payloadId && h.State.State == current.Value))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            var store = new DurableInbox(path + ".inbox");
-            inbox = store.Read();
-            queuedInbox = store;
-        });
-    }
-
-    bool TryInbox(Action action)
-    {
-        try { action(); return true; }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidDataException) { log($"Home Assistant connector inbox storage failed: {Describe(e)}"); return false; }
-    }
-
-    async Task QueueAtQuestionAsync(string sessionId, Published p, IReadOnlyList<(long Seq, HaTrigger Hit)> seen, CancellationToken ct, Observation? current = null)
-    {
-        if (!ServesReplies) { return; }
-        current ??= await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
-        var armed = p.Armed!;
-        var states = seen.Where(h => h.Seq > p.Armed!.Boundary && h.Hit.EntityId == SessionEntities.ReplyPayload(p.Node)).Select(h => h.Hit.State);
-        if (Changed(p.Armed!.PayloadBaseline, current)) { states = states.Append(current.Snapshot!); }
-        foreach (var state in states)
+            events.Insert(events.FindLastIndex(h => h.EntityId == payloadId) + 1, new HaTrigger(payloadId, current.Snapshot!));
+        }
+        if (Changed(armed.SubmitBaseline, submit)) { events.Add(new HaTrigger(submitId, submit.Snapshot!)); }
+        foreach (var (entity, state) in events)
         {
-            var a = state.Attributes;
-            if (!IsStamp(state.State) || p.Reply.IsHandled(state.State) || MixedReplyPayload(SessionEntities.ReplyPayload(p.Node), state)
-                || Str(a, "driver") != "agent" || !string.IsNullOrEmpty(Str(a, "decision_id"))) { continue; }
-            armed.AgentSend = (seen.Where(h => h.Hit.EntityId == SessionEntities.ReplyPayload(p.Node) && h.Hit.State.State == state.State)
-                .Select(h => h.Seq).DefaultIfEmpty(long.MaxValue).Max(), null);
-            if (CleanRid(Str(a, "rid")) is not { } rid) { continue; }
-            var prior = inbox.FirstOrDefault(i => i.Node == sessionId && i.Rid == rid);
-            var remembered = p.Reply.Rids.TryGetValue(rid, out var known);
-            string? error = null;
-            var outcome = prior is not null ? InboxStatus(prior) : remembered ? known ?? "unconfirmed" : "queued";
-            if (prior is null && !remembered)
+            if (!IsStamp(state.State)) { continue; }
+            if (entity == submitId)
             {
-                var payload = JsonSerializer.Serialize(state);
-                if (QueueCount(sessionId) >= MaxWaiting) { error = "queue full"; }
-                else if (Encoding.UTF8.GetByteCount(payload) > 65536) { error = "queued reply exceeds 64 KiB"; }
-                else if (queuedInbox is null) { error = "durable reply queue unavailable"; }
-                else
-                {
-                    try { error = TryInbox(() => { queuedInbox.Enqueue(sessionId, rid, CleanSender(Str(a, "sender")), payload, time.GetUtcNow(), out var saved); inbox = saved; })
-                        ? null : "durable reply queue unavailable"; }
-                    catch (InvalidOperationException) { error = "queue full"; }
-                }
+                if (state.State == armed.SubmitBaseline.Value || !log.Presses.TryAdd(state.State, log.AgentSends > 0 || current.Kind == "unknown")) { continue; }
+                log.AgentSends = Math.Max(0, log.AgentSends - 1);
+                continue;
             }
-            if (error is not null) { outcome = "refused"; }
-            p.Reply.Ack = MakeAck(rid, CleanSender(Str(a, "sender")), outcome, duplicate: prior is not null || remembered);
-            await TransientAsync(p, error is null ? "Reply " + outcome : "Reply NOT sent",
-                error is null ? [] : new JsonObject { ["error"] = error }, ct);
+            var a = state.Attributes;
+            if ((armed.PayloadBaseline.Present && state.State == armed.PayloadBaseline.Value) || log.AgentStamps.Contains(state.State) || p.Reply.IsHandled(state.State)
+                || MixedReplyPayload(payloadId, state) || Str(a, "driver") != "agent" || !string.IsNullOrEmpty(Str(a, "decision_id"))) { continue; }
+            log.AgentStamps.Add(state.State);
+            if (log.AgentStamps.Count > 64) { log.AgentStamps.RemoveAt(0); }
+            log.AgentSends++;
+            if (!ServesReplies || CleanRid(Str(a, "rid")) is not { } rid || HasAttachments(state) || string.IsNullOrWhiteSpace(Str(a, "text"))) { continue; }
+            var queue = log.Queued;
+            var known = queue.Any(q => CleanRid(Str(q.Attributes, "rid")) == rid) ? "queued"
+                : p.Reply.Rids.TryGetValue(rid, out var prior) ? prior ?? "unconfirmed" : null;
+            var full = known is null && queue.Count >= MaxWaiting;
+            if (known is null && !full) { queue.Add(state); }
+            p.Reply.Ack = MakeAck(rid, CleanSender(Str(a, "sender")), full ? "refused" : known ?? "queued", duplicate: known is not null);
+            await TransientAsync(p, full ? "Reply NOT sent" : "Reply " + (known ?? "queued"), full ? new JsonObject { ["error"] = "queue full" } : [], ct);
             p.Reply.Handle(state.State);
         }
-        if (armed.AgentSend is not { } pending) { return; }
-        var editor = seen.LastOrDefault(h => h.Seq > pending.After && (h.Hit.EntityId == SessionEntities.Reply(p.Node)
-            || h.Hit.EntityId.StartsWith($"select.{p.Node}_f", StringComparison.Ordinal))).Hit?.State.UserId ?? pending.Editor;
-        armed.AgentSend = (pending.After, editor);
-        var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
-        if (!Changed(armed.SubmitBaseline, submit) || submit.Value == armed.SpentPress) { return; }
-        // Only an attributed form edit after the payload disambiguates this press.
-        if (string.IsNullOrEmpty(editor) || editor != submit.Snapshot?.UserId) { armed.SpentPress = submit.Value; }
-        armed.AgentSend = null;
     }
 
-    bool InboxOutcome(string sessionId, string rid, string outcome) => TryInbox(() =>
+    // Queued messages go first once the question has closed, one delivery at a time.
+    async Task<bool> DrainQueueAsync(string sessionId, Published p, CancellationToken ct)
     {
-        if (!inbox.Any(i => i.Node == sessionId && i.Rid == rid)) { return; }
-        queuedInbox!.SetOutcome(sessionId, rid, outcome);
-        inbox = [.. inbox.Where(i => outcome != "refused" || i.Node != sessionId || i.Rid != rid)
-            .Select(i => i.Node == sessionId && i.Rid == rid ? i with { Outcome = outcome } : i)];
-    });
-
-    async Task<bool> DrainInboxAsync(string sessionId, Published p, CancellationToken ct)
-    {
-        var next = inbox.FirstOrDefault(i => i.Node == sessionId && i.DeliveredAt is null);
-        if (next is null) { return false; }
-        // Persist uncertainty before typing: a crash cannot prove receipt, so never automatically replay.
-        var dispatched = next;
-        if (!TryInbox(() => dispatched = queuedInbox!.Deliver(sessionId, next.Rid, time.GetUtcNow(), "unconfirmed"))) { return true; }
-        inbox = [.. inbox.Select(i => i.Node == sessionId && i.Rid == next.Rid ? dispatched : i)];
-        var state = JsonSerializer.Deserialize<HaState>(next.Payload) ?? throw new JsonException("missing queued reply");
-        if (await CardReplyAsync(sessionId, p, state, ct, queued: true) != CardRead.Delivering)
+        while (p.Reply.Log.Queued.Count > 0)
         {
-            InboxOutcome(sessionId, next.Rid, "refused");
+            var next = p.Reply.Log.Queued[0];
+            var read = await CardReplyAsync(sessionId, p, next, ct, queued: true);
+            p.Reply.Log.Queued.RemoveAt(0);
+            if (read == CardRead.Delivering) { return true; }
         }
-        return true;
+        return false;
     }
 }
