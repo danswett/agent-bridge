@@ -682,6 +682,11 @@ export class SignInBanners {
       els.dialog = h('dialog', { class: 'sign-in-sheet', 'aria-labelledby': 'sign-in-sheet-title' }, els.title, els.body, h('div', { class: 'sign-in-sheet-actions' }, els.cancel));
       // Escape is Cancel.
       els.dialog.addEventListener('cancel', (e) => { e.preventDefault(); this.#cancel(this.#sheet?.key); });
+      els.dialog.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.defaultPrevented || !this.#sheet?.cancelDefault || e.target?.closest?.('button')) { return; }
+        e.preventDefault();
+        this.#cancel(this.#sheet.key);
+      });
       globalThis.document.body.append(els.dialog);
       this.#sheet = { els, key: null, opener: null, shape: null };
     }
@@ -727,6 +732,8 @@ export class SignInBanners {
     const shape = `${kind}\n${b.canSignIn}`;
     s.els.title.textContent = `Sign in to ${subject}`;
     s.els.cancel.setAttribute('aria-label', `Cancel sign-in for ${subject}`);
+    s.cancelDefault = kind === 'refused' || kind === 'expired';
+    s.els.cancel.classList.toggle('secondary', !s.cancelDefault);
     if (s.shape === shape) { return; }
     s.shape = shape;
     const retry = b.canSignIn ? [this.#retryButton(subject)] : [];
@@ -758,13 +765,15 @@ export class SignInBanners {
     } else {
       parts = [h('p', { class: 'sign-in-starting' }, `Starting ${b.agentName}\u2019s sign-in on ${b.machine}\u2026`)];
     }
+    const restoreCancel = s.cancelDefault && s.els.body.contains(document.activeElement);
     s.els.body.replaceChildren(...parts);
+    if (restoreCancel) { s.els.cancel.focus({ preventScroll: true }); }
   }
 
   // Try again, in the sheet: a new request, the one before cancelled at the machine.
   #retryButton(subject) {
     return h('div', { class: 'sign-in-flow-actions' },
-      h('button', { type: 'button', class: 'button sign-in-retry', 'aria-label': `Try again to sign in to ${subject}`, onclick: (e) => this.#retry(e.detail > 0) }, 'Try again'));
+      h('button', { type: 'button', class: 'button secondary sign-in-retry', 'aria-label': `Try again to sign in to ${subject}`, onclick: (e) => this.#retry(e.detail > 0) }, 'Try again'));
   }
 
   // The flow before is cancelled at the machine first, and only then a new request sent, so the new
