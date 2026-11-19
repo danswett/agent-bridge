@@ -30,7 +30,7 @@ function Get-FailedJobs([long]$RunId, [string]$Repository) {
 }
 
 function Get-MainRedIssue([string]$Repository) {
-    Invoke-Gh issue list --repo $Repository --state open --label main-red --limit 100 --json number,body,author |
+    Invoke-Gh issue list --repo $Repository --state open --label main-red --limit 100 --json 'number,body,author' |
         ConvertFrom-Json | Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') } |
         Select-Object -First 1
 }
