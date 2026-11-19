@@ -8,8 +8,8 @@
 #
 #   pwsh quality/revert-culprit.ps1 -Repository danswett/agent-bridge
 #
-# Needs a checkout of the repository (with enough main history to hold the culprit) that can push a branch,
-# and GH_TOKEN with contents, pull-requests and issues write. State lives only on GitHub: the branch, PR and issue.
+# Needs a checkout of the repository with enough main history to hold the culprit, and GH_TOKEN with contents,
+# pull-requests and issues write; the push authenticates from GH_TOKEN. State lives only on GitHub: the branch, PR and issue.
 [CmdletBinding()]
 param([string]$Repository = $env:GITHUB_REPOSITORY, [int]$Minutes = 15, [datetime]$Now = [datetime]::UtcNow)
 $ErrorActionPreference = 'Stop'
@@ -22,6 +22,33 @@ function Invoke-Git {
     $out = & $script:GitCommand @args
     if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') failed with exit code $LASTEXITCODE" }
     $out
+}
+
+# The checkout keeps no credentials (persist-credentials: false), so the push authenticates itself from GH_TOKEN.
+# The header reaches only this one git process through GIT_CONFIG_* variables: never argv, a config file, the
+# remote URL or any message, and git's output is masked before it is reported.
+function Invoke-GitPush([string]$Branch) {
+    $token = $env:GH_TOKEN
+    if (-not $token) { throw 'GH_TOKEN is not set, so the revert branch cannot be pushed.' }
+    $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$token"))
+    # Appended after the caller's own GIT_CONFIG_* entries. extraheader is a list, so an empty entry first drops any
+    # inherited Authorization header, and Trace2 must not log config or env values for this one process.
+    $n = 0; $null = [int]::TryParse("$env:GIT_CONFIG_COUNT", [ref]$n)
+    $key = 'http.https://github.com/.extraheader'
+    $set = [ordered]@{ GIT_CONFIG_COUNT = "$($n + 2)"; "GIT_CONFIG_KEY_$n" = $key; "GIT_CONFIG_VALUE_$n" = ''
+        "GIT_CONFIG_KEY_$($n + 1)" = $key; "GIT_CONFIG_VALUE_$($n + 1)" = "AUTHORIZATION: basic $basic"
+        GIT_TRACE2_CONFIG_PARAMS = $null; GIT_TRACE2_ENV_VARS = $null }
+    $saved = @{}; foreach ($k in $set.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
+    try {
+        foreach ($k in $set.Keys) { [Environment]::SetEnvironmentVariable($k, $set[$k]) }
+        $global:LASTEXITCODE = 0
+        $out = & $script:GitCommand push --quiet origin "HEAD:refs/heads/$Branch" 2>&1
+        $code = $LASTEXITCODE
+    } catch { $out = $_.Exception.Message; $code = -1 }
+    finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) } }
+    if ($code -ne 0) {
+        throw ("git push failed with exit code ${code}: " + (@($out | Select-Object -Last 3) -join ' ')).Replace($basic, '***').Replace($token, '***')
+    }
 }
 
 # Every main-red entry (issue body or bot comment): its marker line and the tests it lists.
@@ -78,6 +105,7 @@ function Invoke-RevertCulprit([string]$Repository, [int]$Minutes, [datetime]$Now
     $existing = @(Invoke-Gh issue list --repo $Repository --label revert-culprit --state all --limit 100 --json 'number,body,author' | ConvertFrom-Json |
             Where-Object -FilterScript $mine)
     if ($existing.Count) { return 'culprit issue already exists' }
+    if (-not $env:GH_TOKEN) { throw 'GH_TOKEN is not set, so no revert branch can be pushed; nothing was opened.' }
     # The first red commit is the culprit only if one test failed in the current attempt of EVERY red run since;
     # a test that passed in between (or a run with no entry) proves nothing about that commit.
     $common = $real; $missing = $null
@@ -119,7 +147,9 @@ function Invoke-RevertCulprit([string]$Repository, [int]$Minutes, [datetime]$Now
     # Both artifacts carry the label so a later tick finds either one.
     Invoke-Gh label create revert-culprit --repo $Repository --color B60205 --description 'Main red: an automatic revert or why none was opened' --force | Out-Null
     if (-not $why) {
-        Invoke-Git push --quiet origin "HEAD:refs/heads/$branch" | Out-Null
+        try { Invoke-GitPush $branch } catch { $why = "the revert branch could not be pushed ($($_.Exception.Message))" }
+    }
+    if (-not $why) {
         $body = "Reverts $($pr.html_url) (commit $short), the single culprit of main red: $mainRed`n`n" +
             "Main has been red for $([math]::Floor($redFor)) minutes with these failed tests:`n$tests`n`n" +
             "Opened by quality/revert-culprit.ps1, which never arms or merges it; Quality gates and lands it.`n`n" +

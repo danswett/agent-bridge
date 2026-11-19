@@ -61,7 +61,7 @@ function Fake-Git {
     $s.git += $a
     if ($a -like '* revert --no-edit *' -and $s.conflict) { $global:LASTEXITCODE = 1; return }
     if ($a -like 'push *') {
-        $s.writes += 'push'; $s.pushAuth = "$env:GIT_CONFIG_COUNT|$env:GIT_CONFIG_KEY_0|$env:GIT_CONFIG_VALUE_0"
+        $s.writes += 'push'; $s.pushAuth = "$env:GIT_CONFIG_COUNT|$env:GIT_CONFIG_KEY_0|$env:GIT_CONFIG_KEY_1=$(Test-Path Env:GIT_CONFIG_VALUE_1)$env:GIT_CONFIG_VALUE_1|$env:GIT_CONFIG_KEY_2=$env:GIT_CONFIG_VALUE_2|$env:GIT_TRACE2_CONFIG_PARAMS"
         # A failing push that echoes the credential proves it is masked wherever the failure is reported.
         if ($s.pushFails) { "fatal: Authentication failed with $script:Token ($script:Basic)"; $global:LASTEXITCODE = 128 }
     }
@@ -132,17 +132,20 @@ $s.comments = @((Entry 102 'A.B.C.Method')); try { Tick } catch { $s.result = "t
 Assert ($s.result -eq 'revert PR already exists') "a re-run that moves the spell's first red run opens nothing more for that main-red issue ($($s.result))"
 # Checkout persists no credentials, so the push must authenticate itself from GH_TOKEN without exposing it.
 function Seen { (@($s.result, $s.body) + $s.git + $s.calls) -join "`n" }
+$env:GIT_CONFIG_COUNT = '1'; $env:GIT_CONFIG_KEY_0 = 'core.keep'; $env:GIT_CONFIG_VALUE_0 = 'kept'; $env:GIT_TRACE2_CONFIG_PARAMS = 'http.*'
+Remove-Item Env:GIT_CONFIG_KEY_1, Env:GIT_CONFIG_VALUE_1, Env:GIT_CONFIG_KEY_2, Env:GIT_CONFIG_VALUE_2 -ErrorAction Ignore
 Reset-Scenario; $log = & { try { Tick } catch { "threw: $_" } } *>&1 | Out-String
-Assert ($s.pushAuth -ceq "1|http.https://github.com/.extraheader|AUTHORIZATION: basic $script:Basic" -and -not $env:GIT_CONFIG_VALUE_0 -and
-    ($s.writes -join ',') -eq 'label,push,pr') 'the push carries GH_TOKEN as a basic auth header for that one git command only'
+$header = 'http.https://github.com/.extraheader'
+Assert ($s.pushAuth -ceq "3|core.keep|$header=True|$header=AUTHORIZATION: basic $script:Basic|" -and ($s.writes -join ',') -eq 'label,push,pr' -and
+    "$env:GIT_CONFIG_COUNT|$env:GIT_CONFIG_VALUE_0|$env:GIT_CONFIG_KEY_1$env:GIT_CONFIG_VALUE_2|$env:GIT_TRACE2_CONFIG_PARAMS" -eq '1|kept||http.*') 'the push alone carries GH_TOKEN as its only auth header, untraced, keeping existing git config'
 $seen = $log + (Seen)
 Reset-Scenario; $s.pushFails = $true; $log = & { try { Tick } catch { "threw: $_" } } *>&1 | Out-String
 Assert (($s.writes -join ',') -eq 'label,push,issue' -and $s.body.Contains('could not be pushed') -and $s.body.Contains('***')) "a failed push opens the fallback issue ($($s.result))"
 $seen += $log + (Seen)
 Assert (-not $seen.Contains($script:Token) -and -not $seen.Contains($script:Basic) -and -not ($s.git -match 'remote set-url|config ')) 'the token never appears in output, errors, the issue, git arguments or the remote URL'
-Reset-Scenario; Remove-Item Env:GH_TOKEN; $threw = $null
-try { Tick } catch { $threw = "$_" }
+Reset-Scenario; Remove-Item Env:GH_TOKEN; $threw = @()
+foreach ($noGreen in $false, $true) { $s.noGreen = $noGreen; try { Tick } catch { $threw += "$_" } }
 $env:GH_TOKEN = $script:Token
-Assert ($threw -like '*GH_TOKEN is not set*' -and $s.writes.Count -eq 0 -and -not ($s.git -match '^push ')) "a missing GH_TOKEN fails clearly before any write ($threw)"
+Assert ($threw.Count -eq 2 -and $threw[0] -like '*GH_TOKEN is not set*' -and $s.writes.Count -eq 0 -and $s.git.Count -eq 0) "a missing GH_TOKEN fails clearly before any revert or issue write ($($threw[0]))"
 if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 "revert-culprit: $script:checks checks passed"
