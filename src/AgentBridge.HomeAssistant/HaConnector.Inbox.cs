@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 
 namespace AgentBridge.HomeAssistant;
@@ -16,7 +17,26 @@ public sealed partial class HaConnector
 
     static void ClassifyPress(RidLog log, string press, bool uncertain)
     {
-        if (log.Presses.TryAdd(press, log.AgentSends.Count > 0 || uncertain) && log.AgentSends.Count > 0) { log.AgentSends.RemoveAt(0); }
+        var owed = log.AgentSends.Count > 0;
+        if (!log.TakePress(press, owed || uncertain)) { return; }
+        if (owed) { log.AgentSends.RemoveAt(0); }
+        else if (uncertain)
+        {
+            log.Unmatched.Add(press);
+            if (log.Unmatched.Count > 16) { log.Unmatched.RemoveAt(0); }
+        }
+    }
+
+    // #3224: an agent payload read only after its Send was taken, unmatched, while no payload could be read owes
+    // nothing more, as if it had been read in time. Only a press at or after the payload changed, both on Home
+    // Assistant's clock, can be its companion: an owner's press before it still leaves the agent's Send owed.
+    static bool SettledByEarlierPress(RidLog log, HaState payload)
+    {
+        if (payload.LastChanged is not { } changed) { return false; }
+        var i = log.Unmatched.FindIndex(press => DateTimeOffset.TryParse(press, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at) && at >= changed);
+        if (i < 0) { return false; }
+        log.Unmatched.RemoveAt(i);
+        return true;
     }
 
     static bool RememberPayload(RidLog log, string stamp)
@@ -40,7 +60,8 @@ public sealed partial class HaConnector
         submit ??= await ObserveAsync(submitId, ct);
         current ??= await ObserveAsync(payloadId, ct);
         var events = seen.Where(h => h.Seq > armed.Boundary && (h.Hit.EntityId == payloadId || h.Hit.EntityId == submitId)).Select(h => h.Hit).ToList();
-        if (Changed(armed.PayloadBaseline, current) && !events.Any(h => h.EntityId == payloadId && h.State.State == current.Value))
+        // #3224: a watch report of the same stamp with other attributes is a split, not this complete payload.
+        if (Changed(armed.PayloadBaseline, current) && !events.Any(h => h.EntityId == payloadId && h.State.State == current.Value && Str(h.State.Attributes, "at") == current.Value))
         {
             events.Insert(events.FindLastIndex(h => h.EntityId == payloadId) + 1, new HaTrigger(payloadId, current.Snapshot!));
         }
@@ -61,20 +82,23 @@ public sealed partial class HaConnector
                 var at = Str(a, "at");
                 if (!IsStamp(at ?? "")) { at = null; }
                 if (Known(stamp) && Known(at)) { continue; }
-                log.UncertainPayload = (stamp, at, Known(stamp) ? stamp : Known(at) ? at : null);
+                log.UncertainPayload = (stamp, at, Known(stamp) ? stamp : Known(at) ? at : null, state.LastUpdated);
                 if (Known(stamp) && at is not null) { stamp = at; }
             }
             // Either half may arrive first. Only the newer complete payload (or its replacement),
-            // never a lagging previous snapshot, discharges the uncertainty.
+            // never a lagging previous snapshot, discharges the uncertainty: with neither half known, a complete one
+            // Home Assistant wrote after the split is the newer (#3224).
             else if (log.UncertainPayload is { } split && stamp != split.Before
-                && (split.Before is not null || split.At is null || (stamp != split.State && stamp != split.At))) { log.UncertainPayload = null; }
+                && (split.Before is not null || split.At is null || (stamp != split.State && stamp != split.At) || state.LastUpdated > split.Updated)) { log.UncertainPayload = null; }
             if (!mixed && Str(a, "driver") != "agent") { log.AgentSends.Remove(stamp); }
             if (!mixed && ((armed.PayloadBaseline.Present && stamp == armed.PayloadBaseline.Value) || p.Reply.IsHandled(stamp))) { continue; }
             var fresh = RememberPayload(log, stamp);
             if (mixed && log.UncertainPayload is { Before: null, At: { } other }) { RememberPayload(log, other); }
             // Press accounting is independent of payload acceptance and its fallible acknowledgement.
-            // Every agent payload, even one naming the open question, owes its companion Send.
-            if (fresh && (mixed || Str(a, "driver") == "agent")) { log.AgentSends.Add(stamp); }
+            // Every agent payload, even one naming the open question, owes its companion Send, unless an unread one
+            // already came (#3224), including when a split recorded the debt before this complete read.
+            if (!mixed && Str(a, "driver") == "agent" && (fresh || log.AgentSends.Contains(stamp)) && SettledByEarlierPress(log, state)) { log.AgentSends.Remove(stamp); }
+            else if (fresh && (mixed || Str(a, "driver") == "agent")) { log.AgentSends.Add(stamp); }
             if (mixed || Str(a, "driver") != "agent" || !string.IsNullOrEmpty(Str(a, "decision_id")) || !ServesReplies || CleanRid(Str(a, "rid")) is not { } rid
                 || HasAttachments(state) || string.IsNullOrWhiteSpace(Str(a, "text"))) { continue; }
             var queue = log.Queued;

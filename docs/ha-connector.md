@@ -598,7 +598,14 @@ confirms the form as it then stands. Another limit: messages overwritten before 
 or a read observes them cannot be counted; their extra Send presses cannot be distinguished from
 the owner's. An unreadable closing boundary is retained until its split payload completes or is
 replaced by a newer complete publish. Both split orders are tracked against the previously
-observed payload, so a lagging snapshot cannot end that uncertainty.
+observed payload, so a lagging snapshot cannot end that uncertainty. When neither half was seen
+before, a complete payload that Home Assistant wrote after the split snapshot (its `last_updated`) ends it too,
+and a watched split at the same stamp never hides the complete payload a read returns: that one is queued
+([#3224](https://github.com/danswett/agent-bridge/issues/3224)). A press taken as the agent's only because no payload
+could be read is matched to that payload once it is read, if the press came at or after the payload changed
+(both on Home Assistant's clock): the payload then owes no further press. The latest 64 Send presses per session
+are remembered; a press at or before the newest forgotten one is never classified again, so it is never the owner's
+and never spends an agent message's debt.
 
 **Durable inbox foundation.** `DurableInbox` is an internal, not-yet-connected store: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,

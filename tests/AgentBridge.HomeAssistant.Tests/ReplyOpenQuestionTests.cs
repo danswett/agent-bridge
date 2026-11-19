@@ -496,6 +496,27 @@ public sealed partial class ReplyTests
         Assert.Equal("agent message", Assert.Single(replied).Text);
     }
 
+    // #3224: the same holds when the payload, once readable, first shows as a split before its complete read.
+    [Fact]
+    public async Task A_recovered_payload_first_seen_split_still_settles_its_unread_companion_press()
+    {
+        await using var c = await Asking();
+        var first = ha.SendFromCard(Node, "first", driver: "agent", rid: "r-1");
+        await Do(c, first);
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        ha.GetFailsFor = id => id == SessionEntities.ReplyPayload(Node);
+        var second = ha.SendFromCard(Node, "second", driver: "agent", rid: "r-2");
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        ha.GetFailsFor = null;
+        await Do(c, second with { State = second.State with { Attributes = first.State.Attributes } });
+        Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+        await CardCloses(c);
+        Assert.Equal(["first", "second"], replied.Select(r => r.Text));
+    }
+
     // #3224: a split of two missed publishes (the older's stamp, the newer's attributes) clears once the newer
     // completes later on Home Assistant's clock, not only on an unrelated third publish.
     [Fact]
@@ -555,8 +576,10 @@ public sealed partial class ReplyTests
             await Pass(c);
         }
         Assert.InRange(c.PressesKept(A), 1, 64);
+        c.Observe(ha.SendFromCard(Node, "late", driver: "agent", rid: "r-late"));
         c.Observe(presses[0]);
         await Pass(c);
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
         Assert.Empty(answered);
         await Do(c, ha.Press(SessionEntities.Submit(Node)));
         Assert.Single(answered);
