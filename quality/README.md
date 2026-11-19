@@ -913,12 +913,13 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
 - **Culprit auto-revert** ([issue 3211](https://github.com/danswett/agent-bridge/issues/3211)):
   `pwsh quality/revert-culprit.ps1 -Repository <owner/repo>` acts once main has been red for 15 minutes
   (`red-minutes.ps1`'s rule) and the `main-red` issue's entry for the newest run names a failed test with no
-  open `quarantined` issue. Failures that name no test (infra, setup, build) do nothing. If that test also
-  failed in the spell's first red run, and exactly one commit, from exactly one merged PR, separates the last
+  open `quarantined` issue. Failures that name no test (infra, setup, build) do nothing. If one such test failed in
+  the current attempt of every red run since the spell's first (a run with no entry leaves the culprit unknown),
+  and exactly one commit, from exactly one merged PR, separates the last
   green run from that first red run, it pushes a revert to its own `revert-culprit/<sha>` branch (never main)
   and opens one PR linking the `main-red` issue and the culprit PR. Otherwise, including a revert that conflicts
-  or a leftover branch with no PR, it opens one `revert-culprit` issue. Later runs find the PR or issue and do
-  nothing. It refuses to revert from a shallow history. It never arms or merges: Quality gates the revert like
+  or a leftover branch with no PR, it opens one `revert-culprit` issue. Both carry the `revert-culprit` label; once
+  either exists for that culprit or `main-red` issue, later runs do nothing. It refuses to revert from a shallow history. It never arms or merges: Quality gates the revert like
   any PR. It runs in a GitHub Actions job, so no machine owns it; its state is the branch, PR and issue on GitHub.
   Offline test: `quality/test-revert-culprit.ps1`.
 - **Red minutes on main** (owner target, 2026-11-09): `pwsh quality/red-minutes.ps1` prints how long

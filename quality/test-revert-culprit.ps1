@@ -42,13 +42,14 @@ function Fake-Gh {
         '^issue view 9 ' { @{ comments = @($s.comments) } | ConvertTo-Json -Depth 5; return }
         '^issue list .*--label quarantined ' { ConvertTo-Json -InputObject @($s.quarantined) -Depth 5; return }
         '^issue list .*--label revert-culprit ' { ConvertTo-Json -InputObject @($s.culpritIssues) -Depth 5; return }
-        '^pr list .*--head revert-culprit/bbbbbbbbbbbb ' { ConvertTo-Json -InputObject @($s.revertPrs) -Depth 5; return }
+        '^pr list .*--head revert-culprit/' { ConvertTo-Json -InputObject @($s.revertPrs | Where-Object { $a -like "*--head $($_.head) *" }) -Depth 5; return }
+        '^pr list .*--label revert-culprit ' { ConvertTo-Json -InputObject @($s.revertPrs) -Depth 5; return }
         '^label create revert-culprit ' { $s.writes += 'label'; return }
         '^issue create ' {
             $s.writes += 'issue'; $s.body = $body
             $s.culpritIssues += @{ number = 60; body = $body; author = @{ login = 'app/github-actions' } }; return
         }
-        '^pr create --repo o/r --base main --head revert-culprit/bbbbbbbbbbbb ' { $s.writes += 'pr'; $s.body = $body; $s.revertPrs += @{ number = 50 }; return }
+        '^pr create --repo o/r --base main --head revert-culprit/bbbbbbbbbbbb ' { $s.writes += 'pr'; $s.body = $body; $s.revertPrs += @{ number = 50; head = 'revert-culprit/bbbbbbbbbbbb'; body = $body; author = @{ login = 'app/github-actions' } }; return }
         default { throw "Unexpected fake gh request: $a" }
     }
 }
@@ -65,14 +66,14 @@ function Tick { $s.result = Invoke-RevertCulprit -Repository 'o/r' -Minutes 15 -
 Reset-Scenario; $s.redAt = '2026-11-09T07:46:00Z'; Tick
 Assert ($s.writes.Count -eq 0 -and $s.git.Count -eq 0) 'red for 14 minutes does nothing'
 Reset-Scenario; Tick
-Assert (($s.writes -join ',') -eq 'push,pr') "red for 20 minutes with one culprit opens one revert PR ($($s.result))"
+Assert (($s.writes -join ',') -eq 'label,push,pr') "red for 20 minutes with one culprit opens one revert PR ($($s.result))"
 Assert ((@($s.git | Where-Object { $_ -like 'push *' }) -join ';') -eq 'push --quiet origin HEAD:refs/heads/revert-culprit/bbbbbbbbbbbb') 'the revert is pushed to its own branch, never to main'
 Assert ($s.git -contains "-c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com revert --no-edit $script:RedSha") 'the culprit commit is the one reverted'
 Assert ($s.body.Contains('https://github.com/o/r/issues/9') -and $s.body.Contains('https://github.com/o/r/pull/42') -and
     $s.body.Contains('A.B.C.Method') -and $s.body.Contains('Author-model:')) 'the revert PR links the main-red issue and culprit PR, with attribution'
 Assert (@($s.calls | Where-Object { $_ -match '^pr (merge|ready)|--auto' }).Count -eq 0) 'the revert PR is never armed or merged'
 Tick
-Assert (($s.writes -join ',') -eq 'push,pr') 'a second tick opens no duplicate revert PR'
+Assert (($s.writes -join ',') -eq 'label,push,pr') 'a second tick opens no duplicate revert PR'
 foreach ($evidence in 'no test name was found', 'log was unreadable') {
     Reset-Scenario; $s.entry = $s.entry.Replace('A.B.C.Method', $evidence); Tick
     Assert ($s.writes.Count -eq 0 -and $s.git.Count -eq 0) "infra-only red ($evidence) does nothing"
@@ -84,7 +85,7 @@ Assert ($s.writes.Count -eq 0 -and $s.calls.Count -eq 1) 'green main does nothin
 Reset-Scenario; $s.entry = $s.entry.Replace('run=101', 'run=99'); Tick
 Assert ($s.writes.Count -eq 0) 'a main-red issue describing an older run does nothing'
 Reset-Scenario; $s.newest = 'failure2'; $s.comments = @(@{ author = @{ login = 'github-actions' }; body = $s.entry.Replace('run=101', 'run=102') }); Tick
-Assert (($s.writes -join ',') -eq 'push,pr' -and $s.git -match "revert --no-edit $script:RedSha$") 'a test failing since the first red run reverts that run''s commit'
+Assert (($s.writes -join ',') -eq 'label,push,pr' -and $s.git -match "revert --no-edit $script:RedSha$") 'a test failing since the first red run reverts that run''s commit'
 Reset-Scenario; $s.newest = 'failure2'; $s.comments = @(@{ author = @{ login = 'github-actions' }; body = $s.entry.Replace('run=101', 'run=102') })
 $s.entry = $s.entry.Replace('A.B.C.Method', 'no test name was found'); Tick
 Assert (($s.writes -join ',') -eq 'label,issue' -and $s.git.Count -eq 0) 'a test that began failing after an infra-only first red run opens an issue, not a revert'
@@ -107,7 +108,7 @@ foreach ($middle in 'A.B.C.Method', 'U.Other.Test', $null) {
     $s.runs = @(@{ id = 100; run_attempt = 1; conclusion = 'success'; updated_at = '2026-11-09T07:00:00Z'; head_sha = $script:GreenSha; html_url = 'u100' },
         (Run 101 '07:40' $script:RedSha), (Run 102 '07:50' ('c' * 40)), (Run 103 '07:59' ('d' * 40)))
     $s.comments = @(@(if ($middle) { Entry 102 $middle }) + (Entry 103 'A.B.C.Method')); Tick
-    $expected = if ($middle -eq 'A.B.C.Method') { 'push,pr' } else { 'label,issue' }
+    $expected = if ($middle -eq 'A.B.C.Method') { 'label,push,pr' } else { 'label,issue' }
     Assert (($s.writes -join ',') -eq $expected) "with middle-run evidence '$middle', T at 07:40 and 07:59 gives $expected ($($s.result))"
 }
 Reset-Scenario
@@ -118,6 +119,9 @@ Assert ($s.writes -notcontains 'pr') "an obsolete attempt of the first red run d
 Reset-Scenario; $s.conflict = $true; Tick; $s.conflict = $false; Tick
 Assert (($s.writes -join ',') -eq 'label,issue') 'a culprit issue stops a later revert PR for the same culprit'
 Reset-Scenario; Tick; $s.newest = 'failure2'; $s.comments = @((Entry 102 'U.Other.Test')); Tick
-Assert (($s.writes -join ',') -eq 'push,pr') 'a revert PR stops a later culprit issue for the same culprit'
+Assert (($s.writes -join ',') -eq 'label,push,pr') 'a revert PR stops a later culprit issue for the same culprit'
+Reset-Scenario; Tick; $s.runs = @(@{ id = 100; run_attempt = 1; conclusion = 'success'; updated_at = '2026-11-09T07:00:00Z'; head_sha = $script:GreenSha; html_url = 'u100' }, (Run 102 '07:44' ('c' * 40)))
+$s.comments = @((Entry 102 'A.B.C.Method')); try { Tick } catch { $s.result = "threw: $_" }
+Assert ($s.result -eq 'revert PR already exists') "a re-run that moves the spell's first red run opens nothing more for that main-red issue ($($s.result))"
 if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 "revert-culprit: $script:checks checks passed"

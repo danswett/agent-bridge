@@ -1,7 +1,8 @@
 #Requires -Version 7
 # F5 guardian C4 (#3211): once a real test has kept main red for 15 minutes, open ONE revert PR for the single
 # culprit merge, or ONE issue when the culprit is unknown or ambiguous. Red is red-minutes.ps1's rule; the failed
-# tests come from the main-red issue (main-red.ps1). A failure that names no test (infra, setup or build) and a
+# tests come from the main-red issue (main-red.ps1); the culprit needs one test failing in every red run since the
+# first. A failure that names no test (infra, setup or build) and a
 # test with an open `quarantined` issue never trigger a revert. It pushes only its own revert-culprit/<sha>
 # branch, never main, and never arms or merges: Quality gates and lands the revert like any other PR.
 #
@@ -61,15 +62,34 @@ function Invoke-RevertCulprit([string]$Repository, [int]$Minutes, [datetime]$Now
     $quarantined = @(Invoke-Gh issue list --repo $Repository --label quarantined --state open --limit 200 --json 'number,title,body,author' | ConvertFrom-Json)
     $real = @($latest[-1].Tests | Where-Object { $null -eq (Find-FlakyIssue $_ $quarantined) })
     if ($real.Count -eq 0) { return 'no failed test that is neither infra nor quarantined' }
-    # The commit that started the spell is the culprit only if the same test has failed since that first red run.
-    $firstTests = @($entries | Where-Object { $_.Marker.StartsWith("main-red: run=$($firstRed.id) ") } | ForEach-Object { $_.Tests })
 
     $redSha = $firstRed.head_sha
     $short = $redSha.Substring(0, 12)
     $branch = "revert-culprit/$short"
+    $marker = "revert-culprit: first-red=$redSha"
+    $mainRed = "https://github.com/$Repository/issues/$($issue.number)"
+    # One shot per red spell (one main-red issue): a PR or an issue from any earlier tick ends it, whichever path
+    # this tick would take, even after a re-run of the first red run moves the spell's start to another commit.
+    $link = "$([regex]::Escape($mainRed))(?!\d)"
+    $mine = { $_.author.login -in $script:Bots -and ($_.body -match $link -or ($_.body -split '\r?\n') -ccontains $marker) }
+    if (@(Invoke-Gh pr list --repo $Repository --head $branch --state all --limit 1 --json 'number' | ConvertFrom-Json).Count -or
+        @(Invoke-Gh pr list --repo $Repository --label revert-culprit --state all --limit 100 --json 'body,author' | ConvertFrom-Json |
+                Where-Object -FilterScript $mine).Count) { return 'revert PR already exists' }
+    $existing = @(Invoke-Gh issue list --repo $Repository --label revert-culprit --state all --limit 100 --json 'number,body,author' | ConvertFrom-Json |
+            Where-Object -FilterScript $mine)
+    if ($existing.Count) { return 'culprit issue already exists' }
+    # The first red commit is the culprit only if one test failed in the current attempt of EVERY red run since;
+    # a test that passed in between (or a run with no entry) proves nothing about that commit.
+    $common = $real; $missing = $null
+    foreach ($run in @($runs[[array]::IndexOf($runs, $firstRed)..($runs.Count - 1)])) {
+        $entry = @($entries | Where-Object { $_.Marker.StartsWith("main-red: run=$($run.id) attempt=$($run.run_attempt) ") })
+        if ($entry.Count -eq 0) { $missing = $run.id; break }
+        $common = @($common | Where-Object { $_ -cin $entry[-1].Tests })
+    }
     $why = $null; $pr = $null
     if ($green.Count -eq 0) { $why = 'no green main run precedes the red spell' }
-    elseif (@($real | Where-Object { $_ -cin $firstTests }).Count -eq 0) { $why = 'no failing test has failed since the first red run' }
+    elseif ($missing) { $why = "run $missing has no main-red entry, so the culprit is unknown" }
+    elseif ($common.Count -eq 0) { $why = 'no failing test has failed in every red run since the first' }
     else {
         $commits = @((Invoke-Gh api "repos/$Repository/compare/$($green[-1].head_sha)...$redSha" | ConvertFrom-Json).commits)
         if ($commits.Count -ne 1 -or @($commits[0].parents).Count -ne 1) { $why = "$($commits.Count) commits (or a merge commit) landed between the last green run and the first red run" }
@@ -80,7 +100,6 @@ function Invoke-RevertCulprit([string]$Repository, [int]$Minutes, [datetime]$Now
         }
     }
     if (-not $why) {
-        if (@(Invoke-Gh pr list --repo $Repository --head $branch --state all --limit 1 --json 'number' | ConvertFrom-Json).Count) { return 'revert PR already exists' }
         Invoke-Git fetch --quiet origin '+refs/heads/main:refs/remotes/origin/main' | Out-Null
         # A shallow checkout makes the culprit a root commit, and reverting a root deletes the whole tree.
         $parent = try { Invoke-Git rev-parse --verify --quiet "$redSha^1" } catch { $global:LASTEXITCODE = 0 }
@@ -96,22 +115,18 @@ function Invoke-RevertCulprit([string]$Repository, [int]$Minutes, [datetime]$Now
             try { Invoke-Git revert --abort | Out-Null } catch { $global:LASTEXITCODE = 0 }
         }
     }
-    $mainRed = "https://github.com/$Repository/issues/$($issue.number)"
-    $tests = ($real | Select-Object -First 10 | ForEach-Object { "- ``$_``" }) -join "`n"
+    $tests = (@(if ($common.Count) { $common } else { $real }) | Select-Object -First 10 | ForEach-Object { "- ``$_``" }) -join "`n"
+    # Both artifacts carry the label so a later tick finds either one.
+    Invoke-Gh label create revert-culprit --repo $Repository --color B60205 --description 'Main red: an automatic revert or why none was opened' --force | Out-Null
     if (-not $why) {
         Invoke-Git push --quiet origin "HEAD:refs/heads/$branch" | Out-Null
         $body = "Reverts $($pr.html_url) (commit $short), the single culprit of main red: $mainRed`n`n" +
             "Main has been red for $([math]::Floor($redFor)) minutes with these failed tests:`n$tests`n`n" +
             "Opened by quality/revert-culprit.ps1, which never arms or merges it; Quality gates and lands it.`n`n" +
             "Builder: quality/revert-culprit.ps1 (F5 guardian C4, #3211)`nAuthor-model: none (deterministic script)"
-        Invoke-Gh pr create --repo $Repository --base main --head $branch --title "Revert #$($pr.number): culprit of main red" --body $body | Out-Null
+        Invoke-Gh pr create --repo $Repository --base main --head $branch --label revert-culprit --title "Revert #$($pr.number): culprit of main red" --body $body | Out-Null
         return "opened a revert PR for #$($pr.number)"
     }
-    $marker = "revert-culprit: first-red=$redSha"
-    $existing = @(Invoke-Gh issue list --repo $Repository --label revert-culprit --state all --limit 100 --json 'number,body,author' | ConvertFrom-Json |
-            Where-Object { $_.author.login -in $script:Bots -and ($_.body -split '\r?\n') -ccontains $marker })
-    if ($existing.Count) { return 'culprit issue already exists' }
-    Invoke-Gh label create revert-culprit --repo $Repository --color B60205 --description 'Main red with no single revertable culprit' --force | Out-Null
     $body = "$marker`nMain red: $mainRed`n`nNo revert PR was opened: $why. Failed tests:`n$tests"
     Invoke-Gh issue create --repo $Repository --title "Main red: no single culprit to revert ($short)" --label revert-culprit --body $body | Out-Null
     "opened an issue: $why"
