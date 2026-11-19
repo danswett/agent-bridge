@@ -220,7 +220,7 @@ public sealed class SignInTests
         var banner = Banners([Needing("a")], flows: new() { [key] = new("pending", Code: code) }).Single();
         var sheet = new SignInSheetViewModel(banner);
         Assert.False(sheet.CancelIsDefault);
-        sheet.Update(banner with { Code = refused ? code with { Refused = true, Code = null, Uri = null } : null, Expired = !refused });
+        sheet.Update(banner with { Code = refused ? AuthState.ReadCode(Json(Code(uri: "https://evil.example/device"))) : null, Expired = !refused });
         Assert.True(sheet.CancelIsDefault);
         Assert.True(sheet.CanRetry);
         Assert.False(sheet.HasCode);

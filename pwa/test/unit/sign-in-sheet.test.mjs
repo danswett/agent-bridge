@@ -44,6 +44,7 @@ function setup(t) {
     }
     remove() { if (this.parent) { this.parent.children.splice(this.parent.children.indexOf(this), 1); this.parent = null; } }
     contains(c) { return this === c || this.children.some((n) => n instanceof Element && n.contains(c)); }
+    closest(tag) { return this.tag === tag ? this : this.parent?.closest(tag); }
     showModal() { this.open = true; }
     close() { this.open = false; }
     focus() { doc.activeElement = this; }
@@ -88,12 +89,13 @@ for (const state of ['expired', 'unshowable']) {
     assert.equal(s.find('sign-in-copy').classList.contains('secondary'), false);
     const cancel = s.find('sign-in-cancel');
     assert.equal(cancel.classList.contains('secondary'), true);
+    s.find('sign-in-copy').focus();
     if (state === 'expired') { s.expire(); } else { await s.sendCode('https://evil.example/device'); }
     assert.ok(s.find(state === 'expired' ? 'sign-in-expired' : 'sign-in-refused'));
     assert.equal(s.find('sign-in-code'), undefined);
     assert.equal(cancel.classList.contains('secondary'), false, 'Cancel is filled when no code can be shown');
     assert.equal(s.find('sign-in-retry').classList.contains('secondary'), true);
-    assert.equal(s.doc.activeElement, cancel);
+    assert.equal(s.doc.activeElement === cancel, true, 'focus returns to Cancel when the code controls disappear');
     await s.find('sign-in-retry').onclick({ detail: 0 });
     assert.equal(cancel.classList.contains('secondary'), true, 'starting keeps its existing emphasis');
     await s.sendCode();
@@ -101,3 +103,22 @@ for (const state of ['expired', 'unshowable']) {
     assert.equal(cancel.classList.contains('secondary'), true);
   });
 }
+
+test('Enter defaults to Cancel in an expired sheet without taking Try again own Enter', async (t) => {
+  const s = setup(t);
+  await s.find('sign-in-start').onclick({ detail: 0 });
+  await s.sendCode();
+  s.expire();
+  const dialog = s.find('sign-in-sheet');
+  const retry = s.find('sign-in-retry');
+  let prevented = false;
+  const enter = (target) => dialog.onkeydown?.({ key: 'Enter', target, preventDefault() { prevented = true; } });
+  retry.focus();
+  enter(retry);
+  assert.equal(prevented, false);
+  assert.equal(dialog.open, true);
+  dialog.focus();
+  enter(dialog);
+  assert.equal(dialog.open, false, 'Enter on the sheet cancels the expired sign-in');
+  assert.equal(prevented, true);
+});

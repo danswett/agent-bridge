@@ -107,8 +107,8 @@ public sealed partial class SessionsPage
             XamlRoot = XamlRoot,
             Content = body,
             CloseButtonText = "Cancel",
-            // Copy is the one primary (accent) and the default, so Cancel is drawn as secondary
-            // (Creative 6675007095, ui.md §6.13); Enter copies (below).
+            // Copy is primary while the code is shown; Draw selects Cancel only for an expired
+            // or unshowable code (ui.md §6.13). Enter copies while the code is shown (below).
             DefaultButton = ContentDialogButton.None,
         };
         AutomationProperties.SetAutomationId(dialog, "SignInSheet");
