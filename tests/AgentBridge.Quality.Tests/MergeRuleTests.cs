@@ -28,6 +28,7 @@ public class MergeRuleTests
           workflow: ci.yml
           jobs: [quality-gate]
           exempt_labels: [fixes-main]
+          exempt_paths: [tests/AgentBridge.*.Tests/**, pwa/test/**]
         copilot_waiver:
           labels: [copilot-waived]
           second_review: independent-review-2
@@ -238,6 +239,51 @@ public class MergeRuleTests
         Assert.Equal(["draft: mark it ready for review"], draft.Reasons);
         Assert.All(new[] { onRedMain, held, draft, failed }, v => Assert.Equal("failure", v.State));
         Assert.Equal(["the independent review of abcdef0 failed: sec-42 failure"], failed.Reasons);
+    }
+
+    const string RedMain = "main is red (CI c500000): waiting for main to be fixed";
+
+    [Fact]
+    public void The_fixes_main_label_lifts_a_red_main_for_a_tests_only_change_and_logs_the_use()
+    {
+        var red = new MainFact("failure", RedMain);
+        var verdict = MergeRule.Evaluate(Config, red, Pr(["tests/AgentBridge.Quality.Tests/MergeRuleTests.cs", "pwa/test/e2e/sign-in.spec.ts"],
+            labels: ["fixes-main"], statuses: [First()]))!;
+
+        Assert.Equal("success", verdict.State);
+        Assert.Contains("fixes-main tests-only bypass used", verdict.Description);
+    }
+
+    [Fact]
+    public void The_fixes_main_label_does_not_lift_a_red_main_when_one_file_is_not_a_test()
+    {
+        var red = new MainFact("failure", RedMain);
+        var verdict = MergeRule.Evaluate(Config, red, Pr(["tests/AgentBridge.Quality.Tests/MergeRuleTests.cs", "src/AgentBridge.App/Program.cs"],
+            labels: ["fixes-main"], statuses: [First()]))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Equal([RedMain], verdict.Reasons);
+    }
+
+    [Fact]
+    public void The_fixes_main_label_does_not_lift_a_red_main_when_the_file_list_is_incomplete()
+    {
+        var red = new MainFact("failure", RedMain);
+        var verdict = MergeRule.Evaluate(Config, red, Pr(["tests/AgentBridge.Quality.Tests/MergeRuleTests.cs"],
+            labels: ["fixes-main"], statuses: [First()], filesComplete: false))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Contains(RedMain, verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_tests_only_change_without_the_fixes_main_label_waits_on_a_red_main()
+    {
+        var red = new MainFact("failure", RedMain);
+        var verdict = MergeRule.Evaluate(Config, red, Pr(["tests/AgentBridge.Quality.Tests/MergeRuleTests.cs"], statuses: [First()]))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Equal([RedMain], verdict.Reasons);
     }
 
     [Fact]
@@ -1193,14 +1239,14 @@ public class MergeRuleTests
     public void The_fixes_main_label_exempts_only_the_main_check_so_a_sensitive_fix_still_needs_its_receipt()
     {
         var red = new MainFact("failure", "main is red (CI c500000): waiting for main to be fixed");
-        string[] files = ["src/AgentBridge.Transport/Channel.cs"];
+        string[] files = ["tests/AgentBridge.Quality.Tests/MergeRuleTests.cs"];
 
-        var unreviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["fixes-main"]))!;
-        var reviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["Fixes-Main"], statuses: [Receipt("success")]))!;
-        var unlabelled = MergeRule.Evaluate(Config, red, Pr(files, statuses: [Receipt("success")]))!;
+        var unreviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["fixes-main", "security"]))!;
+        var reviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["Fixes-Main", "security"], statuses: [Receipt("success")]))!;
+        var unlabelled = MergeRule.Evaluate(Config, red, Pr(files, labels: ["security"], statuses: [Receipt("success")]))!;
 
-        Assert.Equal(("failure", "Needs an independent review of abcdef0: it touches src/AgentBridge.Transport/Channel.cs"), (unreviewed.State, unreviewed.Description));
-        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file; main isn't green, but it's labelled Fixes-Main"), (reviewed.State, reviewed.Description));
+        Assert.Equal(("failure", "Needs an independent review of abcdef0: it's marked as a security change"), (unreviewed.State, unreviewed.Description));
+        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file; fixes-main tests-only bypass used"), (reviewed.State, reviewed.Description));
         Assert.Equal(("failure", "Main is red (CI c500000): waiting for main to be fixed"), (unlabelled.State, unlabelled.Description));
     }
 
@@ -1211,7 +1257,8 @@ public class MergeRuleTests
     {
         var plain = GraphQLPullRequest(Head);
         var fix = GraphQLPullRequest(Older, labels: ["fixes-main"], number: 7);
-        var unreadable = new FakeGitHub(plain, listed: [plain, fix], byNumber: new Dictionary<int, string> { [42] = plain, [7] = fix }, failMain: true);
+        var unreadable = new FakeGitHub(plain, listed: [plain, fix], byNumber: new Dictionary<int, string> { [42] = plain, [7] = fix }, failMain: true,
+            files: """{"files": [{"filename": "tests/AgentBridge.Quality.Tests/MergeRuleTests.cs"}]}""");
         var unfinished = new FakeGitHub(plain, mainRuns: MainRuns((5, "in_progress", null, 1)));
         var config = WriteConfig();
         try
@@ -1222,9 +1269,9 @@ public class MergeRuleTests
             Assert.Equal(1, exit);
             Assert.Equal(
                 [$"{Head} error merge-rule Couldn't read main's CI: gh: HTTP 502 ",
-                 $"{Older} success merge-rule Copilot reviewed 0000000; every check passed; independent review on file; main isn't green, but it's labelled fixes-main "],
+                 $"{Older} success merge-rule Copilot reviewed 0000000; every check passed; independent review on file; fixes-main tests-only bypass used "],
                 unreadable.Posted);
-            Assert.Equal([$"{Head} failure merge-rule No completed non-cancelled CI run on main: waiting for one "], unfinished.Posted);
+            Assert.Equal([$"{Head} failure merge-rule No completed CI product evidence on main: waiting for one "], unfinished.Posted);
         }
         finally
         {
@@ -1580,8 +1627,8 @@ public class MergeRuleTests
             var output = new StringWriter();
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            if (scenario is "running" or "plan-failed" or "cancelled" or "rerun-running")
-                Assert.Contains("no completed non-cancelled product evidence", output.ToString(), StringComparison.Ordinal);
+            if (scenario is "running" or "plan-failed" or "rerun-running")
+                Assert.Contains("no completed product evidence", output.ToString(), StringComparison.Ordinal);
             else if (scenario is not ("missing-run" or "invalid-attempt"))
                 Assert.Contains("app-installer (win-arm64)", output.ToString(), StringComparison.Ordinal);
         }
@@ -1616,7 +1663,7 @@ public class MergeRuleTests
     }
 
     [Fact]
-    public void Main_uses_the_latest_completed_non_cancelled_run_instead_of_a_newer_unfinished_head()
+    public void Main_skips_an_unfinished_head_but_cancelled_jobs_without_steps_fail_closed()
     {
         var github = new FakeGitHub(GraphQLPullRequest(Head),
             mainRuns: MainRuns((9, "in_progress", null, 1), (8, "completed", "cancelled", 1), (5, "completed", "success", 1)));
@@ -1624,8 +1671,8 @@ public class MergeRuleTests
         try
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
-            Assert.Contains(" success merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            Assert.Contains(github.RestPaths, p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal));
+            Assert.Contains(" failure merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.Contains(github.RestPaths, p => p.Contains("/actions/runs/8/jobs?", StringComparison.Ordinal));
         }
         finally { File.Delete(config); }
     }
@@ -1652,9 +1699,9 @@ public class MergeRuleTests
     }
 
     [Theory]
-    [InlineData("success", "success")]
+    [InlineData("success", "failure")]
     [InlineData("failure", "failure")]
-    public void A_cancelled_latest_run_never_replaces_completed_green_or_red_evidence(string conclusion, string state)
+    public void Cancelled_jobs_without_step_evidence_hold_even_after_an_older_green_run(string conclusion, string state)
     {
         var github = new FakeGitHub(GraphQLPullRequest(Head),
             mainRuns: MainRuns((6, "completed", "cancelled", 1), (5, "completed", conclusion, 1)));
@@ -1663,7 +1710,7 @@ public class MergeRuleTests
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/actions/runs/6/jobs?", StringComparison.Ordinal));
+            Assert.Contains(github.RestPaths, p => p.Contains("/actions/runs/6/jobs?", StringComparison.Ordinal));
         }
         finally { File.Delete(config); }
     }
@@ -1695,10 +1742,11 @@ public class MergeRuleTests
     public void History_is_paged_and_an_unreadable_later_page_never_grants_green(bool unreadable, string state)
     {
         var first = JsonSerializer.Serialize(new { total_count = 21, workflow_runs = Enumerable.Range(6, 20)
-            .Select(id => new { id, head_sha = $"c{id}".PadRight(40, '0'), status = "completed", conclusion = "cancelled", run_attempt = 1 }) });
+            .Select(id => new { id, head_sha = $"c{id}".PadRight(40, '0'), status = "in_progress", conclusion = (string?)null, run_attempt = 1 }) });
         var older = MainRuns((5, "completed", "failure", 1));
         var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: older,
-            mainRunPages: unreadable ? [first] : [first, older]);
+            mainRunPages: unreadable ? [first] : [first, older],
+            jobsByRun: Enumerable.Range(6, 20).ToDictionary(id => (long)id, _ => """{"total_count":0,"jobs":[]}"""));
         var config = WriteConfig();
         try
         {
@@ -1798,14 +1846,9 @@ public class MergeRuleTests
             else
             {
                 var matrix = (YamlMappingNode)((YamlMappingNode)strategy).Children[new YamlScalarNode("matrix")];
-                if (matrix.Children.TryGetValue(new YamlScalarNode("include"), out var include))
-                {
-                    var template = ((YamlScalarNode)job.Children[new YamlScalarNode("name")]).Value!;
-                    var dimension = Regex.Match(template, @"matrix\.(\w+)").Groups[1].Value;
-                    expanded.AddRange(((YamlSequenceNode)include).Children.Cast<YamlMappingNode>()
-                        .Select(row => Regex.Replace(template, @"\$\{\{\s*matrix\.\w+\s*\}\}",
-                            ((YamlScalarNode)row.Children[new YamlScalarNode(dimension)]).Value!)));
-                }
+                if (matrix.Children.ContainsKey(new YamlScalarNode("include")))
+                    // Every leg, post-merge ones too: main runs both tiers (#3209).
+                    expanded.AddRange(CiPlan.Legs(group.Key, job)!.Value.All);
                 else
                 {
                     // A plan-selected matrix must be configured by family, never fixed instances.
@@ -1968,6 +2011,68 @@ public class MergeRuleTests
         Assert.Contains(facts.Checks, c => c.Name == "CI" && c.State == "failure");
     }
 
+    const string TierCatalog = """
+        suites:
+          - id: arm
+            where: ci.yml app, product
+            tier: post-merge
+            tier_jobs: [app (win-arm64), product (windows-11-arm), product]
+          - id: typo
+            where: ci.yml light
+            tier: postmerge
+            tier_jobs: [light]
+        """;
+
+    [Theory]
+    [InlineData("app (win-arm64)", "failure", true, "success")]
+    [InlineData("product (windows-11-arm)", "failure", true, "success")]
+    [InlineData("product (windows-11-arm)", null, true, "success")]
+    [InlineData("light", "failure", true, "failure")]
+    [InlineData("app (win-x64)", "failure", true, "failure")]
+    [InlineData("product (ubuntu-latest)", "failure", true, "failure")]
+    [InlineData("app (win-arm64)", "failure", false, "failure")]
+    public void Main_green_ignores_but_shows_post_merge_jobs_and_an_unknown_tier_or_no_catalog_still_holds(
+        string failed, string? conclusion, bool catalog, string state)
+    {
+        var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)", failed }.Distinct()
+            .Select((name, id) => new { id, name, status = name == failed && conclusion is null ? "in_progress" : "completed",
+                conclusion = name == failed ? conclusion : "success", run_attempt = 1 }).ToArray();
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
+        var folder = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, $"tier-{Guid.NewGuid():N}")).FullName;
+        var config = Path.Combine(folder, "merge-rule.yml");
+        File.Move(WriteConfig(), config);
+        if (catalog) File.WriteAllText(Path.Combine(folder, "catalog.yml"), TierCatalog);
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            // A bare family name in tier_jobs never excuses a failed blocking instance of it.
+            Assert.Contains($"Main job [{(catalog && failed.Contains("arm", StringComparison.Ordinal) ? "post-merge" : "required")}]: {failed}: ",
+                output.ToString(), StringComparison.Ordinal);
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("SUCCESS", null, true, "success")]
+    [InlineData("SUCCESS", "pwa-ui (chromium 1/3)", true, "failure")]
+    [InlineData("FAILURE", null, true, "failure")]
+    [InlineData("SUCCESS", null, false, "failure")]
+    public void A_pull_request_does_not_count_a_failed_post_merge_job_but_shows_it(string gate, string? alsoFailed, bool postMerge, string state)
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+        using var doc = JsonDocument.Parse(WaiverPullRequest("pwa-ui (webkit 1/3)", gate: gate,
+            extraJobs: alsoFailed is null ? [] : [Job(5002, alsoFailed, "COMPLETED", "FAILURE")]));
+        var facts = MergeRuleCommand.ParseFacts(doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), config,
+            postMerge: postMerge ? new HashSet<string> { "pwa-ui (webkit 1/3)" } : null);
+        var verdict = MergeRule.Evaluate(config, MainGreen, facts)!;
+        Assert.Equal(state, verdict.State);
+        Assert.Equal(postMerge, verdict.Reasons.Contains("post-merge, not counted: pwa-ui (webkit 1/3) failure"));
+        if (state == "success")
+            Assert.EndsWith("; post-merge, not counted: pwa-ui (webkit 1/3) failure", verdict.Description, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("app (win-arm64)", -1, "success")]
     [InlineData("product (windows-11-arm)", -1, "success")]
@@ -2063,6 +2168,217 @@ public class MergeRuleTests
         finally { File.Delete(config); }
     }
 
+    [Theory]
+    [InlineData("infra-only", "success")]
+    [InlineData("mixed", "failure")]
+    [InlineData("unknown", "failure")]
+    [InlineData("cancelled-before-tests", "success")]
+    [InlineData("cancelled-run", "success")]
+    [InlineData("cancelled-after-tests", "failure")]
+    [InlineData("cancelled-during-setup", "success")]
+    [InlineData("setup-failed-then-cancelled", "failure")]
+    [InlineData("setup-503-then-cancelled", "success")]
+    [InlineData("runner-never-started", "success")]
+    [InlineData("no-step-data", "failure")]
+    [InlineData("empty-step-data", "failure")]
+    [InlineData("rerun-used", "success")]
+    [InlineData("infra-then-infra", "success")]
+    [InlineData("prior-test-failure", "failure")]
+    [InlineData("skipped-after-failure", "failure")]
+    [InlineData("no-evidence", "failure")]
+    [InlineData("npm-ci", "failure")]
+    [InlineData("system-packages", "failure")]
+    [InlineData("product-infra", "success")]
+    [InlineData("build-failure", "failure")]
+    [InlineData("wrong-job", "failure")]
+    public void Main_classifies_infra_per_job_and_flags_only_one_rerun(string scenario, string state)
+    {
+        var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
+        var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
+        // A blocking shard: pwa-ui's WebKit shards are post-merge in the catalog beside these rules.
+        var target = scenario is "product-infra" or "build-failure" or "prior-test-failure" || scenario.EndsWith("then-cancelled", StringComparison.Ordinal) ? "product (ubuntu-latest)"
+            : scenario == "wrong-job" ? "light" : "pwa-ui (chromium 3/3)";
+        var attempt = scenario is "rerun-used" or "prior-test-failure" or "infra-then-infra" or "skipped-after-failure" ? 2 : 1;
+        object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
+        var setup = target.StartsWith("product", StringComparison.Ordinal) ? "Run actions/setup-dotnet@v6"
+            : scenario == "npm-ci" ? "Run npm ci"
+            : scenario == "system-packages" ? "Download Playwright's system packages"
+            : "Playwright's browsers from main's cache";
+        var steps = new List<object>
+        {
+            Step(scenario == "unknown" ? "Unknown step" : setup, "failure"),
+            Step("Run tests", scenario == "mixed" ? "failure" : "skipped"),
+        };
+        // A step that failed before the job was cancelled is judged by its own evidence.
+        var conclusion = scenario.EndsWith("then-cancelled", StringComparison.Ordinal) ? "cancelled" : "failure";
+        if (scenario.StartsWith("cancelled", StringComparison.Ordinal) || scenario == "runner-never-started")
+        {
+            conclusion = "cancelled";
+            steps = [Step(scenario == "cancelled-during-setup" ? setup : "Set up job", scenario == "cancelled-during-setup" ? "cancelled" : "success"),
+                Step("Run tests", scenario == "cancelled-after-tests" ? "success" : "skipped")];
+            if (scenario == "runner-never-started")
+            {
+                conclusion = "failure";
+                steps = [Step("Set up job", "skipped"), Step("Run tests", "skipped")];
+            }
+        }
+        if (scenario == "build-failure") steps = [Step("Build", "failure")];
+        if (scenario == "skipped-after-failure")
+        {
+            conclusion = "skipped";
+            steps = [Step(setup, "skipped"), Step("Run tests", "skipped")];
+        }
+        var jobs = required.Select(n => n == "product" ? "product (ubuntu-latest)" : n).Append("plan")
+            .Select((name, id) => new Dictionary<string, object?>
+            {
+                ["id"] = id, ["name"] = name, ["status"] = "completed",
+                ["conclusion"] = name == target ? conclusion : "success",
+                ["run_attempt"] = name == target ? attempt : 1,
+                ["runner_id"] = scenario == "runner-never-started" && name == target ? 0 : 1,
+            }).ToArray();
+        if (scenario != "no-step-data")
+            jobs.Single(j => (string)j["name"]! == target)["steps"] = scenario == "empty-step-data" ? [] : steps;
+        // Attempt 1 failed its tests (or, for infra-then-infra, its setup); the rerun then failed in
+        // setup, before the tests ran (or, for skipped-after-failure, was skipped).
+        if (scenario is "prior-test-failure" or "infra-then-infra" or "skipped-after-failure")
+            jobs = [.. jobs, new Dictionary<string, object?>
+            {
+                ["id"] = 99, ["name"] = target, ["status"] = "completed", ["conclusion"] = "failure",
+                ["run_attempt"] = 1, ["runner_id"] = 1, ["steps"] = scenario == "infra-then-infra"
+                    ? new[] { Step(setup, "failure"), Step("Run tests", "skipped") }
+                    : new[] { Step(setup, "success"), Step("Run tests", "failure") },
+            }];
+        // A step's name says where it failed, never why: only network or runner evidence exempts it.
+        var evidence = scenario switch
+        {
+            "no-evidence" => "Process completed with exit code 1.",
+            "product-infra" => "Process completed with exit code 124.",
+            "setup-failed-then-cancelled" => "Version 99.0.x is not a valid .NET SDK version.",
+            "cancelled-during-setup" => "The operation was canceled.",
+            _ => "Response status code does not indicate success: 503 (Service Unavailable).",
+        };
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((5, "completed", scenario == "cancelled-run" ? "cancelled" : "failure", attempt)),
+            mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }),
+            annotations: JsonSerializer.Serialize(new[] { new { annotation_level = "failure", message = evidence } }));
+        var output = new StringWriter();
+        MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
+        var posted = Assert.Single(github.Posted);
+        Assert.Contains($" {state} merge-rule ", posted, StringComparison.Ordinal);
+        if (state == "failure")
+            Assert.DoesNotContain("INFRA", posted, StringComparison.Ordinal);
+        else if (attempt > 1)
+            Assert.Contains($"INFRA-PERSISTENT {target}: rerun used, open an issue", posted, StringComparison.Ordinal);
+        else
+        {
+            Assert.Contains("ALERT infra-only", posted, StringComparison.Ordinal);
+            Assert.Contains("rerun needed (once)", posted, StringComparison.Ordinal);
+            Assert.Contains(target, output.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Infra_alerts_follow_the_blocking_reason_compactly_and_the_report_ignores_them()
+    {
+        var main = MainGreen with { Alerts = [.. new[] { "1/3", "2/3", "3/3" }.Select(s => $"ALERT infra-only pwa-ui (webkit {s}): rerun needed (once)")] };
+        var held = MergeRule.Evaluate(Config, main, Pr(labels: ["hold"], statuses: [First()]))!;
+
+        Assert.Equal("Held by the label 'hold'; ALERT infra-only pwa-ui (webkit 1/3): rerun needed (once) (+2 more)", held.Description);
+        Assert.Equal("held", WeeklyReport.Category(held.Description));
+        Assert.Equal("held", WeeklyReport.Category("ALERT infra-only light: rerun needed (once); Held by the label 'hold'"));
+        Assert.Equal("held", WeeklyReport.Category("INFRA-PERSISTENT light: rerun used, open an issue; Held by the label 'hold'"));
+    }
+
+    // Run 6 (newer) has no real product (or light) result; run 5 (older) passed or failed its tests.
+    // "unusable": run 5 never ran product but failed light's tests; run 4 is green.
+    // "cleared": run 5's product passed, then its rerun failed only in setup; run 4 failed its tests.
+    [Theory]
+    [InlineData("skipped-retry", "success", "failure")]
+    [InlineData("skipped-placeholder", "success", "failure")]
+    [InlineData("light-infra", "unusable", "failure")]
+    [InlineData("infra", "failure", "failure")]
+    [InlineData("infra", "success", "success")]
+    [InlineData("infra", "cleared", "success")]
+    [InlineData("infra", "rerunning", "failure")]
+    [InlineData("success-then-infra", "failure", "success")]
+    [InlineData("success-then-skipped", "failure", "success")]
+    [InlineData("cancelled-before-tests", "failure", "failure")]
+    [InlineData("two-failed-steps", "success", "failure")]
+    [InlineData("two-steps-one-note", "success", "failure")]
+    [InlineData("two-infra-notes", "success", "failure")]
+    [InlineData("deterministic-note", "success", "failure")]
+    [InlineData("zero-jobs-cancelled", "success", "success")]
+    [InlineData("arm-waiver-on", "failure", "success")]
+    [InlineData("arm-waiver-off", "failure", "failure")]
+    [InlineData("arm-waiver-on-retried", "success", "success")]
+    [InlineData("arm-waiver-off-retried", "success", "failure")]
+    public void A_newer_run_without_a_real_result_never_hides_an_older_failure_or_a_deterministic_one(string scenario, string older, string state)
+    {
+        object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
+        object Entry(int id, string name, string conclusion, int attempt, params object[] steps) =>
+            new { id, name, status = "completed", conclusion, run_attempt = attempt, runner_id = 1, steps };
+        const string product = "product (ubuntu-latest)", arm = "app (win-arm64)";
+        var replaced = scenario == "light-infra" ? "light" : scenario.StartsWith("arm", StringComparison.Ordinal) ? arm : null;
+        object[] retried = [Entry(10, product, "success", 1), scenario == "success-then-skipped" ? Entry(11, product, "skipped", 2)
+            : Entry(11, product, "failure", 2, Step("Set up job", "failure"), Step("Run tests", "skipped"))];
+        object[] tried = scenario switch
+        {
+            "skipped-retry" or "skipped-placeholder" => [Entry(10, product, "failure", 1, Step("Set up job", "success"), Step("Run tests", "failure")),
+                Entry(11, scenario == "skipped-retry" ? product : "product", "skipped", 2)],
+            "light-infra" => [Entry(10, product, "success", 1), Entry(12, "light", "failure", 1, Step("Set up job", "failure"), Step("Run tests", "skipped"))],
+            // "retried": a waivable arm64 test failure, then a rerun cancelled before its tests.
+            _ when replaced == arm => [Entry(10, product, "success", 1), .. scenario.EndsWith("retried", StringComparison.Ordinal)
+                ? new[] { Entry(13, arm, "failure", 1, Step("Run tests", "failure")), Entry(14, arm, "cancelled", 2, Step("Set up job", "success"), Step("Run tests", "skipped")) }
+                : [Entry(13, arm, "failure", 1, Step("Set up job", "failure"), Step("Run tests", "skipped"))]],
+            "success-then-infra" or "success-then-skipped" => retried,
+            "cancelled-before-tests" => [Entry(10, product, "cancelled", 1, Step("Set up job", "success"), Step("Run tests", "skipped"))],
+            _ => [Entry(10, product, "failure", 1, Step("Set up job", "failure"), Step("Run tests", "skipped"),
+                Step("Post Run actions/checkout@v4", scenario.StartsWith("two-", StringComparison.Ordinal) ? "failure" : "success"))],
+        };
+        string[] names = ["plan", "light", "app (win-x64)", "app (win-arm64)"];
+        var settled = names.Select((name, id) => Entry(id, name, "success", 1)).ToArray();
+        var jobs = settled.Where((_, id) => names[id] != replaced).Concat(tried).ToArray();
+        // "rerunning": run 5's product failed its tests and its retry is still running; run 4 is green.
+        object[]? fifth = older switch
+        {
+            "unusable" => [Entry(0, "plan", "success", 1), Entry(1, "product", "skipped", 1), Entry(2, "light", "failure", 1, Step("Run tests", "failure")),
+                Entry(3, "app (win-x64)", "success", 1), Entry(4, "app (win-arm64)", "success", 1)],
+            "cleared" => [.. settled, .. retried],
+            "rerunning" => [.. settled, Entry(10, product, "failure", 1, Step("Run tests", "failure")),
+                new { id = 11, name = product, status = "in_progress", conclusion = (string?)null, run_attempt = 2, runner_id = 1 }],
+            _ => null,
+        };
+        const string unavailable = "Response status code does not indicate success: 503 (Service Unavailable).";
+        var notes = new[] { unavailable, scenario switch
+            {
+                "two-failed-steps" => "fatal: bad config line 1 in file .git/config. Process completed with exit code 1.",
+                "deterministic-note" => "Version 99.0.x is not a valid .NET SDK version.",
+                "two-infra-notes" => unavailable,
+                _ => null,
+            } }.OfType<string>().Select(message => new { annotation_level = "failure", message });
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, "completed", scenario.Contains("cancelled", StringComparison.Ordinal) ? "cancelled" : "failure", 1), (5, "completed", older, 1),
+                (4, "completed", older == "cleared" ? "failure" : "success", 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = JsonSerializer.Serialize(scenario == "zero-jobs-cancelled"
+                ? new { total_count = 0, jobs = Array.Empty<object>() } : new { total_count = jobs.Length, jobs }),
+                [fifth is null ? 0 : 5] = JsonSerializer.Serialize(new { total_count = fifth?.Length ?? 0, jobs = fifth ?? [] }) },
+            annotations: JsonSerializer.Serialize(notes));
+        var config = WriteConfig(arm64Waiver: replaced == arm);
+        try
+        {
+            File.WriteAllText(config, File.ReadAllText(config).Replace("jobs: [light",
+                "infra_steps: { product: [Set up job, Post Run actions/checkout@*], light: [Set up job], app: [Set up job] }, jobs: [light", StringComparison.Ordinal));
+            var output = new StringWriter();
+            // The waiver is active only when its switch is on, as Green already honours it.
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain,
+                () => WaiverExpiry.AddSeconds(-1), _ => scenario.StartsWith("arm-waiver-on", StringComparison.Ordinal) ? "on" : null);
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            if (scenario == "infra" && older != "cleared")
+                Assert.Contains($"ALERT infra-only {product}: rerun needed (once)", output.ToString(), StringComparison.Ordinal);
+        }
+        finally { File.Delete(config); }
+    }
+
     static string WriteConfig(bool arm64Waiver = false)
     {
         var path = Path.Combine(AppContext.BaseDirectory, $"merge-rule-{Guid.NewGuid():N}.yml");
@@ -2073,7 +2389,7 @@ public class MergeRuleTests
             hold_labels: [hold]
             independent_review: { context: independent-review, posters: [danswett] }
             codeql: { workflow: CodeQL, check: CodeQL }
-            main_green: { workflow: ci.yml, exempt_labels: [fixes-main], jobs: [light, app (win-x64), app (win-arm64), product] }
+            main_green: { workflow: ci.yml, exempt_labels: [fixes-main], exempt_paths: [tests/AgentBridge.*.Tests/**], jobs: [light, app (win-x64), app (win-arm64), product] }
             copilot_waiver: { second_review: independent-review-2 }
             sensitive_paths: [docs/old.md]
             """ + (arm64Waiver ? "\n" + WaiverYaml : ""));
@@ -2161,7 +2477,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]") : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -2235,6 +2551,8 @@ public class MergeRuleTests
                     }),
                 }));
             }
+            if (path.Contains("/check-runs/", StringComparison.Ordinal) && path.Contains("/annotations", StringComparison.Ordinal))
+                return JsonDocument.Parse(annotations);
             if (failStatuses && path.Contains("/statuses", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             return JsonDocument.Parse(path.Contains("/statuses", StringComparison.Ordinal)

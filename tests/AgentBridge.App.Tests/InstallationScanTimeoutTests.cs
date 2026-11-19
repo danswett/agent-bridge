@@ -8,7 +8,8 @@ public sealed class InstallationScanTimeoutTests
     public async Task A_clear_59_second_scan_is_reused_by_the_remaining_preflight_checks()
     {
         var clock = new FakeTimeProvider();
-        var budget = new InstallationFiles.Budget(clock);
+        // An unchanged lock footprint, as the app's: what lets a clear scan be reused.
+        var budget = new InstallationFiles.Budget(clock) { LockedFiles = () => [] };
         var scans = 0;
         string? Scan()
         {
@@ -99,6 +100,44 @@ public sealed class InstallationScanTimeoutTests
             Assert.Equal(2, scans);
         }
         finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    // #3241: a budget given no lock footprint (the app always gives one) could not see an image
+    // newly held, so it keeps no clear scan to reuse.
+    [Fact]
+    public async Task A_clear_scan_without_a_lock_footprint_is_not_reused()
+    {
+        var budget = new InstallationFiles.Budget(new FakeTimeProvider());
+        var scans = 0;
+        string? Scan() => Interlocked.Increment(ref scans) == 1 ? null : "fixture (pid 42)";
+
+        Assert.Null(await budget.ProbeOnceAsync(Scan, default));
+        Assert.Equal("fixture (pid 42)", await budget.ProbeOnceAsync(Scan, default));
+    }
+
+    [Fact]
+    public void A_held_non_executable_resource_is_scanned_like_a_held_image()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "ab-scan-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        var resource = Path.Combine(folder, "resources.pri");
+        File.WriteAllText(resource, "old install");
+        File.WriteAllText(Path.Combine(folder, "free.dll"), "old install");
+        try
+        {
+            using var holder = new FileStream(resource, FileMode.Open, FileAccess.Read, FileShare.Read);
+            Assert.Equal([resource], InstallationFiles.LockedImages(folder));
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    [Fact]
+    public void A_confirmed_holder_beside_an_unchecked_one_is_still_reported_as_a_held_file()
+    {
+        var mixed = new UpdateBlockedException($"fixture (pid 42) holding current\\a.dll; {InstallationFiles.Unknown} for 1 other").Message;
+        Assert.Equal("another program is holding a file in the installation", AppUpdateViewModel.Reason(mixed));
+        Assert.Equal("Windows file holders could not be checked; no file holder was confirmed",
+            AppUpdateViewModel.Reason(new UpdateBlockedException(InstallationFiles.Unknown).Message));
     }
 
     [Fact]

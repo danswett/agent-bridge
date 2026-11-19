@@ -560,7 +560,7 @@ the same service calls.
 **Request id and acknowledgement.** A sender may add `rid` (1 to 64 letters, digits, `-`, `_`, `.`;
 anything else is ignored) and `sender` (a name, at most 64 characters). The host then publishes
 `reply_ack` `{rid, outcome, at, sender?, duplicate?}` in the session's activity attributes in the same
-update as `Reply sent` / `Reply NOT sent`. `outcome` is `delivered`, `unconfirmed` or `refused`. The ack
+update as `Reply sent` / `Reply NOT sent`. `outcome` is `queued`, `delivered`, `unconfirmed` or `refused`. The ack
 stays until a newer one replaces it, so a sender that finds another rid there knows its message was
 swapped or lost and sends again. A rid seen before (the last 50 per session) is not delivered again; the
 host re-acks it with `duplicate: true`. A `refused` rid is forgotten, so the same rid may be retried.
@@ -570,10 +570,46 @@ is still dropped. When a session ends for good its history is dropped with its c
 delivery still running for it finishes); a session that comes back under the same id starts empty.
 `sender` loses control, format and unassigned characters, whitespace is collapsed,
 and the cut at 64 never splits a character. A reply that arrives while a question card is open
-(single choice or field slots) is refused, never queued: the host acks `refused` with the sender's rid,
+(single choice or field slots) is refused, unless queued as below: the host acks `refused` with the sender's rid,
 logs `refused a reply to <node> from <sender>` and types nothing, so the sender retries after the card
 closes. A reply already waiting when a question opens is refused the same way (#1634).
 Publishes without a `rid` behave as before.
+
+The one exception is an untagged agent text (`driver: agent`, a valid `rid`, no `decision_id`, words
+and no attachments)
+([#3204](https://github.com/danswett/agent-bridge/issues/3204)): it waits in a bounded **in-memory**
+FIFO, at most 16 per session, and is acked `queued` (a rid already waiting is re-acked `queued` with
+`duplicate: true`). A 17th is refused with `queue full`, never replacing one already waiting. The
+activity sensor shows `reply_queue_count`. A question that is replaced or cleared keeps what agents
+had already sent to it. Once no question is open, waiting messages go through the normal reply
+delivery, oldest first, one at a time, ahead of anything sent after. There is **no durable
+persistence**: a host restart drops the queue (the count shows 0 again, and nothing waiting is
+delivered), and so does the session ending; a session back under the same id starts empty. Senders
+that see `queued` and then a count that drops without their rid being acked `delivered` send again.
+An agent's own Send press is not taken as the owner's confirmation, by count: while an agent
+message still owes its press, the next new Send press is taken as the agent's, and a press read when the payload
+cannot be read is too (fail closed). A mixed watched stamp remains uncertain even if REST still
+shows the previous complete payload. That debt outlives a question being replaced or cleared (each press is counted once, even when a close is retried);
+an idle Send consumes it too. Every agent payload, including one naming the open question, a stale tag or attachments,
+owes its companion press. An owner whose
+press lands there presses Send again. Known limit: if the owner's press lands between an agent's
+message and its own Send, the owner's press is taken as the agent's and the agent's later press
+confirms the form as it then stands. Another limit: messages overwritten before either the watch
+or a read observes them cannot be counted; their extra Send presses cannot be distinguished from
+the owner's. An unreadable closing boundary is retained until its split payload completes or is
+replaced by a newer complete publish. Both split orders are tracked against the previously
+observed payload, so a lagging snapshot cannot end that uncertainty. When neither half was seen
+before, a complete payload that Home Assistant wrote after the split snapshot (its `last_updated`) ends it too,
+and a watched split at the same stamp never hides the complete payload a read returns: that one is queued
+([#3224](https://github.com/danswett/agent-bridge/issues/3224)). Such a split owes a Send for each of its two
+publishes, not only its state's, so neither agent press can become the owner's once it completes
+([#3296](https://github.com/danswett/agent-bridge/pull/3296)). A split whose attributes carry no stamp missed no
+publish: its own stamp written complete later ends it ([#3298](https://github.com/danswett/agent-bridge/issues/3298)).
+A press taken as the agent's only because no payload
+could be read is matched to that payload once it is read, if the press came at or after the payload changed
+(both on Home Assistant's clock; for a split's attributes, when the snapshot was last updated): the payload then owes no further press. The latest 64 Send presses per session
+are remembered; a press at or before the newest forgotten one is never classified again, so it is never the owner's
+and never spends an agent message's debt.
 
 **Durable inbox foundation.** `DurableInbox` is an internal, not-yet-connected store: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,
@@ -1525,6 +1561,14 @@ hex characters, checks the local JWT shape (not validity), then warns about the 
 three-rejection budget (the real HA ban count is unknown). Only an explicit `yes` stores it
 and authorizes one attempt; a rejection stops it until consent is given again, even after
 restart. Neither this command nor a declined prompt contacts HA; malformed input changes nothing.
+
+If the masked prompt receives zero characters, it reports "Nothing was entered (0 characters)"
+instead of a JWT-format error. In PowerShell, the installed host can also read a pasted token
+without requiring its executable on PATH:
+
+```powershell
+Get-Clipboard | & "$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe" ha token set
+```
 
 ## Troubleshooting
 

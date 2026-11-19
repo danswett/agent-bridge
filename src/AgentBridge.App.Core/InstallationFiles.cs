@@ -9,16 +9,23 @@ public static class InstallationFiles
     public static IReadOnlyList<string> LockedImages(string folder)
     {
         var locked = new List<string>();
-        foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
-            .Where(f => Path.GetExtension(f).Equals(".exe", StringComparison.OrdinalIgnoreCase)
-                || Path.GetExtension(f).Equals(".dll", StringComparison.OrdinalIgnoreCase)))
+        // Every file, not only .exe/.dll: an outside holder of a resource such as resources.pri
+        // blocks the install just the same (#3099).
+        foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
         {
             try { using var check = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None); }
-            catch (IOException e) when ((e.HResult & 0xffff) is 32 or 33) { locked.Add(file); }
+            catch (IOException e) when (IsSharingViolation(e)) { locked.Add(file); }
             catch (UnauthorizedAccessException) { locked.Add(file); }
         }
         return locked;
     }
+
+    // Windows reports a held file as ERROR_SHARING_VIOLATION or ERROR_LOCK_VIOLATION. .NET on Unix
+    // emulates FileShare.None with flock and reports a conflict as the raw errno EWOULDBLOCK
+    // (11 on Linux, 35 on macOS); missing it threw instead of reporting the lock (#2884 CI).
+    static bool IsSharingViolation(IOException e) => OperatingSystem.IsWindows()
+        ? (e.HResult & 0xffff) is 32 or 33
+        : e.HResult == (OperatingSystem.IsLinux() ? 11 : 35);
 
     public sealed class Budget(TimeProvider time)
     {
@@ -31,11 +38,12 @@ public static class InstallationFiles
         internal Func<IReadOnlyList<string>>? LockedFiles { get; set; }
         Func<string?>? clearProbe;
         HashSet<string>? clearFiles;
-        public async Task<string?> ProbeOnceAsync(Func<string?>? probe, CancellationToken cancellation)
+        public async Task<string?> ProbeOnceAsync(Func<string?>? probe, CancellationToken cancellation, bool fresh = false)
         {
             if (probe is null) { return null; }
-            // A successful scan is shared by the duplicate preflight gates, not a deadline.
-            // A changed lock footprint invalidates it, including locks acquired in a dialog.
+            // A clear scan serves the duplicate check right after the wait, not a deadline; a changed
+            // lock footprint invalidates it. The last gate before stop and handoff scans fresh: an
+            // outside holder of an image the app already holds changes no file name (#2884 review).
             using var deadline = new CancellationTokenSource(ReleaseWait, Time);
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation, deadline.Token);
             var token = stop.Token;
@@ -44,7 +52,8 @@ public static class InstallationFiles
                 return await Task.Run(() =>
                 {
                     var files = LockedFiles?.Invoke();
-                    if (clearProbe == probe && (files is null || clearFiles?.SetEquals(files) == true)) { return null; }
+                    // Without a footprint (no LockedFiles) nothing could invalidate a clear scan: none is reused.
+                    if (!fresh && clearProbe == probe && files is not null && clearFiles?.SetEquals(files) == true) { return null; }
                     var held = probe();
                     token.ThrowIfCancellationRequested();
                     clearProbe = held is null ? probe : null;

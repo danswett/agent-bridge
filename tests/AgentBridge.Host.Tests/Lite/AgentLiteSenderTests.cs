@@ -31,7 +31,7 @@ public class AgentLiteSenderTests
     }
     sealed class Peers(bool pinned, LitePeer? peer = null) : ILitePeers
     {
-        readonly LitePeer p = peer ?? new LitePeer(Other, [], "vm2");
+        readonly LitePeer p = peer ?? new LitePeer(Other, [], "node-b");
         public bool TryFind(string deviceId, out LitePeer found) { found = p; return pinned && deviceId == p.DeviceId; }
         public IReadOnlyList<LitePeer> All() => pinned ? [p] : [];
     }
@@ -43,7 +43,7 @@ public class AgentLiteSenderTests
         public Func<object, CancellationToken, Task<LiteAck>> Reply = (_, _) => throw new InvalidOperationException();
         public string Self => AgentLiteSenderTests.Self;
         public string Account => AgentLiteSenderTests.Account;
-        public IReadOnlyList<PresenceEntry> Presence => Present ? [new PresenceEntry(Other, "vm2", "host", DateTimeOffset.UnixEpoch)] : [];
+        public IReadOnlyList<PresenceEntry> Presence => Present ? [new PresenceEntry(Other, "node-b", "host", DateTimeOffset.UnixEpoch)] : [];
         public Task<LiteAck> SendAsync(string peerId, object request, CancellationToken ct) { Opened++; Request = request; return Reply(request, ct); }
     }
     sealed class Rig : IDisposable
@@ -56,7 +56,7 @@ public class AgentLiteSenderTests
         public bool Pinned = true;
         public Deliver Deliver = new(new LiteDelivery(true, null));
         public AgentLiteSender Sender() => new(Mode, new Peers(Pinned), Link, _ => Live, () => { Signed++; return new EcdsaEnvelopeSigner(Key); }, OwnStatic, null, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(20));
-        public Task<LiteOutcome> Send(string text = "hello", string machine = "vm2") => Sender().SendAsync(Caller, new LiteSendInput(machine, "agent-b2", text), default);
+        public Task<LiteOutcome> Send(string text = "hello", string machine = "node-b") => Sender().SendAsync(Caller, new LiteSendInput(machine, "agent-b2", text), default);
         public void Dispose() => Key.Dispose();
     }
 
@@ -74,7 +74,7 @@ public class AgentLiteSenderTests
         Receiving(r);
         const string canary = "abat1_CANARY_NOT_A_PRINCIPAL";
         var script = AgentCredential.Script(canary, Self, "pump-wake", DateTimeOffset.UtcNow);
-        var result = await r.Sender().SendAsync(script, new LiteSendInput("vm2", "agent-b2", "hello"), default);
+        var result = await r.Sender().SendAsync(script, new LiteSendInput("node-b", "agent-b2", "hello"), default);
         Assert.Equal(LiteKind.Delivered, result.Kind);
         var wire = Encoding.UTF8.GetString(r.Deliver.Envelope!.Body.Encode());
         Assert.Contains("\"kind\":\"script\"", wire);
@@ -92,7 +92,7 @@ public class AgentLiteSenderTests
     {
         using var r = new Rig();
         var caller = Caller with { Kind = kind, Principal = principal };
-        var result = await r.Sender().SendAsync(caller, new LiteSendInput("vm2", "agent-b2", "hello"), default);
+        var result = await r.Sender().SendAsync(caller, new LiteSendInput("node-b", "agent-b2", "hello"), default);
         Assert.Equal((LiteKind.Refused, AgentLiteSender.NoCredential), (result.Kind, result.Code));
         Assert.Equal(0, r.Signed);
         Assert.Equal(0, r.Link.Opened);
@@ -102,7 +102,7 @@ public class AgentLiteSenderTests
     static void Receiving(Rig r, LiteDelivery? result = null)
     {
         var q = r.Key.ExportParameters(false).Q;
-        var peer = new LitePeer(Self, [0x04, .. q.X!, .. q.Y!], "vm1");
+        var peer = new LitePeer(Self, [0x04, .. q.X!, .. q.Y!], "node-a");
         r.Deliver = new Deliver(result ?? new LiteDelivery(true, null));
         var receiver = new LiteReceiver(new Mode(), new Peers(true, peer), r.Deliver);
         var channel = new LiteChannel(Self, "host", OwnStatic, Other, Account, true);
@@ -167,7 +167,7 @@ public class AgentLiteSenderTests
         {
             var peers = new OwnLitePeers(new OwnPeers(dir, () => true, () => Account));
             var sender = new AgentLiteSender(r.Mode, peers, r.Link, _ => true, () => { r.Signed++; return new EcdsaEnvelopeSigner(r.Key); }, OwnStatic);
-            var o = await sender.SendAsync(Caller, new LiteSendInput("vm2", "agent-b2", "hi"), default);
+            var o = await sender.SendAsync(Caller, new LiteSendInput("node-b", "agent-b2", "hi"), default);
             Assert.Equal((LiteKind.Refused, "notPeer"), (o.Kind, o.Code));
             Assert.Equal((0, 0), (r.Link.Opened, r.Signed));
         }
@@ -185,7 +185,7 @@ public class AgentLiteSenderTests
             await r.Mode.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
             return new LiteAck("delivered", "", "not-the-request", 0);
         };
-        var send = sender.SendAsync(Caller, new LiteSendInput("vm2", "agent-b2", "hi"), default);
+        var send = sender.SendAsync(Caller, new LiteSendInput("node-b", "agent-b2", "hi"), default);
         await Task.Delay(300);
         Assert.False(send.IsCompleted);
         r.Mode.Gate.Set();
@@ -209,7 +209,7 @@ public class AgentLiteSenderTests
         // The ack limit is far longer than the watcher's tick, so a loaded runner cannot let the timeout beat the
         // mode watcher (#1521: with a 200 ms limit it sometimes reported "timeout"). Only the watcher can end this send.
         var sender = new AgentLiteSender(r.Mode, new Peers(true), r.Link, _ => true, () => new EcdsaEnvelopeSigner(r.Key), OwnStatic, null, TimeSpan.FromSeconds(60), TimeSpan.FromMilliseconds(1));
-        var o = await sender.SendAsync(Caller, new LiteSendInput("vm2", "agent-b2", "hi"), default).WaitAsync(TimeSpan.FromSeconds(30));
+        var o = await sender.SendAsync(Caller, new LiteSendInput("node-b", "agent-b2", "hi"), default).WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal((LiteKind.Unconfirmed, "mode switched off"), (o.Kind, o.Code));
     }
 

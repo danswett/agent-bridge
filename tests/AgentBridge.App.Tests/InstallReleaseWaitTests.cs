@@ -88,6 +88,18 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         Assert.Empty(host.Sent(HostOps.Stop));
     }
 
+    [Fact]
+    public async Task A_failed_locked_image_listing_at_the_last_check_blocks_as_unchecked_not_as_a_raw_error()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var budget = new InstallationFiles.Budget(clock) { LockedFiles = () => throw new IOException("private-path") };
+
+        var failed = await Assert.ThrowsAsync<UpdateBlockedException>(() => Manager(clock).CheckInstallationFilesAsync(() => null, budget));
+
+        Assert.Contains("could not be checked", failed.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-path", failed.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
