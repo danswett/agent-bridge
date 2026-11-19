@@ -167,6 +167,22 @@ public sealed partial class ReplyTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task An_agent_answer_tagged_for_a_replaced_question_never_confirms_the_next_one(bool seenFirst)
+    {
+        await using var c = await Asking();
+        var tagged = ha.SendFromCard(Node, "for q1", decisionId: "q1", driver: "agent", rid: "r-q1");
+        if (seenFirst) { await Do(c, tagged); } else { c.Observe(tagged); }
+        Idle(question: Pick() with { Id = "q2" }); await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal("q2", Assert.Single(answered).Question);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task A_failed_queue_ack_publish_retries_queued_without_duplicate_delivery(bool attributes)
     {
         await using var c = await Asking();
