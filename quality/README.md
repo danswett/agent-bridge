@@ -936,7 +936,10 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
 - **Main-red detection** ([issue 3074](https://github.com/danswett/agent-bridge/issues/3074)):
   `main-red.yml` handles completed CI push runs on main using main's trusted script, with no polling.
   Failure, timeout and startup failure open or update one bot-authored `main-red` issue; success
-  closes it, including reruns. Cancelled, skipped, stale and duplicate events make no changes.
+  closes it, including reruns. Every detector reconciles the newest completed verdict, even when an
+  older event replaces its pending detector. The completed event preserves its attempt and verdict
+  if a retry has already started; job evidence comes from that exact attempt. Cancelled and skipped
+  conclusions say nothing; duplicate evidence, including a recovered incident, is not reposted.
   Evidence contains capped, mention-neutralised job/test names, never raw logs; unreadable logs are noted.
   GitHub issues and the label are the only alert channel: no assignee, owner mention or phone notification.
   Tiered gating B3 ([issue 3210](https://github.com/danswett/agent-bridge/issues/3210)): a failed job named

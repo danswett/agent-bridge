@@ -29,13 +29,16 @@ function Reset-Scenario {
     $script:s = @{ conclusion = 'failure'; attempt = 1; newest = 100; status = 'completed'; event = 'push'
         branch = 'main'; repo = 'o/r'; path = '.github/workflows/ci.yml'; open = $false
         log = '  Failed A.B.C.Method [1 s]'; unreadable = $false; jobName = 'product'; jobConclusion = 'failure'
-        body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = '' }
+        body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = ''; created = $false }
 }
 function Fake-Gh {
     $a = $args -join ' '
     $s.calls += ,@($args)
+    $run = @{ id = 100; run_number = 100; conclusion = $s.conclusion; status = $s.status; run_attempt = $s.attempt
+        head_sha = 'abcdef0123456789'; head_branch = $s.branch; event = $s.event; path = $s.path
+        head_repository = @{ full_name = $s.repo } }
     if ($args[0] -eq 'issue' -and $args[1] -in @('list', 'view')) {
-        $fields = if ($args[1] -eq 'list') { 'number,body,author' } else { 'comments' }
+        $fields = if ($args[1] -eq 'view') { 'comments' } elseif ($args -contains 'all') { 'number,body,author,state' } else { 'number,body,author' }
         $json = [array]::IndexOf($args, '--json')
         if ($json -lt 0 -or $args.Count -ne $json + 2 -or $args[$json + 1] -isnot [string] -or
             $args[$json + 1] -cne $fields) {
@@ -44,15 +47,20 @@ function Fake-Gh {
     }
     switch -Regex ($a) {
         '^api repos/o/r/actions/runs/100$' {
-            @{ id = 100; conclusion = $s.conclusion; status = $s.status; run_attempt = $s.attempt
-                head_sha = 'abcdef0123456789'; head_branch = $s.branch; event = $s.event; path = $s.path
-                head_repository = @{ full_name = $s.repo } } | ConvertTo-Json; return
+            if ($s.ContainsKey('triggerConclusion')) { $run.conclusion = $s.triggerConclusion }
+            $run | ConvertTo-Json; return
         }
         '^api repos/o/r/actions/workflows/ci.yml/runs\?' {
-            if ($a -notmatch 'status=completed' -or $a -notmatch 'per_page=1') { throw 'Require one newest finished run' }
-            @{ workflow_runs = @(@{ id = $s.newest; run_attempt = $s.attempt }) } | ConvertTo-Json; return
+            if ($a -notmatch 'per_page=100' -or $a -match 'status=completed') { throw 'Require one bounded page including in-flight retries' }
+            $run.id = $s.newest; $run.run_number = $s.newest
+            $runs = if ($s.ContainsKey('latest')) { @($s.latest) } else { @($run) }
+            @{ workflow_runs = @($runs) } | ConvertTo-Json -Depth 5; return
         }
-        '^api repos/o/r/actions/runs/100/jobs' {
+        '^api repos/o/r/actions/runs/(100|101)/attempts/(\d+)$' {
+            $run.id = [long]$Matches[1]; $run.run_number = $run.id; $run.run_attempt = [int]$Matches[2]
+            $run.status = 'completed'; $run.conclusion = 'failure'; $run | ConvertTo-Json; return
+        }
+        '^api repos/o/r/actions/runs/(100|101)/(attempts/\d+/)?jobs' {
             @{ jobs = @(@{ id = 7; name = $s.jobName; conclusion = $s.jobConclusion }) + $s.extraJobs } | ConvertTo-Json; return
         }
         '^api repos/o/r/actions/jobs/\d+/logs --allow-escape-sequences$' {
@@ -62,13 +70,15 @@ function Fake-Gh {
         '^issue list ' {
             $found = @()
             if ($s.foreign) { $found += @{ number = 5; body = ''; author = @{ login = 'stranger' } } }
-            if ($s.open) { $found += @{ number = 9; body = $s.body; author = @{ login = 'app/github-actions' } } }
+            if ($s.open -or ($args -contains 'all' -and $s.created)) {
+                $found += @{ number = 9; body = $s.body; author = @{ login = 'app/github-actions' }; state = $(if ($s.open) { 'OPEN' } else { 'CLOSED' }) }
+            }
             ConvertTo-Json -InputObject $found -Depth 5; return
         }
         '^issue view 9 ' { @{ comments = $s.comments } | ConvertTo-Json -Depth 5; return }
         '^label create main-red ' { $s.writes += 'label'; return }
         '^issue create ' {
-            $s.writes += 'create'; $s.open = $true; $s.body = $args[([array]::IndexOf($args, '--body') + 1)]
+            $s.writes += 'create'; $s.open = $true; $s.created = $true; $s.body = $args[([array]::IndexOf($args, '--body') + 1)]
             $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; return
         }
         '^issue comment 9 ' {
@@ -116,9 +126,46 @@ foreach ($c in 'startup_failure', 'timed_out') {
     Assert ($s.writes -contains 'create' -and $s.body -match 'product') "$c is red"
 }
 foreach ($c in 'failure', 'success') {
-    Reset-Scenario; $s.open = $true; $s.newest = 101; $s.conclusion = $c; Detect
-    Assert ($s.writes.Count -eq 0) "stale $c event does nothing"
+    Reset-Scenario; $s.open = $c -eq 'success'; $s.newest = 101; $s.conclusion = $c
+    $s.triggerConclusion = if ($c -eq 'failure') { 'success' } else { 'failure' }; Detect
+    $evidence = (@($s.body) + @($s.comments | ForEach-Object { $_.body })) -join "`n"
+    Assert ($evidence -match 'run=101' -and
+        (($c -eq 'failure' -and $s.open) -or ($c -eq 'success' -and -not $s.open))) "a replacement stale event reconciles the newest $c verdict"
 }
+$eventPath = [IO.Path]::GetTempFileName()
+$savedEventName = $env:GITHUB_EVENT_NAME; $savedEventPath = $env:GITHUB_EVENT_PATH
+try {
+    Reset-Scenario
+    $completed = Fake-Gh api repos/o/r/actions/runs/100 | ConvertFrom-Json
+    $env:GITHUB_EVENT_NAME = 'workflow_run'; $env:GITHUB_EVENT_PATH = $eventPath
+    @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+    $s.status = 'in_progress'; $s.attempt = 2
+    Detect
+    Assert ($s.body -match 'attempt=1' -and $s.body -match 'A.B.C.Method' -and
+        @($s.calls | Where-Object { ($_ -join ' ') -match '/runs/100/attempts/1/jobs' }).Count -eq 1) 'a retry started before detection still records the completed red attempt with its own jobs'
+    $completed.run_attempt = 2; $completed.conclusion = 'success'
+    @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+    $s.latest = @($completed); Detect
+    Assert (($s.writes -join ',') -eq 'label,create,comment,close' -and $s.body -match 'attempt=1' -and $s.comments.Count -eq 1 -and
+        $s.comments[0].body -match 'green again, run=100 attempt=2') 'the successful retry closes the incident without losing attempt-one failure evidence'
+    Reset-Scenario; $completed.run_attempt = 1; $completed.conclusion = 'failure'
+    @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+    $s.conclusion = 'success'; $s.attempt = 2; Detect
+    Assert (($s.writes -join ',') -eq 'label,create,comment,close') 'a retry already green when detection starts records red before reconciling green'
+    Detect
+    Assert (($s.writes -join ',') -eq 'label,create,comment,close') 'redelivery after recovery cannot reopen the recorded incident'
+    $s.conclusion = 'failure'; $s.attempt = 3; Detect
+    Assert (@($s.writes | Where-Object { $_ -eq 'create' }).Count -eq 2 -and $s.open -and
+        $s.body -match 'attempt=3') 'a new failure after recovery opens a new incident instead of extending the closed one'
+    Detect
+    Assert (($s.writes -join ',') -eq 'label,create,comment,close,label,create') 'a late earlier attempt cannot add out-of-order evidence to the newer incident'
+} finally {
+    $env:GITHUB_EVENT_NAME = $savedEventName; $env:GITHUB_EVENT_PATH = $savedEventPath
+    Remove-Item -LiteralPath $eventPath
+}
+Reset-Scenario; $s.newest = 101; $s.status = 'in_progress'; $s.attempt = 2; $s.triggerConclusion = 'success'; Detect
+Assert ($s.open -and $s.body -match 'run=101 attempt=1' -and
+    @($s.calls | Where-Object { ($_ -join ' ') -match '/runs/101/attempts/1/jobs' }).Count -eq 1) 'an older replacement event recovers the latest red verdict even while its retry is running'
 Reset-Scenario; $s.log = 'Build FAILED: error CS1002'; Detect
 Assert ($s.body -match 'product' -and $s.body -match 'no test name was found') 'build failure still lists its job'
 Reset-Scenario; $s.jobName = "@someone `````n# injected"

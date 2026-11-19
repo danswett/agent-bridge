@@ -36,8 +36,8 @@ function Get-RedVerdict([string]$Conclusion) {
     'none'
 }
 
-function Get-FailedJobs([long]$RunId, [string]$Repository, [Collections.Generic.HashSet[string]]$PostMergeJobs) {
-    $pages = Invoke-Gh api "repos/$Repository/actions/runs/$RunId/jobs?per_page=100" --paginate --slurp | ConvertFrom-Json
+function Get-FailedJobs([long]$RunId, [string]$Repository, [Collections.Generic.HashSet[string]]$PostMergeJobs, [int]$Attempt) {
+    $pages = Invoke-Gh api "repos/$Repository/actions/runs/$RunId/attempts/$Attempt/jobs?per_page=100" --paginate --slurp | ConvertFrom-Json
     foreach ($page in $pages) {
         foreach ($job in $page.jobs | Where-Object { $_.conclusion -in @('failure', 'timed_out') }) {
             $readable = $true; $tests = @()
@@ -55,9 +55,12 @@ function Get-FailedJobs([long]$RunId, [string]$Repository, [Collections.Generic.
     }
 }
 
-function Get-MainRedIssue([string]$Repository) {
-    Invoke-Gh issue list --repo $Repository --state open --label main-red --limit 100 --json 'number,body,author' |
+function Get-MainRedIssue([string]$Repository, [switch]$IncludeClosed) {
+    $state = if ($IncludeClosed) { 'all' } else { 'open' }
+    $fields = if ($IncludeClosed) { 'number,body,author,state' } else { 'number,body,author' }
+    Invoke-Gh issue list --repo $Repository --state $state --label main-red --limit 100 --json $fields |
         ConvertFrom-Json | Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') } |
+        Sort-Object -Stable { if ($IncludeClosed) { $_.state -eq 'CLOSED' } else { $false } } |
         Select-Object -First 1
 }
 
@@ -122,15 +125,34 @@ function Request-Quarantine([long]$RunId, [string]$Test, [string]$Repository) {
 
 function Invoke-MainRed([long]$RunId, [string]$Repository) {
     if ($RunId -le 0 -or $Repository -notmatch '^[\w.-]+/[\w.-]+$') { throw 'Give a positive RunId and owner/repository.' }
-    $run = Invoke-Gh api "repos/$Repository/actions/runs/$RunId" | ConvertFrom-Json
+    # A rerun can mutate the run API before this detector starts; the completed event cannot.
+    $run = if ($env:GITHUB_EVENT_NAME -eq 'workflow_run') {
+        (Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json).workflow_run
+    } else { Invoke-Gh api "repos/$Repository/actions/runs/$RunId" | ConvertFrom-Json }
+    if ($run.id -ne $RunId) { throw 'The completed event does not match RunId.' }
     if ($run.path -ne '.github/workflows/ci.yml' -or $run.event -ne 'push' -or $run.head_branch -ne 'main' -or
-        $run.head_repository.full_name -ne $Repository -or $run.status -ne 'completed') { return }
+        $run.head_repository.full_name -ne $Repository) { return }
+    # Reconcile the newest completed verdict even if an older event replaced its pending detector.
+    $recent = (Invoke-Gh api "repos/$Repository/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=100" | ConvertFrom-Json).workflow_runs
+    $latest = $recent | Where-Object { $_.status -eq 'completed' -or $_.run_attempt -gt 1 } |
+        Sort-Object run_number -Descending | Select-Object -First 1
+    if ($latest -and $latest.status -ne 'completed') {
+        $latest = Invoke-Gh api "repos/$Repository/actions/runs/$($latest.id)/attempts/$($latest.run_attempt - 1)" | ConvertFrom-Json
+    }
+    $completed = @(@($run) + @($latest) | Where-Object { $null -ne $_ -and $_.status -eq 'completed' } | Sort-Object run_number -Descending)
+    if ($completed.Count -eq 0) { return }
+    foreach ($candidate in $completed | Where-Object { $_.run_number -eq $completed[0].run_number } | Sort-Object run_attempt -Unique) {
+        if ($candidate.path -ne '.github/workflows/ci.yml' -or $candidate.event -ne 'push' -or $candidate.head_branch -ne 'main' -or
+            $candidate.head_repository.full_name -ne $Repository -or $candidate.run_attempt -lt 1) { throw 'Invalid completed main CI run.' }
+        Publish-MainRed $candidate $Repository
+    }
+}
+
+function Publish-MainRed($run, [string]$Repository) {
+    $RunId = $run.id
     $verdict = Get-RedVerdict $run.conclusion
     if ($verdict -eq 'none') { return }
-    # Filter completed runs server-side: a newer in-progress push says nothing about main's state.
-    $latest = (Invoke-Gh api "repos/$Repository/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&per_page=1" | ConvertFrom-Json).workflow_runs
-    if (@($latest).Count -ne 1 -or $latest[0].id -ne $RunId -or $latest[0].run_attempt -ne $run.run_attempt) { return }
-    $issue = Get-MainRedIssue $Repository
+    $issue = Get-MainRedIssue $Repository -IncludeClosed:($verdict -eq 'red')
     $sha = $run.head_sha.Substring(0, 8)
     if ($verdict -eq 'green') {
         if ($issue) {
@@ -146,8 +168,12 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
         $comments = @((Invoke-Gh issue view $issue.number --repo $Repository --json comments | ConvertFrom-Json).comments |
                 Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') })
         if (@($comments | Where-Object { ($_.body -split '\r?\n') -ccontains $marker }).Count -gt 0) { return }
+        $entries = @($issue.body) + @($comments | ForEach-Object { $_.body })
+        if (@($entries | Where-Object { $_ -cmatch "(?m)^main-red: run=$RunId attempt=(\d+) sha=" -and
+                    [long]$Matches[1] -gt $run.run_attempt }).Count -gt 0) { return }
+        if ($issue.state -eq 'CLOSED') { $issue = $null; $comments = @() }
     }
-    $jobs = @(Get-FailedJobs $RunId $Repository (Get-PostMergeJobs $script:CatalogPath))
+    $jobs = @(Get-FailedJobs $RunId $Repository (Get-PostMergeJobs $script:CatalogPath) $run.run_attempt)
     # The PR verdict's main-green skips post-merge tier jobs (#3219); say so, so this isn't read as a hold.
     # quality-gate only sums the other ci.yml jobs and main-green never lists it, so it echoes them.
     $own = @($jobs | Where-Object { $_.Name -cne 'quality-gate' })
