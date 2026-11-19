@@ -2225,6 +2225,53 @@ public class MergeRuleTests
         Assert.Equal("held", WeeklyReport.Category("INFRA-PERSISTENT light: rerun used, open an issue; Held by the label 'hold'"));
     }
 
+    // Run 6 (newer) has no real product result; run 5 (older) passed or failed product's tests.
+    [Theory]
+    [InlineData("skipped-retry", "success", "failure")]
+    [InlineData("infra", "failure", "failure")]
+    [InlineData("infra", "success", "success")]
+    [InlineData("cancelled-before-tests", "failure", "failure")]
+    [InlineData("two-failed-steps", "success", "failure")]
+    [InlineData("two-steps-one-note", "success", "failure")]
+    [InlineData("deterministic-note", "success", "failure")]
+    [InlineData("zero-jobs-cancelled", "success", "success")]
+    public void A_newer_run_without_a_real_result_never_hides_an_older_failure_or_a_deterministic_one(string scenario, string older, string state)
+    {
+        object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
+        object Entry(int id, string name, string conclusion, int attempt, params object[] steps) =>
+            new { id, name, status = "completed", conclusion, run_attempt = attempt, runner_id = 1, steps };
+        const string product = "product (ubuntu-latest)";
+        object[] tried = scenario switch
+        {
+            "skipped-retry" => [Entry(10, product, "failure", 1, Step("Set up job", "success"), Step("Run tests", "failure")), Entry(11, product, "skipped", 2)],
+            "cancelled-before-tests" => [Entry(10, product, "cancelled", 1, Step("Set up job", "success"), Step("Run tests", "skipped"))],
+            _ => [Entry(10, product, "failure", 1, Step("Set up job", "failure"), Step("Run tests", "skipped"),
+                Step("Post Run actions/checkout@v4", scenario.StartsWith("two-", StringComparison.Ordinal) ? "failure" : "success"))],
+        };
+        var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)" }.Select((name, id) => Entry(id, name, "success", 1)).Concat(tried).ToArray();
+        var notes = new[] { "Response status code does not indicate success: 503 (Service Unavailable).",
+            scenario == "two-failed-steps" ? "fatal: bad config line 1 in file .git/config. Process completed with exit code 1."
+                : scenario == "deterministic-note" ? "Version 99.0.x is not a valid .NET SDK version." : null }
+            .OfType<string>().Select(message => new { annotation_level = "failure", message });
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, "completed", scenario.Contains("cancelled", StringComparison.Ordinal) ? "cancelled" : "failure", 1), (5, "completed", older, 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = JsonSerializer.Serialize(scenario == "zero-jobs-cancelled"
+                ? new { total_count = 0, jobs = Array.Empty<object>() } : new { total_count = jobs.Length, jobs }) },
+            annotations: JsonSerializer.Serialize(notes));
+        var config = WriteConfig();
+        try
+        {
+            File.WriteAllText(config, File.ReadAllText(config).Replace("jobs: [light",
+                "infra_steps: { product: [Set up job, Post Run actions/checkout@*] }, jobs: [light", StringComparison.Ordinal));
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            if (scenario == "infra")
+                Assert.Contains($"ALERT infra-only {product}: rerun needed (once)", output.ToString(), StringComparison.Ordinal);
+        }
+        finally { File.Delete(config); }
+    }
+
     static string WriteConfig(bool arm64Waiver = false)
     {
         var path = Path.Combine(AppContext.BaseDirectory, $"merge-rule-{Guid.NewGuid():N}.yml");
