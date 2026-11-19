@@ -368,8 +368,10 @@ static class MergeRule
         var description = state == "success"
             ? $"{(copilot ? $"Copilot reviewed {sha}" : needsSecond ? "Two model families' reviews on file" : "Independent review on file")}; every check passed{(copilot ? "; independent review on file" : "")}{(main.State != "success" ? $"; fixes-main tests-only bypass used" : "")}"
             : Capitalize(string.Join("; ", reasons));
+        // Blocking reasons first: alerts are informational, and the 140-character cut must never
+        // drop a hold. The detailed log names every alert.
         if (main.Alerts.Count > 0)
-            description = string.Join("; ", main.Alerts) + "; " + description;
+            description += $"; {main.Alerts[0]}{More(main.Alerts.Count)}";
         reasons.AddRange(main.Alerts);
         return new MergeVerdict(state, Truncate(Printable(description)), reasons, sensitive);
     }

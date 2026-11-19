@@ -73,7 +73,8 @@ arm64_waiver:
 # run, every pull request fails. Main's commit, not run finish time, determines the run.
 # Plan must succeed. Only then may a skipped job (or unexpanded skipped family) count as green.
 # Exact display names pin every selected matrix instance: missing or renamed holds.
-# Owner decision Nov 18 15:05 PT: infra-only failures warn, rather than holding main red.
+# Owner decision Nov 18 15:05 PT: infra-only failures warn, rather than holding main red, on a
+# job's first attempt; once the one rerun is used they hold.
 # Unknown failing steps and missing/empty step data hold. Cancellation needs proof tests never ran.
 # A bare name covers a dynamic family: at least one entry, and every present instance green.
 # The aggregate quality-gate waits on installer, so only its test inputs are listed.
@@ -100,8 +101,10 @@ main_green:
     - pwa-e2e
     - app (win-x64)
     - app (win-arm64)
-  # Exact job or matrix-family name -> case-sensitive step globs. Never list tests or builds.
-  # S2 is not on main yet: the evaluator flags one rerun, and never dispatches a second path.
+  # Exact job or matrix-family name -> case-sensitive step globs. Never list tests or builds, or
+  # source-dependent installs (npm ci, Playwright's pin, its system-packages action), which fail
+  # the same way on every attempt for a bad lockfile or pin.
+  # S2 is not on main yet: the evaluator flags one rerun; after it, an infra-only failure holds.
   infra_steps:
     product: &dotnet_infra
       - Set up job
@@ -128,15 +131,7 @@ main_green:
       - Post Run actions/checkout@*
       - Run actions/setup-node@*
       - Run actions/setup-dotnet@*
-      - Run npm ci
-      - npm ci, for both
-      - Which Playwright
       - Playwright's browsers from main's cache
-      - Download Playwright's system packages
-      - Download Playwright's system packages, S2
-      - Download Playwright's system packages, S4
-      - Run npx playwright install*
-      - Playwright's browsers, for both
       - Save Playwright's browsers to main's cache
     pwa-e2e: *browser_infra
     spikes-linux: *browser_infra

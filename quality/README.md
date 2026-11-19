@@ -286,8 +286,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
    so it runs beside them and can't take a waiting push run's place and leave that push's commit
    untested (#938's review). GitHub promises no
-   order between push runs: the merge rule ignores cancelled runs and unfinished product
-   evidence, judging the newest usable named-job result (item 9).
+   order between push runs: the merge rule inspects cancelled runs' job steps (item 9), passes
+   over unfinished product evidence, and judges the newest usable named-job result.
    So a main run's change is everything since the last commit main's CI
    passed on: the plan reads `ci.yml`'s passed push runs on `main` (the newest 100, through the
    `actions: read` token), takes the newest whose commit is an ancestor of this one, fetches
@@ -585,13 +585,18 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      successful jobs. Installer, signing and publishing results do not hold, even if red or
      pending; the evaluator prints them as non-gating jobs for Quality's main-red log.
      Owner decision Nov 18 15:05 PT: `main_green.infra_steps` lists case-sensitive infra step
-     names/globs per exact job or matrix family. Only those failing steps are exempt; unknown
+     names/globs per exact job or matrix family: checkout, setup, cache and job plumbing only,
+     never source-dependent installs such as `npm ci`, Playwright's pin or its system-packages
+     action. Only those failing steps are exempt; unknown
      failures and missing/empty step data hold. Cancellation needs evidence no test/build step
      started; a never-assigned runner also needs a nonempty step manifest. Cancelled runs are
      inspected rather than hiding a test failure behind older green evidence.
-     Each exempt job adds `ALERT infra-only` to the merge-rule description and detailed log.
+     Each exempt job adds `ALERT infra-only` to the merge-rule description (after any blocking
+     reason, compacted) and to the detailed log.
      [S2](https://github.com/danswett/agent-bridge/pull/3079) is not on main: flag `rerun needed
-     (once)` rather than dispatching another rerun path; attempt two or later says `rerun already used`.
+     (once)` rather than dispatching another rerun path. Only a job's first attempt is exempt:
+     at attempt two or later an infra-only failure holds, so a rerun failing in setup never
+     erases an earlier test failure, and a persistent one can't keep main green.
      Unreadable history, plan or product data fails closed without fallback. No usable run in
      the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from Quality, since labels take triage

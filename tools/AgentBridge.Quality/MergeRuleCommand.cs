@@ -445,9 +445,14 @@ static class MergeRuleCommand
             var attempt = RunAttempt(run);
             var planGreen = latest.TryGetValue("plan", out var plan)
                 && plan.GetProperty("status").GetString() == "completed" && plan.GetProperty("conclusion").GetString() == "success";
+            // An infra-only failure warns on a job's first attempt alone. Once the one rerun is used
+            // it holds, so a rerun failing in setup can never erase attempt 1's test failure, and a
+            // persistent infra failure can't keep main green forever.
+            bool RerunUsed(JsonElement job) => Math.Max(attempt, RunAttempt(job)) > 1;
+            bool Exempt(JsonElement job) => InfraOnly(config.MainGreen, job) && !RerunUsed(job);
             bool Green(JsonElement job) => job.GetProperty("status").GetString() == "completed"
                 && (job.GetProperty("conclusion").GetString() is "success" or "skipped"
-                    || InfraOnly(config.MainGreen, job)
+                    || Exempt(job)
                     || (session.Arm64Waiver && config.Arm64Waiver?.Allows(job.GetProperty("name").GetString() ?? "",
                         job.GetProperty("conclusion").GetString()) == true));
             bool Passed(string name)
@@ -482,7 +487,7 @@ static class MergeRuleCommand
                     held.Add($"unexpected leg {string.Join(", ", unexpected)}");
                 else if (exact.Count == 1)
                     held.AddRange(exact[0].Where(n => latest[n].GetProperty("conclusion").GetString() != "success"
-                        && !InfraOnly(config.MainGreen, latest[n])));
+                        && !Exempt(latest[n])));
                 else if (exact.Count > 1)
                     held.Add("mixed or ambiguous leg families");
                 else if (possible.Count > 0)
@@ -492,14 +497,16 @@ static class MergeRuleCommand
             }
             bool Required(string name) => present.Contains(name) || config.MainGreen.Jobs.Any(n =>
                 n == name || (!n.Contains(" (", StringComparison.Ordinal) && name.StartsWith($"{n} (", StringComparison.Ordinal)));
-            var alerts = latest.Where(j => Required(j.Key) && InfraOnly(config.MainGreen, j.Value))
-                .OrderBy(j => j.Key, StringComparer.Ordinal).Select(j =>
-                    $"ALERT infra-only {j.Key}: {(Math.Max(attempt, RunAttempt(j.Value)) > 1 ? "rerun already used" : "rerun needed (once)")}").ToList();
+            var infra = latest.Where(j => Required(j.Key) && InfraOnly(config.MainGreen, j.Value))
+                .OrderBy(j => j.Key, StringComparer.Ordinal).ToList();
+            var alerts = infra.Where(j => !RerunUsed(j.Value)).Select(j => $"ALERT infra-only {j.Key}: rerun needed (once)").ToList();
             log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {MergeRule.Short(sha!)}; "
                 + (held.Count == 0 ? "named jobs passed." : $"named jobs not green: {string.Join(", ", held)}.")
                 + "\n" + string.Join("\n", latest.OrderBy(j => j.Key, StringComparer.Ordinal).Select(j =>
                     $"Main job [{(j.Key == "plan" || Required(j.Key) ? "required" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."))
-                + (alerts.Count == 0 ? "" : "\n" + string.Join("\n", alerts));
+                + string.Concat(infra.Select(j => RerunUsed(j.Value)
+                    ? $"\nHOLD infra-only {j.Key}: it failed again after its one rerun"
+                    : $"\nALERT infra-only {j.Key}: rerun needed (once)"));
             var fact = held.Count == 0
                 ? new("success", $"{config.Base}'s CI {MergeRule.Short(sha!)} named jobs passed")
                 : new MainFact("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green");
