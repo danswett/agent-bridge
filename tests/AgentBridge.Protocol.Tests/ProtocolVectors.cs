@@ -628,6 +628,11 @@ public static class ProtocolVectors
             Id = FileA, Ref = @"@C:\bridge\attachments\0123456789abcdef0123456789abcdef-shot.png",
         };
         f.Record<ReplyAttachmentBinding>(Host).Valid("a-staged-reference", binding);
+        // A guarded clear's escrow (#804): the whole draft escaped as the host shows it, spaces kept.
+        var hidden = ShownText.RevealMarked("rerun the build\u202E gol", rightToLeft: true);
+        f.Record<ClearedComposer>(Host)
+            .Valid("a-plain-draft", new ClearedComposer("  rerun the tests ", []))
+            .Valid("an-escaped-draft", new ClearedComposer(hidden.Shown, [.. hidden.Marks.Select(m => (IReadOnlyList<int>)[m.Start, m.Length])]));
         f.Record<ReplyResult>(Host)
             .Valid("delivered", new ReplyResult(AnswerOutcome.Delivered))
             .Valid("delivered-with-bindings", new ReplyResult(AnswerOutcome.Delivered) { Attachments = [binding] })

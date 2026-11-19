@@ -75,6 +75,22 @@ public sealed partial class HaConnector
     {
         public readonly Dictionary<string, string?> Rids = new(StringComparer.Ordinal);
         readonly List<string> ridOrder = [];
+        // #3204: agent messages waiting for an open question to close, oldest first; those still owed
+        // their own Send press, the ones counted; and each Send press read with whether it was the agent's.
+        public readonly List<HaState> Queued = [];
+        public readonly List<string> AgentSends = [];
+        public (string State, string? At, string? Before)? UncertainPayload;
+        public readonly List<string> PayloadStamps = [];
+        public readonly Dictionary<string, bool> Presses = new(StringComparer.Ordinal);
+
+        public void Drop()
+        {
+            Queued.Clear();
+            AgentSends.Clear();
+            UncertainPayload = null;
+            PayloadStamps.Clear();
+            Presses.Clear();
+        }
         // The last acknowledgement: which rid the host delivered, published with the card's activity.
         public JsonObject? Ack;
 
@@ -188,7 +204,7 @@ public sealed partial class HaConnector
                 // so what is sent after that is still new once the delivery is done.
                 if (!p.Reply.Baselined) { touched.TryAdd(p.Node, []); continue; }
                 if (underWay.ContainsKey(id)) { continue; }
-                if (sweep || p.Reply.ReadAgain || p.Reply.PendingPress is not null) { touched.TryAdd(p.Node, []); }
+                if (sweep || p.Reply.ReadAgain || p.Reply.PendingPress is not null || p.Reply.Log.Queued.Count > 0) { touched.TryAdd(p.Node, []); }
             }
         }
     }
@@ -306,7 +322,9 @@ public sealed partial class HaConnector
         var boundary = Interlocked.Read(ref hitSeq);
         var payload = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
         var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
-        if (payload.Kind == "unknown" || submit.Kind == "unknown") { return false; }
+        // Agent messages that reached the closing question are kept, even when Send cannot be read.
+        if (p.Armed is { } armed) { await QueueAtQuestionAsync(p, armed, [.. hits.Where(h => h.Seq <= boundary)], ct, payload, submit); }
+        if (payload.Kind == "unknown" || submit.Kind == "unknown" || p.Reply.Log.UncertainPayload is not null) { return false; }
         if (payload.Present) { p.Reply.Handle(payload.Value); }
         p.Reply.HandledPress = submit.Present ? submit.Value : null;
         p.Reply.PendingPress = null;
@@ -326,10 +344,17 @@ public sealed partial class HaConnector
             await BaselineRepliesAsync(p, ct);
             return;
         }
+        var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
+        // Presses up to the boundary were counted as the question closed: again, one would spend a later message's.
+        foreach (var press in seen.Where(h => h.Seq > p.Reply.Boundary && h.Hit.EntityId == SessionEntities.Submit(p.Node)).Select(h => h.Hit.State.State)
+            .Append(submit.Value).Where(s => IsStamp(s) && s != p.Reply.HandledPress))
+        {
+            ClassifyPress(p.Reply.Log, press, false);
+        }
         foreach (var (seq, hit) in seen)
         {
             if (seq <= p.Reply.Boundary || hit.EntityId != SessionEntities.ReplyPayload(p.Node) || !IsStamp(hit.State.State) || p.Reply.IsHandled(hit.State.State)
-                || p.Reply.Waiting.Any(w => w.State == hit.State.State))
+                || MixedReplyPayload(hit.EntityId, hit.State) || p.Reply.Waiting.Any(w => w.State == hit.State.State))
             {
                 continue;
             }
@@ -342,6 +367,7 @@ public sealed partial class HaConnector
         }
         if (underWay.ContainsKey(sessionId)) { return; }
         p.Reply.ReadAgain = false;
+        if (await DrainQueueAsync(sessionId, p, ct)) { p.Reply.ReadAgain = true; return; }
         while (p.Reply.Waiting.Count > 0)
         {
             var next = p.Reply.Waiting[0];
@@ -369,9 +395,9 @@ public sealed partial class HaConnector
     // Send-DaemonCardPayload: one publish from the reply card, unless it was read before. Says
     // whether it was nothing to send, taken without a delivery (refused, or words for a question),
     // or is being delivered.
-    async Task<CardRead> CardReplyAsync(string sessionId, Published p, HaState state, CancellationToken ct)
+    async Task<CardRead> CardReplyAsync(string sessionId, Published p, HaState state, CancellationToken ct, bool queued = false)
     {
-        if (!IsStamp(state.State) || p.Reply.IsHandled(state.State)) { return CardRead.Nothing; }
+        if (!IsStamp(state.State) || (!queued && p.Reply.IsHandled(state.State)) || MixedReplyPayload(SessionEntities.ReplyPayload(p.Node), state)) { return CardRead.Nothing; }
         var stamp = state.State;
         var a = state.Attributes;
         var attributes = a.ValueKind == JsonValueKind.Object;
@@ -412,6 +438,13 @@ public sealed partial class HaConnector
         }
         var rid = attributes ? CleanRid(Str(a, "rid")) : null;
         var sender = attributes ? CleanSender(Str(a, "sender")) : null;
+        if (!queued && rid is not null && p.Reply.Log.Queued.Any(q => CleanRid(Str(q.Attributes, "rid")) == rid))
+        {
+            p.Reply.Ack = MakeAck(rid, sender, "queued", duplicate: true);
+            await TransientAsync(p, "Duplicate reply dropped", [], ct);
+            p.Reply.Handle(stamp);
+            return CardRead.Taken;
+        }
         // A message delivered twice is dropped: nothing is typed again, and the sender is told
         // what came of the first. While the first is still going in, its own outcome will say.
         if (rid is not null && p.Reply.Rids.TryGetValue(rid, out var prior))
