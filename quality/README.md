@@ -909,6 +909,11 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   closes it, including reruns. Cancelled, skipped, stale and duplicate events make no changes.
   Evidence contains capped, mention-neutralised job/test names, never raw logs; unreadable logs are noted.
   GitHub issues and the label are the only alert channel: no assignee, owner mention or phone notification.
+  Tiered gating B3 ([issue 3210](https://github.com/danswett/agent-bridge/issues/3210)): a failed job named
+  in a `tier: post-merge` suite's `tier_jobs` in `catalog.yml` is listed as `Job (post-merge-tier)`. When
+  only such jobs failed (the `quality-gate` aggregate aside), the entry says so: an alert that never feeds
+  a pull request's merge verdict. The issue stays open until main's CI is green; quarantine proposals are
+  B3b. Missing tier data means blocking.
   Offline test: `quality/test-main-red.ps1` (catalog suite `main-red`).
 - **Red minutes on main** (owner target, 2026-11-09): `pwsh quality/red-minutes.ps1` prints how long
   main's CI was red over the last 24 h, the same way the main guardian counts it (a spell runs from a

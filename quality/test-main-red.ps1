@@ -11,7 +11,7 @@ suites:
   - id: pwa-ui
     where: ci.yml pwa-ui
     tier: post-merge  # WebKit after merge
-    tier_jobs: ['pwa-ui (webkit 1/3)', pwa-e2e]
+    tier_jobs: ['pwa-ui (webkit 1/3)', pwa-e2e, "probe, light"]
   - id: product
     tier_jobs: [product]
   - id: lab
@@ -150,10 +150,15 @@ Assert (($s.writes -join ',') -eq 'label,create,comment' -and $s.open -and
 Reset-Scenario; $s.extraJobs = @(@{ id = 8; name = 'pwa-e2e'; conclusion = 'failure' }); Detect
 Assert ($s.title -match '^Main red: CI failing' -and $s.body -match '(?m)^Job: product$' -and
     $s.body -match '(?m)^Job \(post-merge-tier\): pwa-e2e$' -and $s.body -notmatch 'post-merge tier only') 'a blocking failure beside a post-merge one stays an ordinary main-red entry'
+Reset-Scenario; $s.jobName = 'pwa-e2e'; $s.extraJobs = @(@{ id = 8; name = 'quality-gate'; conclusion = 'failure' }); Detect
+Assert ($s.title -match 'post-merge tier only' -and $s.body -match '(?m)^Job: quality-gate$') 'the quality-gate aggregate echoing a post-merge failure keeps it post-merge only'
+Reset-Scenario; $s.jobName = 'light'; Detect
+Assert ($s.body -match '(?m)^Job: light$' -and $s.body -notmatch 'post-merge tier only') 'a comma inside a quoted tier job name invents no post-merge job'
 Reset-Scenario; $s.jobName = 'pwa-ui (webkit 1/3)'; $script:CatalogPath = "$tierPath.missing"; Detect; $script:CatalogPath = $tierPath
 Assert ($s.title -match '^Main red: CI failing' -and $s.body -match '(?m)^Job: pwa-ui') 'without catalog tier data every failed job stays blocking'
-$names = @(Get-PostMergeJobs $tierPath | Sort-Object)
-Assert (($names -join '|') -eq 'pwa-e2e|pwa-ui (webkit 1/3)') "only post-merge suites' tier_jobs are post-merge ($($names -join '|'))"
+$names = @((Get-PostMergeJobs $tierPath) | Sort-Object)
+$expected = @('pwa-ui (webkit 1/3)', 'pwa-e2e', 'probe, light') | Sort-Object
+Assert (($names -join '|') -eq ($expected -join '|')) "only post-merge suites' tier_jobs are post-merge ($($names -join '|'))"
 Remove-Item -LiteralPath $tierPath
 if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 "main-red: $script:checks checks passed"
