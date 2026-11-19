@@ -619,15 +619,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runtime: win-x64
-            runner: windows-latest
-            out: out/app
-            artifact: agent-bridge-windows
-          - runtime: win-arm64
-            runner: windows-11-arm
-            out: out/app-arm64
-            artifact: agent-bridge-windows-arm64
+        # The Arm64 leg is post-merge (quality/catalog.yml app suite, #3209): only main builds it.
+        include: >-
+          ${{ fromJSON(format('[{0}{1}]',
+          '{"runtime":"win-x64","runner":"windows-latest","out":"out/app","artifact":"agent-bridge-windows"}',
+          github.event_name != 'pull_request' && ',{"runtime":"win-arm64","runner":"windows-11-arm","out":"out/app-arm64","artifact":"agent-bridge-windows-arm64"}' || '')) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -785,7 +781,8 @@ jobs:
     # The existing install, architecture, distribution and installed-app checks remain intact.
     name: app-installer (${{ matrix.runtime }})
     needs: [plan, app]
-    if: "!cancelled() && (needs.plan.outputs.app-installer == 'true')"
+    # Post-merge (quality/catalog.yml app suite, #3209): pull requests skip both installers.
+    if: "!cancelled() && github.event_name != 'pull_request' && (needs.plan.outputs.app-installer == 'true')"
     strategy:
       fail-fast: false
       matrix:
@@ -1568,26 +1565,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: chromium 1/3
-            project: chromium
-            shard: 1/3
-            renders: true
-          - name: chromium 2/3
-            project: chromium
-            shard: 2/3
-          - name: chromium 3/3
-            project: chromium
-            shard: 3/3
-          - name: webkit 1/3
-            project: webkit
-            shard: 1/3
-          - name: webkit 2/3
-            project: webkit
-            shard: 2/3
-          - name: webkit 3/3
-            project: webkit
-            shard: 3/3
+        # WebKit is post-merge (quality/catalog.yml pwa-ui suite, #3209): only main runs it.
+        include: >-
+          ${{ fromJSON(format('[{0}{1}]',
+          '{"name":"chromium 1/3","project":"chromium","shard":"1/3","renders":true},{"name":"chromium 2/3","project":"chromium","shard":"2/3"},{"name":"chromium 3/3","project":"chromium","shard":"3/3"}',
+          github.event_name != 'pull_request' && ',{"name":"webkit 1/3","project":"webkit","shard":"1/3"},{"name":"webkit 2/3","project":"webkit","shard":"2/3"},{"name":"webkit 3/3","project":"webkit","shard":"3/3"}' || '')) }}
     runs-on: ubuntu-24.04
     # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
     # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
@@ -1699,7 +1681,8 @@ jobs:
     # (test/e2e/e2e.spec.mjs). The only job that needs the dev stack, so the only one that builds
     # it (#457): built once, here, rather than in every shard or passed round as an artifact.
     needs: plan
-    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.pwa-e2e == 'true'
+    # Post-merge (quality/catalog.yml pwa-e2e suite, #3209): pull requests skip it.
+    if: github.event_name != 'pull_request' && (needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.pwa-e2e == 'true')
     runs-on: ubuntu-24.04
     # 35, as every job that runs `playwright install --with-deps` gets (#689): main run
     # 41952998347 cancelled this job at its old 15 inside that install, fetching 126 of Chromium's
@@ -1769,7 +1752,8 @@ jobs:
     # The one check that sums up this workflow (quality/README.md §4.7), and the one to make
     # required. Every job the plan marked to run must have succeeded: when the whole ring runs,
     # that is every job here except unselected app and installer; otherwise, those the plan gave
-    # true. A job the plan skipped isn't selected, so no run waits on it, but any job that failed or was
+    # true. A pull request skips post-merge jobs (PR_OFF below, quality/catalog.yml tiers, #3209), so they aren't
+    # selected there. A job the plan skipped isn't selected, so no run waits on it, but any job that failed or was
     # cancelled fails this, and so does a selected job that was skipped (#487). The plan itself is
     # in needs, since when it fails every other job is skipped. The catalog check fails when any
     # check job is missing here. publish-gate, sign, publish, attest and relay-image-sarif are
@@ -1837,6 +1821,8 @@ jobs:
         env:
           # The waiver's needs when it waived something, otherwise the real ones.
           NEEDS: ${{ steps.waiver.outputs.needs || toJSON(needs) }}
+          # Whole jobs the catalog makes post-merge: they skip pull requests, which aren't gated on them.
+          PR_OFF: ${{ github.event_name == 'pull_request' && 'app-installer pwa-e2e' || '' }}
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
@@ -1860,10 +1846,12 @@ jobs:
           # Selected: every job when the whole ring runs, otherwise those the plan gave true.
           # App and installer always use their own outputs, on main too (#1910).
           # Each selected job must have succeeded; a skipped one was meant to run and didn't.
-          missing=$(echo "$NEEDS" | jq -r '
+          missing=$(echo "$NEEDS" | jq -r --arg off "$PR_OFF" '
             (.plan.outputs // {}) as $plan
             | ($plan["whole-ring"] == "true") as $all
+            | ($off | split(" ")) as $off
             | [to_entries[] | select(.key == "plan" or ($all and .key != "app" and .key != "app-installer") or $plan[.key] == "true")
+                | select(.key | IN($off[]) | not)
                 | select(.value.result != "success") | "\(.key) (\(.value.result))"]
             | join(", ")')
           if [ -n "$missing" ]; then

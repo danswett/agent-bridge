@@ -1846,14 +1846,9 @@ public class MergeRuleTests
             else
             {
                 var matrix = (YamlMappingNode)((YamlMappingNode)strategy).Children[new YamlScalarNode("matrix")];
-                if (matrix.Children.TryGetValue(new YamlScalarNode("include"), out var include))
-                {
-                    var template = ((YamlScalarNode)job.Children[new YamlScalarNode("name")]).Value!;
-                    var dimension = Regex.Match(template, @"matrix\.(\w+)").Groups[1].Value;
-                    expanded.AddRange(((YamlSequenceNode)include).Children.Cast<YamlMappingNode>()
-                        .Select(row => Regex.Replace(template, @"\$\{\{\s*matrix\.\w+\s*\}\}",
-                            ((YamlScalarNode)row.Children[new YamlScalarNode(dimension)]).Value!)));
-                }
+                if (matrix.Children.ContainsKey(new YamlScalarNode("include")))
+                    // Every leg, post-merge ones too: main runs both tiers (#3209).
+                    expanded.AddRange(CiPlan.Legs(group.Key, job)!.Value.All);
                 else
                 {
                     // A plan-selected matrix must be configured by family, never fixed instances.
