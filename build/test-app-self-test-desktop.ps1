@@ -81,7 +81,10 @@ try {
         $out = Join-Path $fixture 'public-selftest'
         if ($attempt -eq 'selftest-retry') { $out = Join-Path $out 'retry' }
         $files = @(Get-ChildItem -LiteralPath $out -File -ErrorAction SilentlyContinue)
-        $matching = @($files | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw).Contains($attempt) })
+        $matching = @($files | Where-Object {
+            $expected = if ($_.Name.EndsWith('.json')) { "{`"attempt`":`"$attempt`"}" } else { "$attempt diagnostic" }
+            [string]::Equals((Get-Content -LiteralPath $_.FullName -Raw), $expected, [StringComparison]::Ordinal)
+        })
         Test-Case ($null -eq $stageError -and $files.Count -eq 5 -and $matching.Count -eq 5) "$attempt stages its own five named text files, never dumps or archives ($stageError)"
     }
     Remove-Item -LiteralPath (Join-Path $fixture 'public-selftest') -Recurse -ErrorAction SilentlyContinue

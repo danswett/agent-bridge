@@ -920,6 +920,10 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   only while `MAIN_RED_QUARANTINE` is exactly `on` in its environment and the script exists (until PR 3078
   lands, the request is only recorded). The generator keeps its own fences: the repository variable rechecked
   before each write, and only attempt 2 of one failed run; a refusal is a warning, never a failed detection.
+  The first request reserves the one opportunity for that test across the entire open issue, not one
+  per distinct test. A successful generator invocation adds `quarantine-completed: test=<name>` to the
+  alert; a refusal, nonzero exit, missing script or disabled switch leaves the intent pending. Later
+  eligible entries for the requested test may try again until completion; duplicate events still do nothing.
   Nothing here posts a status, check or label, so no merge verdict reads it.
   Offline test: `quality/test-main-red.ps1` (catalog suite `main-red`).
 - **Red minutes on main** (owner target, 2026-11-09): `pwsh quality/red-minutes.ps1` prints how long
