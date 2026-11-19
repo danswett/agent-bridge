@@ -2241,6 +2241,7 @@ public class MergeRuleTests
     [InlineData("infra", "failure", "failure")]
     [InlineData("infra", "success", "success")]
     [InlineData("infra", "cleared", "success")]
+    [InlineData("infra", "rerunning", "failure")]
     [InlineData("success-then-infra", "failure", "success")]
     [InlineData("success-then-skipped", "failure", "success")]
     [InlineData("cancelled-before-tests", "failure", "failure")]
@@ -2251,12 +2252,15 @@ public class MergeRuleTests
     [InlineData("zero-jobs-cancelled", "success", "success")]
     [InlineData("arm-waiver-on", "failure", "success")]
     [InlineData("arm-waiver-off", "failure", "failure")]
+    [InlineData("arm-waiver-on-retried", "success", "success")]
+    [InlineData("arm-waiver-off-retried", "success", "failure")]
     public void A_newer_run_without_a_real_result_never_hides_an_older_failure_or_a_deterministic_one(string scenario, string older, string state)
     {
         object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
         object Entry(int id, string name, string conclusion, int attempt, params object[] steps) =>
             new { id, name, status = "completed", conclusion, run_attempt = attempt, runner_id = 1, steps };
-        const string product = "product (ubuntu-latest)";
+        const string product = "product (ubuntu-latest)", arm = "app (win-arm64)";
+        var replaced = scenario == "light-infra" ? "light" : scenario.StartsWith("arm", StringComparison.Ordinal) ? arm : null;
         object[] retried = [Entry(10, product, "success", 1), scenario == "success-then-skipped" ? Entry(11, product, "skipped", 2)
             : Entry(11, product, "failure", 2, Step("Set up job", "failure"), Step("Run tests", "skipped"))];
         object[] tried = scenario switch
@@ -2264,22 +2268,26 @@ public class MergeRuleTests
             "skipped-retry" or "skipped-placeholder" => [Entry(10, product, "failure", 1, Step("Set up job", "success"), Step("Run tests", "failure")),
                 Entry(11, scenario == "skipped-retry" ? product : "product", "skipped", 2)],
             "light-infra" => [Entry(10, product, "success", 1), Entry(12, "light", "failure", 1, Step("Set up job", "failure"), Step("Run tests", "skipped"))],
-            "arm-waiver-on" or "arm-waiver-off" => [Entry(10, product, "success", 1),
-                Entry(13, "app (win-arm64)", "failure", 1, Step("Set up job", "failure"), Step("Run tests", "skipped"))],
+            // "retried": a waivable arm64 test failure, then a rerun cancelled before its tests.
+            _ when replaced == arm => [Entry(10, product, "success", 1), .. scenario.EndsWith("retried", StringComparison.Ordinal)
+                ? new[] { Entry(13, arm, "failure", 1, Step("Run tests", "failure")), Entry(14, arm, "cancelled", 2, Step("Set up job", "success"), Step("Run tests", "skipped")) }
+                : [Entry(13, arm, "failure", 1, Step("Set up job", "failure"), Step("Run tests", "skipped"))]],
             "success-then-infra" or "success-then-skipped" => retried,
             "cancelled-before-tests" => [Entry(10, product, "cancelled", 1, Step("Set up job", "success"), Step("Run tests", "skipped"))],
             _ => [Entry(10, product, "failure", 1, Step("Set up job", "failure"), Step("Run tests", "skipped"),
                 Step("Post Run actions/checkout@v4", scenario.StartsWith("two-", StringComparison.Ordinal) ? "failure" : "success"))],
         };
-        var replaced = scenario == "light-infra" ? "light" : scenario.StartsWith("arm", StringComparison.Ordinal) ? "app (win-arm64)" : null;
         string[] names = ["plan", "light", "app (win-x64)", "app (win-arm64)"];
         var settled = names.Select((name, id) => Entry(id, name, "success", 1)).ToArray();
         var jobs = settled.Where((_, id) => names[id] != replaced).Concat(tried).ToArray();
+        // "rerunning": run 5's product failed its tests and its retry is still running; run 4 is green.
         object[]? fifth = older switch
         {
             "unusable" => [Entry(0, "plan", "success", 1), Entry(1, "product", "skipped", 1), Entry(2, "light", "failure", 1, Step("Run tests", "failure")),
                 Entry(3, "app (win-x64)", "success", 1), Entry(4, "app (win-arm64)", "success", 1)],
             "cleared" => [.. settled, .. retried],
+            "rerunning" => [.. settled, Entry(10, product, "failure", 1, Step("Run tests", "failure")),
+                new { id = 11, name = product, status = "in_progress", conclusion = (string?)null, run_attempt = 2, runner_id = 1 }],
             _ => null,
         };
         const string unavailable = "Response status code does not indicate success: 503 (Service Unavailable).";
@@ -2297,7 +2305,7 @@ public class MergeRuleTests
                 ? new { total_count = 0, jobs = Array.Empty<object>() } : new { total_count = jobs.Length, jobs }),
                 [fifth is null ? 0 : 5] = JsonSerializer.Serialize(new { total_count = fifth?.Length ?? 0, jobs = fifth ?? [] }) },
             annotations: JsonSerializer.Serialize(notes));
-        var config = WriteConfig(arm64Waiver: replaced == "app (win-arm64)");
+        var config = WriteConfig(arm64Waiver: replaced == arm);
         try
         {
             File.WriteAllText(config, File.ReadAllText(config).Replace("jobs: [light",
@@ -2305,7 +2313,7 @@ public class MergeRuleTests
             var output = new StringWriter();
             // The waiver is active only when its switch is on, as Green already honours it.
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain,
-                () => WaiverExpiry.AddSeconds(-1), _ => scenario == "arm-waiver-on" ? "on" : null);
+                () => WaiverExpiry.AddSeconds(-1), _ => scenario.StartsWith("arm-waiver-on", StringComparison.Ordinal) ? "on" : null);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
             if (scenario == "infra" && older != "cleared")
                 Assert.Contains($"ALERT infra-only {product}: rerun needed (once)", output.ToString(), StringComparison.Ordinal);

@@ -75,7 +75,8 @@ arm64_waiver:
 # Exact display names pin every selected matrix instance: missing or renamed holds.
 # Owner decision Nov 18 15:05 PT: infra-only failures never hold main red. They need network or
 # runner evidence in the job's annotations; after the one rerun they escalate as INFRA-PERSISTENT.
-# Unknown failing steps and missing/empty step data hold. Cancellation needs proof tests never ran.
+# Unknown failing steps, more than one failed step and missing/empty step data hold.
+# Cancellation needs proof tests never ran; a step that failed before it needs its own evidence.
 # A bare name covers a dynamic family: at least one entry, and every present instance green.
 # The aggregate quality-gate waits on installer, so only its test inputs are listed.
 # Installer, sign and publish jobs do not hold, but their results are printed by the evaluator.

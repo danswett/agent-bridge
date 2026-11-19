@@ -461,23 +461,22 @@ static class MergeRuleCommand
                     memo[key] = infra = InfraOnly(session, job);
                 return infra;
             }
-            bool Unresolved(JsonElement job) => UnresolvedIn(job, all);
-            bool UnresolvedIn(JsonElement job, List<JsonElement> all)
-            {
-                var name = job.GetProperty("name").GetString();
-                var earlier = all.Where(j => j.GetProperty("name").GetString() == name
-                        && (RunAttempt(j), j.GetProperty("id").GetInt64()).CompareTo((RunAttempt(job), job.GetProperty("id").GetInt64())) < 0)
-                    .OrderBy(RunAttempt).ThenBy(j => j.GetProperty("id").GetInt64()).ToList();
-                var passed = earlier.FindLastIndex(j => j.GetProperty("conclusion").GetString() == "success");
-                return earlier.Skip(passed + 1).Any(j => j.GetProperty("conclusion").GetString() is not ("skipped" or "neutral") && !Infra(j));
-            }
+            // A job's last real result in one run, across its attempts: a success, or a failure that
+            // isn't infra-only. Null when every attempt was infra-only, skipped or neutral.
+            JsonElement? LastReal(string name, List<JsonElement> jobs) => jobs
+                .Where(j => j.GetProperty("name").GetString() == name && (j.GetProperty("conclusion").GetString() == "success"
+                    || (j.GetProperty("conclusion").GetString() is not (null or "skipped" or "neutral") && !Infra(j))))
+                .OrderBy(RunAttempt).ThenBy(j => j.GetProperty("id").GetInt64()).Cast<JsonElement?>().LastOrDefault();
+            bool Waived(string name, string? conclusion) => session.Arm64Waiver && config.Arm64Waiver?.Allows(name, conclusion) == true;
+            // A real result holds unless it passed or is a waived arm64 failure, wherever it was found.
+            bool Holds(string name, JsonElement? real) => real is { } r && r.GetProperty("conclusion").GetString() is var c && c != "success" && !Waived(name, c);
+            bool Unresolved(JsonElement job) => Holds(job.GetProperty("name").GetString()!, LastReal(job.GetProperty("name").GetString()!, all));
             bool Exempt(JsonElement job) => Infra(job) && !Unresolved(job);
             bool Green(JsonElement job) => job.GetProperty("status").GetString() == "completed"
                 && (job.GetProperty("conclusion").GetString() == "success"
                     || (job.GetProperty("conclusion").GetString() == "skipped" && !Unresolved(job))
                     || Exempt(job)
-                    || (session.Arm64Waiver && config.Arm64Waiver?.Allows(job.GetProperty("name").GetString() ?? "",
-                        job.GetProperty("conclusion").GetString()) == true));
+                    || Waived(job.GetProperty("name").GetString() ?? "", job.GetProperty("conclusion").GetString()));
             bool Passed(string name)
             {
                 if (!name.Contains(" (", StringComparison.Ordinal))
@@ -524,20 +523,20 @@ static class MergeRuleCommand
                 .OrderBy(j => !RerunUsed(j.Value)).ThenBy(j => j.Key, StringComparer.Ordinal)
                 .Select(j => RerunUsed(j.Value) ? $"INFRA-PERSISTENT {j.Key}: rerun used, open an issue" : $"ALERT infra-only {j.Key}: rerun needed (once)")
                 .ToList();
-            // A job that is only infra-only or skipped after a retry proved nothing about this commit:
-            // its last real result in an older run still stands, so a failure holds until a success.
-            var pending = latest.Where(j => Required(j.Key) && !Unresolved(j.Value) && (Infra(j.Value) || (j.Value.GetProperty("conclusion").GetString() == "skipped"
+            // A job with no real result in this run (only infra-only or skipped after a retry) proved
+            // nothing about this commit: the newest older run with a real result decides, so a failure
+            // holds until a success, and a success stops the lookup.
+            var pending = latest.Where(j => Required(j.Key) && LastReal(j.Key, all) is null && (Infra(j.Value) || (j.Value.GetProperty("conclusion").GetString() == "skipped"
                 && all.Any(a => a.GetProperty("name").GetString() == j.Key && a.GetProperty("conclusion").GetString() != "skipped"))))
                 .Select(j => j.Key).ToHashSet(StringComparer.Ordinal);
             while (pending.Count > 0 && evidence.MoveNext())
                 foreach (var name in pending.Where(evidence.Current.Jobs.ContainsKey).ToList())
                 {
-                    var job = evidence.Current.Jobs[name];
-                    var conclusion = job.GetProperty("conclusion").GetString();
-                    if (Incomplete(job) || (conclusion != "success" && (conclusion is "skipped" or "neutral" || Infra(job)) && !UnresolvedIn(job, evidence.Current.All)))
+                    // An older run's unfinished retry is no result, but its earlier attempts still are.
+                    if (LastReal(name, evidence.Current.All) is not { } real)
                         continue;
                     pending.Remove(name);
-                    if (conclusion != "success")
+                    if (Holds(name, real))
                         held.Add($"{name} (run {evidence.Current.Run.GetProperty("id").GetInt64()})");
                 }
             log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {MergeRule.Short(sha!)}; "
@@ -637,6 +636,7 @@ static class MergeRuleCommand
             && !config.InfraSteps.TryGetValue(name.Split(" (", StringSplitOptions.None)[0], out patterns))
             return false;
         var globs = patterns.Select(p => new Glob(p)).ToList();
+        var cancelled = job.GetProperty("conclusion").GetString() == "cancelled";
         var failedInfra = 0;
         var hasInfra = false;
         var tested = false;
@@ -657,25 +657,32 @@ static class MergeRuleCommand
                 continue;
             if (!infra || result.GetString() is not ("failure" or "timed_out" or "cancelled"))
                 return false;
-            failedInfra++;
+            // In a cancelled job the step running at the cancel shows cancelled; that is no failure.
+            if (!cancelled || result.GetString() != "cancelled")
+                failedInfra++;
         }
-        // A cancellation can be exempt only before any test/build step started. A never-assigned
-        // runner still needs a nonempty step manifest; absent step data is not proof of infra.
-        if (job.GetProperty("conclusion").GetString() == "cancelled")
-            return hasInfra && !tested;
+        // A cancellation can be exempt only before any test/build step started, and a step that failed
+        // before it is still judged by its own evidence below. A never-assigned runner still needs a
+        // nonempty step manifest; absent step data is not proof of infra.
+        if (cancelled && (!hasInfra || tested))
+            return false;
         if (hasInfra && allSkipped && job.TryGetProperty("runner_id", out var runner)
             && runner.TryGetInt64(out var runnerId) && runnerId == 0)
             return true;
         if (failedInfra == 0)
+            return cancelled;
+        // Annotations don't name their step, so one step's evidence can't vouch for another's: a job
+        // with more than one failed step holds.
+        if (failedInfra > 1)
             return false;
-        // The job id is its check run id; a truncated list proves nothing. Annotations don't name their
-        // step, so each failed step needs its own failure annotation and every one needs infra evidence.
+        // The job id is its check run id; a truncated list proves nothing. Every failure annotation
+        // needs infra evidence.
         using var notes = session.Rest($"repos/{session.Slug}/check-runs/{job.GetProperty("id").GetInt64()}/annotations?per_page=100");
         if (notes.RootElement.ValueKind != JsonValueKind.Array || notes.RootElement.GetArrayLength() >= 100)
             return false;
         var failures = notes.RootElement.EnumerateArray().Where(n => n.ValueKind != JsonValueKind.Object
             || !n.TryGetProperty("annotation_level", out var level) || level.ValueKind != JsonValueKind.String || level.GetString() == "failure").ToList();
-        return failures.Count >= failedInfra && failures.All(n => n.ValueKind == JsonValueKind.Object && n.TryGetProperty("message", out var message)
+        return failures.Count > 0 && failures.All(n => n.ValueKind == JsonValueKind.Object && n.TryGetProperty("message", out var message)
             && message.ValueKind == JsonValueKind.String && InfraEvidence.IsMatch(message.GetString()!));
     }
 

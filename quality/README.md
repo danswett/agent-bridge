@@ -587,11 +587,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      Owner decision Nov 18 15:05 PT: `main_green.infra_steps` lists case-sensitive infra step
      names/globs per exact job or matrix family: checkout, setup, cache and job plumbing only,
      never source-dependent installs such as `npm ci`, Playwright's pin or its system-packages
-     action. Those names only locate a failure: each failed step needs its own failure annotation,
-     and all its job's failure annotations (one extra read) must show a network or runner cause, such as exit
+     action. Those names only locate a failure: annotations don't name their step, so a job with
+     more than one failed step holds, and the job's failure annotations (one extra read) must all
+     show a network or runner cause, such as exit
      code 124 or a timeout, HTTP 429/5xx, a connection reset, DNS failure or a lost runner. Unknown
      failures and missing/empty step data hold. Cancellation needs evidence no test/build step
-     started; a never-assigned runner also needs a nonempty step manifest. Cancelled runs are
+     started, and a step that failed before it is judged like any other; a never-assigned runner
+     also needs a nonempty step manifest. Cancelled runs are
      inspected rather than hiding a test failure behind older green evidence; a cancelled run
      with no jobs (displaced in `ci-main`) is passed over.
      An infra-only failure never holds. On a first attempt it adds `ALERT infra-only` to the
@@ -601,7 +603,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `INFRA-PERSISTENT <job>` instead (listed first), and the F5 guardian or Quality opens the
      issue. A test/build failure in any attempt holds until a later attempt of that job
      succeeds, even if a later attempt or newer run of that job is only infra-only or a skipped
-     retry: older runs are read back to its last real result.
+     retry: older runs are read back to its last real result, and a success there (or earlier in the
+     same run) stops the lookup. The arm64 waiver applies to that result as to the latest one.
      Unreadable history, plan or product data fails closed without fallback. No usable run in
      the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from Quality, since labels take triage
