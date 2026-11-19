@@ -96,7 +96,7 @@ public sealed partial class ReplyTests
     {
         await using var c = await Asking();
         HaTrigger? previous = null;
-        if (!first) { previous = ha.SendFromCard(Node, "previous", decisionId: "q1", driver: "agent"); await Do(c, previous); }
+        if (!first) { previous = ha.SendFromCard(Node, "previous", decisionId: "q1", driver: "agent"); await Do(c, previous); await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user")); }
         var current = ha.SendFromCard(Node, "queued", decisionId: owner && !late ? "q1" : null, driver: owner ? null : "agent", rid: "r-1");
         var split = current with { State = stateFirst
             ? current.State with { Attributes = previous?.State.Attributes ?? JsonSerializer.SerializeToElement(new { }) }

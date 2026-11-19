@@ -70,8 +70,8 @@ public sealed partial class HaConnector
             var fresh = RememberPayload(log, stamp);
             if (mixed && log.UncertainPayload is { Before: null, At: { } other }) { RememberPayload(log, other); }
             // Press accounting is independent of payload acceptance and its fallible acknowledgement.
-            if (!mixed && Str(a, "decision_id") == armed.Question.Id) { log.AgentSends.Remove(stamp); }
-            if (fresh && (mixed || (Str(a, "driver") == "agent" && Str(a, "decision_id") != armed.Question.Id))) { log.AgentSends.Add(stamp); }
+            // Every agent payload, even one naming the open question, owes its companion Send.
+            if (fresh && (mixed || Str(a, "driver") == "agent")) { log.AgentSends.Add(stamp); }
             if (mixed || Str(a, "driver") != "agent" || !string.IsNullOrEmpty(Str(a, "decision_id")) || !ServesReplies || CleanRid(Str(a, "rid")) is not { } rid
                 || HasAttachments(state) || string.IsNullOrWhiteSpace(Str(a, "text"))) { continue; }
             var queue = log.Queued;

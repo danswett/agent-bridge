@@ -590,8 +590,8 @@ An agent's own Send press is not taken as the owner's confirmation, by count: wh
 message still owes its press, the next new Send press is taken as the agent's, and a press read when the payload
 cannot be read is too (fail closed). A mixed watched stamp remains uncertain even if REST still
 shows the previous complete payload. That debt outlives a question being replaced or cleared (each press is counted once, even when a close is retried);
-an idle Send consumes it too. Refused agent payloads, including stale question tags and attachments,
-still owe their companion press. An owner whose
+an idle Send consumes it too. Every agent payload, including one naming the open question, a stale tag or attachments,
+owes its companion press. An owner whose
 press lands there presses Send again. Known limit: if the owner's press lands between an agent's
 message and its own Send, the owner's press is taken as the agent's and the agent's later press
 confirms the form as it then stands. Another limit: messages overwritten before either the watch
