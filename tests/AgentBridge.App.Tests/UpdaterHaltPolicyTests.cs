@@ -38,6 +38,21 @@ public sealed class UpdaterHaltPolicyTests
     }
 
     [Fact]
+    public async Task An_initially_halted_check_keeps_its_candidate_blocked_from_download()
+    {
+        var inner = new Updater { HaltPolicy = Halted() };
+        var observed = new ObservedUpdater(inner);
+        Assert.Null(await observed.CheckAsync());
+        Assert.Null(observed.Found);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => observed.DownloadAsync(_ => { }));
+
+        Assert.Contains("halted", error.Message);
+        Assert.Equal(0, inner.Downloads);
+        Assert.Null(observed.Ready);
+    }
+
+    [Fact]
     public async Task A_new_halt_hides_a_previously_offered_and_downloaded_release()
     {
         var inner = new Updater { Ready = "0.2.0" };
