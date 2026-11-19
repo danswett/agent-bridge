@@ -3554,6 +3554,37 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         finally { holder?.Dispose(); }
     }
 
+    // #2884 review: an outside process taking an image the app already holds leaves the locked-file
+    // set unchanged, so only a fresh Restart Manager scan sees it before the host stops.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task An_outside_holder_of_an_image_the_app_already_holds_is_found_before_stop_or_handoff(bool departing)
+    {
+        if (departing) { await StartAsync(); }
+        else { await StartAsync(null, Make.Session("s1", SessionStatus.Working)); await auto.TickAsync(); }
+        var path = Path.Combine(app, "held-by-the-app.dll");
+        File.WriteAllText(path, "old install");
+        using var own = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        FileStream? outside = null;
+        var scans = 0;
+        preflight = () => { Interlocked.Increment(ref scans); return outside is null ? null : "an outside fixture (pid 42)"; };
+        void Take() => outside = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        host.On(HostOps.UpdateDepart, _ => { Take(); return Committed; });
+        try
+        {
+            string? why;
+            if (departing) { await NowAsync(); why = prefs.LastUpdate?.Reason; }
+            else { why = await auto.RestartToUpdateAsync(_ => { Take(); return Task.FromResult(true); }); }
+            Assert.Equal(2, scans);
+            Assert.Contains("pid 42", why, StringComparison.Ordinal);
+            Assert.False(updater.Applied);
+            Assert.Empty(host.Sent(HostOps.Stop));
+        }
+        finally { outside?.Dispose(); }
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task An_Update_now_whose_15_minutes_end_while_the_host_tries_its_lease_ends_expired_whatever_the_host_refuses_it_with()
