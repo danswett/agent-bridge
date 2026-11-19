@@ -701,7 +701,15 @@ controls consume that same contract; this extraction does not disable or remove 
   * **Files held by Windows** (#2345, #2353): before stopping the host, wait at most two minutes
     for Restart Manager's holders to release, with checks backing off to ten seconds.
     An unreadable/changing holder list is unknown, never permission to install. A SYSTEM service
-    is named even when its image is unreadable. Waiting carries no Installing credit; timeout
+    is named even when its image is unreadable; refusals include process/service name and PID,
+    never the absolute image path. Verify a confirmed external holder's association with one installation file
+    before naming that relative path ([holder diagnostics](https://github.com/danswett/agent-bridge/issues/2858));
+    the aggregate registered-file list is not proof of which file a process holds. A holder that
+    releases between queries or changes creation time is unknown, never a guessed filename; holders
+    already confirmed in the same check stay named beside it.
+    Match PID plus creation time throughout. Include non-executable resources such as `.pri`
+    files, not only DLLs and executables.
+    Waiting carries no Installing credit; timeout
     keeps the old install intact with recovery text and the existing 10/20/40/60-minute backoff.
     This path never stops a service or self-elevates; it does not replace the later slot design.
   * **Usage probes hold the host's stop** (#238): before the host is stopped, for an install or
