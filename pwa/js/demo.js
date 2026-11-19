@@ -1308,10 +1308,10 @@ export async function demoUpdateNow(machines) {
   const deviceId = await deviceIdOf(me.public);
   for (const m of machines) { m.key ??= await P256KeyPair.generate(); }
   const byId = new Map(machines.map((m) => [m.machine.id, m]));
-  return ({ id, release, accept, request }) => {
+  return ({ id, release, accept, request, unchecked }) => {
     const m = byId.get(id);
     if (!m) { return Promise.reject(new Error('not connected to that machine')); }
-    return signUpdateNow({ key: me, deviceId, machinePublic: m.key.public, release, accept, request });
+    return signUpdateNow({ key: me, deviceId, machinePublic: m.key.public, release, accept, request, unchecked });
   };
 }
 

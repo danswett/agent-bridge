@@ -88,8 +88,9 @@ export function acceptOf(b) {
 }
 
 // UpdateNowArgs, signed with the press: now, the release shown, and accept only when one was shown.
-export function nowArgs({ release, accept = null }) {
-  return accept ? { now: true, release, accept } : { now: true, release };
+// unchecked only once the person has confirmed a sheet showing POLICY_LINE (#3307); never batch.
+export function nowArgs({ release, accept = null, unchecked = false }) {
+  return { now: true, release, ...(accept ? { accept } : {}), ...(unchecked ? { unchecked: true } : {}) };
 }
 
 // update.get's and update.subscribe's result, and update.state's data.
@@ -242,6 +243,8 @@ export function notUpdated(why, { at = null, retryAt = null, failed = false } = 
     'not-connected': "this device can't update that machine",
     'local-device': "this device can't update that machine",
     'needs-roster': 'this needs your approved devices first',
+    'policy-unreadable': "bad-release protection couldn't be checked there",
+    halted: 'this release has been halted',
     unavailable: "the app there can't install it now",
     'old-app': "the app there can't install it now",
   };
@@ -316,8 +319,11 @@ export const STATE_WORDS = Object.freeze({ working: 'Mid-turn', question: 'Quest
 export const PAUSE_LINE = 'They pause while the bridge restarts, usually under a minute.';
 export const UNKNOWN_LINE = "Some sessions there haven't reported yet.";
 export const WARN_LINE = 'A question or approval waiting may have to be answered at the machine afterwards.';
+// The design's single-press warning (updates-fast-fleet-update.md §4) once the machine refused
+// policy-unreadable: confirming it is what signs unchecked.
+export const POLICY_LINE = 'Bad-release protection could not be checked on this machine.';
 
-export function nowSheet({ machine, busy, nameOf = () => null }) {
+export function nowSheet({ machine, busy, nameOf = () => null, unchecked = false }) {
   const b = busy ?? CANT_TELL;
   const left = b.moreApprovals + b.moreOther;
   const asking = b.waiting > 0 || b.moreApprovals > 0 || b.sessions.some((s) => s.state !== 'working');
@@ -329,6 +335,7 @@ export function nowSheet({ machine, busy, nameOf = () => null }) {
     pause: PAUSE_LINE,
     // Until #954 lands (settled decision 8): err toward warning.
     warn: asking || b.unknown ? WARN_LINE : null,
+    policy: unchecked ? POLICY_LINE : null,
     busy: b,
   };
 }
@@ -379,7 +386,7 @@ export class UpdateControl {
   #generation = 0;
 
   // fleet: a FleetStatus (update(id), call(id, op, data), noteUpdate(id, state), watch(id)).
-  // sign({ id, machineKey, release, accept, request }): an Update now's signed command for that
+  // sign({ id, machineKey, release, accept, request, unchecked }): an Update now's signed command for that
   // machine (transfer.js signUpdateNow), or null where this device can't sign one (no Update now).
   // session(hostId, sessionId): the session this device has, or null, for its name in the
   // confirmation. nameOf(id): a machine's name, for one restarting after it left.
@@ -441,6 +448,9 @@ export class UpdateControl {
     this.#notes.delete(id);
     let busy = s.busy ?? CANT_TELL;
     let ask = !quiet(busy);
+    // A refusal for stale or unreadable bad-release protection brings the confirmation back, once,
+    // with POLICY_LINE; only Update now on that signs unchecked (#3307). A halt still refuses.
+    let unchecked = false;
     for (;;) {
       let accept = null;
       if (ask) {
@@ -451,7 +461,7 @@ export class UpdateControl {
         this.#emit();
         let go = false;
         try {
-          go = await confirm(nowSheet({ machine, busy, nameOf: (sessionId) => sessionName(this.session(id, sessionId)) }), { signal: abort.signal }) === true;
+          go = await confirm(nowSheet({ machine, busy, unchecked, nameOf: (sessionId) => sessionName(this.session(id, sessionId)) }), { signal: abort.signal }) === true;
         } catch (e) {
           console.error(e);
         } finally {
@@ -462,14 +472,17 @@ export class UpdateControl {
         if (!go || abort.signal.aborted || generation !== this.#generation) { return; }
         accept = acceptOf(busy);
       }
-      const result = await this.#sendNow(id, release, accept, generation);
-      if (result?.outcome !== 'confirm' || generation !== this.#generation) { return; }
+      const result = await this.#sendNow(id, release, accept, generation, unchecked);
+      if (generation !== this.#generation) { return; }
+      if (result?.outcome === 'refused' && result.code === 'policy-unreadable' && !unchecked) {
+        unchecked = true;
+      } else if (result?.outcome !== 'confirm') { return; }
       busy = result.state?.busy ?? this.fleet.update(id)?.busy ?? CANT_TELL;
       ask = true;
     }
   }
 
-  async #sendNow(id, release, accept, generation) {
+  async #sendNow(id, release, accept, generation, unchecked = false) {
     this.#busy.add(id);
     this.#emit();
     // An answer that comes once the account has been cleared is nobody's to show.
@@ -478,14 +491,14 @@ export class UpdateControl {
       const before = this.fleet.update(id);
       const request = this.newRequest();
       // Signed once the channel to the machine is open, with the key its handshake proved.
-      const make = async (machineKey) => ({ now: await this.sign({ id, machineKey, release, accept, request }) });
+      const make = async (machineKey) => ({ now: await this.sign({ id, machineKey, release, accept, request, unchecked }) });
       const result = readUpdateCommandResult(await this.fleet.call(id, UPDATE.install, make));
       if (!current()) { return result; }
       if (result.state && this.fleet.update(id) === before) { this.fleet.noteUpdate(id, result.state); }
       if (result.outcome === 'accepted') {
         this.#nowRequests = [...this.#nowRequests.slice(-31), request];
         this.fleet.watch?.(id);
-      } else if (result.outcome === 'refused') {
+      } else if (result.outcome === 'refused' && (unchecked || result.code !== 'policy-unreadable')) {
         this.#notes.set(id, notUpdated(result.code, { at: result.state?.updateNowAt ?? this.fleet.update(id)?.updateNowAt ?? null, retryAt: result.retryAt }));
       }
       return result;
