@@ -2225,9 +2225,12 @@ public class MergeRuleTests
         Assert.Equal("held", WeeklyReport.Category("INFRA-PERSISTENT light: rerun used, open an issue; Held by the label 'hold'"));
     }
 
-    // Run 6 (newer) has no real product result; run 5 (older) passed or failed product's tests.
+    // Run 6 (newer) has no real product (or light) result; run 5 (older) passed or failed its tests.
+    // "unusable": run 5 never ran product but failed light's tests; run 4 is green.
     [Theory]
     [InlineData("skipped-retry", "success", "failure")]
+    [InlineData("skipped-placeholder", "success", "failure")]
+    [InlineData("light-infra", "unusable", "failure")]
     [InlineData("infra", "failure", "failure")]
     [InlineData("infra", "success", "success")]
     [InlineData("cancelled-before-tests", "failure", "failure")]
@@ -2243,26 +2246,32 @@ public class MergeRuleTests
         const string product = "product (ubuntu-latest)";
         object[] tried = scenario switch
         {
-            "skipped-retry" => [Entry(10, product, "failure", 1, Step("Set up job", "success"), Step("Run tests", "failure")), Entry(11, product, "skipped", 2)],
+            "skipped-retry" or "skipped-placeholder" => [Entry(10, product, "failure", 1, Step("Set up job", "success"), Step("Run tests", "failure")),
+                Entry(11, scenario == "skipped-retry" ? product : "product", "skipped", 2)],
+            "light-infra" => [Entry(10, product, "success", 1), Entry(12, "light", "failure", 1, Step("Set up job", "failure"), Step("Run tests", "skipped"))],
             "cancelled-before-tests" => [Entry(10, product, "cancelled", 1, Step("Set up job", "success"), Step("Run tests", "skipped"))],
             _ => [Entry(10, product, "failure", 1, Step("Set up job", "failure"), Step("Run tests", "skipped"),
                 Step("Post Run actions/checkout@v4", scenario.StartsWith("two-", StringComparison.Ordinal) ? "failure" : "success"))],
         };
-        var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)" }.Select((name, id) => Entry(id, name, "success", 1)).Concat(tried).ToArray();
+        var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)" }.Where(n => n != "light" || scenario != "light-infra")
+            .Select((name, id) => Entry(id, name, "success", 1)).Concat(tried).ToArray();
+        object[] unusable = [Entry(0, "plan", "success", 1), Entry(1, "product", "skipped", 1), Entry(2, "light", "failure", 1, Step("Run tests", "failure")),
+            Entry(3, "app (win-x64)", "success", 1), Entry(4, "app (win-arm64)", "success", 1)];
         var notes = new[] { "Response status code does not indicate success: 503 (Service Unavailable).",
             scenario == "two-failed-steps" ? "fatal: bad config line 1 in file .git/config. Process completed with exit code 1."
                 : scenario == "deterministic-note" ? "Version 99.0.x is not a valid .NET SDK version." : null }
             .OfType<string>().Select(message => new { annotation_level = "failure", message });
         var github = new FakeGitHub(GraphQLPullRequest(Head),
-            mainRuns: MainRuns((6, "completed", scenario.Contains("cancelled", StringComparison.Ordinal) ? "cancelled" : "failure", 1), (5, "completed", older, 1)),
+            mainRuns: MainRuns((6, "completed", scenario.Contains("cancelled", StringComparison.Ordinal) ? "cancelled" : "failure", 1), (5, "completed", older, 1), (4, "completed", "success", 1)),
             jobsByRun: new Dictionary<long, string> { [6] = JsonSerializer.Serialize(scenario == "zero-jobs-cancelled"
-                ? new { total_count = 0, jobs = Array.Empty<object>() } : new { total_count = jobs.Length, jobs }) },
+                ? new { total_count = 0, jobs = Array.Empty<object>() } : new { total_count = jobs.Length, jobs }),
+                [older == "unusable" ? 5 : 0] = JsonSerializer.Serialize(new { total_count = unusable.Length, jobs = unusable }) },
             annotations: JsonSerializer.Serialize(notes));
         var config = WriteConfig();
         try
         {
             File.WriteAllText(config, File.ReadAllText(config).Replace("jobs: [light",
-                "infra_steps: { product: [Set up job, Post Run actions/checkout@*] }, jobs: [light", StringComparison.Ordinal));
+                "infra_steps: { product: [Set up job, Post Run actions/checkout@*], light: [Set up job] }, jobs: [light", StringComparison.Ordinal));
             var output = new StringWriter();
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);

@@ -482,8 +482,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      of the same pull request, as ci.yml does. Only pull requests: these workflows group each
      push run on `main` by its own run id, so none is cancelled. ci.yml's push runs on `main`
      never cancel a run in progress either, but a first attempt still waiting can be replaced in
-     `ci-main` (item 7). A cancelled named test job on main's current push holds
-     merge-rule's main_green check until it succeeds (item 9).
+     `ci-main` (item 7). A named test job cancelled after its tests or build started holds
+     merge-rule's main_green check until it succeeds; one cancelled earlier is infra-only (item 9).
 
    A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
    cancelled, and if any job the plan selected didn't succeed: when the whole ring runs, that's
@@ -587,19 +587,21 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      Owner decision Nov 18 15:05 PT: `main_green.infra_steps` lists case-sensitive infra step
      names/globs per exact job or matrix family: checkout, setup, cache and job plumbing only,
      never source-dependent installs such as `npm ci`, Playwright's pin or its system-packages
-     action. Those names only locate a failure: a failed step also needs a failure annotation
-     on its job (one extra read per such job) showing a network or runner cause, such as exit
+     action. Those names only locate a failure: each failed step needs its own failure annotation,
+     and all its job's failure annotations (one extra read) must show a network or runner cause, such as exit
      code 124 or a timeout, HTTP 429/5xx, a connection reset, DNS failure or a lost runner. Unknown
      failures and missing/empty step data hold. Cancellation needs evidence no test/build step
      started; a never-assigned runner also needs a nonempty step manifest. Cancelled runs are
-     inspected rather than hiding a test failure behind older green evidence.
+     inspected rather than hiding a test failure behind older green evidence; a cancelled run
+     with no jobs (displaced in `ci-main`) is passed over.
      An infra-only failure never holds. On a first attempt it adds `ALERT infra-only` to the
      merge-rule description (after any blocking reason, compacted) and to the detailed log;
      [S2](https://github.com/danswett/agent-bridge/pull/3079) is not on main: flag `rerun needed
      (once)` rather than dispatching another rerun path. Once the rerun is used it adds
      `INFRA-PERSISTENT <job>` instead (listed first), and the F5 guardian or Quality opens the
      issue. A test/build failure in any attempt holds until a later attempt of that job
-     succeeds, so a rerun failing in setup never erases it.
+     succeeds, even if a later attempt or newer run of that job is only infra-only or a skipped
+     retry: older runs are read back to its last real result.
      Unreadable history, plan or product data fails closed without fallback. No usable run in
      the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from Quality, since labels take triage
