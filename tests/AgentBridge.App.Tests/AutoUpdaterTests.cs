@@ -469,6 +469,42 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.NotEmpty(late.Sent(HostOps.ProbeHold));
     }
 
+    // #2884 review: a host started from the installation during the scan after the stop's waits was
+    // never held, and that scan passes the package's own processes; the update would end it mid-probe.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task A_host_started_from_the_installation_during_the_last_scan_refuses_the_install_and_brings_the_host_back(bool arrives)
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        var started = false;
+        var updating = Manager(packageNow: () => Volatile.Read(ref started) ? [4242, 7171] : [4242]);
+        var applied = false;
+        string? Scan()
+        {
+            if (arrives && host.Sent(HostOps.Stop).Count > 0) { Volatile.Write(ref started, true); }
+            return null;
+        }
+
+        var update = updating.StopAndApplyAsync(() => { }, () => applied = true, Scan);
+        if (!arrives)
+        {
+            await update;
+            Assert.True(applied);
+            Assert.Empty(processes.Started);
+            return;
+        }
+        var refused = await Assert.ThrowsAsync<HostBusyException>(() => update);
+
+        Assert.Contains("pid 7171", refused.Message, StringComparison.Ordinal);
+        Assert.False(applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.Single(processes.Started);
+        Assert.False(updating.UpdateUnderWay);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Quitting_while_an_update_waits_for_another_profiles_probe_after_stopping_this_host_starts_it_again_at_once()
