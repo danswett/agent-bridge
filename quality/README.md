@@ -937,13 +937,18 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   `main-red.yml` handles completed CI push runs on main using main's trusted script, with no polling.
   Failure, timeout and startup failure open or update one bot-authored `main-red` issue; success
   closes it, including reruns. Cancelled, skipped, stale and duplicate events make no changes.
+  An incomplete rerun does not hide red: the detector reads the latest completed attempt and its
+  attempt-specific jobs immediately, preserving the five-minute reporting SLA without waiting for
+  the rerun. A newer completed push still supersedes an older event.
   Evidence contains capped, mention-neutralised job/test names, never raw logs; unreadable logs are noted.
   GitHub issues and the label are the only alert channel: no assignee, owner mention or phone notification.
   Tiered gating B3 ([issue 3210](https://github.com/danswett/agent-bridge/issues/3210)): a failed job named
   in a `tier: post-merge` suite's `tier_jobs` in `catalog.yml` is listed as `Job (post-merge-tier)`. When
   only such jobs failed (the `quality-gate` aggregate aside), the entry says so: an alert that never feeds
   a pull request's merge verdict. The issue stays open until main's CI is green; quarantine proposals are
-  B3b. Missing tier data means blocking.
+  B3b. Missing or IO-unreadable tier data means blocking (an unreadable catalog emits a warning,
+  not a lost alert). If a later entry includes a blocking failure, a post-merge-only issue title
+  is promoted to the ordinary main-red title before that entry is posted.
   Offline test: `quality/test-main-red.ps1` (catalog suite `main-red`).
 - **Culprit auto-revert** ([issue 3211](https://github.com/danswett/agent-bridge/issues/3211)):
   `pwsh quality/revert-culprit.ps1 -Repository <owner/repo>` acts once main has been red for 15 minutes

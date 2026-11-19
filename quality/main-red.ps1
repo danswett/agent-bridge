@@ -11,8 +11,13 @@ $script:CatalogPath = Join-Path $PSScriptRoot 'catalog.yml'
 function Get-PostMergeJobs([string]$Path) {
     $jobs = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return , $jobs }
+    try { $lines = @(Get-Content -LiteralPath $Path -ErrorAction Stop) }
+    catch [IO.IOException] {
+        Write-Warning 'Cannot read the tier catalog; every failed job stays blocking.'
+        return , $jobs
+    }
     $tier = $null; $names = @()
-    foreach ($line in @(Get-Content -LiteralPath $Path) + 'end:') {
+    foreach ($line in $lines + 'end:') {
         if ($line -match '^(\S|  - )') {
             if ($tier -eq 'post-merge') { foreach ($name in $names) { [void]$jobs.Add($name) } }
             $tier = $null; $names = @()
@@ -34,8 +39,8 @@ function Get-RedVerdict([string]$Conclusion) {
     'none'
 }
 
-function Get-FailedJobs([long]$RunId, [string]$Repository, [Collections.Generic.HashSet[string]]$PostMergeJobs) {
-    $pages = Invoke-Gh api "repos/$Repository/actions/runs/$RunId/jobs?per_page=100" --paginate --slurp | ConvertFrom-Json
+function Get-FailedJobs([long]$RunId, [string]$Repository, [Collections.Generic.HashSet[string]]$PostMergeJobs, [int]$Attempt) {
+    $pages = Invoke-Gh api "repos/$Repository/actions/runs/$RunId/attempts/$Attempt/jobs?per_page=100" --paginate --slurp | ConvertFrom-Json
     foreach ($page in $pages) {
         foreach ($job in $page.jobs | Where-Object { $_.conclusion -in @('failure', 'timed_out') }) {
             $readable = $true; $tests = @()
@@ -54,7 +59,7 @@ function Get-FailedJobs([long]$RunId, [string]$Repository, [Collections.Generic.
 }
 
 function Get-MainRedIssue([string]$Repository) {
-    Invoke-Gh issue list --repo $Repository --state open --label main-red --limit 100 --json 'number,body,author' |
+    Invoke-Gh issue list --repo $Repository --state open --label main-red --limit 100 --json 'number,body,author,title' |
         ConvertFrom-Json | Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') } |
         Select-Object -First 1
 }
@@ -89,12 +94,24 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
     if ($RunId -le 0 -or $Repository -notmatch '^[\w.-]+/[\w.-]+$') { throw 'Give a positive RunId and owner/repository.' }
     $run = Invoke-Gh api "repos/$Repository/actions/runs/$RunId" | ConvertFrom-Json
     if ($run.path -ne '.github/workflows/ci.yml' -or $run.event -ne 'push' -or $run.head_branch -ne 'main' -or
-        $run.head_repository.full_name -ne $Repository -or $run.status -ne 'completed') { return }
-    $verdict = Get-RedVerdict $run.conclusion
-    if ($verdict -eq 'none') { return }
+        $run.head_repository.full_name -ne $Repository) { return }
     # Filter completed runs server-side: a newer in-progress push says nothing about main's state.
     $latest = (Invoke-Gh api "repos/$Repository/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&per_page=1" | ConvertFrom-Json).workflow_runs
-    if (@($latest).Count -ne 1 -or $latest[0].id -ne $RunId -or $latest[0].run_attempt -ne $run.run_attempt) { return }
+    if (@($latest).Count -eq 1) {
+        if ($latest[0].run_number -gt $run.run_number) { return }
+        if ($latest[0].id -eq $RunId -and $latest[0].run_attempt -gt $run.run_attempt) {
+            $run = Invoke-Gh api "repos/$Repository/actions/runs/$RunId/attempts/$($latest[0].run_attempt)" | ConvertFrom-Json
+        }
+    }
+    # A rerun can replace the run's current status before this completed event is handled.
+    # Read immutable attempt evidence now, rather than delaying the five-minute alert until the rerun ends.
+    while ($run.status -ne 'completed') {
+        $attempt = [int]$run.run_attempt - 1
+        if ($attempt -lt 1) { return }
+        $run = Invoke-Gh api "repos/$Repository/actions/runs/$RunId/attempts/$attempt" | ConvertFrom-Json
+    }
+    $verdict = Get-RedVerdict $run.conclusion
+    if ($verdict -eq 'none') { return }
     $issue = Get-MainRedIssue $Repository
     $sha = $run.head_sha.Substring(0, 8)
     if ($verdict -eq 'green') {
@@ -111,15 +128,19 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
         if (@($comments | Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') -and
                     ($_.body -split '\r?\n') -ccontains $marker }).Count -gt 0) { return }
     }
-    $jobs = @(Get-FailedJobs $RunId $Repository (Get-PostMergeJobs $script:CatalogPath))
+    $jobs = @(Get-FailedJobs $RunId $Repository (Get-PostMergeJobs $script:CatalogPath) $run.run_attempt)
     # The PR verdict's main-green skips post-merge tier jobs (#3219); say so, so this isn't read as a hold.
     # quality-gate only sums the other ci.yml jobs and main-green never lists it, so it echoes them.
     $own = @($jobs | Where-Object { $_.Name -cne 'quality-gate' })
     $postMergeOnly = $own.Count -gt 0 -and @($own | Where-Object { -not $_.PostMerge }).Count -eq 0
     $body = Format-MainRedBody $run $Repository $jobs $postMergeOnly
-    if ($issue) { Invoke-Gh issue comment $issue.number --repo $Repository --body $body | Out-Null }
-    else {
-        $title = if ($postMergeOnly) { "Main red, post-merge tier only ($sha)" } else { "Main red: CI failing on main ($sha)" }
+    $title = if ($postMergeOnly) { "Main red, post-merge tier only ($sha)" } else { "Main red: CI failing on main ($sha)" }
+    if ($issue) {
+        if (-not $postMergeOnly -and $issue.title -like 'Main red, post-merge tier only (*)') {
+            Invoke-Gh issue edit $issue.number --repo $Repository --title $title | Out-Null
+        }
+        Invoke-Gh issue comment $issue.number --repo $Repository --body $body | Out-Null
+    } else {
         Invoke-Gh label create main-red --repo $Repository --color B60205 --description 'CI is red on main' --force | Out-Null
         Invoke-Gh issue create --repo $Repository --title $title --label main-red --body $body | Out-Null
     }
