@@ -23,6 +23,7 @@ function Fake-Gh {
     $body = if ($args -contains '--body') { $args[([array]::IndexOf($args, '--body') + 1)] }
     switch -Regex ($a) {
         '^api repos/o/r/actions/workflows/ci.yml/runs\?.*status=completed' {
+            if ($s.ContainsKey('runs')) { @{ workflow_runs = $s.runs } | ConvertTo-Json -Depth 5; return }
             $runs = @(@{ id = 101; run_attempt = 1; conclusion = 'failure'; updated_at = $s.redAt; head_sha = $script:RedSha; html_url = 'u101' })
             if (-not $s.noGreen) { $runs += @{ id = 100; run_attempt = 1; conclusion = 'success'; updated_at = '2026-11-09T07:00:00Z'; head_sha = $script:GreenSha; html_url = 'u100' } }
             if ($s.newest -eq 'success') { $runs += @{ id = 102; run_attempt = 1; conclusion = 'success'; updated_at = '2026-11-09T07:55:00Z'; head_sha = 'c' * 40; html_url = 'u102' } }
@@ -98,5 +99,25 @@ foreach ($case in @(@{ commits = 2 }, @{ prs = 0 }, @{ prs = 2 }, @{ noGreen = $
     Assert (($s.writes -join ',') -eq 'label,issue') "a second tick opens no duplicate issue ($name)"
 }
 Assert ($s.git -contains 'revert --abort') 'a conflicting revert is aborted'
+function Run($Id, $At, $Sha, $Attempt = 1) { @{ id = $Id; run_attempt = $Attempt; conclusion = 'failure'; updated_at = "2026-11-09T$At`:00Z"; head_sha = $Sha; html_url = "u$Id" } }
+function Entry($Id, $Test, $Attempt = 1) { @{ author = @{ login = 'github-actions' }; body = $s.entry.Replace('run=101 attempt=1', "run=$Id attempt=$Attempt").Replace('A.B.C.Method', $Test) } }
+# The 07:40 commit is the culprit only if one test failed in every red run's current attempt since then.
+foreach ($middle in 'A.B.C.Method', 'U.Other.Test', $null) {
+    Reset-Scenario
+    $s.runs = @(@{ id = 100; run_attempt = 1; conclusion = 'success'; updated_at = '2026-11-09T07:00:00Z'; head_sha = $script:GreenSha; html_url = 'u100' },
+        (Run 101 '07:40' $script:RedSha), (Run 102 '07:50' ('c' * 40)), (Run 103 '07:59' ('d' * 40)))
+    $s.comments = @(@(if ($middle) { Entry 102 $middle }) + (Entry 103 'A.B.C.Method')); Tick
+    $expected = if ($middle -eq 'A.B.C.Method') { 'push,pr' } else { 'label,issue' }
+    Assert (($s.writes -join ',') -eq $expected) "with middle-run evidence '$middle', T at 07:40 and 07:59 gives $expected ($($s.result))"
+}
+Reset-Scenario
+$s.runs = @(@{ id = 100; run_attempt = 1; conclusion = 'success'; updated_at = '2026-11-09T07:00:00Z'; head_sha = $script:GreenSha; html_url = 'u100' },
+    (Run 101 '07:40' $script:RedSha 2), (Run 102 '07:59' ('d' * 40)))
+$s.comments = @((Entry 101 'U.Other.Test' 2), (Entry 102 'A.B.C.Method')); Tick
+Assert ($s.writes -notcontains 'pr') "an obsolete attempt of the first red run does not authorize a revert ($($s.result))"
+Reset-Scenario; $s.conflict = $true; Tick; $s.conflict = $false; Tick
+Assert (($s.writes -join ',') -eq 'label,issue') 'a culprit issue stops a later revert PR for the same culprit'
+Reset-Scenario; Tick; $s.newest = 'failure2'; $s.comments = @((Entry 102 'U.Other.Test')); Tick
+Assert (($s.writes -join ',') -eq 'push,pr') 'a revert PR stops a later culprit issue for the same culprit'
 if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 "revert-culprit: $script:checks checks passed"
