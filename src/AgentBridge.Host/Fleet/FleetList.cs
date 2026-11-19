@@ -43,6 +43,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     readonly Func<RosterVerifier?>? signedRoster;
     readonly TimeProvider clock;
     readonly Dictionary<string, (FleetMachine Machine, DateTimeOffset Seen)> cache = new(StringComparer.Ordinal);
+    readonly HashSet<string> expired = new(StringComparer.Ordinal);
 
     public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null)
     {
@@ -63,15 +64,32 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
             var now = clock.GetUtcNow();
             var machines = Parse(frames, signedRoster?.Invoke() is { } roster ? Hosts(roster) : null).ToList();
             var listed = machines.Select(m => m.Id).ToHashSet(StringComparer.Ordinal);
-            foreach (var id in cache.Keys.Where(id => !listed.Contains(id) || now - cache[id].Seen >= CacheAge).ToList()) { cache.Remove(id); }
+            foreach (var id in cache.Keys.Where(id => !listed.Contains(id) || now - cache[id].Seen >= CacheAge).ToList())
+            {
+                if (listed.Contains(id)) { expired.Add(id); }
+                cache.Remove(id);
+            }
+            expired.IntersectWith(listed);
             for (var i = 0; i < machines.Count; i++)
             {
                 var m = machines[i];
                 FleetMachine? held = cache.TryGetValue(m.Id, out var c) ? c.Machine : null;
                 if (m.Online && m.HasRegistryRecord && (held?.Order is not { } a || m.Order is not { } b || (a.Epoch == b.Epoch ? b.Seq >= a.Seq : b.At > a.At)))
                 {
-                    cache[m.Id] = (m, now);
-                    if (m.Order is { } o && (now - o.At).Duration() > Freshness) { machines[i] = m with { Online = false, Verified = false, HasRegistryRecord = false }; }
+                    var seen = now;
+                    if (m.Order is { } o && (now - o.At).Duration() > Freshness)
+                    {
+                        // Without history, use the start of the frame's freshness window so
+                        // an expired replay cannot recreate rows after cache eviction.
+                        var stamp = o.At.ToUniversalTime();
+                        var earliest = stamp < DateTimeOffset.MinValue + Freshness ? DateTimeOffset.MinValue : stamp - Freshness;
+                        seen = c.Machine is not null ? c.Seen : earliest < now ? earliest : now;
+                        var drop = expired.Contains(m.Id) || now - seen >= CacheAge;
+                        machines[i] = m with { Online = false, Verified = false, HasRegistryRecord = false, Sessions = drop ? [] : m.Sessions };
+                        if (drop) { expired.Add(m.Id); continue; }
+                    }
+                    else { expired.Remove(m.Id); }
+                    cache[m.Id] = (m, seen);
                 }
                 else if (held is not null)
                 {
@@ -94,7 +112,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     // A new connection may be another account's, so nothing cached carries over.
     public void Attach(RelayClient? connection)
     {
-        lock (cache) { cache.Clear(); Volatile.Write(ref relay, connection); }
+        lock (cache) { cache.Clear(); expired.Clear(); Volatile.Write(ref relay, connection); }
     }
 
     public async Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => (await ReadScopedAsync(ct)).Machines;

@@ -130,12 +130,12 @@ public sealed class RosterSyncTests
     {
         var frame = Frame("H", at: at, ids: ["a"]);
         Assert.True(Assert.Single(reader.Read([frame])).Online);
-        time.Advance(TimeSpan.FromMinutes(2));
+        time.Advance(TimeSpan.FromMinutes(3));
         var stale = Assert.Single(reader.Read([frame]));
         Assert.False(stale.Online);
         Assert.False(stale.Verified);
         Assert.Equal(["a"], Ids(stale));
-        time.Advance(RelayFleetRoster.CacheAge - TimeSpan.FromMinutes(2) - TimeSpan.FromTicks(1));
+        time.Advance(RelayFleetRoster.CacheAge - TimeSpan.FromMinutes(3) - TimeSpan.FromTicks(1));
         Assert.Equal(["a"], Ids(Assert.Single(reader.Read([frame]))));
         time.Advance(TimeSpan.FromTicks(1));
         var expired = Assert.Single(reader.Read([frame]));
@@ -144,6 +144,22 @@ public sealed class RosterSyncTests
         Assert.Empty(Assert.Single(reader.Read([frame])).Sessions);
         reader.Attach(null);
         Assert.Empty(Assert.Single(reader.Read([frame])).Sessions);
+    }
+
+    [Fact]
+    public void A_future_stale_record_cannot_recreate_rows_after_its_cache_expires()
+    {
+        var frame = Frame("H", at: 120, ids: ["a"]);
+        var future = Assert.Single(reader.Read([frame]));
+        Assert.False(future.Online);
+        Assert.Equal(["a"], Ids(future));
+        time.Advance(RelayFleetRoster.CacheAge);
+        Assert.Empty(Assert.Single(reader.Read([frame])).Sessions);
+        Assert.Empty(Assert.Single(reader.Read([frame])).Sessions);
+        var fresh = Assert.Single(reader.Read([Frame("H", seq: 0, at: (int)RelayFleetRoster.CacheAge.TotalSeconds, ids: ["b"])]));
+        Assert.True(fresh.Online);
+        Assert.Equal(["b"], Ids(fresh));
+        Assert.Equal(["b"], Ids(Assert.Single(reader.Read([Known("H")]))));
     }
 
     [Fact]
