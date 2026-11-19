@@ -42,26 +42,72 @@ public sealed partial class ReplyTests
     [InlineData(true, "agent-user", "agent-user", true)]
     [InlineData(true, null, "agent-user", false)]
     [InlineData(true, "agent-user", null, false)]
-    public async Task An_agent_payload_and_companion_press_cannot_confirm_the_owners_completed_form(bool together, string? agent, string? user, bool restFails)
+    [InlineData(false, "agent-user", "agent-user", false, "q0")]
+    public async Task An_agent_payload_and_companion_press_cannot_confirm_the_owners_completed_form(bool together, string? agent, string? user, bool restFails, string? tag = null)
     {
         await using var c = await Ready(agent is null ? [] : [agent]);
         Idle(question: Pick());
         await Pass(c);
         await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
-        var payload = ha.SendFromCard(Node, "agent message", driver: "agent", rid: "r-agent");
+        var payload = ha.SendFromCard(Node, "agent message", decisionId: tag, driver: "agent", rid: "r-agent");
         if (together) { c.Observe(payload); }
         else { await Do(c, payload); }
         ha.GetFailsFor = id => restFails && id == SessionEntities.ReplyPayload(Node);
         await Do(c, ha.Press(SessionEntities.Submit(Node), user));
         Assert.Empty(answered);
-        Assert.Equal("queued", Ack.GetProperty("outcome").GetString());
+        Assert.Equal(tag is null ? "queued" : "refused", Ack.GetProperty("outcome").GetString());
         await Pass(c, 20);
         Assert.Empty(answered);
         ha.GetFailsFor = null;
         await Do(c, ha.Press(SessionEntities.Submit(Node)));
         Assert.Single(answered);
         await CardCloses(c);
-        Assert.Equal("agent message", Assert.Single(replied).Text);
+        Assert.Equal(tag is null ? ["agent message"] : [], replied.Select(r => r.Text));
+    }
+
+    [Fact]
+    public async Task A_mixed_watch_with_lagging_complete_REST_cannot_make_an_agent_press_the_owners()
+    {
+        await using var c = await Asking();
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        var previous = ha.SendFromCard(Node, "first", driver: "agent", rid: "r-1");
+        await Do(c, previous);
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        var current = ha.SendFromCard(Node, "second", driver: "agent", rid: "r-2");
+        ha.States[current.EntityId] = previous.State;
+        c.Observe(current with { State = current.State with { Attributes = previous.State.Attributes } });
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        Assert.Empty(answered);
+    }
+
+    [Fact]
+    public async Task An_idle_companion_press_does_not_consume_the_next_questions_owner_submit()
+    {
+        await using var c = await Asking();
+        await Do(c, ha.SendFromCard(Node, "queued", driver: "agent", rid: "r-1"));
+        await CardCloses(c);
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        Idle(question: Pick() with { Id = "q2" }); await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal("q2", Assert.Single(answered).Question);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failed_queue_ack_publish_retries_queued_without_duplicate_delivery(bool attributes)
+    {
+        await using var c = await Asking();
+        var topic = attributes ? HaContract.Topics(Node).ActivityAttributes : HaContract.Topics(Node).ActivityState;
+        var failed = false;
+        ha.PublishFailsFor = (t, _) => t == topic && !failed && (failed = true);
+        await Do(c, ha.SendFromCard(Node, "queued", driver: "agent", rid: "r-1"));
+        Assert.True(failed);
+        Assert.Equal("queued", Ack.GetProperty("outcome").GetString());
+        Assert.Equal(1, Detail.GetProperty("reply_queue_count").GetInt32());
+        await CardCloses(c);
+        Assert.Equal("queued", Assert.Single(replied).Text);
     }
 
     [Fact]
@@ -214,8 +260,10 @@ public sealed partial class ReplyTests
         Assert.Equal(0, Detail.GetProperty("reply_queue_count").GetInt32());
     }
 
-    [Fact]
-    public async Task A_split_payload_at_an_open_question_is_not_refused_using_the_previous_messages_identity()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_split_payload_at_an_open_question_is_not_refused_using_the_previous_messages_identity(bool clears)
     {
         await using var c = await Ready();
         var previous = ha.SendFromCard(Node, "previous message", driver: "agent");
@@ -230,11 +278,12 @@ public sealed partial class ReplyTests
         await Do(c, split);
 
         Assert.False(Detail.TryGetProperty("reply_ack", out _));
+        if (clears) { Idle(turn: 2); await Pass(c); }
         ha.States[current.EntityId] = current.State;
         await Do(c, current);
         Assert.True(Detail.TryGetProperty("reply_ack", out _), "The complete payload must receive its own acknowledgement.");
         Assert.Equal("r-current", Ack.GetProperty("rid").GetString());
-        Assert.Equal("queued", Ack.GetProperty("outcome").GetString());
+        Assert.Equal(clears ? "delivered" : "queued", Ack.GetProperty("outcome").GetString());
         await CardCloses(c);
         Assert.Equal("current message", Assert.Single(replied).Text);
         Assert.Empty(answered);
