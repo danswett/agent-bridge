@@ -894,8 +894,12 @@ test('signed in with no pending from the host, the hold ends after a short grace
   await page.clock.runFor(100);
   await expect(sheet(page).locator('.sign-in-code')).toBeVisible();
   await doneBeforePendingWhileSigningIn(page);
+  await page.clock.runFor(100); // The demo delivers frames on a timer.
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
-  await page.clock.runFor(11000);
+  await page.clock.runFor(4000);
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
+  // Past the hold's deadline with no sweep and nothing from the host: the banner follows it again.
+  await page.clock.runFor(1500);
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Waiting for sign-in');
   await expect(banner(page).getByRole('button', { name: 'Show code for Copilot on DEV-VM1' })).toBeVisible();
 });

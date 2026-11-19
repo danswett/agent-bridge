@@ -1027,6 +1027,25 @@ public sealed class SignInTests
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_signed_in_hold_with_no_pending_ends_on_its_second_and_the_banner_follows_the_host_again()
+    {
+        await using var demo = new Demo();
+        await demo.Host.NeedSignInAsync();
+        await Wait.UntilAsync(() => demo.Banner is { Sessions.Count: 3 }, "the sign-in banner");
+        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
+        await Wait.UntilAsync(() => demo.Main.SignInSheet is { HasCode: true }, "the code");
+        await demo.Host.SignInUnderWayAsync(true);
+        await demo.Host.FinishSignInAsync("signedIn", pendingFirst: false);
+        await Wait.UntilAsync(() => demo.Main.SignInSheet is null, "the sheet to close");
+        Assert.Equal("Sign in", TestUi.Read(() => demo.Main.SignIns.Single().VerbText));
+        await Task.Delay(AuthState.SignedInHold + TimeSpan.FromMilliseconds(200));
+        // The first tick: not the five-second sweep, so only the hold's own deadline can end it.
+        TestUi.Read(() => { demo.Main.Tick(); return 0; });
+        Assert.Equal(("Waiting for sign-in", "Show code"), TestUi.Read(() => (demo.Main.SignIns.Single().Line, demo.Main.SignIns.Single().VerbText)));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_session_that_fails_sign_in_again_while_confirming_goes_back_to_Needs_sign_in()
     {
         await using var demo = new Demo();

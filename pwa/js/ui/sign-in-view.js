@@ -275,7 +275,9 @@ export class SignInBanners {
     // Code lifetime still ends out of sight, without an idle periodic sweep.
     clearTimeout(this.#expiryTimer);
     const expires = [...this.#flows.values()].map((f) => f.code?.expiresAt)
-      .concat(this.#early.map((e) => e.read.expiresAt)).map((at) => Date.parse(at ?? '')).filter((at) => at > now);
+      .concat(this.#early.map((e) => e.read.expiresAt)).map((at) => Date.parse(at ?? ''))
+      // A signed-in hold ends on its deadline, not at the next sweep (#902).
+      .concat([...this.#flows.values()].filter(signedInHold).map((f) => f.at + SIGNED_IN_HOLD_MS)).filter((at) => at > now);
     if (expires.length) { this.#expiryTimer = setTimeout(() => this.render(), Math.min(2147483647, Math.min(...expires) - now)); }
     const banners = signInBanners(links, { flows: this.#flows, resolved: this.#resolved, now });
     // A banner that went without a press here: its sessions no longer need sign-in, so it
