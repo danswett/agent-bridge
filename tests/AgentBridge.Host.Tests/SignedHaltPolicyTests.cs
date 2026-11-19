@@ -213,6 +213,42 @@ public sealed class SignedHaltPolicyTests : IDisposable
         Assert.EndsWith("(key slot unknown); stored policy kept", Assert.Single(logs), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Another_process_reading_the_predecessor_adopts_the_successors_lower_sequence()
+    {
+        using var reader = Discovery();
+        await Trust.OfferAsync(reader, "cdn", Envelope(TestOnlyKeyA, Payload(5)));
+        using (var writer = Discovery()) { await Trust.OfferAsync(writer, "cdn", Envelope(TestOnlyKeyB, Payload(1, ""))); }
+        var observed = await reader.ReadHaltPolicyAsync((_, _) => throw new InvalidOperationException("legacy must remain closed"));
+        Assert.Equal((true, SignedHaltPolicy.KeyId(Point(TestOnlyKeyB)), 0), (observed.Fresh, observed.Policy!.Kid, observed.Policy.Halted.Length));
+    }
+
+    [Fact]
+    public async Task A_cache_behind_its_floor_after_a_failed_write_is_not_fresh_after_a_restart()
+    {
+        var first = Discovery();
+        await Trust.OfferAsync(first, "cdn", Envelope(TestOnlyKeyA, Payload(5, "")));
+        var blocked = Directory.CreateDirectory(Path.Combine(folder, ReleaseDiscovery.FileName + ".tmp"));
+        Assert.False((await Trust.OfferAsync(first, "cdn", Envelope(TestOnlyKeyA, Payload(6)))).Fresh);
+        blocked.Delete();
+        first.Dispose();
+        using var client = new HttpClient(http);
+        Assert.False((await new GitHubHaltListSource(client, Discovery()).ReadSnapshotAsync(default)).Fresh);
+    }
+
+    [Fact]
+    public async Task An_unsigned_cache_that_replaced_a_signed_halt_while_its_floor_survives_is_unavailable()
+    {
+        using (var first = Discovery()) { await Trust.OfferAsync(first, "cdn", Envelope(TestOnlyKeyA, Payload(5))); }
+        LegacyRewrite();
+        var path = Path.Combine(folder, ReleaseDiscovery.FileName);
+        var state = JsonNode.Parse(File.ReadAllText(path))!;
+        (state["haltPolicy"]!["policy"]!["body"], state["haltPolicy"]!["policy"]!["halted"]) = ("""{"v":1,"halted":[]}""", new JsonArray());
+        File.WriteAllText(path, state.ToJsonString());
+        using var client = new HttpClient(http);
+        Assert.Equal(new HaltCheck(null, ReleaseBlockedReason.HaltListUnavailable), await new ReleaseEligibility(new GitHubHaltListSource(client, Discovery())).IsHalted("0.1.7"));
+    }
+
     [Theory]
     [InlineData("""{"v":1,"keys":[{"kid":""")]
     [InlineData("""{"v":1,"keys":[{"kid":"a","seq":"9"}]}""")]

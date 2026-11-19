@@ -20,6 +20,7 @@ public sealed partial class ReleaseDiscovery
     // push a floor to long.MaxValue. Each key has its own floor, so a successor key starts fresh without any migration.
     public const long MaxSequenceJump = 100_000;
     string FloorPath => Path.Combine(folder, FloorFileName);
+    string[] pinned = [];
     internal sealed record HaltPolicyCache(VerifiedHaltPolicy? Policy, DateTimeOffset? At, DateTimeOffset NotBefore, string? ETag,
         DateTimeOffset? AttemptedAt = null, long Attempt = 0, long Verified = 0);
 
@@ -100,6 +101,7 @@ public sealed partial class ReleaseDiscovery
         try
         {
             using var held = await LockAsync(cancellationToken);
+            pinned = slots;
             var now = time.GetUtcNow();
             var state = Sane(Read(), now);
             var policy = state.HaltPolicy ?? new(null, null, DateTimeOffset.MinValue, null);
@@ -188,13 +190,20 @@ public sealed partial class ReleaseDiscovery
     }
     static long NextAttempt(HaltPolicyCache policy) =>
         policy.Attempt >= policy.Verified && policy.Attempt is >= 0 and < long.MaxValue ? policy.Attempt + 1 : throw new IOException("update policy: cache generation unavailable");
+    // A cache the floor does not vouch for is never fresh: a signed policy away from its key's floor (its cache write failed
+    // after the floor moved, or the floor went back), or an unsigned one once any floor exists (#3326 review 1979a45a).
+    HaltPolicyCache? Floored(HaltPolicyCache? cache) => cache?.Policy is { } held && Floors(cache) is var floors
+        && (held.Sequence > 0 ? floors?.Find(f => f.Kid == held.Kid).Seq != held.Sequence : floors is not { Count: 0 }) ? cache with { At = null } : cache;
     // Verification generations, not Saved or clock stamps, order same-release changes.
-    static HaltPolicyCache? MergePolicy(HaltPolicyCache? known, HaltPolicyCache? disk)
+    // Sequences are per key: across keys the later pinned slot wins; without the slot order, the file (written under lock).
+    HaltPolicyCache? MergePolicy(HaltPolicyCache? known, HaltPolicyCache? disk)
     {
         if (known is null) { return disk; }
         if (disk is null) { return known with { At = null }; }
         var (before, after) = (known.Policy, disk.Policy);
-        var chosen = before is not null && (after is null || (before.Sequence, before.Release, known.Verified).CompareTo((after.Sequence, after.Release, disk.Verified)) > 0) ? known with { At = null } : disk;
+        var crossed = before is { Sequence: > 0 } && after is { Sequence: > 0 } && before.Kid != after.Kid;
+        var chosen = before is not null && (after is null || (crossed ? Array.IndexOf(pinned, before.Kid).CompareTo(Array.IndexOf(pinned, after.Kid))
+            : (before.Sequence, before.Release, known.Verified).CompareTo((after.Sequence, after.Release, disk.Verified))) > 0) ? known with { At = null } : disk;
         if (before is not null && after is not null && before.Sequence == after.Sequence && before.Release == after.Release && known.Verified == disk.Verified
             && (before.Body != after.Body || !(before.Halted ?? []).SequenceEqual(after.Halted ?? [], StringComparer.Ordinal)))
         { chosen = chosen with { Policy = before with { Halted = [.. (before.Halted ?? []).Union(after.Halted ?? [], StringComparer.Ordinal)] }, At = null, ETag = null }; }
