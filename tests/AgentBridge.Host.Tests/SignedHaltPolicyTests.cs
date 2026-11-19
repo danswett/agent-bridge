@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Host.Core.Updates;
 using AgentBridge.Roster;
@@ -120,6 +121,89 @@ public sealed class SignedHaltPolicyTests : IDisposable
         Assert.EndsWith("(expired); stored policy kept", Assert.Single(logs), StringComparison.Ordinal);
         var lifted = await Trust.OfferAsync(discovery, "cdn", Envelope(TestOnlyKeyA, Payload(6, "")));
         Assert.Equal((true, 0), (lifted.Fresh, lifted.Policy!.Halted.Length));
+    }
+
+    // What a release before the verifier does to the shared cache: it rewrites it in its own record shape, without seq,
+    // expires or kid. It never writes the floor file.
+    void LegacyRewrite()
+    {
+        var path = Path.Combine(folder, ReleaseDiscovery.FileName);
+        var state = JsonNode.Parse(File.ReadAllText(path))!;
+        foreach (var name in new[] { "sequence", "expires", "kid" }) { state["haltPolicy"]!["policy"]!.AsObject().Remove(name); }
+        File.WriteAllText(path, state.ToJsonString());
+    }
+
+    [Fact]
+    public async Task A_rollback_that_rewrites_the_shared_cache_cannot_replay_an_older_sequence_or_reopen_the_legacy_read()
+    {
+        var older = Envelope(TestOnlyKeyA, Payload(1, ""));
+        using (var keyed = Discovery()) { await Trust.OfferAsync(keyed, "cdn", Envelope(TestOnlyKeyA, Payload(2))); }
+        LegacyRewrite();
+        using var returned = Discovery();
+        var replay = await Trust.OfferAsync(returned, "relay", older);
+        Assert.Equal("0.1.7", Assert.Single(replay.Policy!.Halted));
+        Assert.EndsWith("(older sequence); stored policy kept", logs[^1], StringComparison.Ordinal);
+        using var client = new HttpClient(http);
+        Assert.Equal(new HaltCheck(true), await new ReleaseEligibility(new GitHubHaltListSource(client, returned)).IsHalted("0.1.7"));
+        Assert.Equal(0, http.Count);
+    }
+
+    [Fact]
+    public async Task A_stolen_key_cannot_jump_its_sequence_past_the_bound_and_the_next_key_alone_recovers_from_its_own_floor()
+    {
+        using var discovery = Discovery();
+        foreach (var jump in new[] { long.MaxValue, ReleaseDiscovery.MaxSequenceJump + 1 })
+        {
+            Assert.Null((await Trust.OfferAsync(discovery, "relay", Envelope(TestOnlyKeyA, Payload(jump)))).Policy);
+            Assert.EndsWith("(sequence jump too large); stored policy kept", logs[^1], StringComparison.Ordinal);
+        }
+        Assert.Equal(ReleaseDiscovery.MaxSequenceJump, (await Trust.OfferAsync(discovery, "relay", Envelope(TestOnlyKeyA, Payload(ReleaseDiscovery.MaxSequenceJump)))).Policy!.Sequence);
+        time.Advance(TimeSpan.FromDays(2));
+        using var rebuilt = Discovery();
+        var next = await new SignedHaltPolicy(["", Pub(TestOnlyKeyB)]).OfferAsync(rebuilt, "cdn", Envelope(TestOnlyKeyB, Payload(1, "")));
+        Assert.Equal((true, 1L, 0), (next.Fresh, next.Policy!.Sequence, next.Policy.Halted.Length));
+    }
+
+    [Fact]
+    public async Task Accepting_the_next_key_retires_the_previous_one_so_its_unexpired_copies_cannot_be_replayed()
+    {
+        using var discovery = Discovery();
+        var lastOfA = Envelope(TestOnlyKeyA, Payload(5, ""));
+        await Trust.OfferAsync(discovery, "cdn", lastOfA);
+        Assert.Equal(1, (await Trust.OfferAsync(discovery, "cdn", Envelope(TestOnlyKeyB, Payload(1)))).Policy!.Sequence);
+        var replay = await Trust.OfferAsync(discovery, "relay", lastOfA);
+        Assert.Equal((1L, "0.1.7"), (replay.Policy!.Sequence, Assert.Single(replay.Policy.Halted)));
+        Assert.EndsWith("(retired key); stored policy kept", logs[^1], StringComparison.Ordinal);
+        Assert.Equal(2, (await Trust.OfferAsync(discovery, "cdn", Envelope(TestOnlyKeyB, Payload(2, "")))).Policy!.Sequence);
+    }
+
+    [Theory]
+    [InlineData("""{"v":1,"keys":[{"kid":""")]
+    [InlineData("""{"v":1,"keys":[{"kid":"a","seq":"9"}]}""")]
+    [InlineData("[]")]
+    public async Task An_unreadable_floor_refuses_every_signed_policy_and_keeps_the_legacy_read_closed(string floor)
+    {
+        using (var first = Discovery()) { await Trust.OfferAsync(first, "cdn", Envelope(TestOnlyKeyA, Payload(5))); }
+        LegacyRewrite();
+        File.WriteAllText(Path.Combine(folder, ReleaseDiscovery.FloorFileName), floor);
+        using var discovery = Discovery();
+        var kept = await Trust.OfferAsync(discovery, "cdn", Envelope(TestOnlyKeyA, Payload(6, "")));
+        Assert.Equal("0.1.7", Assert.Single(kept.Policy!.Halted));
+        Assert.EndsWith("(floor unreadable); stored policy kept", logs[^1], StringComparison.Ordinal);
+        using var client = new HttpClient(http);
+        await new ReleaseEligibility(new GitHubHaltListSource(client, discovery)).IsHalted("0.1.7");
+        Assert.Equal(0, http.Count);
+    }
+
+    // A deleted floor file (a local admin) is rebuilt from the signed policy still held, never from zero.
+    [Fact]
+    public async Task A_deleted_floor_still_refuses_an_older_sequence_of_the_held_policy()
+    {
+        using var discovery = Discovery();
+        await Trust.OfferAsync(discovery, "cdn", Envelope(TestOnlyKeyA, Payload(5)));
+        File.Delete(Path.Combine(folder, ReleaseDiscovery.FloorFileName));
+        Assert.Equal(5, (await Trust.OfferAsync(discovery, "relay", Envelope(TestOnlyKeyA, Payload(4, "")))).Policy!.Sequence);
+        Assert.EndsWith("(older sequence); stored policy kept", logs[^1], StringComparison.Ordinal);
     }
 
     sealed class Requests : HttpMessageHandler

@@ -59,7 +59,7 @@ public sealed class SignedHaltPolicy
         if (issued > now + Skew) { throw Refused("not yet valid"); }
         if (expires - issued > MaxLifetime) { throw Refused("lifetime too long"); }
         if (expires <= now) { throw Refused("expired"); }
-        return new(0, body, halted, seq, expires);
+        return new(0, body, halted, seq, expires, kid);
     }
 
     static JsonDocument Parse(byte[] bytes)
