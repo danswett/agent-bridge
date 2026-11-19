@@ -606,6 +606,18 @@ suites:
     where: ci.yml light; rerun-known-flakes.yml rerun
     status: exists
 
+  - id: main-red
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/main-red.ps1, quality/test-main-red.ps1, .github/workflows/main-red.yml]
+    command: pwsh -NoProfile -File quality/test-main-red.ps1
+    where: ci.yml light; main-red.yml
+    status: exists
+
   - id: beta-acceptance
     validation_plan: native
     kind: e2e

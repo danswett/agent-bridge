@@ -923,6 +923,13 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   in the retry run's summary, before posting issue comments. GitHub retains the next attempt
   on the source run. Attempt 2 is never re-run, so repeated timeouts or failures remain red.
   Offline test: `quality/test-rerun-known-flakes.ps1` (catalog suite `rerun-known-flakes`).
+- **Main-red detection** ([issue 3074](https://github.com/danswett/agent-bridge/issues/3074)):
+  `main-red.yml` handles completed CI push runs on main using main's trusted script, with no polling.
+  Failure, timeout and startup failure open or update one bot-authored `main-red` issue; success
+  closes it, including reruns. Cancelled, skipped, stale and duplicate events make no changes.
+  Evidence contains capped, mention-neutralised job/test names, never raw logs; unreadable logs are noted.
+  GitHub issues and the label are the only alert channel: no assignee, owner mention or phone notification.
+  Offline test: `quality/test-main-red.ps1` (catalog suite `main-red`).
 - **Red minutes on main** (owner target, 2026-11-09): `pwsh quality/red-minutes.ps1` prints how long
   main's CI was red over the last 24 h, the same way the main guardian counts it (a spell runs from a
   failed push run of `ci.yml` to the next success; cancelled and running runs say nothing). Target:
