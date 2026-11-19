@@ -65,7 +65,8 @@ uses namespaced NuGet metadata. Read `current\sq.version` anew under the package
 and check package identity, main executable and release identity before respawn.
 Observation cancellation retains updater pin, package custody and the real process
 handle until actual exit; an admitted apply joins adapter `Ownership` before it runs.
-The future B3 entry point must drain it before exiting, including late respawn completion/errors.
+The future B3 entry point must drain it before exiting, including late respawn completion/errors;
+the adapter observes a faulted `Ownership` itself, so an undrained late fault never escalates as unobserved.
 Native starts remain injectable for in-process tests; no native binary is run locally.
 
 ## C/D: approved design basis, not activation proof
