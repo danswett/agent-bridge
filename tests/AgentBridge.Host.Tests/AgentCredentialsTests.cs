@@ -327,16 +327,20 @@ public sealed class AgentCredentialsTests : IDisposable
     sealed class FakeTasks : IScriptTaskReader
     {
         public Dictionary<string, string> Hashes { get; } = new() { [BoundTask] = Sha("<Task/>"), [Wscript] = Sha("w"), [Vbs] = Sha("v"), [Ps1] = Sha("p") };
-        public Dictionary<string, int[]> Running { get; } = new() { [BoundTask] = [40] };
+        public Dictionary<string, ScriptTaskEngine[]> Running { get; } = new() { [BoundTask] = [new(40, Started.AddMinutes(1))] };
         public HashSet<string> Writable { get; } = [];
+        public string[] Actions { get; set; } = [Wscript, Vbs];
         public string? Definition(string task) => Hashes.GetValueOrDefault(task);
-        public IReadOnlyList<string>? ActionFiles(string task) => task == BoundTask ? [Wscript, Vbs] : null;
-        public IReadOnlyList<int> RunningEngines(string task) => Running.GetValueOrDefault(task) ?? [];
+        public IReadOnlyList<string>? ActionFiles(string task) => task == BoundTask ? Actions : null;
+        public IReadOnlyList<ScriptTaskEngine> RunningEngines(string task) => Running.GetValueOrDefault(task) ?? [];
         public bool TaskLocked(string task) => !Writable.Contains(task);
         public bool FileLocked(string path) => !Writable.Contains(path);
         public string? FileSha256(string path) => Hashes.GetValueOrDefault(path);
         public static string Sha(string s) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)));
     }
+
+    // What reading the caller's chain again at hello finds; the connect-time one unless a test says otherwise.
+    ProcessAncestry atHello = FromTask();
 
     (string Token, AgentCredentials Store) BoundScript(FakeTasks tasks, Action<JsonObject>? edit = null)
     {
@@ -345,7 +349,8 @@ public sealed class AgentCredentialsTests : IDisposable
         credential["scheduledTask"] = JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(binding, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
         edit?.Invoke(credential["scheduledTask"]!.AsObject());
         WriteCredential(credential);
-        return (token, new AgentCredentials(root, "machine1", new Clock(Started), tasks: tasks));
+        return (token, new AgentCredentials(root, "machine1", new Clock(Started), tasks: tasks,
+            reread: pid => atHello.Processes is [var self, ..] && self.Id == pid ? atHello : ProcessAncestry.Unknown));
     }
 
     [Fact]
@@ -355,7 +360,7 @@ public sealed class AgentCredentialsTests : IDisposable
         var (token, store) = BoundScript(tasks);
         Assert.Equal("script:machine1/pump-wake", store.Check(token, FromTask()).Accepted?.Principal);
         Assert.Equal([Wscript, Vbs, Ps1], store.MintScript("pump-two", task: BoundTask, files: [Ps1]).Credential.ScheduledTask!.Files.Select(f => f.Path));
-        tasks.Running[BoundTask] = [77];
+        tasks.Running[BoundTask] = [new(77, Started.AddMinutes(1))];
         Assert.EndsWith("no running instance of the bound task started the caller", store.Check(token, FromTask()).Refusal);
     }
 
@@ -365,7 +370,7 @@ public sealed class AgentCredentialsTests : IDisposable
         var tasks = new FakeTasks();
         var (token, store) = BoundScript(tasks);
         tasks.Running.Remove(BoundTask);
-        tasks.Running[@"\agent-copy"] = [40];
+        tasks.Running[@"\agent-copy"] = [new(40, Started.AddMinutes(1))];
         Assert.EndsWith("no running instance of the bound task started the caller", store.Check(token, FromTask()).Refusal);
         Assert.Throws<InvalidOperationException>(() => store.MintScript("copy", task: @"\agent-copy"));
     }
@@ -375,12 +380,54 @@ public sealed class AgentCredentialsTests : IDisposable
     {
         var (token, store) = BoundScript(new FakeTasks());
         Assert.EndsWith("inside an agent session", store.Check(token, FromTask(agent: "copilot.exe")).Refusal);
+        atHello = FromTask(agent: "copilot.exe");
+        Assert.EndsWith("inside an agent session", store.Check(token, FromTask()).Refusal);
         var chain = FromTask().Processes.ToArray();
         chain[0] = chain[0] with { StartedAt = null };
-        Assert.EndsWith("could not be traced in full", store.Check(token, new(chain, true)).Refusal);
+        Assert.EndsWith("could not be read again at hello", store.Check(token, new(chain, true)).Refusal);
         chain = FromTask().Processes.ToArray();
         chain[1] = chain[1] with { Image = @"C:\Users\me\wscript.exe" };
-        Assert.EndsWith("is not the program the bound task runs", store.Check(token, new(chain, true)).Refusal);
+        atHello = new(chain, true);
+        Assert.EndsWith("is not the program the bound task runs", store.Check(token, atHello).Refusal);
+    }
+
+    [Fact]
+    public void An_engine_with_the_chains_pid_but_another_start_is_refused()
+    {
+        var (token, store) = BoundScript(new FakeTasks());
+        var chain = FromTask().Processes.ToArray();
+        chain[1] = chain[1] with { StartedAt = Started.AddYears(-5) };
+        atHello = new(chain, true);
+        Assert.EndsWith("no running instance of the bound task started the caller", store.Check(token, atHello).Refusal);
+    }
+
+    [Fact]
+    public void A_bound_hello_judges_the_chain_read_again_not_the_one_from_connect()
+    {
+        var (token, store) = BoundScript(new FakeTasks());
+        // The caller's own wscript 40 has ended since connect; the task's engine now holds pid 40.
+        atHello = new([FromTask().Processes[0]], true);
+        Assert.EndsWith("no running instance of the bound task started the caller", store.Check(token, FromTask()).Refusal);
+        atHello = ProcessAncestry.Unknown;
+        Assert.EndsWith("could not be read again at hello", store.Check(token, FromTask()).Refusal);
+        atHello = new([FromTask().Processes[0] with { StartedAt = Started.AddMinutes(9) }, .. FromTask().Processes.Skip(1)], true);
+        Assert.EndsWith("could not be read again at hello", store.Check(token, FromTask()).Refusal);
+    }
+
+    [Fact]
+    public void A_mint_that_would_not_load_is_refused_and_the_store_stays_usable()
+    {
+        var tasks = new FakeTasks();
+        var (token, store) = BoundScript(tasks);
+        var many = Enumerable.Range(0, 15).Select(i => $@"C:\ProgramData\Slipgates\{i}.ps1").ToArray();
+        Assert.Contains("at most 16 files", Assert.Throws<InvalidOperationException>(() => store.MintScript("many", task: BoundTask, files: many)).Message);
+        tasks.Hashes[BoundTask] = "not-a-hash";
+        Assert.Throws<InvalidOperationException>(() => store.MintScript("odd", task: BoundTask));
+        tasks.Hashes[BoundTask] = FakeTasks.Sha("<Task/>");
+        tasks.Actions = [];
+        Assert.Throws<InvalidOperationException>(() => store.MintScript("none", task: BoundTask, files: [Ps1]));
+        Assert.Null(new AgentCredentials(root, "machine1", new Clock(Started)).Problem);
+        Assert.NotNull(store.Check(token, FromTask()).Accepted);
     }
 
     [Theory]

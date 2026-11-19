@@ -87,10 +87,13 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     sealed record Connection(string CredentialId, string Principal, bool Script);
 
     readonly IScriptTaskReader? tasks;
+    readonly Func<int, ProcessAncestry> reread;
 
-    public AgentCredentials(string folder, string machine, TimeProvider? time = null, Action<string>? log = null, Func<int, DateTimeOffset, bool>? rootAlive = null, IScriptTaskReader? tasks = null)
+    public AgentCredentials(string folder, string machine, TimeProvider? time = null, Action<string>? log = null, Func<int, DateTimeOffset, bool>? rootAlive = null, IScriptTaskReader? tasks = null,
+        Func<int, ProcessAncestry>? reread = null)
     {
         this.tasks = tasks;
+        this.reread = reread ?? ProcessChain.Read;
         LaunchGate = new AgentLaunchGate(folder);
         FleetGrant = new FleetLaunchGrant(folder);
         this.rootAlive = rootAlive ?? ((_, _) => true);
@@ -330,16 +333,23 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         if (match is null) { return Refused("no live credential matches that token"); }
         if (match.Kind == "script")
         {
+            // A bound credential's chain is read again now, for the same caller process: the
+            // connect-time chain is a moment the caller chose, and a parent it has ended since
+            // may by now be the task's engine under the same pid.
+            var fresh = match.ScheduledTask is null || tasks is null ? ancestry
+                : ancestry.Processes is [{ Id: > 0, StartedAt: { } at } self, ..]
+                    && reread(self.Id) is { Processes: [var again, ..] } current && again.Id == self.Id && again.StartedAt == at ? current : null;
+            if (fresh is null) { return Outside(match, "the script caller could not be read again at hello"); }
             lock (gate)
             {
                 var agents = records.Where(r => r.Credential.Kind == "session" && r.Credential.RootPid > 0)
                     .Select(r => new KnownProcess(r.Credential.RootPid, r.Credential.RootStartUtc, "a credentialed session"))
                     .Concat(pending.Select(p => new KnownProcess(p.RootPid, p.RootStartUtc, "an adopted session"))).ToArray();
-                if (agentCaller || AgentAncestry.Find(ancestry.Processes, agents) is not null)
+                if (agentCaller || AgentAncestry.Find(ancestry.Processes, agents) is not null || AgentAncestry.Find(fresh.Processes, agents) is not null)
                 { return Outside(match, "a script credential cannot be used inside an agent session"); }
             }
             // Outside the gate (a bound one reads the Scheduler and ACLs); unbound needs the whole chain read.
-            var why = match.ScheduledTask is { } binding ? binding.Refusal(ancestry, tasks)
+            var why = match.ScheduledTask is { } binding ? binding.Refusal(fresh, tasks)
                 : !ancestry.Complete || ancestry.Processes.Count == 0 || ancestry.Processes.Any(ScriptTaskBinding.Unread)
                 ? "the script caller's ancestry could not be traced in full" : null;
             if (why is not null) { return Outside(match, why); }

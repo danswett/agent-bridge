@@ -137,8 +137,16 @@ token is accepted only from a person's device).
    are writable only by SYSTEM and Administrators; it records hashes of the task's definition
    (actions, principal, triggers) and of each file. Accepting it needs a running instance of that
    task, as the Task Scheduler reports it, whose engine (the program it started) is an ancestor
-   read in full up to the caller, with the task, ACLs and hashes unchanged. Any other task path,
-   edit, loosened ACL or wrong engine is refused. **The admin-only ACLs hold this, not ancestry:**
+   read in full up to the caller, with the task, ACLs and hashes unchanged. The engine must be the
+   same process, not just the same pid: `IScriptTaskReader.RunningEngines(task)` returns each running
+   instance's engine as `ScriptTaskEngine(int Pid, DateTimeOffset StartedAt)` (the engine process's
+   creation time, UTC; an engine whose start can't be read is left out), and the ancestor must match
+   both, its start within a second. At `agent.hello` the host reads the caller's chain again rather
+   than trusting the one from connect, and refuses unless it is still the same caller process (pid
+   and start): a parent the caller ended after connecting may since be the engine under its pid. Any
+   other task path, edit, loosened ACL or wrong engine is refused. A mint that pins more than 16
+   files, no action program or anything that isn't a SHA-256 hash is refused, so it can't fault the
+   store. **The admin-only ACLs hold this, not ancestry:**
    an agent can't change the task or its files, and running it runs only the pinned files. As the
    same user it can still reach into a running instance (its process handles, a spoofed parent, or
    the user's environment and profile scripts its processes load): the residual below. #3312 is
