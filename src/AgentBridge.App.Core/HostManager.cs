@@ -574,13 +574,12 @@ public sealed class HostManager
             var giveUp = quit.Token;
             updateStop = stop = Task.Run(async () =>
             {
-                var own = await OwnPidAsync();
-                var ownStarted = own is { } o ? processes.StartedAt(o) : null;
+                (int Pid, DateTimeOffset? Started)? own = await OwnPidAsync() is { } o ? (o, processes.StartedAt(o)) : null;
                 await OthersDoneAsync(own, giveUp);
-                await StopAsync(ProbeWait, CancellationToken.None, giveUp, own is { } h ? (h, ownStarted) : null);
+                await StopAsync(ProbeWait, CancellationToken.None, giveUp, own);
                 // Again just before the hand-over: every other host's hold is fresh, and one that
                 // let a probe start while this host was waited for is waited for too.
-                return (await OthersDoneAsync(own, giveUp)).Distinct().ToDictionary(p => p, processes.StartedAt);
+                return await OthersDoneAsync(own, giveUp);
             });
         }
         try
@@ -591,7 +590,8 @@ public sealed class HostManager
             await CheckInstallationFilesAsync(preflight, fileBudget, fresh: true);
             // A host started from the package during that scan (up to 120 s) was never held, and the
             // scan passes the package's own processes: the update would end it mid-probe. One not
-            // held with a known start time, or since restarted under its pid, refuses (#2884 review).
+            // held with a known start time, or since restarted under its pid, refuses (#2884 review);
+            // settled carries each start time as held, not as read once the holds were done (#3241).
             if (PackageHosts().Where(p => settled.GetValueOrDefault(p) is not { } began || processes.StartedAt(p) != began)
                 .Select(p => (int?)p).FirstOrDefault() is { } arrived)
             {
@@ -981,24 +981,37 @@ public sealed class HostManager
     // cannot confirm stops the update. They are left running: the update ends them once this host
     // has stopped. Every one is held again each round, so no hold lapses while another is waited
     // for, and the package is looked at again once they are done: a host started during the wait
-    // was never held. own: this profile's host, which its own stop holds. The package as settled.
-    async Task<IReadOnlyCollection<int>> OthersDoneAsync(int? own, CancellationToken ct)
+    // was never held. own: this profile's host and its start time, which its own stop holds. The
+    // package as settled, each host with the start time it was held under (this profile's as read
+    // before its stop, none if unread, so one under its pid refuses).
+    async Task<Dictionary<int, DateTimeOffset?>> OthersDoneAsync((int Pid, DateTimeOffset? Started)? own, CancellationToken ct)
     {
         var deadline = Time.GetUtcNow() + ProbeWait;
         while (true)
         {
-            var seen = await OthersHeldAsync(own, deadline, ct);
+            var seen = await OthersHeldAsync(own?.Pid, deadline, ct);
             var package = PackageHosts();
-            if (package.All(p => p == own || seen.Contains(p))) { return package; }
+            // A held host can end while another is held and its pid go to a host never held, which
+            // the pid alone took for it (#3241): the start time it was held under tells them apart.
+            // Another profile's is held again; this profile's, which nothing here can hold, refuses.
+            if (own is { Started: { } began } h && package.Contains(h.Pid) && processes.StartedAt(h.Pid) != began)
+            {
+                throw new HostBusyException($"a host running from this installation (pid {h.Pid}) was not this profile's host held for the update, so nothing was installed; try again");
+            }
+            if (package.All(p => p == own?.Pid || seen.TryGetValue(p, out var at) && processes.StartedAt(p) == at))
+            {
+                return package.Distinct().ToDictionary(p => p, p => p == own?.Pid ? own.Value.Started : seen[p]);
+            }
             if (Time.GetUtcNow() >= deadline) { throw new HostBusyException($"nothing was stopped: hosts kept starting from this installation for {FormatWait(ProbeWait)}; try again later"); }
         }
     }
 
-    // One look at the package: every other host of it held until none is busy. The hosts held.
-    async Task<HashSet<int>> OthersHeldAsync(int? own, DateTimeOffset deadline, CancellationToken ct)
+    // One look at the package: every other host of it held until none is busy. The hosts held, each
+    // with its start time.
+    async Task<Dictionary<int, DateTimeOffset?>> OthersHeldAsync(int? own, DateTimeOffset deadline, CancellationToken ct)
     {
         var package = PackageHosts();
-        var seen = new HashSet<int>();
+        var seen = new Dictionary<int, DateTimeOffset?>();
         var reached = new List<(string Who, LocalChannel Channel)>();
         try
         {
@@ -1021,12 +1034,14 @@ public sealed class HostManager
                     throw new HostBusyException($"{who} could not say whether a usage probe it started is still finishing, so nothing was stopped: {e.Message}");
                 }
                 if (!package.Contains(pid)) { await ch.DisposeAsync(); continue; }
-                seen.Add(pid);
+                // Read between its status and its holds through this same pipe, which answer only
+                // while it runs: the start time is that host's, not a later one's under its pid.
+                seen[pid] = processes.StartedAt(pid);
                 reached.Add((who, ch));
             }
             // A host of the package no pipe reached (one at another elevation refuses this app's
             // connection, say) cannot be held, and the update would end it all the same.
-            if (package.Where(p => p != own && !seen.Contains(p)).Select(p => (int?)p).FirstOrDefault() is { } missed)
+            if (package.Where(p => p != own && !seen.ContainsKey(p)).Select(p => (int?)p).FirstOrDefault() is { } missed)
             {
                 throw new HostBusyException($"a host running from this installation (pid {missed}) could not be reached to hold its usage probes, so nothing was stopped");
             }

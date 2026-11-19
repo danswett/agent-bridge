@@ -8,7 +8,8 @@ public sealed class InstallationScanTimeoutTests
     public async Task A_clear_59_second_scan_is_reused_by_the_remaining_preflight_checks()
     {
         var clock = new FakeTimeProvider();
-        var budget = new InstallationFiles.Budget(clock);
+        // An unchanged lock footprint, as the app's: what lets a clear scan be reused.
+        var budget = new InstallationFiles.Budget(clock) { LockedFiles = () => [] };
         var scans = 0;
         string? Scan()
         {

@@ -471,16 +471,19 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     // #3241: a held host can end while another profile's hold is awaited and its pid go to a host
     // never held, which the settlement took by pid. Another profile's is held before the update
-    // goes ahead; one under this profile's own pid, its host already stopped, refuses it.
+    // goes ahead; one under this profile's own pid, its host already stopped, refuses it, as it does
+    // when this profile's host's start time could not be read as the update began.
     [Theory]
-    [InlineData(6161)]
-    [InlineData(4242)]
+    [InlineData(6161, true)]
+    [InlineData(4242, true)]
+    [InlineData(4242, false)]
     [Trait("Category", "Network")]
-    public async Task A_held_hosts_pid_taken_by_another_host_before_the_holds_settle_is_not_taken_for_the_held_one(int reused)
+    public async Task A_held_hosts_pid_taken_by_another_host_before_the_holds_settle_is_not_taken_for_the_held_one(int reused, bool ownStartKnown)
     {
         await StartAsync();
         processes.OnStart = () => host.Start();
-        processes.StartTimes[4242] = Make.T0;
+        if (ownStartKnown) { processes.StartTimes[4242] = Make.T0; }
+        processes.StartTimes[6161] = processes.StartTimes[7171] = Make.T0;
         await using var first = new FakeHost();
         await using var last = new FakeHost();
         first.Start();
@@ -504,7 +507,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
             return new { stopping = true };
         });
-        var updating = Manager(others: [first.Folder, last.Folder], package: [4242, 6161, 7171]);
+        var updating = Manager(others: [first.Folder, last.Folder], package: [4242, 6161, 7171], startsKnown: false);
         var applied = false;
 
         var update = updating.StopAndApplyAsync(() => { }, () => applied = true);
@@ -671,8 +674,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
-    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null, TimeSpan? connectTimeout = null, bool startsKnown = true) =>
-        new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
+    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null, TimeSpan? connectTimeout = null, bool startsKnown = true)
+    {
+        // This profile's host's start time is known when an update reads it, before the package's.
+        if (startsKnown) { processes.StartTimes.TryAdd(4242, Make.T0); }
+        return new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
             ct => LocalClient.ConnectAsync(host.Endpoint, connectTimeout ?? TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
         {
             StartTimeout = TimeSpan.FromSeconds(5),
@@ -695,6 +701,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             // test needs to run out is advanced by hand.
             Time = held,
         };
+    }
 
     // #238: the switch turned off while the host answers about its probes stops the install. Since
     // #516 that switch, "Download updates automatically", is what lets Install between turns
