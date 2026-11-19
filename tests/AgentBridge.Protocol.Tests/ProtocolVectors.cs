@@ -414,6 +414,7 @@ public static class ProtocolVectors
         f.Record<Session>(Host)
             .Valid("full", FullSession)
             .Valid("minimal", MinimalSession)
+            .Valid("host-roster-with-unknown-outcomes", MinimalSession with { Machine = MachineId, Owner = new(), Pr = new(), Finished = new(), StartedAt = null })
             .Valid("transcript-file-size", MinimalSession with { TranscriptBytes = 52_428_801, TranscriptObservation = transcriptObservation })
             .Valid("transcript-unavailable", MinimalSession with { TranscriptBytesUnavailable = "not-found", TranscriptObservation = transcriptObservation })
             .Valid("waiting-on-a-delegate", MinimalSession with { Agent = AgentKind.Copilot, Status = SessionStatus.Waiting, Question = Plain with { Agent = "agent-1", AnswerAtMachine = true }, Subagents = [Delegate with { Status = SubagentStatus.Waiting }], WaitingOn = "agent-1" })
