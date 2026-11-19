@@ -123,6 +123,48 @@ public sealed class RosterSyncTests
         Assert.Equal(["b"], Ids(silent));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(60)]
+    public void A_frozen_relay_online_record_loses_its_session_rows_at_cache_age(int at)
+    {
+        var frame = Frame("H", at: at, ids: ["a"]);
+        Assert.True(Assert.Single(reader.Read([frame])).Online);
+        time.Advance(TimeSpan.FromMinutes(2));
+        var stale = Assert.Single(reader.Read([frame]));
+        Assert.False(stale.Online);
+        Assert.False(stale.Verified);
+        Assert.Equal(["a"], Ids(stale));
+        time.Advance(RelayFleetRoster.CacheAge - TimeSpan.FromMinutes(2) - TimeSpan.FromTicks(1));
+        Assert.Equal(["a"], Ids(Assert.Single(reader.Read([frame]))));
+        time.Advance(TimeSpan.FromTicks(1));
+        var expired = Assert.Single(reader.Read([frame]));
+        Assert.False(expired.Online);
+        Assert.Empty(expired.Sessions);
+        Assert.Empty(Assert.Single(reader.Read([frame])).Sessions);
+        reader.Attach(null);
+        Assert.Empty(Assert.Single(reader.Read([frame])).Sessions);
+    }
+
+    [Fact]
+    public void A_fresh_record_refreshes_the_cache_age_for_offline_session_rows()
+    {
+        Assert.True(Assert.Single(reader.Read([Frame("H", at: 0, ids: ["a"])])).Online);
+        var refreshAt = RelayFleetRoster.CacheAge - TimeSpan.FromSeconds(30);
+        time.Advance(refreshAt);
+        var fresh = Assert.Single(reader.Read([Frame("H", seq: 2, at: (int)refreshAt.TotalSeconds, ids: ["b"])]));
+        Assert.True(fresh.Online);
+        Assert.Equal(["b"], Ids(fresh));
+        time.Advance(TimeSpan.FromSeconds(30));
+        var offline = Assert.Single(reader.Read([Known("H")]));
+        Assert.False(offline.Online);
+        Assert.Equal(["b"], Ids(offline));
+        time.Advance(RelayFleetRoster.CacheAge - TimeSpan.FromSeconds(30) - TimeSpan.FromTicks(1));
+        Assert.Equal(["b"], Ids(Assert.Single(reader.Read([Known("H")]))));
+        time.Advance(TimeSpan.FromTicks(1));
+        Assert.Empty(Assert.Single(reader.Read([Known("H")])).Sessions);
+    }
+
     [Fact]
     public async Task Peer_rows_from_a_host_in_the_signed_device_roster_appear_with_all_A1_fields()
     {
