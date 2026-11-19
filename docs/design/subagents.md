@@ -89,6 +89,13 @@ First match wins. The text is in [ui.md](ui.md) §2.2.
 
 Rules 3–6 are exactly today's behaviour. Rule 2 is new and needs `Session.waitingOn` (§5).
 
+The live parser keeps pending questions indexed by id and agent, in transcript order.
+Reasking an id replaces it at the end; answering it removes it in constant time.
+A failed main turn removes only its own questions, and a delegate end only that
+delegate's and other known-ended agents' questions. Restore-hidden questions keep
+their place but do not participate in status or the constant-time selection of the
+newest main-agent question, else the newest delegate question.
+
 ## 5. Protocol (v1, additive)
 
 ```jsonc
