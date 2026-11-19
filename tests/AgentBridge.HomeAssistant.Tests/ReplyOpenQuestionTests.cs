@@ -141,8 +141,10 @@ public sealed partial class ReplyTests
         Assert.Equal("q2", Assert.Single(answered).Question);
     }
 
-    [Fact]
-    public async Task Sends_counted_as_a_question_closes_are_not_counted_again_against_a_later_messages_press()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Sends_counted_as_a_question_closes_are_not_counted_again_against_a_later_messages_press(bool clearFails)
     {
         await using var c = await Asking();
         for (var n = 1; n <= 3; n++)
@@ -150,7 +152,10 @@ public sealed partial class ReplyTests
             c.Observe(ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
             if (n < 3) { c.Observe(ha.Press(SessionEntities.Submit(Node), "agent-user")); }
         }
-        Idle(turn: 2); await Pass(c);
+        var failed = false;
+        ha.PublishFailsFor = (topic, body) => clearFails && topic == HaContract.Topics(Node).DecisionAttributes && body == "{}" && !failed && (failed = true);
+        Idle(turn: 2); await Pass(c); await Pass(c);
+        Assert.Equal(clearFails, failed);
         Idle(question: Pick() with { Id = "q2" }); await Pass(c);
         await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
         await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));

@@ -330,7 +330,6 @@ public sealed partial class HaConnector
         p.Reply.PendingPress = null;
         p.Reply.Waiting.Clear();
         p.Reply.Boundary = boundary;
-        p.Reply.Log.Presses.Clear();
         p.Reply.Baselined = true;
         return true;
     }
@@ -346,7 +345,8 @@ public sealed partial class HaConnector
             return;
         }
         var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
-        foreach (var press in seen.Where(h => h.Hit.EntityId == SessionEntities.Submit(p.Node)).Select(h => h.Hit.State.State)
+        // Presses up to the boundary were counted as the question closed: again, one would spend a later message's.
+        foreach (var press in seen.Where(h => h.Seq > p.Reply.Boundary && h.Hit.EntityId == SessionEntities.Submit(p.Node)).Select(h => h.Hit.State.State)
             .Append(submit.Value).Where(s => IsStamp(s) && s != p.Reply.HandledPress))
         {
             ClassifyPress(p.Reply.Log, press, false);
