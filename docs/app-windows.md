@@ -699,14 +699,15 @@ controls consume that same contract; this extraction does not disable or remove 
     the host for its own pid first. The banner offers only a release the updater has ready: while a
     newer one found since is still downloading, or held after a failed download, it offers nothing.
   * **Files held by Windows** (#2345, #2353, [timeout fix](https://github.com/danswett/agent-bridge/issues/2866)):
-    before stopping the host, check only locked executable images (`.exe`/`.dll`) with Restart
-    Manager. A completed clear scan serves only the duplicate check right after the wait (cheap
+    before stopping the host, check only locked installation files (any type, including `.pri`)
+    with Restart Manager. A completed clear scan serves only the duplicate checks right after the
+    wait and as the stop begins (cheap
     file checks invalidate it if the locked-file set changes); the last check before the host stops,
     after any confirmation or departure, always scans again, since an outside process can take an
     image the app already holds without changing which files are locked. A last scan runs after the
     stop's probe and other-profile waits, right before the handoff; a holder found then is named,
     the host is started again and the install refused.
-    The cheap check opens each image exclusively for an instant, so a lazy assembly load in that
+    The cheap check opens each file exclusively for an instant, so a lazy assembly load in that
     instant could see a sharing violation; a shared open would miss holders that allow writes.
     Each scan has its own two-minute deadline, independent of the two-minute release wait
     (checks back off to ten seconds). A scan started within that wait may finish afterwards.

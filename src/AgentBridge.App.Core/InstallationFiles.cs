@@ -9,9 +9,9 @@ public static class InstallationFiles
     public static IReadOnlyList<string> LockedImages(string folder)
     {
         var locked = new List<string>();
-        foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
-            .Where(f => Path.GetExtension(f).Equals(".exe", StringComparison.OrdinalIgnoreCase)
-                || Path.GetExtension(f).Equals(".dll", StringComparison.OrdinalIgnoreCase)))
+        // Every file, not only .exe/.dll: an outside holder of a resource such as resources.pri
+        // blocks the install just the same (#3099).
+        foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
         {
             try { using var check = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None); }
             catch (IOException e) when (IsSharingViolation(e)) { locked.Add(file); }
