@@ -2060,6 +2060,91 @@ public class MergeRuleTests
     }
 
     [Theory]
+    [InlineData("app (win-arm64)", "app (renamed)", "failure", "failure")]
+    [InlineData("app (win-arm64)", "app (renamed)", "success", "failure")]
+    [InlineData("pwa-ui (webkit 1/3)", "pwa-ui (webkit renamed)", "failure", "failure")]
+    [InlineData("pwa-ui (webkit 1/3)", "pwa-ui (webkit renamed)", "success", "failure")]
+    [InlineData("app (win-arm64)", null, "failure", "error")]
+    [InlineData("app (win-arm64)", "", "failure", "error")]
+    [InlineData("app (win-arm64)", " ", "failure", "error")]
+    [InlineData("app (win-arm64)", "missing-property", "failure", "error")]
+    [InlineData("app (win-arm64)", "absent", "success", "success")]
+    public void Main_tiering_rejects_renamed_or_unnamed_jobs_but_allows_absent_post_merge_jobs(
+        string target, string? replacement, string conclusion, string state)
+    {
+        var folder = Fixture.ScratchFolder();
+        var config = Path.Combine(folder, "merge-rule.yml");
+        File.Move(WriteConfig(), config);
+        File.WriteAllText(config, File.ReadAllText(config).Replace("jobs: [light,",
+            "jobs: [pwa-ui (chromium 1/3), pwa-ui (webkit 1/3), light,", StringComparison.Ordinal));
+        File.WriteAllText(Path.Combine(folder, "catalog.yml"), TierCatalog + """
+
+              - id: ui
+                where: ci.yml pwa-ui
+                tier: post-merge
+                tier_jobs: [pwa-ui (webkit 1/3)]
+            """);
+        var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)",
+                "pwa-ui (chromium 1/3)", "pwa-ui (webkit 1/3)" }
+            .Where(n => n != target || replacement != "absent").Select((name, id) => new Dictionary<string, object?>
+            {
+                ["id"] = id, ["name"] = name == target ? replacement : name, ["status"] = "completed",
+                ["conclusion"] = name == target ? conclusion : "success", ["run_attempt"] = 1,
+            }).ToArray();
+        if (replacement == "missing-property")
+            jobs.Single(j => (string?)j["name"] == replacement).Remove("name");
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData(true, "failure", "failure")]
+    [InlineData(true, "skipped", "failure")]
+    [InlineData(true, "success", "success")]
+    [InlineData(false, "failure", "failure")]
+    [InlineData(false, "success", "success")]
+    public void Main_leg_families_check_present_blocking_results_without_reading_post_merge_annotations(
+        bool partial, string blocking, string state)
+    {
+        var folder = Fixture.ScratchFolder();
+        var config = Path.Combine(folder, "merge-rule.yml");
+        File.Move(WriteConfig(), config);
+        File.WriteAllText(config, File.ReadAllText(config).Replace("jobs: [light,",
+            "leg_families: [[pwa-ui (chromium 1/3), pwa-ui (webkit 1/3), pwa-ui (webkit 2/3)]], infra_steps: { pwa-ui: [Setup] }, jobs: [light,",
+            StringComparison.Ordinal));
+        File.WriteAllText(Path.Combine(folder, "catalog.yml"), TierCatalog + """
+
+              - id: ui
+                where: ci.yml pwa-ui
+                tier: post-merge
+                tier_jobs: [pwa-ui (webkit 1/3), pwa-ui (webkit 2/3)]
+            """);
+        var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)",
+                "pwa-ui (chromium 1/3)", "pwa-ui (webkit 1/3)", "pwa-ui (webkit 2/3)" }
+            .Where(n => !partial || n != "pwa-ui (webkit 2/3)").Select((name, id) => new
+            {
+                id, name, status = "completed", run_attempt = 1,
+                conclusion = name == "pwa-ui (chromium 1/3)" ? blocking : name.StartsWith("pwa-ui (webkit", StringComparison.Ordinal) ? "failure" : "success",
+                steps = name.StartsWith("pwa-ui (webkit", StringComparison.Ordinal)
+                    ? new[] { new { name = "Setup", status = "completed", conclusion = "failure" } } : [],
+            }).ToArray();
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }), annotations: "unreadable annotations");
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/annotations", StringComparison.Ordinal));
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    [Theory]
     [InlineData("SUCCESS", null, true, "success")]
     [InlineData("SUCCESS", "pwa-ui (chromium 1/3)", true, "failure")]
     [InlineData("FAILURE", null, true, "failure")]
