@@ -129,26 +129,31 @@ token is accepted only from a person's device).
 3. **Not from inside an agent session.** The caller's ancestry must be read in full and must
    contain no agent session: the reverse of `agent.hello`'s rule, as agent-launch-scope.md §11
    states it. A partial or untraceable ancestry is refused, never treated as a script.
-   The one exception is a scheduled task on Windows. The host can't open the Task
-   Scheduler's service host, an svchost that runs as SYSTEM, so it can't read that
-   process's start time or path. The walk then ends at that svchost as its top, but only
-   when the service manager reports that process id for the `Schedule` service. Every
-   process below it must still be read in full (id, start time and image). An agent anywhere
-   in the chain is checked first and still refuses, including one a task starts. These are
-   all still refused: an unreadable process anywhere else, an svchost the service manager
-   doesn't name (a name alone, or a readable copy in a user folder, which is just another
-   process), a chain cut at the depth limit, and every other platform.
+   A task the scheduler runs never passes that (its SYSTEM service host can't be opened), and
+   ancestry couldn't vouch for it anyway: any user process can register a task that runs anything.
+   A scheduled script needs a credential bound to its task, minted elevated with
+   `scripts add <name> --task <\Folder\Task> [--file <path>]...`. The mint is refused unless the
+   task and every file it runs (its program, the script it names, each `--file` that script runs)
+   are writable only by SYSTEM and Administrators; it records hashes of the task's definition
+   (actions, principal, triggers) and of each file. Accepting it needs a running instance of that
+   task, as the Task Scheduler reports it, whose engine (the program it started) is an ancestor
+   read in full up to the caller, with the task, ACLs and hashes unchanged. Any other task path,
+   edit, loosened ACL or wrong engine is refused. **The admin-only ACLs hold this, not ancestry:**
+   an agent can't change the task or its files, and running it runs only the pinned files. As the
+   same user it can still reach into a running instance (its process handles, a spoofed parent, or
+   the user's environment and profile scripts its processes load): the residual below. #3312 is
+   the host-side check with fakes; the Windows reads and `--task` follow, and until then every bound
+   credential is refused.
    **A script a coordinator starts does not pass this rule, on purpose.** A script started
    from inside a coordinator's session (a child of its shell) has an agent session in its
    ancestry and is refused. There are two ways to run such work:
    * **Recommended: the coordinator sends and reads with its own session credential**
      (`agent.send`, `fleet.list`), which it already holds; no script credential is involved.
-   * **Scheduled runs:** the owner starts the script from the machine's task scheduler (or by
-     hand in a terminal), so its ancestry holds no agent session. A coordinator that wants one
-     run now asks the scheduler to run the task. Its parent is then the scheduler, not the
-     session. This is the rail's known gap (a detached process has an agent-free ancestry, and
-     so does a task an agent registers as the same user),
-     not a feature: it is why the credential file, not rule 3, is the real barrier.
+   * **Scheduled runs:** the owner binds the credential to an admin-locked task (above), or runs
+     the script by hand in a terminal, so its ancestry holds no agent session. A coordinator that
+     wants one run now asks the scheduler to run the bound task; it runs only the pinned files.
+     An unbound credential from a detached process with an agent-free ancestry is still the rail's
+     known gap, not a feature: it is why the credential file, not rule 3, is the real barrier.
    Running a script credential's file from a session by copying or exporting it is a
    leak (§8), not a supported path.
 4. **No launch, no answers.** The ops list is an allow-list; an op not on it is refused by

@@ -311,59 +311,123 @@ public sealed class AgentCredentialsTests : IDisposable
         Assert.Null(store.Check(token, new([new PeerProcess(100, Started, "copilot.exe")], true)).Accepted);
     }
 
-    // What a scheduled task looks like to a user-level host: svchost (Schedule) > wscript > pwsh,
-    // the service host unreadable and recognised as the scheduler by the walk.
-    static ProcessAncestry FromScheduler(bool scheduled = true, bool complete = true, string? agent = null) =>
+    // A scheduled task as a user-level host sees it: svchost (Schedule, unreadable) > wscript > pwsh.
+    const string BoundTask = @"\Slipgates\pump-wake", Wscript = @"C:\Windows\System32\wscript.exe";
+    const string Vbs = @"C:\ProgramData\Slipgates\pump-wake.vbs", Ps1 = @"C:\ProgramData\Slipgates\pump-wake.ps1";
+
+    static ProcessAncestry FromTask(string? agent = null) =>
         new([
             new PeerProcess(50, Started.AddMinutes(2), @"C:\Program Files\PowerShell\7\pwsh.exe"),
             .. agent is null ? Array.Empty<PeerProcess>() : [new PeerProcess(45, Started.AddMinutes(1), agent)],
-            new PeerProcess(40, Started.AddMinutes(1), @"C:\Windows\System32\wscript.exe"),
+            new PeerProcess(40, Started.AddMinutes(1), Wscript),
             new PeerProcess(30, null, "svchost.exe"),
-        ], complete, scheduled);
+        ], true);
 
-    [Fact]
-    public void A_script_credential_is_accepted_from_a_scheduled_task_whose_scheduler_cannot_be_opened()
+    // The Scheduler and ACL reads for an admin-locked task whose action runs wscript on a .vbs that runs a .ps1.
+    sealed class FakeTasks : IScriptTaskReader
+    {
+        public Dictionary<string, string> Hashes { get; } = new() { [BoundTask] = Sha("<Task/>"), [Wscript] = Sha("w"), [Vbs] = Sha("v"), [Ps1] = Sha("p") };
+        public Dictionary<string, int[]> Running { get; } = new() { [BoundTask] = [40] };
+        public HashSet<string> Writable { get; } = [];
+        public string? Definition(string task) => Hashes.GetValueOrDefault(task);
+        public IReadOnlyList<string>? ActionFiles(string task) => task == BoundTask ? [Wscript, Vbs] : null;
+        public IReadOnlyList<int> RunningEngines(string task) => Running.GetValueOrDefault(task) ?? [];
+        public bool TaskLocked(string task) => !Writable.Contains(task);
+        public bool FileLocked(string path) => !Writable.Contains(path);
+        public string? FileSha256(string path) => Hashes.GetValueOrDefault(path);
+        public static string Sha(string s) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)));
+    }
+
+    (string Token, AgentCredentials Store) BoundScript(FakeTasks tasks, Action<JsonObject>? edit = null)
     {
         var (token, credential) = ScriptRecord();
+        var binding = ScriptTaskBinding.Pin(BoundTask, [Ps1], tasks);
+        credential["scheduledTask"] = JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(binding, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+        edit?.Invoke(credential["scheduledTask"]!.AsObject());
         WriteCredential(credential);
-        var decision = Store(new Clock(Started)).Check(token, FromScheduler());
-        Assert.Equal("script:machine1/pump-wake", decision.Accepted?.Principal);
+        return (token, new AgentCredentials(root, "machine1", new Clock(Started), tasks: tasks));
     }
 
     [Fact]
-    public void A_scheduled_chain_with_an_agent_in_it_is_still_refused_as_inside_an_agent_session()
+    public void A_bound_script_credential_is_accepted_only_from_a_running_instance_of_its_unchanged_admin_locked_task()
     {
-        var (token, credential) = ScriptRecord();
-        WriteCredential(credential);
-        var store = Store(new Clock(Started));
-        Assert.EndsWith("inside an agent session", store.Check(token, FromScheduler(agent: @"C:\Users\me\.local\bin\copilot.exe")).Refusal);
-        Assert.EndsWith("inside an agent session", store.Check(token, FromScheduler(complete: false, agent: "claude.exe")).Refusal);
+        var tasks = new FakeTasks();
+        var (token, store) = BoundScript(tasks);
+        Assert.Equal("script:machine1/pump-wake", store.Check(token, FromTask()).Accepted?.Principal);
+        Assert.Equal([Wscript, Vbs, Ps1], store.MintScript("pump-two", task: BoundTask, files: [Ps1]).Credential.ScheduledTask!.Files.Select(f => f.Path));
+        tasks.Running[BoundTask] = [77];
+        Assert.EndsWith("no running instance of the bound task started the caller", store.Check(token, FromTask()).Refusal);
     }
 
     [Fact]
-    public void An_unreadable_process_is_refused_unless_it_is_the_scheduler_at_the_top_of_a_whole_chain()
+    public void An_agent_registered_task_running_the_same_command_under_another_path_is_refused()
+    {
+        var tasks = new FakeTasks();
+        var (token, store) = BoundScript(tasks);
+        tasks.Running.Remove(BoundTask);
+        tasks.Running[@"\agent-copy"] = [40];
+        Assert.EndsWith("no running instance of the bound task started the caller", store.Check(token, FromTask()).Refusal);
+        Assert.Throws<InvalidOperationException>(() => store.MintScript("copy", task: @"\agent-copy"));
+    }
+
+    [Fact]
+    public void A_bound_chain_with_an_agent_or_an_unreadable_process_below_the_engine_is_refused()
+    {
+        var (token, store) = BoundScript(new FakeTasks());
+        Assert.EndsWith("inside an agent session", store.Check(token, FromTask(agent: "copilot.exe")).Refusal);
+        var chain = FromTask().Processes.ToArray();
+        chain[0] = chain[0] with { StartedAt = null };
+        Assert.EndsWith("could not be traced in full", store.Check(token, new(chain, true)).Refusal);
+        chain = FromTask().Processes.ToArray();
+        chain[1] = chain[1] with { Image = @"C:\Users\me\wscript.exe" };
+        Assert.EndsWith("is not the program the bound task runs", store.Check(token, new(chain, true)).Refusal);
+    }
+
+    [Theory]
+    [InlineData(BoundTask)]
+    [InlineData(Vbs)]
+    [InlineData(Ps1)]
+    public void A_changed_task_definition_or_script_is_refused(string changed)
+    {
+        var tasks = new FakeTasks();
+        var (token, store) = BoundScript(tasks);
+        tasks.Hashes[changed] = FakeTasks.Sha("edited");
+        Assert.EndsWith("has changed since it was bound", store.Check(token, FromTask()).Refusal);
+    }
+
+    [Theory]
+    [InlineData(BoundTask)]
+    [InlineData(Wscript)]
+    [InlineData(Ps1)]
+    public void A_task_or_file_the_user_can_write_is_refused_at_mint_and_at_accept(string writable)
+    {
+        var tasks = new FakeTasks();
+        var (token, store) = BoundScript(tasks);
+        tasks.Writable.Add(writable);
+        Assert.EndsWith("can be changed without elevation", store.Check(token, FromTask()).Refusal);
+        Assert.EndsWith("can be changed without elevation", Assert.Throws<InvalidOperationException>(() => store.MintScript("other", task: BoundTask, files: [Ps1])).Message);
+        Assert.False(Directory.Exists(Path.Combine(root, "script-credentials")));
+    }
+
+    [Fact]
+    public void An_unbound_credential_refuses_the_scheduler_path_and_a_bound_one_needs_a_reader()
     {
         var (token, credential) = ScriptRecord();
         WriteCredential(credential);
-        var store = Store(new Clock(Started));
-        const string Untraced = "credential presented from outside its session: the script caller's ancestry could not be traced in full";
-        // VM4's refusal: the same unreadable svchost by name alone.
-        Assert.Equal(Untraced, store.Check(token, FromScheduler(scheduled: false)).Refusal);
-        Assert.Equal(Untraced, store.Check(token, FromScheduler(complete: false)).Refusal);
-        Assert.Equal(Untraced, store.Check(token, new([new PeerProcess(30, null, "svchost.exe")], true, Scheduled: true)).Refusal);
-        // Unreadable below the scheduler: the middle, or the caller itself.
-        var middle = FromScheduler().Processes.ToArray();
-        middle[1] = middle[1] with { StartedAt = null };
-        Assert.Equal(Untraced, store.Check(token, new(middle, true, Scheduled: true)).Refusal);
-        middle = FromScheduler().Processes.ToArray();
-        middle[0] = middle[0] with { Image = "  " };
-        Assert.Equal(Untraced, store.Check(token, new(middle, true, Scheduled: true)).Refusal);
-        // A user's own svchost.exe is readable, so it is just another process; what started it still counts.
-        Assert.EndsWith("inside an agent session", store.Check(token, new([
-            new PeerProcess(50, Started.AddMinutes(2), @"C:\Program Files\PowerShell\7\pwsh.exe"),
-            new PeerProcess(30, Started.AddMinutes(1), @"C:\Users\me\AppData\Local\Temp\svchost.exe"),
-            new PeerProcess(20, Started, @"C:\Users\me\.local\bin\copilot.exe"),
-        ], true)).Refusal);
+        Assert.EndsWith("could not be traced in full", Store(new Clock(Started)).Check(token, FromTask()).Refusal);
+        File.Delete(Path.Combine(root, AgentCredentials.FileName));
+        var (bound, _) = BoundScript(new FakeTasks());
+        Assert.EndsWith("the bound task cannot be checked on this host", Store(new Clock(Started)).Check(bound, FromTask()).Refusal);
+        Assert.Throws<InvalidOperationException>(() => Store().MintScript("other", task: BoundTask));
+    }
+
+    [Theory]
+    [InlineData("task", @"Slipgates\pump-wake")]
+    [InlineData("definition", "not-a-hash")]
+    public void An_invalid_task_binding_fails_the_store_closed(string field, string value)
+    {
+        var (_, store) = BoundScript(new FakeTasks(), b => b[field] = value);
+        Assert.NotNull(store.Problem);
     }
 
     [Theory]
