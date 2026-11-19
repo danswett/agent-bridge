@@ -116,7 +116,7 @@ public sealed partial class ShadowLedger
     }
 
     // Which side counts more, for a difference of two counts ("daemon=1 host=0"): 1 the daemon's, -1
-    // the host's; null for any other. Seen on DEV-VM1 (#40): a shell ended and was started again a
+    // the host's; null for any other. Seen in shadow (#40): a shell ended and was started again a
     // minute later, the daemon a pass behind each time, so it counted one the host did not and then
     // none where the host did; two lags in opposite directions, each shorter than the grace, ran on
     // as one disagreement of 60 s and became a mismatch.

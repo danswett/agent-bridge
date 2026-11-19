@@ -561,7 +561,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     // The turn's latest reply decides whether it goes on to run tools. Copilot answers an
                     // agent_idle notification inside the turn it starts: a read_agent request, its
                     // result, then the reply with nothing more to run. Kept from the first, the session
-                    // read working until its next prompt, idle for hours (#40, DSWETT-DEV-VM1).
+                    // read working until its next prompt, idle for hours (#40).
                     _turnAskedForTools = Json.Arr(data, "toolRequests") is { } requests && requests.GetArrayLength() > 0;
                     S.SetStatus(SessionStatus.Working);
                     S.Activity(at);
@@ -685,7 +685,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     }
 
     // A turn starting leaves the last one's error behind it, as the CLI's own session list clears
-    // its error on a prompt. Never a sign-in: VM1's Quality session (#800) signed out at 16:45:05,
+    // its error on a prompt. Never a sign-in: a Quality session (#800) signed out at 16:45:05,
     // ended a turn at 16:50:55 and failed sign-in again 51 ms later, and Migration's turn_end at
     // 16:47:25 proved nothing either. A prompt, a turn starting or ending, a hook and anything the
     // bridge typed are all written whether the agent can reach its model or not.
