@@ -27,6 +27,27 @@ public sealed class SessionRosterFixtureTests
         Assert.Equal(1, subscription.Result.Count);
     }
 
+    [Fact]
+    public async Task Case_distinct_registration_ids_remain_distinct_across_roots()
+    {
+        using var f = new Fixture();
+        const string lower = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        var upper = lower.ToUpperInvariant();
+        f.CodexRegistration(lower, 950, null);
+        var other = Directory.CreateDirectory(Path.Combine(f.Root, "other-registrations")).FullName;
+        File.WriteAllText(Path.Combine(other, upper + ".json"), JsonSerializer.Serialize(new
+        {
+            SessionId = upper, ProcessId = 951, Updated = Fixture.T0,
+        }));
+        f.Processes.Run(AgentKind.Codex, 950, "codex.exe");
+        f.Processes.Run(AgentKind.Codex, 951, "codex.exe");
+        await using var source = new SessionSource(f.Options(codexRoots: [f.CodexRegistrations, other]),
+            f.Processes, f.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal([upper, lower], source.Snapshot().Select(s => s.Id).Order(StringComparer.Ordinal));
+        Assert.Null(source.Held);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -311,7 +332,8 @@ public sealed class SessionRosterFixtureTests
             fixture.CodexRegistration(ids[i], 1000 + i, null);
             fixture.Processes.Run(AgentKind.Codex, 1000 + i, "codex.exe");
         }
-        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
+        var state = Path.Combine(fixture.Root, "sessions-listed.json");
+        await using var source = new SessionSource(fixture.Options(stateFile: state), fixture.Processes, fixture.Time, hostId: "host-id");
         await source.RefreshAsync();
         Assert.Equal(250, source.Snapshot().Count);
         Assert.Contains("250-session roster limit", source.Held!.Reason);
@@ -323,6 +345,9 @@ public sealed class SessionRosterFixtureTests
         Assert.Null(source.Get(ended));
         Assert.NotNull(source.Get(omitted));
         Assert.Null(source.Held);
+        using var saved = JsonDocument.Parse(File.ReadAllText(state));
+        Assert.DoesNotContain(saved.RootElement.GetProperty("sessions").EnumerateArray(),
+            s => s.TryGetProperty("omitted", out _));
         using var subscription = source.Subscribe();
         Assert.Equal(250, subscription.Result.Count);
     }
@@ -478,6 +503,49 @@ public sealed class SessionRosterFixtureTests
         await source.RefreshAsync();
         Assert.Equal(successor, Assert.Single(source.Snapshot()).ProcessId);
         Assert.Null(source.Held);
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Claude, false)]
+    [InlineData(AgentKind.Claude, true)]
+    [InlineData(AgentKind.Codex, false)]
+    [InlineData(AgentKind.Codex, true)]
+    public async Task An_undated_native_successor_holds_until_its_birth_is_proved_or_it_exits(AgentKind agent, bool exits)
+    {
+        using var f = new Fixture();
+        if (agent == AgentKind.Claude) { f.ClaudeRegistration(Id, 700, null); }
+        else { f.CodexRegistration(Id, 700, null); }
+        var exe = agent == AgentKind.Claude ? "claude.exe" : "codex.exe";
+        f.Processes.Run(agent, 700, exe);
+        await using var source = new SessionSource(f.Options(), f.Processes, f.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(700, source.Get(Id)!.ProcessId);
+        using var subscription = source.Subscribe();
+        while (subscription.Events.TryRead(out _)) { }
+        var root = agent == AgentKind.Claude ? f.ClaudeRegistrations : f.CodexRegistrations;
+        var path = Path.Combine(root, Id + ".json");
+        var registration = JsonNode.Parse(File.ReadAllText(path))!;
+        registration["Ended"] = true;
+        File.WriteAllText(path, registration.ToJsonString());
+        f.Processes.Exit(agent, 700);
+        f.Processes.RunUndated(agent, 701, exe);
+        var birth = Fixture.T0.AddMinutes(5);
+        if (agent == AgentKind.Claude) { f.ClaudeSessionFile(701, Id, birth); }
+        else { f.Processes.Holders[f.CodexLock(Id)] = [701]; }
+        await source.RefreshAsync();
+        Assert.Contains(agent, Assert.IsType<DiscoveryHeld>(source.Held).Agents);
+        Assert.Null(source.Get(Id));
+        Assert.True(subscription.Events.TryRead(out var first));
+        Assert.Equal(Events.DiscoveryChanged, first!.Name);
+        f.Time.Advance(TimeSpan.FromHours(1));
+        await source.RefreshAsync();
+        Assert.Contains(agent, source.Held!.Agents);
+        if (exits) { f.Processes.Exit(agent, 701); }
+        else { f.Processes.Run(agent, 701, exe, birth); }
+        await source.RefreshAsync();
+        Assert.Null(source.Held);
+        if (exits) { Assert.Empty(source.Snapshot()); }
+        else { Assert.Equal(701, Assert.Single(source.Snapshot()).ProcessId); }
     }
 
     [Theory]
