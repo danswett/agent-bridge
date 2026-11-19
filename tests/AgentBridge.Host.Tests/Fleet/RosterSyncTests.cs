@@ -1,5 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Host.Fleet;
+using AgentBridge.Protocol;
+using AgentBridge.Relay;
 using AgentBridge.Roster;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
@@ -105,6 +107,42 @@ public sealed class RosterSyncTests
     }
 
     [Fact]
+    public async Task Peer_rows_from_a_host_in_the_signed_device_roster_appear_with_all_A1_fields()
+    {
+        var source = new FleetPublisherTests.Source();
+        source.Sessions[0] = source.Sessions[0] with
+        {
+            Owner = new() { State = SessionEvidenceState.Known, Principal = "agent:fixture/one" },
+            Pr = new() { State = SessionEvidenceState.Known, Number = 42 },
+            Finished = new() { State = SessionEvidenceState.Known, Value = true },
+        };
+        source.Sessions[1] = source.Sessions[1] with { Owner = new(), Pr = new() { State = SessionEvidenceState.None }, Finished = new() };
+        // Malformed own evidence is left out rather than costing the whole record.
+        source.Sessions[2] = source.Sessions[2] with { Owner = new() { State = SessionEvidenceState.Known }, Pr = new() { State = SessionEvidenceState.Known, Number = 0 } };
+        var registry = new SessionRegistry(time);
+        Assert.True(await new FleetPublisher(source, world.Id("H"), time: time).PublishAsync((record, _) =>
+        {
+            Assert.Null(registry.Put("account", world.Id("H"), record));
+            return Task.CompletedTask;
+        }));
+        var record = JsonDocument.Parse(Assert.Single(registry.Read("account")).Json).RootElement.Clone();
+        var host = Assert.Single(reader.Read([JsonSerializer.SerializeToElement(new { machine = world.Id("H"), online = true, record }), Frame("X", ids: ["c"])]));
+        JsonElement[] Rows(FleetMachine m) => [.. m.Sessions.Select(s => JsonSerializer.SerializeToElement(new FleetListSession(m.Id, s.Node, s.State, s.Since, 0, m.Online, null, null, s.Evidence), Web))];
+        // Newest state change first: sessions 3, 2, 1.
+        var rows = Rows(host);
+        Assert.Equal("agent:fixture/one", rows[2].GetProperty("owner").GetProperty("principal").GetString());
+        Assert.Equal(42, rows[2].GetProperty("pr").GetProperty("number").GetInt32());
+        Assert.True(rows[2].GetProperty("finished").GetProperty("value").GetBoolean());
+        Assert.Equal("none", rows[1].GetProperty("pr").GetProperty("state").GetString());
+        // Unknown travels as absent, as from an older host: never as none or false.
+        Assert.False(rows[1].TryGetProperty("owner", out _) || rows[1].TryGetProperty("finished", out _));
+        Assert.False(rows[0].TryGetProperty("owner", out _) || rows[0].TryGetProperty("pr", out _));
+        time.Advance(TimeSpan.FromMinutes(2));
+        var stale = Rows(Assert.Single(reader.Read([Frame("H", online: false)])));
+        Assert.True(stale[2].GetProperty("stale").GetBoolean() && stale[2].GetProperty("finished").GetProperty("value").GetBoolean());
+            }
+
+            [Fact]
     public void A_record_with_missing_or_malformed_order_never_erases_the_cached_order()
     {
         Assert.Equal(["a"], Ids(Assert.Single(reader.Read([Frame("H", seq: 5, ids: ["a"])]))));
