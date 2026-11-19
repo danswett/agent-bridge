@@ -14,8 +14,7 @@ public class MachineNameScanTests
     // left in it fails until it is removed.
     static readonly string[] NotYetCleaned =
     [
-        "design/", "docs/", "infra/cloudflare/release-feed/README.md", "ops/", "pwa/", "quality/lab/README.md",
-        "quality/merge-rule.yml", "spikes/", "tests/AgentBridge.HomeAssistant.Tests/", "tools/ha-contract/",
+        "design/", "pwa/", "tests/AgentBridge.HomeAssistant.Tests/", "tools/ha-contract/",
     ];
 
     [Fact]
