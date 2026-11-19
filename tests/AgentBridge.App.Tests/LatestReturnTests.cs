@@ -5,6 +5,93 @@ namespace AgentBridge.App.Tests;
 
 public sealed class LatestReturnTests
 {
+    static string ViewSource(string file)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent; }
+        Assert.NotNull(root);
+        return File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.App", file));
+    }
+
+    [Fact]
+    public void Question_navigation_releases_the_pin_before_requesting_bring_into_view()
+    {
+        var source = ViewSource("SessionView.xaml.cs");
+        var start = source.IndexOf("void OnQuestionBar(", StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        var handler = source[start..source.IndexOf("\n    }", start, StringComparison.Ordinal)];
+        var release = handler.IndexOf("ReleasePin();", StringComparison.Ordinal);
+        var navigate = handler.IndexOf("QuestionCard.StartBringIntoView(", StringComparison.Ordinal);
+        Assert.True(release >= 0 && navigate > release, "Question navigation must release the Jump pin before moving the viewport.");
+    }
+
+    [Fact]
+    public void History_restore_recaptures_the_anchor_after_correcting_the_viewport()
+    {
+        var source = ViewSource("SessionView.History.cs");
+        var start = source.IndexOf("void Restore()", StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        var restore = source[start..source.IndexOf("\n        }", start, StringComparison.Ordinal)];
+        var correction = restore.IndexOf("Anchoring(scroll, target);", StringComparison.Ordinal);
+        var capture = restore.IndexOf("TakeAnchor();", StringComparison.Ordinal);
+        Assert.True(correction >= 0 && capture > correction, "Restore must capture the corrected position, including when no correction was needed.");
+        Assert.Equal("}", restore[(correction + "Anchoring(scroll, target);".Length)..capture].Trim());
+    }
+
+    [Fact]
+    public void Jump_pins_until_released_and_can_be_explicitly_rearmed()
+    {
+        var hatch = new LatestHatch();
+        hatch.Jump();
+        Assert.True(hatch.AtEnd(false));
+        hatch.Release();
+        Assert.False(hatch.Pinned);
+        Assert.False(hatch.AtEnd(false));
+        hatch.Jump();
+        Assert.True(hatch.AtEnd(false));
+    }
+
+    [Fact]
+    public void Released_hatch_still_follows_when_back_at_bottom()
+    {
+        var h = new LatestHatch();
+        h.Jump();
+        h.Release();
+        Assert.True(h.AtEnd(true));
+    }
+
+    [Fact]
+    public void Released_hatch_compensates_prepend()
+    {
+        var h = new LatestHatch();
+        h.Jump();
+        h.Release();
+        Assert.Equal(700, h.RestoreOffset(600, 900, 800));
+    }
+
+    [Theory]
+    [InlineData(600d, 1200d, 900d, 900d)]
+    [InlineData(600d, 800d, null, 600d)]
+    [InlineData(600d, 400d, null, 400d)]
+    public void A_released_hatch_keeps_its_offset_or_compensates_a_prepend_without_a_visible_row(
+        double offset, double extent, double? previousExtent, double expected)
+    {
+        var hatch = new LatestHatch();
+        hatch.Jump();
+        hatch.Release();
+        Assert.Equal(expected, hatch.RestoreOffset(offset, extent, previousExtent));
+    }
+
+    [Fact]
+    public void Before_jump_the_existing_automatic_follow_and_prepend_compensation_are_unchanged()
+    {
+        var hatch = new LatestHatch();
+        hatch.Release();
+        Assert.True(hatch.AtEnd(true));
+        Assert.False(hatch.AtEnd(false));
+        Assert.Equal(900, hatch.RestoreOffset(600, 900, 600));
+    }
+
     [Fact]
     public void The_latest_input_receipt_for_the_exact_view_is_accepted()
     {

@@ -616,6 +616,7 @@ public sealed partial class SessionView : UserControl
 
     void OnQuestionBar(object sender, RoutedEventArgs e)
     {
+        ReleasePin();
         QuestionCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = true });
     }
 

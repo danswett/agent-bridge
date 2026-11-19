@@ -145,6 +145,12 @@
             <!-- Subtle icon buttons with tooltips (§6.2): Pin, Details, and the inspector. -->
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Top">
                 <Button
+                    Content="Jump to latest"
+                    AutomationProperties.AutomationId="JumpToLatest"
+                    AutomationProperties.Name="Jump to latest"
+                    Visibility="{x:Bind local:Ui.Show(Layout.ShowConversation), Mode=OneWay}"
+                    Click="OnJumpToLatest" />
+                <Button
                     Style="{StaticResource AbIconButton}"
                     AutomationProperties.AutomationId="HeaderPin"
                     AutomationProperties.Name="{x:Bind local:SessionView.PinName(Card.Pinned), Mode=OneWay}"
