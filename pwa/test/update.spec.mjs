@@ -102,6 +102,68 @@ const sheetOf = (page) => page.locator('dialog.update-now-sheet');
 const setUpdate = (page, change) => page.evaluate((c) => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update, ...c }), change);
 const QUIET = { busy: { working: 0, waiting: 0 } };
 
+test('the restart cap keeps Update usable and sends Update when idle without a confirmation', async ({ page }) => {
+  await openDemo(page, '&updateNow=1');
+  await setUpdate(page, { canUpdateNow: false, updateNowWhy: 'restart-cap' });
+  const block = updateOf(page);
+  const update = block.getByRole('button', { name: /^Update/ });
+
+  await expect(update).toBeEnabled();
+  await update.click();
+
+  await expect(sheetOf(page)).toHaveCount(0);
+  await expect(rowOf(page)).toContainText(/updates when its sessions are quiet/i);
+  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog))
+    .toEqual([{ op: 'update.install', request: expect.stringMatching(UUID) }]);
+});
+
+test('a failed download offers Try again now and sends one install press', async ({ page }) => {
+  await openDemo(page);
+  await setUpdate(page, { last: { outcome: 'failed', step: 'downloading', to: '0.2.0', at: new Date().toISOString() } });
+  const retry = updateOf(page).getByRole('button', { name: 'Try again now', exact: true });
+
+  await expect(retry).toBeEnabled();
+  await retry.click();
+
+  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog))
+    .toEqual([{ op: 'update.install', request: expect.stringMatching(UUID) }]);
+});
+
+test('a failed download retries without signing even when Update now is offered', async ({ page }) => {
+  await openDemo(page, '&updateNow=1');
+  await setUpdate(page, { last: { outcome: 'failed', step: 'downloading', to: '0.2.0', at: new Date().toISOString() } });
+  const block = updateOf(page);
+  await expect(block.locator('.machine-update-now')).toHaveCount(0);
+  await block.getByRole('button', { name: 'Try again now', exact: true }).click();
+  await expect(sheetOf(page)).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog))
+    .toEqual([{ op: 'update.install', request: expect.stringMatching(UUID) }]);
+});
+
+test('a restart cap shows quiet wording before the press, never a deadline or an allowance', async ({ page }) => {
+  await openDemo(page, '&updateNow=1');
+  await setUpdate(page, { canUpdateNow: false, updateNowWhy: 'restart-cap', updateNowAt: '2026-11-02T20:30:00Z' });
+  const block = updateOf(page);
+  await expect(block.locator('.machine-update-why')).toHaveText('Updates when its sessions are quiet');
+  await expect(block.getByRole('button', { name: /^Update when idle:/ })).toBeEnabled();
+  expect(await page.evaluate(() => window.agentBridgeDemo.updateLog)).toEqual([]);
+});
+
+test('a capped update shows quiet wording once and never revives its note after a failure or a new release', async ({ page }) => {
+  await openDemo(page, '&updateNow=1');
+  await page.evaluate(() => { window.agentBridgeDemo.host.updateStepMs = 60000; });
+  await setUpdate(page, { canUpdateNow: false, updateNowWhy: 'restart-cap' });
+  const row = rowOf(page);
+  await updateOf(page).getByRole('button', { name: /^Update when idle:/ }).click();
+  await expect(row.getByText('Updates when its sessions are quiet', { exact: true })).toHaveCount(1);
+  await setUpdate(page, { phase: 'idle', request: null, last: { outcome: 'failed', reason: 'connection reset' } });
+  await expect(updateOf(page).locator('.machine-update-last')).toHaveText('The update failed: connection reset.');
+  await expect(row.getByRole('alert')).toHaveCount(0);
+  await setUpdate(page, { available: null });
+  await setUpdate(page, { available: '0.3.0', updateNowWhy: null });
+  await expect(row.getByText('Updates when its sessions are quiet', { exact: true })).toHaveCount(0);
+});
+
 test('Update now on a quiet machine goes on one press, asking nothing, and says it updated', async ({ page }) => {
   await openDemo(page, '&updateNow=1');
   await setUpdate(page, QUIET);

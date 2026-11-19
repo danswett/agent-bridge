@@ -10,7 +10,7 @@ import { ReadDwell } from '../read-dwell.js';
 import { ago } from './time.js';
 import { whileVisible } from './ticker.js';
 import { enter, flip, leave, seen, select as showSelection, slide } from './motion.js';
-import { updateLine, updateDetails, lastLine, checkHeld, canCheck, canInstall, canUpdateNow, updateNowReason, RESTARTING } from '../update.js';
+import { updateLine, updateDetails, lastLine, checkHeld, canCheck, canInstall, canRetryDownload, canUpdateWhenIdle, canUpdateNow, updateNowReason, RESTARTING } from '../update.js';
 import { openUpdateNowSheet } from './update-now-sheet.js';
 import { signInDevicesLines } from '../signin-devices.js';
 import { BRAND } from '../brand.js';
@@ -1103,11 +1103,13 @@ function updateRow(updates, id, name, now) {
   const last = checkFailed || (idle && s.last?.outcome === 'current') ? null : lastLine(s, now, { updateNow });
   const check = canCheck(s) && !busy && !asking;
   const install = canInstall(s) && !busy && !asking;
-  const offerNow = updates.signs === true && canUpdateNow(s);
+  const retry = canRetryDownload(s);
+  const whenIdle = canUpdateWhenIdle(s);
+  const offerNow = !retry && ((updates.signs === true && canUpdateNow(s)) || whenIdle);
   const pressNow = offerNow && !busy && !asking;
-  const why = updates.signs === true ? updateNowReason(s) : null;
+  const why = updates.signs === true || whenIdle ? updateNowReason(s) : null;
   const details = updateDetails(s, now);
-  const key = [said, last, note, busy, asking, check, install, offerNow, pressNow, why, ...details];
+  const key = [said, last, note, busy, asking, check, install, retry, whenIdle, offerNow, pressNow, why, ...details];
   const checkLabel = checking ? 'Checking\u2026' : busy ? 'Asking\u2026' : 'Check now';
   // Not disabled when it cannot be pressed: a disabled button loses focus, and the next draw
   // could not give it back. A press then does nothing (UpdateControl, and the host's own rules).
@@ -1132,11 +1134,13 @@ function updateRow(updates, id, name, now) {
       last ? h('p', { class: 'machine-update-last' }, last) : null,
       why ? h('p', { class: 'machine-update-why' }, why) : null,
       ...details.map((text) => h('p', { class: 'machine-update-detail', id: checkFailed ? `update-check-${id}` : null }, text)),
-      note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
+      note && note !== why ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
       s.installer ? h('div', { class: 'machine-actions machine-update-actions' },
         !offerNow ? button('machine-update-check', checkLabel, `${checkLabel} on ${name}`, check, () => updates.press(id, 'check')) : null,
-        s.available && !offerNow ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
-        offerNow ? button('machine-update-now', 'Update now', `Update now: ${s.available} on ${name}, without waiting`, pressNow, (e) => {
+        s.available && !offerNow ? button('machine-update-install', retry ? 'Try again now' : 'Install',
+          retry ? 'Try again now' : `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
+        offerNow ? button('machine-update-now', whenIdle ? 'Update when idle' : 'Update now',
+          whenIdle ? `Update when idle: ${s.available} on ${name}` : `Update now: ${s.available} on ${name}, without waiting`, pressNow, (e) => {
           const doc = e.currentTarget.ownerDocument;
           updates.pressNow(id, { machine: name, confirm: (sheet, { signal } = {}) => openUpdateNowSheet(sheet, { doc, returnFocus: refocus(doc), signal }) });
         }) : null) : null),

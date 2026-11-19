@@ -473,10 +473,17 @@ host's own text (#826). "Bridge", never "host".
   `updateNowWhy`: `disabled` "Update now is off on this machine"; `read-only` "View only" (the
   row's own word); `old-app` "Update now needs a newer app there. Install still works.";
   `unavailable` "The app there can't install updates now"; `sign-in` "An agent sign-in is under
-  way there"; `busy` "Another update or restart is under way there"; `restart-cap` "Update now
-  is available again at *time*" (`updateNowAt`, in the viewer's
-  local time). A read-only machine already says "View only", and offers neither. Install keeps
+  way there"; `busy` "Another update or restart is under way there"; `restart-cap` "Updates when
+  its sessions are quiet", with **Update when idle** sending one ordinary `update.install`
+  request, without signing or confirming. No restart allowance or deadline is shown.
+  The accepted note follows only that request and release; a newer terminal result,
+  changed release or unavailable app clears it. Identical quiet wording is shown only once.
+  A read-only machine already says "View only", and offers neither. Install keeps
   its words and its wait.
+* **A failed download** (`last.outcome: failed`, `last.step: downloading`, `last.to: available`),
+  not already downloaded, with an installed app and phase `idle` offers **Try again now** instead of Install or Update now.
+  It sends one ordinary Install request; only the app decides when to download or restart.
+  A held Check, unknown failure step or update already under way offers no download retry.
 * **One press on a quiet machine** (owner): nothing working, no question or approval waiting,
   and its sessions known. No dialog.
 * **Otherwise one confirmation**, the same dialog as the confirm before a more expensive model
@@ -514,8 +521,8 @@ host's own text (#826). "Bridge", never "host".
   | `not-quiet` | a message was being delivered there the whole time |
   | `changed` | something changed on the machine; try again |
   | `release-changed` | a newer update arrived; try again |
-  | `rate-limited` | too many presses just now; try again in a few minutes |
-  | `restart-cap` | Update now has used its restarts for the last 6 hours; try after *time* |
+  | `rate-limited` | Not updated yet. Try again after *viewer-local time*, with the date when it is not today; without `retryAt`, Try again in a few minutes |
+  | `restart-cap` | Not updated yet. Try Update when idle. (a refusal at departure or from an older host) |
   | `busy` | another update or restart is under way there |
   | `sign-in` | an agent sign-in is under way there |
   | `announce-failed` | the bridge couldn't tell your devices it was restarting |
