@@ -2,6 +2,19 @@ namespace AgentBridge.App;
 
 static class NativeInputSetup
 {
+    public static async Task<bool> RestoreFocus<T>(T focused, Action<T, bool> holdBringIntoView, Func<Task<bool>> restore)
+    {
+        holdBringIntoView(focused, true);
+        try { return await restore(); }
+        finally { holdBringIntoView(focused, false); }
+    }
+
+    public static (T Target, string Method) PressWithTarget<T>(Func<T> target, Func<string> press)
+    {
+        var sent = target();
+        return (sent, press());
+    }
+
     public static bool CanQuarantineHistoryForeground(bool hostedArm64, bool foregroundMatches, DateTimeOffset now) =>
         hostedArm64 && !foregroundMatches && now < new DateTimeOffset(2026, 11, 20, 8, 0, 0, TimeSpan.Zero);
 
