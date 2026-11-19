@@ -571,6 +571,7 @@ alone, observe mode or roster library support is not evidence those gates are de
 | Session name | Never | Relay sees (cap 64, optional) | Only person-set names; filter; per-machine off switch (Decision 2); not stored, not logged |
 | Session state and since | Never | Relay sees | Coarse enum only |
 | Process startedAt (#2360, planned) | Never | Relay sees | Optional process time only; signed before ranking |
+| Session owner principal, PR number, finished flag (#2643) | Never | Relay sees, only once known | Bounded closed shapes; unknown sent as absent; not stored, not logged |
 | Count of sessions per machine | Never | Relay sees | Capped at 64, `total` when more |
 | Prompts, questions, paths, repo, branch, model, first message, folder | Never | Never | Allow-list test on host and relay |
 | Storage | Machine blob, 30 s writes | Registry is **not** in the blob | Memory only; lost on relay restart, rebuilt from host heartbeats within 20 s |
