@@ -40,24 +40,18 @@ Failures retain their step and structured error type/code, never exception messa
 B2 supplies the native adapter and closed packaging; B3 supplies private staging and
 the app/launcher cutover. This layer alone changes no production apply path.
 
-### B2: native evidence adapter and build closure
+### B2 part 1: adapter seams and build closure
 
-Pin the [Velopack 1.2.161 image](https://github.com/velopack/velopack/blob/92d6a1c91716729d449034df5c50307dcce39493/src/bins/build.rs)
-read-only through real exit; missing or other native release metadata is unknown.
-The adapter pins the original process handle before checking its UTC creation time,
-and owns the real apply handle through its exit wait. A nonzero updater exit alone
-cannot disprove a surviving elevated worker; it stays unknown, never retry authority.
-The [pinned manifest parser](https://github.com/velopack/velopack/blob/92d6a1c91716729d449034df5c50307dcce39493/src/lib-rust/src/bundle.rs)
-uses namespaced NuGet metadata. Read `current\sq.version` anew under the package lock
-and check package identity, main executable and release identity before respawn.
-Native starts remain injectable for in-process tests; no native binary is run locally.
+The shared request, process interface and launch specifications separate native
+process ownership from the coordinator flow. Apply arguments keep the verified
+cached package form; app restart arguments preserve the original profile.
+The launcher references the shared coordinator and contracts in its self-contained
+bundle instead of compiling private copies.
 
-Observation cancellation does not release the updater pin, package custody or real
-process handle: the owned noncancellable exit wait retains them until actual exit.
-The future B3 entry point must drain adapter `Ownership` before exiting, including
-late native respawn completion/errors. Respawn observation uses the same deadline
-and releases the package lock on timeout/cancellation. An entered native start
-cannot be revoked: its late outcome stays unknown, never retry authority.
+Respawn observation uses the same deadline and releases the package lock on
+timeout/cancellation. An entered native start cannot be revoked: its late outcome
+stays unknown, never retry authority. `RespawnFinished` retains that late outcome
+for the native adapter in part 2; this slice starts no native updater.
 
 ## C/D: approved design basis, not activation proof
 
