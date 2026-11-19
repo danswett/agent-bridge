@@ -8,6 +8,9 @@ $script:failures = 0
 $script:checks = 0
 $script:GreenSha = 'a' * 40
 $script:RedSha = 'b' * 40
+$script:Token = 'ghs_fakeTokenForRevertCulprit0123'
+$script:Basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$script:Token"))
+$env:GH_TOKEN = $script:Token
 function Assert([bool]$Ok, [string]$Name) {
     $script:checks++
     if ($Ok) { "ok   $Name" } else { "FAIL $Name"; $script:failures++ }
@@ -15,7 +18,7 @@ function Assert([bool]$Ok, [string]$Name) {
 function Reset-Scenario {
     $script:s = @{ redAt = '2026-11-09T07:40:00Z'; newest = 'failure'; noGreen = $false; commits = 1; prs = 1; conflict = $false; parent = $script:GreenSha; branchExists = $false; comments = @()
         entry = @('main-red: run=101 attempt=1 sha=bbbbbbbb', '```', 'Job: product', '  A.B.C.Method', '```') -join "`n"
-        quarantined = @(); revertPrs = @(); culpritIssues = @(); calls = @(); git = @(); writes = @(); body = '' }
+        quarantined = @(); revertPrs = @(); culpritIssues = @(); calls = @(); git = @(); writes = @(); body = ''; result = ''; pushFails = $false; pushAuth = '' }
 }
 function Fake-Gh {
     $a = $args -join ' '
@@ -57,7 +60,11 @@ function Fake-Git {
     $a = $args -join ' '
     $s.git += $a
     if ($a -like '* revert --no-edit *' -and $s.conflict) { $global:LASTEXITCODE = 1; return }
-    if ($a -like 'push *') { $s.writes += 'push' }
+    if ($a -like 'push *') {
+        $s.writes += 'push'; $s.pushAuth = "$env:GIT_CONFIG_COUNT|$env:GIT_CONFIG_KEY_0|$env:GIT_CONFIG_VALUE_0"
+        # A failing push that echoes the credential proves it is masked wherever the failure is reported.
+        if ($s.pushFails) { "fatal: Authentication failed with $script:Token ($script:Basic)"; $global:LASTEXITCODE = 128 }
+    }
     if ($a -eq "rev-parse --verify --quiet $script:RedSha^1") { if ($s.parent) { $s.parent } else { $global:LASTEXITCODE = 1 } }
     if ($a -like 'ls-remote --exit-code --heads origin revert-culprit/*') { $global:LASTEXITCODE = if ($s.branchExists) { 0 } else { 2 } }
 }
@@ -123,5 +130,19 @@ Assert (($s.writes -join ',') -eq 'label,push,pr') 'a revert PR stops a later cu
 Reset-Scenario; Tick; $s.runs = @(@{ id = 100; run_attempt = 1; conclusion = 'success'; updated_at = '2026-11-09T07:00:00Z'; head_sha = $script:GreenSha; html_url = 'u100' }, (Run 102 '07:44' ('c' * 40)))
 $s.comments = @((Entry 102 'A.B.C.Method')); try { Tick } catch { $s.result = "threw: $_" }
 Assert ($s.result -eq 'revert PR already exists') "a re-run that moves the spell's first red run opens nothing more for that main-red issue ($($s.result))"
+# Checkout persists no credentials, so the push must authenticate itself from GH_TOKEN without exposing it.
+function Seen { (@($s.result, $s.body) + $s.git + $s.calls) -join "`n" }
+Reset-Scenario; $log = & { try { Tick } catch { "threw: $_" } } *>&1 | Out-String
+Assert ($s.pushAuth -ceq "1|http.https://github.com/.extraheader|AUTHORIZATION: basic $script:Basic" -and -not $env:GIT_CONFIG_VALUE_0 -and
+    ($s.writes -join ',') -eq 'label,push,pr') 'the push carries GH_TOKEN as a basic auth header for that one git command only'
+$seen = $log + (Seen)
+Reset-Scenario; $s.pushFails = $true; $log = & { try { Tick } catch { "threw: $_" } } *>&1 | Out-String
+Assert (($s.writes -join ',') -eq 'label,push,issue' -and $s.body.Contains('could not be pushed') -and $s.body.Contains('***')) "a failed push opens the fallback issue ($($s.result))"
+$seen += $log + (Seen)
+Assert (-not $seen.Contains($script:Token) -and -not $seen.Contains($script:Basic) -and -not ($s.git -match 'remote set-url|config ')) 'the token never appears in output, errors, the issue, git arguments or the remote URL'
+Reset-Scenario; Remove-Item Env:GH_TOKEN; $threw = $null
+try { Tick } catch { $threw = "$_" }
+$env:GH_TOKEN = $script:Token
+Assert ($threw -like '*GH_TOKEN is not set*' -and $s.writes.Count -eq 0 -and -not ($s.git -match '^push ')) "a missing GH_TOKEN fails clearly before any write ($threw)"
 if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 "revert-culprit: $script:checks checks passed"
