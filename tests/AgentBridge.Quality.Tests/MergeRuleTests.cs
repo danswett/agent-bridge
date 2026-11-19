@@ -2121,7 +2121,10 @@ public class MergeRuleTests
     [InlineData("runner-never-started", "success")]
     [InlineData("no-step-data", "failure")]
     [InlineData("empty-step-data", "failure")]
-    [InlineData("rerun-used", "success")]
+    [InlineData("rerun-used", "failure")]
+    [InlineData("prior-test-failure", "failure")]
+    [InlineData("npm-ci", "failure")]
+    [InlineData("system-packages", "failure")]
     [InlineData("product-infra", "success")]
     [InlineData("build-failure", "failure")]
     [InlineData("wrong-job", "failure")]
@@ -2129,12 +2132,14 @@ public class MergeRuleTests
     {
         var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
-        var target = scenario is "product-infra" or "build-failure" ? "product (ubuntu-latest)"
+        var target = scenario is "product-infra" or "build-failure" or "prior-test-failure" ? "product (ubuntu-latest)"
             : scenario == "wrong-job" ? "light" : "pwa-ui (webkit 3/3)";
-        var attempt = scenario == "rerun-used" ? 2 : 1;
+        var attempt = scenario is "rerun-used" or "prior-test-failure" ? 2 : 1;
         object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
-        var setup = target.StartsWith("product", StringComparison.Ordinal)
-            ? "Run actions/setup-dotnet@v6" : "Download Playwright's system packages";
+        var setup = target.StartsWith("product", StringComparison.Ordinal) ? "Run actions/setup-dotnet@v6"
+            : scenario == "npm-ci" ? "Run npm ci"
+            : scenario == "system-packages" ? "Download Playwright's system packages"
+            : "Playwright's browsers from main's cache";
         var steps = new List<object>
         {
             Step(scenario == "unknown" ? "Unknown step" : setup, "failure"),
@@ -2163,6 +2168,13 @@ public class MergeRuleTests
             }).ToArray();
         if (scenario != "no-step-data")
             jobs.Single(j => (string)j["name"]! == target)["steps"] = scenario == "empty-step-data" ? [] : steps;
+        // Attempt 1 failed its tests; the rerun then failed in setup, before the tests ran.
+        if (scenario == "prior-test-failure")
+            jobs = [.. jobs, new Dictionary<string, object?>
+            {
+                ["id"] = 99, ["name"] = target, ["status"] = "completed", ["conclusion"] = "failure",
+                ["run_attempt"] = 1, ["runner_id"] = 1, ["steps"] = new[] { Step(setup, "success"), Step("Run tests", "failure") },
+            }];
         var github = new FakeGitHub(GraphQLPullRequest(Head),
             mainRuns: MainRuns((5, "completed", scenario == "cancelled-run" ? "cancelled" : "failure", attempt)),
             mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
@@ -2173,11 +2185,24 @@ public class MergeRuleTests
         if (state == "success")
         {
             Assert.Contains("ALERT infra-only", posted, StringComparison.Ordinal);
-            Assert.Contains(scenario == "rerun-used" ? "rerun already used" : "rerun needed", posted, StringComparison.Ordinal);
+            Assert.Contains("rerun needed (once)", posted, StringComparison.Ordinal);
             Assert.Contains(target, output.ToString(), StringComparison.Ordinal);
         }
         else
             Assert.DoesNotContain("ALERT infra-only", posted, StringComparison.Ordinal);
+        if (attempt > 1)
+            Assert.Contains($"HOLD infra-only {target}: it failed again after its one rerun", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Infra_alerts_follow_the_blocking_reason_compactly_and_the_report_ignores_them()
+    {
+        var main = MainGreen with { Alerts = [.. new[] { "1/3", "2/3", "3/3" }.Select(s => $"ALERT infra-only pwa-ui (webkit {s}): rerun needed (once)")] };
+        var held = MergeRule.Evaluate(Config, main, Pr(labels: ["hold"], statuses: [First()]))!;
+
+        Assert.Equal("Held by the label 'hold'; ALERT infra-only pwa-ui (webkit 1/3): rerun needed (once) (+2 more)", held.Description);
+        Assert.Equal("held", WeeklyReport.Category(held.Description));
+        Assert.Equal("held", WeeklyReport.Category("ALERT infra-only light: rerun needed (once); Held by the label 'hold'"));
     }
 
     static string WriteConfig(bool arm64Waiver = false)
