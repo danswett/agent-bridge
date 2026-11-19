@@ -184,6 +184,8 @@ Detect; $s.attempt = 3; Detect
 Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1 -and $s.comments.Count -eq 2) 'a second tick and a third failure make no duplicate request'
 Reset-Quarantine -Switch ''; Detect; $s.attempt = 2; Detect
 Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 0) 'with MAIN_RED_QUARANTINE unset the request is recorded but the generator never runs'
+Reset-Quarantine -Switch "o$([char]0x200b)n"; Detect; $s.attempt = 2; Detect
+Assert (@(Get-GeneratorCalls).Count -eq 0) 'only the exact value on runs the generator'
 Reset-Quarantine -Script 'absent.ps1'; Detect; $s.attempt = 2; Detect
 Assert (@(Get-Requests).Count -eq 1 -and $LASTEXITCODE -eq 0) 'without the generator script the request is still recorded and detection succeeds'
 Reset-Quarantine -Script 'refusing.ps1'; Detect; $s.attempt = 2; $refused = $null
@@ -195,6 +197,9 @@ Reset-Quarantine; Detect; $s.attempt = 2; $s.log = '  Failed A.B.C.Other [1 s]';
 Assert (@(Get-Requests).Count -eq 0) 'two different post-merge tests in a row propose no quarantine'
 Reset-Quarantine; $s.log = "  Failed A.B.C.Method [1 s]`n  Failed A.B.C.Other [1 s]"; Detect; $s.attempt = 2; Detect
 Assert (@(Get-Requests).Count -eq 0) 'an entry naming more than one test proposes no quarantine'
+Reset-Quarantine; $s.log = "  1) [webkit] $([char]0x203a) login$([char]0x200b).spec.mjs:43:1 $([char]0x203a) t"; Detect
+$s.attempt = 2; $s.log = "  1) [webkit] $([char]0x203a) login.spec.mjs:43:1 $([char]0x203a) t"; Detect
+Assert (@(Get-Requests).Count -eq 0 -and $s.body.Contains('[sanitized]')) 'a name sanitized into another test name proposes no quarantine'
 Remove-Item -LiteralPath $genDir -Recurse; $env:MAIN_RED_QUARANTINE = $null
 Remove-Item -LiteralPath $tierPath
 if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }

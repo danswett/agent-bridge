@@ -912,8 +912,15 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   Tiered gating B3 ([issue 3210](https://github.com/danswett/agent-bridge/issues/3210)): a failed job named
   in a `tier: post-merge` suite's `tier_jobs` in `catalog.yml` is listed as `Job (post-merge-tier)`. When
   only such jobs failed (the `quality-gate` aggregate aside), the entry says so: an alert that never feeds
-  a pull request's merge verdict. The issue stays open until main's CI is green; quarantine proposals are
-  B3b. Missing tier data means blocking.
+  a pull request's merge verdict. The issue stays open until main's CI is green. Missing tier data means blocking.
+  B3b: when two entries in a row (no green between) name the same single test, and every failed job in
+  each but `quality-gate` is post-merge tier, the second entry adds one `quarantine-request: test=<name>`
+  line, once per open issue, with the [S3b generator](https://github.com/danswett/agent-bridge/pull/3078)
+  command. `main-red.ps1` then calls `quarantine-pr.ps1` by path (24 h expiry, draft `fixes-main` PR), but
+  only while `MAIN_RED_QUARANTINE` is exactly `on` in its environment and the script exists (until PR 3078
+  lands, the request is only recorded). The generator keeps its own fences: the repository variable rechecked
+  before each write, and only attempt 2 of one failed run; a refusal is a warning, never a failed detection.
+  Nothing here posts a status, check or label, so no merge verdict reads it.
   Offline test: `quality/test-main-red.ps1` (catalog suite `main-red`).
 - **Red minutes on main** (owner target, 2026-11-09): `pwsh quality/red-minutes.ps1` prints how long
   main's CI was red over the last 24 h, the same way the main guardian counts it (a spell runs from a
@@ -936,6 +943,11 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   `app`'s raw result, so main doesn't publish while app legs fail. Remove it (script, test, catalog suite,
   the gate's two steps) once #2563 and the self-test fix are on main and three main push runs in a
   row show all three jobs green; extending it needs a new owner decision.
+  **Should win-arm64 gate publishing? Yes** (B3b, #3210): a release ships and signs both architectures
+  whole, and the Arm64 package is uploaded only after its own self-test passes, so publishing without
+  it would ship nothing, or an untested build, to Arm64 copies. But one self-test flake (#2026) should not
+  hold a release: the smallest safe change, proposed to Quality in the B3b PR, retries only that step,
+  once, on win-arm64, with a warning naming #2026. `publish-gate` is unchanged; two failures still block.
   Offline test: `quality/test-arm64-waiver.ps1` (catalog suite `arm64-waiver-script`).
 - **The weekly report** (`weekly-report`, [weekly-report.yml](../.github/workflows/weekly-report.yml))
   is how the flake record gets read, so flakes are fixed rather than re-run. Every Monday at 08:00

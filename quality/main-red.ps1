@@ -5,6 +5,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'rerun-known-flakes.ps1') -RunId $RunId -Repository $Repository
 $script:CatalogPath = Join-Path $PSScriptRoot 'catalog.yml'
+# The S3b generator (PR 3078), called by path only: until it is on main a request is just recorded.
+$script:QuarantineScript = Join-Path $PSScriptRoot 'quarantine-pr.ps1'
 
 # Tiered gating (#3210): the post-merge tier is the tier_jobs flow list of each tier: post-merge
 # suite in catalog.yml. Anything this minimal read misses stays blocking, so a miss only alerts louder.
@@ -62,6 +64,8 @@ function Get-MainRedIssue([string]$Repository) {
 function Format-MainRedBody($Run, [string]$Repository, $Jobs, [bool]$PostMergeOnly) {
     function Safe-Text([string]$Text) {
         $clean = $Text.Replace('@', '[at]').Replace('`', "'") -replace '\p{C}', ''
+        # B3b compares names across entries: a changed name must not read as another, real one.
+        if (-not [string]::Equals($clean, $Text, [StringComparison]::Ordinal)) { $clean += ' [sanitized]' }
         if ($clean.Length -gt 300) { return $clean.Substring(0, 300) + ' [truncated]' }
         $clean
     }
@@ -85,6 +89,37 @@ function Format-MainRedBody($Run, [string]$Repository, $Jobs, [bool]$PostMergeOn
     $text + "`n" + '```'
 }
 
+# B3b (#3210): the one test an entry names when every failed job but quality-gate is post-merge tier and
+# names only that test; otherwise $null. Entries are parsed, not jobs, so the previous run reads the same way.
+function Get-QuarantineTest([string]$Entry) {
+    if ($Entry.Contains('[evidence truncated]')) { return $null }
+    $perJob = @(); $kind = $null
+    foreach ($line in $Entry -split '\r?\n') {
+        if ($line -cmatch '^Job( \(post-merge-tier\))?: (.*)$') {
+            $kind = if ($Matches[2] -ceq 'quality-gate') { 'gate' } elseif ($Matches[1]) { 'post' } else { return $null }
+            if ($kind -eq 'post') { $perJob += , [Collections.Generic.List[string]]::new() }
+        } elseif ($kind -eq 'post' -and $line -cmatch '^  (\S.*)$') { $perJob[-1].Add($Matches[1]) }
+    }
+    # Ordinal throughout: PowerShell's -ceq and -Unique compare culture-aware and ignore zero-width characters.
+    $tests = [Collections.Generic.HashSet[string]]::new([string[]]@(foreach ($list in $perJob) { if ($list.Count -eq 1) { $list[0] } else { '' } }),
+        [StringComparer]::Ordinal)
+    if ($tests.Count -ne 1) { return $null }
+    $test = @($tests)[0]
+    # The generator's own supported-name shape, so a sanitized, truncated or sentinel line never matches.
+    if ($test -cnotmatch '^(?:[A-Za-z_]\w*(?:\.[A-Za-z_]\w*){2,}|(?:[\w-]+/)*[\w-]+\.spec\.mjs:[1-9]\d*)$') { return $null }
+    $test
+}
+
+function Request-Quarantine([long]$RunId, [string]$Test, [string]$Repository) {
+    # Default off: the generator writes a branch and a draft PR, so it runs only while Quality has
+    # turned MAIN_RED_QUARANTINE on (it rechecks the repository variable before each write).
+    if (-not [string]::Equals($env:MAIN_RED_QUARANTINE, 'on', [StringComparison]::Ordinal)) { Write-Warning "Quarantine of $Test recorded only: MAIN_RED_QUARANTINE is not on."; return }
+    if (-not (Test-Path -LiteralPath $script:QuarantineScript -PathType Leaf)) { Write-Warning "Quarantine of $Test recorded only: no generator."; return }
+    try { & $script:QuarantineScript -RunId $RunId -TestName $Test -Repository $Repository -Hours 24 | ForEach-Object { Write-Host "quarantine-pr: $_" } }
+    catch { Write-Warning "Quarantine generator refused $($Test): $($_.Exception.Message)" }
+    finally { $global:LASTEXITCODE = 0 }
+}
+
 function Invoke-MainRed([long]$RunId, [string]$Repository) {
     if ($RunId -le 0 -or $Repository -notmatch '^[\w.-]+/[\w.-]+$') { throw 'Give a positive RunId and owner/repository.' }
     $run = Invoke-Gh api "repos/$Repository/actions/runs/$RunId" | ConvertFrom-Json
@@ -105,11 +140,12 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
         return
     }
     $marker = "main-red: run=$RunId attempt=$($run.run_attempt) sha=$sha"
+    $comments = @()
     if ($issue) {
         if (($issue.body -split '\r?\n') -ccontains $marker) { return }
-        $comments = (Invoke-Gh issue view $issue.number --repo $Repository --json comments | ConvertFrom-Json).comments
-        if (@($comments | Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') -and
-                    ($_.body -split '\r?\n') -ccontains $marker }).Count -gt 0) { return }
+        $comments = @((Invoke-Gh issue view $issue.number --repo $Repository --json comments | ConvertFrom-Json).comments |
+                Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') })
+        if (@($comments | Where-Object { ($_.body -split '\r?\n') -ccontains $marker }).Count -gt 0) { return }
     }
     $jobs = @(Get-FailedJobs $RunId $Repository (Get-PostMergeJobs $script:CatalogPath))
     # The PR verdict's main-green skips post-merge tier jobs (#3219); say so, so this isn't read as a hold.
@@ -117,12 +153,26 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
     $own = @($jobs | Where-Object { $_.Name -cne 'quality-gate' })
     $postMergeOnly = $own.Count -gt 0 -and @($own | Where-Object { -not $_.PostMerge }).Count -eq 0
     $body = Format-MainRedBody $run $Repository $jobs $postMergeOnly
+    # B3b: the same single post-merge test failing in two entries in a row proposes one quarantine, once
+    # per open issue. It is a line in this alert and a generator call, never a status, check or label.
+    $test = Get-QuarantineTest $body; $request = $false
+    if ($test -and $issue) {
+        $entries = @(@($issue.body) + @($comments | ForEach-Object { $_.body }) | Where-Object { $_ -clike 'main-red: *' })
+        $flag = "quarantine-request: test=$test"
+        $request = $entries.Count -gt 0 -and [string]::Equals((Get-QuarantineTest $entries[-1]), $test, [StringComparison]::Ordinal) -and
+            @($entries | Where-Object { [Array]::IndexOf([string[]]($_ -split '\r?\n'), $flag) -ge 0 }).Count -eq 0
+        if ($request) {
+            $body += "`n$flag`nSecond failure in a row: one draft fixes-main quarantine, 24 h expiry, refused unless " +
+                "MAIN_RED_QUARANTINE is on: ``pwsh -NoProfile -File quality/quarantine-pr.ps1 -RunId $RunId -TestName $test -Repository $Repository -Hours 24``"
+        }
+    }
     if ($issue) { Invoke-Gh issue comment $issue.number --repo $Repository --body $body | Out-Null }
     else {
         $title = if ($postMergeOnly) { "Main red, post-merge tier only ($sha)" } else { "Main red: CI failing on main ($sha)" }
         Invoke-Gh label create main-red --repo $Repository --color B60205 --description 'CI is red on main' --force | Out-Null
         Invoke-Gh issue create --repo $Repository --title $title --label main-red --body $body | Out-Null
     }
+    if ($request) { Request-Quarantine $RunId $test $Repository }
 }
 
 if ($MyInvocation.InvocationName -eq '.') { return }
