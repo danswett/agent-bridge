@@ -469,7 +469,9 @@ public sealed class SessionService
         Action<AnswerOutcome>? Prepare(Guid operation, Session session, Question question)
         {
             if (AnswerGate(session, question, operation, "person-client") is not { } gate) { return null; }
-            var intent = new AgentAuditEntry("local", gate.Operation.ToString(), "person:local", [], Ops.SessionAnswer,
+            gate = gate with { Path = channel is SecureChannel ? "relay" : "local" };
+            var principal = channel is SecureChannel relay ? $"person:{relay.PeerId}" : "person:local";
+            var intent = new AgentAuditEntry(gate.Path, gate.Operation.ToString(), principal, [], Ops.SessionAnswer,
                 gate.Incarnation.ToString(), "attempted", Gate: gate);
             if (audit is not { } writer || !writer.Append(intent)) { return null; }
             return outcome => writer.Append(intent with { Outcome = outcome == AnswerOutcome.Delivered ? "delivered" : "refused",

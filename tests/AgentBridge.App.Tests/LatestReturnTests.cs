@@ -93,4 +93,59 @@ public sealed class LatestReturnTests
 
         Assert.False(gate.Accepts(receipt));
     }
+
+    // The native slices run in WinUI; keep their issue/arrival/check wiring guarded here too.
+    [Theory]
+    [InlineData("firstScroll", "firstInput", "try { method = Press", "\"finishes the first native scroll\"")]
+    [InlineData("fillingScroll", "fillingInput", "Press(window.Handle, VirtualKey.PageUp", "\"finishes native scrolling during older drawing\"")]
+    public void Each_native_history_key_checks_the_receipt_captured_for_its_issued_input(
+        string prefix, string stamp, string dispatch, string settled)
+    {
+        var source = HistoryBudgetSource();
+        Assert.Contains($"{prefix}Receipt ??= away.StampLatestNativeInput({stamp}, scroll);", source, StringComparison.Ordinal);
+        AssertOrdered(source,
+            $"{prefix}Input = away.BeginLatestNativeInput();",
+            dispatch,
+            settled,
+            $"CheckLatestNativeReceipt(away, {prefix}Receipt, check);");
+        if (prefix == "firstScroll")
+        {
+            AssertOrdered(source, "CheckLatestNativeReceipt(away, firstScrollReceipt, check);",
+                "fillingScrollInput = away.BeginLatestNativeInput();");
+        }
+    }
+
+    [Fact]
+    public void The_native_wheel_checks_its_arriving_receipt_without_bypassing_quarantine()
+    {
+        var source = HistoryBudgetSource();
+        Assert.Contains("wheelReceipt ??= away.StampLatestNativeInput(input, scroll);", source, StringComparison.Ordinal);
+        AssertOrdered(source,
+            "wheelInput = away.BeginLatestNativeInput();",
+            "Wheel(window, list);",
+            "var quarantined = wheelReceivedCount is null",
+            "if (!quarantined)",
+            "CheckLatestNativeReceipt(away, wheelReceipt, check);");
+    }
+
+    static string HistoryBudgetSource()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (!File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx")))
+        {
+            root = root.Parent ?? throw new DirectoryNotFoundException("Cannot find the app's self-test sources.");
+        }
+        return File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.App", "SelfTest.HistoryBudget.cs"));
+    }
+
+    static void AssertOrdered(string source, params string[] steps)
+    {
+        var after = 0;
+        foreach (var step in steps)
+        {
+            var found = source.IndexOf(step, after, StringComparison.Ordinal);
+            Assert.True(found >= 0, $"Expected self-test wiring after position {after}: {step}");
+            after = found + step.Length;
+        }
+    }
 }
