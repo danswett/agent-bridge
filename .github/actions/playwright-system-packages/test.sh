@@ -28,8 +28,10 @@ EOF
 cat > "$work/bin/timeout" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$TIMEOUT_LOG"
+# Model a cold download's elapsed seconds without waiting out production bounds.
 if [ "${3:-}" = apt-get ] && [[ " $* " == *" --download-only "* ]] &&
-  [ "$(grep -c -- '--download-only' "$APT_LOG" || true)" -lt "${APT_DOWNLOAD_TIMEOUTS:-0}" ]; then
+  { [ "$(grep -c -- '--download-only' "$APT_LOG" || true)" -lt "${APT_DOWNLOAD_TIMEOUTS:-0}" ] ||
+    [ "${2%s}" -lt "${APT_DOWNLOAD_SECONDS:-0}" ]; }; then
   shift 2; "$@"; exit 124
 fi
 if [ "${3:-}" = apt-get ] && [ -n "${APT_TIMEOUT_EXIT:-}" ]; then
@@ -164,7 +166,7 @@ reset() {
   : > "$NPX_LOG"; : > "$APT_LOG"; : > "$SLEEP_LOG"; : > "$TIMEOUT_LOG"
   export NPX_OUT='sudo -- sh -c "apt-get update&& apt-get install -y --no-install-recommends libasound2t64 libgtk-4-1 xvfb"'
   unset APT_SLOW APT_UPDATE_SLOW APT_UPDATE_EXIT APT_DOWNLOAD_EXIT APT_GETS PLAYWRIGHT_APT_FORCE_FALLBACK CHECK_BROWSERS
-  unset APT_ERROR APT_FAIL_COUNT APT_AZURE_ONLY APT_DOWNLOAD_TIMEOUTS
+  unset APT_ERROR APT_FAIL_COUNT APT_AZURE_ONLY APT_DOWNLOAD_TIMEOUTS APT_DOWNLOAD_SECONDS
   unset APT_DNS_EXIT APT_DNS_OUTPUT APT_UPDATE_ERROR APT_UPDATE_FAIL_COUNT
   unset DEBS_CACHE_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
   unset APT_VERIFY_ERROR APT_VERIFY_URI
@@ -274,6 +276,7 @@ if [ "${1:-}" = --cache-auth ]; then
   [ "$failures" -eq 0 ]; exit
 fi
 
+if [ "${1:-}" != --cold-cache ]; then
 reset "$azure" "$canonical"
 check "a download that finishes in time fetches the packages Playwright names, from the mirror list as it stands" \
   0 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
@@ -499,7 +502,8 @@ check "a cached install failure fails without network fallback" \
 reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true PLAYWRIGHT_APT_FORCE_FALLBACK=true CHECK_BROWSERS=chromium
 check "the forced proof downloads despite a cache hit" \
   0 "$(printf 'update\n%s' "$download")" "$canonical"
-reset "$canonical"; export APT_TIMEOUT_EXIT=124; unset PLAYWRIGHT_APT_LIMIT
+fi
+reset "$canonical"; export APT_TIMEOUT_EXIT=124; unset PLAYWRIGHT_APT_LIMIT PLAYWRIGHT_APT_ATTEMPTS PLAYWRIGHT_APT_RETRY_DELAY
 check "Canonical update timeouts use four sixty-second attempts then fail loudly" \
   124 "$(printf 'update\nupdate\nupdate\nupdate')" "$canonical"
 [ "$(grep -c -- '^--kill-after=30s 60s apt-get update$' "$TIMEOUT_LOG")" = 4 ] \
@@ -508,12 +512,12 @@ check "Canonical update timeouts use four sixty-second attempts then fail loudly
   || { echo "FAIL: update timeout retries did not use 15/30/60 second backoff"; failures=$((failures + 1)); }
 export PLAYWRIGHT_APT_LIMIT=1s
 for hit in false true; do
-  reset "$canonical"; export DEBS_CACHE_HIT="$hit" APT_DOWNLOAD_TIMEOUTS=2
+  reset "$canonical"; export DEBS_CACHE_HIT="$hit" APT_DOWNLOAD_TIMEOUTS=2 APT_DOWNLOAD_SECONDS=300
   [ "$hit" != true ] || rm "$HOME/.cache/playwright-apt-debs/cached.deb"
   unset PLAYWRIGHT_APT_LIMIT
-  check "an incomplete cache ($hit) retains three-minute downloads and recovers on attempt three" \
+  check "an incomplete cache ($hit) finishes a five-minute cold download on Canonical after two timeouts" \
     0 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$canonical"
-  [ "$(grep -c -- '^--kill-after=30s 180s apt-get install .*--download-only' "$TIMEOUT_LOG")" = 3 ] &&
+  [ "$(grep -c -- '^--kill-after=30s 600s apt-get install .*--download-only' "$TIMEOUT_LOG")" = 3 ] &&
     [ "$(cat "$SLEEP_LOG")" = $'5\n20' ] \
     || { echo "FAIL: download retries inherited the update limit or lost bounded backoff"; failures=$((failures + 1)); }
   update_limit=60s
@@ -528,6 +532,7 @@ check "three download timeouts remain fatal on an incomplete cache without insta
 grep -q '^::error::apt download failed (exit 124)' "$work/out" && [ ! -s "$GITHUB_OUTPUT" ] \
   || { echo "FAIL: exhausted downloads did not fail loudly without authorizing a cache save"; failures=$((failures + 1)); }
 export PLAYWRIGHT_APT_LIMIT=1s
+if [ "${1:-}" != --cold-cache ]; then
 reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_DNS_EXIT=1
 export APT_UPDATE_ERROR="E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Temporary failure resolving 'archive.ubuntu.com'"
 check "a cache hit cannot bypass broken update DNS" \
@@ -557,10 +562,14 @@ check "a cache hit cannot ignore an exit-zero signature warning" 100 update "$ca
 reset "$canonical"; export DEBS_CACHE_HIT=true APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Unable to fetch some archives'
 check "offline install failure on a hit is fatal without network fallback" \
   100 "$(printf 'update\n%s\n%s' "$verify" "$cached")" "$canonical"
+fi
 reset "$azure" "$canonical"; export APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Sub-process /usr/bin/dpkg returned an error code (1)'
 check "an offline install failure after downloading packages fails the step" \
   100 "$(printf 'update\n%s\n%s' "$download" "$cached")" "$azure" "$canonical"
-[ ! -s "$GITHUB_OUTPUT" ] || { echo "FAIL: a failed offline install authorized a cache save"; failures=$((failures + 1)); }
+if grep -qx 'cache-ready=true' "$GITHUB_OUTPUT" && grep -qF "if: always() && steps.packages.outputs.cache-ready == 'true'" "$here/action.yml"; then
+  echo "ok: successfully downloaded archives can be saved after a fatal install failure"
+else echo "FAIL: a later install failure prevented saving downloaded archives"; failures=$((failures + 1)); fi
+if [ "${1:-}" != --cold-cache ]; then
 reset "$azure" "$canonical"; export APT_TIMEOUT_EXIT=124
 export APT_UPDATE_ERROR=$'E: Failed to fetch http://azure.archive.ubuntu.com/ubuntu/dists/noble/InRelease Connection failed\nE: Hash Sum mismatch'
 check "a timeout with mixed integrity errors never retries or switches mirrors" 124 "update" "$azure" "$canonical"
@@ -574,7 +583,7 @@ check "a forced proof cannot use a cache hit to ignore update DNS failures" \
   ! grep -q 'playwright-apt-lists' "$here/action.yml" &&
   grep -q 'key:.*packages-hash.*ref-hash' "$here/action.yml" &&
   grep -q 'restore-keys:' "$here/action.yml" &&
-  grep -qF "    - if: steps.packages.outputs.cache-ready == 'true'" "$here/action.yml" \
+  grep -qF "    - if: always() && steps.packages.outputs.cache-ready == 'true'" "$here/action.yml" \
   || { echo "FAIL: versioned archives-only caches must restore and save after successful cold runs"; failures=$((failures + 1)); }
 awk '
   /^  [[:alnum:]_-]+:/ { actions=0 }
@@ -657,6 +666,7 @@ fi
 cache_auth_cases
 cache_ref_case
 cache_copy_cases
+fi
 if [ "$failures" -ne 0 ]; then
   echo "::error::$failures of download.sh's checks failed"; exit 1
 fi
