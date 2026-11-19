@@ -469,6 +469,59 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.NotEmpty(late.Sent(HostOps.ProbeHold));
     }
 
+    // #3241: a held host can end while another profile's hold is awaited and its pid go to a host
+    // never held, which the settlement took by pid. Another profile's is held before the update
+    // goes ahead; one under this profile's own pid, its host already stopped, refuses it.
+    [Theory]
+    [InlineData(6161)]
+    [InlineData(4242)]
+    [Trait("Category", "Network")]
+    public async Task A_held_hosts_pid_taken_by_another_host_before_the_holds_settle_is_not_taken_for_the_held_one(int reused)
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        processes.StartTimes[4242] = Make.T0;
+        await using var first = new FakeHost();
+        await using var last = new FakeHost();
+        first.Start();
+        last.Start();
+        first.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        last.Status = FakeHost.StatusOf() with { ProcessId = 7171 };
+        first.On(HostOps.ProbeHold, _ => new ProbeHoldResult(false));
+        var holdsAtReuse = -1;
+        last.On(HostOps.ProbeHold, _ =>
+        {
+            // The last round's first hold is answered; then that host ends and its pid is taken.
+            if (host.Sent(HostOps.Stop).Count > 0 && holdsAtReuse < 0)
+            {
+                holdsAtReuse = first.Sent(HostOps.ProbeHold).Count;
+                processes.StartTimes[reused] = Make.T0.AddSeconds(5);
+            }
+            return new ProbeHoldResult(false);
+        });
+        host.On(HostOps.Stop, data =>
+        {
+            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
+            return new { stopping = true };
+        });
+        var updating = Manager(others: [first.Folder, last.Folder], package: [4242, 6161, 7171]);
+        var applied = false;
+
+        var update = updating.StopAndApplyAsync(() => { }, () => applied = true);
+        if (reused == 6161)
+        {
+            await update;
+            Assert.True(applied);
+            Assert.True(first.Sent(HostOps.ProbeHold).Count > holdsAtReuse, "the host under the reused pid was never held");
+            return;
+        }
+        var refused = await Assert.ThrowsAsync<HostBusyException>(() => update);
+
+        Assert.Contains("pid 4242", refused.Message, StringComparison.Ordinal);
+        Assert.False(applied);
+        Assert.Single(processes.Started);
+    }
+
     // #2884 review: a host started from the installation during the scan after the stop's waits was
     // never held, and that scan passes the package's own processes; the update would end it mid-probe.
     // One whose pid was reused, or whose start time could not be read when held, is not confirmed.

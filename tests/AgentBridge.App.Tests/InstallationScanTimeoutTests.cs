@@ -101,6 +101,19 @@ public sealed class InstallationScanTimeoutTests
         finally { Directory.Delete(folder, recursive: true); }
     }
 
+    // #3241: a budget given no lock footprint (the app always gives one) could not see an image
+    // newly held, so it keeps no clear scan to reuse.
+    [Fact]
+    public async Task A_clear_scan_without_a_lock_footprint_is_not_reused()
+    {
+        var budget = new InstallationFiles.Budget(new FakeTimeProvider());
+        var scans = 0;
+        string? Scan() => Interlocked.Increment(ref scans) == 1 ? null : "fixture (pid 42)";
+
+        Assert.Null(await budget.ProbeOnceAsync(Scan, default));
+        Assert.Equal("fixture (pid 42)", await budget.ProbeOnceAsync(Scan, default));
+    }
+
     [Fact]
     public void A_held_non_executable_resource_is_scanned_like_a_held_image()
     {
