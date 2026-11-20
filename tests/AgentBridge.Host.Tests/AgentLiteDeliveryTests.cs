@@ -23,7 +23,9 @@ public sealed class AgentLiteDeliveryTests
         public string Remote = AgentMessagingSettings.OwnAccount;
         public string[] AllowAllTargetSessions = [];
         public string[] Rows = EmptyBox;
-        public int Gets;
+        public int Gets, TargetGets;
+        public int? PidOnRecheck;
+        public readonly List<string> Others = [];
         public AnswerOutcome Outcome = AnswerOutcome.Delivered;
         public ReplyRefusal Refusal;
         public readonly TaskCompletionSource ReplyScreenRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -42,13 +44,16 @@ public sealed class AgentLiteDeliveryTests
             })
         ], this, this, this, Log.Add, Clock);
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
-        public long Revision => 0; public IReadOnlyList<Session> Snapshot() => []; public SessionList List(string? cursor = null) => new([], 0);
+        public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
         public Session? Get(string id)
         {
             if (FlipAfterFirstGet && ++Gets >= 2) { Status = SessionStatus.Working; }
-            return !Exists || id != Target ? null : new Session { Id = id, Agent = AgentKind.Copilot, Status = Status, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, ProcessId = 42, Activity = new Activity() };
+            if (id == Target && Exists) { return Live(id, PidOnRecheck is { } pid && ++TargetGets >= 2 ? pid : 42); }
+            return Others.Contains(id) ? Live(id, 43) : null;
         }
+        public IReadOnlyList<Session> Snapshot() => [.. (Exists ? new[] { Target } : Array.Empty<string>()).Concat(Others).Select(id => Live(id, 42))];
+        Session Live(string id, int pid) => new() { Id = id, Agent = AgentKind.Copilot, Status = Status, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, ProcessId = pid, Activity = new Activity() };
         public SessionSubscription Subscribe() => throw new NotSupportedException();
         public Task RefreshAsync(CancellationToken ct = default) => Task.CompletedTask; public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask; public bool Available => true;
@@ -66,15 +71,84 @@ public sealed class AgentLiteDeliveryTests
             return Task.FromResult(new ConsoleScreen(Rows, null));
         }
     }
-    static VerifiedEnvelope Envelope(string text, string request = Req)
+    static VerifiedEnvelope Envelope(string text, string request = Req, string target = Target)
     {
         var sha = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(text))).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         var body = new EnvelopeBody(request, "acct", "g", [], new AgentPrincipal("SENDER", "add", "sess-9", "inst", "cred", "copilot", "launcher"),
-            new AgentChain("root", 0, null, 0, 1, []), new AgentProvenance(null, default, null), "message", new AgentTarget("acct", "HOST", Target, null), sha, 0, 0);
+            new AgentChain("root", 0, null, 0, 1, []), new AgentProvenance(null, default, null), "message",             new AgentTarget("acct", "HOST", target, null), sha, 0, 0);
         return new VerifiedEnvelope(body, []);
     }
 
     static Task<LiteDelivery> Send(Fixture f, string text = "hi") => f.Build().DeliverAsync(Envelope(text), text, default);
+                // What the roster and fleet.find publish for Target (HaContract.NodeId).
+                const string Node = "agent_bridge_aaaaaaaaaaaaaaaa", Sibling = "aaaaaaaa-aaaa-aaaa-bbbb-bbbbbbbbbbbb";
+                static Task<LiteDelivery> SendTo(Fixture f, string target) => f.Build().DeliverAsync(Envelope("hi", target: target), "hi", default);
+
+                [Fact]
+                public async Task A_node_id_resolves_to_the_one_matching_session_and_types_to_it()
+                {
+                    var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+                    f.Others.Add("bbbbbbbb-0000-0000-0000-000000000000");
+                    Assert.Equal(new LiteDelivery(true, null), await SendTo(f, Node));
+                    Assert.Equal(Target, Assert.Single(f.Typed).Id);
+                    Assert.Contains(f.Log, l => l.Contains($"to {Node} request {Req}: typed", StringComparison.Ordinal));
+                }
+                [Fact]
+                public async Task An_ambiguous_node_id_is_refused_with_no_such_session_and_types_nothing()
+                {
+                    var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+                    f.Others.Add(Sibling);
+                    Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
+                    Assert.Empty(f.Typed);
+                    f.Others.Clear();
+                    Assert.True((await SendTo(f, Node)).Typed);
+                }
+                [Theory]
+                [InlineData("agent_bridge_bbbbbbbbbbbbbbbb")]
+                [InlineData("agent_bridge_AAAAAAAAAAAAAAAA")]
+                [InlineData("agent_bridge_aaaaaaaaaaaa")]
+                [InlineData("agent_bridge_aaaaaaaaaaaaaaaaa")]
+                [InlineData("aaaaaaaaaaaaaaaa")]
+                public async Task An_unknown_or_malformed_node_id_is_refused_while_the_real_one_types(string node)
+                {
+                    var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+                    Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, node));
+                    Assert.Empty(f.Typed);
+                    Assert.True((await SendTo(f, Node)).Typed);
+                }
+                [Fact]
+                public async Task A_full_session_id_still_types_to_its_session_as_its_node_id_does()
+                {
+                    var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+                    Assert.True((await SendTo(f, Target)).Typed);
+                    Assert.True((await SendTo(f, Node)).Typed);
+                    Assert.All(f.Typed, t => Assert.Equal(Target, t.Id));
+                    // A sibling sharing the node id makes only the node id ambiguous, never the full id.
+                    f.Others.Add(Sibling);
+                    Assert.True((await SendTo(f, Target)).Typed);
+                    Assert.Equal(3, f.Typed.Count);
+                }
+                [Fact]
+                public async Task The_allow_all_allowlist_is_checked_against_the_resolved_full_id_not_the_node_id()
+                {
+                    var f = new Fixture { AllowAllTargets = true }; f.Launch(LaunchProtocol.AllowAll);
+                    f.AllowAllTargetSessions = [Node];
+                    Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await SendTo(f, Node));
+                    Assert.Empty(f.Typed);
+                    f.AllowAllTargetSessions = [Target];
+                    Assert.Equal(new LiteDelivery(true, null), await SendTo(f, Node));
+                    Assert.Contains(f.Log, l => l.Contains($"to {Target} request {Req} gate AllowlistedAllTargetsGate: allowed", StringComparison.Ordinal));
+                }
+                [Fact]
+                public async Task A_node_id_whose_session_changes_process_between_the_two_lookups_is_refused()
+                {
+                    var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+                    Assert.True((await SendTo(f, Node)).Typed);
+                    f.TargetGets = 0; f.PidOnRecheck = 43;
+                    Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
+                    Assert.Single(f.Typed);
+                    Assert.Equal(2, f.TargetGets);
+                }
     [Fact]
     public async Task Script_delivery_is_labelled_and_logged_as_a_script_never_an_agent()
     {

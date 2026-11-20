@@ -27,6 +27,7 @@ own-agents-only.
   uses, and text goes only into an idle session with an empty input box. Delivered text starts with one fixed
   prefix line naming the sending machine and session.
 - Allow-all sessions: `agentMessaging.allowAllTargets` is the per-machine master switch, on only for the cut-over machines and off everywhere else. Even when it is on, a session receives only if its exact session id is in `agentMessaging.allowAllTargetSessions` and this host launched it in allow-all mode since its last restart (the launch record is in memory). A missing or empty list denies every allow-all session; display names and wildcards never grant access.
+- Target: the full session id or the node id `agent_bridge_<16 lowercase hex>` the roster and `fleet.find` publish (#3399). A node id is used only when exactly one live session here maps to it; none or several is refused as `noSuchSession`, never guessed. Gates, the allow-all list, rate and typing all use the resolved full id; the log keeps the target as sent.
 - Which sessions receive: the relay types only into sessions this host launched since its last restart in forced-ask mode, or in allow-all mode with both the master switch and an exact listed session id. A session started by hand or launched before the host's last restart, even if listed, is refused as `notReplyTarget` and falls back to Home Assistant until relaunched by this host.
 - Rate: the receiver allows at most 6 messages a minute and 60 an hour from one sending session to one
   receiving session. The sender side allows 6 a minute per sender-receiver pair, in the messenger script (fleet #56), covering both the relay and Home Assistant routes. Beyond that is refused as `rate`, which is final.
@@ -81,7 +82,7 @@ Receiver refusals, in the order they are checked:
 | `notReplyTarget` | the target is not a session this host can type into |
 | `busy` | the target is not idle, or the duplicate memory is full |
 | `composerNotEmpty` | someone has typed in the target's input box; nothing was typed |
-| `noSuchSession` | the target session does not exist |
+| `noSuchSession` | the target session does not exist, or the target is a node id that no live session or more than one maps to |
 
 What the sender gets, and what the messenger does:
 
