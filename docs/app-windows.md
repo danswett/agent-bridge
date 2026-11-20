@@ -1232,6 +1232,15 @@ closure wiring are a separate slice; this model alone does not replace the old r
 | Usage | Each agent's windows: percent, amber at 75 %, red at 90 %, pace against the window, "resets in" | PWA usage panel |
 | Settings | Host: running, version, profile, pid, start/stop/restart, start at sign-in, log tail; relay: sign in with GitHub (device code shown in the app), machine name, connection state; this machine: approving Copilot permission prompts from other devices (`permissions.remoteApproval`), answering folder-trust questions from devices (`launch.remoteFolderTrust`, applied at once; turned on with this app approved) and which devices may (`launch.remoteFolderTrustDevices`: this app, the account's phones, browsers and apps the relay lists, and any approved that are not connected; changes from here and from the Launch page go one at a time, each made from the list the host has just then, since the host replaces the whole list; a list changed meanwhile by another app or at a terminal is refused by the host and the change made again from it, so a device revoked there stays revoked), signing Copilot in again from a device the account's device roster (#55) pins as a person's here ("Let my devices sign Copilot in on this machine", `permissions.phoneSignIn`, off by default, applied when the host restarts; it says that the machine opens a browser and copies the code while it runs; under it, only while it is on, the read-only list "Devices that can sign Copilot in" from the host's status, `signInDevices`, with no Add or Remove (ui.md §6.9, #972); [host-config.md](host-config.md#phone-sign-in)), agent-ha-bridge state; on a Microsoft Dev Box only, keeping it awake while the host runs (`devBox.keepAwake`, applied at once; [host-config.md](host-config.md#dev-box-keep-awake)), with the last pass and the next, and a failed or blocked pass (no `az login`, say), Dev Box agent settings the host cannot use, or a stand-back with Task Scheduler unreadable in red since the Dev Box may then hibernate; app: show reasoning and tools (the old Detail toggle, kept in the app since every client now gets the full activity), toasts, start the app at sign-in, version and updates | status card, `install.ps1`, `agent-ha-bridge configure` |
 
+The Windows delegate strip reserves 20 DIPs below each item and its overflow footer:
+16 for the expanded horizontal scrollbar and 4 for focus clearance
+([#398](https://github.com/danswett/agent-bridge/issues/398)). The footer stays
+unwrapped and untrimmed, with a trailing inset inside the scroll extent, so its
+last words can be scrolled fully into view. `DelegateStripLayoutTests` guards
+these XAML layout constraints without running WinUI; rendered scrollbar modes,
+themes and input still need the hosted Windows app checks. The PWA is unchanged;
+this is not evidence that its chip strip has the same defect.
+
 **Toasts** (§7.2): a question raises a toast with its options as buttons and a text box
 for Other or a free-text answer; anything larger (several fields, multi-select) gets Open.
 An approval's toast (a permission prompt) has only Open, and a click anywhere on it opens
