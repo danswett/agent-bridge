@@ -58,6 +58,167 @@ public sealed class ConversationEndPinTests
         Assert.Empty(view.Scroller.Targets);
     }
 
+    [Fact]
+    public void A_held_pinned_prepend_waits_without_moving_or_inserting_rows()
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.FollowState.PointerOver(7);
+        view.DrawEarlierForProbe();
+        view.DrainForProbe();
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+        Assert.Equal(1, view.ShownCount);
+        view.FollowState.PointerLeft(7);
+        view.DrawEarlierForProbe();
+        Assert.Equal(2, view.ShownCount);
+        Assert.Contains(view.Scroller.ScrollableHeight, view.Scroller.Targets);
+    }
+
+    [Theory]
+    [InlineData("held")]
+    [InlineData("unheld")]
+    [InlineData("ended")]
+    public void Opening_another_session_places_its_end_even_with_an_inherited_hold(string hold)
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        if (hold != "unheld") { view.FollowState.PointerOver(7); }
+        view.SwitchForProbe();
+        if (hold == "ended") { view.FollowState.PointerLeft(7); }
+        view.DrainForProbe();
+        view.Follow();
+        Assert.Equal([view.Scroller.ScrollableHeight], view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void A_bring_target_spanning_the_viewport_does_not_latch_navigation_that_will_not_scroll()
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Top = -50, Height = 200 });
+        view.DrawEarlierForProbe();
+        Assert.Equal(2, view.ShownCount);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(double.NaN, 10)]
+    public void An_explicit_alignment_or_offset_still_owns_a_bring_target_spanning_the_viewport(double alignment, double offset)
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Top = -50, Height = 200 }, alignment, offset);
+        view.DrawEarlierForProbe();
+        Assert.False(view.Pinned);
+        Assert.Equal(1, view.ShownCount);
+    }
+
+    [Fact]
+    public void A_navigation_after_opening_cancels_the_queued_opening_end_placement()
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.FollowState.PointerOver(7);
+        view.SwitchForProbe();
+        view.Scroller.Wheel();
+        view.DrainForProbe();
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void An_unloaded_or_replaced_session_drops_scrollbar_custody_without_a_release(bool switchSession)
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.Scroller.Press(new Microsoft.UI.Xaml.Controls.Primitives.ScrollBar { Parent = view.Scroller }, 7);
+        if (switchSession) { view.SwitchForProbe(); }
+        else { view.DetachForProbe(); }
+        view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
+        Assert.True(view.HistoryEnd);
+    }
+
+    [Theory]
+    [InlineData("pointer")]
+    [InlineData("touch")]
+    [InlineData("cancel")]
+    [InlineData("press")]
+    public void A_held_conversation_defers_end_correction_until_the_hold_ends(string hold)
+    {
+        var view = new SessionView();
+        if (hold == "pointer") { view.FollowState.PointerOver(1); }
+        else if (hold == "press") { view.FollowState.Pressed(1); }
+        else { view.FollowState.TouchDown(1); }
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+        view.Scroller.ScrollableHeight = 300;
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+        if (hold == "pointer") { view.FollowState.PointerLeft(1); }
+        else if (hold == "press") { view.FollowState.Released(1); }
+        else if (hold == "cancel") { view.FollowState.TouchCanceled(1); }
+        else { view.FollowState.TouchUp(1); }
+        Assert.Equal([300.0], view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void Only_the_last_hold_ending_retries_the_latest_end_without_another_layout()
+    {
+        var view = new SessionView();
+        view.FollowState.PointerOver(1);
+        view.FollowState.TouchDown(2);
+        view.Follow();
+        view.FollowState.PointerLeft(1);
+        Assert.Empty(view.Scroller.Targets);
+        view.Scroller.ScrollableHeight = 400;
+        view.FollowState.TouchUp(2);
+        Assert.Equal([400.0], view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void Ending_a_hold_does_not_repin_a_destination_chosen_while_held()
+    {
+        var view = new SessionView();
+        view.FollowState.PointerOver(1);
+        view.Follow();
+        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Parent = view.Scroller });
+        view.FollowState.PointerLeft(1);
+        Assert.False(view.Pinned);
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void History_cannot_repin_navigation_before_its_first_view_change_even_when_a_hold_ends()
+    {
+        var view = new SessionView();
+        view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
+        view.FollowState.PointerOver(1);
+        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Parent = view.Scroller });
+        Assert.False(view.HistoryEnd);
+        view.FollowState.PointerLeft(1);
+        Assert.False(view.HistoryEnd);
+        Assert.Empty(view.Scroller.Targets);
+        view.Scroller.VerticalOffset = 50;
+        view.StopScrolling();
+        Assert.False(view.HistoryEnd);
+        view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
+        view.StopScrolling();
+        Assert.True(view.HistoryEnd);
+    }
+
+    [Fact]
+    public void A_bring_request_already_wholly_in_view_does_not_take_the_end_pin()
+    {
+        var view = new SessionView();
+        view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
+        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Parent = view.Scroller, Top = 10 });
+        Assert.True(view.Pinned);
+        Assert.True(view.HistoryEnd);
+    }
+
     [Theory]
     [InlineData("release", false)]
     [InlineData("cancel", false)]
@@ -133,6 +294,25 @@ public sealed class ConversationEndPinTests
         view.StopScrolling();
         view.Follow();
         Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void Follow_does_not_correct_the_end_while_the_person_is_scrolling()
+    {
+        var view = new SessionView();
+        view.Scrolling();
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void An_in_flight_correction_still_follows_a_growing_end()
+    {
+        var view = new SessionView();
+        view.Scrolling(correction: 150);
+        view.Follow();
+        Assert.Equal([200.0], view.Scroller.Targets);
+        Assert.Equal(200, view.AnchorAt);
     }
 
     [Fact]
