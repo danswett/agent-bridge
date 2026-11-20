@@ -16,8 +16,15 @@ static partial class SelfTest
         window.ShowPage("sessions");
         Resize(window, 1000, 700);
         const string id = "demo-history-bottom-bounce";
-        var fixture = DemoHost.Heavy(DateTimeOffset.UtcNow).Single(s => s.Id == DemoHost.HeavyId)
-            with { Id = id, Title = "Bottom bounce regression", Subagents = null };
+        // The heavy fixture's response is 210 blocks tall and sits below the history, so a viewport near the end
+        // is over response rows with the history repeater far above, realising nothing (CI: gap 6504-8007, drawn
+        // history 0). A short response keeps the history within reach of the end, which the driver surface needs.
+        var fixture = DemoHost.Heavy(DateTimeOffset.UtcNow).Single(s => s.Id == DemoHost.HeavyId);
+        fixture = fixture with
+        {
+            Id = id, Title = "Bottom bounce regression", Subagents = null,
+            Activity = fixture.Activity with { Response = string.Join("\n\n", Enumerable.Range(1, 6).Select(n => $"Step {n} is done and checked.")) },
+        };
         var trace = new List<object>();
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var phase = "setup";
@@ -174,13 +181,8 @@ static partial class SelfTest
                 var entryGap = Gap();
                 requiredRows = startCount + 64;
                 growthFloor = startExtent + 1.5;
-                // Hosted CI showed drawn history 0 after 60 settled frames: the update bursts leave the
-                // viewport over the live response rows (gap ~8000), so the history repeater, which sits
-                // above them, realises nothing. Waiting cannot fix that. Start the rapid burst from the
-                // top of the history instead, and wait on rendered frames for the unchanged validity rule.
-                view.ReleasePin();
-                scroll.ChangeView(null, Math.Max(0, scroll.VerticalOffset + rows.TransformToVisual(scroll).TransformPoint(default).Y),
-                    null, disableAnimation: true);
+                // Layout realises the repeater's rows a frame or more after the last burst, so wait on
+                // rendered frames for the unchanged validity rule rather than sampling at once.
                 var entry = Surface();
                 for (var settle = 0; settle < 60 && !(entry.Valid && Gap() > 1.5); settle++)
                 {
