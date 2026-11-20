@@ -299,6 +299,7 @@ static partial class SelfTest
                 && JsonSerializer.SerializeToElement(timings) is { ValueKind: JsonValueKind.Array } timingRecords
                 && timingRecords.EnumerateArray().Any(r => r.GetProperty("Kind").GetString() == "check"),
                 "latest: records Windows view check timings");
+            await CheckHistoryBottomBounce(window, main, demo, Check, outFile);
             await CheckHistoryYourMessages(window, main, Check);
             await CheckMessageTimes(window, main, Check);
             await CheckHistoryScrollBudget(window, main, demo, Check, result);
