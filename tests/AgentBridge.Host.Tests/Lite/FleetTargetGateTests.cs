@@ -38,7 +38,7 @@ public sealed class FleetTargetGateTests
         (await new FleetTargetGate(launches, roster).CheckAsync(From(sender ?? world.Id("H")), target)).Allowed;
 
     [Fact]
-    public async Task A_fleet_launched_allow_all_session_is_allowed_for_a_roster_verified_host_sender()
+    public async Task A_fleet_launched_allow_all_session_is_allowed_for_a_serving_host_sender()
     {
         Launch();
         Assert.True(await Allowed(() => signed));
@@ -60,6 +60,16 @@ public sealed class FleetTargetGateTests
         Assert.False(await Allowed(() => throw new InvalidOperationException("refused: not yet verified")));
         Assert.False(await Allowed(() => signed, sender: world.Id("Q")));
         Assert.False(await Allowed(() => signed, sender: world.Id("X")));
+    }
+
+    [Fact]
+    public async Task A_fleet_session_is_refused_when_the_roster_is_present_but_has_not_verified_the_serving_host()
+    {
+        Launch();
+        Assert.False(await Allowed(() => new RosterVerifier(world.AccountId, world.GenerationId, () => world.Now)));
+        var genesisOnly = new RosterVerifier(world.AccountId, world.GenerationId, () => world.Now);
+        Assert.All(world.Feed(genesisOnly, "G"), r => Assert.Equal(Verdict.Accepted, r.Verdict));
+        Assert.False(await Allowed(() => genesisOnly));
     }
 
     [Fact]

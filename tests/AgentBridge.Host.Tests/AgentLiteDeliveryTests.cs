@@ -432,10 +432,10 @@ public sealed class AgentLiteDeliveryTests
         return (() => signed, world.Id("H"));
     }
 
-    // Relay A: an allow-all fleet session is typed into only from a roster-verified host; with no
+    // Relay A: an allow-all fleet session is typed into only from a serving host; with no
     // verified roster it is refused as before, and an ask-mode session is unchanged either way.
     [Fact]
-    public async Task An_allow_all_fleet_target_is_typed_only_for_a_roster_verified_sender_and_ask_mode_is_unchanged()
+    public async Task An_allow_all_fleet_target_is_typed_only_for_a_serving_host_sender_and_ask_mode_is_unchanged()
     {
         var (roster, host) = VerifiedHost();
         var f = new Fixture(); f.Launch(LaunchProtocol.AllowAll); f.Launches.FleetLaunched(Target);

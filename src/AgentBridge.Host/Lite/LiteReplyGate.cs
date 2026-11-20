@@ -95,13 +95,14 @@ public sealed class AllowlistedAllTargetsGate(ILiteLaunches launches, Func<Agent
     }
 }
 
-// A session this host launched for a session.launch request, typed into only for a sender the
-// pinned, verified device roster lists as a serving host (owner, Nov 20 12:37 PT). With no pin, a
-// pin not yet verified, or any other sender, it refuses. Permission and trust prompts stay
-// person-only: LiteDeliver types only into an idle session with no question.
+// A session this host launched for a session.launch request, typed into only when the sending
+// machine is a serving host in the pinned, verified device roster (owner, Nov 20 12:37 PT). The
+// roster condition is about the serving host, not the agent principal. With no pin, a roster not
+// yet verified, or any other sender, it refuses. Permission and trust prompts stay person-only:
+// LiteDeliver types only into an idle session with no question.
 public sealed class FleetTargetGate(ILiteLaunches launches, Func<RosterVerifier?> roster) : IReplyTargetGate
 {
-    public const string Reason = "the session is not a fleet target for a roster-verified sender";
+    public const string Reason = "the session is not a fleet target for a serving-host sender";
 
     public Task<GateDecision> CheckAsync(VerifiedEnvelope env, string targetSession) =>
         Task.FromResult(launches.IsFleetTarget(targetSession) && ServingHost(env.Body.Principal.Machine) ? GateDecision.Allow() : GateDecision.Refuse(Reason));
