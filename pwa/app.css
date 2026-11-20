@@ -1452,6 +1452,9 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .tool-line .tool-summary { color: var(--ab-text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* Reduced motion stops every glyph (ui.md §9): the state is in the shape, never the motion. */
+[data-page-hidden] .glyph .glyph-spin, [data-page-hidden] .glyph .glyph-orbit {
+  animation-play-state: paused;
+}
 @media (prefers-reduced-motion: reduce) {
   .glyph .glyph-spin, .glyph .glyph-orbit { animation: none; }
 }
