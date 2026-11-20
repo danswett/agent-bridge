@@ -177,14 +177,14 @@ Below are ordered WHOLE-line budgets including tests/docs, each strictly below 2
 split further before exceeding its budget. They extend the linked existing work,
 not new issues or grants. Q1-Q3 are decided; implementation still requires dependency completion and explicit rollout authority.
 Repos: Bridge = [agent-bridge](https://github.com/danswett/agent-bridge); Fleet = [slipgates-fleet](https://github.com/danswett/slipgates-fleet).
-Sensitive means credentials, auth, trust, protocol or approval rendering: every Yes requires an Opus builder plus two independent, distinct-family readers.
+Sensitive means credentials, auth, trust, protocol, approval rendering or activation identity: every Yes requires a `claude-opus-5.5` builder plus two independent, distinct-family readers.
 Slice 1 is first. After 1, slices 2 and 3 can run in parallel; after 9, 10 and 12 can run in parallel; after 8, 14 can run alongside 9-13.
 
 | Order | Repo | Slice and maximum WHOLE lines | Depends on | Sensitive | Acceptance test |
 |---|---|---|---|---|---|
 | 1 (first) | Bridge | Protocol types/vectors, 180 | None | Yes | Distinct GUID fields, canonical claim bytes; wrong versions/purposes refuse |
 | 2 | Bridge | Person authority enrollment, 220 | 1 | Yes | Pinned person delegation; wrong account/generation/key and agent setters refuse |
-| 3 | Bridge | Host activation identity, 220 | 1 | No | Resume/restart mints new SESSION GUID; proven same-process continuity and cloned-state refusal |
+| 3 | Bridge | Host activation identity, 220 | 1 | Yes | Resume/restart mints new SESSION GUID; proven same-process continuity and cloned-state refusal |
 | 4 | Bridge | Signed session GUID publication/reading, 220 | 3, existing hostSign chain | Yes | Verify legacy locator mapping and enrolled host proof; never truncate GUIDs |
 | 5 | Bridge | Durable role ledger/CAS, 220 | 2 | Yes | Mint/tombstone/recovery, concurrent assignment and quorum-loss refusal |
 | 6 | Bridge | Claim signing/publisher/verifier, 220 | 4-5 | Yes | Reject unsigned/self-appointed claims, wrong assignment/host proof, stale and conflicting claims |
