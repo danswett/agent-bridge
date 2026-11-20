@@ -962,10 +962,10 @@ public sealed partial class HaConnector
             launchOutcomes.Add(o);
             if (!launchRequestsHandled.Contains(id, StringComparer.Ordinal)) { launchRequestsHandled.Add(id); }
         }
-        foreach (var held in store?.All() ?? [])
+        foreach (var held in store?.All().Where(h => !h.Id.StartsWith("pipe-", StringComparison.Ordinal)) ?? [])
         {
             // Queued or launching, and not this connector's launch under way: cut off, so said to
-            // be unconfirmed rather than started (again).
+            // be unconfirmed rather than started (again). An agent's pipe launches ("pipe-") are the host's (#3237).
             if (!held.Finished && held.Id != launchInFlight) { Record(held.Id, "unconfirmed", ""); }
             launchOutcomes.Add(Told(store!.Get(held.Id) ?? held, shown.GetValueOrDefault(held.Id)));
         }

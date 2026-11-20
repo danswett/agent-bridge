@@ -293,6 +293,21 @@ Adopting again, or revoking, ends the earlier credential and its open connection
 Adoption alone never makes a manual session a reply target. Known gap: a session nested inside
 an adopted one is covered by the same adoption and can claim it during the window.
 
+### An agent's own `session.launch` and `launch.status` (#3237)
+
+After `agent.hello`, `session.launch` with the caller's own `request` UUID starts a session
+through the card's launch service, the agent principal as provenance. Refused, with an audit
+line, unless the credential is live with `read+reply+launch` at depth 0 and not adopted, the
+request has only the allowed fields with `permissions: "ask"`, the agent and isolated workspace
+are in `agents.inbound.local.launch`, and the launch gate admits it. The id is kept, per
+principal, on the record HA's launch card uses (`launch-requests.json`, #2743): a repeat returns
+the same outcome and starts nothing, even after a restart; the same id with a different request
+is refused (`requestReused`); a refused id stays refused, and an id whose outcome expired is never
+launched again (`requestUsed`). A damaged record refuses every launch.
+`launch.status` `{ "request": UUID }` reads only the caller's own record: `{ request, state
+(queued|launching|launched|refused|failed), session, code, queuedAt, changedAt, keptUntil }`,
+kept 15 minutes after it finishes. No path issues `read+reply+launch` yet.
+
 ### `fleet.list` and `fleet.find`
 
 Agent-only reads of the account's cross-machine session list, on a connection that has passed `agent.hello` with at least the `read` scope. Described in [agent-operations.md](agent-operations.md).

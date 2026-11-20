@@ -656,8 +656,12 @@ async Task<int> ServeAsync(HostHandover handover)
     // Home Assistant's refusals of this machine, counted with every other process of this user so a
     // rejected token is never repeated into a ban (#227); the app shows what it says.
     var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
+    // One launch request record per profile, for the card's launches and agents' pipe launches alike (#2743, #3237 S3).
+    var launchRequests = AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(identity.Folder, TimeProvider.System);
+    if (launchRequests.Problem is { } requestsProblem) { Log($"launch requests with an id are refused: {requestsProblem}"); }
+    AgentPipeLaunch.Restore(launchRequests.Store);
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
-        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current, launchAudit: agentAudit);
+        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current, launchAudit: agentAudit, requestStore: launchRequests);
     load.SetConsumerDemand((!localOnly && settings.LoadEnabled) || homeAssistant is not null);
     // What takes answering, replying, ending and launching away while it runs (design G5).
     // Asked afresh by what acts on it (updates, the readiness checks, the app's status).
@@ -923,7 +927,17 @@ async Task<int> ServeAsync(HostHandover handover)
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
     var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
+    // An agent's own session.launch (#3237 S3), with the gate's lifecycle: a late registration or
+    // failure settles an unconfirmed launch, and a session's end frees its live slot.
+    var agentLaunch = agentCredentials is null ? null
+        : new AgentPipeLaunch(identity.Folder, agentCredentials, service, agentAudit, launchRequests.Store, launchRequests.Problem);
+    if (agentLaunch is not null)
+    {
+        launcher.RequestRegistered += agentLaunch.Registered;
+        launcher.RequestFailed += agentLaunch.Failed;
+        source.Changed += (_, change) => { if (change.Kind == SessionChangeKind.Removed) { agentCredentials!.LaunchGate.SessionEnded(change.Id); } };
+    }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit, agentLaunch: agentLaunch), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);

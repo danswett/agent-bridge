@@ -21,7 +21,8 @@ public sealed class HaRunning : IAsyncDisposable
         Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log, ISessionAnswerer? answers = null,
         Func<HaReply, CancellationToken, Task<AgentBridge.Protocol.ReplyResult>>? reply = null, ISessionStopper? stops = null,
         AgentBridge.Host.Delivery.Launch.ISessionLauncher? launcher = null, IHostUpdates? updates = null, SessionDrivers? drivers = null,
-        HaAuthGuard? auth = null, Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load = null, AgentAuditLog? launchAudit = null)
+        HaAuthGuard? auth = null, Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load = null, AgentAuditLog? launchAudit = null,
+        (AgentBridge.Host.Core.Launch.LaunchRequestStore? Store, string? Problem)? requestStore = null)
     {
         foreach (var p in settings.HomeAssistantProblems) { log($"config.json: {p}"); }
         var ha = settings.HomeAssistant;
@@ -68,8 +69,9 @@ public sealed class HaRunning : IAsyncDisposable
         // its one-at-a-time start, its following to registration); whether it offers launching
         // here is its own Available, asked when the connector starts.
         // Agents' launch requests by id, on a record in the profile folder that survives restarts
-        // (#2743): each id launches once, and its outcome is readable for 15 minutes.
-        var (requests, requestsProblem) = launcher is null ? (null, null) : AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(folder, TimeProvider.System);
+        // (#2743): each id launches once, and its outcome is readable for 15 minutes. One record per
+        // profile, shared with the pipe's agent launches (#3237 S3) when serve passes it.
+        var (requests, requestsProblem) = launcher is null ? (null, null) : requestStore ?? AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(folder, TimeProvider.System);
         if (requestsProblem is not null) { log($"Home Assistant launch requests with an id are refused: {requestsProblem}"); }
         var launch = launcher is null ? null : new HaLauncher(() => launcher.Available, launcher.OptionsAsync,
             (request, ct) => launchAudit is null ? launcher.LaunchAsync(request, "home-assistant", ct)
