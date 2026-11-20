@@ -18,7 +18,8 @@ public static class AuditCommands
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool PreviousTailIncomplete = false);
 
     public static int Run(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error) =>
-        Read(args, profileRoot, output, error, null);
+        args.ElementAtOrDefault(1) == "archive" ? AuditArchiveCommand.Run(args, profileRoot, output, error)
+            : Read(args, profileRoot, output, error, null);
 
     internal static int Read(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error, Action<Row>? receive, Action<string>? fault = null, bool alreadyLocked = false, Action<long, bool>? boundary = null, AuditLockTiming? lockTiming = null)
     {
