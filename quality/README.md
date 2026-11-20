@@ -349,7 +349,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    (its own output, and it runs in the whole ring whatever the plan says, except `app` and
    `app-installer`, which always require their own output to be true: the whole ring alone
    brings neither job to a pull request or main push, and a pull request's whole ring leaves the
-   `windows-11-arm` product leg to `main`, #1249); the plan
+   `windows-11-arm` product leg to `main`, #1249; a job whose every leg is post-merge puts
+   `github.event_name != 'pull_request' &&` before it, #3209); the plan
    step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
    compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
    delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, `sign`, each pinned to
@@ -432,6 +433,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      Install failure stays fatal. Successful cold downloads stage debs before install and save even on later failure.
      Keys include OS, arch, image, exact dry-run package-list hash and ref hash; restores share only image/list matches.
      PR entries stay PR-scoped; main seeds its own. Bad exact keys cannot be overwritten: `gh cache delete <key>`.
+     Invalid exact-key hits still require authenticated redownloads, but use apt `-qq` to suppress
+     repeated progress, not errors; one warning explains the immutable key and deletion recovery.
+     Prefix-hit downloads and forced fallback proof keep their normal output.
      Fakes model the trusted Release/index/archive chain; hosted Linux cache-hit proof is still required.
      The four subsequent browser
      installs omit `--with-deps`, so they cannot trigger another apt update.
@@ -439,9 +443,16 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      (#2025; outage runs 43039845647 and 43039976393). A healthy but slow cold update
      now has less time per attempt than the old five-minute limit. Forced-proof checks
      below are unchanged.
-     Each of those jobs gets 35 minutes, so a
-     fallback download still leaves time for the tests; the browsers' own download, on a cache
-     miss, is unchanged. To prove that fallback once without waiting for a slow mirror, once this
+     **Retry budget versus the 35-minute job cap:** limits apply per attempt and per mirror,
+     not to the total step. Conservatively including the 30-second kill grace on every attempt,
+     Canonical updates allow `4 * (60 + 30) + 15 + 30 + 60 = 465 s` (7m45s), and downloads
+     allow `3 * (600 + 30) + 5 + 20 = 1915 s` (31m55s). Combined, `2380 s` (39m40s)
+     already exceeds the job's `2100 s`; earlier Azure attempts and its up-to-seven-second
+     DNS probe can add more. The job timeout is the final bound, not a guarantee of test
+     headroom. Local planning/offline dpkg install, browser downloads, setup and tests are
+     outside these network retry budgets; dpkg is deliberately not wrapped in the network
+     timeout. These fakes establish bounds/branches, not hosted cold-run success.
+     To prove that fallback once without waiting for a slow mirror, once this
      `workflow_dispatch` trigger is on `main` (until then a branch's run by hand may not
      start): make a new commit of its own on a throwaway branch from `main` (an empty one,
      `git commit --allow-empty`, with the usual trailers), push the branch, never open a pull
@@ -617,8 +628,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      and the log marks it `[post-merge]`; on a pull request's CI run a post-merge job that
      failed or is running counts as passed and the description adds `post-merge, not counted:`.
      Any other tier, a renamed job, or a missing or unreadable catalog blocks. The arm64 waiver
-     applies first, so a waived job still needs its receipt. ci.yml's own gate (quality-gate)
-     still waits on those jobs until B2.
+     applies first, so a waived job still needs its receipt. ci.yml runs post-merge jobs on main
+     and manual runs only (#3209): a pull request leaves out app's and pwa-ui's post-merge legs
+     (their matrix include adds them only when the event isn't `pull_request`), skips a job whose
+     every leg is post-merge (`github.event_name != 'pull_request' &&` before its gate shape) and
+     its quality-gate doesn't count those jobs as selected (the check step's `PR_OFF`). The catalog
+     check holds all three to the catalog's `tier_jobs`. Required checks still run on every pull
+     request, so the ruleset needs no change; main's quality-gate still needs every leg to publish.
    - The standing rule (owner decision 2026-11-08, replacing the 2026-11-05 label of #955):
      Copilot and Codex reviews are optional extras, and the receipts are the gate. A PR needs a
      success independent-review receipt on its head from a listed poster and no Copilot review,

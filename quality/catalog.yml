@@ -38,7 +38,8 @@
 #                 default false: a change reaching it adds the security suites and the
 #                 security-review label (quality/README.md §2, AGENTS.md rule 5)
 #   tier          blocking (the default) | post-merge. A post-merge suite's tier_jobs run as
-#                 selected, but neither a pull request's merge-rule verdict nor main-green counts
+#                 selected on main and manual runs, never on a pull request (ci.yml, #3209), and
+#                 neither a pull request's merge-rule verdict nor main-green counts
 #                 them; both still show them (quality/README.md §4.9). check reports an unknown
 #                 tier, which counts as blocking
 #   tier_jobs     required with tier: post-merge: the exact ci.yml job display names it makes
