@@ -42,7 +42,7 @@ function walk(node, what) {
   }
 }
 
-function isWellFormed(s) {
+export function isWellFormed(s) {
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
     if (c >= 0xd800 && c <= 0xdbff) {

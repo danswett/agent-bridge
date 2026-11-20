@@ -6,5 +6,5 @@ public static class HostKey
 {
     // What `hostSignProof` signs: F("agent-bridge host key binding v1", account, generation, dh).
     public static byte[] Binding(string account, string generation, ReadOnlySpan<byte> dh) =>
-        Framing.F(Framing.Label(Framing.HostKeyBindingLabel), Framing.Utf8(account), Framing.Utf8(generation), dh.ToArray());
+        Framing.F(Framing.Label(Framing.HostKeyBindingLabel), Framing.Utf8(EntryBody.ParseAccount(account)), Framing.Utf8(generation), dh.ToArray());
 }

@@ -234,6 +234,15 @@ when the host's own pinned verifier holds the exact matching active v2 add and t
 joiner accepts its approver and matched exchange; otherwise `pending` or
 `not-enrolled`. The CLI remains dormant pending #2367 and host wiring.
 
+The PWA's `parseHostDescriptor(bytes, account, generation)` in `js/roster/entry.js`
+reads the public descriptor with the same strict v2 device parser as a roster add,
+including its account/generation/DH binding proof. It grants no enrollment or
+signer authority. Node and browser tests replay the existing C# host-v2 vectors;
+the Windows `HostEnrollmentTests` also require Node to verify a freshly generated
+DPAPI-backed descriptor through that reader (#2377). The supplied account context
+must contain only Unicode scalars before UTF-8 encoding (`account`); unpaired
+surrogates never alias U+FFFD. C# host-key binding enforces the same account check.
+
 ## Acceptance and state
 
 A verifier (`RosterVerifier`) holds one generation's accepted entries as a DAG and decides each

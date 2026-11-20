@@ -59,12 +59,18 @@ internal static class StrictJson
         string text;
         try { text = read() ?? ""; }
         catch (InvalidOperationException) { throw new RosterFormatException(Refusal.Json, what); }
+        if (!IsWellFormed(text)) { throw new RosterFormatException(Refusal.Json, what); }
+        return text;
+    }
+
+    public static bool IsWellFormed(string text)
+    {
         for (var i = 0; i < text.Length; i++)
         {
             if (char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1])) { i++; }
-            else if (char.IsSurrogate(text[i])) { throw new RosterFormatException(Refusal.Json, what); }
+            else if (char.IsSurrogate(text[i])) { return false; }
         }
-        return text;
+        return true;
     }
 
     // Members not in `allowed` are refused, the first in document order; then the first of

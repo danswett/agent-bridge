@@ -191,7 +191,7 @@ for (const width of [1440, 390]) {
       await expect(row(page, CLAUDE)).toHaveCount(0);
       await expect(page.getByRole('button', { name: /^Team, 1 session/ })).toBeFocused();
       expect(await page.evaluate(() => window.groupMotions.some((a) => a.id === 'ab-motion-listItem'))).toBe(true);
-      expect(await page.evaluate((id) => window.groupMotions.some((a) => a.id === 'ab-motion-shift' && a.effect.target.dataset.id === id), COPILOT)).toBe(true);
+      await expect.poll(() => page.evaluate((id) => window.groupMotions.some((a) => a.id === 'ab-motion-shift' && a.effect.target.dataset.id === id), COPILOT)).toBe(true);
     });
 
     test('New group validates names inline, creates expanded at the foot and retains the row after reload', async ({ page }) => {
