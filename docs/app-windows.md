@@ -372,26 +372,6 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
 
 ### Updates: Velopack, one version for app and host
 
-**Completion evidence** ([updater follow-up](https://github.com/danswett/agent-bridge/issues/2869)):
-`UpdateApplyCompletion` is a platform-neutral observer seam, not yet wired to apply or
-respawn. Its adapter must track the actual apply operation, including delegated workers,
-and freshly read the active installation's normalized version. A launcher exit, target
-files appearing, or a cached locator version does not establish worker completion.
-Each run supplies a new operation generation; evidence with another (or no) generation
-is `Unknown`. Adapters must bind it to that operation's actual process, never re-tag a
-cached snapshot, and sample the active manifest after completion. Release identity
-uses the shared `UpdateVersions` normalizer (whitespace, one optional `v`, metadata
-ignored; case-insensitive comparison; `0.0.0` unknown).
-Only authoritative worker completion, a known zero apply exit code, and the matching
-active version produce `Completed`. A known nonzero worker exit produces `Failed`.
-Missing evidence, unreadable state, a timeout or a version mismatch stays `Unknown`;
-none authorizes a retry or claims app/host convergence. Any result arriving at or after
-the observation window is `Unknown`, even success. Cancellation stops observation,
-not the updater. The asynchronous probe must return promptly and cancel only its wait.
-Results retain the operation step, target/observed versions, actual exit/native error
-code when available, offset-bearing observation time and monotonic elapsed time,
-without copying exception messages or inventing holder PID/path evidence.
-
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
 into one folder with one version. An app update is a host update, so they never skew.
@@ -899,6 +879,27 @@ controls consume that same contract; this extraction does not disable or remove 
   and that key once nothing else is in it. The host's profile (device key,
   account, `config.json`, logs) stays in `%LOCALAPPDATA%\AgentBridge`, like any app's
   data, so a reinstall picks up where it was.
+
+**Completion evidence** ([updater follow-up](https://github.com/danswett/agent-bridge/issues/2869)):
+`UpdateApplyCompletion` is a platform-neutral observer seam, not yet wired to apply or
+respawn. Its adapter must track the actual apply operation, including delegated workers,
+and freshly read the active installation's normalized version. A launcher exit, target
+files appearing, or a cached locator version does not establish worker completion.
+Each run supplies a new operation generation; evidence with another (or no) generation
+is `Unknown`. Adapters must bind it to that operation's actual process, never re-tag a
+cached snapshot, and sample the active manifest after completion. Release identity
+uses the shared `UpdateVersions` normalizer (whitespace, one optional `v`, metadata
+ignored; case-insensitive comparison, as Velopack's own `SemanticVersion`; `0.0.0` unknown).
+Only authoritative worker completion, a known zero apply exit code, and the matching
+active version produce `Completed`. A known nonzero worker exit produces `Failed`.
+Missing evidence, unreadable state, a timeout or a version mismatch stays `Unknown`;
+an unknown target is `target-unknown`, never the host's decision code `version-skew`;
+none authorizes a retry or claims app/host convergence. Any result arriving at or after
+the observation window is `Unknown`, even success. Cancellation stops observation,
+not the updater. The asynchronous probe must return promptly and cancel only its wait.
+Results retain the operation step, target/observed versions, actual exit/native error
+code when available, offset-bearing observation time and monotonic elapsed time,
+without copying exception messages or inventing holder PID/path evidence.
 
 ### Releases and updates: every merge to main is a pre-release
 
