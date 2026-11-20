@@ -81,6 +81,16 @@ static class InstallBlockers
     static bool Unreadable(Exception e) => e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception
         or InvalidOperationException or ArgumentException or NotSupportedException or DllNotFoundException or EntryPointNotFoundException;
 
+    // For an in-place install (#3343): each file in current held from outside, one at a time so none
+    // is missed. A holder that can't be told is one; a failed query throws.
+    internal static IReadOnlyList<string> HeldFiles(string root, Func<List<string>, List<Holder>>? query = null)
+    {
+        var own = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return InstallationFiles.LockedImages(Path.Combine(root, "current")).Where(file => (query ?? Held)([file]).Any(p =>
+            InstallHolder.Blocks(p.Pid, Environment.ProcessId, p.Image, own, p.Service)
+            || (p.Pid != Environment.ProcessId && string.IsNullOrWhiteSpace(p.Image) && string.IsNullOrWhiteSpace(p.Service)))).ToList();
+    }
+
     // OpenProcess with limited query rights works for elevated and other users' processes, which
     // Process.MainModule does not; null when the path still can't be read.
     static string? ImagePath(int pid, long started)

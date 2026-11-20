@@ -211,14 +211,17 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         handedOver?.Dispose();
         handedOver = null;
         var copy = handoff.Prepare(file, version, source!);
-        // DefaultProcessImpl uses Process.Start directly, so this app is Update.exe's parent.
-        handedOver = handoff.Launch(copy, root, packages, new[] { "--background", "--profile", profile },
-            args => locator.Process.StartProcess(updateExe, args, Path.GetDirectoryName(updateExe)!, false));
-        // Update.exe has started: the next start may say the install didn't take (#1167). Best
+        // #3343: started through a copy of this app outside the installation, which installs in place when a held file refuses Update.exe.
+        var helper = InPlaceHandoff.CopyHelper(Path.Combine(root, "current"), Path.Combine(profileFolder!, "app-update-helper"), "AgentBridge.exe");
+        using var me = System.Diagnostics.Process.GetCurrentProcess();
+        var request = new InPlaceHandoff(copy.Package, copy.Digest, root, packages, me.Id, me.StartTime.ToUniversalTime().Ticks, ["--background", "--profile", profile]);
+        handedOver = handoff.Launch(copy, root, packages, request.Restart,
+            _ => locator.Process.StartProcess(helper, request.Arguments(), Path.GetDirectoryName(helper)!, false));
+        // The helper has started: the next start may say the install didn't take (#1167). Best
         // effort; it must not keep this process from exiting.
         try { handedOverTo?.Invoke(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { log?.Invoke($"update: the hand-over could not be recorded: {e.Message}"); }
-        // As ApplyUpdatesAndRestart ends: Update.exe waits for this process to exit (--wait).
+        // The helper waits for this process to exit before Update.exe starts.
         locator.Process.Exit(0);
     }
 }

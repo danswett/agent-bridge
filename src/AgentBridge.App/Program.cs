@@ -13,6 +13,9 @@ public static class Program
     {
         AppDomain.CurrentDomain.UnhandledException += (_, e) => CrashLog.Write(e.ExceptionObject as Exception);
 
+        // #3343: a copy of the app outside the installation, handed an update; before Velopack's own.
+        if (InPlaceHandoff.Parse(args) is { } handoff) { return InstallHandedOver(handoff); }
+
         // First: Velopack starts the installed exe with hook arguments on install, update and
         // uninstall, and Run() handles those and exits. The host lives in the app's folder, so
         // it is stopped before an update replaces the folder and started by the new version;
@@ -60,6 +63,26 @@ public static class Program
         // exit code 1, and this tells the app's own code from what happened after it.
         if (options.SelfTest is not null) { AppLog.Write($"self-test: the app ends with exit code {App.ExitCode}"); }
         return App.ExitCode;
+    }
+
+    // Update.exe's apply, or in place when a held file refuses it; then the app again either way. 1 when not all was installed.
+    static int InstallHandedOver(InPlaceHandoff handoff)
+    {
+        var code = 0;
+        try
+        {
+            Directory.SetCurrentDirectory(handoff.Root); // what this starts must not keep the helper folder in use
+            if (!handoff.WaitForApp(TimeSpan.FromMinutes(1))) { throw new InvalidOperationException("the app that handed the update over did not exit; nothing was installed"); }
+            var inPlace = handoff.Install(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar) + "-staged",
+                a => { using var p = System.Diagnostics.Process.Start(Path.Combine(handoff.Root, "Update.exe"), a); p.WaitForExit(); return p.ExitCode; },
+                () => InstallBlockers.HeldFiles(handoff.Root), AppLog.Write);
+            AppLog.Write(inPlace ? "update: installed in place; the held files were left as they were" : "update: installed");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException or System.ComponentModel.Win32Exception)
+        { AppLog.Write($"update: {e.Message}"); code = 1; }
+        try { System.Diagnostics.Process.Start(Path.Combine(handoff.Root, "current", "AgentBridge.exe"), handoff.Restart).Dispose(); }
+        catch (Exception e) when (e is IOException or System.ComponentModel.Win32Exception) { AppLog.Write($"update: the app could not be started again: {e.Message}"); code = 1; }
+        return code;
     }
 }
 

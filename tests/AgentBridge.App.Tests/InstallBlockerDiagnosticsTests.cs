@@ -51,6 +51,17 @@ public sealed class InstallBlockerDiagnosticsTests : IDisposable
     string? Probe() => InstallBlockers.Find(root,
         () => Directory.EnumerateFiles(Path.Combine(root, "current"), "*", SearchOption.AllDirectories).ToList(), Query);
 
+    [Fact]
+    public void The_in_place_install_is_given_every_file_held_from_outside_and_none_of_the_apps_own()
+    {
+        var dac = Hold("mscordaccore.dll", new(External, 1, "Connected User Experiences and Telemetry", "DiagTrack", null));
+        var pri = Hold("resources.pri", new(External, 1, "unidentified", "", null));
+        File.WriteAllText(Path.Combine(root, "current", "free.dll"), "free");
+        Assert.Equal(new[] { dac, pri }, InstallBlockers.HeldFiles(root, Query).Order());
+        unreadable = true;
+        Assert.Throws<UnauthorizedAccessException>(() => InstallBlockers.HeldFiles(root, Query));
+    }
+
     public void Dispose()
     {
         foreach (var handle in locks) { handle.Dispose(); }
