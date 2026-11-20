@@ -572,7 +572,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     // Relay A: only a session.launch request (HA, a device, or an agent under a grant) marks its
     // session a fleet target; a restore and a verification launch never do.
     [Fact]
-    public async Task A_launch_request_marks_its_session_a_fleet_target_but_a_restore_or_verification_launch_never_does()
+    public async Task Only_a_fleet_target_launch_marks_its_session_never_a_restore_or_verification_launch()
     {
         const string Restored = "79797979-7979-4979-8979-797979797979";
         Resumable(Restored, app, "Restored");
@@ -580,12 +580,27 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var fleet = new List<string>();
         launcher.FleetTargetStarted += id => { lock (fleet) { fleet.Add(id); } };
 
-        var launched = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-1");
+        var launched = await launcher.LaunchFleetTargetAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "home-assistant", null);
         var restored = await launcher.ResumeAsync(new ResumeAsk(Restored, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
         var verified = await launcher.LaunchVerificationAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-1");
 
         Assert.All([launched, restored, verified], r => Assert.Equal(LaunchOutcome.Started, r.Outcome));
         lock (fleet) { Assert.Equal([launched.Session!], fleet); }
+    }
+
+    // Engineering ruling (Nov 20): a person's app or PWA session.launch, audited or not, is never a fleet target.
+    [Fact]
+    public async Task An_app_or_pwa_launch_is_not_a_fleet_target()
+    {
+        var launcher = Launcher(Config());
+        var fleet = new List<string>();
+        launcher.FleetTargetStarted += id => { lock (fleet) { fleet.Add(id); } };
+
+        var plain = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-1");
+        var audited = await launcher.LaunchAuditedAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-2", _ => _ => { });
+
+        Assert.All([plain, audited], r => Assert.Equal(LaunchOutcome.Started, r.Outcome));
+        lock (fleet) { Assert.Empty(fleet); }
     }
 
     // #780 Host B: a restore is a resume through the same path as one from Launch, with nothing typed

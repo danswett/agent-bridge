@@ -24,6 +24,11 @@ public interface ISessionLauncher
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot write durable launch evidence."));
 
     Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
+    // Relay A: a launch whose session becomes a fleet reply target, called only from Home Assistant's
+    // launch path and an agent's launch under a grant; a person's app or PWA launch never comes here.
+    Task<LaunchResult> LaunchFleetTargetAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare,
+        CancellationToken cancellationToken = default) =>
+        prepare is null ? LaunchAsync(request, peer, cancellationToken) : LaunchAuditedAsync(request, peer, prepare, cancellationToken);
     Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
         CancellationToken cancellationToken = default) => Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "fleet launch is unavailable"));
     bool IsFleetWorker(string session, SessionProcess? process) => false;
@@ -263,9 +268,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // is decided; a handler that throws costs only itself.
     public event Action<string, LaunchedWith>? SessionStarted;
 
-    // The same moment, only for a session a session.launch request started (HA, a device, or an
-    // agent under a grant): never a restore or a verification launch. The lite fleet-target gate's
-    // registry; raised by this host alone. A handler that throws costs only itself.
+    // The same moment, only for a session Home Assistant's launch path or an agent under a grant
+    // started: never a person's app or PWA launch, a restore or a verification launch. The lite
+    // fleet-target gate's registry; raised by this host alone. A handler that throws costs only itself.
     public event Action<string>? FleetTargetStarted;
 
     // A launch already answered Unconfirmed (its window not seen ready in time) whose window is seen
@@ -722,7 +727,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         {
             return Task.FromResult(Refused($"Verification cannot guarantee standard permissions with configured launch.agents.{agent.Id}.extraArgs. Remove those extra arguments at the machine before testing; nothing was started."));
         }
-        return LaunchOnceAsync(request with { Permissions = LaunchProtocol.Ask }, peer, null, fleetTarget: false);
+        return LaunchOnceAsync(request with { Permissions = LaunchProtocol.Ask }, peer, null);
     }
 
     public Func<LaunchRequest, string, Func<Task<LaunchResult>>, Task<LaunchResult>>? NamedLaunch { get; set; }
@@ -768,7 +773,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
         LaunchOnceAsync(request, peer, null);
     public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
-        CancellationToken cancellationToken = default) => LaunchOnceAsync(request, principal, prepare, fleet: true);
+        CancellationToken cancellationToken = default) => LaunchOnceAsync(request, principal, prepare, fleet: true, fleetTarget: true);
+    public Task<LaunchResult> LaunchFleetTargetAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare,
+        CancellationToken cancellationToken = default) => LaunchOnceAsync(request, peer, prepare, fleetTarget: true);
     public bool IsFleetWorker(string session, SessionProcess? process) => provenance.IsFleetWorker(session, process);
     public LaunchConfig FleetConfig => Config;
 
@@ -779,7 +786,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return LaunchOnceAsync(request, peer, prepare);
     }
 
-    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false, bool fleetTarget = true)
+    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false, bool fleetTarget = false)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
         return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet, fleetTarget: fleetTarget)

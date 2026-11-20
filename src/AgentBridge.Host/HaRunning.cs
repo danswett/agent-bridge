@@ -72,9 +72,9 @@ public sealed class HaRunning : IAsyncDisposable
         var (requests, requestsProblem) = launcher is null ? (null, null) : AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(folder, TimeProvider.System);
         if (requestsProblem is not null) { log($"Home Assistant launch requests with an id are refused: {requestsProblem}"); }
         var launch = launcher is null ? null : new HaLauncher(() => launcher.Available, launcher.OptionsAsync,
-            (request, ct) => launchAudit is null ? launcher.LaunchAsync(request, "home-assistant", ct)
+            (request, ct) => launchAudit is null ? launcher.LaunchFleetTargetAsync(request, "home-assistant", null, ct)
                 : GateLaunchAudit.LaunchAsync(launcher, request, "home-assistant", launchAudit,
-                    new("legacy-ha", "ha-component", "ha-component:local", launchAudit.ControlWriterRun), ct))
+                    new("legacy-ha", "ha-component", "ha-component:local", launchAudit.ControlWriterRun), ct, fleetTarget: true))
         { Requests = requests, RequestsProblem = requestsProblem };
         var connector = new HaConnector(new HaConnectorOptions
         {

@@ -32,7 +32,7 @@ public interface IReplyTargetGate
 }
 
 // What this host knows of a session: the permission mode it launched it with, if it launched it,
-// and whether that launch was a session.launch request (HA, a device or an agent under a grant).
+// and whether Home Assistant's launch path or an agent under a grant launched it (a fleet target).
 public interface ILiteLaunches
 {
     string? PermissionsOf(string session);
@@ -95,7 +95,7 @@ public sealed class AllowlistedAllTargetsGate(ILiteLaunches launches, Func<Agent
     }
 }
 
-// A session this host launched for a session.launch request, typed into only when the sending
+// A session Home Assistant's launch path or an agent under a grant launched, typed into only when the sending
 // machine is a serving host in the pinned, verified device roster (owner, Nov 20 12:37 PT). The
 // roster condition is about the serving host, not the agent principal. With no pin, a roster not
 // yet verified, or any other sender, it refuses. Permission and trust prompts stay person-only:

@@ -108,7 +108,8 @@ public sealed class SessionService
             : running.Agent(request.Agent ?? "").ExtraArgs.Count > 0 ? "extraArgs: this agent starts with extra arguments on this machine; agents may not launch it"
             : running.Workspaces.Any(w => w.Isolate && w.Label == request.Workspace) ? null : "the workspace is not an isolated launch workspace on this machine");
         if (Dispatch() is { } problem) { return new(LaunchOutcome.Refused, problem); }
-        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null), refusal: Dispatch);
+        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null), refusal: Dispatch,
+            fleetTarget: true);
         return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
     }
 
