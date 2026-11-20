@@ -54,8 +54,29 @@ Never expand them into GUIDs or guess a locator from GUID prefixes.
 Require a person-approved, purpose-specific relay role-authority signing key.
 This explicitly adds online assignment authority to the relay, unlike today's untrusted
 registry relay, as decided in Q1; existing relay TLS is not enrollment.
-A new domain-separated person `capSign` delegation pins the authority public key,
-account, roster generation and allowed role operations; no implicit new key purpose.
+A presence-gated person `sign` command enrolls the authority key and pins its public
+key, account, roster generation and allowed role operations; no implicit new key purpose.
+Authority enrollment/rotation, holder approval and person-initiated revocation require
+explicit new role-management person-command actions, not today's fixed action set or
+`accept-host-sign`. Follow [Devices: Signing keys](../protocol/devices.md#signing-keys)
+and [Vetoes, person commands and head attestations](../protocol/devices.md#vetoes-person-commands-and-head-attestations):
+`sign` signs `F("agent-bridge person command v1", bodyBytes)`, with presence role `command`.
+Require an ACTIVE enrolled person device in the pinned account/generation, neither
+probationary nor held, with its recorded presence: `key`, or a verified `webauthn`
+assertion per [Presence assertions](../protocol/devices.md#presence-assertions).
+`presence: none`, agents and host-only signatures cannot authorize these operations.
+Apply the normal action/receiving-target, signer, signature, presence, `host-key`,
+heads and roster-freshness checks. Require the receiving channel's fresh 32-byte
+`nonce`, an unused `request`, positive lifetime at most 10 minutes, at most 2 minutes
+future skew, unexpired time and issue time above the persisted floor.
+Use `now = max(local wall clock, durable highWater)` for all time checks.
+Persist/flush the replay record before acting; retain it through `expiresAt` plus
+2 minutes by the durable wall-clock high-water mark, persisting the highest accepted
+`issuedAt` too. These are receiver obligations, not guarantees of the stateless parser.
+As [Signed verifier-support evidence](../protocol/devices.md#signed-verifier-support-evidence-2372-design-2366-implementation)
+specifies, `capSign` is unattended, not person consent. It can NEVER enroll or rotate
+the authority key, revoke authority or approve a holder; neither can any other
+unattended statement signature. Domain separation does not supply person presence.
 Hosts prove session possession with enrolled `hostSign`; that signature alone cannot
 assign a role. Do not reuse the AP5-lite key or let a host self-appoint.
 
@@ -64,7 +85,13 @@ Publish one canonical signed claim through the existing registry's role projecti
 bindingProof, assignmentDigest, state, issuedAt, expiresAt, authorityKeyId, signature`.
 `hostAdd` is the active enrolled host add, not a machine display name.
 The host proof signs the scoped role/session/host/epoch tuple under a new purpose context.
-A person-signed assignment binds that exact tuple and expected predecessor epoch.
+A person `sign` assignment under those same command gates binds that exact tuple,
+expected predecessor epoch, `assignmentVersion`, `nonce`, `issuedAt` and `expiresAt`.
+`assignmentVersion` is strictly monotonic per role, distinct from the claim-format
+`version` and holder epoch; reject any value not greater than the durable accepted
+version. Assignments require a fresh 32-byte nonce and a positive lifetime at most
+60 seconds, checked again at commit; an expired uncommitted approval needs fresh
+person approval. Expiry limits acceptance, not an already committed holder's tenure.
 Only the authorized relay publisher commits/signs it; readers never trust a record's
 self-supplied key. Verify pinned delegation, assignment, active host add and both proofs.
 No-holder/revoked states are authenticated records too, not inferred missing JSON.
@@ -82,7 +109,9 @@ without online fencing: respectively they lack provenance, ownership or currentn
 Require per-role linearizable transactions shared by all authority replicas:
 `active(epoch E) -> quiescing(E) -> active(E+1)` or `revoked(E+1)`.
 The owner approves each exact successor; agents may request, never authorize, transfer.
-Compare-and-swap includes account/generation, role, old epoch and expected old session.
+Compare-and-swap includes account/generation, role, old epoch, expected old session
+and assignment version; atomically persist the higher version and consumed request/nonce
+with the assignment. Restart, key rotation and roster changes never reset role versions.
 Two successor requests cannot both commit; losers must obtain new owner approval.
 Quiescing first closes old-epoch admission, cancels unissued sends and drains every
 issued delivery reservation to authenticated `delivered` or `notDelivered`.
@@ -135,8 +164,9 @@ in the relay service. No named machine, agent session or watcher is the coordina
 When a client node leaves, another independently enrolled client can resolve afresh.
 When the holder leaves, its role becomes unavailable; an unconfirmed stop blocks
 replacement rather than silently granting the role to a different machine.
-Relay restart recovers ledger, epochs, tombstones and unresolved reservations before
-serving sends; absent durable state or loss of quorum refuses all role operations.
+Relay restart recovers ledger, epochs, assignment versions, command replay records,
+tombstones and unresolved reservations before serving sends; absent durable state
+or loss of quorum refuses all role operations.
 
 Resume or host move uses a new SESSION GUID, the same ROLE GUID, and the same atomic
 owner-approved successor procedure; copied workspace labels confer no ownership.
@@ -146,8 +176,11 @@ Approved host recovery retains an uncompromised role only after owner-approved
 rebind, fresh enrolled-host proof and confirmed old-holder stop. A compromised role
 is retired permanently; authority compromise suspends routing and requires person-approved
 authority re-enrollment and affected-role retirement. Mint replacement ROLE GUIDs, never reset epochs or resurrect tombstones.
-Key rotation needs person-approved delegation continuity; a relay-provided new key
-alone is refused. Roster-generation change invalidates all old claims/delegations.
+Authority re-enrollment, key rotation and person-approved revocation/retirement use
+section 2's active-person `sign`, presence, freshness, nonce and durable replay gates.
+Rotation also needs pinned delegation continuity; a relay-provided new key alone
+is refused. `capSign` cannot supply that continuity or authorize recovery.
+Roster-generation change invalidates all old claims/delegations.
 
 ## 6. Failure contract: all routing fails closed
 
