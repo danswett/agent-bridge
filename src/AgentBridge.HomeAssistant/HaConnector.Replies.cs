@@ -79,6 +79,11 @@ public sealed partial class HaConnector
         // their own Send press, the ones counted; and each Send press read with whether it was the agent's.
         public readonly List<HaState> Queued = [];
         public readonly List<string> AgentSends = [];
+        // #2780: whether the durable inbox was read back (Restore), when, and the queued rids taken but not yet
+        // marked delivered there, oldest first.
+        public bool Restored;
+        public DateTimeOffset Since;
+        public readonly List<string> Marks = [];
         // Updated: when Home Assistant last wrote the split snapshot, so a complete one written later ends it (#3224).
         public (string State, string? At, string? Before, DateTimeOffset? Updated)? UncertainPayload;
         public readonly List<string> PayloadStamps = [];
