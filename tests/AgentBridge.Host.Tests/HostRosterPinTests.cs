@@ -55,7 +55,8 @@ public sealed class HostRosterPinTests : IDisposable
             Assert.Contains("unpinned", reader.Update(null, RosterFixture.Account).Reasons);
             Assert.Null(reader.Pinned(RosterFixture.Account));
             var typed = PersonGenesis.FromFingerprint(HostRosterPinWriter.Fingerprint(w.Entry("G").Hash));
-            Assert.Equal("pinned", HostRosterPinWriter.Write(path, typed, Relay("G", "B"), RosterFixture.Account, () => w.Now));
+            // The fixture genesis is v1; stand in K1's v3 (capSign) predicate as the writer's own tests do.
+            Assert.Equal("pinned", HostRosterPinWriter.Write(path, typed, Relay("G", "B"), RosterFixture.Account, () => w.Now, _ => true));
             Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
             Assert.NotNull(reader.Verified);
             Assert.Same(reader.Verified, reader.Pinned(RosterFixture.Account));
