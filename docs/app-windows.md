@@ -28,6 +28,21 @@ has its hooks connected (`AppPreferences.GuidePending`, `SettingsViewModel.Guide
 only to a first install (no settings file existed, so upgraders never see it) and only to a launch that
 shows the window: a start at sign-in or a toast launch leaves it pending for the next one.
 
+## Local crash evidence
+
+The existing `AppLog` always writes redacted diagnostics to `Paths.AppData`'s `app.log`,
+rolling to `app.log.1` after 1 MB. Transcript text is not diagnostic input. `CrashLog`
+keeps exception types and frames, not messages or source paths, in `crash.log` and the
+existing diagnostics journal. Neither submits anything.
+Each profile keeps `runs/<profile>/run-marker.json` under `Paths.AppData` (the demo uses
+`runs/demo`). Startup captures `RunMarker.Previous` before writing the current version
+and UTC start time; an empty/corrupt marker counts as unclean. Marker writes flush a
+same-directory temporary file before atomically replacing the old marker; failed writes
+preserve the old marker and remove the temporary file. Only an actual exit,
+not hiding to the tray, calls `Complete()`. Crash evidence survives closing; a teardown
+crash restores the marker. Self-tests leave markers alone. `RecordHang` is the seam for
+the separate watchdog slice; recovery UI and the existing feedback submission remain separate work.
+
 ## Decisions
 
 Settings' **Reply box** group offers **Return key in replies**: **New line** (the
