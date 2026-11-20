@@ -1068,7 +1068,8 @@ async Task<int> ServeAsync(HostHandover handover)
                 Log($"device roster (security.roster {settings.Security.Roster}): {check.Summary}");
             });
             since.Restart();
-            await fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token);
+            await fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token,
+                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability));
             (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);
             diagnosticsJournal.Record(JournalEvents.RelayClosed(endedWith, since.Elapsed, HostVersion()));
             Log($"connection ended after {since.Elapsed.TotalMinutes:F1} min: {(int?)relay.CloseStatus} {relay.CloseReason}");

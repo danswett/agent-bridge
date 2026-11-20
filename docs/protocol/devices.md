@@ -439,6 +439,12 @@ S: the platforms sign in IEEE P1363 (`r ‖ s`), and S is replaced by n − S wh
 | PWA | `pwa/js/roster/signing-key.js`: a WebCrypto key generated non-extractable, usable only to sign, kept in IndexedDB beside the device key |
 | Apple clients | The Secure Enclave, with slice A1 |
 
+A person's `capSign` custody (below, "Signer and enrollment") reuses these stores as a separate
+key behind one seam, `ICapSignKeys` in `src/AgentBridge.App.Core` (a `cap-sign` profile folder) and
+`openCapSignKey` in `pwa/js/roster/cap-sign-key.js` (record `roster-cap-sign`). It exposes only the
+public point, algorithm, tier and `Sign`. It is made once on first need; a damaged entry, or a lost
+key the roster still names, is the fixed failure `no-capsign`, never a new key. Nothing enrolls it yet.
+
 `RosterSigningKeyTests` (in `tests/AgentBridge.Transport.Tests`) and
 `pwa/test/unit/roster-signing-key.test.mjs` check the DPAPI and WebCrypto stores on every run. The
 TPM test runs only on a machine whose TPM can sign with P-256. GitHub's runners have none, so after
