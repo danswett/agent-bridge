@@ -82,6 +82,10 @@ using AgentBridge.Transport;
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 var arguments = args.ToList();
 var command = arguments.Count > 0 ? arguments[0] : "help";
+if (command == NotifyOwnerProtocol.Op)
+{
+    return await NotifyOwnerCommands.RunAsync(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
+}
 string? Option(string name)
 {
     var i = arguments.IndexOf(name);
