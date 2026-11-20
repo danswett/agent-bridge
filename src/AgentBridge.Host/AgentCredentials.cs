@@ -16,6 +16,8 @@ public sealed record AgentCredential(string Id, string Session, string LaunchId,
     string Kind = "session", string? Principal = null)
 {
     public bool FleetLaunch { get; init; }
+    // Set only by scripts add --task: the scheduled task (and its files) this credential answers from.
+    public ScriptTaskBinding? ScheduledTask { get; init; }
     // Record construction only; minting and persisting a script token are separate operations.
     public static AgentCredential Script(string id, string machine, string name, DateTimeOffset issuedAt, TimeSpan? lifetime = null)
     {
@@ -84,8 +86,14 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     sealed record Connection(string CredentialId, string Principal, bool Script);
 
-    public AgentCredentials(string folder, string machine, TimeProvider? time = null, Action<string>? log = null, Func<int, DateTimeOffset, bool>? rootAlive = null)
+    readonly IScriptTaskReader? tasks;
+    readonly Func<int, ProcessAncestry> reread;
+
+    public AgentCredentials(string folder, string machine, TimeProvider? time = null, Action<string>? log = null, Func<int, DateTimeOffset, bool>? rootAlive = null, IScriptTaskReader? tasks = null,
+        Func<int, ProcessAncestry>? reread = null)
     {
+        this.tasks = tasks;
+        this.reread = reread ?? ProcessChain.Read;
         LaunchGate = new AgentLaunchGate(folder);
         FleetGrant = new FleetLaunchGrant(folder);
         this.rootAlive = rootAlive ?? ((_, _) => true);
@@ -225,10 +233,12 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     // Called only by the person-authorized management path, never a remote/agent operation.
     // No token is returned. Both hashes stand until a successful fleet read retires the old one.
-    public (AgentCredential Credential, string Path) MintScript(string name, TimeSpan? lifetime = null)
+    public (AgentCredential Credential, string Path) MintScript(string name, TimeSpan? lifetime = null, string? task = null, IReadOnlyList<string>? files = null)
     {
         var now = time.GetUtcNow();
         var credential = AgentCredential.Script(BlobFormat.Base64Url(RandomNumberGenerator.GetBytes(16)), machine, name, now, lifetime);
+        if (task is not null) { credential = credential with { ScheduledTask = ScriptTaskBinding.Pin(task, files ?? [],
+            tasks ?? throw new InvalidOperationException("refused: this host cannot check scheduled tasks")) }; }
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
@@ -323,18 +333,27 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         if (match is null) { return Refused("no live credential matches that token"); }
         if (match.Kind == "script")
         {
-            if (!ancestry.Complete || ancestry.Processes.Count == 0
-                || ancestry.Processes.Any(p => p.Id <= 0 || p.StartedAt is null || string.IsNullOrWhiteSpace(p.Image)))
-            { return Outside(match, "the script caller's ancestry could not be traced in full"); }
+            // A bound credential's chain is read again now, for the same caller process: the
+            // connect-time chain is a moment the caller chose, and a parent it has ended since
+            // may by now be the task's engine under the same pid.
+            var fresh = match.ScheduledTask is null || tasks is null ? ancestry
+                : ancestry.Processes is [{ Id: > 0, StartedAt: { } at } self, ..]
+                    && reread(self.Id) is { Processes: [var again, ..] } current && again.Id == self.Id && again.StartedAt == at ? current : null;
+            if (fresh is null) { return Outside(match, "the script caller could not be read again at hello"); }
             lock (gate)
             {
                 var agents = records.Where(r => r.Credential.Kind == "session" && r.Credential.RootPid > 0)
                     .Select(r => new KnownProcess(r.Credential.RootPid, r.Credential.RootStartUtc, "a credentialed session"))
                     .Concat(pending.Select(p => new KnownProcess(p.RootPid, p.RootStartUtc, "an adopted session"))).ToArray();
-                if (agentCaller || AgentAncestry.Find(ancestry.Processes, agents) is not null)
+                if (agentCaller || AgentAncestry.Find(ancestry.Processes, agents) is not null || AgentAncestry.Find(fresh.Processes, agents) is not null)
                 { return Outside(match, "a script credential cannot be used inside an agent session"); }
-                return IsLive(match) ? new AgentHelloDecision(match, null) : Refused("no live credential matches that token");
             }
+            // Outside the gate (a bound one reads the Scheduler and ACLs); unbound needs the whole chain read.
+            var why = match.ScheduledTask is { } binding ? binding.Refusal(fresh, tasks)
+                : !ancestry.Complete || ancestry.Processes.Count == 0 || ancestry.Processes.Any(ScriptTaskBinding.Unread)
+                ? "the script caller's ancestry could not be traced in full" : null;
+            if (why is not null) { return Outside(match, why); }
+            return IsLive(match) ? new AgentHelloDecision(match, null) : Refused("no live credential matches that token");
         }
         if (match.RootPid <= 0) { return Outside(match, "its launch has not started"); }
         if (!ancestry.Complete)
@@ -536,7 +555,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             {
                 if (r?.Credential is not { } c || r.Hash is not { Length: 64 } || !IsHex(r.Hash) || c.Id is not { Length: > 0 } || !ids.Add(c.Id)
                     || !AgentProtocol.Scopes.Contains(c.Scope, StringComparer.Ordinal) || c.Chain is null
-                    || !(c.Kind == "session" ? !c.FleetLaunch && ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
+                    || !(c.Kind == "session" ? !c.FleetLaunch && ValidSession(c.Session) && c.Principal is null && c.ScheduledTask is null
+                        : c.Kind == "script" && ValidScript(c, machine) && c.ScheduledTask?.Valid() != false))
                 {
                     throw new JsonException("invalid credential record");
                 }

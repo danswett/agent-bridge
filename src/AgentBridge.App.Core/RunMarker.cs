@@ -8,26 +8,52 @@ public sealed record PreviousRun(bool Unclean, string? Version = null, DateTimeO
     string? Crash = null, HangRecord? Hang = null);
 
 // Local evidence only. Callers supply diagnostics, never conversation/transcript text.
-public sealed class RunMarker
+public sealed class RunMarker : IDisposable
 {
     [ThreadStatic] internal static Action<string, byte[]>? WriteFileOverride;
-    const string FileName = "run-marker.json";
     readonly object gate = new();
     readonly string path;
     readonly TimeProvider clock;
+    readonly FileStream ownership;
     PreviousRun current;
-    bool completed;
+    bool completed, disposed;
 
     public PreviousRun Previous { get; }
+    public IReadOnlyList<string> RecoveryWarnings { get; } = [];
 
     RunMarker(string dir, string version, TimeProvider clock)
     {
         this.clock = clock;
-        path = Path.Combine(dir, FileName);
-        Previous = ReadPrevious(dir);
+        path = Path.Combine(dir, $"run-marker.{Guid.NewGuid():N}.json");
         current = new(true, FeedbackRedactor.Redact(version), clock.GetUtcNow());
         Directory.CreateDirectory(dir);
-        Save();
+        ownership = UserLock.TryTake(path + ".lock", deleteOnClose: true) ?? throw new IOException("The new run record is already owned.");
+        var saved = false;
+        List<(string Path, FileStream Owner)> recoveredLeases = [];
+        try
+        {
+            Previous = ReadPrevious(dir, recoveredLeases, out var recovered);
+            Save();
+            if (recovered is not null)
+            {
+                List<string> warnings = [];
+                foreach (var lease in recoveredLeases)
+                {
+                    try { File.Delete(lease.Path); }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                    {
+                        warnings.Add($"Recovered run marker not removed: {error.GetType().Name}");
+                    }
+                }
+                RecoveryWarnings = warnings.AsReadOnly();
+            }
+            saved = true;
+        }
+        finally
+        {
+            foreach (var lease in recoveredLeases) { lease.Owner.Dispose(); }
+            if (!saved) { ownership.Dispose(); }
+        }
     }
 
     public static RunMarker Start(string dir, string version, TimeProvider? clock = null) =>
@@ -35,16 +61,35 @@ public sealed class RunMarker
 
     public static PreviousRun ReadPrevious(string dir)
     {
+        List<(string Path, FileStream Owner)> leases = [];
+        try { return ReadPrevious(dir, leases, out _); }
+        finally { foreach (var lease in leases) { lease.Owner.Dispose(); } }
+    }
+
+    static PreviousRun ReadPrevious(string dir, List<(string Path, FileStream Owner)> leases, out string? record)
+    {
+        record = null;
         try
         {
-            return (JsonSerializer.Deserialize<PreviousRun>(File.ReadAllText(Path.Combine(dir, FileName)))
-                ?? new(true)) with { Unclean = true };
+            PreviousRun previous = new(false);
+            foreach (var file in Directory.EnumerateFiles(dir, "run-marker*.json"))
+            {
+                // Keep abandoned records owned until the replacement is durable and consumed.
+                var owner = UserLock.TryTake(file + ".lock", deleteOnClose: true);
+                if (owner is null) { continue; }
+                leases.Add((file, owner));
+                PreviousRun candidate;
+                try { candidate = (JsonSerializer.Deserialize<PreviousRun>(File.ReadAllText(file)) ?? new(true)) with { Unclean = true }; }
+                catch (FileNotFoundException) { continue; }
+                catch (JsonException) { candidate = new(true); }
+                if (!previous.Unclean || candidate.StartedAt.GetValueOrDefault() >= previous.StartedAt.GetValueOrDefault()) { previous = candidate; record = file; }
+            }
+            return previous;
         }
-        catch (FileNotFoundException) { return new(false); }
-        catch (DirectoryNotFoundException) { return new(false); }
-        catch (JsonException) { return new(true); }
+        catch (DirectoryNotFoundException) { record = null; return new(false); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
+            record = null;
             return new(true, Crash: "The run marker could not be read.");
         }
     }
@@ -53,7 +98,7 @@ public sealed class RunMarker
     {
         lock (gate)
         {
-            if (completed) { return; }
+            if (completed || disposed) { return; }
             var lines = FeedbackRedactor.RedactLogLines(string.Join('\n', lastLogLines))
                 .Split('\n').TakeLast(40).Select(line => Limit(line, 2048)).ToArray();
             current = current with { Hang = new(clock.GetUtcNow(), threadId, stalled.TotalSeconds, lines) };
@@ -65,6 +110,7 @@ public sealed class RunMarker
     {
         lock (gate)
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
             completed = false;
             // Exception messages can contain transcript text; only type and frames belong here.
             current = current with { Crash = DescribeCrash(error) };
@@ -72,18 +118,40 @@ public sealed class RunMarker
         }
     }
 
-    public static string DescribeCrash(Exception? error) => error is null ? "Unknown exception" :
-        Limit(FeedbackRedactor.Redact(error.GetType().FullName ?? "Exception") + "\n" +
-            FeedbackRedactor.Redact(new System.Diagnostics.StackTrace(error, fNeedFileInfo: false).ToString()), 8192);
+    public static string DescribeCrash(Exception? error)
+    {
+        if (error is null) { return "Unknown exception"; }
+        List<Exception> errors = [error];
+        for (var index = 0; index < errors.Count; index++)
+        {
+            if (errors[index] is AggregateException aggregate)
+            {
+                errors.AddRange(aggregate.InnerExceptions.Take(16 - errors.Count));
+            }
+            else if (errors[index].InnerException is { } inner && errors.Count < 16) { errors.Add(inner); }
+        }
+        // Share the bound so a long outer stack cannot hide every inner exception.
+        var entryLimit = (8192 - errors.Count + 1) / errors.Count;
+        return string.Join("\n", errors.Select(item => Limit(
+            FeedbackRedactor.Redact(item.GetType().FullName ?? "Exception") + "\n" +
+            FeedbackRedactor.Redact(new System.Diagnostics.StackTrace(item, fNeedFileInfo: false).ToString()), entryLimit)));
+    }
 
     public void Complete()
     {
         lock (gate)
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
             if (completed || current.Crash is not null) { return; }
             File.Delete(path);
             completed = true;
         }
+    }
+
+    // Letting go without Complete represents an abandoned run; its evidence stays.
+    public void Dispose()
+    {
+        lock (gate) { disposed = true; ownership.Dispose(); }
     }
 
     static string Limit(string text, int length) => text.Length <= length ? text : text[..length];

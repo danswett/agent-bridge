@@ -34,12 +34,19 @@ The existing `AppLog` always writes redacted diagnostics to `Paths.AppData`'s `a
 rolling to `app.log.1` after 1 MB. Transcript text is not diagnostic input. `CrashLog`
 keeps exception types and frames, not messages or source paths, in `crash.log` and the
 existing diagnostics journal. Neither submits anything.
-Each profile keeps `runs/<profile>/run-marker.json` under `Paths.AppData` (the demo uses
-`runs/demo`). Startup captures `RunMarker.Previous` before writing the current version
-and UTC start time; an empty/corrupt marker counts as unclean. Marker writes flush a
+The marker and `crash.log` include nested/aggregate exception types and frames,
+bounded to 16 exceptions and 8192 characters total; no exception messages are retained.
+Each profile keeps owned `runs/<profile>/run-marker.<id>.json` records under `Paths.AppData`
+(the demo uses `runs/demo`). A per-record lifetime file lease spans Windows sessions;
+startup captures only the latest abandoned run in `RunMarker.Previous`, never a running
+copy's evidence. All abandoned records are reclaimed only after the new marker is durable.
+Recovery leases span selection, replacement and cleanup. Cleanup failures are returned
+as `RecoveryWarnings` and written to `app.log`; the new marker stays owned and usable.
+Empty/corrupt records count as unclean. Marker writes flush a
 same-directory temporary file before atomically replacing the old marker; failed writes
 preserve the old marker and remove the temporary file. Only an actual exit,
-not hiding to the tray, calls `Complete()`. Crash evidence survives closing; a teardown
+not hiding to the tray, calls `Complete()`, including tray Quit and a successful update
+handoff immediately before exit. Crash evidence survives closing; a teardown
 crash restores the marker. Self-tests leave markers alone. `RecordHang` is the seam for
 the separate watchdog slice; recovery UI and the existing feedback submission remain separate work.
 
@@ -756,7 +763,10 @@ controls consume that same contract; this extraction does not disable or remove 
     already confirmed in the same check stay named beside it.
     Match PID plus creation time throughout. Include non-executable resources such as `.pri`
     files, not only DLLs and executables. A scan timeout names Restart Manager and 120 s, never
-    claiming a confirmed holder.
+    claiming a confirmed holder. Quit and the two-minute deadline stop a scan between Restart Manager
+    calls, so it neither bisects further nor names a file (unknown); a call already in flight
+    finishes on its own thread holding the scan, so scans never overlap. The first start after an
+    update that did not take names holders within the same two-minute budget.
     Waiting carries no Installing credit; timeout
     keeps the old install intact with recovery text and the existing 10/20/40/60-minute backoff.
     This path never stops a service or self-elevates; it does not replace the later slot design.
@@ -1228,6 +1238,15 @@ closure wiring are a separate slice; this model alone does not replace the old r
 | Launch | Start or resume a session on any machine on the account that offers it (`sessions.launch`): machine, resume, agent, workspace (a new worktree where the folder is isolated), profile, model, effort, context and permissions as that machine offers them, and a first prompt sent whole. Each press is one launch with its own request id, sent again with the same id after a lost connection, so it starts once; the outcome (started, busy with the reason, refused, failed, unconfirmed) is shown and announced to screen readers, and the new session's card opens when it arrives. Try again sends a launch that could not be sent with the same request, but only to the same host process, never to one that restarted since, and only while the host still remembers the request (9 minutes from the first send). An error from the host says the launch may still have started, and a failure says what Try again would send, since the form may have changed since. A launch the machine reports failed is sent again as a new request. A host that names no run in its hello counts each connection as a new run, so a lost launch to it is reported unconfirmed rather than sent again. What was picked on a machine is kept while it drops out and when another machine is picked. A machine's choices are fetched only while the page is open, since that is costly at the host. A machine waiting on a folder-trust question says it is busy when the page opens or its choices are reloaded. Codex is not launched without a first prompt (nor needs one for a session brought over). Where the machine takes sessions from the account's others (`sessions.transfer`), Resume also lists the ended sessions they hand on (`sessions.transfer.serve`), by machine: picking one copies it over and resumes it as a new session in the workspace picked, with a command the app signs with its own device key, as a person's device (kind `app`), for the machine the session is on ([v1-transfer.md](protocol/v1-transfer.md)); the original stays. A transfer to this machine goes to its host through the relay, as the protocol requires, not the pipe; a transfer waits up to 12 minutes for its outcome and is resent for up to 20; why the form cannot go is said beside the Launch button, apart from the last launch's outcome. A launched agent asking whether to trust its folder ([v1-launch.md](protocol/v1-launch.md#folder-trust)), listed by the machine or named in a launch's outcome (which counts only until the machine's next listing, asked for at once), is shown in full (agent, the whole folder path wrapped and selectable, the repository root it applies to, the agent's own words); where the machine allows it and has approved this app, Trust and Quit answer it with `launch.trust.answer` and a command the app signs as a person's device for that machine, question and choice, through the relay only (this machine's own host through its loopback, never the pipe). Otherwise it says to answer at the machine and why; for this machine, "Allow answering from this app" turns the setting on with this app approved. An answer that may have typed is never offered again; an error offers only that same request again. A machine that takes no launches now (agent-ha-bridge runs there) is still listed, to show such a question read-only | PWA launch view (`pwa/js/ui/launch-view.js`), agent-ha-bridge's launch card |
 | Usage | Each agent's windows: percent, amber at 75 %, red at 90 %, pace against the window, "resets in" | PWA usage panel |
 | Settings | Host: running, version, profile, pid, start/stop/restart, start at sign-in, log tail; relay: sign in with GitHub (device code shown in the app), machine name, connection state; this machine: approving Copilot permission prompts from other devices (`permissions.remoteApproval`), answering folder-trust questions from devices (`launch.remoteFolderTrust`, applied at once; turned on with this app approved) and which devices may (`launch.remoteFolderTrustDevices`: this app, the account's phones, browsers and apps the relay lists, and any approved that are not connected; changes from here and from the Launch page go one at a time, each made from the list the host has just then, since the host replaces the whole list; a list changed meanwhile by another app or at a terminal is refused by the host and the change made again from it, so a device revoked there stays revoked), signing Copilot in again from a device the account's device roster (#55) pins as a person's here ("Let my devices sign Copilot in on this machine", `permissions.phoneSignIn`, off by default, applied when the host restarts; it says that the machine opens a browser and copies the code while it runs; under it, only while it is on, the read-only list "Devices that can sign Copilot in" from the host's status, `signInDevices`, with no Add or Remove (ui.md §6.9, #972); [host-config.md](host-config.md#phone-sign-in)), agent-ha-bridge state; on a Microsoft Dev Box only, keeping it awake while the host runs (`devBox.keepAwake`, applied at once; [host-config.md](host-config.md#dev-box-keep-awake)), with the last pass and the next, and a failed or blocked pass (no `az login`, say), Dev Box agent settings the host cannot use, or a stand-back with Task Scheduler unreadable in red since the Dev Box may then hibernate; app: show reasoning and tools (the old Detail toggle, kept in the app since every client now gets the full activity), toasts, start the app at sign-in, version and updates | status card, `install.ps1`, `agent-ha-bridge configure` |
+
+The Windows delegate strip reserves 20 DIPs below each item and its overflow footer:
+16 for the expanded horizontal scrollbar and 4 for focus clearance
+([#398](https://github.com/danswett/agent-bridge/issues/398)). The footer stays
+unwrapped and untrimmed, with a trailing inset inside the scroll extent, so its
+last words can be scrolled fully into view. `DelegateStripLayoutTests` guards
+these XAML layout constraints without running WinUI; rendered scrollbar modes,
+themes and input still need the hosted Windows app checks. The PWA is unchanged;
+this is not evidence that its chip strip has the same defect.
 
 **Toasts** (§7.2): a question raises a toast with its options as buttons and a text box
 for Other or a free-text answer; anything larger (several fields, multi-select) gets Open.

@@ -2,8 +2,11 @@
 
 A temporary mode (#728, owner decision of 14:06 PT on 2026-11-08) that lets the owner's agents on the owner's
 own machines message each other host to host over the relay, with Home Assistant as the automatic fallback,
-until the signed roster (#55) exists. It is off by default and is removed or folded into the roster path
-when that lands. It is built by slices L1 to L7 (#1349 to #1355, #1369, #1371).
+until the signed roster (#55) exists. Since the owner's decision of Nov 19, 2026, 22:07 PT it is **on by default**
+for a host signed in to the account: with no `agentMessaging.remote` key it is `own-account`, and it does anything
+only with a present same-account peer, by the trust rule below. A host with no signed-in account sends and receives
+nothing. An explicit `"off"`, an unreadable setting or a kill keeps it off; the kill switch stays. It is removed or
+folded into the roster path when that lands. It is built by slices L1 to L7 (#1349 to #1355, #1369, #1371).
 
 ## What it trusts, and what it does not
 
@@ -27,6 +30,7 @@ own-agents-only.
   uses, and text goes only into an idle session with an empty input box. Delivered text starts with one fixed
   prefix line naming the sending machine and session.
 - Allow-all sessions: `agentMessaging.allowAllTargets` is the per-machine master switch, on only for the cut-over machines and off everywhere else. Even when it is on, a session receives only if its exact session id is in `agentMessaging.allowAllTargetSessions` and this host launched it in allow-all mode since its last restart (the launch record is in memory). A missing or empty list denies every allow-all session; display names and wildcards never grant access.
+- Target: the full session id or the node id `agent_bridge_<16 lowercase hex>` the roster and `fleet.find` publish (#3399). A node id is used only when exactly one live session here maps to it and session discovery is not held (a held pass may miss a second one); none, several or a hold is refused as `noSuchSession`, never guessed. A full session id is not affected by a hold. Gates, the allow-all list, rate and typing all use the resolved full id; the log keeps the target as sent.
 - Which sessions receive: the relay types only into sessions this host launched since its last restart in forced-ask mode, or in allow-all mode with both the master switch and an exact listed session id. A session started by hand or launched before the host's last restart, even if listed, is refused as `notReplyTarget` and falls back to Home Assistant until relaunched by this host.
 - Rate: the receiver allows at most 6 messages a minute and 60 an hour from one sending session to one
   receiving session. The sender side allows 6 a minute per sender-receiver pair, in the messenger script (fleet #56), covering both the relay and Home Assistant routes. Beyond that is refused as `rate`, which is final.
@@ -40,8 +44,10 @@ own-agents-only.
 
 ## Turn it on (a person at each machine, in this order: VM3, VM1, VM4, VM2)
 
-1. Set `agentMessaging.remote` to `own-account` ([host-config](../host-config.md)); changes need no restart.
-   On VM1, VM2, VM3 and VM4 also set `agentMessaging.allowAllTargets` to `true`; leave it off on every other machine. On each receiving machine, list the exact session ids approved for allow-all delivery in `agentMessaging.allowAllTargetSessions`. An empty or missing list denies all; a display name or wildcard does not grant access. Setting the master switch back to `false` refuses all allow-all targets.
+1. Nothing to set for the mode itself: a signed-in host with no `agentMessaging.remote` key is `own-account`
+   ([host-config](../host-config.md)). A machine that was killed or set to `"off"` needs a person there to set
+   `agentMessaging.remote` to `own-account`; changes need no restart.
+   On VM1, VM2, VM3 and VM4 also set `agentMessaging.remote` to `own-account` explicitly and `agentMessaging.allowAllTargets` to `true` (the default never opens allow-all); leave it off on every other machine. On each receiving machine, list the exact session ids approved for allow-all delivery in `agentMessaging.allowAllTargetSessions`. An empty or missing list denies all; a display name or wildcard does not grant access. Setting the master switch back to `false` refuses all allow-all targets.
 2. Nothing to pin: every other host signed in to the same account and present on the relay is a peer. The legacy
    `peers` commands and `own-peers.json` no longer decide who may send or kill.
 3. After each machine, send one message each way with the machines already on, then do the next.
@@ -59,8 +65,10 @@ own-agents-only.
    answers with an error or has not taken the epoch. A kill is believed only from such a host whose channel key
    matches its device id (no pin), through the push, the epoch on a lite send, or an ack; it only ever turns the
    mode off. A machine offline at the kill learns it at its next lite send, so run the kill there as well.
-3. One machine only: set `agentMessaging.remote` to `off`; it holds from the next message.
-4. Turning back on takes a person at that machine. Nothing remote can.
+3. One machine only: set `agentMessaging.remote` to `off`; it holds from the next message, and the default never
+   overrides an explicit `"off"`.
+4. Turning back on takes a person at that machine setting `agentMessaging.remote` to `own-account`. Nothing remote
+   can, and after a recorded kill removing the key (`config unset`) does not either.
 
 **Roll back at once** on any one of: more than 1 percent of messages late or lost; p99 delivery over 250 ms for
 10 minutes; the relay down for more than 2 minutes; or any message delivered to the wrong session. Then tell the
@@ -81,7 +89,7 @@ Receiver refusals, in the order they are checked:
 | `notReplyTarget` | the target is not a session this host can type into |
 | `busy` | the target is not idle, or the duplicate memory is full |
 | `composerNotEmpty` | someone has typed in the target's input box; nothing was typed |
-| `noSuchSession` | the target session does not exist |
+| `noSuchSession` | the target session does not exist, or the target is a node id that no live session or more than one maps to, or discovery is held |
 
 What the sender gets, and what the messenger does:
 
@@ -101,7 +109,7 @@ Run on staging, then production, with VM3 and VM1 first and VM4 and VM2 joining 
 - [ ] Relay duplicates: the same message id sent twice over the relay inside 2 minutes is delivered once; 20 races from two machines at once lose nothing and duplicate nothing on the relay route. Not tested for once-only across relay and Home Assistant (known limit above).
 - [ ] Relay unreachable: messages arrive through Home Assistant. Target offline: a fast, clear failure.
 - [ ] Busy target and non-empty input box: refused, nothing typed. Other account, absent host and wrong static key: refused, nothing typed.
-- [ ] A fresh install has the mode off. A 60 KB message is refused at the cap; a one-character message is delivered.
+- [ ] A fresh install has the mode on only when signed in with a present same-account peer; signed out it sends and receives nothing; after a kill it stays off across restarts; a malformed or unreadable setting is off. A 60 KB message is refused at the cap; a one-character message is delivered.
 - [ ] The 7th message in a minute from one pair is refused as `rate` and not retried over Home Assistant; another pair is unaffected.
 - [ ] A deliberate refusal case, a host-down fallback to Home Assistant, and a coordinator and a builder session on each machine each receive a message. Receiving sessions must have been launched by this host since its last restart in forced-ask mode, or allow-all mode with the switch on and exact id listed; listed sessions started by hand or before a host restart are refused as `notReplyTarget`.
 - [ ] Delivered text carries the prefix line. An allow-all session receives only when idle, the master switch is on, its exact id is listed, and this host launched it in allow-all mode since its last restart; unlisted, hand-started or pre-restart sessions are refused as `notReplyTarget`.

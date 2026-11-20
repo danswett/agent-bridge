@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
+using AgentBridge.App;
 using AgentBridge.App.Core;
+using AgentBridge.Host;
 using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -151,7 +153,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Elevated = () => false,
             Time = held,
         };
-        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi, () => preflight?.Invoke())
+        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi, _ => preflight?.Invoke())
         {
             WindowOpen = () => windowOpen,
         };
@@ -542,7 +544,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var started = false;
         var updating = Manager(packageNow: () => Volatile.Read(ref started) ? [4242, 7171] : [4242], startsKnown: change != "unknown");
         var applied = false;
-        string? Scan()
+        string? Scan(CancellationToken _)
         {
             if (host.Sent(HostOps.Stop).Count > 0 && change == "arrives") { Volatile.Write(ref started, true); }
             if (host.Sent(HostOps.Stop).Count > 0 && change == "restarted") { processes.StartTimes[4242] = Make.T0.AddSeconds(5); }
@@ -1162,6 +1164,75 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.False(updater.Applied);
         Assert.Empty(host.Sent(HostOps.Stop));
         Assert.Contains(AutoUpdater.PolicyHold, auto.State.Waiting);
+    }
+
+    // #3307: the app's own policy reader (UpdaterHaltPolicy, as VelopackUpdater composes it, over
+    // the host's GitHubHaltListSource and a shared ReleaseDiscovery). Before, production said
+    // nothing (null), so an unasked install went over protection never checked. Unknown,
+    // unreadable or stale now holds it with the hold's words; Restart to update, a person's press,
+    // still installs once. A fresh policy installs unasked as before.
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData("unknown")]
+    [InlineData("unreadable")]
+    [InlineData("stale")]
+    [InlineData("fresh")]
+    public async Task The_app_updaters_own_policy_reader_holds_unasked_installs_unless_fresh_while_a_persons_press_still_installs(string policy)
+    {
+        InstallBetweenTurns();
+        var halts = await HaltsAsync(policy);
+        updater.HaltPolicy = halts.Snapshot;
+        Assert.Equal(policy == "fresh", halts.Snapshot.Fresh);
+        Assert.Equal(policy is "fresh" or "stale", halts.Snapshot.Policy is not null);
+        await StartAsync();
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        if (policy == "fresh") { await Wait.UntilAsync(() => updater.Applied, "the install between turns", TimeSpan.FromSeconds(5)); return; }
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Contains(AutoUpdater.PolicyHold, auto.State.Waiting);
+        if (policy == "unreadable") { Assert.Contains(log, l => l.StartsWith("update policy: protection could not be read (IOException)", StringComparison.Ordinal)); }
+
+        Assert.Null(await auto.RestartToUpdateAsync());
+        Assert.Equal("0.2.0", updater.AppliedVersion);
+    }
+
+    async Task<UpdaterHaltPolicy> HaltsAsync(string policy)
+    {
+        var folder = Path.Combine(app, "policy");
+        Directory.CreateDirectory(folder);
+        // A cache generation behind its verified one: the reader throws rather than read.
+        if (policy == "unreadable") { File.WriteAllText(Path.Combine(folder, ReleaseDiscovery.FileName), """{"haltPolicy":{"notBefore":"0001-01-01T00:00:00+00:00","attempt":0,"verified":1}}"""); }
+        var body = """{"v":1,"halted":[]}"""u8.ToArray();
+        var metadata = JsonSerializer.SerializeToUtf8Bytes(new[] { new { tag_name = "v0.1.2349", draft = false, assets = new[] { new { name = "halts.json",
+            browser_download_url = "https://github.com/danswett/agent-bridge/releases/download/v0.1.2349/halts.json",
+            size = body.Length, digest = "sha256:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(body)) } } } });
+        var up = policy is "fresh" or "stale";
+        var github = new PolicyGitHub(uri => !up ? null : uri.AbsoluteUri == ReleaseDiscovery.HaltPolicyList ? metadata : body);
+        var clock = new FakeTimeProvider(Make.T0);
+        var halts = new UpdaterHaltPolicy(new GitHubHaltListSource(new HttpClient(github), new ReleaseDiscovery(folder, github, clock, random: () => 0)), log.Add, clock);
+        Assert.Equal(new HaltPolicySnapshot(null, null, false), halts.Snapshot);
+        await halts.RefreshAsync();
+        if (policy == "stale")
+        {
+            up = false;
+            Assert.True(halts.Snapshot.Fresh);
+            clock.Advance(ReleaseDiscovery.GithubRevalidateEvery);
+            // Past its six hours it is stale before any check renews it.
+            Assert.False(halts.Snapshot.Fresh);
+            await halts.RefreshAsync();
+        }
+        return halts;
+    }
+
+    sealed class PolicyGitHub(Func<Uri, byte[]?> read) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(read(request.RequestUri!) is { } bytes
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) }
+                : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
     }
 
     [Fact]
@@ -1919,7 +1990,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     public void An_update_that_did_not_take_is_counted_and_names_what_holds_the_installation_and_one_that_took_clears_the_count()
     {
         prefs = prefs with { UpdatedFrom = "0.1.0", UpdateHandedOver = true };
-        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time, () => "svchost.exe (DiagTrack, pid 4242)");
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time, _ => "svchost.exe (DiagTrack, pid 4242)");
 
         Assert.Equal(1, prefs.UpdateFailures);
         Assert.Equal(time.GetUtcNow() + UpdateBackoff.First, prefs.UpdateRetryAt);
@@ -1931,6 +2002,39 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Null(prefs.UpdateFailures);
         Assert.Null(prefs.UpdateRetryAt);
+    }
+
+    // A stuck holder scan at startup once had no bound: the first start after a failed update hung.
+    [Fact]
+    public async Task A_failed_update_start_stops_a_stuck_holder_scan_at_the_two_minute_budget_on_a_ui_thread()
+    {
+        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateHandedOver = true };
+        var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        UpdateAnnouncement? said = null;
+        var ui = new Thread(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new Unpumped());
+            said = AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time,
+                token => { entered.TrySetResult(token); release.Wait(); return null; });
+        });
+        ui.Start();
+        try
+        {
+            var scan = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            time.Advance(InstallationFiles.ReleaseWait);
+            Assert.True(ui.Join(TimeSpan.FromSeconds(5)), "startup still waiting on the holder scan");
+            Assert.True(scan.IsCancellationRequested);
+            Assert.NotNull(said);
+            Assert.Contains(log, l => l.Contains(InstallationFiles.TimedOut, StringComparison.Ordinal) && l.Contains("update failed, retrying at", StringComparison.Ordinal));
+        }
+        finally { release.Set(); ui.Join(TimeSpan.FromSeconds(5)); }
+    }
+
+    // A UI thread blocked on startup never runs posted continuations.
+    sealed class Unpumped : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state) { }
     }
 
     [Fact]

@@ -968,7 +968,9 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   Tiered gating B3 ([issue 3210](https://github.com/danswett/agent-bridge/issues/3210)): a failed job named
   in a `tier: post-merge` suite's `tier_jobs` in `catalog.yml` is listed as `Job (post-merge-tier)`. When
   only such jobs failed (the `quality-gate` aggregate aside), the entry says so: an alert that never feeds
-  a pull request's merge verdict. The issue stays open until main's CI is green. Missing tier data means blocking.
+  a pull request's merge verdict. The issue stays open until main's CI is green. Missing or unreadable tier data
+  means blocking (an unreadable catalog warns; it never loses the alert). If a later entry has a blocking
+  failure, a post-merge-only issue title is promoted to the ordinary main-red title before that entry is posted.
   B3b: when two entries in a row (no green between) name the same single test, and every failed job in
   each but `quality-gate` is post-merge tier, the second entry adds one `quarantine-request: test=<name>`
   line, once per unrecovered streak, with the [S3b generator](https://github.com/danswett/agent-bridge/pull/3078)

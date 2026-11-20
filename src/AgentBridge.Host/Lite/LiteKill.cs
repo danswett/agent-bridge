@@ -7,9 +7,9 @@ using AgentBridge.Transport;
 namespace AgentBridge.Host.Lite;
 
 // The fleet kill switch for own-agents messaging (L6, #1354). Only ever turns the mode OFF: the
-// mode is on when config.json says agentMessaging.remote is own-account, and every path here
-// writes "off" there or does nothing. Turning it on again is a person running `config set` at the
-// machine, so a peer, a message or an agent can never switch it on.
+// mode is on when config.json's agentMessaging.remote reads own-account (also when the key is absent,
+// unless a kill was ever seen here), and every path here writes "off" there or does nothing. Turning
+// it on again is a person running `config set` at the machine, so a peer, a message or an agent can never switch it on.
 //
 // The epoch (Unix seconds of the latest kill) is kept in its own host-written file, never settable
 // by `config set`, and read afresh each time like the config, so `agents lite kill` run in another
@@ -43,8 +43,17 @@ public sealed class LiteKill : ILiteMode
     }
 
     // Reading the record each time lets an unreadable one latch the mode off, and a kill made by
-    // another process (`agents lite kill`) cancel the sends in flight here.
-    public bool On { get { ReadEpoch(); return !off && !latched && !held && HostSettings.CurrentAgentMessaging(folder).RemoteEnabled; } }
+    // another process (`agents lite kill`) cancel the sends in flight here. Once any kill is recorded,
+    // the default (an absent key) does not count: unsetting the "off" a kill wrote keeps the mode off.
+    public bool On
+    {
+        get
+        {
+            var epoch = ReadEpoch();
+            var settings = HostSettings.CurrentAgentMessaging(folder);
+            return !off && !latched && !held && settings.RemoteEnabled && (settings.RemoteSet || epoch == 0);
+        }
+    }
 
     public long KillEpoch => ReadEpoch();
 
@@ -214,8 +223,9 @@ public sealed class LiteKill : ILiteMode
             var path = Path.Combine(folder, FileName);
             if (!File.Exists(path))
             {
-                // Missing is normal only before any kill; after one it means the record was lost.
-                if (Interlocked.Read(ref seen) > 0) { Unreadable("missing"); }
+                // Missing is normal only before any kill; after one it means the record was lost. A path that is
+                // there but not a file is a kill whose record could not be written, so the default stays off.
+                if (Interlocked.Read(ref seen) > 0 || Path.Exists(path)) { Unreadable("missing"); }
                 return Interlocked.Read(ref seen);
             }
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
