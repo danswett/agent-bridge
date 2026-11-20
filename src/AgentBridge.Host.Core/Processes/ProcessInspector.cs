@@ -391,7 +391,7 @@ public sealed class SystemProcessInspector : IProcessInspector
         return read;
     }
 
-    internal static string? ReadCommandLine(int pid)
+    public static string? ReadCommandLine(int pid)
     {
         try
         {

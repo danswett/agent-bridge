@@ -711,6 +711,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 .Concat(starting.Where(p => !live.ContainsKey(p.Key)).Select(p => (p.Key, p.Value)))];
             work = everything ? [.. live.Keys] : [.. notified.Where(live.ContainsKey).Concat(live.Keys.Where(id => !published.ContainsKey(id))).Distinct()];
         }
+        List<string> discard = [];
         foreach (var (id, node) in gone)
         {
             Published? was;
@@ -723,7 +724,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 starting.Remove(id);
                 // An ended session's rid history goes with it, unless a delivery is still running
                 // (RepliesDoneAsync drops it then).
-                if (!underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
+                if (!underWay.ContainsKey(id) && ridLogs.TryRemove(id, out _)) { discard.Add(id); }
                 retiring.TryAdd(node, new Retiring());
                 // Observed here, so forgotten here: one that comes back starts as the person's.
                 if (!drivers.SourceObserves) { drivers.Forget(id); }
@@ -740,11 +741,12 @@ public sealed partial class HaConnector : IAsyncDisposable
         {
             foreach (var id in ridLogs.Keys)
             {
-                if (!live.ContainsKey(id) && !underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
+                if (!live.ContainsKey(id) && !underWay.ContainsKey(id)) { if (ridLogs.TryRemove(id, out _)) { discard.Add(id); } }
                 // A delivery still running keeps the history, not the queue: the same id back is a new lifetime.
-                else if (!live.ContainsKey(id) && ridLogs.TryGetValue(id, out var ended)) { ended.Drop(); }
+                else if (!live.ContainsKey(id) && ridLogs.TryGetValue(id, out var ended)) { ended.Drop(); discard.Add(id); }
             }
         }
+        Discard(discard);
         if (gone.Count > 0) { WatchSetChanged(); }
         for (var i = 0; i < work.Count; i++)
         {

@@ -30,9 +30,10 @@ function Reset-Scenario {
         branch = 'main'; repo = 'o/r'; path = '.github/workflows/ci.yml'; open = $false
         log = '  Failed A.B.C.Method [1 s]'; unreadable = $false; jobName = 'product'; jobConclusion = 'failure'
         body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = ''; failComment = ''; created = $false
-        closeFails = 0; closeAttempts = 0 }
+        closeFails = 0; closeAttempts = 0; clock = 0 }
 }
 # $s.runs maps run number to its attempts' conclusions, oldest first; 'running' is an unfinished attempt.
+function Get-FakeTime([int]$Second) { [DateTime]::new(2026, 11, 20, 12, 0, 0, [DateTimeKind]::Utc).AddSeconds($Second).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'") }
 function New-FakeAttempt([int]$Id, [int]$N) {
     $c = $s.runs[$Id][$N - 1]
     @{ id = $Id; run_number = $Id; run_attempt = $N; status = $(if ($c -eq 'running') { 'in_progress' } else { 'completed' })
@@ -91,13 +92,14 @@ function Fake-Gh {
         '^label create main-red ' { $s.writes += 'label'; return }
         '^issue create ' {
             $s.writes += 'create'; $s.open = $true; $s.created = $true; $s.body = $args[([array]::IndexOf($args, '--body') + 1)]
-            $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; return
+            $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; $s.comments = @(); return
         }
         '^issue comment 9 ' {
             $text = $args[([array]::IndexOf($args, '--body') + 1)]
             if ($s.failComment -and $text -match $s.failComment) { $global:LASTEXITCODE = 1; return }
             $s.writes += 'comment'
-            $s.comments += @{ body = $text; author = @{ login = 'github-actions' } }
+            # GitHub's comment createdAt, one second apart, so legacy completions can be placed in time.
+            $s.comments += @{ body = $text; author = @{ login = 'github-actions' }; createdAt = Get-FakeTime (++$s.clock) }
             return
         }
         '^issue close 9 ' {
@@ -156,6 +158,12 @@ foreach ($c in 'failure', 'success') {
     $evidence = (@($s.body) + @($s.comments | ForEach-Object { $_.body })) -join "`n"
     Assert ($evidence -match 'run=101' -and
         (($c -eq 'failure' -and $s.open) -or ($c -eq 'success' -and -not $s.open))) "a replacement stale event reconciles the newest $c verdict"
+}
+foreach ($c in 'failure', 'success') {
+    Reset-Scenario; $s.runs = @{ 100 = @('failure'); 101 = @($c) }
+    $output = (Invoke-MainRed -RunId 100 -Repository 'o/r' 6>&1) -join "`n"
+    Assert ($output -match 'run=100 attempt=1.*not backfilled.*newer decisive run=101 attempt=1' -and
+        $output -match 'missing old-run entry.*auto-revert.*fail-safe') "missing old-run red evidence is explained while reconciling newer $c"
 }
 $eventPath = [IO.Path]::GetTempFileName()
 $savedEventName = $env:GITHUB_EVENT_NAME; $savedEventPath = $env:GITHUB_EVENT_PATH
@@ -308,6 +316,19 @@ Assert ((@(Get-GeneratorCalls) -join '|') -ceq '100|A.B.C.Method|o/r|24') 'that 
 Assert (-not (($s.calls | ForEach-Object { $_ -join ' ' }) -match 'statuses|check-runs|--add-label|pr create')) 'the request writes no status, check, label or pull request itself, so no merge verdict reads it'
 Detect; $s.attempt = 3; Detect
 Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1 -and $s.comments.Count -eq 3) 'a second tick and a third failure make no duplicate request'
+Reset-Quarantine; $s.runs = @{ 100 = @('failure') }; Detect
+$s.runs[100] = @('failure', 'failure', 'success', 'failure'); $s.attempt = 2; Detect
+Assert ($s.open -and $s.comments[-1].body -match 'attempt=4' -and $s.writes -notcontains 'close' -and
+    @(Get-Requests).Count -eq 0 -and @(Get-GeneratorCalls).Count -eq 0) 'a delayed failure cannot count across an intervening successful retry'
+$s.runs[100] += 'failure'; $s.attempt = 5; Detect
+Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1) 'only the second failure after recovery reaches the unchanged threshold'
+Reset-Quarantine; $s.runs = @{ 100 = @('failure') }; Detect
+$s.runs[100] += 'failure'; $s.attempt = 2; Detect
+$s.runs[100] += @('success', 'failure'); $s.attempt = 1; Detect
+Assert ($s.comments[-1].body -match 'attempt=4' -and @(Get-Requests).Count -eq 1 -and
+    @(Get-GeneratorCalls).Count -eq 1) 'the first failure after recovery makes no request even when an earlier streak already requested one'
+$s.runs[100] += 'failure'; $s.attempt = 5; Detect
+Assert (@(Get-Requests).Count -eq 2 -and @(Get-GeneratorCalls).Count -eq 2) 'a fresh pair after recovery can request quarantine again'
 Reset-Quarantine -Switch ''; Detect; $s.attempt = 2; Detect
 Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 0) 'with MAIN_RED_QUARANTINE unset the request is recorded but the generator never runs'
 Reset-Quarantine -Switch "o$([char]0x200b)n"; Detect; $s.attempt = 2; Detect
@@ -349,18 +370,48 @@ Assert (@(Get-Completions).Count -eq 0 -and $LASTEXITCODE -eq 0) 'a nonzero gene
 $script:QuarantineScript = Join-Path $genDir 'quarantine-pr.ps1'; $s.attempt = 3; Detect
 Assert (@(Get-Requests).Count -eq 1 -and @(Get-Completions).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1) 'a generator refusal by exit code leaves the existing request available'
 Remove-Item Env:MAIN_RED_FAKE_ATTEMPT
-# #3243 follow-up: the issue-wide intent is stored before the generator runs; completion is its own later write.
+# #3243 follow-up: the streak's intent is stored before the generator runs; completion is its own later write.
 Reset-Quarantine; Detect; $s.attempt = 2; $s.failComment = 'quarantine-request:'; $failed = $null
 try { Detect } catch { $failed = $_.Exception.Message }
 Assert ($null -ne $failed -and @(Get-Requests).Count -eq 0 -and @(Get-GeneratorCalls).Count -eq 0) "a failed intent write never invokes the generator ($failed)"
 $s.failComment = ''; Detect
 Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1 -and @(Get-Completions).Count -eq 1) 'the retried event then stores the intent once and invokes the generator once'
-Assert ($s.comments[0].body -clike '*quarantine-request: test=A.B.C.Method*' -and $s.comments[1].body -ceq 'quarantine-completed: test=A.B.C.Method') 'intent and completion are separate comments written in that order'
+Assert ($s.comments[0].body -clike '*quarantine-request: test=A.B.C.Method*' -and
+    $s.comments[1].body -ceq 'quarantine-completed: test=A.B.C.Method run=100 attempt=2') "intent and completion are separate comments in that order, the completion naming its run and attempt ($($s.comments[1].body))"
 Reset-Quarantine; Detect; $s.attempt = 2; $s.failComment = '^quarantine-completed:'; $failed = $null
 try { Detect } catch { $failed = $_.Exception.Message }
 Assert ($null -ne $failed -and @(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1 -and @(Get-Completions).Count -eq 0) "a failed completion write keeps the stored intent pending ($failed)"
 $s.failComment = ''; $s.attempt = 3; Detect
 Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 2 -and @(Get-Completions).Count -eq 1) 'the next attempt retries the generator and records completion without a second request'
+# Legacy completions carry no run: one applies only to the streak open when GitHub recorded it (#3268).
+function Add-LegacyCompletion($At, [string]$Line = 'quarantine-completed: test=A.B.C.Method') {
+    $c = @{ body = $Line; author = @{ login = 'github-actions' } }
+    if ($null -ne $At) { $c.createdAt = $At }
+    $s.comments += $c
+}
+function Start-LegacyStreak {
+    Reset-Quarantine -Switch ''; $s.runs = @{ 100 = @('failure') }; Detect
+    $s.runs[100] += 'failure'; $s.attempt = 2; Detect
+}
+Start-LegacyStreak; Add-LegacyCompletion (Get-FakeTime (++$s.clock)); $env:MAIN_RED_QUARANTINE = 'on'
+$s.runs[100] += @('success', 'failure'); $s.attempt = 4; Detect
+$s.runs[100] += 'failure'; $s.attempt = 5; Detect
+Assert (@(Get-Requests).Count -eq 2 -and @(Get-GeneratorCalls).Count -eq 1) 'a legacy completion from before a recovery never suppresses the fresh streak after it'
+Reset-Quarantine -Switch ''; Detect; $s.attempt = 2; Detect; Add-LegacyCompletion (Get-FakeTime (++$s.clock)); $env:MAIN_RED_QUARANTINE = 'on'
+$s.attempt = 3; Detect
+$s.log = '  Failed A.B.C.Other [1 s]'; $s.attempt = 4; Detect; $s.attempt = 5; Detect
+$s.log = '  Failed A.B.C.Method [1 s]'; $s.attempt = 6; Detect; $s.attempt = 7; Detect
+Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 0) 'a legacy completion inside the open streak suppresses it even after the latest failure pair changes'
+foreach ($case in @(@{ name = 'shares its second with entries on both sides of a recovery'; at = 'tie' },
+        @{ name = 'has no createdAt'; at = $null }, @{ name = 'is malformed'; at = 'now'; line = 'quarantine-completed: test=A.B.C.Method run=100' })) {
+    Start-LegacyStreak; $env:MAIN_RED_QUARANTINE = 'on'
+    $s.runs[100] += @('success', 'failure'); $s.attempt = 4; Detect
+    $at = switch ($case.at) { 'tie' { $s.comments[-1].createdAt } 'now' { Get-FakeTime (++$s.clock) } default { $null } }
+    if ($case.ContainsKey('line')) { Add-LegacyCompletion $at $case.line } else { Add-LegacyCompletion $at }
+    $before = $s.writes.Count; $s.runs[100] += 'failure'; $s.attempt = 5; $refused = $null
+    try { Detect } catch { $refused = $_.Exception.Message }
+    Assert ($refused -match 'quarantine-completed' -and @(Get-GeneratorCalls).Count -eq 0 -and $s.writes.Count -eq $before) "a completion that $($case.name) refuses that entry before its write or any generator call ($refused)"
+}
 Remove-Item -LiteralPath $genDir -Recurse; $env:MAIN_RED_QUARANTINE = $null
 Remove-Item -LiteralPath $tierPath
 if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }

@@ -1,14 +1,84 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace AgentBridge.HomeAssistant;
 
-// #3204: agent messages sent while a question is open wait in memory, in order, for it to close.
-// A restart or the session's end drops them; reply_queue_count says how many wait. The Send press
-// that follows each one is the agent's own, never the owner's confirmation of the form.
+// #3204: agent messages sent while a question is open wait, in order, for it to close; the session's
+// end drops them; reply_queue_count says how many wait. The Send press that follows each one is the
+// agent's own, never the owner's confirmation of the form. #2780: each is also kept in the durable inbox
+// beside the state file, so a restart no longer drops them.
 public sealed partial class HaConnector
 {
     int QueueCount(string sessionId) => ridLogs.TryGetValue(sessionId, out var log) ? log.Queued.Count : 0;
+
+    DurableInbox? inbox;
+    DurableInbox? Inbox => ServesReplies && options.StateFile is { } file
+        ? inbox ??= new DurableInbox(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(file))!, "ha-reply-inbox.json")) : null;
+
+    bool Durably(string what, Action act)
+    {
+        try { act(); return true; }
+        catch (Exception e) { log($"Home Assistant connector could not {what} in the reply inbox: {Describe(e)}"); return false; }
+    }
+
+    // The inbox shows only its oldest undelivered entry, so what a restart left there comes back one at
+    // a time: the oldest first, and each next one once the one before is marked delivered, all ahead of
+    // anything queued since (which the inbox holds after them). Marks owed go first, in the order taken.
+    bool Restore(Published p)
+    {
+        var log = p.Reply.Log;
+        if (log.Restored || Inbox is null) { return true; }
+        if (!Mark(p)) { return false; }
+        log.Since = time.GetUtcNow();
+        return log.Restored = true;
+    }
+
+    bool Mark(Published p)
+    {
+        var log = p.Reply.Log;
+        InboxMessage? head = null;
+        while (true)
+        {
+            if (!Durably("read", () => head = Inbox!.Peek(p.Node))) { return false; }
+            if (log.Marks.Count == 0) { break; }
+            // Not the head: already marked (a session's end marks all), since the inbox keeps the queue's order.
+            if (head?.Rid == log.Marks[0] && !Durably("mark a reply delivered", () => Inbox!.Deliver(p.Node, head.Rid, time.GetUtcNow()))) { return false; }
+            log.Marks.RemoveAt(0);
+        }
+        if (head is null || log.Queued.Any(q => CleanRid(Str(q.Attributes, "rid")) == head.Rid)) { return true; }
+        HaState? state = null;
+        if (!Durably("read back a reply", () => state = JsonSerializer.Deserialize<HaState>(head.Payload)) || state is not { State: not null, Attributes.ValueKind: JsonValueKind.Object }) { return false; }
+        log.Queued.Insert(0, state);
+        return true;
+    }
+
+    // Kept before it is acked queued: one the inbox cannot keep is refused, never held in memory alone.
+    // A rid already there is a duplicate: queued while it waits; once marked delivered, unconfirmed if
+    // that was before this lifetime, else refused (its delivery was refused and the rid forgotten, and
+    // the inbox can take it again only after the card closes).
+    (string? Known, string? Error) Store(Published p, string rid, HaState state)
+    {
+        if (Inbox is not { } box) { return (null, null); }
+        var at = time.GetUtcNow();
+        InboxMessage? kept = null;
+        if (!Restore(p) || !Durably("keep a reply", () => kept = box.Enqueue(p.Node, rid, CleanSender(Str(state.Attributes, "sender")), JsonSerializer.Serialize(state), at)))
+        {
+            return (null, "reply inbox unavailable");
+        }
+        if (kept!.DeliveredAt is null) { return (kept.QueuedAt == at ? null : "queued", null); }
+        return kept.DeliveredAt < p.Reply.Log.Since ? ("unconfirmed", null) : (null, "reply inbox unavailable");
+    }
+
+    // A session's end drops its queue, and a session back under the same id starts empty: its entries are
+    // marked delivered, the only way the inbox lets them go.
+    void Discard(IEnumerable<string> sessionIds)
+    {
+        foreach (var node in sessionIds.Select(HaContract.NodeId))
+        {
+            if (Inbox is { } box) { Durably("drop an ended session's replies", () => { while (box.Peek(node) is { } m) { box.Deliver(node, m.Rid, time.GetUtcNow()); } }); }
+        }
+    }
 
     // The Send presses remembered for a session. For tests.
     internal int PressesKept(string sessionId) => ridLogs.TryGetValue(sessionId, out var log) ? log.Presses.Count : 0;
@@ -55,6 +125,7 @@ public sealed partial class HaConnector
         var payloadId = SessionEntities.ReplyPayload(p.Node);
         var submitId = SessionEntities.Submit(p.Node);
         var log = p.Reply.Log;
+        Restore(p);
         bool Known(string? stamp) => stamp is not null && (stamp == armed.PayloadBaseline.Value || p.Reply.IsHandled(stamp) || log.PayloadStamps.Contains(stamp));
         // Send first: an agent presses only after its message, so the payload read next shows it.
         submit ??= await ObserveAsync(submitId, ct);
@@ -111,22 +182,26 @@ public sealed partial class HaConnector
             var queue = log.Queued;
             var known = queue.Any(q => CleanRid(Str(q.Attributes, "rid")) == rid) ? "queued"
                 : p.Reply.Rids.TryGetValue(rid, out var prior) ? prior ?? "unconfirmed" : null;
-            var full = known is null && queue.Count >= MaxWaiting;
-            if (known is null && !full) { queue.Add(state); }
-            p.Reply.Ack = MakeAck(rid, CleanSender(Str(a, "sender")), full ? "refused" : known ?? "queued", duplicate: known is not null);
-            await TransientAsync(p, full ? "Reply NOT sent" : "Reply " + (known ?? "queued"), full ? new JsonObject { ["error"] = "queue full" } : [], ct);
+            var error = known is null && queue.Count >= MaxWaiting ? "queue full" : null;
+            if (known is null && error is null && ((known, error) = Store(p, rid, state)) is (null, null)) { queue.Add(state); }
+            p.Reply.Ack = MakeAck(rid, CleanSender(Str(a, "sender")), error is not null ? "refused" : known ?? "queued", duplicate: known is not null);
+            await TransientAsync(p, error is not null ? "Reply NOT sent" : "Reply " + (known ?? "queued"), error is not null ? new JsonObject { ["error"] = error } : [], ct);
             p.Reply.Handle(state.State);
         }
     }
 
-    // Queued messages go first once the question has closed, one delivery at a time.
+    // Queued messages go first once the question has closed, one delivery at a time; each taken is marked
+    // delivered in the inbox.
     async Task<bool> DrainQueueAsync(string sessionId, Published p, CancellationToken ct)
     {
+        Restore(p);
         while (p.Reply.Log.Queued.Count > 0)
         {
             var next = p.Reply.Log.Queued[0];
             var read = await CardReplyAsync(sessionId, p, next, ct, queued: true);
             p.Reply.Log.Queued.RemoveAt(0);
+            if (Inbox is not null && CleanRid(Str(next.Attributes, "rid")) is { } rid) { p.Reply.Log.Marks.Add(rid); }
+            Mark(p);
             if (read == CardRead.Delivering) { return true; }
         }
         return false;

@@ -33,7 +33,7 @@ own-agents-only.
   The duplicate memory is in memory only, so a host restart inside the 2 minute window can also deliver one message twice.
 - A message to an offline machine fails at once and falls back to Home Assistant. Nothing is queued.
 - "Delivered" means typed and acknowledged, not read.
-- **Not in the first version; each is required before anyone beyond the owner uses it:** the signed roster, durable duplicate memory, a full audit log (today delivery outcomes and each evaluated gate's decision and reason are logged without message text), and pushing the kill to connected hosts (it follows the cut-over).
+- **Not in the first version; each is required before anyone beyond the owner uses it:** the signed roster, durable duplicate memory, and a full audit log (today delivery outcomes and each evaluated gate's decision and reason are logged without message text).
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
    could message his sessions, and any message from a pinned own machine is typed into a session there that is idle, has an empty input box, and is host-launched or allow-all (see the next limit).
 
@@ -53,9 +53,15 @@ own-agents-only.
 
 1. Fleet: set the repo variable `FLEET_RELAY_MSG` to `off` in the private fleet repository. The messenger script (fleet issues #36 and #56) reads it at least every 30 seconds, so messengers are back on Home Assistant within about
    a minute. This alone restores messaging.
-2. Then on each machine run `agent-bridge-host agents lite kill` (L6). It turns that
-   machine off at once. A kill that a host receives from a pinned peer turns it off, but hosts do not send it in
-   this version, so run the kill on every machine.
+2. Then run `agent-bridge-host agents lite kill [--profile <name>]` (L6) at a machine's own command line; it is
+   refused inside an agent session. It turns that machine off at once: it saves a new kill epoch, sets
+   `agentMessaging.remote` to `off` and cancels the sends in flight there (they end `unconfirmed`). If the setting
+   cannot be written (another part of `config.json` is invalid), the command exits 1 and the kill record holds the
+   machine off, across restarts, until a start can write the setting off. Within about 5 seconds the running host
+   tells each connected host pinned there, which turns off too if it pins this host as well; it retries a host
+   that answers with an error or has not taken the epoch. A kill is believed only from a pinned host of this
+   account, through the push, the epoch on a lite send, or an ack; it only ever turns the mode off. A machine
+   offline at the kill learns it at its next lite send, so run the kill there as well.
 3. One machine only: set `agentMessaging.remote` to `off`; it holds from the next message.
 4. Turning back on takes a person at that machine. Nothing remote can.
 
@@ -69,7 +75,7 @@ Receiver refusals, in the order they are checked:
 
 | Code | Meaning |
 | --- | --- |
-| `off` | the mode is off or killed on the target |
+| `off` | the mode is off or killed on the target, or the request carried a newer kill epoch |
 | `notSameAccount` | the sender is not a host of this account |
 | `notPeer` | the sender is not pinned here, or its key does not match its device id |
 | envelope codes | unsigned, bad signature, expired, from the future, another account, not the reply action, lacks the lite markers, or the text is not bound or too long (each has its own code) |
@@ -111,4 +117,4 @@ Run on staging, then production, with VM3 and VM1 first and VM4 and VM2 joining 
 - [ ] `allowAllTargets` is true on VM1, VM2, VM3 and VM4 only, and false on all other machines; each enabled machine lists only the exact allow-all session ids it approves.
 - [ ] No sender still writes the Home Assistant reply payload.
 - [ ] A week has passed with no Home Assistant reply-path use.
-- [ ] Before any rollout beyond the owner: the roster, durable duplicate memory, full audit log and kill push are built.
+- [ ] Before any rollout beyond the owner: the roster, durable duplicate memory and full audit log are built.

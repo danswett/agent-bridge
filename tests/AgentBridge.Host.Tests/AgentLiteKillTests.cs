@@ -332,4 +332,56 @@ public sealed class AgentLiteKillTests : IDisposable
         var lite = Host(NewHost("a"));
         await Assert.ThrowsAsync<OperationCanceledException>(() => lite.GuardAsync("r", _ => throw new OperationCanceledException(), CancellationToken.None));
     }
+
+    [Fact]
+    public async Task Agents_lite_kill_turns_this_machine_off_and_is_refused_inside_an_agent_session()
+    {
+        var folder = NewHost("a");
+        Assert.Equal(4, await AgentCommands.RunAsync(["agents", "lite", "kill"], folder, () => true, TextWriter.Null, TextWriter.Null));
+        Assert.True(Host(folder).On);
+        var output = new StringWriter();
+        Assert.Equal(0, await AgentCommands.RunAsync(["agents", "lite", "kill"], folder, () => false, output, TextWriter.Null));
+        var killed = Host(folder);
+        Assert.False(killed.On);
+        Assert.Contains($"epoch {killed.KillEpoch}", output.ToString());
+        Assert.True(killed.KillEpoch > 0);
+    }
+
+    [Fact]
+    public void The_host_runs_the_kill_switch_on_both_sides_and_pushes_it()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (!File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent ?? throw new IOException("repository root not found"); }
+        var program = File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "Program.cs"));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(program, @"new AgentBridge\.Host\.Lite\.LiteKill\("));
+        Assert.Contains("new OwnPeers(identity.Folder, () => true, () => identity.Account?.AccountId)), Log);", program);
+        Assert.Contains("LiteReceiver(liteKill, litePeers, liteDeliver)", program);
+        Assert.Contains("LiteKill = liteKill,", program);
+        Assert.Contains("AgentLiteSender.ForHost(identity.Folder, liteKill, litePeers,", program);
+        Assert.Contains("await liteKill.PushAsync(relay, hub, current.Token);", program);
+        // The kill op is a host role's under trusted-peer enforcement, like agent.lite.send.
+        Assert.Contains("Lite.LiteReceiver.Op, Lite.LiteKill.Op];", File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "RemoteAuthorization.cs")));
+    }
+
+    [Fact]
+    public void A_kill_the_setting_did_not_take_holds_across_a_restart()
+    {
+        var folder = NewHost("a");
+        var config = Path.Combine(folder, HostSettings.FileName);
+        var broken = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(config))!;
+        broken["devBox"] = new System.Text.Json.Nodes.JsonObject { ["keepAwake"] = "yes" };
+        File.WriteAllText(config, broken.ToJsonString());
+        Assert.True(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
+        Host(folder).Kill();
+        Assert.True(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
+        Assert.False(Host(folder).On);
+        // Once the setting can be written, the next start writes it off and lets the record go.
+        broken["devBox"] = new System.Text.Json.Nodes.JsonObject { ["keepAwake"] = false };
+        File.WriteAllText(config, broken.ToJsonString());
+        Assert.False(Host(folder).On);
+        Assert.False(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
+        Assert.DoesNotContain("held", File.ReadAllText(Path.Combine(folder, LiteKill.FileName)));
+        TurnOn(folder);
+        Assert.True(Host(folder).On);
+    }
 }
