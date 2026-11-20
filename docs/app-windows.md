@@ -1474,6 +1474,9 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   and older drawing, restoring its original Tab-stop setting even if setup refuses the wheel.
   Async focus stays inside the scroller with bring-into-view held on the focused stop
   through frame capture and settling. Posting refuses if focus has moved the view off the end.
+  Settled XAML focus may be on the list or any descendant (including a nested list's
+  child), regardless of the async focus request's reported success. Setup failures
+  name every failed readiness condition and the request, XAML and native focus values.
   Posting still requires verified list focus, native target and foreground; no focus or
   scroll retry substitutes for a received wheel.
   The regular `--self-test` also records the existing Latest history-scroll checks in

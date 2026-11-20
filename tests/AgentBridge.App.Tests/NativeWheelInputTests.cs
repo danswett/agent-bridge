@@ -15,6 +15,15 @@ public sealed class NativeWheelInputTests
     }
 
     [Fact]
+    public async Task Settled_child_focus_with_an_unverified_native_target_still_refuses_the_wheel()
+    {
+        var port = new WheelPort { FocusSucceeds = false, SettledFocus = true, Verified = false, Target = 0x4008C };
+        using var wheel = new NativeWheelInput(port);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => wheel.Post());
+        Assert.DoesNotContain("post", port.Calls);
+    }
+
+    [Fact]
     public async Task A_focus_miss_names_every_failed_readiness_condition()
     {
         var port = new WheelPort { LosesFocus = true, Verified = false, Foreground = false };

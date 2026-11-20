@@ -954,14 +954,17 @@ static partial class SelfTest
     sealed class WheelInputPort(MainWindow window, ListView list, ScrollViewer scroll) : INativeWheelInputPort
     {
         WheelPoint mouse;
+        string focusAttempt = "not attempted";
         public bool ListIsTabStop { get => list.IsTabStop; set => list.IsTabStop = value; }
         public async Task<bool> FocusList()
         {
             // The list itself is above its scroller; focus a stop inside its content instead.
+            focusAttempt = "no focusable stop";
             if (scroll.Content is not DependencyObject content
                 || FocusManager.FindLastFocusableElement(content) is not { } focused) { return false; }
             var held = new Windows.Foundation.TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
             var restoreAt = focused as UIElement ?? (focused as Microsoft.UI.Xaml.Documents.TextElement)?.ContentStart?.VisualParent;
+            focusAttempt = restoreAt is null ? "no bring-into-view target" : "pending";
             return restoreAt is not null && await NativeInputSetup.RestoreFocus(restoreAt,
                 (element, hold) =>
                 {
@@ -971,16 +974,32 @@ static partial class SelfTest
                 async () =>
                 {
                     var succeeded = (await FocusManager.TryFocusAsync(focused, FocusState.Programmatic)).Succeeded;
+                    focusAttempt = $"TryFocusAsync.Succeeded: {succeeded}";
                     await CaptureFrame(window.RootElement);
                     await Still(scroll);
                     return succeeded && ListHasFocus;
                 });
         }
         public bool ListAtEnd => scroll.ScrollableHeight > 0 && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
-        public bool ListHasFocus => ReferenceEquals(FindAncestor<ListView>(
-            FocusManager.GetFocusedElement(list.XamlRoot) as DependencyObject), list);
+        public bool ListHasFocus
+        {
+            get
+            {
+                var focused = FocusManager.GetFocusedElement(list.XamlRoot);
+                var visual = focused is Microsoft.UI.Xaml.Documents.TextElement text ? text.ContentStart?.VisualParent : focused as DependencyObject;
+                return Motion.Within(visual, list);
+            }
+        }
         public bool WindowIsForeground => GetForegroundWindow() == window.Handle;
-        public string DescribeTarget() => PostedInputTarget(window).Detail;
+        public string DescribeTarget()
+        {
+            var target = PostedInputTarget(window);
+            var thread = GetWindowThreadProcessId(target.Target, out var process);
+            var nearestList = FindAncestor<ListView>(FocusManager.GetFocusedElement(list.XamlRoot) as DependencyObject);
+            return $"{target.Detail}; {focusAttempt}; XAML within list: {ListHasFocus}; "
+                + $"nearest list matches: {ReferenceEquals(nearestList, list)}; "
+                + $"target thread: {thread}; current thread: {GetCurrentThreadId()}; target process: {process}; current process: {Environment.ProcessId}";
+        }
         public void Log(string message) => AppLog.Write(message);
 
         public nint PrepareTarget()

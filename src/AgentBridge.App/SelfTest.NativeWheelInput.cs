@@ -25,12 +25,22 @@ sealed class NativeWheelInput(INativeWheelInputPort port) : IDisposable
     public async Task Post()
     {
         port.ListIsTabStop = true;
-        if (!await port.FocusList()) { throw new InvalidOperationException($"setup: native wheel list focus failed ({port.DescribeTarget()})"); }
+        // A focus request can fail even though a child already holds the required focus.
+        var focusRequest = await port.FocusList();
         if (!port.ListAtEnd) { throw new InvalidOperationException("setup: native wheel focus moved the view away from the latest."); }
         var target = port.PrepareTarget();
-        if (!port.ListHasFocus || !port.TargetIsVerified(target) || !port.WindowIsForeground)
+        var listFocus = port.ListHasFocus;
+        var nativeTarget = port.TargetIsVerified(target);
+        var foreground = port.WindowIsForeground;
+        if (!listFocus || !nativeTarget || !foreground)
         {
-            throw new InvalidOperationException($"setup: native wheel target not ready ({port.DescribeTarget()})");
+            var failed = string.Join(", ", new[]
+            {
+                listFocus ? null : "list focus", nativeTarget ? null : "native target", foreground ? null : "foreground",
+            }.Where(condition => condition is not null));
+            throw new InvalidOperationException($"setup: native wheel target not ready (failed: {failed}; "
+                + $"focus request: {focusRequest}; list focus: {listFocus}; native target: {nativeTarget}; foreground: {foreground}; "
+                + $"prepared target: {target:X}; {port.DescribeTarget()})");
         }
         Target = port.DescribeTarget();
         if (!port.Post(target)) { throw new InvalidOperationException("The native wheel message could not be posted."); }
