@@ -33,10 +33,18 @@ public sealed class LiteDefaultOnTests : IDisposable
     sealed class Link(Func<object, CancellationToken, Task<LiteAck>> reply) : ILiteLink
     {
         public int Opened;
+        public LiteAck? Last;
         public string Self => A;
         public string Account { get; set; } = LiteDefaultOnTests.Account;
         public IReadOnlyList<PresenceEntry> Presence => [new PresenceEntry(B, "node-b", "host", DateTimeOffset.UnixEpoch)];
-        public Task<LiteAck> SendAsync(string peerId, string account, object request, CancellationToken ct) { Opened++; return reply(request, ct); }
+        public async Task<LiteAck> SendAsync(string peerId, string account, object request, CancellationToken ct) { Opened++; return Last = await reply(request, ct); }
+    }
+
+    // A refusal made before the envelope is read names no request, so the sender cannot match it; what b said is the ack.
+    static async Task<(string, string?)> RefusedEarly(AgentLiteSender sender, Link link)
+    {
+        Assert.Equal((LiteKind.Unconfirmed, AgentLiteSender.BadAck), Kinded(await Send(sender)));
+        return (link.Last!.Status, link.Last.Code);
     }
 
     // Host a sends to host b over a fake relay, each with its own real kill switch read from its own profile folder.
@@ -75,7 +83,7 @@ public sealed class LiteDefaultOnTests : IDisposable
     {
         Assert.Equal(0, Config(Folder("b"), "set", "agentMessaging.remote", "off"));
         var (sender, link, deliver) = Pair();
-        Assert.Equal((LiteKind.Refused, LiteReceiver.Off), Kinded(await Send(sender)));
+        Assert.Equal(("refused", LiteReceiver.Off), await RefusedEarly(sender, link));
         Assert.Equal(0, Config(Folder("a"), "set", "agentMessaging.remote", "off"));
         var opened = link.Opened;
         Assert.Equal(LiteKind.Off, (await Send(sender)).Kind);
@@ -124,8 +132,8 @@ public sealed class LiteDefaultOnTests : IDisposable
         var (settings, problem) = HostSettings.Load(Folder("b"));
         Assert.Contains(said, string.Join("; ", settings.SectionProblems.Append(problem ?? "")));
         Assert.False(new LiteKill(Folder("b")).On);
-        var (sender, _, deliver) = Pair();
-        Assert.Equal((LiteKind.Refused, LiteReceiver.Off), Kinded(await Send(sender)));
+        var (sender, link, deliver) = Pair();
+        Assert.Equal(("refused", LiteReceiver.Off), await RefusedEarly(sender, link));
         Assert.Equal(0, deliver.Calls);
     }
 
@@ -146,8 +154,8 @@ public sealed class LiteDefaultOnTests : IDisposable
         Assert.Equal(LiteKind.Undeliverable, (await Send(sender)).Kind);
         Assert.Equal(0, link.Opened);
 
-        var (unsigned, _, deliver) = Pair(receiverAccount: "");
-        Assert.Equal((LiteKind.Refused, LiteReceiver.NotSameAccount), Kinded(await Send(unsigned)));
+        var (unsigned, unsignedLink, deliver) = Pair(receiverAccount: "");
+        Assert.Equal(("refused", LiteReceiver.NotSameAccount), await RefusedEarly(unsigned, unsignedLink));
         Assert.Equal(0, deliver.Calls);
 
         var b = new LiteKill(Folder("b"));
