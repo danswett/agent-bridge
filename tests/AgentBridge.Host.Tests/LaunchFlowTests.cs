@@ -569,6 +569,63 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal((o.Session, "copilot", "API", "ask"), (id, launched.Agent, launched.Workspace, launched.Permissions));
     }
 
+    // Relay A: only a session.launch request (HA, a device, or an agent under a grant) marks its
+    // session a fleet target; a restore and a verification launch never do.
+    [Fact]
+    public async Task Only_a_fleet_target_launch_marks_its_session_never_a_restore_or_verification_launch()
+    {
+        const string Restored = "79797979-7979-4979-8979-797979797979";
+        Resumable(Restored, app, "Restored");
+        var launcher = Launcher(Config());
+        var fleet = new List<string>();
+        launcher.FleetTargetStarted += (id, _) => { lock (fleet) { fleet.Add(id); } };
+
+        var launched = await launcher.LaunchFleetTargetAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "home-assistant", null);
+        var restored = await launcher.ResumeAsync(new ResumeAsk(Restored, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+        var verified = await launcher.LaunchVerificationAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-1");
+
+        Assert.All([launched, restored, verified], r => Assert.Equal(LaunchOutcome.Started, r.Outcome));
+        lock (fleet) { Assert.Equal([launched.Session!], fleet); }
+    }
+
+    // Engineering ruling (Nov 20): a person's app or PWA session.launch, audited or not, is never a fleet target.
+    [Fact]
+    public async Task An_app_or_pwa_launch_is_not_a_fleet_target()
+    {
+        var launcher = Launcher(Config());
+        var fleet = new List<string>();
+        launcher.FleetTargetStarted += (id, _) => { lock (fleet) { fleet.Add(id); } };
+
+        var plain = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-1");
+        var audited = await launcher.LaunchAuditedAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-2", _ => _ => { });
+
+        Assert.All([plain, audited], r => Assert.Equal(LaunchOutcome.Started, r.Outcome));
+        lock (fleet) { Assert.Empty(fleet); }
+    }
+
+    // The registry keeps the process the launch started, as it started it: one that takes the session id
+    // before the note (here in a SessionStarted handler, which runs first) inherits nothing; it leaves on exit.
+    [Theory, InlineData(false), InlineData(true)]
+    public async Task A_fleet_target_is_the_process_its_launch_started_never_one_that_replaced_it_before_the_note(bool replaced)
+    {
+        var launcher = Launcher(Config());
+        var log = new AgentBridge.Host.Lite.LiteLaunchLog(source.ProcessOf, launcher.Owns);
+        launcher.SessionStarted += (id, _) =>
+        {
+            if (!replaced) { return; }
+            starter.Exit(starter.Pids[0]);
+            f.CopilotSession(id, 7777, lockWrite: DateTimeOffset.UtcNow.AddSeconds(1));
+            f.Processes.Run(AgentKind.Copilot, 7777, $"copilot --session-id {id}", DateTimeOffset.UtcNow);
+            source.RefreshAsync().GetAwaiter().GetResult();
+        };
+        launcher.FleetTargetStarted += log.FleetLaunched;
+        var launched = await launcher.LaunchFleetTargetAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "home-assistant", null);
+        Assert.Equal((LaunchOutcome.Started, !replaced), (launched.Outcome, log.IsFleetTarget(launched.Session!)));
+        starter.Exit(starter.Pids[0]);
+        await source.RefreshAsync();
+        Assert.False(log.IsFleetTarget(launched.Session!));
+    }
+
     // #780 Host B: a restore is a resume through the same path as one from Launch, with nothing typed
     // (so the session opens idle), found past the resume list's length, with what the machine no
     // longer offers left to its defaults, and never Allow all for a session started by hand, whatever
@@ -1736,6 +1793,7 @@ public abstract partial class LaunchFlowFixture
                 return processId == started.ProcessId || parents.GetValueOrDefault(processId) == started.ProcessId;
             }
         }
+        public bool? OwnsExactly(Started started, int processId) => Owns(started, processId);
 
         // As the process goes: for the host's discovery too, which lists the agent's processes. It
         // was only forgotten here, so discovery still listed the "closed" agent's process: the

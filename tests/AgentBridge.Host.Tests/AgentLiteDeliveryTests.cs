@@ -36,8 +36,14 @@ public sealed class AgentLiteDeliveryTests
         public readonly List<KeyPlan> Plans = [];
         int reads;
         public readonly List<ReplyRequest> Typed = []; public readonly List<string> Log = [];
-        public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches = new();
+        public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches;
+        public Fixture() => Launches = new(ProcessOf, (started, pid) => Process?.Id == pid ? Process.StartedAt == started.StartedAt : null);
+        public SessionProcess? Process = new(42, DateTimeOffset.UnixEpoch); public SessionProcess? ProcessOf(string id) => id == Target ? Process : null;
+        public void FleetLaunch() => Launches.FleetLaunched(Target, new(42, DateTimeOffset.UnixEpoch));
+        public Func<AgentBridge.Roster.RosterVerifier?> Roster = () => null;
+        public Question? Asking; public ISessionReplier? Replier;
         public LiteDeliver Build() => new([
+            new FleetTargetGate(Launches, () => Roster()),
             new ForcedAskGate(Launches),
             new AllowlistedAllTargetsGate(Launches, () => new AgentMessagingSettings
             {
@@ -45,7 +51,7 @@ public sealed class AgentLiteDeliveryTests
                 AllowAllTargets = AllowAllTargets,
                 AllowAllTargetSessions = AllowAllTargetSessions
             })
-        ], this, this, this, Log.Add, Clock);
+        ], this, Replier ?? this, this, Log.Add, Clock);
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -61,7 +67,7 @@ public sealed class AgentLiteDeliveryTests
             OnSnapshot?.Invoke();
             return listed;
         }
-        Session Live(string id, int pid) => new() { Id = id, Agent = AgentKind.Copilot, Status = Status, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, ProcessId = pid, Activity = new Activity() };
+        Session Live(string id, int pid) => new() { Id = id, Agent = AgentKind.Copilot, Status = Status, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, ProcessId = pid, Activity = new Activity(), Question = Asking };
         public SessionSubscription Subscribe() => throw new NotSupportedException();
         public Task RefreshAsync(CancellationToken ct = default) => Task.CompletedTask; public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask; public bool Available => true;
@@ -85,10 +91,10 @@ public sealed class AgentLiteDeliveryTests
             return Task.FromResult(new ConsoleScreen(Rows, null));
         }
     }
-    static VerifiedEnvelope Envelope(string text, string request = Req, string target = Target)
+    static VerifiedEnvelope Envelope(string text, string request = Req, string target = Target, string machine = "SENDER")
     {
         var sha = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(text))).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        var body = new EnvelopeBody(request, "acct", "g", [], new AgentPrincipal("SENDER", "add", "sess-9", "inst", "cred", "copilot", "launcher"),
+        var body = new EnvelopeBody(request, "acct", "g", [], new AgentPrincipal(machine,  "add", "sess-9", "inst", "cred", "copilot", "launcher"),
             new AgentChain("root", 0, null, 0, 1, []), new AgentProvenance(null, default, null), "message",             new AgentTarget("acct", "HOST", target, null), sha, 0, 0);
         return new VerifiedEnvelope(body, []);
     }
@@ -264,6 +270,7 @@ public sealed class AgentLiteDeliveryTests
         f.AllowAllTargetSessions = [Target];
         Assert.Equal(allowed ? new LiteDelivery(true, null) : new LiteDelivery(false, "notReplyTarget"), await Send(f));
         Assert.Equal(allowed ? 1 : 0, f.Typed.Count);
+        Assert.All(f.Typed, typed => Assert.Null(typed.StillCurrent)); // no injection-time fence, as on main
     }
     [Theory]
     [InlineData("*")]
@@ -382,6 +389,21 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(typed ? 1 : 0, f.Plans.Count);
     }
 
+    // Relay test 3 (Nov 20 12:33 PT): a forced-ask or listed allow-all session with no transcript yet gets its first relay message through the real replier.
+    [Theory, InlineData(LaunchProtocol.Ask), InlineData(LaunchProtocol.AllowAll)]
+    public async Task A_forced_ask_or_listed_session_with_no_transcript_yet_gets_its_first_relay_message(string permissions)
+    {
+        using var home = new global::Fixture();
+        var events = home.CopilotSession(Target, 42);
+        home.Processes.Run(AgentKind.Copilot, 42, startedAt: DateTimeOffset.UnixEpoch);
+        var f = new Fixture { AllowAllTargets = true, AllowAllTargetSessions = [Target] }; f.Launch(permissions);
+        f.OnInject = plan => global::Fixture.Append(events, Copilot.User(plan.Sends[0].Text, 1));
+        f.Replier = new ReplyService(new DeliveryGate(), f, home.Processes, new NoBridge(), new NoGuard(), f, new ReplyOptions { CopilotHome = home.CopilotHome,
+            PlatformSupported = true, PreRead = false, ConfirmTimeout = TimeSpan.FromSeconds(1), PollInterval = TimeSpan.FromMilliseconds(10) });
+        Assert.Equal(new LiteDelivery(true, null), await Send(f));
+        Assert.Single(f.Plans);
+    }
+
     sealed class NoBridge : IAgentHaBridgeProbe { public string? Active() => null; }
     sealed class NoGuard : ITargetGuard { public string? Refuse(int processId) => null; }
 
@@ -417,5 +439,61 @@ public sealed class AgentLiteDeliveryTests
         Assert.False((await deliver.DeliverAsync(Envelope("hi"), "hi", default)).Typed);
         f.Clock.Advance(TimeSpan.FromSeconds(61));
         Assert.True((await deliver.DeliverAsync(Envelope("hi"), "hi", default)).Typed);
+    }
+
+    static (Func<AgentBridge.Roster.RosterVerifier?> Roster, string Host) VerifiedHost()
+    {
+        var world = new World();
+        world.Genesis("P");
+        world.Add("H", "P", "H", "G", kind: "host");
+        var signed = new AgentBridge.Roster.RosterVerifier(world.AccountId, world.GenerationId, () => world.Now);
+        world.Feed(signed, "G", "H");
+        return (() => signed, world.Id("H"));
+    }
+
+    // Relay A: an allow-all fleet session is typed into only from a serving host; with no
+    // verified roster it is refused as before, and an ask-mode session is unchanged either way.
+    [Fact]
+    public async Task An_allow_all_fleet_target_is_typed_only_for_a_serving_host_sender_and_ask_mode_is_unchanged()
+    {
+        var (roster, host) = VerifiedHost();
+        var f = new Fixture(); f.Launch(LaunchProtocol.AllowAll); f.FleetLaunch();
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await f.Build().DeliverAsync(Envelope("hi", machine: host), "hi", default));
+        f.Roster = roster;
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await f.Build().DeliverAsync(Envelope("hi"), "hi", default));
+        Assert.Empty(f.Typed);
+        Assert.Equal(new LiteDelivery(true, null), await f.Build().DeliverAsync(Envelope("hi", machine: host), "hi", default));
+        Assert.Contains(f.Log, l => l.Contains($"request {Req} gate FleetTargetGate: allowed", StringComparison.Ordinal));
+
+        var ask = new Fixture(); ask.Launch(LaunchProtocol.Ask);
+        Assert.True((await Send(ask)).Typed);
+    }
+
+    // Permission and trust prompts stay person-only: a relayed message to a fleet target that is
+    // asking types nothing, so it can never be taken as the prompt's answer.
+    [Fact]
+    public async Task A_relayed_message_never_answers_a_fleet_targets_pending_permission_prompt()
+    {
+        var (roster, host) = VerifiedHost();
+        var f = new Fixture { Roster = roster, Status = SessionStatus.Waiting, Asking = new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "Allow **Bash**?", AskedAt = DateTimeOffset.UnixEpoch } };
+        f.Launch(LaunchProtocol.AllowAll); f.FleetLaunch();
+        Assert.Equal(new LiteDelivery(false, "busy"), await f.Build().DeliverAsync(Envelope("approve", machine: host), "approve", default));
+        f.Status = SessionStatus.Idle;
+        Assert.Equal(new LiteDelivery(false, "busy"), await f.Build().DeliverAsync(Envelope("1", machine: host), "1", default));
+        Assert.Empty(f.Typed);
+        Assert.Empty(f.Plans);
+    }
+
+    // A message that waited (composer read, the shared typing slot) is authorized again just
+    // before keys go: a sender dropped from the roster or a target replaced meanwhile gets nothing typed.
+    [Theory, InlineData("revoked"), InlineData("replaced"), InlineData("unchanged")]
+    public async Task A_waiting_fleet_message_is_authorized_again_at_injection(string change)
+    {
+        var (roster, host) = VerifiedHost();
+        var f = new Fixture { Roster = roster }; f.Launch(LaunchProtocol.AllowAll); f.FleetLaunch();
+        f.OnReply = change switch { "revoked" => () => f.Roster = () => null, "replaced" => () => f.Process = new(42, DateTimeOffset.UnixEpoch.AddMinutes(1)), _ => null };
+        var delivered = change == "unchanged";
+        Assert.Equal(new LiteDelivery(delivered, delivered ? null : "notReplyTarget"), await f.Build().DeliverAsync(Envelope("hi", machine: host), "hi", default));
+        Assert.Equal(delivered ? 1 : 0, f.Typed.Count);
     }
 }

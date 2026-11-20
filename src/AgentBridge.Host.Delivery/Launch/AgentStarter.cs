@@ -47,6 +47,8 @@ public interface IAgentStarter
     // which may start the agent's own binary); null when that cannot be told, as when the
     // process started has gone.
     bool? Owns(Started started, int processId) => null;
+    // Owns for fleet authority: the started process's creation time exactly as recorded (no tolerance); unreadable is null.
+    bool? OwnsExactly(Started started, int processId) => null;
 }
 
 // Exactly as agent-ha-bridge starts one on Windows (Start-BridgeCopilotSession: Start-Process,
@@ -144,6 +146,10 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
         }
         finally { CloseHandle(process); }
     }
+
+    // The handle's creation time to the tick, before and after the walk (a launch whose own read failed never matches).
+    public bool? OwnsExactly(Started started, int processId) => Exactly(started) is not true and var at ? at : Owns(started, processId) is not true and var own ? own : Exactly(started);
+    static bool? Exactly(Started started) => CreatedAt(started.ProcessId) is { } at ? at == started.StartedAt : null;
 
     public bool? Owns(Started started, int processId)
     {

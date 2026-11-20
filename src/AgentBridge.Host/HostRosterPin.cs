@@ -26,6 +26,8 @@ public sealed partial class HostRosterReader
     }
 
     public RosterVerifier? Verified { get; private set; }
+    // This host's clock when a pinned roster last verified; relay A's fleet gate refuses past a bound (Fresh).
+    TimeSpan? verifiedAt;
 
     public RosterCheck Update(RelayRoster? relay, string account)
     {
@@ -33,7 +35,9 @@ public sealed partial class HostRosterReader
         lock (sync)
         lock (Verified ?? sync)
         {
-            return UpdateCore(relay, account);
+            var check = UpdateCore(relay, account);
+            if (pin is not null && Verified is not null && check.Outcome == "verified") { verifiedAt = clock(); }
+            return check;
         }
     }
 
@@ -48,6 +52,11 @@ public sealed partial class HostRosterReader
             return problem is null && account is not null && pin?.Account == account && Verified?.Account == account ? Verified
                 : throw new InvalidOperationException("refused: this host's pinned device roster is unreadable, another account's or not yet verified");
         }
+    }
+
+    internal RosterVerifier? Fresh(string? account, TimeSpan maxAge)
+    {
+        lock (sync) { var pinned = Pinned(account); return pinned is null || clock() - verifiedAt <= maxAge ? pinned : throw new InvalidOperationException("refused: this host's pinned device roster has not been verified recently"); }
     }
 
     RosterCheck UpdateCore(RelayRoster? relay, string account)
