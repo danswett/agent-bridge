@@ -22,6 +22,14 @@ sealed class NativeWheelInput(INativeWheelInputPort port) : IDisposable
 
     public void Dispose() => port.ListIsTabStop = wasTabStop;
 
+    internal static async Task<bool> FocusWithFallback(Func<Task<bool>> focusStop, Func<Task<bool>> focusList, Func<bool> hasFocus)
+    {
+        var requested = await focusStop();
+        if (hasFocus()) { return requested; }
+        requested = await focusList();
+        return hasFocus() ? requested : await focusStop();
+    }
+
     public async Task Post()
     {
         port.ListIsTabStop = true;

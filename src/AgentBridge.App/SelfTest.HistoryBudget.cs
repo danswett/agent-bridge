@@ -956,15 +956,22 @@ static partial class SelfTest
         WheelPoint mouse;
         string focusAttempt = "not attempted";
         public bool ListIsTabStop { get => list.IsTabStop; set => list.IsTabStop = value; }
-        public async Task<bool> FocusList()
+        public Task<bool> FocusList()
         {
-            // The list itself is above its scroller; focus a stop inside its content instead.
-            focusAttempt = "no focusable stop";
-            if (scroll.Content is not DependencyObject content
-                || FocusManager.FindLastFocusableElement(content) is not { } focused) { return false; }
+            focusAttempt = "";
+            var searches = 0;
+            return NativeWheelInput.FocusWithFallback(
+                () => Focus(false, ++searches == 1 ? "stop search" : "stop retry"),
+                () => Focus(true, "list fallback"), () => ListHasFocus);
+        }
+        async Task<bool> Focus(bool fallback, string attempt)
+        {
+            var focused = fallback ? list : scroll.Content is DependencyObject content ? FocusManager.FindLastFocusableElement(content) : null;
+            focusAttempt += $"{attempt}: ";
+            if (focused is null) { focusAttempt += "no focusable stop; "; return false; }
             var held = new Windows.Foundation.TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
             var restoreAt = focused as UIElement ?? (focused as Microsoft.UI.Xaml.Documents.TextElement)?.ContentStart?.VisualParent;
-            focusAttempt = restoreAt is null ? "no bring-into-view target" : "pending";
+            focusAttempt += restoreAt is null ? "no bring-into-view target; " : "pending; ";
             return restoreAt is not null && await NativeInputSetup.RestoreFocus(restoreAt,
                 (element, hold) =>
                 {
@@ -974,7 +981,7 @@ static partial class SelfTest
                 async () =>
                 {
                     var succeeded = (await FocusManager.TryFocusAsync(focused, FocusState.Programmatic)).Succeeded;
-                    focusAttempt = $"TryFocusAsync.Succeeded: {succeeded}";
+                    focusAttempt += $"TryFocusAsync.Succeeded: {succeeded}; ";
                     await CaptureFrame(window.RootElement);
                     await Still(scroll);
                     return succeeded && ListHasFocus;
@@ -997,7 +1004,7 @@ static partial class SelfTest
             var thread = GetWindowThreadProcessId(target.Target, out var process);
             var nearestList = FindAncestor<ListView>(FocusManager.GetFocusedElement(list.XamlRoot) as DependencyObject);
             return $"{target.Detail}; {focusAttempt}; XAML within list: {ListHasFocus}; "
-                + $"nearest list matches: {ReferenceEquals(nearestList, list)}; "
+                + $"nearest list matches: {ReferenceEquals(nearestList, list)}; list enabled: {list.IsEnabled}; visibility: {list.Visibility}; tab stop: {list.IsTabStop}; "
                 + $"target thread: {thread}; current thread: {GetCurrentThreadId()}; target process: {process}; current process: {Environment.ProcessId}";
         }
         public void Log(string message) => AppLog.Write(message);

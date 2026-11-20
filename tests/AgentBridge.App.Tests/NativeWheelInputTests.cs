@@ -4,6 +4,24 @@ namespace AgentBridge.App.Tests;
 
 public sealed class NativeWheelInputTests
 {
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task Missing_focus_stop_uses_the_list_fallback_or_refuses_the_wheel(bool fallbackFocus, bool retryFocus)
+    {
+        var port = new WheelPort { FocusSucceeds = false, FallbackFocus = fallbackFocus, RetryFocus = retryFocus };
+        using var wheel = new NativeWheelInput(port);
+        if (fallbackFocus || retryFocus) { await wheel.Post(); Assert.True(port.FocusedWhenPosted); }
+        else
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => wheel.Post());
+            Assert.Contains("target not ready (failed: list focus;", error.Message);
+            Assert.DoesNotContain("post", port.Calls);
+        }
+        Assert.Equal(fallbackFocus ? 1 : 2, port.StopSearches);
+    }
+
     [Fact]
     public async Task Settled_child_focus_posts_despite_an_unsuccessful_focus_request()
     {
@@ -146,6 +164,9 @@ public sealed class NativeWheelInputTests
         public bool FocusSucceeds = true, LosesFocus, Verified = true, Foreground = true;
         public bool Focused, FocusedWhenPosted, AtEnd = true;
         public bool? SettledFocus;
+        public bool? FallbackFocus;
+        public bool RetryFocus;
+        public int StopSearches;
         public bool ListIsTabStop { get; set; }
         public bool ListAtEnd => AtEnd;
         public Task FocusCompletion = Task.CompletedTask;
@@ -156,6 +177,12 @@ public sealed class NativeWheelInputTests
         public IReadOnlyList<nint> Chain = [0x20, 0xA];
         public async Task<bool> FocusList()
         {
+            if (FallbackFocus is { } fallback)
+            {
+                return await NativeWheelInput.FocusWithFallback(
+                    () => { Focused = ++StopSearches > 1 && RetryFocus; return Task.FromResult(Focused); },
+                    () => { Focused = fallback && ListIsTabStop; return Task.FromResult(Focused); }, () => Focused);
+            }
             Calls.Add("focus");
             await FocusCompletion;
             Focused = SettledFocus ?? (FocusSucceeds && ListIsTabStop);
