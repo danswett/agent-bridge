@@ -176,12 +176,12 @@ public static class ConversationKeyboard
 
     // Whether the scroll the focus manager makes to a stop focused in a block just brought to the
     // leading edge is held back (#829): it pads a control 20 px each side, so a Copy button 12 px
-    // down its block would take the block's start 8 px off the edge. Held when the stop itself, its
-    // top `top` from the viewport's and `height` tall, is wholly in view, as nothing need move; one
+    // down its block would take the block's start 8 px off the edge. Evaluate the stop after the
+    // pending leading scroll, subtracting its block's current top `blockTop` from `top`; one
     // not wholly in view (in a block taller than the view) is brought in with TabLanding.FocusVisible,
     // and stays where it is, the block's start at the edge, with TabLanding.BlockStart.
-    public static bool HoldsFocusScroll(TabLanding landing, double top, double height, double viewport) =>
-        landing == TabLanding.BlockStart || WhollyInView(top, height, viewport);
+    public static bool HoldsFocusScroll(TabLanding landing, double top, double height, double viewport, double blockTop = 0) =>
+        landing == TabLanding.BlockStart || WhollyInView(top - blockTop, height, viewport);
 
     // Whether a focus move is the focus manager's to report, not a routed LosingFocus or
     // GettingFocus's (#829): those are raised only on a control, never on a text element such as a
