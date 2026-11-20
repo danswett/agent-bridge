@@ -151,7 +151,8 @@ public partial class App : Application
         var localMachine = Build(Machine.LocalKey, connection, new FoldStore(Path.Combine(appData, $"{options.Profile}-folds.json")), () => self?.ReadOnlyWhy);
         // The list's order, pins and sort, kept beside the folds (#164): every machine's, not only this one's.
         // Usage kept between runs for the account (#172), beside them too.
-        main = self = new MainViewModel(localMachine, new UsageViewModel(cache: new UsageCache(Path.Combine(appData, $"{options.Profile}-usage.json"))), settings, new SessionOrder(Path.Combine(appData, $"{options.Profile}-order.json")));
+        main = self = new MainViewModel(localMachine, new UsageViewModel(cache: new UsageCache(Path.Combine(appData, $"{options.Profile}-usage.json"))), settings, new SessionOrder(Path.Combine(appData, $"{options.Profile}-order.json")),
+            recovery: options.SelfTest is null ? new SessionRecovery(Path.Combine(appData, $"{options.Profile}-reading.json"), AppLog.Write) : null);
         settings.PreferencesChanged += () => { foreach (var c in main.AllCards) { c.CapabilitiesChanged(); } };
         responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (machine, id) => ShowWindow(machine, id))
         {

@@ -253,6 +253,7 @@ public sealed partial class SessionView : UserControl
 
     void OnCard(SessionCardViewModel? old, SessionCardViewModel? card)
     {
+        RecoverReading();
         if (attached && old is not null) { old.PropertyChanged -= OnCardChanged; old.Reply.PropertyChanged -= OnReplyStatusChanged; old.Delegates.ReplyWanted -= OnReplyWanted; old.Delegates.PropertyChanged -= OnDelegatesChanged; }
         // The box the person is typing in now belongs to the next session: the last one is no longer
         // being edited, which would otherwise keep holding its list's order (MainViewModel.Rearrange).
@@ -279,7 +280,7 @@ public sealed partial class SessionView : UserControl
         follow.Reset();
         ShowResponse(reset: true);
         WatchHistory();
-        if (ConversationScroll is { VerticalOffset: > 0.5 } top) { Anchoring(top, 0); }
+        if (restoreReading is null && ConversationScroll is { VerticalOffset: > 0.5 } top) { Anchoring(top, 0); }
         TakeFocus();
     }
 
