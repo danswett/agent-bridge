@@ -7,7 +7,9 @@ namespace AgentBridge.Host.Core.Launch;
 
 public enum LaunchRequestState { Queued, Launching, Launched, Refused, Failed }
 
-public enum EnqueueStatus { Added, Existing, Conflict, InvalidId, Full }
+// Used: the id finished before and its outcome is past Retention, so there is no record to show;
+// it is never launched again.
+public enum EnqueueStatus { Added, Existing, Conflict, InvalidId, Full, Used }
 
 // What the store keeps of a launch request: never its text (a prompt can hold anything), only a
 // hash of it to tell a true repeat from the same id reused for something else.
@@ -22,7 +24,8 @@ public readonly record struct EnqueueResult(EnqueueStatus Status, LaunchRequestR
 
 // Launch requests keyed by the caller's request id (#2743). Home Assistant's one payload slot let
 // a second coordinator overwrite the first and lose its launch; here each id has its own record,
-// launches at most once while its record is kept, and survives a restart in the profile folder.
+// launches at most once, and survives a restart in the profile folder. Retention is only how long
+// a finished outcome stays readable; the id itself stays used (#3404 review).
 public sealed class LaunchRequestStore
 {
     public const string FileName = "launch-requests.json";
@@ -31,14 +34,24 @@ public sealed class LaunchRequestStore
     public const int MaxRecords = 1024;
     public static readonly TimeSpan Retention = TimeSpan.FromMinutes(15);
 
+    // How long, and how many, used ids are remembered after their outcome expires. 30 days far
+    // outlasts any caller's retry of one request, and 4096 ids (under 1 MB of file) is over
+    // 130 launches a day for all of it. At the cap a new id is refused as Full, never an
+    // unexpired used id forgotten to make room; only ids past the age bound are dropped.
+    public const int MaxUsedIds = 4096;
+    public static readonly TimeSpan UsedKept = TimeSpan.FromDays(30);
+
     readonly Lock _gate = new();
     readonly string _path;
     readonly TimeProvider _time;
     readonly int _maxPending;
     Dictionary<string, LaunchRequestRecord> _records;
+    readonly Dictionary<string, UsedId> _used;
 
-    LaunchRequestStore(string path, TimeProvider time, int maxPending, Dictionary<string, LaunchRequestRecord> records) =>
-        (_path, _time, _maxPending, _records) = (path, time, maxPending, records);
+    readonly record struct UsedId(string TextHash, DateTimeOffset FinishedAt);
+
+    LaunchRequestStore(string path, TimeProvider time, int maxPending, Dictionary<string, LaunchRequestRecord> records, Dictionary<string, UsedId> used) =>
+        (_path, _time, _maxPending, _records, _used) = (path, time, maxPending, records, used);
 
     // Null with a reason when the file cannot be trusted. It is kept as found, never replaced:
     // an empty store over it would forget which requests already launched and launch them again.
@@ -51,9 +64,9 @@ public sealed class LaunchRequestStore
             try { bytes = File.ReadAllBytes(path); }
             catch (Exception absent) when (absent is FileNotFoundException or DirectoryNotFoundException)
             {
-                return (new LaunchRequestStore(path, time, maxPending, new(StringComparer.Ordinal)), null);
+                return (new LaunchRequestStore(path, time, maxPending, new(StringComparer.Ordinal), new(StringComparer.Ordinal)), null);
             }
-            if (Parse(bytes) is not { } records) { return (null, $"{path} is damaged; it is kept as found and no launch request is accepted"); }
+            if (Parse(bytes) is not ({ } records, { } used)) { return (null, $"{path} is damaged; it is kept as found and no launch request is accepted"); }
             var now = time.GetUtcNow();
             // A launch under way when the host stopped may have started a session: it is never
             // tried again unasked.
@@ -61,7 +74,7 @@ public sealed class LaunchRequestStore
             {
                 records[r.Id] = r with { State = LaunchRequestState.Failed, Code = "restarted", ChangedAt = now > r.ChangedAt ? now : r.ChangedAt };
             }
-            var store = new LaunchRequestStore(path, time, maxPending, records);
+            var store = new LaunchRequestStore(path, time, maxPending, records, used);
             store.Prune(now);
             store.Save();
             return (store, null);
@@ -87,7 +100,12 @@ public sealed class LaunchRequestStore
             {
                 return new(existing.TextHash == hash ? EnqueueStatus.Existing : EnqueueStatus.Conflict, existing);
             }
-            if (_records.Count >= MaxRecords || _records.Values.Count(r => !r.Finished) >= _maxPending) { return new(EnqueueStatus.Full, null); }
+            if (_used.TryGetValue(id, out var used)) { return new(used.TextHash == hash ? EnqueueStatus.Used : EnqueueStatus.Conflict, null); }
+            // Every record becomes a used id, so counting both keeps the used ids within their cap.
+            if (_records.Count >= MaxRecords || _records.Count + _used.Count >= MaxUsedIds || _records.Values.Count(r => !r.Finished) >= _maxPending)
+            {
+                return new(EnqueueStatus.Full, null);
+            }
             var record = new LaunchRequestRecord(id, LaunchRequestState.Queued, hash, now, now);
             Commit(() => _records[id] = record);
             return new(EnqueueStatus.Added, record);
@@ -135,11 +153,17 @@ public sealed class LaunchRequestStore
         }
     }
 
-    // In memory only: the file drops them at its next write, and a reopen prunes them again.
-    // Queued and launching records are never pruned by age: they have not happened yet.
+    // In memory only: the file catches up at its next write, and a reopen prunes again. An
+    // expired outcome leaves its id used: pruning it once erased the evidence and let the same id
+    // launch again. Queued and launching records are never pruned by age: they have not happened yet.
     void Prune(DateTimeOffset now)
     {
-        foreach (var r in _records.Values.Where(r => r.Finished && now - r.ChangedAt >= Retention).ToList()) { _records.Remove(r.Id); }
+        foreach (var r in _records.Values.Where(r => r.Finished && now - r.ChangedAt >= Retention).ToList())
+        {
+            _records.Remove(r.Id);
+            _used[r.Id] = new(r.TextHash, r.ChangedAt);
+        }
+        foreach (var id in _used.Where(u => now - u.Value.FinishedAt >= UsedKept).Select(u => u.Key).ToList()) { _used.Remove(id); }
     }
 
     // The change stands only once it is on disk, so memory never claims what a restart forgets.
@@ -175,6 +199,16 @@ public sealed class LaunchRequestStore
                 w.WriteEndObject();
             }
             w.WriteEndArray();
+            w.WriteStartArray("used");
+            foreach (var (id, u) in _used.OrderBy(u => u.Value.FinishedAt).ThenBy(u => u.Key, StringComparer.Ordinal))
+            {
+                w.WriteStartObject();
+                w.WriteString("id", id);
+                w.WriteString("textHash", u.TextHash);
+                w.WriteString("finishedAt", u.FinishedAt.ToString("o", CultureInfo.InvariantCulture));
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
             w.WriteEndObject();
             w.Flush();
             // On the disk before the rename: a power cut never leaves a zero-filled record.
@@ -187,7 +221,7 @@ public sealed class LaunchRequestStore
 
     // Every record whole or the file is damaged: a record dropped as unreadable could be an id
     // that already launched.
-    static Dictionary<string, LaunchRequestRecord>? Parse(byte[] bytes)
+    static (Dictionary<string, LaunchRequestRecord>, Dictionary<string, UsedId>)? Parse(byte[] bytes)
     {
         using var doc = JsonDocument.Parse(bytes);
         var e = doc.RootElement;
@@ -201,7 +235,7 @@ public sealed class LaunchRequestStore
             var code = Json.Str(item, "code");
             var stateText = Json.Str(item, "state");
             LaunchRequestState? state = Enum.GetValues<LaunchRequestState>().Where(s => Name(s) == stateText).Select(s => (LaunchRequestState?)s).FirstOrDefault();
-            if (!IsValidId(id) || state is not { } known || hash is not { Length: 64 } || !hash.All(char.IsAsciiHexDigitLower)
+            if (!IsValidId(id) || state is not { } known || !IsHash(hash)
                 || Json.Time(item, "queuedAt") is not { } queued || Json.Time(item, "changedAt") is not { } changed || changed < queued
                 || (session is not null && !IsToken(session, 128)) || (code is not null && !IsToken(code, 128))
                 || (known == LaunchRequestState.Launched) != (session is not null)
@@ -211,8 +245,26 @@ public sealed class LaunchRequestStore
                 return null;
             }
         }
-        return records;
+        // A file written before used ids were kept has no list; its finished records become used
+        // ids as their outcomes expire. Present, it is read whole like the records.
+        var used = new Dictionary<string, UsedId>(StringComparer.Ordinal);
+        if (e.TryGetProperty("used", out var spent))
+        {
+            if (spent.ValueKind != JsonValueKind.Array) { return null; }
+            foreach (var item in spent.EnumerateArray())
+            {
+                var id = Json.Str(item, "id");
+                var hash = Json.Str(item, "textHash");
+                if (!IsValidId(id) || !IsHash(hash) || Json.Time(item, "finishedAt") is not { } at || records.ContainsKey(id!) || !used.TryAdd(id!, new(hash!, at)))
+                {
+                    return null;
+                }
+            }
+        }
+        return (records, used);
     }
+
+    static bool IsHash([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] string? s) => s is { Length: 64 } && s.All(char.IsAsciiHexDigitLower);
 
     // Ids, session ids and codes are short plain tokens, so nothing else a caller sends can ride
     // into the file or a log line.

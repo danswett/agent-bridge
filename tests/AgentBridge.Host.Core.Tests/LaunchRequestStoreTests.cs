@@ -160,6 +160,131 @@ public sealed class LaunchRequestStoreTests : IDisposable
         Assert.Single(store.All());
     }
 
+    // #2743: each id launches at most once, durably; the 15 minutes is only how long its outcome
+    // is readable (reviewer's probe on #3404).
+    [Fact]
+    public void A_completed_id_cannot_be_launched_again_after_outcome_retention_and_restart()
+    {
+        var store = Open();
+        store.Enqueue("req-1", "one");
+        store.Begin("req-1");
+        store.Launched("req-1", "session-a");
+        _time.Advance(LaunchRequestStore.Retention);
+
+        var reopened = Open();
+
+        Assert.Equal(new EnqueueResult(EnqueueStatus.Used, null), reopened.Enqueue("req-1", "one"));
+        Assert.False(reopened.Begin("req-1"));
+        Assert.Equal(new EnqueueResult(EnqueueStatus.Conflict, null), reopened.Enqueue("req-1", "two"));
+        Assert.False(reopened.Begin("req-1"));
+    }
+
+    [Fact]
+    public void An_expired_outcome_is_not_readable_but_its_id_stays_used()
+    {
+        var store = Open();
+        store.Enqueue("req-1", "one");
+        store.Refuse("req-1", "busy");
+        _time.Advance(LaunchRequestStore.Retention);
+
+        Assert.Null(store.Get("req-1"));
+        Assert.Empty(store.All());
+        Assert.Equal(EnqueueStatus.Used, store.Enqueue("req-1", "one").Status);
+        Assert.Null(store.Get("req-1"));
+    }
+
+    [Fact]
+    public void A_used_id_survives_several_restarts()
+    {
+        var store = Open();
+        store.Enqueue("req-1", "one");
+        store.Fail("req-1", "failed");
+
+        for (var i = 0; i < 3; i++)
+        {
+            _time.Advance(TimeSpan.FromDays(7));
+            store = Open();
+            Assert.Equal(EnqueueStatus.Used, store.Enqueue("req-1", "one").Status);
+        }
+        Assert.Contains("\"req-1\"", File.ReadAllText(FilePath));
+    }
+
+    [Fact]
+    public void A_file_from_before_used_ids_loads_and_its_finished_ids_stay_used()
+    {
+        var now = _time.GetUtcNow();
+        File.WriteAllText(FilePath, $$"""
+            {"version":1,"requests":[
+            {"id":"old","state":"launched","textHash":"{{Hash("one")}}","session":"s-1","queuedAt":"{{now.AddHours(-1):o}}","changedAt":"{{now.AddHours(-1):o}}"},
+            {"id":"recent","state":"refused","textHash":"{{Hash("two")}}","code":"busy","queuedAt":"{{now.AddMinutes(-5):o}}","changedAt":"{{now.AddMinutes(-5):o}}"}]}
+            """);
+
+        var store = Open();
+
+        Assert.Null(store.Get("old"));
+        Assert.Equal(EnqueueStatus.Used, store.Enqueue("old", "one").Status);
+        Assert.Equal(EnqueueStatus.Conflict, store.Enqueue("old", "other").Status);
+        Assert.Equal("busy", store.Get("recent")!.Code);
+        _time.Advance(LaunchRequestStore.Retention);
+        Assert.Equal(EnqueueStatus.Used, Open().Enqueue("recent", "two").Status);
+    }
+
+    [Fact]
+    public void At_the_used_id_cap_a_new_id_is_refused_until_the_oldest_are_past_the_age_bound()
+    {
+        var at = _time.GetUtcNow().AddDays(-1).ToString("o");
+        var used = Enumerable.Range(0, LaunchRequestStore.MaxUsedIds).Select(i => $$"""{"id":"u{{i}}","textHash":"{{Hash("x")}}","finishedAt":"{{at}}"}""");
+        File.WriteAllText(FilePath, $$"""{"version":1,"requests":[],"used":[{{string.Join(",", used)}}]}""");
+
+        var store = Open();
+        Assert.Equal(new EnqueueResult(EnqueueStatus.Full, null), store.Enqueue("new", "one"));
+        Assert.Equal(EnqueueStatus.Used, store.Enqueue("u0", "x").Status);
+
+        _time.Advance(LaunchRequestStore.UsedKept - TimeSpan.FromDays(1) - TimeSpan.FromMinutes(1));
+        Assert.Equal(EnqueueStatus.Full, Open().Enqueue("new", "one").Status);
+
+        _time.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(EnqueueStatus.Added, Open().Enqueue("new", "one").Status);
+    }
+
+    // Documented: past the age bound an id is forgotten and may be used again.
+    [Fact]
+    public void A_used_id_is_forgotten_only_after_the_age_bound()
+    {
+        var store = Open();
+        store.Enqueue("req-1", "one");
+        store.Refuse("req-1", "busy");
+        store.Enqueue("req-2", "two");
+        _time.Advance(TimeSpan.FromDays(1));
+        store.Refuse("req-2", "busy");
+
+        _time.Advance(LaunchRequestStore.UsedKept - TimeSpan.FromDays(1) - TimeSpan.FromMinutes(1));
+        Assert.Equal(EnqueueStatus.Used, Open().Enqueue("req-1", "one").Status);
+
+        _time.Advance(TimeSpan.FromMinutes(1));
+        var store2 = Open();
+        Assert.Equal(EnqueueStatus.Used, store2.Enqueue("req-2", "two").Status);
+        Assert.Equal(EnqueueStatus.Added, store2.Enqueue("req-1", "one").Status);
+    }
+
+    [Theory]
+    [InlineData("""{"version":1,"requests":[],"used":{}}""")]
+    [InlineData("""{"version":1,"requests":[],"used":[{"id":"a","textHash":"00","finishedAt":"2026-11-20T00:00:00Z"}]}""")]
+    [InlineData("""{"version":1,"requests":[],"used":[{"id":"a","textHash":"HASH"}]}""")]
+    [InlineData("""{"version":1,"requests":[],"used":[{"id":"a","textHash":"HASH","finishedAt":"2026-11-20T00:00:00Z"},{"id":"a","textHash":"HASH","finishedAt":"2026-11-20T00:00:00Z"}]}""")]
+    [InlineData("""{"version":1,"requests":[{"id":"a","state":"queued","textHash":"HASH","queuedAt":"2026-11-20T00:00:00Z","changedAt":"2026-11-20T00:00:00Z"}],"used":[{"id":"a","textHash":"HASH","finishedAt":"2026-11-20T00:00:00Z"}]}""")]
+    public void A_damaged_used_id_list_is_refused_and_left_in_place(string json)
+    {
+        File.WriteAllText(FilePath, json.Replace("HASH", Hash("x"), StringComparison.Ordinal));
+        var before = File.ReadAllBytes(FilePath);
+
+        Assert.Null(LaunchRequestStore.Open(_folder, _time).Store);
+        Assert.Equal(before, File.ReadAllBytes(FilePath));
+    }
+
+    static string Hash(string text) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Runtime.InteropServices.MemoryMarshal.AsBytes(text.AsSpan())));
+
     [Theory]
     [InlineData("")]
     [InlineData("has space")]
