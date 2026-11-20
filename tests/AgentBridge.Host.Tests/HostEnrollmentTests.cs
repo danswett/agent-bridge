@@ -8,6 +8,7 @@ using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Roster;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 using static RosterFixture;
 
@@ -223,6 +224,96 @@ public sealed class HostEnrollmentTests : IDisposable
         Assert.False(File.Exists(HostRosterPinWriter.PinPath(profile)));
     }
 
+    // Brief 184b, ruling (b): the host is the joiner over the approver's Noise channel (handshake hash h).
+    string PinPath => HostRosterPinWriter.PinPath(profile);
+    static byte[] G => World.Keys("G").Dh.Public;
+    RelayRoster Relay(params string[] labels) => new("off", w.GenerationId, [.. new[] { "G" }.Concat(labels).Select(l => w.Entry(l).Canonical())]);
+
+    (HostEnrollment Host, EnrollmentApprover Approver, byte[] H) Exchanged(FakeTimeProvider time)
+    {
+        var host = new HostEnrollment(Unpinned(), Account, null, name: "H", time: time);
+        Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        var h = RandomNumberGenerator.GetBytes(32);
+        DateTimeOffset Now() => time.GetUtcNow();
+        var a = new EnrollmentApprover(Account, h, w.Id("H"), new(EnrollmentLockout.Counts.WrongEntries, Now), Now);
+        var offer = a.OnCommit(host.Exchange(h, G, "commit", []).Value!)!;
+        Assert.True(a.OnReveal(host.Exchange(h, G, "offer", offer).Value!));
+        Assert.Equal(CodeResult.Match, a.EnterCode1(host.Code!));
+        return (host, a, h);
+    }
+
+    [WindowsFact("host enrollment runs on the Windows host")]
+    public void A_matched_exchange_pins_the_approvers_genesis_once_its_host_add_is_in_the_chain()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var (host, a, h) = Exchanged(time);
+        using (host)
+        {
+            w.Genesis();
+            Assert.Equal("not-matched", host.Exchange(h, G, "genesis", w.Entry("G").Hash).Refusal);
+            Assert.Equal("match", host.EnterCode(a.Code2Shown!));
+            Assert.Null(host.Exchange(h, G, "genesis", w.Entry("G").Hash).Refusal);
+            Assert.Equal("not-added", host.Finish(Relay(), PinPath, () => w.Now, _ => true));
+            w.Add("+H", "G", "H", "G", kind: "host", transcript: a.TranscriptToSign);
+            Assert.Equal("pinned", host.Finish(Relay("+H"), PinPath, () => w.Now, _ => true));
+            Assert.Equal("verified", Unpinned().Update(Relay("+H"), Account).Outcome);
+        }
+    }
+
+    [HostSignKeyTests.WindowsHostSignTheory]
+    [InlineData("not-started", "no-attempt")]
+    [InlineData("wrong-code", "no-attempt")]
+    [InlineData("expired", "no-attempt")]
+    [InlineData("other-genesis", "genesis-mismatch")]
+    [InlineData("second-channel", "no-genesis")]
+    [InlineData("other-account", "chain-invalid")]
+    public void A_refused_exchange_writes_no_pin(string mischief, string expected)
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        if (mischief == "other-account") { w.AccountId = "other@example"; }
+        w.Genesis();
+        if (mischief == "not-started")
+        {
+            using var idle = new HostEnrollment(Unpinned(), Account, null, time: time);
+            Assert.Equal("no-attempt", idle.Exchange(RandomNumberGenerator.GetBytes(32), G, "commit", []).Refusal);
+            Assert.Equal(expected, idle.Finish(Relay(), PinPath, () => w.Now, _ => true));
+            Assert.False(File.Exists(PinPath));
+            return;
+        }
+        var (host, a, h) = Exchanged(time);
+        using var _ = host;
+        if (mischief == "wrong-code")
+        {
+            var wrong = a.Code2Shown!.Replace(" ", "") == "000000" ? "111111" : "000000";
+            Assert.Equal(["wrong", "wrong", "ended"], new[] { host.EnterCode(wrong), host.EnterCode(wrong), host.EnterCode(wrong) });
+        }
+        else { Assert.Equal("match", host.EnterCode(a.Code2Shown!)); }
+        var other = RandomNumberGenerator.GetBytes(32);
+        if (mischief == "second-channel") { Assert.Equal("attempt-bound", host.Exchange(other, G, "genesis", w.Entry("G").Hash).Refusal); }
+        else { host.Exchange(h, G, "genesis", mischief == "other-genesis" ? other : w.Entry("G").Hash); }
+        w.Add("+H", "G", "H", "G", kind: "host", transcript: a.TranscriptToSign);
+        if (mischief == "expired") { time.Advance(EnrollmentLockout.AttemptLifetime); }
+        Assert.Equal(expected, host.Finish(Relay("+H"), PinPath, () => w.Now, _ => true));
+        Assert.False(File.Exists(PinPath));
+    }
+
+    [WindowsFact("host enrollment runs on the Windows host")]
+    public void Three_attempts_in_an_hour_lock_joining_across_restarts_until_the_lock_ends()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        foreach (var minute in new[] { 0, 1, 55 })
+        {
+            time.SetUtcNow(DateTimeOffset.UnixEpoch.AddMinutes(minute));
+            using var host = new HostEnrollment(Unpinned(), Account, null, time: time);
+            Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        }
+        using var later = new HostEnrollment(Unpinned(), Account, null, time: time);
+        time.SetUtcNow(DateTimeOffset.UnixEpoch.AddMinutes(61));
+        Assert.Equal("locked", later.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        time.SetUtcNow(DateTimeOffset.UnixEpoch.AddMinutes(55) + EnrollmentLockout.LockFor);
+        Assert.Null(later.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+    }
+
     [WindowsFact("host enrollment runs on the Windows host")]
     public async Task Enrollment_ops_are_answered_only_by_the_local_app_surface()
     {
@@ -235,14 +326,24 @@ public sealed class HostEnrollmentTests : IDisposable
             Stop = () => { }, Restart = () => { },
             EnrollDescribe = () => enrollment.Describe(profile, World.Keys("H").Dh.Public),
             EnrollStatus = () => enrollment.Status(null, ""),
+            EnrollCode = typed => enrollment.EnterCode(typed),
+            EnrollFinish = () => Task.FromResult(enrollment.Finish(Relay(), PinPath, () => w.Now)),
         }, _ => { });
         var described = JsonSerializer.SerializeToElement(await control.HandleAsync(null!, AgentBridge.Local.HostOps.EnrollDescribe, default));
         Assert.Equal(w.Id("H"), described.GetProperty("device").GetProperty("id").GetString());
         var status = JsonSerializer.SerializeToElement(await control.HandleAsync(null!, AgentBridge.Local.HostOps.EnrollStatus, default));
         Assert.Equal("pending", status.GetProperty("state").GetString());
+        var typed = JsonSerializer.SerializeToElement(await control.HandleAsync(null!, AgentBridge.Local.HostOps.EnrollCode,
+            JsonSerializer.SerializeToElement(new { code = "000 000" })));
+        Assert.Equal("no-exchange", typed.GetProperty("result").GetString());
+        w.Genesis();
+        var finished = JsonSerializer.SerializeToElement(await control.HandleAsync(null!, AgentBridge.Local.HostOps.EnrollFinish, default));
+        Assert.Equal("not-matched", finished.GetProperty("state").GetString());
         var reads = (HashSet<string>)typeof(LocalApi).GetField("Reads", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.GetValue(null)!;
         Assert.DoesNotContain(AgentBridge.Local.HostOps.EnrollDescribe, reads);
         Assert.DoesNotContain(AgentBridge.Local.HostOps.EnrollStatus, reads);
+        Assert.DoesNotContain(AgentBridge.Local.HostOps.EnrollCode, reads);
+        Assert.DoesNotContain(AgentBridge.Local.HostOps.EnrollFinish, reads);
     }
 
     [WindowsFact("host enrollment CLI refuses before Windows identity access")]

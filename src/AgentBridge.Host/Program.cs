@@ -873,6 +873,8 @@ async Task<int> ServeAsync(HostHandover handover)
     // Approve-gesture enrollment (#3450, brief 184): one attempt holder per signed-in account, app-only on the pipe.
     var enrollmentGate = new object();
     HostEnrollment? enrollment = null;
+    // The serving connection's roster read, for Finish: never a second connection as this device.
+    Func<Task<RelayRoster?>>? liveRoster = null;
     HostEnrollment? Enrollment()
     {
         lock (enrollmentGate)
@@ -924,7 +926,17 @@ async Task<int> ServeAsync(HostHandover handover)
         AgentVerification = agentVerification,
         AgentSignIn = agentSignIn,
         EnrollDescribe = () => Enrollment()?.Describe(identity.Folder, identity.Key.Public) ?? (null, "signed-out"),
-        EnrollStatus = () => Enrollment()?.Status(null, "") ?? "not-enrolled",
+        EnrollStatus = () => Enrollment()?.Status() ?? "not-enrolled",
+        EnrollShown = () => Enrollment()?.Code,
+        EnrollCode = typed => Enrollment()?.EnterCode(typed) ?? "signed-out",
+        EnrollFinish = async () =>
+        {
+            if (Enrollment() is not { } joining) { return "signed-out"; }
+            RelayRoster? roster;
+            try { roster = await (liveRoster ?? throw new InvalidOperationException())(); }
+            catch (Exception e) when (e is not OutOfMemoryException) { return "no-roster"; }
+            return roster is null ? "no-roster" : joining.Finish(roster, HostRosterPinWriter.PinPath(identity.Folder), HostRoster.Now);
+        },
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -1023,10 +1035,15 @@ async Task<int> ServeAsync(HostHandover handover)
             attempt.Restart();
             await using var relay = await RelayClient.ConnectAsync(relayUri, account.Token, identity.Key, name, "host", current.Token);
             diagnosticsJournal.Record(JournalEvents.RelayConnected(attempt.Elapsed, HostVersion()));
+            var remote = trustedPeers.Handler(service, agentAudit);
             var hub = new ChannelHub(relay, identity.Key, name, "host", trustedPeers.Allows)
             {
                 JsonOptions = ProtocolJson.Options,
-                Handler = trustedPeers.Handler(service, agentAudit),
+                // The approver's enrollment steps reach only an attempt the person opened on this machine,
+                // and, while device pins are on, only from a pinned person device.
+                Handler = (ch, op, data) => op.StartsWith(HostEnrollment.StepPrefix, StringComparison.Ordinal)
+                    ? Task.FromResult<object?>(HostEnrollment.Remote(trustedPeers.HasRole(ch, TrustedPeerStore.Person) ? Enrollment() : null,
+                        ch.HandshakeHash, ch.PeerStatic, op, data)) : remote(ch, op, data),
                 // Answered from an IK first message (#603), which a relay can replay: hello only
                 // reads, so running it again changes nothing.
                 EarlyOps = [Ops.Hello],
@@ -1061,6 +1078,7 @@ async Task<int> ServeAsync(HostHandover handover)
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff.Reset();
+            liveRoster = () => relay.GetRosterAsync(current.Token);
             // Off mode: read and verify the roster in the background, log what it says, enforce nothing.
             _ = Task.Run(async () =>
             {

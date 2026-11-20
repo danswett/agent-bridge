@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Roster;
+using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
@@ -15,13 +16,22 @@ internal interface IHostEnrollmentKey : IDisposable
 // describes itself as a v1 host (id dh kind platform name), pinned or not; a v2 descriptor is made
 // only while a verified pin's AcceptHostSign switch is on. One attempt is open per profile: a lock
 // file beside the pin, under HostRosterPinWriter's private roster folder, holds it across instances
-// and processes until the exchange's lifetime ends. Reached only through the app's local pipe.
+// and processes until the exchange's lifetime ends. Opened only through the app's local pipe; the
+// approver's exchange steps then reach it over the approver's Noise channel (brief 184b).
 internal sealed class HostEnrollment(HostRosterReader reader, string account, string? generation,
     Func<string, IHostEnrollmentKey>? openKey = null, string name = "host", TimeProvider? time = null) : IDisposable
 {
-    sealed record Attempt(DeviceDescriptor Own, IDisposable Held, ITimer Expiry);
+    sealed record Attempt(DeviceDescriptor Own, IDisposable Held, ITimer Expiry, EnrollmentLockout Lockout)
+    {
+        public EnrollmentJoiner? Joiner;
+        public byte[]? H;
+        public string? Approver;
+        public bool Matched;
+        public byte[]? Genesis;
+    }
     Attempt? open;
     readonly object sync = new();
+    TimeProvider Clock => time ?? TimeProvider.System;
 
     public string Account => account;
 
@@ -45,11 +55,36 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
             if (held is null) { return (null, "attempt-already-open"); }
             try
             {
+                var log = Path.Combine(folder, "enrollment-attempts.json");
+                long[] marks;
+                try { marks = File.Exists(log) ? JsonSerializer.Deserialize<long[]>(File.ReadAllBytes(log)) ?? throw new InvalidDataException() : []; }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidDataException) { return (null, "attempt-store"); }
+                var now = Clock.GetUtcNow();
+                marks = [.. marks.Where(m => now - DateTimeOffset.FromUnixTimeSeconds(m) < EnrollmentLockout.Window + EnrollmentLockout.LockFor)];
+                // §4.4: replay the persisted attempts so a restart cannot reset joining's lockout; a lock set by
+                // the third attempt in an hour outlasts the first one's hour, so the log keeps hour + lock.
+                DateTimeOffset? replay = null;
+                var lockout = new EnrollmentLockout(EnrollmentLockout.Counts.EndedAttempts, () => replay ?? Clock.GetUtcNow());
+                foreach (var mark in marks) { replay = DateTimeOffset.FromUnixTimeSeconds(mark); lockout.RecordEnded("attempt"); }
+                replay = null;
+                if (lockout.IsBlocked("attempt")) { return (null, "locked"); }
                 var (descriptor, json, refused) = v2 && OperatingSystem.IsWindows() ? HostSigned(profile, dh) : V1(dh);
                 if (descriptor is null) { return (null, refused); }
+                // Every attempt counts as ended until it pins; logged before it is shown.
+                var temporary = log + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    using (var stream = PrivateFolder.CreateNew(temporary)) { JsonSerializer.Serialize(stream, marks.Append(now.ToUnixTimeSeconds())); }
+                    File.Move(temporary, log, overwrite: true);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    try { File.Delete(temporary); } catch (Exception f) when (f is IOException or UnauthorizedAccessException) { }
+                    return (null, "attempt-store");
+                }
                 Attempt? attempt = null;
-                var expiry = (time ?? TimeProvider.System).CreateTimer(_ => End(attempt!), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-                (open, held) = (attempt = new Attempt(descriptor, held, expiry), null);
+                var expiry = Clock.CreateTimer(_ => End(attempt!), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+                (open, held) = (attempt = new Attempt(descriptor, held, expiry, lockout), null);
                 expiry.Change(EnrollmentLockout.AttemptLifetime, Timeout.InfiniteTimeSpan);
                 return (json, null);
             }
@@ -101,6 +136,88 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
             or PlatformNotSupportedException or System.Security.SecurityException)
         { return (null, null, "missing-key"); }
     }
+
+    public string? Code { get { lock (sync) { return open?.Joiner?.Code1Shown; } } }
+
+    // The approver's steps (§4.2), over its Noise channel: only into an attempt the person opened here,
+    // and only from the channel (handshake hash h, authenticated static key) that sent the commit.
+    // The full 32-byte genesis is taken only after code 2 matched, so it is bound to that channel.
+    public (byte[]? Value, string? Refusal) Exchange(byte[] h, byte[] peerStatic, string step, byte[] value)
+    {
+        lock (sync)
+        {
+            if (open is not { } attempt) { return (null, "no-attempt"); }
+            var approver = Ids.Device(peerStatic);
+            if (step == "commit")
+            {
+                if (attempt.Joiner is not null) { return (null, "attempt-bound"); }
+                (attempt.H, attempt.Approver) = (h.ToArray(), approver);
+                attempt.Joiner = new EnrollmentJoiner(account, attempt.H, attempt.Lockout, Clock.GetUtcNow);
+                return attempt.Joiner.Commit() is { } commit ? (commit, null) : (null, "locked");
+            }
+            if (attempt.Joiner is null || !CryptographicOperations.FixedTimeEquals(attempt.H, h) || attempt.Approver != approver) { return (null, "attempt-bound"); }
+            if (step == "offer") { return attempt.Joiner.OnOffer(value) is { } reveal ? (reveal, null) : (null, "attempt-ended"); }
+            if (step != "genesis") { return (null, "unknown-step"); }
+            if (!attempt.Matched) { return (null, "not-matched"); }
+            if (value.Length != 32 || attempt.Genesis is not null) { return (null, "invalid-genesis"); }
+            attempt.Genesis = value.ToArray();
+            return ([], null);
+        }
+    }
+
+    // Code 2 as the person typed it here; three wrong entries end the attempt.
+    public string EnterCode(string typed)
+    {
+        Attempt? ended = null;
+        CodeResult result;
+        lock (sync)
+        {
+            if (open is not { Joiner: { } joiner } attempt) { return "no-exchange"; }
+            result = joiner.EnterCode2(typed);
+            attempt.Matched |= result == CodeResult.Match;
+            if (result == CodeResult.Ended) { ended = attempt; }
+        }
+        if (ended is not null) { End(ended); }
+        return result.ToString().ToLowerInvariant();
+    }
+
+    // Ruling (b): the host verifies the relay's chain itself and pins only when its root is the genesis
+    // sent on the matched channel and it holds this exact host's add, by the approver the person
+    // matched (an active person device), carrying this exchange's transcript. Only the 182 writer pins.
+    public string Finish(RelayRoster relay, string pinPath, Func<TimeSpan> clock, Func<byte[], bool>? isCapSignGenesis = null)
+    {
+        lock (sync)
+        {
+            if (open is not { } attempt) { return "no-attempt"; }
+            if (!attempt.Matched || attempt.Joiner is not { } joiner) { return "not-matched"; }
+            if (attempt.Genesis is not { } genesis) { return "no-genesis"; }
+            if (relay.Generation is not { } generationId || relay.Entries.Count == 0) { return "no-roster"; }
+            var verifier = new RosterVerifier(account, generationId, clock);
+            try
+            {
+                if (verifier.Offer(relay.Entries.Select(t => Entry.Parse(System.Text.Encoding.UTF8.GetBytes(t)))).Any(o => o.Verdict == Verdict.Refused)
+                    || verifier.Graph.Count == 0) { return "chain-invalid"; }
+            }
+            catch (RosterFormatException) { return "chain-invalid"; }
+            if (!CryptographicOperations.FixedTimeEquals(verifier.Graph[0].Hash, genesis)) { return "genesis-mismatch"; }
+            if (!verifier.State.PersonDevices.Contains(attempt.Approver) || verifier.State.ActiveAdd(attempt.Own.Id) is not { } add
+                || !joiner.Accepts(verifier.Graph[add].Entry, attempt.Own, attempt.Approver!)) { return "not-added"; }
+            return HostRosterPinWriter.Write(pinPath, new PersonGenesis("enrollment", genesis), relay, account, clock, isCapSignGenesis);
+        }
+    }
+
+    // The remote steps' wire form (ops enroll.commit, enroll.offer, enroll.genesis; value base64url).
+    public const string StepPrefix = "enroll.";
+    public static object Remote(HostEnrollment? enrollment, byte[] h, byte[]? peerStatic, string op, JsonElement data)
+    {
+        byte[] value;
+        try { value = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("value", out var v) ? Codec.FromBase64Url(v.GetString() ?? "", "value") : []; }
+        catch (RosterFormatException) { return new { value = (string?)null, refusal = "invalid-value" }; }
+        var (reply, refusal) = enrollment is null || peerStatic is null ? (null, "no-attempt") : enrollment.Exchange(h, peerStatic, op[StepPrefix.Length..], value);
+        return new { value = reply is null ? null : Codec.Base64Url(reply), refusal };
+    }
+
+    public string Status() { var attempt = Volatile.Read(ref open); return Status(attempt?.Joiner, attempt?.Approver ?? ""); }
 
     // enrolled: the host's verified roster holds the exact active add of this attempt's descriptor
     // (v1, or v2 only while the switch is on) that the matched exchange accepts from that approver.

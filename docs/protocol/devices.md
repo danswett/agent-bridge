@@ -206,10 +206,12 @@ Neither the relay nor the other device can reset them. An expiry blocks no pendi
 approver. A relay that ends both channels has two different `h`, so the codes it could read off one
 leg do not match the other.
 
-`EnrollmentLockout` holds its counts in memory only. A restart would forget them, so the host that
-runs an exchange must persist and restore the counts and blocks, or the limits can be reset by
-restarting. That persistence belongs to the host slice that runs enrollment over the pipe (R3 in the
-design's §12 table); until then a caller that does not persist them does not meet §4.4.
+`EnrollmentLockout` holds its counts in memory only. The host joiner (brief 184b) persists them: each
+attempt it opens is logged in `enrollment-attempts.json` in the pin's private roster folder before it
+is shown, counts as ended unless it pins, and is replayed into the joiner's lockout, so a restart
+cannot reset §4.4. An unreadable log refuses (`attempt-store`); three attempts in an hour refuse
+(`locked`) for 15 minutes. Marks are kept for the hour plus the lock, so a replay never ends a lock
+early. The relay keeps no pending state for it.
 
 Not here: the channel, the relay's `pending` list and its 8-pending and 20-attempts limits (R2),
 the QR paths (§4.3), signing the `add`, and any screen.
@@ -240,7 +242,21 @@ The existing person-approver exchange is the sole add path; descriptor equality
 also covers `hostSign`, `hostSignAlg` and `hostSignProof`. Status is `enrolled` only
 when the host's own verifier holds the exact matching active add (v1, or v2 while the switch is
 on) and the joiner accepts its approver and matched exchange; otherwise `pending` or
-`not-enrolled`. The CLI remains dormant; the exchange and the pin it writes are brief 184b.
+`not-enrolled`. The CLI remains dormant.
+
+**The exchange and the pin (brief 184b, Engineering ruling (b)).** The host is the joiner. The
+approver sends `enroll.commit`, `enroll.offer` and `enroll.genesis` (`{ "value": base64url }`, answered
+`{ "value"?, "refusal"? }`) on its Noise channel to the host, which answers them only for a peer
+holding the trusted-person role; they reach only an attempt the person
+opened here (`no-attempt` otherwise), and only from the channel, by handshake hash `h` and
+authenticated static key, that sent the commit (`attempt-bound`). The person types code 2 at the
+host (`host.enroll.code`). Only after it matched does the host take the approver's full 32-byte
+genesis hash (`not-matched`, `invalid-genesis`), never the 16-hex fingerprint. `host.enroll.finish` then
+reads the roster over the serving relay connection, verifies the chain itself, and pins through
+`HostRosterPinWriter` only when its root is that genesis (`genesis-mismatch`) and it holds this
+host's exact v1 add by the matched approver, an active person device, carrying this exchange's
+transcript (`not-added`). A held pin is never replaced (`pin-exists`), and the writer's capSign (v3)
+gate still applies.
 
 ## Acceptance and state
 

@@ -56,6 +56,9 @@ public static class HostOps
     // state of its one open attempt. For the app alone, like every management op; never the relay's.
     public const string EnrollDescribe = "host.enroll.describe";
     public const string EnrollStatus = "host.enroll.status";
+    // Code 2 as the person typed it here, and the pin once the approver's add is in the chain (brief 184b).
+    public const string EnrollCode = "host.enroll.code";
+    public const string EnrollFinish = "host.enroll.finish";
 }
 
 // host.update.depart's request: the press (an Update now's request) the app is carrying.
