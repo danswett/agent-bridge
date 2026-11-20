@@ -519,7 +519,7 @@ The file is at most 4,096 bytes, owner-only, not a link, and has exactly
 the full base64url genesis hash and one to four distinct hashes in head order.
 The reader has no write or creation API. `HostRosterPinWriter` (#3450) alone creates the
 record, from a person's genesis (an 8-byte fingerprint compared out of band, or a 32-byte hash
-from a later app or enrollment caller): one genesis, for this account and the relay's generation,
+from a later app or enrollment caller): one v3 (capSign) genesis, for this account and the relay's generation,
 matching in fixed time, a chain with no refused entry, written atomically and never over a pin,
 then read back as above. Every other case is a closed refusal and writes nothing. Its only caller
 today is the local `roster-pin set` command ([runbook](../runbooks/roster-pin.md)).

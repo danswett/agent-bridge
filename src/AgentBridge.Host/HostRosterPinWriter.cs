@@ -45,7 +45,13 @@ internal static class HostRosterPinWriter
 
     public static string Fingerprint(byte[] genesis) => string.Join(' ', Convert.ToHexStringLower(genesis, 0, 8).Chunk(4).Select(c => new string(c)));
 
-    public static string Write(string pinPath, PersonGenesis? source, RelayRoster? relay, string? account, Func<TimeSpan> clock)
+    // Only a genesis whose person descriptor carries capSign (v3) is pinned: a v1 root can never
+    // gain capSign without a roster reset (owner 13:36 PT Nov 20). Today's parser reads v1 only,
+    // so this refuses everything until K1's v3 parser (#3450, brief 189) is wired in here.
+    public static bool IsCapSignGenesis(byte[] genesis) => false;
+
+    public static string Write(string pinPath, PersonGenesis? source, RelayRoster? relay, string? account, Func<TimeSpan> clock,
+        Func<byte[], bool>? isCapSignGenesis = null)
     {
         if (source is null) { return "no-source"; }
         if (string.IsNullOrEmpty(account)) { return "no-account"; }
@@ -61,6 +67,7 @@ internal static class HostRosterPinWriter
         var genesis = geneses[0];
         if (relay.Generation != genesis.Body.Generation) { return "generation-mismatch"; }
         if (!CryptographicOperations.FixedTimeEquals(genesis.Hash.AsSpan(0, source.Expected.Length), source.Expected)) { return "fingerprint-mismatch"; }
+        if (!(isCapSignGenesis ?? IsCapSignGenesis)(Encoding.UTF8.GetBytes(genesis.Canonical()))) { return "genesis-not-v3"; }
 
         var verifier = new RosterVerifier(account, genesis.Body.Generation, clock);
         if (verifier.Offer(entries).Any(o => o.Verdict == Verdict.Refused) || verifier.Graph.Count == 0 ||
@@ -83,7 +90,8 @@ internal static class HostRosterPinWriter
         }
         catch (IOException) when (File.Exists(full)) { return "pin-exists"; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException) { return "pin-store"; }
-        finally { File.Delete(temporary); }
+        // Cleanup never replaces the closed refusal (a file where the folder should be throws here).
+        finally { try { if (File.Exists(temporary)) { File.Delete(temporary); } } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { } }
 
         // Read back as the host will, so a pin it would refuse is never left as if it worked.
         if (new HostRosterReader(full, clock).Update(relay, account).Outcome != "verified")
