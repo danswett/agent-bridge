@@ -34,7 +34,7 @@ public sealed partial class SessionView
     {
         UnwatchHistory();
         history = Card?.Stored;
-        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; openPrompts.Clear(); historyVisible = 1; }
+        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; seen = null; openPrompts.Clear(); historyVisible = 1; }
         if (history is null) { ShowHistory(); return; }
         history.Changed += OnHistoryChanged;
         ShowHistory();
@@ -49,6 +49,7 @@ public sealed partial class SessionView
 
     void UnwatchHistory()
     {
+        ResetScrollbarGestures();
         historyDraw?.Stop();
         if (historyFirstFrame is not null) { CompositionTarget.Rendering -= historyFirstFrame; historyFirstFrame = null; }
         if (history is not null) { history.Changed -= OnHistoryChanged; }
@@ -80,7 +81,7 @@ public sealed partial class SessionView
         var line = history is null ? null : HistoryDraw.Line(history.State, rows.Count, !string.IsNullOrEmpty(Card?.UserMessage), history.Start);
         var scroll = ConversationScroll;
         // Measured before the rows change: the pane collapsing under the view must not read as scrolled back.
-        var atEnd = pinEnd || !panning && !scrolling && keyTarget is null && scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
+        var atEnd = HistoryAtEnd();
         var offset = scroll?.VerticalOffset ?? 0;
         var reading = atEnd ? null : ReadingHistory();
         var changed = HistoryRowSync.Apply(historyShown, rows);
@@ -127,7 +128,7 @@ public sealed partial class SessionView
 
     void DrawEarlier()
     {
-        if (!IsLoaded || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
+        if (!IsLoaded || scrollbarPointers.Count > 0 || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
         var turns = history?.Turns ?? [];
         var first = historyShown.FirstOrDefault();
         var end = first is null ? turns.Count - 1 : 0;
@@ -136,7 +137,7 @@ public sealed partial class SessionView
         var from = Math.Max(0, end - 2);
         var rows = HistoryDraw.Rows(turns.Skip(from).Take(end - from).ToArray(), null, openPrompts);
         var scroll = ConversationScroll;
-        var atEnd = pinEnd || scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
+        var atEnd = HistoryAtEnd();
         var offset = scroll?.VerticalOffset ?? 0;
         var extent = scroll?.ScrollableHeight ?? 0;
         var reading = atEnd ? null : ReadingHistory();
@@ -179,9 +180,6 @@ public sealed partial class SessionView
 
     void OnHistoryEarlier(object sender, RoutedEventArgs e) => LoadEarlier();
 
-    // The person is scrolling: the view is theirs from here, and stays where they leave it.
-    internal void ReleasePin() { pinEnd = false; anchoring = null; pinReleases++; }
-
     // Content changed in the conversation can reflow it, so the place is put back once layout has settled:
     // the end if pinned, else the stored turn's screen position through a prepend (#1593).
     // Without a visible stored turn, keep the previous offset if the layout moved it up (#1635).
@@ -191,7 +189,7 @@ public sealed partial class SessionView
         var (session, releases) = (shownHistory, pinReleases);
         void Restore()
         {
-            if (session != shownHistory || releases != pinReleases || ConversationScroll is not { } scroll) { return; }
+            if (session != shownHistory || releases != pinReleases || scrollbarPointers.Count > 0 || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset + (earlierExtent is { } extent ? scroll.ScrollableHeight - extent : 0), scroll.ScrollableHeight);
             if (!atEnd && !pinEnd && reading is { } kept)
