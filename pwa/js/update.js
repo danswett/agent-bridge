@@ -384,6 +384,11 @@ export class UpdateControl {
   #confirming = new Map();
   // Counted up by clear(): a press whose confirmation was open across it is never sent.
   #generation = 0;
+  // Counted up per machine by forget(): a late answer to an Update now sent before it changes
+  // nothing, and one still waiting for its channel is never signed. Without this a late
+  // policy-unreadable reopened the warning, and confirming it signed unchecked for a machine
+  // already removed (#3324).
+  #forgets = new Map();
 
   // fleet: a FleetStatus (update(id), call(id, op, data), noteUpdate(id, state), watch(id)).
   // sign({ id, machineKey, release, accept, request, unchecked }): an Update now's signed command for that
@@ -444,7 +449,7 @@ export class UpdateControl {
     const s = this.fleet.update(id);
     if (!canUpdateNow(s)) { return; }
     const release = s.available;
-    const generation = this.#generation;
+    const current = this.#still(id);
     this.#notes.delete(id);
     let busy = s.busy ?? CANT_TELL;
     let ask = !quiet(busy);
@@ -469,11 +474,11 @@ export class UpdateControl {
           if (this.#confirming.get(id) === abort) { this.#confirming.delete(id); }
           this.#emit();
         }
-        if (!go || abort.signal.aborted || generation !== this.#generation) { return; }
+        if (!go || abort.signal.aborted || !current()) { return; }
         accept = acceptOf(busy);
       }
-      const result = await this.#sendNow(id, release, accept, generation, unchecked);
-      if (generation !== this.#generation) { return; }
+      const result = await this.#sendNow(id, release, accept, current, unchecked);
+      if (!current()) { return; }
       if (result?.outcome === 'refused' && result.code === 'policy-unreadable' && !unchecked) {
         unchecked = true;
       } else if (result?.outcome !== 'confirm') { return; }
@@ -482,17 +487,29 @@ export class UpdateControl {
     }
   }
 
-  async #sendNow(id, release, accept, generation, unchecked = false) {
+  // Whether a press begun now is still this device's to act on: the account not cleared and the
+  // machine not forgotten since.
+  #still(id) {
+    const generation = this.#generation;
+    const forgets = this.#forgets.get(id) ?? 0;
+    return () => generation === this.#generation && forgets === (this.#forgets.get(id) ?? 0);
+  }
+
+  async #sendNow(id, release, accept, current, unchecked = false) {
     this.#busy.add(id);
     this.#emit();
-    // An answer that comes once the account has been cleared is nobody's to show.
-    const current = () => generation === this.#generation;
     try {
       const before = this.fleet.update(id);
       const request = this.newRequest();
-      // Signed once the channel to the machine is open, with the key its handshake proved.
-      const make = async (machineKey) => ({ now: await this.sign({ id, machineKey, release, accept, request, unchecked }) });
+      // Signed once the channel to the machine is open, with the key its handshake proved; never
+      // for a press withdrawn meanwhile, which then goes nowhere.
+      const make = async (machineKey) => {
+        const now = current() ? await this.sign({ id, machineKey, release, accept, request, unchecked }) : null;
+        if (!current()) { throw new Error('the press was withdrawn'); }
+        return { now };
+      };
       const result = readUpdateCommandResult(await this.fleet.call(id, UPDATE.install, make));
+      // An answer that comes once the account has been cleared or the machine forgotten is nobody's to show.
       if (!current()) { return result; }
       if (result.state && this.fleet.update(id) === before) { this.fleet.noteUpdate(id, result.state); }
       if (result.outcome === 'accepted') {
@@ -552,6 +569,7 @@ export class UpdateControl {
   }
 
   forget(id) {
+    this.#forgets.set(id, (this.#forgets.get(id) ?? 0) + 1);
     this.#confirming.get(id)?.abort();
     this.#notes.delete(id);
     this.#said.delete(id);
