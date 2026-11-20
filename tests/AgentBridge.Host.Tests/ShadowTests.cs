@@ -233,7 +233,7 @@ public sealed class ShadowTests : IDisposable
         Assert.Contains("mismatch: question.options on " + ShadowHash.Session(Id), Assert.Single(log));
     }
 
-    // Seen on DEV-VM1 (#40): a shell ended and started again a minute later, the daemon a pass behind
+    // Seen on node-a (#40): a shell ended and started again a minute later, the daemon a pass behind
     // each time; 1 against 0 and then 0 against 1 ran on as one 60 s disagreement.
     [Fact]
     public void A_count_that_turns_the_other_way_is_two_disagreements_each_judged_against_the_grace()
@@ -1048,7 +1048,7 @@ public sealed class ShadowTests : IDisposable
         Assert.Null(await Confirmed(16));
     }
 
-    // Seen on DEV-VM1 (#40): another machine read the account's usage, so this machine's daemon
+    // Seen on node-a (#40): another machine read the account's usage, so this machine's daemon
     // stood down and its sensor kept an 11-hour-old figure. Every sample compared it all the same,
     // and no reading was ever near enough the host's to count.
     [Fact]
@@ -1087,7 +1087,7 @@ public sealed class ShadowTests : IDisposable
         Assert.Equal(["copilot"], current.UsageFresh);
     }
 
-    // Seen on DEV-VM1 (#40): this machine's daemon stood down for DSWETT-HOME, which read the
+    // Seen on node-a (#40): this machine's daemon stood down for node-c, which read the
     // account; the account's figure is that machine's sensor, read by its one exact entity.
     [Fact]
     public async Task A_daemon_standing_down_is_compared_by_the_reading_of_the_machine_it_names_that_reads_the_account()
@@ -1180,8 +1180,8 @@ public sealed class ShadowTests : IDisposable
         Assert.Equal((52d, false, (DateTimeOffset?)null), (second.Windows["monthly"], second.Lapsed, second.ConfirmedAt));
     }
 
-    // Seen on DEV-VM1 (#40): the host was given a further Copilot login this machine's daemon was not,
-    // so the daemon published no copilot_2 here, while DSWETT-HOME read that login. Its sensor, of the
+    // Seen on node-a (#40): the host was given a further Copilot login this machine's daemon was not,
+    // so the daemon published no copilot_2 here, while node-c read that login. Its sensor, of the
     // host's login, is the daemon's figure; a login no named machine reads is still missing.
     [Fact]
     public async Task A_place_the_daemon_has_no_sensor_for_is_compared_by_the_named_machine_reading_the_hosts_login()
@@ -1220,7 +1220,7 @@ public sealed class ShadowTests : IDisposable
         Assert.Equal([.. reader.Entities.Select(e => "/api/states/" + e)], inner.Seen.Select(r => r.Path));
     }
 
-    // Seen on DEV-VM1 (#40), 2026-10-30 22:40 PT: DSWETT-HOME, the only reader of the host's further
+    // Seen on node-a (#40), 2026-10-30 22:40 PT: node-c, the only reader of the host's further
     // login, went 35 minutes without reading it. A lapsed figure is not compared, as this daemon's
     // own is not; it is not the daemon having no reading.
     [Fact]

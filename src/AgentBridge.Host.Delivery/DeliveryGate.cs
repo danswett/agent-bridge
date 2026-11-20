@@ -314,8 +314,9 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
     }
 
     // For a request with no stages to report (a stop, a launch).
-    public Task<T> Once(Guid key, Func<Task<T>> deliver, Action<T> settled, object? owner = null, Func<Task<T>>? foreign = null) =>
-        Run(key, null, null, _ => deliver(), settled, owner: owner, foreign: foreign);
+    public Task<T> Once(Guid key, Func<Task<T>> deliver, Action<T> settled, object? owner = null,
+        Func<Task<T>>? foreign = null, Func<T, T>? repeated = null) =>
+        Run(key, null, null, _ => deliver(), settled, owner: owner, foreign: foreign, repeated: repeated);
 
     public Task<T>? Read(Guid key, object owner)
     {

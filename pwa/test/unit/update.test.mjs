@@ -104,7 +104,7 @@ test('a state from a newer host reads safely: an unknown phase as idle and an un
   assert.equal(s.phase, 'idle');
   assert.equal(s.progress, 100);
   assert.equal(s.last.outcome, 'failed');
-  assert.deepEqual(readUpdateCommandResult({ outcome: 'maybe' }), { outcome: 'refused', reason: null, state: null, code: null });
+  assert.deepEqual(readUpdateCommandResult({ outcome: 'maybe' }), { outcome: 'refused', reason: null, state: null, code: null, retryAt: null });
 });
 
 test('each phase reads as a line, and Install is offered only when a release is found and nothing is under way', () => {
@@ -311,6 +311,27 @@ function nowFleet(state, answers) {
 const signs = [];
 const fakeSign = async (a) => { signs.push(a); return { body: 'b', by: 'y', mac: 'm' }; };
 
+for (const kind of ['ordinary', 'signed']) {
+  const press = async (answer) => {
+    const fleet = kind === 'ordinary' ? fakeFleet(() => answer) : nowFleet(ready, [answer]);
+    const control = new UpdateControl({ fleet, newRequest: () => 'r1', sign: fakeSign });
+    if (kind === 'ordinary') { await control.press('a', 'install'); } else { await control.pressNow('a'); }
+    return control.stateOf('a').note;
+  };
+  test(`retryAt on ${kind} update refusals uses the viewer clock`, async () => {
+    const retryAt = '2026-11-02T20:12:00.000Z';
+    const answer = { outcome: 'refused', code: 'rate-limited', retryAt, reason: 'host words nobody sees' };
+    const time = new Date(retryAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    assert.equal(await press(answer), `Not updated yet. Try again after ${time}.`);
+  });
+  test(`retryAt missing or invalid on ${kind} update refusals gets a plain fallback`, async () => {
+    for (const retryAt of [undefined, null, 'not a time', 123]) {
+      const answer = { outcome: 'refused', code: 'rate-limited', retryAt, reason: 'host words nobody sees' };
+      assert.equal(await press(answer), 'Not updated yet. Try again in a few minutes.');
+    }
+  });
+}
+
 test('Update now on a quiet machine goes on one press, asking nothing and accepting nothing', async () => {
   signs.length = 0;
   const fleet = nowFleet(ready, []);
@@ -350,7 +371,88 @@ test('a confirm outcome shows the confirmation again with what is busy now, and 
   assert.equal(sheets.length, 1);
   assert.deepEqual(sheets[0].sessions.map((s) => [s.id, s.state]), [['p', 'Approval waiting'], ['q', 'Question waiting'], ['t', 'Mid-turn']]);
   assert.deepEqual(signs.map((s) => [s.request, s.accept?.waiting ?? null]), [['r1', null], ['r2', 2]]);
-  assert.equal(control.stateOf('a').note, 'Not updated: too many presses just now; try again in a few minutes.');
+  assert.equal(control.stateOf('a').note, 'Not updated yet. Try again in a few minutes.');
+});
+
+test('a single Update now refused for unchecked bad-release protection asks once with the warning, and only Update now there signs unchecked', async () => {
+  signs.length = 0;
+  const fleet = nowFleet(ready, [{ outcome: 'refused', code: 'policy-unreadable', reason: 'host words nobody sees', state: ready }]);
+  const sheets = [];
+  let n = 0;
+  const control = new UpdateControl({ fleet, newRequest: () => `r${++n}`, sign: fakeSign });
+  await control.pressNow('a', { machine: 'Laptop', confirm: async (sheet) => { sheets.push(sheet); return true; } });
+  assert.deepEqual(sheets.map((s) => s.policy), ['Bad-release protection could not be checked on this machine.']);
+  assert.deepEqual(signs.map((s) => [s.request, s.unchecked === true]), [['r1', false], ['r2', true]]);
+  assert.equal(control.stateOf('a').note, null);
+  assert.ok(control.isUpdateNow('r2'));
+});
+
+test('Cancel on the bad-release warning sends nothing more, and a refusal after the warning or a halt is worded, not asked again', async () => {
+  signs.length = 0;
+  const unreadable = { outcome: 'refused', code: 'policy-unreadable', reason: 'host words nobody sees' };
+  const fleet = nowFleet(ready, [unreadable]);
+  const control = new UpdateControl({ fleet, newRequest: () => 'r1', sign: fakeSign });
+  await control.pressNow('a', { machine: 'Laptop', confirm: async () => false });
+  assert.equal(fleet.calls.length, 1);
+  assert.ok(signs.every((s) => s.unchecked !== true));
+  let asked = 0;
+  const again = new UpdateControl({ fleet: nowFleet(ready, [unreadable, unreadable]), newRequest: () => 'r2', sign: fakeSign });
+  await again.pressNow('a', { machine: 'Laptop', confirm: async () => { asked += 1; return true; } });
+  assert.equal(asked, 1);
+  assert.equal(again.stateOf('a').note, "Not updated: bad-release protection couldn't be checked there.");
+  const halted = new UpdateControl({ fleet: nowFleet(ready, [{ outcome: 'refused', code: 'halted' }]), newRequest: () => 'r3', sign: fakeSign });
+  await halted.pressNow('a', { machine: 'Laptop', confirm: async () => { asked += 1; return true; } });
+  assert.equal(asked, 1);
+  assert.equal(halted.stateOf('a').note, 'Not updated: this release has been halted.');
+});
+
+test('a machine forgotten while its Update now is on its way ignores the late answer: no warning, signature, send, note or state', async () => {
+  for (const late of [
+    { outcome: 'refused', code: 'policy-unreadable', state: { ...ready, phase: 'checking' } },
+    { outcome: 'confirm', state: { ...ready, busy: busyTwo } },
+    { outcome: 'accepted', state: { ...ready, phase: 'downloading' } },
+    { outcome: 'refused', code: 'halted' },
+  ]) {
+    signs.length = 0;
+    const fleet = nowFleet(ready, []);
+    let sent; let answer; let watched = 0; let asked = 0;
+    const on = new Promise((r) => { sent = r; });
+    fleet.call = async (id, op, data) => {
+      fleet.calls.push({ id, op, data: await data(new Uint8Array([4])) });
+      if (fleet.calls.length > 1) { return { outcome: 'accepted' }; }
+      sent();
+      return new Promise((r) => { answer = r; });
+    };
+    fleet.watch = () => { watched += 1; };
+    const control = new UpdateControl({ fleet, newRequest: () => 'r1', sign: fakeSign });
+    const pressing = control.pressNow('a', { machine: 'Laptop', confirm: async () => { asked += 1; return true; } });
+    await on;
+    control.forget('a');
+    answer(late);
+    await pressing;
+    assert.deepEqual([asked, signs.length, fleet.calls.length, watched], [0, 1, 1, 0], late.outcome);
+    assert.equal(control.stateOf('a').note, null);
+    assert.equal(fleet.states.get('a'), ready);
+    assert.ok(!control.isUpdateNow('r1'));
+  }
+});
+
+test('a machine forgotten before the channel to it opens is never signed or sent an Update now', async () => {
+  signs.length = 0;
+  const fleet = nowFleet(ready, []);
+  let open;
+  const opening = new Promise((r) => { open = r; });
+  const call = fleet.call;
+  fleet.call = async (...a) => { await opening; return call(...a); };
+  const control = new UpdateControl({ fleet, newRequest: () => 'r1', sign: fakeSign });
+  const pressing = control.pressNow('a', { machine: 'Laptop', confirm: async () => true });
+  control.forget('a');
+  open();
+  const logged = console.error;
+  console.error = () => {};
+  try { await pressing; } finally { console.error = logged; }
+  assert.deepEqual([signs.length, fleet.calls.length], [0, 0]);
+  assert.equal(control.stateOf('a').note, null);
 });
 
 test('a press that gets no answer says so and never says it was not sent', async () => {
@@ -419,4 +521,6 @@ test('an Update now press is signed for that machine alone, lives two minutes, a
     target: { machine: id }, to: id, issuedAt: 1_793_300_000, expiresAt: 1_793_300_120,
     args: { now: true, release: '0.5.0', accept },
   });
+  const warned = await signUpdateNow({ key: me, deviceId, machinePublic: machine.public, release: '0.5.0', unchecked: true, request: '7d0f3a2e-1c4b-4d5e-8f60-112233445567' });
+  assert.deepEqual(JSON.parse(fromUtf8.decode(fromBase64url(warned.body))).args, { now: true, release: '0.5.0', unchecked: true });
 });

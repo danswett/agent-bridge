@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -45,20 +46,31 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
                     {
                         id, node, name = displayName is not null && FleetNames.IsValidName(displayName) ? displayName : null,
                         state = s.Status, since = s.StatusSince,
+                        startedAt = source.ProcessOf(s.Id) is { Id: > 0, StartedAt: { } started }
+                            ? started.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture) : null,
+                        owner = Outcome("owner", s.Owner), pr = Outcome("pr", s.Pr), finished = Outcome("finished", s.Finished),
                     };
-                }).ToArray();
+                }).ToList();
             var truncated = usable.Length > 64;
             int? total = truncated ? usable.Length : null;
             var content = JsonSerializer.Serialize(new { truncated, total, sessions }, ProtocolJson.Options);
             if (!force && content == lastContent && elapsed < TimeSpan.FromSeconds(20)) { return false; }
-            var record = JsonSerializer.SerializeToElement(new
+            var seq = ++sequence;
+            var at = clock.GetUtcNow();
+            JsonElement record;
+            while (true)
             {
-                v = 1, machine, epoch, seq = ++sequence, at = clock.GetUtcNow(), truncated, total, sessions,
-            }, ProtocolJson.Options);
-            record = sign?.Invoke(record) ?? record;
-            if (Encoding.UTF8.GetByteCount(record.GetRawText()) > 16 * 1024)
-            {
-                throw new InvalidDataException("registry publication exceeds the 16 KiB record limit");
+                record = JsonSerializer.SerializeToElement(new
+                {
+                    v = 1, machine, epoch, seq, at, truncated, total, sessions,
+                }, ProtocolJson.Options);
+                record = sign?.Invoke(record) ?? record;
+                if (Encoding.UTF8.GetByteCount(record.GetRawText()) <= 16 * 1024) { break; }
+                if (sessions.Count == 0) { throw new InvalidDataException("registry publication exceeds the 16 KiB record limit"); }
+                // Fit the completed signed record, dropping the least-recent state change first.
+                sessions.RemoveAt(sessions.Count - 1);
+                truncated = true;
+                total = usable.Length;
             }
             var started = clock.GetTimestamp();
             await put(record, ct);
@@ -67,5 +79,15 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
             return true;
         }
         finally { publishing.Release(); }
+    }
+
+    // Unknown is sent as absent, which readers already treat as unknown, so a relay older than
+    // this allow-list (it refuses unknown members) sees nothing new until a value is known.
+    // Malformed own evidence is dropped here rather than having the relay refuse the whole record.
+    static JsonElement? Outcome(string member, object? evidence)
+    {
+        if (evidence is null) { return null; }
+        var value = JsonSerializer.SerializeToElement(evidence, evidence.GetType(), ProtocolJson.Options);
+        return value.TryGetProperty("state", out var state) && state.GetString() != "unknown" && SessionEvidence.Outcome(member, value) ? value : null;
     }
 }

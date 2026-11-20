@@ -10,7 +10,7 @@ internal sealed record GateLaunchIngress(string Path, string ActorKind, string P
 internal static class GateLaunchAudit
 {
     internal static async Task<LaunchResult> LaunchAsync(ISessionLauncher launcher, LaunchRequest request, string peer,
-        AgentAuditLog audit, GateLaunchIngress ingress, CancellationToken ct = default)
+        AgentAuditLog audit, GateLaunchIngress ingress, CancellationToken ct = default, bool fleet = false, Func<string?>? refusal = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var id)) { return Refused("request must be a UUID"); }
         if (!audit.Bootstrap()) { return Refused("the launch audit could not establish its existing evidence"); }
@@ -43,16 +43,20 @@ internal static class GateLaunchAudit
                 : new(LaunchOutcome.Started) { Session = terminal.Target };
         }
 
+        string? denied = null;
         Action<string>? Prepare(Guid operation)
         {
+            if ((denied = refusal?.Invoke()) is not null) { return null; }
             var gate = new GateAuditMetadata(1, operation, ingress.Run?.Run ?? Guid.Empty, 0, "intent",
                 ingress.Path, ingress.ActorKind, operation, "none", LaunchBinding: binding);
             var intent = new AgentAuditEntry(ingress.Path == "relay" ? "in" : "local", id.ToString(),
-                ingress.Principal, [], "session.launch", id.ToString(), "reserved", Gate: gate);
+                ingress.Principal, [], "session.launch", id.ToString(), "reserved", Gate: gate) { Grant = fleet ? "fleet" : null };
             if (!audit.Append(intent)) { return null; }
             return session => { audit.Append(intent with { Target = session, Outcome = "started", Gate = gate with { Phase = "terminal" } }); };
         }
-        return await launcher.LaunchAuditedAsync(request, peer, Prepare, ct);
+        var outcome = fleet ? await launcher.LaunchFleetAsync(request, peer, Prepare, ct)
+            : await launcher.LaunchAuditedAsync(request, peer, Prepare, ct);
+        return denied is null ? outcome : Refused(denied);
     }
 
     static LaunchResult Refused(string reason) => new(LaunchOutcome.Refused, reason);

@@ -18,6 +18,8 @@ public interface IUpdater
     string? CheckSource => null;
     int? GitHubRemaining => null;
     DateTimeOffset? GitHubQuotaAt => null;
+    // Optional verified snapshot; null is unknown, never evidence that no releases are halted.
+    HaltPolicySnapshot? HaltPolicy => null;
     // The release notes of the release the last check found, when it has any.
     string? PendingNotes => null;
     Task DownloadAsync(Action<int> progress);
@@ -140,7 +142,15 @@ public sealed partial class SettingsViewModel : Observable
     public string Profile => manager.Layout.Profile;
     public string? AgentHaBridge => Status?.AgentHaBridge;
     public bool HasAgentHaBridge => !string.IsNullOrEmpty(Status?.AgentHaBridge);
-    public string? HomeAssistantRefused => Status?.HomeAssistant;
+    public string? HomeAssistantRefused
+    {
+        get
+        {
+            const string command = """& "$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe" ha token set""";
+            return Status?.HomeAssistant?.Replace("`agent-bridge-host ha token set`",
+                $"`{command}` (or pipe it: `Get-Clipboard | {command}`)", StringComparison.Ordinal);
+        }
+    }
     public bool HasHomeAssistantRefused => !string.IsNullOrEmpty(Status?.HomeAssistant);
     public bool RestartRequired => Status?.RestartRequired == true;
     public bool ElevatedWarning => Status?.Elevated == true;

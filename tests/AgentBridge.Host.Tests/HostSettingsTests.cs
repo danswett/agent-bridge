@@ -404,6 +404,7 @@ public sealed class HostSettingsTests : IDisposable
     {
         Assert.Equal(AgentMessagingSettings.Default, With(null).Settings.AgentMessaging);
         Assert.Equal(("off", false), (AgentMessagingSettings.Default.Remote, AgentMessagingSettings.Default.AllowAllTargets));
+        Assert.Empty(AgentMessagingSettings.Default.AllowAllTargetSessions);
         // An upgrade or install that writes other sections never turns it on.
         var settings = With("""{ "devBox": { "keepAwake": true } }""").Settings;
         Assert.False(settings.AgentMessaging.RemoteEnabled);
@@ -415,6 +416,7 @@ public sealed class HostSettingsTests : IDisposable
     [InlineData("""{ "agentMessaging": { "remote": true } }""", "agentMessaging.remote")]
     [InlineData("""{ "agentMessaging": { "remote": "on", "allowAllTargets": true } }""", "agentMessaging.remote")]
     [InlineData("""{ "agentMessaging": { "allowAllTargets": "yes" } }""", "agentMessaging.allowAllTargets")]
+    [InlineData("""{ "agentMessaging": { "allowAllTargetSessions": "*" } }""", "agentMessaging.allowAllTargetSessions")]
     [InlineData("""{ "agentMessaging": "own-account" }""", "agentMessaging is not an object")]
     public void A_remote_agent_messaging_value_that_cannot_be_read_means_off_and_says_so(string text, string said)
     {
@@ -434,6 +436,19 @@ public sealed class HostSettingsTests : IDisposable
     }
 
     [Fact]
+    public void Allow_all_sessions_require_an_explicit_list_of_non_empty_session_ids()
+    {
+        const string session = "11111111-1111-1111-1111-111111111111";
+        var listed = With("""{"agentMessaging":{"remote":"own-account","allowAllTargets":true,"allowAllTargetSessions":["11111111-1111-1111-1111-111111111111","11111111-1111-1111-1111-111111111111"]}}""").Settings.AgentMessaging;
+        Assert.Equal([session], listed.AllowAllTargetSessions);
+        Assert.Empty(With("""{"agentMessaging":{"remote":"own-account","allowAllTargets":true,"allowAllTargetSessions":[]}}""").Settings.AgentMessaging.AllowAllTargetSessions);
+
+        var malformed = With("""{"agentMessaging":{"allowAllTargetSessions":["",true]}}""").Settings;
+        Assert.Empty(malformed.AgentMessaging.AllowAllTargetSessions);
+        Assert.Contains(malformed.AgentMessagingProblems, p => p.Contains("allowAllTargetSessions", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Switching_remote_agent_messaging_off_takes_effect_on_the_next_read_without_a_restart_and_a_newer_file_is_off()
     {
         Assert.Equal(0, Run("config", "set", "agentMessaging.remote", "own-account"));
@@ -442,6 +457,11 @@ public sealed class HostSettingsTests : IDisposable
 
         Assert.Equal(0, Run("config", "set", "agentMessaging.remote", "off"));
         Assert.False(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
+        const string session = "11111111-1111-1111-1111-111111111111";
+        Assert.Equal(0, Run("config", "set", "agentMessaging.allowAllTargetSessions", """["11111111-1111-1111-1111-111111111111"]"""));
+        Assert.Equal([session], HostSettings.CurrentAgentMessaging(folder).AllowAllTargetSessions);
+        Assert.Equal(1, Run("config", "set", "agentMessaging.allowAllTargetSessions", """[""]"""));
+        Assert.Contains("Not written", Said);
 
         // config set refuses a value that would be read as off for being wrong.
         Assert.Equal(1, Run("config", "set", "agentMessaging.remote", "everyone"));
@@ -485,12 +505,14 @@ public sealed class HostSettingsTests : IDisposable
     [Fact]
     public void The_home_assistant_token_is_read_without_an_argument_kept_protected_and_never_shown()
     {
-        const string token = "fixture-token-that-must-not-be-printed";
+        const string token = SecretPromptTests.Token;
+        const string config = """{"homeAssistant":{"baseUrl":"http://ha.test:8123"}}""";
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), config);
         var output = new StringWriter();
         var error = new StringWriter();
-        Assert.Equal(0, HaCommands.Run(["ha", "token", "set"], folder, () => token, output, error, devBuild: true, agentHaBridge: () => null));
+        Assert.Equal(0, HaCommands.Run(["ha", "token", "set"], folder, () => token, output, error, devBuild: true, agentHaBridge: () => null, confirm: () => "yes"));
         Assert.DoesNotContain(token, output.ToString(), StringComparison.Ordinal);
-        Assert.False(File.Exists(Path.Combine(folder, HostSettings.FileName)));
+        Assert.Equal(config, File.ReadAllText(Path.Combine(folder, HostSettings.FileName)));
         Assert.Equal(token, AgentBridge.HomeAssistant.HaTokenStore.Load(folder));
 
         File.WriteAllText(Path.Combine(folder, HostSettings.FileName), """{ "homeAssistant": { "enabled": true, "baseUrl": "http://ha.test:8123" } }""");
@@ -512,7 +534,7 @@ public sealed class HostSettingsTests : IDisposable
     [Fact]
     public async Task Ha_status_says_Home_Assistant_rejected_the_token_and_ha_token_set_earns_it_one_fresh_attempt()
     {
-        const string token = "test-token-not-a-secret";
+        const string token = SecretPromptTests.Token;
         var profile = Directory.CreateDirectory(Path.Combine(folder, "default")).FullName;
         File.WriteAllText(Path.Combine(profile, HostSettings.FileName), """{ "homeAssistant": { "baseUrl": "http://ha.test:8123" } }""");
         AgentBridge.HomeAssistant.HaTokenStore.Save(profile, token);
@@ -530,7 +552,7 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Contains("refused: Home Assistant rejected the token: run `agent-bridge-host ha token set`", Status(), StringComparison.Ordinal);
         Assert.DoesNotContain(token, Status(), StringComparison.Ordinal);
 
-        Assert.Equal(0, HaCommands.Run(["ha", "token", "set"], profile, () => token, new StringWriter(), new StringWriter(), devBuild: false, agentHaBridge: null));
+        Assert.Equal(0, HaCommands.Run(["ha", "token", "set"], profile, () => token, new StringWriter(), new StringWriter(), devBuild: false, agentHaBridge: null, confirm: () => "yes"));
         Assert.DoesNotContain("refused:", Status(), StringComparison.Ordinal);
         var restarted = new AgentBridge.HomeAssistant.HomeAssistantClient(new Uri("http://ha.test:8123"), token, new HttpClient(new Refusing()),
             auth: new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(profile)));
@@ -542,7 +564,7 @@ public sealed class HostSettingsTests : IDisposable
     [Fact]
     public async Task Ha_token_set_fails_and_says_so_when_it_cannot_record_that_the_token_was_given_again()
     {
-        const string token = "test-token-not-a-secret";
+        const string token = SecretPromptTests.Token;
         var profile = Directory.CreateDirectory(Path.Combine(folder, "default")).FullName;
         File.WriteAllText(Path.Combine(profile, HostSettings.FileName), """{ "homeAssistant": { "baseUrl": "http://ha.test:8123" } }""");
         var record = AgentBridge.HomeAssistant.HaAuthGuard.FileFor(profile);
@@ -552,7 +574,7 @@ public sealed class HostSettingsTests : IDisposable
         Directory.CreateDirectory(record + ".tmp");
 
         var error = new StringWriter();
-        Assert.Equal(1, HaCommands.Run(["ha", "token", "set"], profile, () => token, new StringWriter(), error, devBuild: false, agentHaBridge: null));
+        Assert.Equal(1, HaCommands.Run(["ha", "token", "set"], profile, () => token, new StringWriter(), error, devBuild: false, agentHaBridge: null, confirm: () => "yes"));
         Assert.Contains("could not record", error.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(token, error.ToString(), StringComparison.Ordinal);
 

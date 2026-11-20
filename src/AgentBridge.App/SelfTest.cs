@@ -24,8 +24,11 @@ static partial class SelfTest
         var result = new Dictionary<string, object?>();
         var checks = new List<string>();
         var failures = new List<string>();
+        var latestTiming = new LatestTiming(AppLog.Write);
+        result["latestTiming"] = latestTiming.Records;
         void Check(bool ok, string what)
         {
+            latestTiming.Check(ok, what);
             (ok ? checks : failures).Add(what);
             if (!ok) { AppLog.Write($"self-test: failed: {what}; {ForegroundOwner()}"); }
         }
@@ -289,7 +292,13 @@ static partial class SelfTest
             await CheckDelegates(window, main, demo, Check, outFile);
             await CheckSessionDetails(window, main, demo, Check, outFile);
             await CheckAnswerMoves(window, main, Check, outFile);
-            await CheckHistoryScroll(window, main, Check);
+            latestTiming.Boundary("latest history scroll");
+            try { await CheckHistoryScroll(window, main, Check); }
+            finally { latestTiming.Boundary(""); }
+            Check(result.TryGetValue("latestTiming", out var timings)
+                && JsonSerializer.SerializeToElement(timings) is { ValueKind: JsonValueKind.Array } timingRecords
+                && timingRecords.EnumerateArray().Any(r => r.GetProperty("Kind").GetString() == "check"),
+                "latest: records Windows view check timings");
             await CheckHistoryBottomBounce(window, main, demo, Check, outFile);
             await CheckHistoryYourMessages(window, main, Check);
             await CheckMessageTimes(window, main, Check);

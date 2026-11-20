@@ -4,10 +4,12 @@
 // at once, then tick again.
 export function whileVisible(fn, ms, doc = globalThis.document) {
   let timer = null;
+  let stopped = false;
   const hidden = () => doc?.visibilityState === 'hidden';
-  const start = () => { if (!timer) { timer = setInterval(fn, ms); } };
+  const start = () => { if (!stopped && !timer && !hidden()) { timer = setInterval(fn, ms); } };
   const pause = () => { clearInterval(timer); timer = null; };
   const changed = () => {
+    if (stopped) { return; }
     if (hidden()) { pause(); return; }
     if (timer) { return; }
     fn();
@@ -17,6 +19,7 @@ export function whileVisible(fn, ms, doc = globalThis.document) {
   doc?.addEventListener?.('visibilitychange', changed);
   return {
     stop() {
+      stopped = true;
       pause();
       doc?.removeEventListener?.('visibilitychange', changed);
     },

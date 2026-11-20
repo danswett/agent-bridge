@@ -112,7 +112,6 @@ if (command == "approve")
     return await ApproveCommands.RunAsync(args, Identity.DefaultRoot, () => Refused("approving a question"), Console.Out, Console.Error);
 }
 
-// Inventory must return before even intake or device/account identity files are opened.
 if (command == "devices" && arguments.ElementAtOrDefault(1) == "descriptor")
 {
     // No verified reader is wired here yet; neither identity nor custody may be opened.
@@ -130,6 +129,7 @@ if (command == "host-sign")
         !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_BRIDGE_TOKEN")), Console.Out, Console.Error);
 }
 
+// Inventory must return before even intake or device/account identity files are opened.
 if (command == "ha" && HaCommands.TryInventoryCommand(arguments, Identity.DefaultRoot, Console.Out, Console.Error) is { } inventoryExit)
 {
     return inventoryExit;
@@ -183,7 +183,7 @@ var options = new SessionSourceOptions
     PhoneSignIn = PhoneSignInSetup.Agents(settings, signInCopilot is not null),
     PhoneSignInPinned = () => PersonDevices.Any(personRoster, rosterAccount()),
     Log = command == "serve" ? Log : null,
-    // Only serve keeps what it listed for its next start (#147); no other command reads or writes it.
+    // Serve persists process-generation resume guards, not roster membership (#147).
     StateFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "sessions-listed.json") : null,
     // session.history's cursors outlive a restart of serve (docs/protocol/v1-history.md).
     HistoryKeyFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "history-cursor.key") : null,
@@ -233,7 +233,7 @@ switch (command)
     case "agents":
         {
             return await AgentCommands.RunWithProfileAsync(arguments, Identity.DefaultRoot,
-                () => Refused("adopt a session or end its adoption"), Console.Out, Console.Error);
+                () => Refused(arguments.ElementAtOrDefault(1) == "lite" ? "kill own-agents messaging" : "adopt a session or end its adoption"), Console.Out, Console.Error);
         }
     case "watch":
         {
@@ -338,7 +338,7 @@ switch (command)
             if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
             if (HaCommands.Writes(rest) && Refused("change the host's Home Assistant token")) { return 4; }
             Func<string?>? active = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().Active : null;
-            return HaCommands.Run(rest, LoadIdentity().Folder, () => HaCommands.ReadSecret(Console.Error), Console.Out, Console.Error, IsDevBuild(), active);
+            return HaCommands.Run(rest, LoadIdentity().Folder, () => HaCommands.ReadSecret(Console.Error), Console.Out, Console.Error, IsDevBuild(), active, () => SecretInput.Read(Console.Error));
         }
     case "shadow":
         return await AgentBridge.Host.Shadow.ShadowCommand.RunAsync(arguments, options, HostVersion(), IsDevBuild(), Console.Out, Console.Error);
@@ -419,17 +419,7 @@ switch (command)
 Identity LoadIdentity() => Identity.Load(Option("--profile") ?? "default");
 
 // The password is typed or piped in, never an argument, which a process list or history would keep.
-static string? ReadMaskedPassword()
-{
-    if (Console.IsInputRedirected) { return Console.In.ReadLine(); }
-    var typed = new System.Text.StringBuilder();
-    while (Console.ReadKey(intercept: true) is var key && key.Key != ConsoleKey.Enter)
-    {
-        if (key.Key == ConsoleKey.Backspace) { if (typed.Length > 0) { typed.Length--; } }
-        else if (!char.IsControl(key.KeyChar)) { typed.Append(key.KeyChar); }
-    }
-    return typed.ToString();
-}
+static string? ReadMaskedPassword() => SecretInput.Read(Console.Error);
 
 // What may only be done by a person never runs inside an agent session (§6.3 invariant 13): the
 // host's own command line refuses it there, as the pipe does.
@@ -504,7 +494,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // its command lines are already known.
     var processes = new SystemProcessInspector();
     var attempts = new AttemptLedger(Path.Combine(identity.Folder, "answer-attempts.json"), log: Log);
-    await using var source = new SessionSource(options, processes, drivers: drivers, answerAttempted: attempts.IsClaimed);
+    await using var source = new SessionSource(options, processes, drivers: drivers, answerAttempted: attempts.IsClaimed, hostId: machine.Id);
     attempts.Changed += source.AnswerAttemptsChanged;
     // Five-second samples for sessions or feeds; otherwise only the minute host-log cadence.
     await using var load = HostLoadSampling.Create(settings, source, new AgentBridge.Host.Core.Load.SystemProcessTable(), relay: !localOnly);
@@ -617,7 +607,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit);
     launcher.SessionStarted += restore.Launched;
     launcher.StartScanning();
-    var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => settings.AgentMessaging.AllowAllTargets, launcher, Log);
+    var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => HostSettings.CurrentAgentMessaging(identity.Folder), launcher, Log);
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
     // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
@@ -744,8 +734,14 @@ async Task<int> ServeAsync(HostHandover handover)
             : RemoteDiagnostics.AgentHaBridge(g5),
         log: Log);
     var fleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder);
-    var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare, name: fleetNames.Get, log: Log);
+    var hostRoster = new HostRosterReader(Path.Combine(identity.Folder, "roster-pin.json"), HostRoster.Now);
+    var fleetTrust = new AgentBridge.Host.Fleet.FleetTrust(hostRoster, identity.Folder, () => identity.Account?.AccountId);
+    var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
+        name: fleetNames.Get, log: Log, sign: fleetTrust.Sign);
     var loadService = new LoadService(source, () => load.Current, () => settings.LoadEnabled, Log);
+    var litePeers = new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId));
+    // L6: one kill switch is the mode of both sides. Its pins hold while the mode is off, so a killed host still tells the others.
+    var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => true, () => identity.Account?.AccountId)), Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         LoadEnabled = () => settings.LoadEnabled,
@@ -764,7 +760,8 @@ async Task<int> ServeAsync(HostHandover handover)
         SignInDevices = self => PersonDevices.View(personRoster, rosterAccount(), self),
         Manage = manage,
         Diagnostics = diagnostics,
-        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)),         new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteDeliver),
+        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(liteKill, litePeers, liteDeliver),
+        LiteKill = liteKill,
     };
     Log(settings.LoadStatus);
     // Who is on the other end of the pipe: the app beside this host, or something inside an
@@ -924,9 +921,9 @@ async Task<int> ServeAsync(HostHandover handover)
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
-    var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster();
+    var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, litePeers, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
@@ -1003,6 +1000,20 @@ async Task<int> ServeAsync(HostHandover handover)
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
             liteLink.Attach(relay, hub);
+            // L6: tells the other pinned hosts of a newer kill, including one `agents lite kill` made in another process.
+            _ = Task.Run(async () =>
+            {
+                using var tick = new PeriodicTimer(TimeSpan.FromSeconds(5));
+                try
+                {
+                    while (!relay.Completion.IsCompleted && await tick.WaitForNextTickAsync(current.Token))
+                    {
+                        try { await liteKill.PushAsync(relay, hub, current.Token); }
+                        catch (Exception e) when (e is not OperationCanceledException) { Log($"lite: kill push failed ({e.GetType().Name})"); }
+                    }
+                }
+                catch (OperationCanceledException) { }
+            });
             fleetRoster.Attach(relay);
             usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);
@@ -1015,7 +1026,7 @@ async Task<int> ServeAsync(HostHandover handover)
             // Off mode: read and verify the roster in the background, log what it says, enforce nothing.
             _ = Task.Run(async () =>
             {
-                var check = await HostRoster.SyncAsync(relay, HostRoster.Now, current.Token);
+                var check = await HostRoster.SyncAsync(relay, HostRoster.Now, current.Token, hostRoster);
                 Log($"device roster (security.roster {settings.Security.Roster}): {check.Summary}");
             });
             since.Restart();
@@ -1122,6 +1133,8 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,
         CodexHome = options.CodexHome,
         Config = settings.Launch,
+        HomeAssistantEnabled = settings.HomeAssistant.Enabled || settings.HomeAssistant.EnabledRequested,
+        HomeAssistantBaseUrl = settings.HomeAssistant.BaseUrl,
         // A session waiting to be restored keeps its worktree as a live one does (#780).
         WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),
         Transfers = transfers,

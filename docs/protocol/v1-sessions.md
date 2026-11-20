@@ -82,7 +82,7 @@ with the wrong type):
 |---|---|---|
 | `HelloResult` | `protocol` | |
 | `MachineInfo` | `id` | |
-| `Session` | `id` | |
+| `Session` | `id`, `machine` | |
 | `SessionLoad` ([v1-machine-load.md](v1-machine-load.md)) | `session` | |
 | `Subagent` | `id` | |
 | `ToolCall` | `id` | |
@@ -284,7 +284,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 | Field | Notes |
 |---|---|
 | `at` | When this run of the host started and compared |
-| `cause` | `reboot` (the machine started again, or the person signed out, so every agent went with it), `crash` (the host stopped without saying so, on the same boot) or `restart` (it stopped cleanly, on the same boot, and sessions went while it was away). A client reads a cause it doesn't know as `crash` |
+| `cause` | `reboot` (the machine started again, or the person signed out, so every agent went with it), `crash` (the host stopped without saying so, on the same boot) or `restart` (it stopped cleanly, on the same boot, and sessions went while it was away). `crash` is a legacy wire name, not a diagnosis: an external stop or launcher job close leaves the same record. A client reads a cause it doesn't know as `crash`; Continue uses neutral wording, "the host stopping unexpectedly", rather than claiming a crash |
 | `since` | When the earlier run last wrote down what was live: about when the sessions went |
 | `restored`, `loops` | Sessions restored, idle, through the resume path, and seen ready, and those not restored again because they died again within 10 minutes of a restore (offered, and among `offered`) |
 | `waiting` | Sessions still being judged: their agent's discovery is held ([Discovery held](#discovery-held)), or its hooks' endings are not yet taken in, so whether they still run, or ended, cannot be told yet. They are never read as gone; once judged, `restore` changes and `hello.changed` says so |
@@ -391,6 +391,23 @@ host sends:
      removed once its process has gone.
    * `discovery.changed`, with `{ "discoveryHeld": {…} }` when the host's discovery becomes
      held or what holds it changes, and `{}` when it clears. Sent once per change.
+
+These reads use the host's in-memory live source, also used by its fleet registry
+publisher, without Home Assistant reads or a separate roster store. Every `Session`
+is scoped to `hello.machine.id`. The in-memory roster is bounded to 250 sessions;
+overflow holds discovery for the affected agent until a slot is freed, without
+evicting a live row or allowing an omitted session to resume: its process stays a resume guard.
+`owner`, `pr` and `finished` carry explicit evidence:
+unknown is not confirmed none or false. Idle does not mean work-finished. Removal bypasses
+upsert coalescing and quiet-session holding once discovery drops a row; list/get and new
+subscriptions then exclude it. Missing rows are retained while their agent's discovery
+is held, but positive ended evidence removes a session immediately, even during a hold.
+A discovery hold alone is not evidence that a session ended.
+
+This cut emits `owner`, `pr` and `finished` as `{ "state": "unknown" }` on every
+host-bound row; discovering known values or confirmed none/false is out of scope.
+It does not complete the all-fields Done-when for
+[the host roster issue](https://github.com/danswett/agent-bridge/issues/2642).
 
 A session can change while the snapshot is being sent; its upsert then simply arrives
 again. When a channel closes, the client subscribes again on the new channel.
@@ -603,23 +620,24 @@ an absence, and never reads the failed look as "every session ended" (design §6
 agent-ha-bridge's "session discovery uncertain … absence-based work is held"). While an agent
 in `agents` is held:
 
-* its sessions are not removed for being missing, and those the host has go on updating;
+* its sessions are not removed merely for being missing, and those the host has go on
+  updating; positive ended evidence removes a session immediately, even during a hold;
 * none of them is offered for resume, a resume is `busy`, and no worktree is reclaimed
   ([v1-launch.md](v1-launch.md#while-discovery-is-held));
 * the Home Assistant connector retires no session's entities, of any agent
   ([ha-connector.md](../ha-connector.md#lifecycle)).
 
-A hold survives a restart of the host (#147). The serving host keeps the sessions it lists in
-`sessions-listed.json` in its profile's folder: each one's id, agent, pid and process start time,
-and never a path, which is found again as discovery finds it. To the first pass after it starts,
-their processes count as known, so one whose runtime cannot be read holds its agent as it would
-have before the restart. That pass brings back each of them of an agent it holds, as long as its
-own process is still running (the same pid, started at the same time) and no session found has
-that process now.
-A session such a pass cannot see, which only the hold was keeping, is therefore still listed
-after a restart, as it was before one. It is then kept like any other session a hold keeps, until
-a complete pass decides. A complete first pass is believed, as ever, and so is a registration
-that says the session ended, even when its runtime cannot be read.
+Host-bound roster membership is memory-only: each row requires fresh live discovery,
+never disk membership to fill in an incomplete pass. `sessions-listed.json` keeps only
+resume guards: a previously known unreadable runtime (dated, or one the 250 limit omitted)
+holds its agent across passes and restarts, without supplying a row. A positively exited or replaced
+process releases that guard. Native discovery supersedes an ended registration only with a
+process born after its last update, the row staying listed until the successor replaces it.
+If either timestamp is unavailable, the native candidate is not admitted and its agent is
+held: removing the ended row must not allow a duplicate resume. The hold lasts until fresh
+evidence proves the successor, the registration changes, or the candidate process exits.
+Registration session ids are compared ordinally, including across registration roots;
+case-distinct ids remain distinct.
 
 Sessions of the other agents are removed and resumed as usual. `reason` says what holds it, in
 words for a person, at most 512 bytes; a client shows it as it is ("discovery held: …", as the
@@ -736,7 +754,7 @@ reads the session's record of that same question again, typing nothing: an answe
 since (submitted at the machine, or recorded late) comes back `delivered`, and from then on
 stays so, and one recorded differently comes back `recorded`. It never answers a newer
 question. A client may therefore send the same request again after a reconnect, within the
-10 minutes the host remembers it, to learn what came of a `typed` answer.
+15 minutes the host remembers it, to learn what came of a `typed` answer.
 
 Typing into a live session is a single writer's job, and the host serializes it: one
 answer or reply per session at a time (`busy` otherwise), checked against the transcript
@@ -997,6 +1015,17 @@ even if hello was stale. A host implementing queue delivery supplies it on every
 Slice 1 defines the contract and models only; hosts must not advertise queue support
 until the delivery path implements it.
 
+**Host-owned intent (#2568 A-i).** `ReplyRequest.Intent` is an in-process carrier,
+not a wire field or the requested `mode`. It defaults to `Unknown`. Only the host's
+current local App/HostCli classification or a current pinned-person relay lease
+produces `Steer`; disabled pinning is not person proof. The carrier rechecks that
+same ingress when read, so a revoked lease cannot be replaced by a later grant.
+Unclassified ingress and both HA reply adapters retain `Unknown`. Text, sender or
+driver labels, `pri=urgent`, a claimed role and `RequireIdle` cannot grant intent;
+neither the carrier nor its source delegate is serialized or accepted from JSON.
+This producer-only slice changes no key behavior and offers no queue capability.
+Capability qualification and the fail-closed submit consumer are separate slices.
+
 **Agent-sender version boundary.** Queue-reply extension **v1** (protocol 1 with
 `sessions.reply.queue`, [#2468](https://github.com/danswett/agent-bridge/issues/2468))
 supersedes the base-v1 agent rule "nothing queued; working-session reply refused
@@ -1034,6 +1063,18 @@ with `timings` for a request that asked for progress, and optional `attachments`
 Hosts emit `stage` only on `unconfirmed`: `typed`, `recorded`, or `queued` below;
 unknown reads as `typed`, never as delivery. Tolerant records may retain a stage on
 another outcome; clients ignore it there rather than override the outcome.
+
+The [guarded-clear foundation](../host-replies.md#guarded-clear-foundation-804)
+adds optional `cleared: { text, marks, truncated }`: text that a clear attempt may
+have deleted, escaped with host-only `[start, length]` marks in UTF-16 units.
+It is returned even if the reply is later refused, and is never logged. This cut
+refuses before keys unless the complete single-row draft fits 500 escaped characters;
+it therefore always returns `truncated: false`. Lossless host-only composer evidence
+is mandatory: display-normalized screen text alone cannot authorize deletion.
+Replay requires the original sender, session and still-current host authority callbacks;
+foreign replay receives no escrow or progress. There is no wire confirmation field,
+production clear producer or capability in this cut. Signed person relay confirmation,
+policy and PWA/app presentation follow separately; existing clients are unchanged.
 
 `attachments: [{ "id": "<client attachment UUID>", "ref": "@<staged absolute path>" }]`
 binds each attachment to exactly the reference token in the recorded prompt, in the
@@ -1094,7 +1135,20 @@ For Copilot, a queued prompt seen in the turn row within 5 s of Ctrl+Q
 withholds that progress: it never ends the transcript wait or decides the result.
 There is **no Enter fallback**. Only the matching transcript `user.message` with
 `delivery: "queued"` confirms a queued reply, with its attachments as above.
-Copilot may take it within those 5 s and yield `delivered` without a queued row.
+Copilot may take it within those 5 s and yield `delivered` without a queued screen
+row; that rapid case still requires transcript `delivery: "queued"` and result
+`mode: "queue"`.
+
+The request's `mode` alone never proves which path was used:
+
+| Copilot path actually used | Matching transcript `delivery` | Result `mode` |
+|---|---|---|
+| Queue while working | `queued` | `queue` |
+| Enter while idle, including a request for `queue` | `idle` | `steer` |
+| Enter steering a working session | `steering` | `steer` |
+
+Only the first row confirms queueing. The other rows can confirm a reply on the
+actual `steer` path, never a selected queue path; `steering` never proves queued.
 
 The confirmation wait is 60 s from typing, extended while **the same turn that was
 running at typing** still runs, with a hard cap of 15 minutes from typing. A later
@@ -1107,6 +1161,13 @@ transcript again, typing nothing, and becomes `delivered` when recorded, as for 
 unconfirmed answer, within the request-memory window. A final outcome or stage a
 client does not know is handled conservatively: unknown outcome is `unconfirmed`,
 unknown stage is `typed`; neither proves delivery.
+
+The confirmation cap starts at typing. The separate 15-minute request-memory
+window starts when the first outcome settles (including `unconfirmed`), not when
+typing starts. An in-flight request is not forgotten by that settled-outcome
+window; a repeat waits for the same attempt. Read-only rechecks do not restart
+the memory window. A full 15-minute confirmation wait therefore does not consume
+the 15-minute window for asking what came of it.
 
 A reply is never typed while the session is asking anything, which a host checks both in
 what it reports and, immediately before typing, in the transcript itself. The per-session
@@ -1302,7 +1363,7 @@ Ends a session, as agent-ha-bridge's End session button does. Request `data`:
 | Field | Notes |
 |---|---|
 | `id` | The session |
-| `request` | A fresh UUID per press, with exactly `session.answer`'s semantics: every outcome is remembered for at least 10 minutes and returned for a repeat, which does nothing more; a repeat of a press still being acted on waits for it |
+| `request` | A fresh UUID per press, with exactly `session.answer`'s semantics: every outcome is remembered for 15 minutes and returned for a repeat, which does nothing more; a repeat of a press still being acted on waits for it |
 | `confirm` | Only on a second press: the token the first press's `confirm` outcome gave. At most 64 characters of `A–Z a–z 0–9 - _` |
 
 **Two presses when the session is not safely idle, enforced by the host.** A session that is
@@ -1873,6 +1934,10 @@ is for disposable evaluation, not production service enrollment.
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | The agent's own session id: the Copilot session-state folder name, or the Claude or Codex session id |
+| `machine` | string? | This host's `hello.machine.id`; absent from older hosts |
+| `owner` | object? | `{"state":"unknown"}` until known; otherwise `{"state":"known","principal":"..."}`. Not inferred from the current driver |
+| `pr` | object? | `{"state":"unknown"}`, confirmed `{"state":"none"}`, or `{"state":"known","number":...}` |
+| `finished` | object? | `{"state":"unknown"}` until known; otherwise `{"state":"known","value":true\|false}`. Idle, merged PRs and closed-unmerged PRs do not establish this evidence |
 | `agent` | `"copilot"` \| `"claude"` \| `"codex"` | Hosts send only these. A client reads anything else as `unknown` |
 | `title` | string? | The session's name if it has one (Copilot's `workspace.yaml` `name`). Otherwise the first user message, cut to 240 bytes |
 | `cwd` | string? | Working directory |
@@ -1883,9 +1948,12 @@ is for disposable evaluation, not production service enrollment.
 | `context` | string? | The agent's own context option id (as in `v1-launch.md` `contexts`, e.g. `1000000` or `long_context`), under the same rules as `effort`. Clients show it in Details after Model; a bare number is left out of the row, and a size such as `1M` reads `1M tokens` |
 | `status` | `"working"` \| `"waiting"` \| `"idle"` \| `"ending"` | `waiting` exactly when `question` is present, unless `ending`. `ending`: the host is ending the session (`session.stop`); it is removed once its process has gone, or shows its own status again if that fails. A client that does not know `ending` reads it as `idle` |
 | `statusSince` | time | When `status` last changed |
-| `startedAt` | time? | |
+| `startedAt` | time? | Omitted when the host cannot prove the session start. Process birth, workspace creation, `statusSince` and subscription cursors are not substitutes, including across resumes and host restarts |
 | `updatedAt` | time | When something a client shows last changed. Events that change nothing visible (hook runs, usage records, model internals) do **not** move it, so they never cause an upsert |
 | `processId` | number? | The agent's process, when known |
+| `transcript_bytes` | integer? | Session event-log file length in bytes, obtained from filesystem metadata only (#2739), never transcript contents or process memory. A measured empty file is zero; absence is unknown, never zero |
+| `transcript_bytes_unavailable` | string? | Instead of a size when metadata cannot be read: `path-unavailable`, `not-found`, `not-a-file`, `access-denied`, `io-error` or `invalid-path`. No local path or exception text |
+| `transcript_observation` | object? | With either result: `observed_at` (UTC time), `source: "file-size"`, `host_id` (this host's public machine id). Bound to this session's `id`. Optional for older hosts and identity-free local readers; clients may ignore all three fields |
 | `activity` | Activity | |
 | `question` | Question? | The question the agent is waiting on, if any |
 | `driver` | `"person"` \| `"agent"`? | Who drives the current turn ([Driver](#driver)). Absent means `person`, and a host sends it only as `agent`. A client that does not know a value reads it as `person` |
@@ -1897,6 +1965,11 @@ is for disposable evaluation, not production service enrollment.
 | `attention` | [Attention](#attention)? | **New (#800).** What is wrong with the session that `status` cannot say: its agent needs signing in again, its turn ended on an error, or it stopped responding. Absent when nothing is |
 | `class` | `"needsYou"` \| `"done"` \| `"fyi"`? | **New (#913).** The session's notification tier, which every client follows instead of its own rules: [Notification class](#notification-class-913). Absent from an older host; a client then keeps today's behaviour. A client that does not know a value reads it as absent |
 | `classSince` | time? | **New (#913).** When the session entered its present tier, the episode's start, which the 15-minute reminder counts from. Kept while `class` is unchanged (a further question does not move it); on a change of `class`, for `needsYou` the earliest of `question.askedAt`, `attention.since` and, after a crash, `restored.at`, otherwise `statusSince` ([Notification class](#notification-class-913)). Present with `class`. Never shown |
+
+The serving host samples transcript metadata on normal refreshes, resolving file links to their
+target metadata. Size, availability or path changes publish a new observation, including partial
+final lines and truncation. An unchanged result retains its last published observation time to avoid
+timestamp-only event churn. This adds no content reads, cap enforcement or census policy.
 
 **Status precedence** with sub-agents (first match wins): the session's own question
 (`waiting`); a sub-agent's question (`waiting`, with `waitingOn`); the main agent's turn

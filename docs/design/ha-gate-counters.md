@@ -1,7 +1,8 @@
 # HA retirement gate counters
 
 Design for [#2384](https://github.com/danswett/agent-bridge/issues/2384), S4-2 of
-[#1396](https://github.com/danswett/agent-bridge/issues/1396). Proposed, not shipped.
+[#1396](https://github.com/danswett/agent-bridge/issues/1396). Source instrumentation
+is staged; qualifying runs remain held.
 This measures item 2 of fleet `docs/ha-retirement-parity.md` section 3:
 one continuous run with at least 500 messages, 50 launches, 30 approvals and
 20 stops, and zero HA fallbacks. It does not approve retirement or replace
@@ -92,7 +93,7 @@ and run-control markers use `agents-*.jsonl`. Totals are a reproducible projecti
 Keep existing audit semantics: `attempted` or `reserved` does not become success.
 The existing fleet message evidence remains its named source, not a new store.
 
-Proposed versioned metadata: host-generated `operation`, `run`, monotonic
+Versioned metadata: host-generated `operation`, `run`, monotonic
 per-profile `sequence`, `phase` (intent/terminal/control), `path`, `actorKind`,
 action, validated target/incarnation, outcome and bounded reason code.
 Record a question identity for approval dedupe, never its title or fields.
@@ -141,6 +142,16 @@ permission display digests and all contents are excluded. Credentialed agents
 remain refused: one terminal/refused row for a matching host question, no dispatched
 intent and no credit or unresolved attempt. Other local callers, restart restoration,
 relay and HA context remain deferred; no automatic run provider is added.
+
+Slice 4 wires app/host-CLI, authenticated relay and internal HA stops. Empty run
+still earns no qualifying credit. A flushed intent follows native stop guards
+and precedes confirmation arming or dispatch; refused/busy/failed pre-dispatch
+results have terminal-only evidence only when the process incarnation is known,
+not HA fallback intents. Only `ended` credits the process incarnation. Replay
+uses retained request/principal/incarnation bindings; changed incarnations and
+uncertain cache misses after restart refuse effects. No confirmation token is
+retained, and terminal-write failure leaves unresolved intent. A6 continuity
+remains required.
 
 At restart rebuild operation mappings, active run and totals from both streams,
 checking supported versions, sequence/link continuity and the #1401 durable head.
@@ -224,11 +235,12 @@ The person-class control entry points are `start`, `pause`, `reset` and `seal`.
 Each requires an authenticated person-class channel and host-side person
 authorization, never the local pipe or shared OS-user identity.
 Agents and read-only audit clients cannot start, reset, repair, pause or seal it.
-Record a host-generated run ID, fixed participating four Windows host/profile
-identities, deployed instrumentation version and starting heads in audit markers.
+Record a host-generated run ID and the host/profile identities of
+all active hosts in the approved fleet roster, pinned at run start.
+Record deployed instrumentation version and starting heads in audit markers.
 Include the existing message recorder identity and starting source cursor/digest.
-The four participating hosts come from the fleet roster source the person approves
-and pins at run start; any roster membership/identity change mid-run voids the run.
+Membership is fixed for the run; any roster membership/identity change mid-run voids the run.
+No host roles are assigned; coordinators can live anywhere.
 All participants must attest coverage of relay, local and legacy HA action
 entries before admission opens. Old daemon/private script bypasses must either
 be covered or disabled by the person; unobserved routes make the gate unavailable.
@@ -245,8 +257,9 @@ use a monotonic timer while live. An unreadable clock or one earlier than the
 last recorded control timestamp makes the deadline uncertain and voids the run.
 On timeout, control loss or restart with an uncertain deadline, void the run and
 resume admission. Retain every queued request for normal revalidation; drop none.
-Restart is allowed only with verified complete replay and unchanged coverage;
-missing/unreachable hosts or incomplete replay block the report.
+Restart is allowed only with verified complete replay and unchanged coverage.
+An offline pinned host or incomplete replay makes the report INCOMPLETE;
+missing/unreachable hosts cannot be omitted.
 
 Any fallback on any participant invalidates the whole run and resets eligible
 message/launch/approval/stop credit to zero, not just that action's counter.
@@ -267,7 +280,7 @@ totals, cached roster counts or unsigned imported JSON may certify the gate.
 Bind each host response to the requested run, membership, fresh reader challenge,
 instrumentation version, durable heads and verified read-through sequence.
 Reject duplicates, mismatched identities, replays, partial pages or stale replies.
-An offline host or missing fresh-challenge response yields INCOMPLETE naming
+An offline pinned host or missing fresh-challenge response yields INCOMPLETE naming
 that host, exit 2; never pass using only the reachable participants.
 The host verifies under its existing audit writer; the CLI read path must not
 instantiate a writer, create locks/profiles or repair files to obtain a verdict.

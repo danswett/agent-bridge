@@ -369,10 +369,41 @@ public sealed record MachineInfo([property: Strict(Strictness.Identity)] string 
 
 public sealed record HelloResult([property: Strict(Strictness.Identity)] int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
 
+public sealed record TranscriptObservation(
+    [property: JsonPropertyName("observed_at")] DateTimeOffset ObservedAt,
+    string Source,
+    [property: JsonPropertyName("host_id")] string HostId);
+
+[UnknownAs(SessionEvidenceState.Unknown)]
+public enum SessionEvidenceState { Unknown, Known, None }
+
+public sealed class SessionOwnerEvidence
+{
+    public SessionEvidenceState State { get; init; }
+    public string? Principal { get; init; }
+}
+
+public sealed class SessionPrEvidence
+{
+    public SessionEvidenceState State { get; init; }
+    public int? Number { get; init; }
+}
+
+public sealed class SessionFinishedEvidence
+{
+    public SessionEvidenceState State { get; init; }
+    public bool? Value { get; init; }
+}
+
 public sealed record Session
 {
     [Strict(Strictness.Identity)]
     public required string Id { get; init; }
+    [Strict(Strictness.Identity)]
+    public string? Machine { get; init; }
+    public SessionOwnerEvidence? Owner { get; init; }
+    public SessionPrEvidence? Pr { get; init; }
+    public SessionFinishedEvidence? Finished { get; init; }
     public required AgentKind Agent { get; init; }
     public string? Title { get; init; }
     public string? Cwd { get; init; }
@@ -390,6 +421,12 @@ public sealed record Session
     public DateTimeOffset? StartedAt { get; init; }
     public required DateTimeOffset UpdatedAt { get; init; }
     public int? ProcessId { get; init; }
+    [JsonPropertyName("transcript_bytes")]
+    public long? TranscriptBytes { get; init; }
+    [JsonPropertyName("transcript_bytes_unavailable")]
+    public string? TranscriptBytesUnavailable { get; init; }
+    [JsonPropertyName("transcript_observation")]
+    public TranscriptObservation? TranscriptObservation { get; init; }
     public required Activity Activity { get; init; }
     public Question? Question { get; init; }
     // Agent while an agent drives the current turn: it launched the session, or answered or
@@ -804,6 +841,9 @@ public sealed record DeliveryProgress(string Stage, bool? Working = null)
 [UnknownAs(Typed)]
 public enum AnswerStage { Typed, Recorded }
 
+// Host-established intent, distinct from the caller's requested wire mode.
+public enum ReplyIntent { Unknown, Steer, Queueable, IdleOnly }
+
 // session.reply: a prompt for the session, typed into its own input as if at the machine.
 // Request is the client's UUID for this reply, as for an answer. Attachments name files the
 // same device sent first (Attachments.cs); with any, the text may be blank.
@@ -824,7 +864,23 @@ public sealed record ReplyRequest
     // Host-only final-effect fence; never supplied by a protocol caller.
     [JsonIgnore]
     public Func<bool>? StillCurrent { get; init; }
+    // Host-only provenance, rechecked when consumed. No producer means Unknown, not Steer;
+    // Mode, RequireIdle, sender labels and message text cannot supply this authority.
+    [JsonIgnore]
+    public Func<ReplyIntent>? IntentSource { get; init; }
+    [JsonIgnore]
+    public ReplyIntent Intent => IntentSource?.Invoke() ?? ReplyIntent.Unknown;
+    // Host-only verified person confirmation, bound to the whole escaped composer digest.
+    // No production producer until the signed relay ingress and policy land (#804).
+    [JsonIgnore]
+    public Func<string, string?>? ClearConfirmation { get; init; }
+    // Host-only lossless composer evidence, never reconstructed from normalized screen rows.
+    // No production producer until a trustworthy source of the original draft lands.
+    [JsonIgnore]
+    public Func<string?>? ClearDraftSource { get; init; }
 }
+
+public sealed record ClearedComposer(string Text, IReadOnlyList<IReadOnlyList<int>> Marks, bool Truncated = false);
 
 // The same outcomes as an answer, read the same way.
 public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
@@ -835,11 +891,12 @@ public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }
     public IReadOnlyList<ReplyAttachmentBinding>? Attachments { get; init; }
+    public ClearedComposer? Cleared { get; init; }
     [JsonIgnore]
     public ReplyRefusal Refusal { get; init; }
     // Refusal is advice to callers, not part of the result's identity.
-    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Mode == other.Mode && Stage == other.Stage && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments);
-    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments);
+    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Mode == other.Mode && Stage == other.Stage && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments) && Equals(Cleared, other.Cleared);
+    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments, Cleared);
 }
 
 public enum ReplyRefusal { Other, Asking, ComposerUnverified, Busy }

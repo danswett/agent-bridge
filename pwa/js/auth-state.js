@@ -45,6 +45,9 @@ export const USER_CODE = /^[A-Z0-9]{4}-[A-Z0-9]{4}$/;
 
 // How long "signed in" or "recovered by itself" stays.
 export const RESOLVED_SHOWN_MS = 60_000;
+// How long a banner holds "Signed in · waiting…" after signin.done signedIn while the host has not
+// yet said pending, so it never flips to Show code meanwhile (#902); the app's AuthState.SignedInHold.
+export const SIGNED_IN_HOLD_MS = 5_000;
 
 export const AGENT_NAME = Object.freeze({ copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'The agent' });
 

@@ -229,6 +229,11 @@ shown on the card's menu as "Bad-release protection: checked 2 hours ago" or "co
 
 The host enforces both, so a PWA that skips its own check cannot start a batch; a single press can still go with `unchecked` and a warning.
 
+The app's optional `IUpdater.HaltPolicy` capability carries the verified snapshot; an older
+updater without it remains policy unknown. `ObservedUpdater` uses known halts, even when stale,
+to hide offers and refuse downloads and installation, re-reading the snapshot at each boundary.
+This shared guard does not replace the host's signed admission and departure checks.
+
 ## 5. One press, Update all, and limits
 
 **One machine.** Update now is the card's primary wherever `canUpdateNow`. A busy machine gets
@@ -370,7 +375,7 @@ all machines signs one per machine, never a batch. A host too old never offers i
 | Hint past the windows | Revalidation due outside `RelayWindow`: hint does nothing. | ReleaseDiscoveryTests: 25 hours after GitHub's last answer a hint leaves the release unknown. |
 | Forged or spammed hint | At most one release-relay read a minute per machine; no install; bad fields dropped. | ReleaseDiscoveryTests: 100 hints → 1 read; a burst of 50 distinct increasing valid tags → 1 read per minute, newest coalesced, memory ≤ 16; tag not in a valid list → no `available`. HostTests: `v0.1.1x`, an unknown channel, 300 bytes → dropped, not logged. |
 | Halt hidden by the relay | Policy from GitHub only; relay list cannot clear. | HostTests: a relay list omitting the newest halt-bearing release leaves the halt; a GitHub answer whose newest release is older keeps it (replay). |
-| Halt policy stale or unreadable | Automatic install held; one press with warning; Update all refused. | AutoUpdaterTests: policy 7 hours old → no automatic install. UpdateServiceTests: `batch` press on `unreadable` → refused `policy-unreadable`; one press without `unchecked` → refused. update.test.mjs: preflight with one unreadable machine sends no press at all. |
+| Halt policy stale or unreadable | Automatic install held; one press with warning; Update all refused. | AutoUpdaterTests: policy 7 hours old → no automatic install. UpdateServiceTests: `batch` press on `unreadable` → refused `policy-unreadable`; one press without `unchecked` → refused. update.test.mjs: preflight with one unreadable machine sends no press at all; a single press refused `policy-unreadable` asks once with the warning and re-signs `unchecked` (#3307). |
 | GitHub 304s cost quota | Policy read ≤ 1 per machine per hour; refusal follows `NotBefore`; stale after 6 hours holds installs. | ReleaseDiscoveryTests: 10 machines' reads in 24 hours stay under 60 an hour; a 403 backs off and does not read the relay's list as policy. |
 | Interrupted send | Unconfirmed press counted "may not have been sent"; never resent blindly. | update.test.mjs: close after `pressed` before dispatch → banner counts it; lost acknowledgment with host `last` matching → row ends from the host. |
 | Protector departing | Idle-queued or batched machine is not a protector. | update.test.mjs: A sent Update when idle, B slow → B not picked; two concurrent batches never pick both of a role's machines in their re-reads. |

@@ -51,7 +51,8 @@ A queued prompt seen in the turn row within 5 s of Ctrl+Q
 (`CopilotInputBox.TurnSigns`) permits interim `queued` progress. If not seen, omit
 that progress and continue the transcript wait: absence never decides the result.
 Never follow Ctrl+Q with Enter. A prompt taken within 5 s can be `delivered` without
-ever showing a queued row.
+ever showing a queued screen row, but still needs transcript `delivery: "queued"`
+and result `mode: "queue"`.
 
 Only the matching transcript `user.message` with `delivery: "queued"` confirms a queued
 Copilot reply. Wait 60 s from typing, extended while the same turn that was running
@@ -61,8 +62,17 @@ At the cap, a queued screen hint without a matching transcript record gives
 [reply stage table](protocol/v1-sessions.md#reply-stages). A repeat reads again
 without typing and becomes `delivered` once confirmed.
 `steer` still records `delivery: "steering"` when taken. Result `mode` reports what
-actually happened, absent meaning `steer`. An older host must never be shown as having
-queued merely because a session was working ([compatibility](protocol/v1-sessions.md#sessionreply)).
+actually happened, absent meaning `steer`. A `queue` request taken on the idle Enter
+path is confirmed by `delivery: "idle"` and reports `mode: "steer"`, not queued.
+`delivery: "steering"` confirms only an actual `steer` path, with `mode: "steer"`;
+neither `steering` nor `idle` confirms a selected queue path.
+An older host must never be shown as having queued merely because a session was
+working ([compatibility](protocol/v1-sessions.md#sessionreply)).
+
+The 15-minute confirmation cap runs from typing; the separate 15-minute request
+memory runs from the first settled outcome, including `unconfirmed`. In-flight
+repeats wait for that attempt. Read-only rechecks do not restart the memory window,
+so a full confirmation wait does not use up the later outcome-lookup window.
 
 **The input box (#825).** A reply is typed only into Copilot's own input box, read off the
 screen (`Copilot/CopilotInputBox.cs`), and only while that box is empty and outside shell
@@ -144,6 +154,31 @@ no check can close is the moment between the worker's read and the CLI taking th
 mode changed at the machine in that moment is not seen. The
 screens the tests read are in `tests/fixtures/screens/copilot-input-box.json`, built from
 the captured live screen and the CLI's rendering code, each naming its source.
+
+## Guarded clear foundation ([#804](https://github.com/danswett/agent-bridge/issues/804))
+
+The host-only `ReplyRequest.ClearConfirmation` seam accepts a verifier bound to the
+whole escaped composer digest, rechecked with person intent, process incarnation,
+G5, elevation, launch and transcript guards before clearing and again before replying.
+No wire field supplies it. There is deliberately **no production producer or advertised
+capability yet**: signed relay-only confirmation, default-off policy and PWA/app UI
+remain follow-up slices. The pipe, HA, MCP and agent paths cannot enable it.
+Clearing additionally requires host-only `ClearDraftSource`: lossless original composer
+text, rechecked before keys. Screen rows alone are insufficient because their ASCII
+spaces are normalized. Missing evidence refuses before keys; this source also has no
+production producer. The confirmation digest and returned escrow include every space.
+
+This first cut permits only complete, single-row, non-shell Copilot drafts that can be
+returned whole within 500 escaped characters. Everything else is refused before keys.
+The clear (Ctrl+End, Ctrl+U) is held to the original rows, safe footer and request freshness.
+A request stale before the clear deletes nothing and returns `Stale`, without escrow.
+Within the same typing slot, two consecutive empty reads must arrive within two seconds,
+then the normal guarded reply path runs. Any attempted deletion returns `cleared`
+(`text`, host escape `marks`, `truncated: false`), even if later guards refuse the reply.
+It is never logged. Request memory binds replies to the sender and target; clear replay
+additionally requires the same host verification callbacks and still-current person
+intent. A changed authority generation is refused without escrow or progress.
+No live key validation or production enablement is claimed by this foundation.
 
 ## Attachments (Copilot)
 
@@ -277,7 +312,8 @@ In order, for every reply:
    a leading `/` or `!`, more than 10 attachments or a malformed one).
 2. The session is live (`stale` otherwise) and is a Copilot, Claude Code or Codex session (`refused` otherwise).
 3. One delivery per session (`busy`), shared with answers. Every request's outcome is
-   remembered for 15 minutes and returned for a resend, which types nothing.
+   remembered for 15 minutes from its first settled outcome and returned for a
+   resend, which types nothing; an in-flight repeat waits for the same attempt.
 4. No question or permission prompt in the session as reported (`refused`: "answer that
    first", or, for one marked `answerAtMachine`, "answer it there first"). Its attachments
    are held, complete, for this device (`refused` otherwise), and are reserved for this
@@ -427,7 +463,10 @@ reported apart.
 
 ## Messages from other own-agents (AP5-lite, #1353)
 
-`LiteDeliver` types a verified lite message into one idle Copilot session behind a one-line provenance marker (sender machine, session, request id). It refuses, typing nothing, with `notReplyTarget` (not launched here in forced-ask mode; allow-all only while `agentMessaging.allowAllTargets` is on; text unbound, empty, over 4096 characters or with a request id that is not a UUID), `busy` (not idle, or over 6 messages a minute per session), `composerNotEmpty` or `noSuchSession`. Its host-only `RequireIdle` condition makes `ReplyService` re-check idle after taking the typing slot; a session that became busy while waiting is refused as `busy`, so the sender falls back to HA. A person's reply can still reach a working session. There is no queue and no retry. Gates (`IReplyTargetGate`) are OR-composed in `LiteComposition`; the log line carries sender, target, request id and outcome, never the text.
+`LiteDeliver` types a verified lite message into one idle Copilot session behind a one-line provenance marker (sender machine, session, request id). It refuses, typing nothing, with `notReplyTarget` (not launched here in forced-ask mode; allow-all only while `agentMessaging.allowAllTargets` is on and the exact target session id is listed in `agentMessaging.allowAllTargetSessions`; text unbound, empty, over 4096 characters or with a request id that is not a UUID), `busy` (not idle, or over 6 messages a minute per session), `composerNotEmpty` or `noSuchSession`. Its host-only `RequireIdle` condition makes `ReplyService` re-check idle after taking the typing slot; a session that became busy while waiting is refused as `busy`, so the sender falls back to HA. A person's reply can still reach a working session. There is no queue and no retry. Gates (`IReplyTargetGate`) are OR-composed in `LiteComposition`; the log line carries sender, target, request id and outcome, never the text.
+
+Each evaluated gate also logs its name, decision and refusal reason with the target and request id,
+never message text. An allowed gate ends evaluation; otherwise every refusal is recorded.
 
 That is the unchanged AP5-lite contract, not the mode-capable queue-reply v1 path.
 #2468's Q35 supersession does not remove `RequireIdle` or add queueing to Lite.
