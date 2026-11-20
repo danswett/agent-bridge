@@ -8,6 +8,27 @@ launcher, as the peer `home-assistant` ([ha-connector.md](ha-connector.md#stage-
 they draw on are the profile's `config.json` ([host-config.md](host-config.md)). The code is
 `src/AgentBridge.Host.Delivery/Launch/`.
 
+For an HA-enabled receiving host, launches explicitly overlay `AGENT_HA_URL` with
+that host's configured `homeAssistant.baseUrl` plus `/api`, replacing any inherited
+URL. An existing trailing `/api` or `/api/` is normalized to a single `/api`.
+No caller environment or User-scope URL is needed. A missing endpoint or one with a
+query, fragment or userinfo refuses the launch with "reply path is not ready", even
+when settings validation disabled the connector. Credential-issuance and process-start
+errors log only the exception type, never its potentially credential-bearing message.
+Non-HA launches and all credential handling stay unchanged;
+providing this URL does not itself establish that an HA agent credential is available.
+
+## Fleet launch provenance
+
+The host's fleet launch route persists `grant: "fleet"` in `launch-provenance.json`
+before dispatch, then binds it to the discovered session and exact process/start time.
+Ordinary launches and older unattributed records never acquire that grant. Origin
+proof survives reopening the store, but conflicting person/process records, unfinished
+launches and corrupt storage fail closed. Names and caller-supplied fields are not proof.
+This reconciles the predecessor provenance work for
+[agent stopping](https://github.com/danswett/agent-bridge/issues/2741) with the current
+host-owned fleet grant; it does not itself enable stopping or fleet launch admission.
+
 ## Answering `launch.options` without waiting for Agency (#1527)
 
 Agency's `hub list-local-sessions --json` took 18.5 s on a cold run against its 20 s cap, so
@@ -366,7 +387,10 @@ cannot be moved aside is left as it is and never written over: the record does n
 | Otherwise | Died with the host |
 
 The cause is `reboot` across boots or logons; on the same boot, `restart` if the last run wrote `stopped`, else
-`crash`. A Copilot session a person closed while the host was down, with nothing its agent records, reads
+`crash`. That legacy wire name means an unexpected stop, not a confirmed crash: an external stop
+or the launcher's job closing leaves the same record. Continue says "the host stopping unexpectedly";
+an unrecognized in-memory cause uses "an interruption", never a guessed crash.
+A Copilot session a person closed while the host was down, with nothing its agent records, reads
 as died: it is offered, never typed into. A Claude or Codex one whose registration is gone reads as
 uncertain (above): not offered, its folder kept.
 

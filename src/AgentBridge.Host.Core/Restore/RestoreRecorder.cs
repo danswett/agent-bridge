@@ -78,7 +78,7 @@ public interface ISessionRestorer
 public static class RestoreJudge
 {
     // Boot times read against the wall clock move with a clock change; two boots closer than this
-    // are one. A machine that ran less than this before it restarted reads as a host crash.
+    // are one. A machine that ran less than this before it restarted reads as an unexpected host stop.
     public static readonly TimeSpan BootTolerance = TimeSpan.FromMinutes(2);
 
     // freshLogon: the person's logon session began since the host last ran (ILogonMarker): a sign-out,
@@ -1177,7 +1177,8 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         {
             RestoreCause.Reboot => "a reboot",
             RestoreCause.Restart => "a host restart",
-            _ => "a host crash",
+            RestoreCause.Crash => "the host stopping unexpectedly",
+            _ => "an interruption",
         };
         var at = TimeZoneInfo.ConvertTime(went, zone);
         return string.Create(System.Globalization.CultureInfo.InvariantCulture, $"You were interrupted by {what} at {at:HH:mm}; carry on where you left off");

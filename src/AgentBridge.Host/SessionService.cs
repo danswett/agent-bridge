@@ -169,6 +169,7 @@ public sealed class SessionService
     // diagnostics.get, through the relay only, to a device pinned as a person's (RemoteDiagnostics).
     public RemoteDiagnostics? Diagnostics { get; init; }
     public Lite.LiteReceiver? LiteReceiver { get; init; }
+    public Lite.LiteKill? LiteKill { get; init; }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -266,6 +267,8 @@ public sealed class SessionService
                 return await transfers.ServeAsync(secure, data);
             case Lite.LiteReceiver.Op when LiteReceiver is not null && channel is SecureChannel secure:
                 return await LiteReceiver.ServeAsync(secure, data, CancellationToken.None);
+            case Lite.LiteKill.Op when LiteKill is not null && channel is SecureChannel secure:
+                return LiteKill.HandleKill(secure.PeerId, secure.PeerKind, data);
             // A person's device through the relay, with a command it signed. Never this machine's
             // pipe, which agents and the MCP server reach, nor the Home Assistant connector.
             case TrustProtocol.Answer when TrustAnswers is not null && channel is SecureChannel secure:
@@ -469,7 +472,9 @@ public sealed class SessionService
         Action<AnswerOutcome>? Prepare(Guid operation, Session session, Question question)
         {
             if (AnswerGate(session, question, operation, "person-client") is not { } gate) { return null; }
-            var intent = new AgentAuditEntry("local", gate.Operation.ToString(), "person:local", [], Ops.SessionAnswer,
+            gate = gate with { Path = channel is SecureChannel ? "relay" : "local" };
+            var principal = channel is SecureChannel relay ? $"person:{relay.PeerId}" : "person:local";
+            var intent = new AgentAuditEntry(gate.Path, gate.Operation.ToString(), principal, [], Ops.SessionAnswer,
                 gate.Incarnation.ToString(), "attempted", Gate: gate);
             if (audit is not { } writer || !writer.Append(intent)) { return null; }
             return outcome => writer.Append(intent with { Outcome = outcome == AnswerOutcome.Delivered ? "delivered" : "refused",
