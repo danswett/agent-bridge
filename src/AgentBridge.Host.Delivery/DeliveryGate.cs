@@ -54,6 +54,23 @@ public sealed class DeliveryGate
 
     bool IsUncertain => WorkerUncertain() || uncertain;
 
+    // Null once every injector worker that failed is proven gone; otherwise completes when they
+    // are, or faults if one never can be. Unknown proof must never let a stop kill or say ended.
+    internal Task? WorkerProof()
+    {
+        lock (state)
+        {
+            if (!WorkerUncertain()) { return null; }
+            return unknownWorker ? Task.FromException(new InvalidOperationException("an injector worker's end cannot be proven"))
+                : Task.WhenAll(failedWorkers);
+        }
+    }
+
+    // A stop may pass a provisional exclusion only: a committing or committed departure stays
+    // fenced, or the host could exit before the newly accepted stop settles.
+    bool Excludes(bool allowExclusion) =>
+        exclusion is not null && (!allowExclusion || exclusion.Committed || exclusion.Committing);
+
     // Admission must precede OutcomeMemory's Task.Run, not just the later session claim.
     public IDisposable? TryEnterDelivery() => TryEnterDelivery(false);
 
@@ -62,7 +79,7 @@ public sealed class DeliveryGate
         lock (state)
         {
             Expire();
-            if ((!allowExclusion && exclusion is not null) || stopping is not null) { return null; }
+            if (Excludes(allowExclusion) || stopping is not null) { return null; }
             deliveries++;
             return new Delivery(this);
         }
@@ -274,7 +291,7 @@ public sealed class DeliveryGate
         lock (state)
         {
             Expire();
-            return (allowExclusion || exclusion is null) && sessions.TryAdd(sessionId, request);
+            return !Excludes(allowExclusion) && sessions.TryAdd(sessionId, request);
         }
     }
 

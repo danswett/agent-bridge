@@ -251,6 +251,8 @@ public sealed class StopService : ISessionStopper
         // Gone between the press and now: what the press asked for has happened.
         if (opened.Process is not { } held) { return Ended(false); }
         Task? pendingWorker = null;
+        // Whether the handle outlives this stop, until every failed worker is proven gone.
+        var hold = false;
         var began = Environment.TickCount64;
         using var deadline = new CancellationTokenSource(options.Grace);
         try
@@ -287,7 +289,8 @@ public sealed class StopService : ISessionStopper
                     catch (Exception e)
                     {
                         pendingWorker = e is InjectorWorkerException worker ? worker.Exited : Task.FromException(e);
-                        log($"end of {Short(session.Id)} retains its injector fence while terminating: {e.Message}");
+                        hold = true;
+                        log($"end of {Short(session.Id)} retains its injector fence and PID handle: {e.Message}");
                         typing = new InjectionResult(InjectionStatus.Interrupted, e.Message);
                     }
                     typed = pendingWorker is null && typing.Status != InjectionStatus.NothingTyped;
@@ -312,6 +315,14 @@ public sealed class StopService : ISessionStopper
             {
                 return Failed($"{started}, so the host stopped short of terminating the session; check at the machine");
             }
+            // A failed injector worker, this stop's or an earlier delivery's, may still be typing:
+            // terminating would let the id pass to another process it could type into.
+            if (pendingWorker is not null || gate.WorkerProof() is not null)
+            {
+                hold = true;
+                log($"end of {Short(session.Id)} (pid {pid}) not terminated: an injector worker is not proven gone");
+                return Failed("a typing attempt may still be running, so the host kept the session's process held and did not end it; check at the machine");
+            }
             var refused = held.Terminate();
             if (refused is not null) { log($"end of {Short(session.Id)} (pid {pid}) could not terminate: {refused}"); }
             if (await held.WaitForExitAsync(options.TerminateWait))
@@ -325,7 +336,8 @@ public sealed class StopService : ISessionStopper
         }
         finally
         {
-            if (pendingWorker is null) { held.Dispose(); }
+            // On every path, a refusal included: the id must not pass on while any worker is unproven.
+            if (!hold && gate.WorkerProof() is null) { held.Dispose(); }
             else
             {
                 uncertainProcesses.TryAdd(held, 0);
@@ -334,17 +346,22 @@ public sealed class StopService : ISessionStopper
         }
     }
 
-    async Task ReleaseWhenQuietAsync(IHeldProcess held, Task worker)
+    // own: this stop's failed worker, whose typing slot it still holds.
+    async Task ReleaseWhenQuietAsync(IHeldProcess held, Task? own)
     {
-        try { await worker; }
+        try
+        {
+            if (own is not null) { await own; }
+            while (gate.WorkerProof() is { } others) { await others; }
+        }
         catch (Exception e)
         {
-            log($"injector quiescence remains unknown for pid {held.Id}; retaining its handle and typing fence: {e.Message}");
+            log($"injector quiescence remains unknown for pid {held.Id}; retaining its handle{(own is null ? "" : " and typing fence")}: {e.Message}");
             return;
         }
         held.Dispose();
         uncertainProcesses.TryRemove(held, out _);
-        gate.DoneTyping();
+        if (own is not null) { gate.DoneTyping(); }
     }
 
     // A Copilot question, a subagent's included, written since the session source last read

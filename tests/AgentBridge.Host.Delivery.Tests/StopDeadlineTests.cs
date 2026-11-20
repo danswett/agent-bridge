@@ -23,22 +23,30 @@ public sealed class StopDeadlineTests(ITestOutputHelper output)
     public async Task An_unproven_worker_keeps_the_PID_handle_and_typing_fence_until_it_is_proven_gone(bool faultedProof) =>
         await CheckDeadlineAsync(false, faultedProof);
 
+    [Fact]
+    public async Task A_stop_waiting_for_another_delivery_forces_termination_without_typing() =>
+        await CheckDeadlineAsync(false, typingBusy: true);
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task A_stop_waiting_for_another_delivery_forces_termination_without_typing(bool unknownWorker) =>
-        await CheckDeadlineAsync(false, typingBusy: true, unknownWorker: unknownWorker);
+    public async Task A_stop_never_terminates_while_another_failed_worker_is_unproven(bool tracked) =>
+        await CheckDeadlineAsync(false, typingBusy: true, otherWorker: tracked ? "tracked" : "unknown");
 
     [Fact]
-    public async Task Stop_ends_the_held_process_after_an_injector_exception_with_no_exit_proof() =>
+    public async Task Stop_keeps_the_held_process_after_an_injector_exception_with_no_exit_proof() =>
         await CheckDeadlineAsync(false, unknownException: true);
 
     [Fact]
     public async Task Stop_during_a_departure_exclusion_ends_the_process_without_typing() =>
         await CheckDeadlineAsync(false, departureBlocked: true);
 
-    async Task CheckDeadlineAsync(bool agentError, bool? faultedProof = null, bool typingBusy = false, bool unknownWorker = false,
-        bool unknownException = false, bool departureBlocked = false)
+    [Fact]
+    public async Task Stop_during_a_committed_departure_is_busy_and_opens_nothing() =>
+        await CheckDeadlineAsync(false, departureBlocked: true, committed: true);
+
+    async Task CheckDeadlineAsync(bool agentError, bool? faultedProof = null, bool typingBusy = false, string? otherWorker = null,
+        bool unknownException = false, bool departureBlocked = false, bool committed = false)
     {
         using var f = new Fixture();
         var events = f.CopilotSession(Id, Pid);
@@ -58,14 +66,20 @@ public sealed class StopDeadlineTests(ITestOutputHelper output)
 
         var injector = new StalledInjector { UnknownException = unknownException };
         var proof = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var other = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (faultedProof is not null) { injector.WorkerExited = proof.Task; }
         if (faultedProof == true) { proof.SetException(new IOException("fixture cannot observe worker exit")); }
         var control = new Control(f);
         var gate = new DeliveryGate();
         if (typingBusy) { await gate.WaitToTypeAsync(); }
-        if (unknownWorker) { gate.MarkWorkerUncertain(null); }
+        if (otherWorker is not null) { gate.MarkWorkerUncertain(otherWorker == "tracked" ? other.Task : null); }
         using var exclusion = departureBlocked ? gate.TryExclude(TimeSpan.FromSeconds(30), out _) : null;
         if (departureBlocked) { Assert.NotNull(exclusion); }
+        if (committed)
+        {
+            Assert.True(exclusion!.TryBeginCommit(out _));
+            Assert.True(exclusion.TryCommit(new DepartureConnection(), 0, false, 0, out _));
+        }
         var stopper = new StopService(gate, source, f.Processes, new NoBridge(), injector, control,
             new StopOptions
             {
@@ -79,6 +93,41 @@ public sealed class StopDeadlineTests(ITestOutputHelper output)
         {
             if (!typingBusy && !departureBlocked) { await injector.Entered.Task.WaitAsync(Bound); }
             var result = await stopping.WaitAsync(TimeSpan.FromSeconds(2));
+            if (committed)
+            {
+                Assert.Equal(StopOutcome.Busy, result.Outcome);
+                Assert.Equal(0, control.Opened);
+                Assert.Equal(0, control.Terminations);
+                Assert.False(injector.Entered.Task.IsCompleted);
+                return;
+            }
+            if (faultedProof is not null || unknownException || otherWorker is not null)
+            {
+                // Unknown worker proof never permits a kill or an ended result (#2910).
+                Assert.Equal(StopOutcome.Failed, result.Outcome);
+                Assert.Equal(0, control.Terminations);
+                Assert.Equal(1, control.Handles);
+                Assert.NotNull(source.Get(Id));
+                if (otherWorker == "tracked")
+                {
+                    other.SetResult();
+                    while (Volatile.Read(ref control.Handles) != 0) { Assert.True(await control.Disposals.WaitAsync(Bound)); }
+                    return;
+                }
+                if (otherWorker is not null) { return; }
+                using var wait = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => gate.WaitToTypeAsync(wait.Token));
+                if (faultedProof == false)
+                {
+                    proof.SetResult();
+                    await gate.WaitToTypeAsync().WaitAsync(Bound);
+                    gate.DoneTyping();
+                    Assert.Equal(0, control.Handles);
+                    using var quiet = gate.TryExclude(TimeSpan.FromSeconds(30), out _);
+                    Assert.NotNull(quiet);
+                }
+                return;
+            }
             Assert.Equal(StopOutcome.Ended, result.Outcome);
             Assert.True(result.Forced);
             Assert.Equal(1, control.Terminations);
@@ -99,23 +148,6 @@ public sealed class StopDeadlineTests(ITestOutputHelper output)
                     await gate.WaitToTypeAsync().WaitAsync(Bound);
                     gate.DoneTyping();
                 }
-                return;
-            }
-            if (faultedProof is not null || unknownException)
-            {
-                Assert.Equal(1, control.Handles);
-                using var wait = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => gate.WaitToTypeAsync(wait.Token));
-                if (faultedProof == false)
-                {
-                    proof.SetResult();
-                    await gate.WaitToTypeAsync().WaitAsync(Bound);
-                    gate.DoneTyping();
-                    Assert.Equal(0, control.Handles);
-                    using var quiet = gate.TryExclude(TimeSpan.FromSeconds(30), out _);
-                    Assert.NotNull(quiet);
-                }
-                return;
             }
         }
         finally
@@ -124,6 +156,7 @@ public sealed class StopDeadlineTests(ITestOutputHelper output)
                 + $"terminations={control.Terminations}; status={source.Get(Id)?.Status}");
             injector.Release.TrySetResult();
             proof.TrySetResult();
+            other.TrySetResult();
             if (typingBusy) { gate.DoneTyping(); }
             await stopping.WaitAsync(Bound);
         }
@@ -158,11 +191,14 @@ public sealed class StopDeadlineTests(ITestOutputHelper output)
     {
         public int Terminations;
         public int Handles;
+        public int Opened;
+        public SemaphoreSlim Disposals { get; } = new(0);
 
         public HeldOpen Open(int processId, DateTimeOffset startedAt)
         {
             Assert.Equal(Pid, processId);
             Assert.Equal(Started, startedAt);
+            Interlocked.Increment(ref Opened);
             Interlocked.Increment(ref Handles);
             return HeldOpen.Of(new Held(this, f));
         }
@@ -182,6 +218,7 @@ public sealed class StopDeadlineTests(ITestOutputHelper output)
             public void Dispose()
             {
                 Interlocked.Decrement(ref owner.Handles);
+                owner.Disposals.Release();
             }
         }
     }
