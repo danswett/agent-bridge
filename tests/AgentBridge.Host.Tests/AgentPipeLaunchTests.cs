@@ -171,6 +171,18 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(1, launcher.Launches);
     }
 
+    [Theory]
+    [InlineData("launch", "--workspace", "App")]
+    [InlineData("launch-status", "--request", "not-a-uuid")]
+    [InlineData("launch", "--agent", "claude", "--workspace", "App", "--agent", "codex")]
+    public async Task The_cli_refuses_a_launch_or_status_without_its_flags_and_names_both_verbs(params string[] args)
+    {
+        var error = new StringWriter();
+
+        Assert.Equal(2, await AgentCommands.RunAsync(["agents", .. args], folder, () => true, TextWriter.Null, error));
+        Assert.Contains("agents launch-status --request", error.ToString());
+    }
+
     sealed class FakeLauncher : ISessionLauncher
     {
         public int Launches;

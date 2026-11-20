@@ -307,7 +307,10 @@ is refused (`requestReused`); a refused id stays refused, and an id whose outcom
 launched again (`requestUsed`). A damaged record refuses every launch.
 `launch.status` `{ "request": UUID }` reads only the caller's own record: `{ request, state
 (queued|launching|launched|refused|failed), session, code, queuedAt, changedAt, keptUntil }`,
-kept 15 minutes after it finishes. No path issues `read+reply+launch` yet.
+kept 15 minutes after it finishes. No path issues `read+reply+launch` yet. Inside the session,
+`agent-bridge-host agents launch --agent <id> --workspace <label> [--request <uuid>] [...]`
+prints the request id first, then the outcome (exit 1 unless started), and `agents
+launch-status --request <uuid>` prints the record; both read `AGENT_BRIDGE_TOKEN`.
 
 ### `fleet.list` and `fleet.find`
 
