@@ -194,7 +194,7 @@ or prove self-repair.
 | `outcome` | `accepted` `refused` `confirm` | `confirm` (#1159): an Update now that would go over more than the person accepted; nothing was asked, and `state.busy` says what is busy now. An unknown outcome reads as `refused`. `accepted`: the machine's app has been asked, and how it goes is in the state (`request`, then `last` with this request), or a Check past its guard was answered from the app's last reported state without asking it again. A Check that finds a newer release ends instead with `request` gone and `available` and `checkedAt` set (`last` stays how the last update, or a check finding nothing, ended). `refused`: nothing was asked |
 | `reason` | string? | Why it was refused |
 | `state` | `UpdateState`? | The state as the press found it |
-| `code` | string? | Why a press was refused or needs confirming: `rate-limited` also accompanies an ordinary Install past its guard; other codes are for a press with `now`: `manage.*`'s reason codes (`ManageReason`) and Update now's own (`release-changed`, `other-profile`, `old-app`, `restart-cap`, `sign-in`, `usage-check`, `policy-unreadable`). `policy-unreadable` refuses stale or unreadable halt protection for a batch, or a single press without `unchecked`. Clients word it themselves ([What the person sees](#what-the-person-sees)); `reason` stays for the log and older clients. An unknown code reads as a refusal |
+| `code` | string? | Why a press was refused or needs confirming: `rate-limited` also accompanies an ordinary Install past its guard; other codes are for a press with `now`: `manage.*`'s reason codes (`ManageReason`) and Update now's own (`release-changed`, `other-profile`, `old-app`, `restart-cap`, `sign-in`, `usage-check`, `policy-unreadable`). `policy-unreadable` refuses stale or unreadable halt protection for a batch, or a single press without `unchecked`; the PWA then brings the confirmation back once with "Bad-release protection could not be checked on this machine." and signs `unchecked` only on Update now there (#3307). `halted` refuses a known-halted release, `unchecked` or not. Clients word it themselves ([What the person sees](#what-the-person-sees)); `reason` stays for the log and older clients. An unknown code reads as a refusal |
 | `retryAt` | time? | Optional UTC retry instant with `code: rate-limited`; render in the viewer's time. Older hosts omit it, so clients retain their generic retry wording. It grants no retry or cap exemption |
 
 The host refuses a device that is not connected to the relay now, one that is not a person's,
@@ -294,14 +294,15 @@ can't be replayed as a forced one, nor an Update now for one release or machine 
 command lives at most **2 minutes** from `issuedAt`, as a manage command does; the press it
 starts lives at most **15 minutes** from that `issuedAt` ([After the press](#the-confirmation)).
 
-Optional booleans in those signed `args` are reserved for the later halt-policy enforcement
-slice (#2234); this contract change parses them but makes no policy decision.
+Optional booleans in those signed `args` carry the halt-policy decision the host enforces (#2234):
+a stale or unreadable policy refuses `batch`, and a single press without `unchecked`.
 
 Absent flags are omitted, so old bodies and signatures remain unchanged. Present values must
 be booleans, not null, strings or numbers; duplicate flags are refused. Both flags are inside
 the exact signed body bytes, so adding, removing or changing either invalidates its MAC.
 Older hosts may refuse these new args; parsing support is not evidence that policy enforcement
-exists. Clients must not send them until the corresponding host behavior ships.
+exists. So the PWA sends `unchecked` only after that machine has refused the same press
+`policy-unreadable`, which only an enforcing host answers, and sends no `batch` yet (#3307).
 
 **Replay, durably** (security review, Medium 3). The host records each `request` it verifies in
 its profile folder (`update-now.json`, as `manage.json` keeps `manage.*`'s), written
@@ -330,8 +331,8 @@ not the authority. Its `args`, signed with the rest:
 | `now` | `true` | Required. Anything else is refused `bad-args` |
 | `release` | string | The release the person was shown (`available`). Anything else at the press, or at the departure, is refused `release-changed` |
 | `accept` | `UpdateBusy`? | What the person confirmed it may go over: the counts, `unknown` if it was shown, `sessions`, the ids and states the confirmation listed, and past 32 `moreApprovals` and `moreOther`, how many approvals and other busy sessions it left out. Each count is at most 1,000,000 (`UpdateProtocol.BusyMost`, far past any machine's sessions, so no sum of them overflows); more is `bad-args`. Absent: the one-press case, valid only while the machine is quiet |
-| `batch` | bool? | Optional. This press belongs to Update all; unreadable/stale policy must refuse it once #2234 ships |
-| `unchecked` | bool? | Optional. The single-machine warning about unreadable protection was accepted; never overrides `batch`; enforcement is #2234 |
+| `batch` | bool? | Optional. This press belongs to Update all; unreadable/stale policy refuses it |
+| `unchecked` | bool? | Optional. The person confirmed the single-machine warning about unreadable protection; never overrides `batch` or a known halt |
 
 Anything else in `args`, or a `contentSha256`, is refused `bad-args`.
 
@@ -493,6 +494,14 @@ host's own text (#826). "Bridge", never "host".
   line: "A question or approval waiting may have to be answered at the machine afterwards."
   Buttons **Update now** and **Cancel**, focus on Cancel. If the machine answers `confirm`, the
   dialog comes back with the sessions it names now.
+* **Bad-release protection stale or unreadable** (#3307). A single press refused
+  `policy-unreadable` brings the confirmation back once, quiet machine or not, with one more
+  line: "Bad-release protection could not be checked on this machine." Cancel sends nothing and
+  leaves no note; Update now there sends the press again signed `unchecked`. A second
+  `policy-unreadable`, or `halted`, is not asked again: it reads "Not updated: *reason*" (below).
+* **Forgetting the machine, or clearing the account, withdraws a press** (#3324): an open
+  confirmation closes as Cancel, a press still waiting for its channel is never signed, and a
+  late answer changes nothing: no confirmation, note, state or further press.
 * **Waiting for a quiet moment** (decision 3), on the update line, from `waitingCode`:
   `turn-running` "Update ready · waiting for the current turn to finish"; `question-waiting`
   "Update ready · waiting for a question to be answered" (the line #719 already uses);
@@ -527,6 +536,8 @@ host's own text (#826). "Bridge", never "host".
   | `bad-args` | the request wasn't one this machine understands; try again |
   | `not-person`, `not-peer`, `not-connected`, `local-device` | this device can't update that machine |
   | `needs-roster` | this needs your approved devices first |
+  | `policy-unreadable` | bad-release protection couldn't be checked there (after the warning) |
+  | `halted` | this release has been halted |
   | `unavailable`, `old-app` | the app there can't install it now |
   | `failed` (outcome) | the update didn't take |
   | anything else | the machine refused it |

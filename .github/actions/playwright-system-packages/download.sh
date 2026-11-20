@@ -9,16 +9,21 @@
 # and WebKit's packages. The runner's mirror list (/etc/apt/apt-mirrors.txt, from
 # actions/runner-images) puts that mirror first and Canonical's HTTPS archive after it, but apt
 # moves down the list only when a fetch fails, never when it is slow. Network attempts get
-# 60 seconds for updates and 180 seconds for downloads; an Azure timeout (124) or DNS failure
+# 60 seconds for updates; downloads get 180 seconds on Azure and 600 on Canonical. Azure timeout or DNS failure
 # immediately leaves Azure. The Azure mirror is taken off the list and apt fetches the rest
 # from https://archive.ubuntu.com,
 # keeping what it has. Nothing else changes: no source, key or trust setting is added, apt checks
 # every package against the signed index either way. Azure DNS failures leave immediately;
 # Downloads get three attempts (5/20 s backoff). Updates get an initial attempt plus three
 # retries (15/30/60 s) for known-host network errors, including Microsoft's feed and HTTP 429.
+# Retry budget is per mirror, NOT a total deadline: allowing each 30 s kill grace, Canonical
+# update can take 4*(60+30)+105 = 465 s, downloads 3*(600+30)+25 = 1915 s.
+# Together that is 2380 s (39m40s), already beyond the 35m job cap, before install/tests.
+# Azure attempts and its up-to-7 s DNS probe can add more. The job cap is the final bound;
+# retries do not reserve test time. See quality/README.md for the budget and proof limits.
 # Exhausted throttling or Microsoft-feed errors are fatal even on a cache hit.
-# A non-forced cache hit uses 20-second update attempts within a two-minute update budget; only
-# classified network exhaustion may warn and continue to the mandatory offline install. If
+# Cache only debs: every run authenticates live indexes with apt-get update. A non-forced hit
+# checks archive hashes/sizes against those indexes before installing with --no-download. If
 # the mirror list isn't the Azure-then-Canonical one this expects, or Azure is still named after the
 # edit, it fails rather than go on waiting on the same mirror.
 #
@@ -35,28 +40,37 @@
 # PLAYWRIGHT_APT_* paths and limits exist for test.sh's stand-ins; the action sets neither.
 set -euo pipefail
 
+key_only=false
+if [ "${1:-}" = --cache-key ]; then key_only=true; shift; fi
 if [ "$#" -eq 0 ]; then
   echo "::error::name the browsers whose system packages to download"; exit 1
 fi
+list=$(npx playwright install-deps --dry-run "$@" | sed -n 's/.*--no-install-recommends \([^"]*\)".*/\1/p' | tr '\n' ' ')
+read -ra pkgs <<< "$list"
+if [ "${#pkgs[@]}" -eq 0 ]; then
+  echo "::error::playwright install-deps --dry-run named no packages to download"; exit 1
+fi
+if [ "$key_only" = true ]; then
+  hash=$(printf '%s\n' "${pkgs[@]}" | sha256sum); echo "packages-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
+  hash=$(printf '%s' "${GITHUB_REF:-}" | sha256sum); echo "ref-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
 apt_etc=${PLAYWRIGHT_APT_ETC:-/etc/apt}
-apt_lists=${PLAYWRIGHT_APT_LISTS:-/var/lib/apt/lists}
 apt_archives=${PLAYWRIGHT_APT_ARCHIVES:-/var/cache/apt/archives}
-cache_lists="$HOME/.cache/playwright-apt-lists"; cache_debs="$HOME/.cache/playwright-apt-debs"
+cache_debs="$HOME/.cache/playwright-apt-debs"
 limit=${PLAYWRIGHT_APT_LIMIT:-60s}
 mirrors="$apt_etc/apt-mirrors.txt"
 force=false
 [ "${PLAYWRIGHT_APT_FORCE_FALLBACK:-}" != true ] || force=true
 cache_hit=false
 cache_available=false
+download_options=()
 if [ "${DEBS_CACHE_HIT:-}" = true ]; then
-  if compgen -G "$cache_lists/*_Packages*" > /dev/null && compgen -G "$cache_debs/*.deb" > /dev/null; then
+  if compgen -G "$cache_debs/*.deb" > /dev/null; then
     cache_available=true
-  else echo "::warning::apt cache lacks matching lists or debs; treating it as a miss"; fi
+  else echo "::warning::apt cache lacks debs; treating it as a miss"; fi
 fi
-if [ "$cache_available" = true ] && [ "$force" = false ]; then
-  cache_hit=true; limit=${PLAYWRIGHT_APT_LIMIT:-20s}
-fi
-update_deadline=0
+if [ "$cache_available" = true ] && [ "$force" = false ]; then cache_hit=true; fi
 attempts=${PLAYWRIGHT_APT_ATTEMPTS:-3}
 delay=${PLAYWRIGHT_APT_RETRY_DELAY:-5}
 network_host=azure.archive.ubuntu.com
@@ -88,14 +102,11 @@ network_error() {
 retry() {
   local phase="$1" n=1 rc=0 log wait max="$attempts" strict=false
   shift
+  if [ "$phase" = download ] && [ "$left_azure" = true ]; then limit=${PLAYWRIGHT_APT_LIMIT:-600s}; fi
   [ "$phase" != update ] || max=${PLAYWRIGHT_APT_ATTEMPTS:-4}
   network_failed=false
   log=$(mktemp)
   while true; do
-    if [ "$update_deadline" -gt 0 ] && [ "$SECONDS" -ge "$update_deadline" ]; then
-      echo "::warning::apt update budget exhausted"
-      rc=124; network_failed=true; break
-    fi
     echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::apt attempt $n of $max: $*"
     rc=0; LC_ALL=C "$@" 2>&1 | tee "$log" || rc=$?
     if [ "$rc" -eq 0 ] && ! grep -qE '^[EW]:' "$log"; then break; fi
@@ -113,10 +124,6 @@ retry() {
     if [ "$phase" = update ]; then
       wait=$((${PLAYWRIGHT_APT_RETRY_DELAY:-15} * 2 ** (n - 1)))
       [ "$wait" -le 60 ] || wait=60
-    fi
-    if [ "$update_deadline" -gt 0 ] && [ "$((SECONDS + wait))" -ge "$update_deadline" ]; then
-      echo "::warning::apt update budget has no time for another backoff"
-      rc=124; network_failed=true; break
     fi
     echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt network failure (exit $rc, attempt $n of $max); retrying"
     sleep "$wait"; n=$((n + 1))
@@ -140,26 +147,16 @@ leave_azure() {
 }
 fail() { echo "::error::apt $1 failed (exit $2); see the attempt log above"; exit "$2"; }
 
-# install-deps --dry-run prints the apt-get command it would run; the packages follow
-# --no-install-recommends. Every such line counts, should Playwright ever print one per browser.
-list=$(npx playwright install-deps --dry-run "$@" | sed -n 's/.*--no-install-recommends \([^"]*\)".*/\1/p' | tr '\n' ' ')
-read -ra pkgs <<< "$list"
-if [ "${#pkgs[@]}" -eq 0 ]; then
-  echo "::error::playwright install-deps --dry-run named no packages to download"; exit 1
-fi
-
 # timeout returns 137 if --kill-after had to KILL it; that still takes the timeout fallback.
 bounded() {
-  local rc=0 remaining
-  if [ "$update_deadline" -gt 0 ]; then
-    remaining=$((update_deadline - SECONDS)); [ "$remaining" -gt 0 ] || return 124
-    sudo timeout --kill-after=2s "${remaining}s" timeout --kill-after=2s "$limit" "$@" || rc=$?
-  else
-    sudo timeout --kill-after=30s "$limit" "$@" || rc=$?
-  fi
+  local rc=0
+  sudo timeout --kill-after=30s "$limit" "$@" || rc=$?
   [ "$rc" -eq 137 ] && rc=124; return "$rc"
 }
-if [ "$cache_hit" = true ]; then update_deadline=$((SECONDS + ${PLAYWRIGHT_APT_UPDATE_BUDGET:-120})); fi
+# Never interrupt dpkg with the network timeout while it is modifying installed packages.
+install_offline() {
+  sudo apt-get install -y --no-install-recommends --no-download "${pkgs[@]}" || fail install "$?"
+}
 if grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors"; then
   probe_rc=0
   probe_output=$(timeout --kill-after=2s 5s getent hosts azure.archive.ubuntu.com 2>&1) || probe_rc=$?
@@ -178,26 +175,52 @@ if [ "$rc" -ne 0 ]; then
     rc=0; retry update bounded apt-get update || rc=$?
   fi
   if [ "$rc" -ne 0 ]; then
-    if [ "$cache_hit" = true ] && [ "$network_failed" = true ]; then
-      echo "::warning::apt update failed (exit $rc); using cached packages for the mandatory offline install; see the attempt log above"
-      sudo find "$apt_lists" -maxdepth 1 -type f ! -name lock -delete
-      sudo install -m 644 "$cache_lists"/* "$apt_lists/"
-    else fail update "$rc"; fi
+    fail update "$rc"
   fi
 fi
-update_deadline=0
-# A fresh index may need large new debs even on a hit; do not inherit its short update limit.
+if [ "$cache_hit" = true ]; then
+  plan=$(mktemp -d)
+  trap 'sudo rm -rf -- "$plan"' EXIT
+  cache_valid=true
+  verified=()
+  # Empty planning archives defeat apt's size-only reuse; live update authenticated the indexes.
+  sudo apt-get -o Dir::Cache::archives="$plan/" -o Acquire::ForceHash=sha256 --print-uris --download-only install -y --no-install-recommends "${pkgs[@]}" > "$plan/uris" || cache_valid=false
+  while read -r uri file size hash extra; do
+    [[ "$uri" == \'* ]] || continue
+    if [[ ! "$file" =~ ^[[:alnum:]][[:alnum:].+%_~:-]*\.deb$ ]] ||
+      [[ ! "$size" =~ ^[0-9]+$ ]] || [[ ! "$hash" =~ ^SHA256:[[:xdigit:]]{64}$ ]] ||
+      [ -n "${extra:-}" ] || [ ! -f "$cache_debs/$file" ]; then
+      cache_valid=false; break
+    fi
+    [ "$(wc -c < "$cache_debs/$file")" -eq "$size" ] &&
+      printf '%s  %s\n' "${hash#SHA256:}" "$cache_debs/$file" | sha256sum --check --status ||
+      { cache_valid=false; break; }
+    verified+=("$cache_debs/$file")
+  done < "$plan/uris"
+  sudo rm -rf -- "$plan"
+  trap - EXIT
+  if [ "$cache_valid" = true ]; then
+    # Copy only after ALL planned archives pass: apt reuses size-matching files without hashing.
+    [ "${#verified[@]}" -eq 0 ] || sudo cp -- "${verified[@]}" "$apt_archives/"
+    install_offline
+    exit 0
+  fi
+  if [ "${DEBS_CACHE_EXACT_HIT:-}" = true ]; then
+    echo "::warning::cached archives failed verification; immutable exact-key cache cannot be replaced; discarding it locally and using quiet authenticated downloads (delete the cache key to recover)"
+    download_options=(-qq)
+  else
+    echo "::warning::cached archives failed verification; discarding cache and using authenticated network downloads"
+  fi
+  find "$cache_debs" -maxdepth 1 -type f -name '*.deb' -delete
+  cache_available=false
+fi
+# Downloads have their own bound, independent of the update limit.
 limit=${PLAYWRIGHT_APT_LIMIT:-180s}
-# Never interrupt dpkg with the network timeout while it is modifying installed packages.
-install_offline() {
-  sudo apt-get install -y --no-install-recommends --no-download "${pkgs[@]}" || fail install "$?"
-}
-if [ "$cache_hit" = true ] && [ "$rc" -ne 0 ]; then install_offline; exit 0; fi
 rc=0
 if [ "$force" = true ]; then
   echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: taking the Azure mirror off apt's list before downloading anything; nothing timed out"
 else
-  retry download bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
+  retry download bounded apt-get "${download_options[@]}" install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
 fi
 if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = true ]; }; then
   if [ "$rc" -eq 124 ]; then
@@ -208,7 +231,7 @@ if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = t
   leave_azure
   if [ "$force" = true ]; then
     got=$(mktemp)
-    retry download bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" | tee "$got"
+    retry download bounded apt-get "${download_options[@]}" install -y --download-only --no-install-recommends "${pkgs[@]}" | tee "$got"
     if grep -q '^Get:.*azure\.archive\.ubuntu\.com' "$got"; then
       echo "::error::apt still fetched packages from azure.archive.ubuntu.com after it was taken off $mirrors"; exit 1
     fi
@@ -221,18 +244,14 @@ if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = t
       echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: nothing was downloaded from https://archive.ubuntu.com, so this leg proves nothing about the fallback"
     fi
   else
-    retry download bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || fail download "$?"
+    retry download bounded apt-get "${download_options[@]}" install -y --download-only --no-install-recommends "${pkgs[@]}" || fail download "$?"
   fi
 elif [ "$rc" -ne 0 ]; then
   fail download "$rc"
 fi
-install_offline
 if [ "$cache_available" = false ] && compgen -G "$apt_archives/*.deb" > /dev/null; then
-  mkdir -p "$cache_lists" "$cache_debs"
-  find "$cache_lists" -maxdepth 1 -type f -delete
+  mkdir -p "$cache_debs"
   cp "$apt_archives"/*.deb "$cache_debs/"
-  sudo find "$apt_lists" -maxdepth 1 -type f ! -name lock -exec cp -t "$cache_lists" -- {} +
-  sudo chown -R "$(id -u):$(id -g)" "$cache_lists"
-  compgen -G "$cache_lists/*_Packages*" > /dev/null || { echo "::error::successful apt update left no package lists to cache"; exit 1; }
   [ -z "${GITHUB_OUTPUT:-}" ] || echo 'cache-ready=true' >> "$GITHUB_OUTPUT"
 fi
+install_offline

@@ -92,6 +92,38 @@ public class CatalogTests
     }
 
     [Fact]
+    public void Only_exact_tier_jobs_in_a_post_merge_suites_where_are_post_merge_and_an_unknown_tier_stays_blocking()
+    {
+        static string Suite(string id, string where, string tier) => $"""
+              - id: {id}
+                validation_plan: native
+                kind: ui
+                ring: 1
+                select: always
+                platforms: [browser]
+                runner: hosted
+                command: see ci.yml
+                where: ci.yml {where}
+                status: exists
+            {tier}
+            """ + "\n";
+        var catalog = Catalog.Parse("suites:\n" + string.Concat(
+            Suite("ui", "pwa-ui", "    tier: post-merge\n    tier_jobs: [pwa-ui (webkit 1/3), app (win-arm64)]"),
+            Suite("e2e", "pwa-e2e, light", "    tier: post-merge\n    tier_jobs: [pwa-e2e]"),
+            Suite("typo", "spikes", "    tier: post_merge\n    tier_jobs: [spikes]"),
+            Suite("bare", "product", "    tier: post-merge"),
+            Suite("plain", "app", "    tier: blocking")));
+
+        Assert.Equal(["pwa-e2e", "pwa-ui (webkit 1/3)"], catalog.PostMergeJobs().Order(StringComparer.Ordinal));
+        Assert.Equal([
+            "tier: suite ui names tier job 'app (win-arm64)', which isn't a ci.yml job in its where",
+            "tier: suite typo has tier 'post_merge', not one of blocking, post-merge, so it counts as blocking",
+            "tier: suite typo names tier_jobs but isn't tier post-merge",
+            "tier: suite bare is tier post-merge but names no tier_jobs",
+        ], catalog.Validate(_ => 1).Select(p => $"{p.Kind}: {p.Message}"));
+    }
+
+    [Fact]
     public void A_catalog_that_lists_a_suite_twice_is_refused()
     {
         var yaml = "suites:\n  - id: a\n    ring: 0\n  - id: a\n    ring: 1\n";
