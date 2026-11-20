@@ -11,15 +11,16 @@ namespace AgentBridge.Host.Delivery;
 // process, are cleared and the reply goes on; anything a person may have typed is never touched.
 public sealed partial class ReplyService
 {
-    // What this host last typed into each Copilot session's box: the process, the words, when, and
-    // whether that reply's confirmation is still running (its Enter may yet be taken). In memory
-    // only, so a restarted host has none and refuses as before. The words are never logged.
-    sealed record Injected(int Pid, string Words, DateTimeOffset At, bool Confirming);
+    // What this host last typed into each Copilot session's box: the process (its pid and start
+    // time, read before the keys: a later process given the same pid is not it), the words, when,
+    // and whether that reply's confirmation is still running (its Enter may yet be taken). In
+    // memory only, so a restarted host has none and refuses as before. The words are never logged.
+    sealed record Injected(int Pid, SessionProcess? Process, string Words, DateTimeOffset At, bool Confirming);
     readonly ConcurrentDictionary<string, Injected> injected = new(StringComparer.Ordinal);
 
     // The words a reply typed, kept until a confirmation shows they were sent.
-    Injected Remember(string sessionId, int pid, string words, bool confirming) =>
-        injected[sessionId] = new Injected(pid, words, options.Time.GetUtcNow(), confirming);
+    Injected Remember(string sessionId, int pid, SessionProcess? process, string words, bool confirming) =>
+        injected[sessionId] = new Injected(pid, process, words, options.Time.GetUtcNow(), confirming);
 
     async Task<ReplyResult> SettleAsync(string sessionId, Injected typed, Func<Task<ReplyResult>> confirm)
     {
@@ -39,8 +40,10 @@ public sealed partial class ReplyService
 
     // The record of what the box holds, when that is exactly this host's unsent words in this
     // process, and the box is whole, the prompt's own, and in neither shell nor vim's normal mode.
+    // A process whose start time was not known, or is not the one typed into, is never this one.
     Injected? Residue(string sessionId, int pid, CopilotInputBoxState? state) =>
-        injected.TryGetValue(sessionId, out var typed) && typed is { Confirming: false } && typed.Pid == pid
+        injected.TryGetValue(sessionId, out var typed) && typed is { Confirming: false, Process.StartedAt: not null } && typed.Pid == pid
+        && typed.Process.Id == pid && source.ProcessOf(sessionId) == typed.Process
         && state is { Complete: true, Main: true, Shell: false, Vim: CopilotVimMode.None or CopilotVimMode.Insert }
         && ReadsAs(typed.Words, state.Content) ? typed : null;
 
@@ -60,24 +63,27 @@ public sealed partial class ReplyService
         return at == words.Length;
     }
 
-    // Clears the host's own unsent words with the guarded clear, while the session is idle and
-    // nothing has changed, and logs it (session, length, age; never the words). Refused before any
-    // key (a turn running, a question), it gives no reason, so the reply keeps today's refusal.
-    async Task<(CopilotInputBox? Box, string? Problem)> ClearResidueAsync(Session session, int pid, CopilotInput input,
-        CopilotInputBoxState state, Injected residue)
+    // Clears the host's own unsent words with the guarded clear, while the session is still the
+    // process they were typed into, idle, the retry still current and nothing changed, and logs it
+    // (session, length, age; never the words). Refused before any key (a turn running, a
+    // question), it gives no reason, so the reply keeps today's refusal. The fence it returns holds
+    // the reply's own keys to the same, since nothing else in a plain request rechecks them.
+    async Task<(CopilotInputBox? Box, string? Problem, Func<string?>? Fence)> ClearResidueAsync(Session session, int pid,
+        CopilotInput input, CopilotInputBoxState state, Injected residue, Func<string?> freshness)
     {
         const string Changed = "the session changed before this host's unsent words could be cleared; nothing was typed";
-        var process = source.ProcessOf(session.Id);
-        string? Fence() => injected.TryGetValue(session.Id, out var now) && now == residue && StillIdle(session, pid, process, input) ? null : Changed;
-        if (Fence() is not null) { return (null, null); }
+        string? Idle() => freshness() ?? (StillIdle(session, pid, residue.Process, input) ? null : Changed);
+        string? Fence() => Idle() ?? (injected.TryGetValue(session.Id, out var now) && now == residue ? null : Changed);
+        if (Fence() is { } refused) { return (null, refused == Changed ? null : refused, null); }
         InjectionResult result;
         try { result = await injector.InjectAsync(pid, ClearKeys(state, Fence)); }
-        catch (Exception e) { return (null, Logged($"the injector failed while clearing this host's unsent words from {Short(session.Id)}", e)); }
-        if (result.Status == InjectionStatus.NothingTyped) { return (null, "the composer changed before this host's unsent words were cleared; nothing was sent"); }
+        catch (Exception e) { return (null, Logged($"the injector failed while clearing this host's unsent words from {Short(session.Id)}", e), null); }
+        if (result.Status == InjectionStatus.NothingTyped) { return (null, "the composer changed before this host's unsent words were cleared; nothing was sent", null); }
         injected.TryRemove(KeyValuePair.Create(session.Id, residue));
         var age = (options.Time.GetUtcNow() - residue.At).TotalSeconds;
         log(FormattableString.Invariant($"residue clear in {Short(session.Id)} (pid {pid}): {residue.Words.Length} characters this host typed {age:0} s ago, never sent and alone in the box, cleared before a new reply -> {result.Status}"));
-        if (result.Status != InjectionStatus.Typed) { return (null, "the composer did not finish clearing this host's unsent words; nothing was sent"); }
-        return await AwaitEmptyAsync(pid, () => StillIdle(session, pid, process, input) ? null : Changed);
+        if (result.Status != InjectionStatus.Typed) { return (null, "the composer did not finish clearing this host's unsent words; nothing was sent", null); }
+        var (box, problem) = await AwaitEmptyAsync(pid, Idle);
+        return (box, problem, box is null ? null : Idle);
     }
 }

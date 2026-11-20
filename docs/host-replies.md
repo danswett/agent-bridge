@@ -158,15 +158,18 @@ the captured live screen and the CLI's rendering code, each naming its source.
 **The host's own unsent words ([#2144](https://github.com/danswett/agent-bridge/issues/2144)).**
 Words a reply typed but never sent (its Enter held back, or pressed and not taken) used to
 leave every later reply refused as already typed. The host now keeps, in memory per
-session, the words it last typed, the process and when. A later reply that finds the box
+session, the words it last typed, the process (its pid and start time, read before the
+keys) and when. A later reply that finds the box
 holding exactly those words (compared after the reader's normalisation: each row's ASCII
 spaces trimmed, so only the spaces at a wrap may differ), in the same process, after that
 reply's confirmation ended, in a whole box that is the prompt's own, outside shell mode and
 vim's normal mode, clears them with the guarded clear below (held to the box's rows and
 footer, only while the session is idle and asks nothing, then two empty reads) and goes
-on. The host logs each such clear with the session, the length and the words' age, never
-the words. Anything else is refused as before: words a person typed, the host's words with
-any edit, shell mode, or no record (a restarted host). A clear that fails sends nothing.
+on, its own keys held to the same checks. The host logs each such clear with the session,
+the length and the words' age, never the words. Anything else is refused as before: words
+a person typed, the host's words with any edit, shell mode, another process given the same
+pid, or no record (a restarted host). A retry no longer current is stale and clears
+nothing. A clear that fails sends nothing.
 
 ## Guarded clear foundation ([#804](https://github.com/danswett/agent-bridge/issues/804))
 

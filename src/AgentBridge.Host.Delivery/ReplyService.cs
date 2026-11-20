@@ -391,7 +391,8 @@ public sealed partial class ReplyService : ISessionReplier
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Done(Refused("the session's id is not a Copilot session id")); }
         var transcript = Path.Combine(options.CopilotHome, "session-state", session.Id, "events.jsonl");
         if (session.ProcessId is not { } pid) { return Done(Refused("the session's process is not known; reply at the machine")); }
-        var process = stillCurrent is null && request.ClearConfirmation is null ? null : source.ProcessOf(session.Id);
+        // Read before any key: the identity this host's typed words are bound to (#2144).
+        var process = source.ProcessOf(session.Id);
         if (!processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid)) { return Done(Stale("the session's process has ended")); }
         if (guard.Refuse(pid) is { } refused) { return Done(Refused(refused)); }
         IReadOnlyList<string> staged = [];
@@ -489,9 +490,8 @@ public sealed partial class ReplyService : ISessionReplier
                 if (request.ClearConfirmation is null)
                 {
                     if (Residue(session.Id, pid, state) is not { } residue) { return Done(Unverified(problem!)); }
-                    var (cleared, why) = await ClearResidueAsync(session, pid, input, state!, residue);
-                    if (cleared is null) { return Done(Unverified(why ?? problem!)); }
-                    box = cleared;
+                    (box, var why, clearFence) = await ClearResidueAsync(session, pid, input, state!, residue, Freshness);
+                    if (box is null) { return Done(retryChanged ? Stale(retryChangedReason) : Unverified(why ?? problem!)); }
                 }
                 else
                 {
@@ -547,9 +547,14 @@ public sealed partial class ReplyService : ISessionReplier
             if (request.ClearConfirmation is not null)
             {
                 clearFence ??= () => request.Intent == ReplyIntent.Steer ? null : "only a person's reply may clear the composer";
+            }
+            // Whatever cleared the box, its fence holds the reply's keys too: a plain request has
+            // no other recheck between the clear and its keys (#2144 review).
+            if (clearFence is not null)
+            {
                 var previous = keys.Proceed;
                 keys = keys with { Proceed = () => previous?.Invoke() ?? clearFence() };
-                if (keys.Proceed() is { } changed) { return Done(Refused(changed)); }
+                if (keys.Proceed() is { } changed) { return Done(retryChanged ? Stale(retryChangedReason) : Refused(changed)); }
             }
 
             timeline.InjectStart();
@@ -566,7 +571,7 @@ public sealed partial class ReplyService : ISessionReplier
         if (result.Status == InjectionStatus.Typed) { timeline.Typed(working); }
         // Kept before the session is free for another reply, which may find these words unsent.
         var typed = result.Status is InjectionStatus.Typed or InjectionStatus.Interrupted
-            ? Remember(session.Id, pid, words, confirming: result.Status == InjectionStatus.Typed) : null;
+            ? Remember(session.Id, pid, process, words, confirming: result.Status == InjectionStatus.Typed) : null;
         log($"typed a reply into {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {keys.Describe()} -> {result.Status} {result.Detail}");
         return result.Status switch
         {
