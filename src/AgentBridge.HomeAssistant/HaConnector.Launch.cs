@@ -951,7 +951,9 @@ public sealed partial class HaConnector
         var shown = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var item in recent?.EnumerateArray().Take(store is null ? HaContract.LaunchOutcomesKept : HaContract.LaunchOutcomesPublished) ?? [])
         {
-            if (JsonNode.Parse(item.GetRawText()) is not JsonObject o || o["request"] is not JsonValue v0 || !v0.TryGetValue<string>(out var id)) { continue; }
+            // An agent's pipe launches ("pipe-", #3237) never reach Home Assistant, even from an older account.
+            if (JsonNode.Parse(item.GetRawText()) is not JsonObject o || o["request"] is not JsonValue v0 || !v0.TryGetValue<string>(out var id)
+                || id.StartsWith("pipe-", StringComparison.Ordinal)) { continue; }
             if (store?.Get(id) is not null) { shown.TryAdd(id, o); continue; }
             if (o["outcome"] is JsonValue v && v.TryGetValue<string>(out var outcome) && outcome == "starting" && id != launchInFlight)
             {
@@ -965,7 +967,8 @@ public sealed partial class HaConnector
         foreach (var held in store?.All().Where(h => !h.Id.StartsWith("pipe-", StringComparison.Ordinal)) ?? [])
         {
             // Queued or launching, and not this connector's launch under way: cut off, so said to
-            // be unconfirmed rather than started (again). An agent's pipe launches ("pipe-") are the host's (#3237).
+            // be unconfirmed rather than started (again). An agent's pipe launches ("pipe-") are the host's
+            // to settle and are never published (#3237).
             if (!held.Finished && held.Id != launchInFlight) { Record(held.Id, "unconfirmed", ""); }
             launchOutcomes.Add(Told(store!.Get(held.Id) ?? held, shown.GetValueOrDefault(held.Id)));
         }

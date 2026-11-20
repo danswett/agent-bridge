@@ -300,7 +300,8 @@ through the card's launch service, the agent principal as provenance. Refused, w
 line, unless the credential is live with `read+reply+launch` at depth 0 and not adopted, the
 request has only the allowed fields with `permissions: "ask"`, the agent and isolated workspace
 are in `agents.inbound.local.launch`, and the launch gate admits it. The id is kept, per
-principal, on the record HA's launch card uses (`launch-requests.json`, #2743): a repeat returns
+principal, on the record HA's launch card uses (`launch-requests.json`, #2743), but never
+published to Home Assistant's launch outcome sensor: a repeat returns
 the same outcome and starts nothing, even after a restart; the same id with a different request
 is refused (`requestReused`); a refused id stays refused, and an id whose outcome expired is never
 launched again (`requestUsed`). A damaged record refuses every launch.
