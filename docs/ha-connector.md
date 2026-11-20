@@ -767,6 +767,17 @@ card keeps while it asks (`Get-DaemonCardSummary`).
 * What the button holds when the connector first reads it is not a press; a session asking a
   question can be ended like any other.
 
+The graceful budget covers typing admission and `/exit`; a blocked typing slot or provisional
+departure exclusion skips typing and forces termination, while a committing or committed departure
+answers Busy. While any failed injector worker (this stop's or an earlier delivery's) is not proven
+exited, a stop never terminates or reports ended: it returns Failed and keeps the PID handle, and its
+own typing fence, until the worker's exit is proven, and for good if it never can be.
+
+Pre-Ending hypotheses for [2910](https://github.com/danswett/agent-bridge/issues/2910),
+not established incident causes:
+* HA: disabled/read-only connector, baselined/busy press, confirmation timing or dispatch failure.
+* Host: press not received, unknown process, confirmation, audit refusal or delivery conflict.
+
 Where stage 4 knowingly differs from the daemon:
 
 | Difference | Why |
