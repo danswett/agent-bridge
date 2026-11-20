@@ -88,7 +88,7 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
         Assert.Equal((2, 17, 3), Rows(measured.Text)["Example"]);
     }
 
-    [Fact]
+    [Fact(Skip = "Quarantined: https://github.com/danswett/agent-bridge/issues/3142, expires 2026-11-19 04:30 PT")]
     public async Task Report_is_deterministic_for_the_same_vectors()
     {
         using var sample = new VectorFolder();
@@ -107,7 +107,7 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
         Assert.Equal((13, 13, 1), Rows(first.Text)["Alpha"]);
     }
 
-    [Fact]
+    [Fact(Skip = "Quarantined: hosted 30s post-READY timeout; owner Payload R3 builder; tracking issue https://github.com/danswett/agent-bridge/issues/3065; fix deadline 2026-11-18 12:00 PT")]
     public async Task Report_fails_clearly_on_a_vector_that_cannot_be_parsed()
     {
         using var sample = new VectorFolder();

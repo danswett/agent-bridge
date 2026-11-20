@@ -320,8 +320,34 @@ public sealed class SettingsTests : IAsyncLifetime
     {
         host.Status = status;
         await Connected();
+        var before = TestUi.Read(() => connection.Status);
         await host.SendAsync(HostOps.StatusEvent, status);
-        await Wait.UntilAsync(() => Equals(connection.Status?.Settings, status.Settings), "the host's status");
+        // Matching subscribe values do not prove this event has reached the UI.
+        await Wait.UntilAsync(() => !ReferenceEquals(connection.Status, before)
+            && Equals(connection.Status?.Settings, status.Settings), "the host's status event");
+    }
+
+    [Fact]
+    public async Task Status_setup_waits_for_its_event_to_be_applied_even_when_the_settings_already_match()
+    {
+        await Connected();
+        var status = connection.Status!;
+        ui.Hold();
+        Task? setup = null;
+        try
+        {
+            setup = ConnectedWith(status);
+            await Wait.UntilAsync(() => host.EventsSent.Any(e => e.Name == HostOps.StatusEvent), "the status event sent");
+            await connection.HostHasAllAsync();
+            await Wait.UntilAsync(() => ui.QueuedCount > 0, "the queued status event");
+
+            Assert.False(setup.IsCompleted);
+        }
+        finally
+        {
+            ui.Release();
+            if (setup is not null) { await setup; }
+        }
     }
 
     // As the host does: answers host.settings with what it saved, which its status says from then
@@ -1890,10 +1916,9 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal("This install uses staging.relay.example:8443", release.RelayNote);
         Assert.Equal("Sign in with GitHub to staging.relay.example:8443", release.SignInLabel);
     }
-    // Home Assistant refusing this machine is shown in the host's words, a rejected token and a ban
-    // alike, and goes when the host says it has; each change is announced, so the page redraws.
+    // Keep the host's refusal, but make its token remedy usable without the executable on PATH.
     [Fact]
-    public async Task Home_Assistant_refusing_this_machine_is_shown_in_the_hosts_words_and_goes_when_the_host_says_so()
+    public async Task Home_Assistant_refusal_banner_gives_the_installed_token_command_and_pipe_form_and_clears()
     {
         await Connected();
         Assert.False(settings.HasHomeAssistantRefused);
@@ -1907,16 +1932,19 @@ public sealed class SettingsTests : IAsyncLifetime
         };
         bool Told((string?, bool) seen) { lock (told) { return told.Contains(seen); } }
 
-        foreach (var said in new[]
+        const string command = """& "$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe" ha token set""";
+        const string banned = "Home Assistant has banned this machine's address; see docs/ha-connector.md, Troubleshooting";
+        foreach (var (said, banner) in new[]
         {
-            "Home Assistant rejected the token: run `agent-bridge-host ha token set`, then restart the host. Stopped after 3 refused attempts with it",
-            "Home Assistant has banned this machine's address; see docs/ha-connector.md, Troubleshooting",
+            ("Home Assistant rejected the token: run `agent-bridge-host ha token set`, then restart the host. Stopped after 3 refused attempts with it",
+             $"Home Assistant rejected the token: run `{command}` (or pipe it: `Get-Clipboard | {command}`), then restart the host. Stopped after 3 refused attempts with it"),
+            (banned, banned),
         })
         {
             host.Status = FakeHost.StatusOf() with { HomeAssistant = said };
             await host.SendAsync(HostOps.StatusEvent, host.Status);
-            await Wait.UntilAsync(() => Told((said, true)), "the refusal, announced");
-            Assert.Equal(said, settings.HomeAssistantRefused);
+            await Wait.UntilAsync(() => Told((banner, true)), "the refusal, announced");
+            Assert.Equal(banner, settings.HomeAssistantRefused);
             Assert.True(settings.HasHomeAssistantRefused);
         }
 

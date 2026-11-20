@@ -736,7 +736,7 @@ internal static class RegistrationDiscovery
     public static IReadOnlyList<DiscoveredSession> Find(
         AgentKind agent, IReadOnlyList<string> roots, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript,
         ICollection<string>? holds = null, ISet<int>? accounted = null, Action<string>? afterRead = null, IReadOnlyList<AgentProcess>? unidentified = null,
-        ISet<string>? ended = null, ICollection<Registration>? pidless = null)
+        IDictionary<string, Registration>? ended = null, ICollection<Registration>? pidless = null)
     {
         var name = agent.ToString().ToLowerInvariant();
         var running = processes.ToDictionary(p => p.Id);
@@ -770,19 +770,11 @@ internal static class RegistrationDiscovery
         var live = new List<DiscoveredSession>();
         foreach (var r in best.Values)
         {
-            if (r.ProcessId <= 0) { continue; }
-            if (!running.TryGetValue(r.ProcessId, out var process))
-            {
-                // The current registration says it ended, and its runtime cannot be read: it stays
-                // ended, or a restart's first pass would bring back what it remembered of it (#147).
-                // Only the current one: an older ended copy in another root says nothing.
-                if (r.Ended && unread.TryGetValue(r.ProcessId, out var runtime) && OfGeneration(r, runtime)) { ended?.Add(r.SessionId); }
-                continue;
-            }
-            if (!OfGeneration(r, process)) { continue; }
-            // An ended session whose process still runs is not a session, and other ways of
-            // finding one (a thread lock) are told so rather than bringing it back.
-            if (r.Ended) { ended?.Add(r.SessionId); continue; }
+            // The current registration (not an older copy elsewhere) says it ended: it stays ended whatever now runs
+            // under its pid (its runtime, an unreadable one, a reuse; checked first, or a reused pid kept it listed),
+            // and a thread lock is told so. Only a proven later generation is admitted again (SessionSource.Successor).
+            if (r.Ended) { ended?.Add(r.SessionId, r); continue; }
+            if (r.ProcessId <= 0 || !running.TryGetValue(r.ProcessId, out var process) || !OfGeneration(r, process)) { continue; }
             // Claude creates its transcript at the first message, so a missing file is a
             // live session with nothing to show yet, not a dead one.
             var transcript = string.IsNullOrWhiteSpace(r.TranscriptPath) ? findTranscript(r.SessionId) : r.TranscriptPath;

@@ -22,6 +22,10 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     // Shared with every profile's app and host through the app's folder (#530).
     readonly ReleaseDiscovery discovery = new(Paths.AppData, log: log);
     readonly PackageDownloader downloader = new();
+    UpdaterHaltPolicy? halts;
+    UpdaterHaltPolicy Halts => halts ??= new(discovery, log);
+    // Renewed at each check, before anything it finds can be downloaded or installed (#3307).
+    public HaltPolicySnapshot? HaltPolicy => Halts.Snapshot;
     UpdateManager? manager;
     UpdateInfo? pending;
     string? source;
@@ -114,6 +118,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     public async Task<string?> CheckAsync()
     {
         var from = Manager();
+        await Halts.RefreshAsync();
         // GitHub's limit (#800) comes as ReleaseDiscovery's Limited, with the reset GitHub sent:
         // AutoUpdater holds its checks off until then.
         var found = await from.CheckForUpdatesAsync();
@@ -219,38 +224,8 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         try { handedOverTo?.Invoke(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { log?.Invoke($"update: the hand-over could not be recorded: {e.Message}"); }
         // As ApplyUpdatesAndRestart ends: Update.exe waits for this process to exit (--wait).
+        Program.CompleteRun();
         locator.Process.Exit(0);
-    }
-}
-
-// Another profile's app or host running from this installation, which an update would stop
-// whatever it is doing (Update.exe stops every process in the package, and starts only the
-// updating profile's app again). One that cannot be looked at counts: not knowing is not
-// permission.
-static class PackageProcesses
-{
-    public static string? Others(int? ownHost)
-    {
-        var root = Path.GetFullPath(AppContext.BaseDirectory);
-        foreach (var name in new[] { "AgentBridge", "agent-bridge-host" })
-        {
-            foreach (var p in System.Diagnostics.Process.GetProcessesByName(name))
-            {
-                using (p)
-                {
-                    if (p.Id == Environment.ProcessId || p.Id == ownHost) { continue; }
-                    string? path;
-                    try { path = p.MainModule?.FileName; }
-                    catch (InvalidOperationException) { continue; }
-                    catch (System.ComponentModel.Win32Exception) { return $"{name} (pid {p.Id}) runs and cannot be looked at"; }
-                    if (path is not null && path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return $"another profile's {(name == "AgentBridge" ? "app" : "host")} (pid {p.Id}) runs from this installation";
-                    }
-                }
-            }
-        }
-        return null;
     }
 }
 

@@ -67,8 +67,9 @@ static class Program
         {
             case "select":
                 {
-                    // A catalog that breaks its own schema would select wrongly, and silently.
-                    var schema = catalog.Validate(graph.CsprojCount);
+                    // A catalog that breaks its own schema would select wrongly, and silently. A bad
+                    // tier only ever blocks (Catalog.PostMergeJobs), so check alone reports it.
+                    var schema = catalog.Validate(graph.CsprojCount).Where(p => p.Kind != "tier").ToList();
                     if (schema.Count > 0)
                         throw new FormatException("quality/catalog.yml breaks its schema; run check for the list. First: " + schema[0].Message);
                     var ring = ParseRing(options.GetValueOrDefault("ring"));
@@ -202,6 +203,7 @@ static class Program
             selection.Unclaimed,
             Matrix = selection.Matrix,
             Jobs = JobsOf(selection),
+            PostMergeJobs = selection.PostMergeJobs.Order(StringComparer.Ordinal),
             Suites = selection.Suites.Select(s => new
             {
                 s.Suite.Id,
