@@ -632,6 +632,8 @@ public sealed partial class MainViewModel : Observable
             // A flush that failed turned the list to Most recent: arrange it so, and tell the picker.
             if (Order.Sort != toldSort) { Rearrange(); }
         }
+        // A signed-in hold ends on its second, not at the next sweep (#902).
+        else if (signInFlows.Values.Any(f => f.Held)) { SyncSignIns(); }
         if (ticks % 30 == 0)
         {
             Usage.Refresh();

@@ -26,7 +26,7 @@ internal sealed record HistoryBudgets
 // the transcript does not mark.
 internal sealed record HistorySeed(IReadOnlyDictionary<string, string?> Delegates, IReadOnlyDictionary<string, string> Calls)
 {
-    public IReadOnlySet<string> AgentTurns { get; init; } = new HashSet<string>();
+    public IReadOnlyDictionary<string, string?> AgentTurns { get; init; } = new Dictionary<string, string?>();
 
     // Who made the delegates' calls the session keeps (BackgroundWork.CallOwners): a permission
     // prompt or a nested start naming a call made on an older page is still that delegate's.
@@ -89,7 +89,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         public bool Queued { get; set; }
     }
 
-    sealed class Pass(HistoryReader reader, SafeFileHandle file, string sessionId, HistoryDialect dialect, HistoryContext context, IReadOnlySet<string> agentTurns, CancellationToken cancellation)
+    sealed class Pass(HistoryReader reader, SafeFileHandle file, string sessionId, HistoryDialect dialect, HistoryContext context, IReadOnlyDictionary<string, string?> agentTurns, CancellationToken cancellation)
     {
         delegate bool DroppedLine(ReadOnlySpan<byte> head, long offset);
 
@@ -592,8 +592,9 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         TurnBuilder Builder(Start s)
         {
             var id = Attachments.Base64Url(s.Id);
-            // A prompt the host knew an agent sent (#489) is the agent's here too, as it was live.
-            var prompt = s.Prompt is { From: null } p && agentTurns.Contains(id) ? p with { From = UserMessageFrom.Agent } : s.Prompt;
+            // The send's display-only label stays with its prompt, never a later driver.
+            var prompt = s.Prompt is { From: null or UserMessageFrom.Agent } p && agentTurns.TryGetValue(id, out var label)
+                ? p with { From = UserMessageFrom.Agent, Label = label } : s.Prompt;
             return new TurnBuilder(id, s.At ?? DateTimeOffset.UnixEpoch, prompt) { Unreadable = s.Prompt is null, Truncated = s.Unknown };
         }
 

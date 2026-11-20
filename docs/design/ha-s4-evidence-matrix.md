@@ -36,8 +36,9 @@ per the owner decision on [#1396](https://github.com/danswett/agent-bridge/issue
 (November 11, 2026, 00:07 PT), relayed by Engineering; the former fixed-count
 continuous-run quota is not a separate gate. Counters belong to [#2384](https://github.com/danswett/agent-bridge/issues/2384)
 and serve #1949 and the per-row runs, not additional retirement quotas.
-The HA-off rehearsal runs first on one machine, then all four, each required row
-at least **three times**, zero failures or HA fallbacks, with owner confirmation of phone approvals.
+The HA-off rehearsal runs first on one machine, then all active hosts in the approved
+fleet roster, pinned at run start, each required row at least **three times**,
+zero failures or HA fallbacks, with owner confirmation of phone approvals.
 
 ## Reading the grid
 
@@ -82,8 +83,8 @@ launch-not-ready or unreadable transcript, confirm then terminate without typing
 `/exit`. Refuse elevated/other-user processes, unreadable start time, the host
 itself and no-live-PID targets. Keep transcript, host log, client outcome and
 confirmation/refusal receipts, including stale/reused-PID checks. Repeat three
-times per rehearsal stage; record 20 row-4 stops across all four Windows
-machines, all with correct targets. C E5-01/02/03/04 and S supply the action/read
+times per rehearsal stage; record 20 row-4 stops across the pinned roster,
+all with correct targets. C E5-01/02/03/04 and S supply the action/read
 locations; historical runs alone do not qualify every client.
 
 Use the [stop proof checklist](../stop-proof-checklist.md) for per-client/stage
