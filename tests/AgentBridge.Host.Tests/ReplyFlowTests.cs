@@ -1649,15 +1649,17 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     // The line boundary moves only at a newline, so a record still without its own (#3153 review)
-    // must end cleanup too: any growth of the file does, at either check.
+    // must end cleanup too: any growth of the file does, at either check, as a replacement does.
     [Theory]
     [InlineData("unterminated", false, false)]
     [InlineData("unterminated", true, false)]
     [InlineData("unterminated", false, true)]
     [InlineData("unterminated", true, true)]
     [InlineData("terminated", false, false)]
+    [InlineData("replaced", false, false)]
+    [InlineData("replaced", false, true)]
     [InlineData("none", false, false)]
-    public async Task SliceA_any_transcript_growth_even_an_unterminated_prompt_or_turn_ends_cleanup(string growth, bool turn, bool worker)
+    public async Task SliceA_any_transcript_change_even_an_unterminated_prompt_or_turn_ends_cleanup(string growth, bool turn, bool worker)
     {
         injector.Result = new(InjectionStatus.Interrupted, "partial native write");
         injector.Partial = (2, false);
@@ -1666,6 +1668,15 @@ public sealed class ReplyFlowTests : IAsyncLifetime
             var record = turn ? Copilot.TurnStart(second++) : Prompt("ag");
             if (growth == "terminated") Fixture.Append(events, record);
             else if (growth == "unterminated") File.AppendAllText(events, record);
+            else if (growth == "replaced")
+            {
+                // Another file of the same length: nothing past the boundary to read.
+                var bytes = File.ReadAllBytes(events);
+                var digit = Array.FindLastIndex(bytes, b => b is >= (byte)'0' and <= (byte)'8');
+                bytes[digit]++;
+                File.Delete(events);
+                File.WriteAllBytes(events, bytes);
+            }
         }
         injector.Sent = i =>
         {

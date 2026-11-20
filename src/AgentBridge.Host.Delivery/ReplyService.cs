@@ -474,6 +474,9 @@ public sealed partial class ReplyService : ISessionReplier
             }
             if (before.Asking && !noTranscriptYet) { return Done(Asking()); }
             from = before.ScannedTo;
+            // Which file was read to that boundary: a same-length replacement is not a transcript
+            // a failed reply's cleanup may still trust (#3153 review).
+            var boundary = JsonlMark.Of(transcript, from);
             // Typed only into Copilot's input box, empty and outside shell mode, as the screen
             // shows it now: words left in it would go with the reply, and in shell mode Enter runs
             // what it holds as a shell command. The keys are held to those rows (KeySend.Expect),
@@ -552,7 +555,7 @@ public sealed partial class ReplyService : ISessionReplier
             if (stillCurrent is null && result.Status == InjectionStatus.Interrupted
                 && !result.Detail.Contains("console closed", StringComparison.Ordinal))
             {
-                await ClearCopilotAsync(session, target, transcript, from, words, result);
+                await ClearCopilotAsync(session, target, transcript, from, boundary, words, result);
             }
         }
         finally { gate.DoneTyping(); }
@@ -576,7 +579,7 @@ public sealed partial class ReplyService : ISessionReplier
         static Attempt Done(ReplyResult r) => new(r, null);
     }
 
-    async Task ClearCopilotAsync(Session session, AgentProcess process, string transcript, long from, string words, InjectionResult write)
+    async Task ClearCopilotAsync(Session session, AgentProcess process, string transcript, long from, JsonlMark boundary, string words, InjectionResult write)
     {
         if (process.StartedAt is null || write.EnterWritten != false
             || write.TextWritten is not { } length || length <= 0 || length > words.Length) return;
@@ -616,11 +619,18 @@ public sealed partial class ReplyService : ISessionReplier
             && inputs.TryGetValue(transcript, out var input)
             // Any transcript advance relinquishes ownership, including before the worker's keys.
             // ScannedTo moves only at a newline, so the file's own length must still be the
-            // boundary too: a record written without its newline yet is an advance (#3153 review).
+            // boundary too: a record written without its newline yet is an advance; and it must
+            // still be the file read to it (#3153 review).
             && (input.Read() is { Readable: true, Asking: false, Resumed: false } latest && latest.ScannedTo == from
-                    && Jsonl.Length(transcript) == from
+                    && Jsonl.Length(transcript) == from && Unreplaced()
                 || from == 0 && NotYetWritten(transcript, live))
                 ? null : "failed reply cleanup is no longer safe";
+
+        bool Unreplaced()
+        {
+            using var stream = Jsonl.Open(transcript);
+            return stream is not null && boundary.Holds(stream);
+        }
     }
 
     // Why a reply to a Copilot session with no transcript yet must wait, or null when its window
