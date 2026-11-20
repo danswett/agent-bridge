@@ -243,42 +243,91 @@ P-256 over `"agent-bridge signed halt policy v1\n" + kid + "\n" + payload bytes`
 re-serialized, so there is no canonical-JSON ambiguity: reformatting breaks the signature.
 
 **Verify.** `SignedHaltPolicy.OfferAsync` is the one door for every source. It reuses the roster's P-256 point and
-DER rules. `kid` is the first 16 hex digits of SHA-256(point), and it selects one of two key slots pinned in the
-build. Over 96 KiB, unsigned, malformed, wrong algorithm, unknown key, bad signature, not yet valid (5 minute
-skew), lifetime over 7 days, expired, older `seq`, the same `seq` with other content, a retired key, a `seq` jump
-over the bound, and an unreadable floor: each is refused, logged with that reason, and leaves the stored policy
-and halts untouched. A refusal never counts as "no halts" or "ok".
-An accepted policy is fresh for 6 hours and never past `expires`. A replayed copy can refresh it only until
-`expires`. Only a higher `seq` may lift a halt. Once any signed policy has been accepted, the legacy GitHub digest
-path is skipped.
+DER rules. `kid` is the first 16 hex digits of SHA-256(point). The build pins an ordered list of key slots, oldest
+first, and a list of retired keys (id and point). Over 96 KiB, unsigned, malformed, wrong algorithm, unknown or
+retired key, bad signature, not yet valid (5 minute skew), lifetime over 7 days, expired, a key outranked by a
+stored one, an older `seq`, the same `seq` with other bytes, a `seq` jump over the bound, and an unreadable store
+entry at or above the offered key's slot: each is refused, logged with that reason, and changes nothing stored. A
+refusal never counts as "no halts" or "ok".
 
-**Sequence floor.** The anti-rollback floor is kept in its own file, `halt-policy-floor.json` beside the shared
-`release-discovery.json`, as `{"v":1,"keys":[{"kid","seq"}]}`: each key's highest accepted `seq`, in the order
-each key was first accepted. No release before the verifier knows this file. Those releases do rewrite the shared
-cache in their own shape, which drops `seq`. So a floor kept in the cache was lost when a machine skipped the
-verifier release and rolled back below it, and an older, still-valid signed copy could then clear a halt. The
-verifier compares an incoming `seq` only with its own key's floor. It writes the floor (temp file, then replace)
-before the cache, so the floor is never behind what is held. Only the most recently first-accepted key is live:
-once a successor key is accepted, copies signed by earlier keys are refused as `retired key`, even if they are
-unexpired and above their own floor. One policy may raise its key's floor by at most `MaxSequenceJump` (100,000).
-At hourly signing that is over eleven years of headroom, and it stops a stolen key from pushing a floor to
-`long.MaxValue`. A floor file that cannot be read or parsed refuses every signed policy and keeps the legacy read
-closed. It is never read as zero. A missing file (first use, or deleted) starts from the signed policy still held,
-never below it. Any release may be a rollback target. There is no ordering rule for when keys may ship.
+**Signed store.** Verified envelopes live in their own store, `signed-policy/<kid>.json` beside the shared
+`release-discovery.json`: one entry per key, `{"v":1,"envelope","at"}`. `envelope` is the exact accepted envelope
+(key id, payload with `seq`, `issued`, `expires` and the full halt list, and signature); `at` is when a source last
+offered those exact bytes. No release before the store knows this directory, so no legacy writer reads or rewrites
+it. An accepted offer is written to its key's entry (temp file, flush, replace) **before** the shared cache is
+touched; if that write fails, the offer is refused and that process treats the store as unreadable until a later
+write succeeds. The cache then gets a copy for older readers. Once the store holds any entry, the cache is never
+authority: a failed cache write, or an older release replacing the cache with its own shape and an empty list,
+changes nothing a store-aware release decides. This replaces the earlier draft's separate floor file and
+cache-held policy (#3326 and #3327 reviews): that floor kept `seq` but not the halts, so a halt could vanish with no
+newer signed policy, and an unchecked press then passed it. The store is per-machine protection state, like the
+cache: it stays on the machine it protects and leaves with it, and a new machine starts from its first verified
+envelope.
 
-**Keys.** SRE generates and holds the P-256 key and provides only the public point for a slot. Rotation: ship the
-next point in the second slot, then sign with it starting from its own `seq` 1. The first policy a machine accepts
-from the new key retires the old key on that machine. Drop the old point in a later build. Revocation means a
-build without that slot (no in-policy revoked list yet). Retiring a compromised key needs no migration: its floor
-stays bounded by the jump limit, and the successor key starts from its own floor. A key once retired is never
-reused; going back means a new key. Both production slots are empty until provisioned, so every signed copy is
-refused and the legacy path stays in use.
+**Key order.** Keys rank by pinned slot, never by arrival or first acceptance. An offer is refused as `retired key`
+if the store holds an entry for any key in a later slot, whether or not this machine ever saw the offered key: a
+machine that accepts successor B first refuses a later, unexpired predecessor A. Within one key, the stored `seq` is
+that key's floor: an offer must be at least that `seq`, the same `seq` must be the same bytes (a replay only renews
+`at`, never past `expires`), and a higher `seq` may move the floor by at most `MaxSequenceJump` (100,000, counted
+from 0 for a key not yet stored; over eleven years of hourly signing). `seq` is never compared across keys.
 
-**Not proven.** A local admin is outside this protection. They can edit the floor file: a corrupt file fails
-closed, and a forged high `seq` only blocks later policies from that key until a successor key is accepted. Deleting
-both the floor file and the cache resets the floor, but such an admin could equally edit the halts or replace the
-binary. Revocation is no faster than a build. Delivery (publisher, CDN and relay fetch) is not built yet. Until it
-is, the legacy path still trusts GitHub TLS plus the asset digest.
+**Reading.** Each decision reads the store under the shared lock. Retired keys rank below every pinned slot.
+Authority is the highest-ranked entry present, and only if its envelope verifies again with its build-held point
+(a retired key keeps its point for this, but accepts no offer). It is fresh for 6 hours from `at` and never past
+`expires`; otherwise it is stale. A lower-ranked entry never becomes authority, even when the authority has expired,
+and is removed only once a higher-ranked entry is stored. The authority's halts apply whether it is fresh or stale,
+whatever the cache says; only a newer envelope (a higher `seq` of the same key, or any key in a later slot) lifts
+them. An entry for a key this build neither pins nor retires came from a newer build (a rollback): its halts apply
+too, and this build never removes it. If the store cannot be listed, or the authority fails verification, there is
+no policy and the host fails closed: automatic installs and Update all hold, and a single press is refused
+`policy-unreadable` even with `unchecked`, since the lost entry may hold a halt. `unchecked` passes only a policy
+that could not be renewed, never a known halt. The legacy GitHub digest path stays closed once the store holds any
+entry or cannot be read.
+
+**Processes.** The host, the app, and two releases during an update may share the folder. None merges cache
+copies: each re-reads the store at its decision boundary, and in-memory state is only a copy of it. Concurrent
+offers serialize on the shared lock, and each re-reads its key's entry before writing. Across keys the later slot
+wins; within a key the higher `seq` wins.
+
+**Keys and recovery.** SRE generates and holds each P-256 key and provides only the public point. Rotation: ship the
+successor point in the next slot, sign with it from its own `seq` 1 (republishing the current halts), and stop
+signing with the predecessor. Once the predecessor's last envelope has expired (at most 7 days) and the successor
+build is out, ship a build that moves the predecessor to the retired list, where it stays in every later build (an
+unlisted unknown key reads as one from a newer build). A key id is never reused. A stolen key can raise its own
+floor by at most 100,000 per accepted envelope, and its envelopes can lift halts only on machines that have not yet
+stored a successor envelope. Recovery from a stolen or maxed-out key is the same rotation, done at once: the
+successor's first accepted envelope outranks every earlier slot whatever its `seq`, so a poisoned floor needs no
+migration. Both production slots are empty until provisioned, so every signed copy is refused and the legacy path
+stays in use.
+
+**Rollback.** Any rollback is supported, and the store survives all of them: a release that predates it neither
+reads nor writes `signed-policy/`, and a store-aware release reads a later entry version as unreadable (fail closed),
+so a format change ships its reader first. While a pre-store release runs, that machine has **no signed
+protection**: it trusts GitHub TLS plus the asset digest, as before, and sees only the halts in the legacy
+`halts.json` asset. The publisher therefore keeps publishing that asset with the same halts for as long as any
+supported rollback target predates the store. On the return to a store-aware release, the stored envelopes and their
+halts apply again, and an older copy is refused. Mixed-version prerequisite: no build pins a production key unless it
+carries the store, and the earlier floor-file draft never ships with a key.
+
+**Not proven.** A local admin is outside this protection. They can corrupt an entry (it fails closed until an
+envelope from a later slot arrives, or they repair it) or delete the store (resetting floors and halts), but could
+equally replace the binary. A disk fault that corrupts an entry is handled the same way. Revocation is no faster than
+a build. Delivery (publisher, CDN and relay fetch) is not built yet; until it is, the legacy path still trusts GitHub
+TLS plus the asset digest.
+
+**Slices.** These replace #3326's floor, cache and merge logic, in order, each under 250 changed lines. #3326 keeps
+only the envelope verifier and the departure expiry recheck, and drops `FloorFileName`, `Floors`, `WriteFloors`,
+`Floored` and the cross-key branch of `MergePolicy`.
+1. Store: read and write `signed-policy/<kid>.json` (temp file, flush, replace) with its entry version; unreadable
+   is never empty. Tests: a torn write and an unknown version.
+2. Offer: store entry before the cache copy; slot rank and retired list; per-key `seq`, jump bound and reuse. Tests:
+   a failed cache write keeps the new halt; B first, then A late, is refused.
+3. Read: authority, freshness and halts from the store; the cache is never authority; legacy path closed; process
+   merge keeps only the request budget. Tests: an older-schema cache rewrite keeps the halt; two processes agree.
+4. Host: eligibility and `UpdateService` refuse a stored halt even with `unchecked`, and a failed store with
+   `policy-unreadable`; host-lifecycle.md and v1-update.md. Test: an unchecked press after a legacy rewrite.
+5. Keys: production slots stay empty until 1-4 merge; then SRE provisions them, and the publisher keeps the legacy
+   `halts.json` asset (Rollback above).
 
 ## 5. One press, Update all, and limits
 
