@@ -957,7 +957,7 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   still-running attempts are neither a verdict nor a hold, and writes only move past the newest recorded
   attempt, so every delivery order converges. The completed event preserves its attempt and verdict
   if a retry has already started; job evidence comes from that exact attempt. Duplicate evidence,
-  including a recovered incident, is not reposted.
+  including a recovered incident, is not reposted; a recovery whose close failed is closed on redelivery.
   Evidence contains capped, mention-neutralised job/test names, never raw logs; unreadable logs are noted.
   GitHub issues and the label are the only alert channel: no assignee, owner mention or phone notification.
   Tiered gating B3 ([issue 3210](https://github.com/danswett/agent-bridge/issues/3210)): a failed job named

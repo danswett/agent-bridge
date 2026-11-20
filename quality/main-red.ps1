@@ -174,21 +174,26 @@ function Publish-MainRed($run, [string]$Repository) {
     if ($verdict -eq 'none') { return }
     $issue = Get-MainRedIssue $Repository -IncludeClosed:($verdict -eq 'red')
     $sha = $run.head_sha.Substring(0, 8)
-    $comments = @()
+    $comments = @(); $greenRecorded = $false
     if ($issue) {
         $comments = @((Invoke-Gh issue view $issue.number --repo $Repository --json comments | ConvertFrom-Json).comments |
                 Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') })
         # Writes only move forward: nothing at or before the newest recorded red or green attempt is written again.
         # Run ids grow with run numbers, so they order runs the same way.
         $recorded = (@($issue.body) + @($comments | ForEach-Object { $_.body })) -join "`n"
-        foreach ($m in [regex]::Matches($recorded, '(?m)^main-red: (?:green again, )?run=(\d+) attempt=(\d+),? sha=')) {
-            $id = [long]$m.Groups[1].Value
-            if ($id -gt $RunId -or ($id -eq $RunId -and [long]$m.Groups[2].Value -ge $run.run_attempt)) { return }
+        foreach ($m in [regex]::Matches($recorded, '(?m)^main-red: (green again, )?run=(\d+) attempt=(\d+),? sha=')) {
+            $id = [long]$m.Groups[2].Value; $n = [long]$m.Groups[3].Value
+            # Only the comment is a duplicate: if the close after this attempt's own recovery comment failed,
+            # the issue is still open and a redelivery must finish closing it, or main stays reported red.
+            if ($verdict -eq 'green' -and $m.Groups[1].Success -and $id -eq $RunId -and $n -eq $run.run_attempt) { $greenRecorded = $true }
+            elseif ($id -gt $RunId -or ($id -eq $RunId -and $n -ge $run.run_attempt)) { return }
         }
     }
     if ($verdict -eq 'green') {
         if ($issue) {
-            Invoke-Gh issue comment $issue.number --repo $Repository --body "main-red: green again, run=$RunId attempt=$($run.run_attempt), sha=$sha" | Out-Null
+            if (-not $greenRecorded) {
+                Invoke-Gh issue comment $issue.number --repo $Repository --body "main-red: green again, run=$RunId attempt=$($run.run_attempt), sha=$sha" | Out-Null
+            }
             Invoke-Gh issue close $issue.number --repo $Repository | Out-Null
         }
         return

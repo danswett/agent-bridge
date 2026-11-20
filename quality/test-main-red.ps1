@@ -29,7 +29,8 @@ function Reset-Scenario {
     $script:s = @{ conclusion = 'failure'; attempt = 1; newest = 100; status = 'completed'; event = 'push'
         branch = 'main'; repo = 'o/r'; path = '.github/workflows/ci.yml'; open = $false
         log = '  Failed A.B.C.Method [1 s]'; unreadable = $false; jobName = 'product'; jobConclusion = 'failure'
-        body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = ''; created = $false }
+        body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = ''; created = $false
+        closeFails = 0; closeAttempts = 0 }
 }
 # $s.runs maps run number to its attempts' conclusions, oldest first; 'running' is an unfinished attempt.
 function New-FakeAttempt([int]$Id, [int]$N) {
@@ -97,7 +98,11 @@ function Fake-Gh {
             $s.comments += @{ body = $args[([array]::IndexOf($args, '--body') + 1)]; author = @{ login = 'github-actions' } }
             return
         }
-        '^issue close 9 ' { $s.writes += 'close'; $s.open = $false; return }
+        '^issue close 9 ' {
+            $s.closeAttempts++
+            if ($s.closeFails -gt 0) { $s.closeFails--; $global:LASTEXITCODE = 1; return }
+            $s.writes += 'close'; $s.open = $false; return
+        }
         default { throw "Unexpected fake gh request: $a" }
     }
 }
@@ -126,6 +131,13 @@ Detect
 Assert (($s.writes -join ',') -eq 'comment') 'duplicate comment event makes no changes'
 Reset-Scenario; $s.open = $true; $s.conclusion = 'success'; $s.attempt = 2; Detect
 Assert (($s.writes -join ',') -eq 'comment,close' -and $s.comments[0].body -eq 'main-red: green again, run=100 attempt=2, sha=abcdef01') 'green attempt two comments before closing'
+Reset-Scenario; $s.open = $true; $s.body = 'main-red: run=100 attempt=1 sha=abcdef01'; $s.conclusion = 'success'; $s.attempt = 2
+$s.closeFails = 1; $closeFailed = $false
+try { Detect } catch { $closeFailed = $_.Exception.Message -like 'gh issue close *' }
+Detect
+Assert ($closeFailed -and -not $s.open -and $s.closeAttempts -eq 2 -and $s.comments.Count -eq 1) "a redelivered recovery retries a failed close without repeating its comment (open=$($s.open); closeAttempts=$($s.closeAttempts); comments=$($s.comments.Count))"
+$s.open = $true; $s.comments += @{ body = 'main-red: run=100 attempt=3 sha=abcdef01'; author = @{ login = 'github-actions' } }; Detect
+Assert ($s.open -and $s.closeAttempts -eq 2) 'its own recorded recovery cannot close over a newer recorded failure'
 Reset-Scenario; $s.conclusion = 'success'; Detect
 Assert ($s.writes.Count -eq 0) 'green without an issue does nothing'
 foreach ($c in 'cancelled', 'skipped') {
