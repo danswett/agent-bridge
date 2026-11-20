@@ -16,6 +16,7 @@ class Element {
     this.tag = tag;
     Object.assign(this, props);
     this.children = children.flat().filter(Boolean);
+    for (const child of this.children) { if (typeof child === 'object') { child.parentNode = this; } }
   }
   setAttribute(k, v) { this.attrs[k] = v; }
   removeAttribute(k) { delete this.attrs[k]; }
@@ -44,7 +45,7 @@ function setup(t, hidden = false) {
   };
   const h = (tag, props, ...children) => new Element(tag, props, children);
   const Detail = vm.runInNewContext(`${source}\nDelegateDetail`, {
-    ...attribution, clock, localTime, document: doc,
+    ...attribution, clock, localTime, document: doc, showDetail: { value: true },
     Date: class extends Date { static now() { return now; } },
     h, icon: () => h('svg'), glyph: () => h('span'), setGlyph() {},
     renderMarkdown: (text) => h('p', { textContent: text }),

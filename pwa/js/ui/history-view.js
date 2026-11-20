@@ -11,6 +11,7 @@ import { renderResolved } from './question-view.js';
 import { closedQuestionIds } from '../history.js';
 import { liveVoice } from '../attribution.js';
 import { messageInstant } from './message-time.js';
+import { showDetail } from '../show-detail.js';
 
 export const WORDS = {
   loading: 'Loading conversation\u2026',
@@ -106,6 +107,7 @@ function resolvedView(question) {
 }
 
 function part(p, inline = null) {
+  if (!showDetail.value && (p.kind === 'reasoning' || p.kind === 'tool')) { return null; }
   if (p.kind === 'question' && inline?.kept && p.question?.id !== inline.activeId && !inline.kept.has(p.question?.id)) { return null; }
   if (p.kind === 'question' && inline?.records?.has(p.question?.id)) { return inline.records.get(p.question.id); }
   if (inline && p.kind === 'question' && p.question?.id === inline.questionId) { return inline.slot; }
@@ -287,7 +289,7 @@ export class HistoryView {
       this.hosted ||= placements.includes(inline.slot);
       const old = this.#drawn.get(t.id);
       let node = old?.node;
-      if (old?.turn !== t || old.keptQuestions !== keptQuestions || old.placements?.length !== placements.length || placements.some((p, i) => old.placements[i] !== p || !old.node.contains(p))) {
+      if (old?.turn !== t || old.detail !== showDetail.value || old.keptQuestions !== keptQuestions || old.placements?.length !== placements.length || placements.some((p, i) => old.placements[i] !== p || !old.node.contains(p))) {
         // Build around placeholders so a live question is never detached while its turn updates.
         const holders = new Map(placements.map((p) => [p, h('span')]));
         const fresh = turnView(t, { ...inline, slot: holders.get(inline.slot) ?? inline.slot, records: new Map([...inline.records ?? []].map(([id, p]) => [id, holders.get(p) ?? p])) });
@@ -295,7 +297,7 @@ export class HistoryView {
         node ??= fresh;
         syncChildren(node, [...fresh.children].map((p) => originals.get(p) ?? p));
       }
-      keep.set(t.id, { turn: t, node, placements, keptQuestions });
+      keep.set(t.id, { turn: t, node, placements, keptQuestions, detail: showDetail.value });
       nodes.push(node);
     }
     this.#drawn = keep;
@@ -332,7 +334,7 @@ export class HistoryView {
       batch.unshift(t);
       const places = questionPlaces(t, this.#inline);
       this.hosted ||= places.placements.includes(this.#inline.slot);
-      this.#drawn.set(t.id, { turn: t, node: turnView(t, this.#inline), ...places });
+      this.#drawn.set(t.id, { turn: t, node: turnView(t, this.#inline), ...places, detail: showDetail.value });
     }
     if (batch.length) {
       const nodes = batch.map((t) => this.#drawn.get(t.id).node);

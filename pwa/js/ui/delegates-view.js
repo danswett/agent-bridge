@@ -16,6 +16,7 @@ import { renderMarkdown } from '../markdown.js';
 import { askToStopText, delegateList, delegateName, delegateState, delegateTime, descendants } from '../attribution.js';
 import { clock, localTime } from './time.js';
 import { enter, flip, leave } from './motion.js';
+import { showDetail } from '../show-detail.js';
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
@@ -448,15 +449,20 @@ export class DelegateDetail {
     }
     e.latestBlock.hidden = !latest;
     e.truncated.hidden = !(f?.responseTruncated && response);
-    const reasoning = f?.reasoning ?? '';
+    const reasoning = showDetail.value ? f?.reasoning ?? '' : '';
     if (e.reasoningText.textContent !== reasoning) { e.reasoningText.textContent = reasoning; }
     e.reasoning.hidden = !reasoning;
+    if (showDetail.value) {
+      if (!e.reasoning.parentNode) { this.element.insertBefore(e.reasoning, e.nestedBlock); }
+    } else { e.reasoning.remove(); }
   }
 
   // Its tool calls, newest first: the fetched history, or the one running now. Name and
   // arguments in mono, a glyph per call, and how long each took as a clock.
   #drawTools(now) {
     const e = this.els;
+    if (!showDetail.value) { e.toolsBlock.remove(); return; }
+    if (!e.toolsBlock.parentNode) { this.element.insertBefore(e.toolsBlock, e.nestedBlock); }
     const calls = this.#fetched?.history?.length ? [...this.#fetched.history].reverse() : this.#a.currentTool ? [this.#a.currentTool] : [];
     const shown = calls.slice(0, 50);
     // How long each took: to its end, or to now while it runs. One that ended with no end time

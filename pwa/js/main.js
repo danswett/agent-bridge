@@ -59,6 +59,7 @@ import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 import { watchPhoneViewport } from './phone-viewport.js';
 import { applyTextSize, readTextSize, saveTextSize } from './text-size.js';
+import { saveShowDetail, showDetail } from './show-detail.js';
 import { mountKeyCheck } from './ui/key-check-view.js';
 import { mountRelease } from './ui/release-view.js';
 import { mountKeyboardShortcuts } from './ui/keyboard-shortcuts.js';
@@ -81,6 +82,17 @@ const $ = (id) => document.getElementById(id);
   for (const b of buttons) {
     b.addEventListener('click', () => { applyTextSize(b.dataset.textSize); saveTextSize(b.dataset.textSize); show(b.dataset.textSize); });
   }
+}
+{
+  const toggle = $('show-detail');
+  const status = $('show-detail-status');
+  toggle.checked = showDetail.value;
+  toggle.addEventListener('change', () => {
+    showDetail.apply(toggle.checked);
+    const kept = saveShowDetail(toggle.checked);
+    status.textContent = kept ? '' : 'This choice could not be kept. It applies until this page closes.';
+    status.hidden = kept;
+  });
 }
 // Settings > Keyboard check (#1209): what a hardware keyboard's keys reach the app as.
 mountKeyCheck();
