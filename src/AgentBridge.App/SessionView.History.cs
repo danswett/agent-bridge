@@ -34,8 +34,9 @@ public sealed partial class SessionView
     {
         UnwatchHistory();
         history = Card?.Stored;
-        var opening = shownHistory != Card?.Id;
-        if (opening) { shownHistory = Card?.Id; pinEnd = true; navigationPending = null; seen = null; openPrompts.Clear(); historyVisible = 1; }
+        var key = Card?.Row?.Key ?? Card?.Id;
+        var opening = shownHistory != key;
+        if (opening) { shownHistory = key; pinEnd = true; RecoverReading(); navigationPending = null; seen = null; openPrompts.Clear(); historyVisible = 1; }
         if (history is not null) { history.Changed += OnHistoryChanged; }
         ShowHistory(opening);
         if (history is not null) { _ = history.LoadNewestAsync(); }
@@ -194,7 +195,7 @@ public sealed partial class SessionView
         var (session, releases) = (shownHistory, pinReleases);
         void Restore()
         {
-            if (session != shownHistory || releases != pinReleases || scrollbarPointers.Count > 0 || !opening && follow.Held && (atEnd || pinEnd) || ConversationScroll is not { } scroll) { return; }
+            if (session != shownHistory || releases != pinReleases || restoreReading is not null || scrollbarPointers.Count > 0 || !opening && follow.Held && (atEnd || pinEnd) || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset + (earlierExtent is { } extent ? scroll.ScrollableHeight - extent : 0), scroll.ScrollableHeight);
             if (!atEnd && !pinEnd && reading is { } kept)
