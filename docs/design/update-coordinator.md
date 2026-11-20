@@ -53,6 +53,21 @@ timeout/cancellation. An entered native start cannot be revoked: its late outcom
 stays unknown, never retry authority. `RespawnFinished` retains that late outcome
 for the native adapter in part 2; this slice starts no native updater.
 
+### B2 part 2: native evidence adapter
+
+Pin the [Velopack 1.2.161 image](https://github.com/velopack/velopack/blob/92d6a1c91716729d449034df5c50307dcce39493/src/bins/build.rs)
+read-only through real exit; missing or other native release metadata is unknown.
+The adapter pins the original process handle before checking its UTC creation time,
+and owns the real apply handle through its exit wait. A nonzero updater exit alone
+cannot disprove a surviving elevated worker; it stays unknown, never retry authority.
+The [pinned manifest parser](https://github.com/velopack/velopack/blob/92d6a1c91716729d449034df5c50307dcce39493/src/lib-rust/src/bundle.rs)
+uses namespaced NuGet metadata. Read `current\sq.version` anew under the package lock
+and check package identity, main executable and release identity before respawn.
+Observation cancellation retains updater pin, package custody and the real process
+handle until actual exit; an admitted apply joins adapter `Ownership` before it runs.
+The future B3 entry point must drain it before exiting, including late respawn completion/errors.
+Native starts remain injectable for in-process tests; no native binary is run locally.
+
 ## C/D: approved design basis, not activation proof
 
 Use immutable `root\slots\<release-identity>-<package-digest>` payloads. One validated
