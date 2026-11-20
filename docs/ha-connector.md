@@ -592,11 +592,15 @@ inbox once its delivery is taken, so a host restart no longer drops waiting mess
 oldest undelivered one is read back ahead of anything new, then the next once that one is taken, oldest first.
 `reply_queue_count` and the 16-message cap count only messages read back so far. A rid still waiting after a
 restart is a duplicate acked `queued`; one delivered before the restart is a duplicate acked `unconfirmed`, and
-one already delivered since this start is refused. The session ending still discards its queue (each entry is
+one already delivered since this start is refused with `already taken from the reply inbox; send it again once
+the question closes` (its delivery was refused and the rid forgotten, and the inbox takes a rid only once; slice
+b). Each rid's own `reply_ack` therefore says what the inbox holds for it: `queued` only once kept, `refused` when
+not kept, `duplicate: true` for a rid it already holds, `delivered` only after its entry is marked taken. The
+session ending still discards its queue (each entry is
 marked delivered); a session that ended while the host was down leaves its entries in the file (counting toward
 the 1000), and they are delivered if a session returns under that id. A crash after a message was typed but before it was marked types it again after the
-restart. The `reply_ack` protocol (slice b) and the end-to-end restart proof across roster and relay (slice c)
-are separate. Senders that see `queued` and then a count that drops without their rid being acked `delivered` send again.
+restart. A rid re-sent after a restart while no question is open is not checked against the inbox and is
+typed again. The end-to-end restart proof across roster and relay (slice c) is separate. Senders that see `queued` and then a count that drops without their rid being acked `delivered` send again.
 An agent's own Send press is not taken as the owner's confirmation, by count: while an agent
 message still owes its press, the next new Send press is taken as the agent's, and a press read when the payload
 cannot be read is too (fail closed). A mixed watched stamp remains uncertain even if REST still

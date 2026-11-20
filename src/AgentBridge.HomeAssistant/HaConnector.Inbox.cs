@@ -55,8 +55,8 @@ public sealed partial class HaConnector
 
     // Kept before it is acked queued: one the inbox cannot keep is refused, never held in memory alone.
     // A rid already there is a duplicate: queued while it waits; once marked delivered, unconfirmed if
-    // that was before this lifetime, else refused (its delivery was refused and the rid forgotten, and
-    // the inbox can take it again only after the card closes).
+    // that was before this lifetime, else refused as taken (its delivery was refused and the rid forgotten,
+    // and the inbox can take it again only after the card closes), never blamed on the inbox.
     (string? Known, string? Error) Store(Published p, string rid, HaState state)
     {
         if (Inbox is not { } box) { return (null, null); }
@@ -67,7 +67,7 @@ public sealed partial class HaConnector
             return (null, "reply inbox unavailable");
         }
         if (kept!.DeliveredAt is null) { return (kept.QueuedAt == at ? null : "queued", null); }
-        return kept.DeliveredAt < p.Reply.Log.Since ? ("unconfirmed", null) : (null, "reply inbox unavailable");
+        return kept.DeliveredAt < p.Reply.Log.Since ? ("unconfirmed", null) : (null, "already taken from the reply inbox; send it again once the question closes");
     }
 
     // A session's end drops its queue, and a session back under the same id starts empty: its entries are

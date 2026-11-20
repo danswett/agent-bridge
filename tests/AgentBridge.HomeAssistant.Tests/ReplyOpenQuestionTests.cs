@@ -677,4 +677,55 @@ public sealed partial class ReplyTests
         await CardCloses(c);
         Assert.Equal("first", Assert.Single(replied).Text);
     }
+
+    // #2780 slice b: each rid's reply_ack says what the durable inbox holds for it.
+    List<(string Rid, bool Delivered)> InboxRows() =>
+        [.. JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, "ha-reply-inbox.json"))).RootElement.GetProperty("Messages").EnumerateArray()
+            .Select(m => (m.GetProperty("Rid").GetString()!, m.GetProperty("DeliveredAt").ValueKind != JsonValueKind.Null))];
+
+    [Fact]
+    public async Task Each_rid_is_acked_queued_once_the_inbox_keeps_it_and_delivered_once_its_entry_is_taken()
+    {
+        await using var c = await Asking();
+        for (var n = 1; n <= 2; n++)
+        {
+            await Do(c, ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
+            Assert.Equal(("r-" + n, "queued"), (Ack.GetProperty("rid").GetString(), Ack.GetProperty("outcome").GetString()));
+            Assert.Contains(("r-" + n, false), InboxRows());
+        }
+        var mark = ha.Log.Count;
+        await CardCloses(c);
+        await c.DeliveredAsync();
+        await Pass(c);
+        var acks = NotesSince(mark).Where(n => n.Attributes.TryGetProperty("reply_ack", out _)).Select(n => n.Attributes.GetProperty("reply_ack"))
+            .Where(a => a.GetProperty("outcome").GetString() == "delivered").Select(a => a.GetProperty("rid").GetString()).Distinct();
+        Assert.Equal(["r-1", "r-2"], acks);
+        Assert.Equal([("r-1", true), ("r-2", true)], InboxRows());
+    }
+
+    [Fact]
+    public async Task A_queued_rid_whose_delivery_was_refused_is_refused_truthfully_at_the_next_question_and_goes_in_after_it()
+    {
+        await using var c = await Asking();
+        await Do(c, ha.SendFromCard(Node, "once", driver: "agent", rid: "r-1"));
+        outcome = _ => Task.FromResult(new ReplyResult(AnswerOutcome.Refused, "text already typed in the input box"));
+        await CardCloses(c);
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        outcome = _ => Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
+        Idle(turn: 3, question: Pick() with { Id = "q2" });
+        await Pass(c);
+
+        await Do(c, ha.SendFromCard(Node, "once", driver: "agent", rid: "r-1"));
+        Assert.Equal(("r-1", "refused", false), (Ack.GetProperty("rid").GetString(), Ack.GetProperty("outcome").GetString(), Ack.TryGetProperty("duplicate", out _)));
+        Assert.Equal("already taken from the reply inbox; send it again once the question closes", Detail.GetProperty("error").GetString());
+        Assert.Equal(0, Detail.GetProperty("reply_queue_count").GetInt32());
+
+        Idle(turn: 4);
+        await Pass(c);
+        await Pass(c, 20);
+        await Do(c, ha.SendFromCard(Node, "once", driver: "agent", rid: "r-1"));
+        await c.DeliveredAsync();
+        await Pass(c);
+        Assert.Equal(("r-1", "delivered"), (Ack.GetProperty("rid").GetString(), Ack.GetProperty("outcome").GetString()));
+    }
 }
