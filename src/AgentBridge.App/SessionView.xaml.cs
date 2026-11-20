@@ -123,6 +123,17 @@ public sealed partial class SessionView : UserControl
     string shownMessage = "";
     string shownReceipt = "";
     readonly ExceptionLineFade replyLine = new();
+    ReplyViewModel? watchedReply;
+
+    bool WatchReply()
+    {
+        var next = attached ? Card?.Reply : null;
+        if (ReferenceEquals(next, watchedReply)) { return false; }
+        if (watchedReply is { } old) { old.PropertyChanged -= OnReplyStatusChanged; }
+        watchedReply = next;
+        if (next is not null) { next.PropertyChanged += OnReplyStatusChanged; }
+        return true;
+    }
 
     void ShowReplyStatus(bool reset = false)
     {
@@ -140,7 +151,7 @@ public sealed partial class SessionView : UserControl
             ReceiptMarkView.SetTone(ReplyStatusGone, change.Tone);
             ReplyStatusSpace.Visibility = Visibility.Visible;
             Motion.Leave(ReplyStatusGone, "Acknowledge", () =>
-                ReplyStatusSpace.Visibility = Ui.Show(Card?.Reply.ShowStatus == true));
+                ReplyStatusSpace.Visibility = Ui.Show(Card?.Reply?.ShowStatus == true));
         }
         else
         {
@@ -154,6 +165,7 @@ public sealed partial class SessionView : UserControl
 
     void OnReplyStatusChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (!ReferenceEquals(sender, watchedReply)) { return; }
         if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName == nameof(ReplyViewModel.ShowStatus)) { ShowReplyStatus(); }
     }
 
@@ -254,19 +266,20 @@ public sealed partial class SessionView : UserControl
     void OnCard(SessionCardViewModel? old, SessionCardViewModel? card)
     {
         RecoverReading();
-        if (attached && old is not null) { old.PropertyChanged -= OnCardChanged; old.Reply.PropertyChanged -= OnReplyStatusChanged; old.Delegates.ReplyWanted -= OnReplyWanted; old.Delegates.PropertyChanged -= OnDelegatesChanged; }
+        if (attached && old is not null) { old.PropertyChanged -= OnCardChanged; old.Delegates.ReplyWanted -= OnReplyWanted; old.Delegates.PropertyChanged -= OnDelegatesChanged; }
         // The box the person is typing in now belongs to the next session: the last one is no longer
         // being edited, which would otherwise keep holding its list's order (MainViewModel.Rearrange).
         if (old is not null) { old.Editing = false; old.WantsFocus = false; }
         if (card is not null) { card.Editing = ReplyBox.FocusState != FocusState.Unfocused; }
         if (card is not null)
         {
-            if (attached) { card.PropertyChanged += OnCardChanged; card.Reply.PropertyChanged += OnReplyStatusChanged; card.Delegates.ReplyWanted += OnReplyWanted; card.Delegates.PropertyChanged += OnDelegatesChanged; }
+            if (attached) { card.PropertyChanged += OnCardChanged; card.Delegates.ReplyWanted += OnReplyWanted; card.Delegates.PropertyChanged += OnDelegatesChanged; }
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(this, $"Session:{card.Id}");
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(this, card.Title);
         }
         DetailsFlyout.Card = card;
         ToolsTabList.Card = card;
+        WatchReply();
         if (!attached) { return; }
         // Another session's answers: measured from where they are drawn, held as they appear.
         answers.Forget();
@@ -288,7 +301,8 @@ public sealed partial class SessionView : UserControl
     {
         if (attached) { return; }
         attached = true;
-        if (Card is { } c) { c.PropertyChanged += OnCardChanged; c.Reply.PropertyChanged += OnReplyStatusChanged; c.Delegates.ReplyWanted += OnReplyWanted; c.Delegates.PropertyChanged += OnDelegatesChanged; }
+        if (Card is { } c) { c.PropertyChanged += OnCardChanged; c.Delegates.ReplyWanted += OnReplyWanted; c.Delegates.PropertyChanged += OnDelegatesChanged; }
+        WatchReply();
         answers.Start();
         SyncQuestion();
         ReceiptMarkView.Hushed(Bindings.Update);
@@ -304,7 +318,8 @@ public sealed partial class SessionView : UserControl
     {
         if (!attached) { return; }
         attached = false;
-        if (Card is { } c) { c.PropertyChanged -= OnCardChanged; c.Reply.PropertyChanged -= OnReplyStatusChanged; c.Delegates.ReplyWanted -= OnReplyWanted; c.Delegates.PropertyChanged -= OnDelegatesChanged; }
+        if (Card is { } c) { c.PropertyChanged -= OnCardChanged; c.Delegates.ReplyWanted -= OnReplyWanted; c.Delegates.PropertyChanged -= OnDelegatesChanged; }
+        WatchReply();
         ShowReplyStatus(reset: true);
         // The question goes with the view: its guard's timer has nothing left to let go of.
         guardTimer?.Stop();
@@ -319,6 +334,7 @@ public sealed partial class SessionView : UserControl
     void OnCardChanged(object? sender, PropertyChangedEventArgs e)
     {
         var all = string.IsNullOrEmpty(e.PropertyName);
+        if ((all || e.PropertyName == nameof(SessionCardViewModel.Reply)) && WatchReply()) { ShowReplyStatus(reset: true); }
         if (all || e.PropertyName == nameof(SessionCardViewModel.Question))
         {
             SyncQuestion();
