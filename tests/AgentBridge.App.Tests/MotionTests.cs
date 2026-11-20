@@ -61,6 +61,31 @@ public sealed class MotionTests
     }
 
     [Fact]
+    public void Reply_exception_words_fade_in_and_the_departing_words_keep_their_tone()
+    {
+        var line = new ExceptionLineFade();
+        Assert.Equal(new ExceptionLineChange(ExceptionLineMotion.Enter, "Waiting for machine", Tone.Warn),
+            line.Read("Waiting for machine", Tone.Warn));
+        Assert.Equal(ExceptionLineMotion.None, line.Read("Waiting for machine", Tone.Warn).Motion);
+        Assert.Equal(new ExceptionLineChange(ExceptionLineMotion.Leave, "Waiting for machine", Tone.Warn),
+            line.Read("", Tone.None));
+        Assert.Equal(ExceptionLineMotion.None, line.Read("", Tone.None).Motion);
+    }
+
+    [Fact]
+    public void A_new_exception_replaces_the_departing_one_and_another_session_never_replays_it()
+    {
+        var line = new ExceptionLineFade();
+        line.Read("Waiting", Tone.Warn);
+        line.Read("", Tone.None);
+        Assert.Equal(ExceptionLineMotion.Enter, line.Read("Refused", Tone.Bad).Motion);
+        Assert.Equal(ExceptionLineMotion.None, line.Read("Already shown", Tone.Warn, reset: true).Motion);
+        Assert.Equal(new ExceptionLineChange(ExceptionLineMotion.Leave, "Already shown", Tone.Warn),
+            line.Read("", Tone.None));
+        Assert.Equal(ExceptionLineMotion.None, line.Read("", Tone.None, reset: true).Motion);
+    }
+
+    [Fact]
     public void The_selection_bar_slides_between_visible_rows_in_either_direction()
     {
         var viewport = new LookBox(0, 0, 320, 600);

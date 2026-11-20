@@ -314,6 +314,7 @@ public sealed class RunMarkerTests : IDisposable
             Assert.Throws<IOException>(update);
             Assert.Equal(before, File.ReadAllBytes(file));
             Assert.Equal(file, Assert.Single(Directory.GetFiles(folder, "*.json")));
+            Assert.Empty(Directory.GetFiles(folder, "*.tmp"));
             Assert.Equal("1", ReadCurrent().Version);
         }
         finally { RunMarker.WriteFileOverride = null; }

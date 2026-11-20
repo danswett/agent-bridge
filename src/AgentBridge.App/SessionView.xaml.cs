@@ -122,6 +122,52 @@ public sealed partial class SessionView : UserControl
     // What the conversation last showed of these, so only a change on this session moves.
     string shownMessage = "";
     string shownReceipt = "";
+    readonly ExceptionLineFade replyLine = new();
+    ReplyViewModel? watchedReply;
+
+    bool WatchReply()
+    {
+        var next = attached ? Card?.Reply : null;
+        if (ReferenceEquals(next, watchedReply)) { return false; }
+        if (watchedReply is { } old) { old.PropertyChanged -= OnReplyStatusChanged; }
+        watchedReply = next;
+        if (next is not null) { next.PropertyChanged += OnReplyStatusChanged; }
+        return true;
+    }
+
+    void ShowReplyStatus(bool reset = false)
+    {
+        var reply = Card?.Reply;
+        var change = replyLine.Read(reply?.StatusText ?? "", reply?.StatusTone ?? Tone.None, reset);
+        if (reset || change.Motion == ExceptionLineMotion.Enter)
+        {
+            Motion.Hide(ReplyStatusGone);
+            Motion.Settle(ReplyStatusLine);
+        }
+        if (change.Motion == ExceptionLineMotion.Leave)
+        {
+            Motion.Settle(ReplyStatusLine);
+            ReplyStatusGone.Text = change.Text;
+            ReceiptMarkView.SetTone(ReplyStatusGone, change.Tone);
+            ReplyStatusSpace.Visibility = Visibility.Visible;
+            Motion.Leave(ReplyStatusGone, "Acknowledge", () =>
+                ReplyStatusSpace.Visibility = Ui.Show(Card?.Reply?.ShowStatus == true));
+        }
+        else
+        {
+            if (ReplyStatusGone.Visibility != Visibility.Visible)
+            {
+                ReplyStatusSpace.Visibility = Ui.Show(reply?.ShowStatus == true);
+            }
+            if (change.Motion == ExceptionLineMotion.Enter) { Motion.Enter(ReplyStatusLine, "Acknowledge"); }
+        }
+    }
+
+    void OnReplyStatusChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!ReferenceEquals(sender, watchedReply)) { return; }
+        if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName == nameof(ReplyViewModel.ShowStatus)) { ShowReplyStatus(); }
+    }
 
     // The panes' motion on this pane (SessionsPage passes it on once the app has drawn): the
     // session pushed in from the trailing side, fading only when it asks a question; a question
@@ -149,6 +195,7 @@ public sealed partial class SessionView : UserControl
         Motion.Settle(Receipt);
         shownMessage = Card?.UserMessage ?? "";
         shownReceipt = Card?.ReceiptText ?? "";
+        ShowReplyStatus(reset: true);
         promptShownOpen = Card?.PromptOpen == true;
         Motion.Settle(PromptRule);
         Motion.Turn(PromptChevron, "Disclosure", promptShownOpen, instant: true);
@@ -232,6 +279,7 @@ public sealed partial class SessionView : UserControl
         }
         DetailsFlyout.Card = card;
         ToolsTabList.Card = card;
+        WatchReply();
         if (!attached) { return; }
         // Another session's answers: measured from where they are drawn, held as they appear.
         answers.Forget();
@@ -254,6 +302,7 @@ public sealed partial class SessionView : UserControl
         if (attached) { return; }
         attached = true;
         if (Card is { } c) { c.PropertyChanged += OnCardChanged; c.Delegates.ReplyWanted += OnReplyWanted; c.Delegates.PropertyChanged += OnDelegatesChanged; }
+        WatchReply();
         answers.Start();
         SyncQuestion();
         ReceiptMarkView.Hushed(Bindings.Update);
@@ -270,6 +319,8 @@ public sealed partial class SessionView : UserControl
         if (!attached) { return; }
         attached = false;
         if (Card is { } c) { c.PropertyChanged -= OnCardChanged; c.Delegates.ReplyWanted -= OnReplyWanted; c.Delegates.PropertyChanged -= OnDelegatesChanged; }
+        WatchReply();
+        ShowReplyStatus(reset: true);
         // The question goes with the view: its guard's timer has nothing left to let go of.
         guardTimer?.Stop();
         UnwatchHistory();
@@ -283,6 +334,7 @@ public sealed partial class SessionView : UserControl
     void OnCardChanged(object? sender, PropertyChangedEventArgs e)
     {
         var all = string.IsNullOrEmpty(e.PropertyName);
+        if ((all || e.PropertyName == nameof(SessionCardViewModel.Reply)) && WatchReply()) { ShowReplyStatus(reset: true); }
         if (all || e.PropertyName == nameof(SessionCardViewModel.Question))
         {
             SyncQuestion();

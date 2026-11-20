@@ -64,6 +64,10 @@ and reading position; a missing or stale session falls back to the first availab
 The record contains only opaque session/turn keys and scroll geometry, not transcript text.
 This recovery is independent of crash reporting and sends nothing.
 
+Scrolling upward releases the conversation's end pin and resumes drawing undrawn cached
+turns even while the pointer remains over the conversation. Older drawing still waits for
+the latest exchange's first frame and pauses during active navigation or scrolling.
+
 Sent person-message bubbles recognise host-staged attachment references, including earlier
 turns. Images available on a local disk show thumbnails that open a named image viewer;
 missing, oversized and non-image attachments keep filename chips without exposing paths.
@@ -683,20 +687,25 @@ controls consume that same contract; this extraction does not disable or remove 
     writes, and which is private to this user as the attachment folder is: a protected DACL
     granting this user alone, nothing inherited, `PrivateFolder`), and the copy is checked against
     the same checksum again from a handle that keeps it open, read-only to everyone else, until
-    the app exits. The app then starts `Update.exe` itself,
-    as Velopack's `ApplyUpdatesAndRestart` would (`--silent apply --rootDir …`), but with
-    `--package` naming the copy, and silent (#1167), so Velopack's own "Installing Update" window
+    the app exits. The app then hands the install to a copy of itself (#3343, `InPlaceHandoff`):
+    it copies its `current` folder to `<profile>\app-update-helper`, outside the installation,
+    where Velopack's rename of `current` and its stop of the installation's processes don't reach,
+    starts that copy with `--inplace-apply`, the package copy, its checksum and the app's PID and
+    start time, and exits. The app and the helper each ask `LifecycleGuard` first (#67): inside an
+    agent session nothing is copied, installed or started (the helper exits 4). The helper waits for
+    the app (that PID with that start time, so a reused PID is not mistaken for it), holds the copy
+    and checks it again, then runs `Update.exe` as Velopack's `ApplyUpdatesAndRestart` would
+    (`--silent apply --rootDir …`), but with `--package` naming the copy, `--norestart`, and silent
+    (#1167), so Velopack's own "Installing Update" window
     never shows: the app's Updating screen stands in for it (below); `--packageDir` stays the shared packages folder, where
     `Update.exe` takes its install lock (`packages\.velopack_lock`), so profiles still can't
-    install over each other. **Wait for the app** (#1173): the app launches `Update.exe` directly
-    (Velopack's `DefaultProcessImpl`, `Process.Start`) with `--wait`, so the installer waits for its
-    parent, this app. Velopack 1.2.161's `--waitPid` opens a synchronization-only handle, then queries
-    its exit code without query rights, logging "Access is denied" even after a successful wait.
-    Its parent-wait path requests limited-query rights too and checks creation times against PID
-    reuse. An isolated run of the real updater confirmed both paths wait until parent exit; only
-    the PID path then warns. This is not evidence that the earlier updates installed before exit.
-    Velopack's existing 60-second wait limit and continue-on-wait-error behavior are unchanged;
-    no elevation, process ACL change or extra helper is introduced.
+    install over each other. Only when that apply fails while another process holds a file in
+    `current` does the helper install the same checked package in place (`InPlaceApply`), holding
+    that lock throughout; a package without its manifest or its app, or naming a link or a path
+    outside, is refused first. Either way the helper then starts the app again. **Wait for the
+    app** (#1173): the helper does the waiting, so `Update.exe` gets neither `--wait`, whose parent
+    is now the helper, nor `--waitPid`, which in Velopack 1.2.161 logs "Access is denied" after a
+    successful wait.
     The copy goes at the app's next start. What remains: `Update.exe`
     checks nothing itself when it opens the copy (it takes no checksum), so a process running as
     this same Windows user could still change the copy after the app exits; such a process could as
