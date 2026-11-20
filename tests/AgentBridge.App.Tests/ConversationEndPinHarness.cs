@@ -1,4 +1,9 @@
 // Compile the production pin hooks without loading WinUI or starting a live UI.
+namespace Windows.Foundation
+{
+    public readonly record struct Point(double X, double Y);
+}
+
 namespace Microsoft.UI.Xaml
 {
     public class DependencyObject
@@ -14,13 +19,61 @@ namespace Microsoft.UI.Xaml
         public static readonly object PointerCanceledEvent = new();
         public static readonly object PointerCaptureLostEvent = new();
         public bool IsLoaded { get; init; } = true;
+        public double Top { get; init; } = -100;
+        public double Height { get; init; } = 50;
+        double? broughtAt;
+        public Media.Transform TransformToVisual(UIElement viewport) =>
+            new(Top + (broughtAt is { } at && viewport is Controls.ScrollViewer scroll ? at - scroll.VerticalOffset : 0));
         public event Action<UIElement, BringIntoViewRequestedEventArgs>? BringIntoViewRequested;
-        public void Bring(UIElement target) => BringIntoViewRequested?.Invoke(this, new(target));
+        public void Bring(UIElement target, double alignment = double.NaN, double offset = 0)
+        {
+            target.broughtAt = (this as Controls.ScrollViewer)?.VerticalOffset;
+            BringIntoViewRequested?.Invoke(this, new(target) { VerticalAlignmentRatio = alignment, VerticalOffset = offset });
+        }
     }
 
     public sealed class BringIntoViewRequestedEventArgs(UIElement target) : EventArgs
     {
         public UIElement TargetElement => target;
+        public (double X, double Y, double Height) TargetRect => (0, 0, target.Height);
+        public double VerticalAlignmentRatio { get; init; } = double.NaN;
+        public double VerticalOffset { get; init; }
+    }
+
+    public enum Visibility { Visible, Collapsed }
+    public sealed class RoutedEventArgs : EventArgs;
+
+    public class FrameworkElement : UIElement
+    {
+        public double ActualHeight => Height;
+        public string Text { get; set; } = "";
+        public object? Content { get; set; }
+        public Visibility Visibility { get; set; }
+        public Action? Layout { get; init; }
+        public void UpdateLayout() => Layout?.Invoke();
+    }
+}
+
+namespace Microsoft.UI.Dispatching
+{
+    public enum DispatcherQueuePriority { Low }
+
+    public sealed class DispatcherQueue
+    {
+        readonly Queue<Action> pending = [];
+        public bool TryEnqueue(Action action) { pending.Enqueue(action); return true; }
+        public bool TryEnqueue(DispatcherQueuePriority priority, Action action) => TryEnqueue(action);
+        public DispatcherQueueTimer CreateTimer() => new();
+        public void Drain() { while (pending.TryDequeue(out var action)) { action(); } }
+    }
+
+    public sealed class DispatcherQueueTimer
+    {
+        public TimeSpan Interval { get; set; }
+        public bool IsRunning { get; private set; }
+        public event EventHandler<object> Tick { add { } remove { } }
+        public void Start() => IsRunning = true;
+        public void Stop() => IsRunning = false;
     }
 }
 
@@ -44,6 +97,7 @@ namespace Microsoft.UI.Xaml.Controls
         readonly List<(object Event, Input.PointerEventHandler Handler, bool HandledToo)> handlers = [];
         public double VerticalOffset { get; set; } = 100;
         public double ScrollableHeight { get; set; } = 200;
+        public double ViewportHeight { get; } = 100;
         public List<double> Targets { get; } = [];
         public bool AcceptChange { get; set; } = true;
 
@@ -78,6 +132,16 @@ namespace Microsoft.UI.Xaml.Controls.Primitives
 
 namespace Microsoft.UI.Xaml.Media
 {
+    public static class CompositionTarget
+    {
+        public static event EventHandler<object> Rendering { add { } remove { } }
+    }
+
+    public sealed class Transform(double top)
+    {
+        public Windows.Foundation.Point TransformPoint(Windows.Foundation.Point point) => new(point.X, point.Y + top);
+    }
+
     public static class VisualTreeHelper
     {
         public static DependencyObject? GetParent(DependencyObject node) => node.Parent;
@@ -91,15 +155,25 @@ namespace AgentBridge.App
         readonly Core.ConversationFollow follow = new();
         readonly Microsoft.UI.Xaml.UIElement ConversationList = new();
         Microsoft.UI.Xaml.Controls.ScrollViewer? ConversationScroll { get; } = new();
-        bool pinEnd = true;
-        int pinReleases;
         bool panning = false;
         bool scrolling;
         double? anchoring;
         double? keyTarget = null;
         double anchorAt;
+        object? anchor;
+        readonly Microsoft.UI.Dispatching.DispatcherQueue DispatcherQueue = new();
+        readonly Microsoft.UI.Xaml.FrameworkElement HistoryLine = new(), HistoryRetry = new(), HistoryEarlier = new();
+        readonly ProbeRows HistoryRows = new();
+        readonly Microsoft.UI.Xaml.FrameworkElement HistoryColumn;
+        ProbeCard? Card;
+        bool IsLoaded => true;
 
-        public SessionView() => HookConversationInput(Scroller);
+        public SessionView()
+        {
+            pinEnd = true;
+            HistoryColumn = new() { Layout = () => Scroller.ScrollableHeight = 100 + historyShown.Count * 100 };
+            HookConversationInput(Scroller);
+        }
         public Microsoft.UI.Xaml.Controls.ScrollViewer Scroller => ConversationScroll!;
         public bool Pinned => pinEnd;
         public bool IsScrolling => scrolling;
@@ -111,6 +185,47 @@ namespace AgentBridge.App
         public void Follow() => FollowPinnedEnd();
         public void Moved(double offset) { Scroller.VerticalOffset = offset; PinViewChanged(Scroller); anchoring = null; }
         public void Scrolling(double? correction = null) { scrolling = true; anchoring = correction; }
-        public void StopScrolling() => scrolling = false;
+        public void StopScrolling() { scrolling = false; CompleteNavigation(); }
+        public bool HasAnchor => anchor is not null;
+        public int ShownCount => historyShown.Count;
+        public bool HistoryDrawing => historyDraw?.IsRunning == true;
+        public void FirstFrameForProbe() => historyFirstFrame?.Invoke(this, new());
+        public void DrawEarlierForProbe() => DrawEarlier();
+        public void DrainForProbe() => DispatcherQueue.Drain();
+        public void DetachForProbe() => UnwatchHistory();
+        public void SwitchForProbe()
+        {
+            Card = new("next", Card!.Stored);
+            follow.Reset();
+            WatchHistory();
+            Scroller.VerticalOffset = 0;
+        }
+        public void PrepareHistoryForProbe()
+        {
+            var connection = new Core.HostConnection(
+                _ => Task.FromException<AgentBridge.Local.LocalChannel>(new InvalidOperationException("Offline probe cannot connect.")),
+                new LockedDispatcher());
+            var stored = new Core.SessionHistory(connection, "probe");
+            stored.AddLive(new() { Id = "older", At = default, Prompt = new() { Text = "Older prompt" } });
+            stored.AddLive(new() { Id = "newer", At = default, Prompt = new() { Text = "Newer prompt" } });
+            Card = new("probe", stored);
+            Scroller.VerticalOffset = Scroller.ScrollableHeight;
+            WatchHistory();
+            DrainForProbe();
+            Scroller.Targets.Clear();
+        }
+        static double Top(Microsoft.UI.Xaml.UIElement element, Microsoft.UI.Xaml.UIElement viewport) => element.Top;
+        sealed record ProbeCard(string Id, Core.SessionHistory Stored, string? LiveTurn = null, string? UserMessage = null);
+        sealed class ProbeRows
+        {
+            public Microsoft.UI.Xaml.UIElement? TryGetElement(int index) => null;
+            public Microsoft.UI.Xaml.UIElement? GetOrCreateElement(int index) => null;
+        }
+    }
+
+    static class Ui
+    {
+        public static Microsoft.UI.Xaml.Visibility Show(bool visible) =>
+            visible ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
     }
 }

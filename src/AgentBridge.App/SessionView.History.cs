@@ -34,11 +34,11 @@ public sealed partial class SessionView
     {
         UnwatchHistory();
         history = Card?.Stored;
-        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; seen = null; openPrompts.Clear(); historyVisible = 1; }
-        if (history is null) { ShowHistory(); return; }
-        history.Changed += OnHistoryChanged;
-        ShowHistory();
-        _ = history.LoadNewestAsync();
+        var opening = shownHistory != Card?.Id;
+        if (opening) { shownHistory = Card?.Id; pinEnd = true; navigationPending = null; seen = null; openPrompts.Clear(); historyVisible = 1; }
+        if (history is not null) { history.Changed += OnHistoryChanged; }
+        ShowHistory(opening);
+        if (history is not null) { _ = history.LoadNewestAsync(); }
     }
 
     // Capabilities arriving (the host's hello) is when a first page that could not be asked for is asked.
@@ -55,12 +55,15 @@ public sealed partial class SessionView
         if (history is not null) { history.Changed -= OnHistoryChanged; }
         history = null;
         historyDrawKey = null;
+        navigationPending = null;
     }
 
     // Raised on whichever thread finished the load.
     void OnHistoryChanged() => DispatcherQueue.TryEnqueue(ShowHistory);
 
-    void ShowHistory()
+    void ShowHistory() => ShowHistory(opening: false);
+
+    void ShowHistory(bool opening)
     {
         var turns = history?.Turns ?? [];
         var liveTurn = Card?.LiveTurn;
@@ -87,7 +90,7 @@ public sealed partial class SessionView
         var changed = HistoryRowSync.Apply(historyShown, rows);
         rowsOf = shownHistory;
         // Nothing moved when no row changed, and a scroller left from another session says nothing of where this one is.
-        if (changed) { if (atEnd) { pinEnd = true; anchor = null; } KeepPlace(atEnd, offset, reading); }
+        if (changed || opening) { if (atEnd) { pinEnd = true; anchor = null; } KeepPlace(atEnd, offset, reading, opening: opening); }
         HistoryLine.Text = line ?? "";
         HistoryLine.Visibility = line is null ? Visibility.Collapsed : Visibility.Visible;
         HistoryRetry.Visibility = history?.State == HistoryLoad.Failed ? Visibility.Visible : Visibility.Collapsed;
@@ -118,7 +121,7 @@ public sealed partial class SessionView
                     if (ConversationScroll is not { } s || pinEnd && s.VerticalOffset < s.ScrollableHeight - 1.5) { return; }
                     CompositionTarget.Rendering -= historyFirstFrame;
                     historyFirstFrame = null;
-                    historyDraw.Start();
+                    if (!follow.Held || !HistoryAtEnd()) { historyDraw.Start(); }
                 };
                 CompositionTarget.Rendering += historyFirstFrame;
             }
@@ -128,7 +131,8 @@ public sealed partial class SessionView
 
     void DrawEarlier()
     {
-        if (!IsLoaded || scrollbarPointers.Count > 0 || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
+        if (follow.Held && HistoryAtEnd()) { historyDraw?.Stop(); return; }
+        if (!IsLoaded || navigationPending is not null || scrollbarPointers.Count > 0 || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
         var turns = history?.Turns ?? [];
         var first = historyShown.FirstOrDefault();
         var end = first is null ? turns.Count - 1 : 0;
@@ -184,12 +188,13 @@ public sealed partial class SessionView
     // the end if pinned, else the stored turn's screen position through a prepend (#1593).
     // Without a visible stored turn, keep the previous offset if the layout moved it up (#1635).
     // Skipped if another session was opened, or the person took the view, meanwhile.
-    void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null, double? earlierExtent = null)
+    void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null, double? earlierExtent = null, bool opening = false)
     {
+        if (navigationPending is not null || scrollbarPointers.Count > 0) { return; }
         var (session, releases) = (shownHistory, pinReleases);
         void Restore()
         {
-            if (session != shownHistory || releases != pinReleases || scrollbarPointers.Count > 0 || ConversationScroll is not { } scroll) { return; }
+            if (session != shownHistory || releases != pinReleases || scrollbarPointers.Count > 0 || !opening && follow.Held && (atEnd || pinEnd) || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset + (earlierExtent is { } extent ? scroll.ScrollableHeight - extent : 0), scroll.ScrollableHeight);
             if (!atEnd && !pinEnd && reading is { } kept)
@@ -202,7 +207,7 @@ public sealed partial class SessionView
                 }
             }
             var off = reading is not null || atEnd || pinEnd ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
-            if (off) { Anchoring(scroll, target); }
+            if (off && anchoring != target) { Anchoring(scroll, target); }
         }
         // Compensate a prepend before input can land between insertion and correction.
         if (earlierExtent is not null) { Restore(); }

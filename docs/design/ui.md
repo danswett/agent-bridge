@@ -1716,10 +1716,19 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   It opens at the end, on the latest reply, and stays there as replies arrive until the person
   scrolls; once they scroll, a new reply never moves the view (#1635, #1646).
   A question brought into view, a block requested by a screen reader or any other move back from
-  the end the app did not ask for releases the Windows end pin too: later layout must not scroll that destination away.
+  the end the app did not ask for releases the Windows end pin too: later layout must not scroll that destination away,
+  even before navigation first moves.
+  An unrelated final scroll event cannot end that custody before the requested target is reached.
   A held scrollbar owns the view from its press until release or cancellation, before its
   first movement as well as during the drag; history arriving meanwhile cannot restore the pin.
   Losing capture or rewatching history cancels that pointer's scrollbar custody and pressed hold even if its release happens outside the window.
+  End-following also waits while a finger is down or the pointer is over or pressed in the
+  conversation, then follows the latest measured end when the last hold ends, if still pinned.
+  A held end-pinned view stops the older-prepend timer until the last hold ends, so no prepend lacks its end correction.
+  Opening another session still places its latest reply despite an inherited hold; subsequent
+  scrolling or navigation cancels that queued placement. Unloading or replacing the session
+  clears scrollbar and navigation custody. A nearest-edge bring request already spanning the viewport takes
+  no navigation latch unless an explicit alignment or offset asks it to move.
   Reasoning, tool lines, delegate events and questions are still to come. The Windows app loads earlier turns a page
   at a time through "Load earlier messages" or scrolling upward within a screen of the top
   (#1593 W2b-1). Both use the history client's cursor and deduplication; the first visible
