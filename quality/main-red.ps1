@@ -148,19 +148,34 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
     # Newest run, then newest attempt, first. Cancelled, skipped and running attempts are not verdicts. A running
     # attempt never holds back a finished one: its own completed event reconciles again when it ends.
     $verdict = $null
-    :search foreach ($r in @($recent + @($run) | Group-Object id | ForEach-Object { $_.Group | Sort-Object run_attempt | Select-Object -Last 1 } |
-            Sort-Object run_number -Descending)) {
+    $ordered = @($recent + @($run) | Group-Object id | ForEach-Object { $_.Group | Sort-Object run_attempt | Select-Object -Last 1 } |
+            Sort-Object run_number -Descending)
+    :search foreach ($r in $ordered) {
         for ($n = $r.run_attempt; $n -ge 1; $n--) {
             $a = Get-Attempt $r.id $n
             if ($a.status -eq 'completed' -and (Get-RedVerdict $a.conclusion) -ne 'none') { $verdict = $a; break search }
         }
     }
     if (-not $verdict) { return }
+    # A success event may arrive after the next failure. Recover its boundary for quarantine counting,
+    # without closing the incident over a newer red verdict.
+    $recovery = if ($verdict.conclusion -eq 'success') { $verdict } else { $null }
+    if (-not $recovery) {
+        :recovery foreach ($r in @($ordered | Where-Object { $_.run_number -le $verdict.run_number })) {
+            $start = if ($r.id -eq $verdict.id) { $verdict.run_attempt - 1 } else { $r.run_attempt }
+            for ($n = $start; $n -ge 1; $n--) {
+                $a = Get-Attempt $r.id $n
+                if ($a.status -eq 'completed' -and $a.conclusion -eq 'success') { $recovery = $a; break recovery }
+            }
+        }
+    }
     # The completed event's own failure stays evidence when a retry of the same run already decided main's state.
     if ($run.id -eq $verdict.id -and $run.run_attempt -lt $verdict.run_attempt -and (Get-RedVerdict $run.conclusion) -eq 'red') {
-        Publish-MainRed $run $Repository
+        Publish-MainRed $run $Repository -Recovery $recovery
+    } elseif ($run.id -ne $verdict.id -and (Get-RedVerdict $run.conclusion) -eq 'red') {
+        Write-Host "Red evidence for run=$($run.id) attempt=$($run.run_attempt) is not backfilled: newer decisive run=$($verdict.id) attempt=$($verdict.run_attempt) determines main. A missing old-run entry keeps auto-revert fail-safe."
     }
-    Publish-MainRed $verdict $Repository
+    Publish-MainRed $verdict $Repository -Recovery $recovery
 }
 
 function Test-MainPush($Run, [string]$Repository) {
@@ -168,7 +183,7 @@ function Test-MainPush($Run, [string]$Repository) {
     $Run.head_repository.full_name -eq $Repository -and $Run.run_attempt -ge 1
 }
 
-function Publish-MainRed($run, [string]$Repository) {
+function Publish-MainRed($run, [string]$Repository, $Recovery) {
     $RunId = $run.id
     $verdict = Get-RedVerdict $run.conclusion
     if ($verdict -eq 'none') { return }
@@ -206,10 +221,17 @@ function Publish-MainRed($run, [string]$Repository) {
     $postMergeOnly = $own.Count -gt 0 -and @($own | Where-Object { -not $_.PostMerge }).Count -eq 0
     $body = Format-MainRedBody $run $Repository $jobs $postMergeOnly
     # B3b: the same single post-merge test failing in two entries in a row proposes one quarantine, once
-    # per open issue. It is a line in this alert and a generator call, never a status, check or label.
+    # per unrecovered streak. It is a line in this alert and a generator call, never a status, check or label.
     $test = Get-QuarantineTest $body; $request = $false
     if ($test -and $issue) {
         $entries = @(@($issue.body) + @($comments | ForEach-Object { $_.body }) | Where-Object { $_ -clike 'main-red: *' })
+        if ($Recovery) {
+            $entries = @($entries | Where-Object {
+                    $_ -cmatch '^main-red: run=(\d+) attempt=(\d+) sha=' -and
+                    ([long]$Matches[1] -gt $Recovery.id -or
+                        ([long]$Matches[1] -eq $Recovery.id -and [long]$Matches[2] -gt $Recovery.run_attempt))
+                })
+        }
         $flag = "quarantine-request: test=$test"
         $request = $entries.Count -gt 0 -and [string]::Equals((Get-QuarantineTest $entries[-1]), $test, [StringComparison]::Ordinal) -and
             @($entries | Where-Object { [Array]::IndexOf([string[]]($_ -split '\r?\n'), $flag) -ge 0 }).Count -eq 0

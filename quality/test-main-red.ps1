@@ -91,7 +91,7 @@ function Fake-Gh {
         '^label create main-red ' { $s.writes += 'label'; return }
         '^issue create ' {
             $s.writes += 'create'; $s.open = $true; $s.created = $true; $s.body = $args[([array]::IndexOf($args, '--body') + 1)]
-            $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; return
+            $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; $s.comments = @(); return
         }
         '^issue comment 9 ' {
             $s.writes += 'comment'
@@ -154,6 +154,12 @@ foreach ($c in 'failure', 'success') {
     $evidence = (@($s.body) + @($s.comments | ForEach-Object { $_.body })) -join "`n"
     Assert ($evidence -match 'run=101' -and
         (($c -eq 'failure' -and $s.open) -or ($c -eq 'success' -and -not $s.open))) "a replacement stale event reconciles the newest $c verdict"
+}
+foreach ($c in 'failure', 'success') {
+    Reset-Scenario; $s.runs = @{ 100 = @('failure'); 101 = @($c) }
+    $output = (Invoke-MainRed -RunId 100 -Repository 'o/r' 6>&1) -join "`n"
+    Assert ($output -match 'run=100 attempt=1.*not backfilled.*newer decisive run=101 attempt=1' -and
+        $output -match 'missing old-run entry.*auto-revert.*fail-safe') "missing old-run red evidence is explained while reconciling newer $c"
 }
 $eventPath = [IO.Path]::GetTempFileName()
 $savedEventName = $env:GITHUB_EVENT_NAME; $savedEventPath = $env:GITHUB_EVENT_PATH
@@ -306,6 +312,19 @@ Assert ((@(Get-GeneratorCalls) -join '|') -ceq '100|A.B.C.Method|o/r|24') 'that 
 Assert (-not (($s.calls | ForEach-Object { $_ -join ' ' }) -match 'statuses|check-runs|--add-label|pr create')) 'the request writes no status, check, label or pull request itself, so no merge verdict reads it'
 Detect; $s.attempt = 3; Detect
 Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1 -and $s.comments.Count -eq 2) 'a second tick and a third failure make no duplicate request'
+Reset-Quarantine; $s.runs = @{ 100 = @('failure') }; Detect
+$s.runs[100] = @('failure', 'failure', 'success', 'failure'); $s.attempt = 2; Detect
+Assert ($s.open -and $s.comments[-1].body -match 'attempt=4' -and $s.writes -notcontains 'close' -and
+    @(Get-Requests).Count -eq 0 -and @(Get-GeneratorCalls).Count -eq 0) 'a delayed failure cannot count across an intervening successful retry'
+$s.runs[100] += 'failure'; $s.attempt = 5; Detect
+Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1) 'only the second failure after recovery reaches the unchanged threshold'
+Reset-Quarantine; $s.runs = @{ 100 = @('failure') }; Detect
+$s.runs[100] += 'failure'; $s.attempt = 2; Detect
+$s.runs[100] += @('success', 'failure'); $s.attempt = 1; Detect
+Assert ($s.comments[-1].body -match 'attempt=4' -and @(Get-Requests).Count -eq 1 -and
+    @(Get-GeneratorCalls).Count -eq 1) 'the first failure after recovery makes no request even when an earlier streak already requested one'
+$s.runs[100] += 'failure'; $s.attempt = 5; Detect
+Assert (@(Get-Requests).Count -eq 2 -and @(Get-GeneratorCalls).Count -eq 2) 'a fresh pair after recovery can request quarantine again'
 Reset-Quarantine -Switch ''; Detect; $s.attempt = 2; Detect
 Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 0) 'with MAIN_RED_QUARANTINE unset the request is recorded but the generator never runs'
 Reset-Quarantine -Switch "o$([char]0x200b)n"; Detect; $s.attempt = 2; Detect
