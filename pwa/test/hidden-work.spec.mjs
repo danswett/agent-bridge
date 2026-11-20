@@ -1,14 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { assertLoopingAnimation } from './animation-assertions.mjs';
+import { indicatorStyle, readFont } from './hidden-work-fixture.mjs';
 
 async function indicator(locator, name, pseudo = null) {
-  const style = await locator.evaluate((el, pseudo) => {
-    const style = getComputedStyle(el, pseudo);
-    return { animationName: style.animationName, animationDuration: style.animationDuration,
-      animationIterationCount: style.animationIterationCount, animationPlayState: style.animationPlayState,
-      animationNames: el.getAnimations().map((animation) => animation.animationName) };
-  }, pseudo);
+  const style = await locator.evaluate(indicatorStyle, pseudo);
   assertLoopingAnimation(style, name);
   return style.animationPlayState;
 }
@@ -21,13 +17,15 @@ async function surface(page) {
       return;
     }
     if (path.startsWith('/design/fonts/')) {
-      await route.fulfill({ contentType: 'font/woff2', body: await readFile(new URL(`../..${path}`, import.meta.url)) });
+      await route.fulfill({ contentType: 'font/woff2', body: await readFont(path) });
       return;
     }
     await route.fulfill({ contentType: path.endsWith('.js') ? 'text/javascript' : 'text/css', body: await readFile(new URL(`..${path}`, import.meta.url)) });
   });
   await page.clock.install();
   await page.goto('https://visibility.test/');
+  expect(await page.evaluate(async () => (await document.fonts.load('400 15px "Slipgates Sans"')).length),
+    'the fixture must load the shipped font, not silently use a fallback').toBeGreaterThan(0);
   await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 100);
   await visibility(page, true);
   await page.evaluate(() => {
@@ -137,8 +135,10 @@ test('motion reconnected while hidden resumes, even across a detached visible re
   await visibility(page, false);
   await page.evaluate(() => state.target.remove());
   await visibility(page, true);
+  expect(await page.evaluate(() => state.motion.playState)).toBe('paused');
   await visibility(page, false);
   await page.evaluate(() => document.body.append(state.target));
+  expect(await page.evaluate(() => state.motion.playState)).toBe('paused');
   await visibility(page, true);
   expect(await page.evaluate(() => state.motion.playState)).toBe('running');
 });

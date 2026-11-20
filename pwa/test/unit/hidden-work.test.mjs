@@ -2,6 +2,33 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assertLoopingAnimation } from '../animation-assertions.mjs';
 import { watchPresses } from '../../js/ui/motion.js';
+import { indicatorStyle, readFont } from '../hidden-work-fixture.mjs';
+
+test('the hidden-work fixture loads the shipped sans font', async () => {
+  const font = await readFont('/design/fonts/SlipgatesSans.woff2');
+  assert.equal(font.subarray(0, 4).toString(), 'wOF2', 'the fixture must serve a real WOFF2 asset');
+});
+
+test('the hidden-work fixture rejects a missing font instead of using a fallback', async () => {
+  await assert.rejects(readFont('/design/fonts/Missing.woff2'), { code: 'ENOENT' });
+});
+
+test('the indicator observes a pseudo-element animation rather than passing with an empty list', (t) => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'getComputedStyle');
+  Object.defineProperty(globalThis, 'getComputedStyle', { configurable: true, value: (_, pseudo) => {
+    assert.equal(pseudo, '::after');
+    return { animationName: 'spin', animationDuration: '1s',
+      animationIterationCount: 'infinite', animationPlayState: 'running' };
+  } });
+  t.after(() => {
+    if (descriptor) { Object.defineProperty(globalThis, 'getComputedStyle', descriptor); }
+    else { delete globalThis.getComputedStyle; }
+  });
+  const el = { getAnimations: (options) => options?.subtree ? [{ animationName: 'spin' }] : [] };
+  const style = indicatorStyle(el, '::after');
+  assertLoopingAnimation(style, 'spin');
+  assert.ok(style.animationNames.length > 0, 'at least one animation must be observed');
+});
 
 test('a paused animation-less stub fails the indicator presence assertion', () => {
   const stub = { animationName: 'none', animationDuration: '0s',
@@ -10,7 +37,7 @@ test('a paused animation-less stub fails the indicator presence assertion', () =
     assert.throws(() => assertLoopingAnimation(stub, name), /the expected animation must exist/);
     assert.throws(() => assertLoopingAnimation({ ...stub, animationName: name,
       animationDuration: '1s', animationIterationCount: 'infinite', animationNames: [] }, name),
-    /the browser must instantiate the animation/);
+    /at least one browser animation must be observed/);
   }
 });
 
@@ -61,12 +88,16 @@ test('motion detached and reconnected while hidden resumes on return', (t) => {
   assert.equal(animation.playState, 'running');
 });
 
-test('motion is not stranded if its target is detached when visibility returns', (t) => {
+test('detached paused motion stays paused until reconnected and visible, including a second hide', (t) => {
   const { target, animation, show } = surface(t);
   show(false);
   target.isConnected = false;
   show(true);
+  assert.equal(animation.playState, 'paused', 'a detached target must not resume');
+  show(false);
   target.isConnected = true;
+  assert.equal(animation.playState, 'paused', 'hidden reattachment must not run motion');
+  show(true);
   assert.equal(animation.playState, 'running');
 });
 
