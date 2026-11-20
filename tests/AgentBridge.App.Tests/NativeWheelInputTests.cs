@@ -4,6 +4,27 @@ namespace AgentBridge.App.Tests;
 
 public sealed class NativeWheelInputTests
 {
+    [Fact]
+    public async Task Settled_child_focus_posts_despite_an_unsuccessful_focus_request()
+    {
+        var port = new WheelPort { FocusSucceeds = false, SettledFocus = true, Target = 0x4008C };
+        using var wheel = new NativeWheelInput(port);
+        await wheel.Post();
+        Assert.True(port.FocusedWhenPosted);
+        Assert.Equal((nint)0x4008C, port.PostedTarget);
+    }
+
+    [Fact]
+    public async Task A_focus_miss_names_every_failed_readiness_condition()
+    {
+        var port = new WheelPort { LosesFocus = true, Verified = false, Foreground = false };
+        using var wheel = new NativeWheelInput(port);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => wheel.Post());
+        Assert.Contains("failed: list focus, native target, foreground", error.Message);
+        Assert.Contains("focus request: True; list focus: False; native target: False; foreground: False", error.Message);
+        Assert.DoesNotContain("post", port.Calls);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -115,10 +136,12 @@ public sealed class NativeWheelInputTests
         public readonly List<string> Calls = [], Logs = [];
         public bool FocusSucceeds = true, LosesFocus, Verified = true, Foreground = true;
         public bool Focused, FocusedWhenPosted, AtEnd = true;
+        public bool? SettledFocus;
         public bool ListIsTabStop { get; set; }
         public bool ListAtEnd => AtEnd;
         public Task FocusCompletion = Task.CompletedTask;
         public nint PostedTarget;
+        public nint Target = 0x20;
         public int ChainReads;
         public string Description = "window: 0xA; target: 0x20; foreground: 0xA";
         public IReadOnlyList<nint> Chain = [0x20, 0xA];
@@ -126,7 +149,8 @@ public sealed class NativeWheelInputTests
         {
             Calls.Add("focus");
             await FocusCompletion;
-            return Focused = FocusSucceeds && ListIsTabStop;
+            Focused = SettledFocus ?? (FocusSucceeds && ListIsTabStop);
+            return FocusSucceeds && ListIsTabStop;
         }
         public bool ListHasFocus { get { Calls.Add("list-focus"); return Focused; } }
         public bool WindowIsForeground { get { Calls.Add("foreground"); return Foreground; } }
@@ -134,7 +158,7 @@ public sealed class NativeWheelInputTests
         {
             Calls.Add("prepare");
             if (LosesFocus) { Focused = false; }
-            return 0x20;
+            return Target;
         }
         public bool TargetIsVerified(nint target) { Calls.Add("target"); return Verified; }
         public bool Post(nint target)
