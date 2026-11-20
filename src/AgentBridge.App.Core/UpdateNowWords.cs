@@ -32,6 +32,8 @@ public static class UpdateNowWords
     public const string PauseLine = "They pause while the bridge restarts, usually under a minute.";
     public const string UnknownLine = "Some sessions there haven't reported yet.";
     public const string WarnLine = "A question or approval waiting may have to be answered at the machine afterwards.";
+    // After policy-unreadable: confirming it is what signs unchecked (#3307).
+    public const string PolicyLine = "Bad-release protection could not be checked on this machine.";
     public const string ConfirmButton = "Update now";
     public const string CancelButton = "Cancel";
     // A busy session this device has no name for.
@@ -82,6 +84,8 @@ public static class UpdateNowWords
         [ManageReason.NeedsRoster] = "this needs your approved devices first",
         [ManageReason.Unavailable] = "the app there can't install it now",
         [UpdateCode.OldApp] = "the app there can't install it now",
+        [UpdateCode.PolicyUnreadable] = "bad-release protection couldn't be checked there",
+        ["halted"] = "this release has been halted",
     };
 
     // Why an Update now didn't happen, from its code, as a whole line. at: when Update now works
@@ -151,8 +155,8 @@ public static class UpdateNowWords
     // The confirmation: each busy session by the name this device shows for it, its state in words,
     // how many it left out, whether the bridge can't tell, the pause, and, while a question or
     // approval waits or it can't tell, that one may have to be answered at the machine. nameOf: the
-    // name of a session this device has, or null.
-    public static UpdateNowSheet Sheet(string machine, UpdateBusy? busy, Func<string, string?> nameOf)
+    // name of a session this device has, or null. uncheckedPolicy: with PolicyLine (#3307).
+    public static UpdateNowSheet Sheet(string machine, UpdateBusy? busy, Func<string, string?> nameOf, bool uncheckedPolicy = false)
     {
         var b = busy ?? CantTell;
         var sessions = b.Sessions ?? [];
@@ -167,13 +171,15 @@ public static class UpdateNowWords
             PauseLine,
             // Until #954 lands (settled decision 8): err toward warning.
             asking || b.Unknown == true ? WarnLine : null,
-            b);
+            b,
+            uncheckedPolicy ? PolicyLine : null);
     }
 }
 
 // What Update now's confirmation shows (UpdateNowWords.Sheet), and the busy it was made from, which
 // the press then signs as its accept.
-public sealed record UpdateNowSheet(string Title, IReadOnlyList<UpdateNowSheetRow> Sessions, string? More, string? Unknown, string Pause, string? Warn, UpdateBusy Busy);
+public sealed record UpdateNowSheet(string Title, IReadOnlyList<UpdateNowSheetRow> Sessions, string? More, string? Unknown, string Pause, string? Warn, UpdateBusy Busy,
+    string? Policy = null);
 
 public sealed record UpdateNowSheetRow(string Name, string State);
 

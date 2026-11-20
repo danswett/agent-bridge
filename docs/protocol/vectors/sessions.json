@@ -9434,6 +9434,46 @@
         }
       ]
     },
+    "ClearedComposer": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "a-plain-draft",
+          "json": {
+            "text": "  rerun the tests ",
+            "marks": [],
+            "truncated": false
+          }
+        },
+        {
+          "name": "an-escaped-draft",
+          "json": {
+            "text": "rerun the build\\u202E gol",
+            "marks": [
+              [
+                15,
+                6
+              ]
+            ],
+            "truncated": false
+          }
+        },
+        {
+          "name": "wrong-type-text",
+          "json": {
+            "text": 42,
+            "marks": [],
+            "truncated": false
+          },
+          "reads": {
+            "text": "",
+            "marks": [],
+            "truncated": false
+          }
+        }
+      ],
+      "refused": []
+    },
     "ReplyResult": {
       "direction": "host",
       "valid": [

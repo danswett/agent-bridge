@@ -58,7 +58,10 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
                 return new(from, facts, null, DelegateLabel.Aloud(name is null ? "Scheduled prompt" : $"Scheduled prompt {name.TrimStart('#')}"), repeat, text, preview);
             case UserMessageFrom.Agent:
                 var by = driver is not null && Fact(driver, 128) is { Length: > 0 } p ? p : null;
-                return new(from, ["Sent by an agent"], by, "Prompt sent by an agent", false, text, preview);
+                var sender = Fact(label);
+                var agentLabel = sender.Length == 0 ? "Sent by an agent" : $"From: {sender}";
+                var spoken = sender.Length == 0 ? "Prompt sent by an agent" : $"Prompt sent by an agent, From: {DelegateLabel.Aloud(sender)}";
+                return new(from, [agentLabel], by, spoken, false, text, preview);
             default:
                 return new(UserMessageFrom.Other, ["Automatic prompt"], null, "Automatic prompt", false, text, preview);
         }

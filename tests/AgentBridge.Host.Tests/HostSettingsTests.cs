@@ -400,15 +400,37 @@ public sealed class HostSettingsTests : IDisposable
     }
 
     [Fact]
-    public void Remote_agent_messaging_is_off_and_all_targets_refused_without_a_file_or_a_setting()
+    public void Remote_agent_messaging_is_own_account_without_a_file_or_a_key_and_all_targets_stay_refused()
     {
-        Assert.Equal(AgentMessagingSettings.Default, With(null).Settings.AgentMessaging);
-        Assert.Equal(("off", false), (AgentMessagingSettings.Default.Remote, AgentMessagingSettings.Default.AllowAllTargets));
-        Assert.Empty(AgentMessagingSettings.Default.AllowAllTargetSessions);
-        // An upgrade or install that writes other sections never turns it on.
-        var settings = With("""{ "devBox": { "keepAwake": true } }""").Settings;
-        Assert.False(settings.AgentMessaging.RemoteEnabled);
-        Assert.Empty(settings.AgentMessagingProblems);
+        var absent = With(null).Settings.AgentMessaging;
+        Assert.Equal((true, false), (absent.RemoteEnabled, absent.AllowAllTargets));
+        Assert.Empty(absent.AllowAllTargetSessions);
+        foreach (var text in new[] { """{ "devBox": { "keepAwake": true } }""", """{ "agentMessaging": null }""", """{ "agentMessaging": {} }""", """{ "agentMessaging": { "remote": null } }""" })
+        {
+            var settings = With(text).Settings;
+            Assert.True(settings.AgentMessaging.RemoteEnabled, text);
+            Assert.False(settings.AgentMessaging.AllowAllTargets, text);
+            Assert.Empty(settings.AgentMessagingProblems);
+        }
+        // The default never opens allow-all: that takes remote set to own-account by a person.
+        var listed = With("""{ "agentMessaging": { "allowAllTargets": true, "allowAllTargetSessions": ["11111111-1111-1111-1111-111111111111"] } }""").Settings.AgentMessaging;
+        Assert.Equal((true, false), (listed.RemoteEnabled, listed.AllowAllTargets));
+    }
+
+    [Fact]
+    public void An_explicit_off_or_a_config_json_that_cannot_be_read_is_never_the_default_on()
+    {
+        Assert.False(With("""{ "agentMessaging": { "remote": "off" } }""").Settings.AgentMessaging.RemoteEnabled);
+        Assert.False(With("""{ "agentMessaging": { "allowAllTargetSessions": ["", true] } }""").Settings.AgentMessaging.RemoteEnabled);
+        foreach (var text in new[] { "{ not json", """{ "version": 99 }""", """{ "load": false }""" })
+        {
+            var (settings, problem) = With(text);
+            Assert.NotNull(problem);
+            Assert.False(settings.AgentMessaging.RemoteEnabled, text);
+        }
+        File.Delete(Path.Combine(folder, HostSettings.FileName));
+        Directory.CreateDirectory(Path.Combine(folder, HostSettings.FileName));
+        Assert.False(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
     }
 
     [Theory]

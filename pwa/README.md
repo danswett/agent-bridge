@@ -42,6 +42,15 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 
 ## Modules
 
+Periodic UI clocks pause while the document is hidden or on `pagehide` and refresh once
+on return, including a persisted `pageshow`. Launch probes and jumps keep their own
+visibility handling (#3156). Glyphs, spinners and running
+motion pause too; hidden updates do not start transient motion. The sessions timing
+report, sign-in banner refresh and stop confirmation countdown already used
+visibility-aware clocks. One-shot busy/linger deadlines remain one-shot, and sign-in
+codes still expire out of sight. Focused fake-clock coverage is in
+`test/hidden-work.spec.mjs`.
+
 On opening a session, history asks for the newest five turns. Once drawn, at most
 one older page is fetched automatically, only if the visible pane does not yet
 scroll (#2480). Resizing or reopening does not renew that allowance. Load earlier

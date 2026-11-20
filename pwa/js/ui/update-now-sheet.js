@@ -27,7 +27,8 @@ export function openUpdateNowSheet(sheet, { doc = document, returnFocus = null, 
         sheet.more ? h('p', { class: 'update-now-more' }, sheet.more) : null,
         sheet.unknown ? h('p', { class: 'update-now-unknown' }, sheet.unknown) : null,
         h('p', { class: 'update-now-pause' }, sheet.pause),
-        sheet.warn ? h('p', { class: 'update-now-warn' }, sheet.warn) : null),
+        sheet.warn ? h('p', { class: 'update-now-warn' }, sheet.warn) : null,
+        sheet.policy ? h('p', { class: 'update-now-warn update-now-policy' }, sheet.policy) : null),
       h('div', { class: 'update-now-actions' }, cancel, confirm));
 
     const close = (go, { refocus = true } = {}) => {

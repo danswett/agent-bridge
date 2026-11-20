@@ -155,6 +155,31 @@ mode changed at the machine in that moment is not seen. The
 screens the tests read are in `tests/fixtures/screens/copilot-input-box.json`, built from
 the captured live screen and the CLI's rendering code, each naming its source.
 
+## Guarded clear foundation ([#804](https://github.com/danswett/agent-bridge/issues/804))
+
+The host-only `ReplyRequest.ClearConfirmation` seam accepts a verifier bound to the
+whole escaped composer digest, rechecked with person intent, process incarnation,
+G5, elevation, launch and transcript guards before clearing and again before replying.
+No wire field supplies it. There is deliberately **no production producer or advertised
+capability yet**: signed relay-only confirmation, default-off policy and PWA/app UI
+remain follow-up slices. The pipe, HA, MCP and agent paths cannot enable it.
+Clearing additionally requires host-only `ClearDraftSource`: lossless original composer
+text, rechecked before keys. Screen rows alone are insufficient because their ASCII
+spaces are normalized. Missing evidence refuses before keys; this source also has no
+production producer. The confirmation digest and returned escrow include every space.
+
+This first cut permits only complete, single-row, non-shell Copilot drafts that can be
+returned whole within 500 escaped characters. Everything else is refused before keys.
+The clear (Ctrl+End, Ctrl+U) is held to the original rows, safe footer and request freshness.
+A request stale before the clear deletes nothing and returns `Stale`, without escrow.
+Within the same typing slot, two consecutive empty reads must arrive within two seconds,
+then the normal guarded reply path runs. Any attempted deletion returns `cleared`
+(`text`, host escape `marks`, `truncated: false`), even if later guards refuse the reply.
+It is never logged. Request memory binds replies to the sender and target; clear replay
+additionally requires the same host verification callbacks and still-current person
+intent. A changed authority generation is refused without escrow or progress.
+No live key validation or production enablement is claimed by this foundation.
+
 ## Attachments (Copilot)
 
 Ported from agent-ha-bridge (`hooks/daemon-replies.ps1`: `New-BridgeAttachmentPrompt`,
@@ -438,7 +463,7 @@ reported apart.
 
 ## Messages from other own-agents (AP5-lite, #1353)
 
-`LiteDeliver` types a verified lite message into one idle Copilot session behind a one-line provenance marker (sender machine, session, request id). It refuses, typing nothing, with `notReplyTarget` (not launched here in forced-ask mode; allow-all only while `agentMessaging.allowAllTargets` is on and the exact target session id is listed in `agentMessaging.allowAllTargetSessions`; text unbound, empty, over 4096 characters or with a request id that is not a UUID), `busy` (not idle, or over 6 messages a minute per session), `composerNotEmpty` or `noSuchSession`. Its host-only `RequireIdle` condition makes `ReplyService` re-check idle after taking the typing slot; a session that became busy while waiting is refused as `busy`, so the sender falls back to HA. A person's reply can still reach a working session. There is no queue and no retry. Gates (`IReplyTargetGate`) are OR-composed in `LiteComposition`; the log line carries sender, target, request id and outcome, never the text.
+`LiteDeliver` types a verified lite message into one idle Copilot session behind a one-line provenance marker (sender machine, session, request id). It refuses, typing nothing, with `notReplyTarget` (not launched here in forced-ask mode; allow-all only while `agentMessaging.allowAllTargets` is on and the exact target session id is listed in `agentMessaging.allowAllTargetSessions`; text unbound, empty, over 4096 characters or with a request id that is not a UUID), `busy` (not idle, or over 6 messages a minute per session), `composerNotEmpty` or `noSuchSession`. The target is the full session id or, as the roster and `fleet.find` publish it, the node id `agent_bridge_<16 lowercase hex>` (#3399); a node id is used only when exactly one live session maps to it and discovery is not held (`ISessionSource.Held`, read before and after the scan, and the node id re-resolved after the typing slot is taken and once more just before typing starts), and every later check (gates, allow-all list, rate, typing) uses that session's full id. Zero or several matches are refused as `noSuchSession`. Its host-only `RequireIdle` condition makes `ReplyService` re-check idle after taking the typing slot; a session that became busy while waiting is refused as `busy`, so the sender falls back to HA. A person's reply can still reach a working session. There is no queue and no retry. Gates (`IReplyTargetGate`) are OR-composed in `LiteComposition`; the log line carries sender, target, request id and outcome, never the text.
 
 Each evaluated gate also logs its name, decision and refusal reason with the target and request id,
 never message text. An allowed gate ends evaluation; otherwise every refusal is recorded.
