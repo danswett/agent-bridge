@@ -81,7 +81,7 @@ public class StatusContractTests
         { "too many incidents", j => Section(j, "incidents")["rows"] = new JsonArray([.. Enumerable.Range(0, 21).Select(_ => Row(j, "incidents").DeepClone())]) },
         { "duplicate system", j => Section(j, "systems")["rows"]!.AsArray().Add(Row(j, "systems").DeepClone()) },
         { "done over total", j => Row(j, "programs")["done"] = 6 },
-        { "unknown system code", j => Row(j, "systems")["name"] = "DSWETT-DEV-VM7" },
+        { "unknown system code", j => Row(j, "systems")["name"] = "relay-west" },
         { "offset time", j => j["generatedAt"] = "2026-11-20T04:00:00-08:00" },
         { "impossible date", j => j["generatedAt"] = "2026-02-30T12:00:00Z" },
         { "unknown schema version", j => j["schema"] = 2 },
@@ -109,8 +109,7 @@ public class StatusContractTests
     }
 
     [Theory]
-    [InlineData(600, true)]
-    [InlineData(601, false)]
+    [InlineData(600, true)] [InlineData(601, false)]
     [InlineData(-1, false)]
     public void A_file_over_ten_minutes_old_or_from_the_future_is_unavailable(int secondsAgo, bool fresh)
     {
@@ -121,10 +120,8 @@ public class StatusContractTests
     }
 
     [Theory]
-    [InlineData("delivery.generatedAt", "delivery")]
-    [InlineData("incidents.generatedAt", "incidents")]
-    [InlineData("systems.rows.0.generatedAt", "systems/f3")]
-    [InlineData("programs.rows.0.generatedAt", "programs/f7")]
+    [InlineData("delivery.generatedAt", "delivery")] [InlineData("incidents.generatedAt", "incidents")]
+    [InlineData("systems.rows.0.generatedAt", "systems/f3")] [InlineData("programs.rows.0.generatedAt", "programs/f7")]
     [InlineData("incidents.rows.0.generatedAt", "incidents/0")]
     public void A_stale_or_future_section_or_row_is_unavailable_and_degrades(string path, string key)
     {
@@ -149,32 +146,20 @@ public class StatusContractTests
     }
 
     [Theory]
-    [InlineData("delivery.minutesSinceLastMerge=59", Operational)]
-    [InlineData("delivery.minutesSinceLastMerge=60", Outage)]
+    [InlineData("delivery.minutesSinceLastMerge=59", Operational)] [InlineData("delivery.minutesSinceLastMerge=60", Outage)]
     [InlineData("delivery.minutesSinceLastMerge=600 delivery.readyPrs=0", Operational)]
-    [InlineData("delivery.mainCi=red delivery.mainCiMinutes=59", Degraded)]
-    [InlineData("delivery.mainCi=red delivery.mainCiMinutes=60", Outage)]
+    [InlineData("delivery.mainCi=red delivery.mainCiMinutes=59", Degraded)] [InlineData("delivery.mainCi=red delivery.mainCiMinutes=60", Outage)]
     [InlineData("delivery.mainCi=running delivery.mainCiMinutes=45", Operational)]
-    [InlineData("delivery.mainCi=running delivery.mainCiMinutes=46", Degraded)]
-    [InlineData("delivery.mainCi=unknown", Degraded)]
-    [InlineData("delivery.actionsQueued=25", Operational)]
-    [InlineData("delivery.actionsQueued=26", Degraded)]
-    [InlineData("delivery.actionsQueued=150", Degraded)]
-    [InlineData("delivery.actionsQueued=151", Outage)]
-    [InlineData("fleet.agentErrors=3", Operational)]
-    [InlineData("fleet.agentErrors=4", Degraded)]
-    [InlineData("fleet.buildersWorking=2 fleet.readyIssues=4", Operational)]
-    [InlineData("fleet.buildersWorking=2 fleet.readyIssues=5", Degraded)]
-    [InlineData("quota.restRemainingPercent=[20,90]", Operational)]
-    [InlineData("quota.restRemainingPercent=[90,19]", Degraded)]
-    [InlineData("quota.restRemainingPercent=[5]", Degraded)]
-    [InlineData("quota.restRemainingPercent=[4]", Outage)]
-    [InlineData("quota.restRemainingPercent=[]", Degraded)]
-    [InlineData("quota.modelsInUse=9", Operational)]
-    [InlineData("quota.modelsInUse=10", Degraded)]
-    [InlineData("incidents.rows.0.state=identified incidents.rows.0.resolvedAt=null", Degraded)]
-    [InlineData("systems.rows.0.state=degraded", Degraded)]
-    [InlineData("programs.rows.0.parityState=failed", Degraded)]
+    [InlineData("delivery.mainCi=running delivery.mainCiMinutes=46", Degraded)] [InlineData("delivery.mainCi=unknown", Degraded)]
+    [InlineData("delivery.actionsQueued=25", Operational)] [InlineData("delivery.actionsQueued=26", Degraded)]
+    [InlineData("delivery.actionsQueued=150", Degraded)] [InlineData("delivery.actionsQueued=151", Outage)]
+    [InlineData("fleet.agentErrors=3", Operational)] [InlineData("fleet.agentErrors=4", Degraded)]
+    [InlineData("fleet.buildersWorking=2 fleet.readyIssues=4", Operational)] [InlineData("fleet.buildersWorking=2 fleet.readyIssues=5", Degraded)]
+    [InlineData("quota.restRemainingPercent=[20,90]", Operational)] [InlineData("quota.restRemainingPercent=[90,19]", Degraded)]
+    [InlineData("quota.restRemainingPercent=[5]", Degraded)] [InlineData("quota.restRemainingPercent=[4]", Outage)]
+    [InlineData("quota.restRemainingPercent=[]", Degraded)] [InlineData("quota.modelsInUse=9", Operational)]
+    [InlineData("quota.modelsInUse=10", Degraded)] [InlineData("incidents.rows.0.state=identified incidents.rows.0.resolvedAt=null", Degraded)]
+    [InlineData("systems.rows.0.state=degraded", Degraded)] [InlineData("programs.rows.0.parityState=failed", Degraded)]
     [InlineData("delivery.actionsQueued=151 fleet.agentErrors=9", Outage)]
     public void The_banner_follows_the_documented_thresholds_at_every_boundary(string changes, StatusBanner expected)
     {
