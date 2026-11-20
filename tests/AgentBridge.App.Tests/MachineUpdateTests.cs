@@ -254,6 +254,64 @@ public sealed class MachineUpdateTests : IAsyncLifetime
         Assert.Empty(remoteHost.Sent(UpdateProtocol.Install));
     }
 
+    static UpdateCommandResult Refused(string code) => new(UpdateAck.Refused, "untrusted machine text") { Code = code };
+
+    // #3307: bad-release protection the machine could not check brings the confirmation back once,
+    // with PolicyLine; only confirming it carries unchecked, never a second such refusal or a halt.
+    [Fact]
+    public async Task A_policy_unreadable_refusal_asks_once_more_and_only_its_confirmation_carries_unchecked()
+    {
+        var row = await ListedAsync();
+        await NowState(Found with { CanUpdateNow = true, Busy = new() });
+        var first = row.TakeNow(row.PrepareNow()!)!;
+        Assert.False(first.Unchecked);
+        var policy = Assert.IsType<MachineUpdateNowPrompt>(row.PrepareNow(Refused(UpdateCode.PolicyUnreadable), first));
+        Assert.Equal(UpdateNowWords.PolicyLine, policy.Sheet!.Policy);
+        var choice = row.TakeNow(policy, confirmed: true)!;
+        Assert.True(choice.Unchecked);
+        Assert.NotNull(choice.Accept);
+        // The machine asking to confirm again keeps the press unchecked; a second refusal asks nothing.
+        var again = row.PrepareNow(new UpdateCommandResult(UpdateAck.Confirm) { State = Found with { CanUpdateNow = true, Busy = new() } }, choice)!;
+        var second = row.TakeNow(again, confirmed: true)!;
+        Assert.True(second.Unchecked);
+        Assert.Null(row.PrepareNow(Refused(UpdateCode.PolicyUnreadable), second));
+        var plain = row.PrepareNow()!;
+        Assert.Null(plain.Sheet);
+        var last = row.TakeNow(plain)!;
+        Assert.False(last.Unchecked);
+        Assert.Null(row.PrepareNow(Refused("halted"), last));
+        Assert.Empty(remoteHost.Sent(UpdateProtocol.Install));
+    }
+
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("superseded")]
+    [InlineData("removed")]
+    [InlineData("cancelled-in-flight")]
+    [InlineData("superseded-in-flight")]
+    public async Task A_cancelled_superseded_or_withdrawn_policy_warning_never_produces_an_unchecked_choice(string how)
+    {
+        var row = await ListedAsync();
+        await NowState(Found with { CanUpdateNow = true, Busy = new() });
+        var taken = row.TakeNow(row.PrepareNow()!)!;
+        if (how == "cancelled-in-flight") { row.CancelNow(); }
+        if (how == "superseded-in-flight") { Assert.NotNull(row.TakeNow(row.PrepareNow()!)); }
+        if (how.EndsWith("in-flight"))
+        {
+            // A late answer to the earlier press brings nothing back to sign.
+            Assert.Null(row.PrepareNow(Refused(UpdateCode.PolicyUnreadable), taken));
+            return;
+        }
+        var policy = row.PrepareNow(Refused(UpdateCode.PolicyUnreadable), taken)!;
+        if (how == "cancel") { Assert.Null(row.TakeNow(policy)); }
+        else if (how == "superseded") { Assert.Null(row.PrepareNow()!.Sheet); }
+        else { main.Remove(row.Key); }
+        Assert.True(policy.Cancelled);
+        Assert.Null(row.TakeNow(policy, confirmed: true));
+        Assert.Null(row.PrepareNow(Refused(UpdateCode.PolicyUnreadable), taken));
+        Assert.Empty(remoteHost.Sent(UpdateProtocol.Install));
+    }
+
     async Task NowState(UpdateState state)
     {
         await remoteHost.SendAsync(UpdateProtocol.Event, state);

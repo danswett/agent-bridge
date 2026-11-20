@@ -224,37 +224,6 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     }
 }
 
-// Another profile's app or host running from this installation, which an update would stop
-// whatever it is doing (Update.exe stops every process in the package, and starts only the
-// updating profile's app again). One that cannot be looked at counts: not knowing is not
-// permission.
-static class PackageProcesses
-{
-    public static string? Others(int? ownHost)
-    {
-        var root = Path.GetFullPath(AppContext.BaseDirectory);
-        foreach (var name in new[] { "AgentBridge", "agent-bridge-host" })
-        {
-            foreach (var p in System.Diagnostics.Process.GetProcessesByName(name))
-            {
-                using (p)
-                {
-                    if (p.Id == Environment.ProcessId || p.Id == ownHost) { continue; }
-                    string? path;
-                    try { path = p.MainModule?.FileName; }
-                    catch (InvalidOperationException) { continue; }
-                    catch (System.ComponentModel.Win32Exception) { return $"{name} (pid {p.Id}) runs and cannot be looked at"; }
-                    if (path is not null && path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return $"another profile's {(name == "AgentBridge" ? "app" : "host")} (pid {p.Id}) runs from this installation";
-                    }
-                }
-            }
-        }
-        return null;
-    }
-}
-
 // The app at sign-in, into the notification area, so toasts keep arriving after a restart: an
 // HKCU Run entry (per user, no admin). The host has its own logon task; the app is only its
 // window and toasts, so a plain Run entry is enough for it.

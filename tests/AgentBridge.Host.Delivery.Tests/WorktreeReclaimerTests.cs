@@ -34,6 +34,7 @@ public sealed class WorktreeReclaimerTests : IDisposable
         Git(root, "init", "-q", "-b", "main", origin);
         // Bytes as written, whatever this machine's git is configured to do with line endings.
         Git(origin, "config", "core.autocrlf", "false");
+        Git(origin, "config", "core.fsmonitor", "false");
         File.WriteAllText(Path.Combine(origin, "README.md"), "hello\n");
         File.WriteAllText(Path.Combine(origin, ".gitignore"), "hook/agent-bridge-hook\nhook/agent-bridge-hook.exe\n.env\n");
         Directory.CreateDirectory(Path.Combine(origin, "hook"));
@@ -44,13 +45,15 @@ public sealed class WorktreeReclaimerTests : IDisposable
         beforeCommit?.Invoke(origin);
         Commit(origin, "one");
         var clone = Path.Combine(root, name);
-        Git(root, "clone", "-q", "-c", "core.autocrlf=false", origin, clone);
+        Git(root, "clone", "-q", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", origin, clone);
         return clone;
     }
 
     static void Git(string dir, params string[] args)
     {
-        var r = AgentBridge.Host.Delivery.Launch.Git.Run(dir, args);
+        // Repository setup is not exercising the product's 30-second git deadline.
+        var r = AgentBridge.Host.Delivery.Launch.Git.Run(dir,
+            ["-c", "commit.gpgsign=false", "-c", "core.fsmonitor=false", .. args], timeout: TimeSpan.FromMinutes(2));
         Assert.True(r.Ok, $"git {string.Join(' ', args)}: {r.Said}");
     }
 
@@ -80,6 +83,23 @@ public sealed class WorktreeReclaimerTests : IDisposable
         .Where(f => !Path.GetRelativePath(dir, f).StartsWith(".git", StringComparison.Ordinal)).Order(StringComparer.Ordinal).Select(f => f + "=" + File.ReadAllText(f)));
 
     static string Head(string dir) => AgentBridge.Host.Delivery.Launch.Git.Run(dir, ["rev-parse", "HEAD"]).Output.Trim();
+
+    [Fact]
+    public void Fixture_commits_do_not_use_a_persons_signer_or_file_system_monitor()
+    {
+        var monitor = Path.Combine(root, "monitor-hook");
+        File.WriteAllText(monitor, "#!/bin/sh\nprintf invoked > \"$0.called\"\nexit 1\n");
+        if (!OperatingSystem.IsWindows()) { File.SetUnixFileMode(monitor, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); }
+        var repository = Repo("configured", beforeCommit: dir =>
+        {
+            Git(dir, "config", "commit.gpgsign", "true");
+            Git(dir, "config", "gpg.program", Path.Combine(root, "no-signer"));
+            Git(dir, "config", "core.fsmonitor", monitor);
+        });
+
+        Assert.False(string.IsNullOrEmpty(Head(repository)));
+        Assert.False(File.Exists(monitor + ".called"));
+    }
 
     // ---- the happy path ----
 

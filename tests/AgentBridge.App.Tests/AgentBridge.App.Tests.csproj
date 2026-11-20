@@ -18,6 +18,9 @@
   <ItemGroup>
     <Reference Include="Microsoft.CodeAnalysis" HintPath="$(MSBuildBinPath)\Roslyn\bincore\Microsoft.CodeAnalysis.dll" />
     <Reference Include="Microsoft.CodeAnalysis.CSharp" HintPath="$(MSBuildBinPath)\Roslyn\bincore\Microsoft.CodeAnalysis.CSharp.dll" />
+    <Compile Include="..\..\src\AgentBridge.App\SessionView.EndPin.cs" Link="SessionView.EndPin.cs" />
+    <Compile Include="..\..\src\AgentBridge.App\InstallBlockers.cs" Link="InstallBlockers.cs" />
+    <Compile Include="..\..\src\AgentBridge.App\SessionView.History.cs" Link="SessionView.History.cs" />
     <Compile Include="..\..\src\AgentBridge.App\SelfTest.NativeInputSetup.cs" Link="SelfTest.NativeInputSetup.cs" />
     <Compile Include="..\TestTimeoutDiagnostics.cs" Link="TestTimeoutDiagnostics.cs" />
     <!-- The generated motion resources the app loads, read by MotionTests as the app reads them. -->

@@ -169,6 +169,7 @@ public sealed class SessionService
     // diagnostics.get, through the relay only, to a device pinned as a person's (RemoteDiagnostics).
     public RemoteDiagnostics? Diagnostics { get; init; }
     public Lite.LiteReceiver? LiteReceiver { get; init; }
+    public Lite.LiteKill? LiteKill { get; init; }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -212,7 +213,7 @@ public sealed class SessionService
         HandleAsync(channel, op, data, shape, null);
 
     internal async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape,
-        AgentAuditLog? actionAudit, GateLaunchIngress? launchIngress = null)
+        AgentAuditLog? actionAudit, GateLaunchIngress? launchIngress = null, Func<ReplyIntent>? replyIntent = null)
     {
         switch (op)
         {
@@ -232,7 +233,7 @@ public sealed class SessionService
             case Ops.SessionAnswer:
                 return await AnswerAsync(channel, data, actionAudit);
             case Ops.SessionReply:
-                return await ReplyAsync(channel, data);
+                return await ReplyAsync(channel, data, replyIntent);
             case Ops.AttachmentStart or Ops.AttachmentChunk or Ops.AttachmentDiscard when attachments is not null:
                 return Attach(channel, op, data);
             case Ops.SessionStop:
@@ -266,6 +267,8 @@ public sealed class SessionService
                 return await transfers.ServeAsync(secure, data);
             case Lite.LiteReceiver.Op when LiteReceiver is not null && channel is SecureChannel secure:
                 return await LiteReceiver.ServeAsync(secure, data, CancellationToken.None);
+            case Lite.LiteKill.Op when LiteKill is not null && channel is SecureChannel secure:
+                return LiteKill.HandleKill(Lite.LiteChannel.Of(secure), data);
             // A person's device through the relay, with a command it signed. Never this machine's
             // pipe, which agents and the MCP server reach, nor the Home Assistant connector.
             case TrustProtocol.Answer when TrustAnswers is not null && channel is SecureChannel secure:
@@ -469,7 +472,9 @@ public sealed class SessionService
         Action<AnswerOutcome>? Prepare(Guid operation, Session session, Question question)
         {
             if (AnswerGate(session, question, operation, "person-client") is not { } gate) { return null; }
-            var intent = new AgentAuditEntry("local", gate.Operation.ToString(), "person:local", [], Ops.SessionAnswer,
+            gate = gate with { Path = channel is SecureChannel ? "relay" : "local" };
+            var principal = channel is SecureChannel relay ? $"person:{relay.PeerId}" : "person:local";
+            var intent = new AgentAuditEntry(gate.Path, gate.Operation.ToString(), principal, [], Ops.SessionAnswer,
                 gate.Incarnation.ToString(), "attempted", Gate: gate);
             if (audit is not { } writer || !writer.Append(intent)) { return null; }
             return outcome => writer.Append(intent with { Outcome = outcome == AnswerOutcome.Delivered ? "delivered" : "refused",
@@ -698,12 +703,13 @@ public sealed class SessionService
         return offered;
     }
 
-    async Task<ReplyResult> ReplyAsync(IProtocolChannel channel, JsonElement data)
+    async Task<ReplyResult> ReplyAsync(IProtocolChannel channel, JsonElement data, Func<ReplyIntent>? intent)
     {
         // As for answers: a request without an id or request UUID fails as a request, and
         // anything that can be read gets an outcome.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.reply needs an id, a request and text"); }
         var request = data.Deserialize<ReplyRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.reply needs an id, a request and text");
+        request = request with { IntentSource = intent };
         var (watch, progress) = Watch(request.Progress);
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);
