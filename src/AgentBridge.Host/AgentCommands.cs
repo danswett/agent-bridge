@@ -37,7 +37,7 @@ public static class AgentCommands
         if (verb == "lite")
         {
             // L6: no pipe needed. The running host reads the epoch file afresh, stops its sends and tells the other hosts.
-            var epoch = new Lite.LiteKill(folder, new Lite.NoLitePeers(), error.WriteLine).Kill();
+            var epoch = new Lite.LiteKill(folder, error.WriteLine).Kill();
             // The running host stays off only through the setting, so a failed write is a failed kill here.
             if (HostSettings.CurrentAgentMessaging(folder).RemoteEnabled) { error.WriteLine($"agent-bridge-host: kill epoch {epoch} saved, but agentMessaging.remote is still on; set it off"); return 1; }
             output.WriteLine($"own-agents messaging killed on this machine (epoch {epoch}); turning it on again takes config set agentMessaging.remote own-account here.");

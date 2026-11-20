@@ -18,17 +18,17 @@ public interface ILiteLink
     string Self { get; }
     string Account { get; }
     IReadOnlyList<PresenceEntry> Presence { get; }
-    Task<LiteAck> SendAsync(string peerId, object request, CancellationToken ct);
+    Task<LiteAck> SendAsync(string peerId, string account, object request, CancellationToken ct);
 }
 
-// AP5-lite L3 (#728, #1351): sends a signed own-agent envelope to a pinned host of the same account and reports
+// AP5-lite L3 (#728, #1351): sends a signed own-agent envelope to a present host of the same account (no pin) and reports
 // one typed outcome. Never resends, and never reports delivered without the receiver's acknowledgement.
 public sealed class AgentLiteSender(
-    ILiteMode mode, ILitePeers peers, ILiteLink link, Func<AgentCredential, bool> credentialLive, Func<IEnvelopeSigner?> signer,
+    ILiteMode mode, ILiteLink link, Func<AgentCredential, bool> credentialLive, Func<(IEnvelopeSigner Sign, byte[] Point)?> signer,
     byte[] staticPublic, TimeProvider? time = null, TimeSpan? ackTimeout = null, TimeSpan? watchEvery = null) : ILiteSender
 {
     public const string OfflineText = "that machine is offline; nothing was queued";
-    public const string NoCredential = "credential", NoSigner = "no-sign-key", NotPeer = LiteReceiver.NotPeer, Malformed = LiteReceiver.Malformed;
+    public const string NoCredential = "credential", NoSigner = "no-sign-key", NotPeer = LiteReceiver.NotPeer, Malformed = LiteReceiver.Malformed, Ambiguous = "ambiguousMachine";
     public const string TimedOut = "timeout", ModeSwitchedOff = "mode switched off", ChannelLost = "channel lost", BadAck = "unreadable acknowledgement";
 
     readonly TimeProvider time = time ?? TimeProvider.System;
@@ -51,16 +51,23 @@ public sealed class AgentLiteSender(
             : caller.Kind != "session" || string.IsNullOrEmpty(caller.Session) || caller.Principal is not null)
             || !credentialLive(caller)) { return Out(LiteKind.Refused, NoCredential); }
 
-        var peer = peers.All().FirstOrDefault(p => p.DeviceId == input.Machine || string.Equals(p.Name, input.Machine, StringComparison.OrdinalIgnoreCase));
-        if (peer is null) { return Out(LiteKind.Refused, NotPeer); }
-        if (!link.Presence.Any(p => p.Id == peer.DeviceId && p.Kind == "host")) { return Out(LiteKind.Undeliverable, OfflineText); }
-        if (signer() is not { } sign) { return Out(LiteKind.Refused, NoSigner); }
+        // Presence comes from the relay, never from the caller: a device id, or a host name that names exactly one present host.
+        // One account is read here and held through signing and the opened channel, so a sign-in meanwhile sends nothing.
+        var account = link.Account;
+        var ids = link.Presence.Where(p => p.Kind == "host" && p.Id != link.Self && (p.Id == input.Machine
+            || string.Equals(p.Name, input.Machine, StringComparison.OrdinalIgnoreCase))).Select(p => p.Id).Distinct().ToList();
+        if (ids.Count > 1) { return Out(LiteKind.Refused, Ambiguous); }
+        if (ids.Count == 0 || string.IsNullOrEmpty(account)) { return Out(LiteKind.Undeliverable, OfflineText); }
+        var peerId = ids[0];
+        if (signer() is not { } key) { return Out(LiteKind.Refused, NoSigner); }
+        // Making the key can wait on its file lock; a caller that lapsed meanwhile signs nothing.
+        if (!credentialLive(caller)) { return Out(LiteKind.Refused, NoCredential); }
 
-        var from = new LiteSender(link.Account, link.Self, Codec.Base64Url(SHA256.HashData(staticPublic)), caller.Session, script ? "" : instance,
+        var from = new LiteSender(account, link.Self, Codec.Base64Url(SHA256.HashData(staticPublic)), caller.Session, script ? "" : instance,
             Codec.Base64Url(SHA256.HashData(Encoding.UTF8.GetBytes(caller.Id))[..16]), script ? "" : "agent", script ? "" : "agent-bridge",
             script ? "script" : "agent", script ? caller.Principal : null);
         byte[] envelope;
-        try { envelope = LiteProfile.Seal(from, new LiteTarget(peer.DeviceId, input.Session, Zero12), request, data, time.GetUtcNow().ToUnixTimeSeconds(), sign); }
+        try { envelope = LiteProfile.Seal(from, new LiteTarget(peerId, input.Session, Zero12), request, data, time.GetUtcNow().ToUnixTimeSeconds(), key.Sign); }
         catch (EnvelopeException) { return Out(LiteKind.Refused, Malformed); }
 
         using var flight = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -82,7 +89,7 @@ public sealed class AgentLiteSender(
         flight.CancelAfter(ackTimeout);
         try
         {
-            var ack = await link.SendAsync(peer.DeviceId, new { envelope = Codec.Base64Url(envelope), text = input.Text, killEpoch = mode.KillEpoch }, flight.Token);
+            var ack = await link.SendAsync(peerId, account, new { envelope = Codec.Base64Url(envelope), text = input.Text, killEpoch = mode.KillEpoch, signPoint = Codec.Base64Url(key.Point) }, flight.Token);
             if (ack.KillEpoch > mode.KillEpoch) { mode.RaiseEpoch(ack.KillEpoch); }
             if (ack.Request != request) { return Out(LiteKind.Unconfirmed, BadAck); }
             return ack.Status switch
@@ -100,17 +107,25 @@ public sealed class AgentLiteSender(
         finally { watching.Cancel(); await watcher; }
     }
 
-    // The host's own sender: the agent signing key is opened once and held, and credentials are judged by the store.
-    public static AgentLiteSender ForHost(string profileFolder, ILiteMode mode, ILitePeers peers, ILiteLink link, AgentCredentials? credentials, byte[] staticPublic)
+    // The host's own sender; credentials are judged by the store.
+    public static AgentLiteSender ForHost(string profileFolder, ILiteMode mode, ILiteLink link, AgentCredentials? credentials, byte[] staticPublic) =>
+        new(mode, link, c => credentials?.IsLive(c) == true, HostSigner(profileFolder, mode), staticPublic);
+
+    // The agent signing key is made on first use while the mode is on (no pin or setup step), then held.
+    // A damaged key file is refused, never replaced.
+    public static Func<(IEnvelopeSigner Sign, byte[] Point)?> HostSigner(string profileFolder, ILiteMode mode)
     {
         AgentSignKey? key = null;
         var gate = new object();
-        IEnvelopeSigner? Signer()
+        return () =>
         {
-            lock (gate) { key ??= AgentSignKey.Open(profileFolder); }
-            return key is null ? null : new KeySigner(key);
-        }
-        return new AgentLiteSender(mode, peers, link, c => credentials?.IsLive(c) == true, Signer, staticPublic);
+            lock (gate)
+            {
+                try { key ??= AgentSignKey.OpenOrCreate(profileFolder, mode.On); }
+                catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or CryptographicException) { return null; }
+                return (new KeySigner(key), key.PublicPoint);
+            }
+        };
     }
 
     sealed class KeySigner(AgentSignKey key) : IEnvelopeSigner
@@ -130,7 +145,7 @@ public sealed class RelayLiteLink : ILiteLink
     public string Account => now?.Relay.AccountId ?? "";
     public IReadOnlyList<PresenceEntry> Presence => now?.Relay.Presence ?? [];
 
-    public async Task<LiteAck> SendAsync(string peerId, object request, CancellationToken ct)
+    public async Task<LiteAck> SendAsync(string peerId, string account, object request, CancellationToken ct)
     {
         var l = Volatile.Read(ref now) ?? throw new LitePeerOfflineException("not connected to the relay");
         SecureChannel ch;
@@ -138,6 +153,9 @@ public sealed class RelayLiteLink : ILiteLink
         catch (IOException e) { throw new LitePeerOfflineException(e.Message); }
         try
         {
+            // The opened channel is judged by the same rule the receiver uses; nothing is sent to a peer it refuses.
+            var c = LiteChannel.Of(ch);
+            if ((c.Account != account ? LiteReceiver.NotSameAccount : c.Untrusted) is { } why) { throw new LitePeerOfflineException($"not a present host of this account ({why})"); }
             var response = await ch.RequestAsync(LiteReceiver.Op, request, TimeSpan.FromSeconds(10), ct);
             if (!response.TryGetProperty("ok", out var ok) || ok.ValueKind != JsonValueKind.True) { return new LiteAck("refused", "peerError", "", 0); }
             return response.GetProperty("result").Deserialize<LiteAck>() ?? throw new JsonException("empty acknowledgement");
