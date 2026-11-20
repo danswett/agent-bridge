@@ -22,7 +22,6 @@ public sealed class LiteKill : ILiteMode
     const long MaxSkewSeconds = 86400;
 
     readonly string folder;
-    readonly ILitePeers peers;
     readonly Action<string> log;
     readonly TimeProvider time;
     readonly ConcurrentDictionary<CancellationTokenSource, byte> inFlight = new();
@@ -33,10 +32,9 @@ public sealed class LiteKill : ILiteMode
     long pushed;
     long seen;
 
-    public LiteKill(string folder, ILitePeers peers, Action<string>? log = null, TimeProvider? time = null)
+    public LiteKill(string folder, Action<string>? log = null, TimeProvider? time = null)
     {
         this.folder = folder;
-        this.peers = peers;
         this.log = log ?? (_ => { });
         this.time = time ?? TimeProvider.System;
         // The epoch already on disk is the baseline; only a higher one later is a new kill.
@@ -113,13 +111,13 @@ public sealed class LiteKill : ILiteMode
         return epoch;
     }
 
-    // What a lite send or ack from a device carried (killEpoch). Believed only from a pinned peer.
-    public bool Observe(string deviceId, long epoch)
+    // What a lite send or ack carried (killEpoch). Believed only on a channel LiteChannel.Untrusted admits, as sends are.
+    public bool Observe(LiteChannel from, long epoch)
     {
         if (epoch <= KillEpoch) { return false; }
-        if (!peers.TryFind(deviceId, out _))
+        if (from.Untrusted is { } why)
         {
-            log($"lite: ignored a kill epoch from {Short(deviceId)}, which is not a pinned own-agents peer");
+            log($"lite: ignored a kill epoch from {Short(from.PeerId)} ({why})");
             return false;
         }
         return TryRaise(epoch);
@@ -156,13 +154,13 @@ public sealed class LiteKill : ILiteMode
         catch (Exception e) when (e is OperationCanceledException or ObjectDisposedException) { }
     }
 
-    // agent.lite.kill, through SessionService after the trusted-peer role check: only a pinned own
-    // host, and only to turn the mode off.
-    public object HandleKill(string peerId, string peerKind, JsonElement data)
+    // agent.lite.kill, through SessionService after the trusted-peer role check: only a present same-account host
+    // (no pin), and only to turn the mode off.
+    public object HandleKill(LiteChannel from, JsonElement data)
     {
-        if (peerKind != UsagePeers.HostKind || !peers.TryFind(peerId, out _))
+        if (from.Untrusted is { } why)
         {
-            log($"lite: ignored {Op} from {Short(peerId)}, which is not a pinned own-agents peer");
+            log($"lite: ignored {Op} from {Short(from.PeerId)} ({why})");
             return new { applied = false };
         }
         if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("epoch", out var e) || e.ValueKind != JsonValueKind.Number || !e.TryGetInt64(out var epoch))
@@ -175,7 +173,7 @@ public sealed class LiteKill : ILiteMode
         return new { applied, epoch = KillEpoch };
     }
 
-    // Tells every connected pinned host of the account the latest epoch, when it is newer than the
+    // Tells every present host of the account the latest epoch (the hub checks each static key), when it is newer than the
     // last told. Called on a short tick, which is also how a kill made by the command in another
     // process reaches the other machines.
     public async Task PushAsync(RelayClient relay, ChannelHub hub, CancellationToken ct = default)
@@ -184,13 +182,14 @@ public sealed class LiteKill : ILiteMode
         if (epoch == 0 || epoch <= Interlocked.Read(ref pushed)) { return; }
         var told = 0;
         var failed = false;
-        foreach (var p in relay.Snapshot.Presence.Where(p => p.Kind == UsagePeers.HostKind && p.Id != relay.DeviceId && peers.TryFind(p.Id, out _)))
+        foreach (var p in relay.Snapshot.Presence.Where(p => p.Kind == UsagePeers.HostKind && p.Id != relay.DeviceId))
         {
             SecureChannel? ch = null;
             try
             {
                 ch = await hub.OpenAsync(p.Id, TimeSpan.FromSeconds(10));
-                // Told once the peer holds this epoch, or refused us as not its pinned host; a clock refusal is tried again.
+                if (LiteChannel.Of(ch).Untrusted is { } why) { failed = true; log($"lite: did not tell {Short(p.Id)} of the kill ({why})"); continue; }
+                // Told once the peer holds this epoch, or refused us as untrusted (no epoch); a clock refusal is tried again.
                 var answer = await ch.RequestAsync(Op, new { epoch }, TimeSpan.FromSeconds(10), ct);
                 if (answer.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True && answer.TryGetProperty("result", out var result)
                     && result.ValueKind == JsonValueKind.Object && result.TryGetProperty("applied", out var judged) && judged.ValueKind is JsonValueKind.True or JsonValueKind.False

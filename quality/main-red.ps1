@@ -116,10 +116,15 @@ function Get-QuarantineTest([string]$Entry) {
 function Request-Quarantine([long]$RunId, [string]$Test, [string]$Repository) {
     # Default off: the generator writes a branch and a draft PR, so it runs only while Quality has
     # turned MAIN_RED_QUARANTINE on (it rechecks the repository variable before each write).
-    if (-not [string]::Equals($env:MAIN_RED_QUARANTINE, 'on', [StringComparison]::Ordinal)) { Write-Warning "Quarantine of $Test recorded only: MAIN_RED_QUARANTINE is not on."; return }
-    if (-not (Test-Path -LiteralPath $script:QuarantineScript -PathType Leaf)) { Write-Warning "Quarantine of $Test recorded only: no generator."; return }
-    try { & $script:QuarantineScript -RunId $RunId -TestName $Test -Repository $Repository -Hours 24 | ForEach-Object { Write-Host "quarantine-pr: $_" } }
-    catch { Write-Warning "Quarantine generator refused $($Test): $($_.Exception.Message)" }
+    if (-not [string]::Equals($env:MAIN_RED_QUARANTINE, 'on', [StringComparison]::Ordinal)) { Write-Warning "Quarantine of $Test recorded only: MAIN_RED_QUARANTINE is not on."; return $false }
+    if (-not (Test-Path -LiteralPath $script:QuarantineScript -PathType Leaf)) { Write-Warning "Quarantine of $Test recorded only: no generator."; return $false }
+    try {
+        $global:LASTEXITCODE = 0
+        & $script:QuarantineScript -RunId $RunId -TestName $Test -Repository $Repository -Hours 24 | ForEach-Object { Write-Host "quarantine-pr: $_" }
+        if ($LASTEXITCODE -ne 0) { throw "generator exited $LASTEXITCODE" }
+        return $true
+    }
+    catch { Write-Warning "Quarantine generator refused $($Test): $($_.Exception.Message)"; return $false }
     finally { $global:LASTEXITCODE = 0 }
 }
 
@@ -222,7 +227,7 @@ function Publish-MainRed($run, [string]$Repository, $Recovery) {
     $body = Format-MainRedBody $run $Repository $jobs $postMergeOnly
     # B3b: the same single post-merge test failing in two entries in a row proposes one quarantine, once
     # per unrecovered streak. It is a line in this alert and a generator call, never a status, check or label.
-    $test = Get-QuarantineTest $body; $request = $false
+    $test = Get-QuarantineTest $body
     if ($test -and $issue) {
         $entries = @(@($issue.body) + @($comments | ForEach-Object { $_.body }) | Where-Object { $_ -clike 'main-red: *' })
         if ($Recovery) {
@@ -232,12 +237,19 @@ function Publish-MainRed($run, [string]$Repository, $Recovery) {
                         ([long]$Matches[1] -eq $Recovery.id -and [long]$Matches[2] -gt $Recovery.run_attempt))
                 })
         }
-        $flag = "quarantine-request: test=$test"
-        $request = $entries.Count -gt 0 -and [string]::Equals((Get-QuarantineTest $entries[-1]), $test, [StringComparison]::Ordinal) -and
-            @($entries | Where-Object { [Array]::IndexOf([string[]]($_ -split '\r?\n'), $flag) -ge 0 }).Count -eq 0
-        if ($request) {
+        $lines = @($entries -split '\r?\n')
+        $intent = @($lines | Where-Object { $_ -clike 'quarantine-request: test=*' } | Select-Object -First 1)
+        $eligible = $entries.Count -gt 0 -and [string]::Equals((Get-QuarantineTest $entries[-1]), $test, [StringComparison]::Ordinal)
+        $flag = if ($intent.Count) { $intent[0] } else { "quarantine-request: test=$test" }
+        if ($eligible -and -not $intent.Count) {
             $body += "`n$flag`nSecond failure in a row: one draft fixes-main quarantine, 24 h expiry, refused unless " +
                 "MAIN_RED_QUARANTINE is on: ``pwsh -NoProfile -File quality/quarantine-pr.ps1 -RunId $RunId -TestName $test -Repository $Repository -Hours 24``"
+        }
+        $completed = "quarantine-completed: test=$test"
+        # A refusal leaves the streak's one intent pending for a later eligible attempt.
+        if ($eligible -and [string]::Equals($flag, "quarantine-request: test=$test", [StringComparison]::Ordinal) -and
+            [Array]::IndexOf([string[]]$lines, $completed) -lt 0 -and (Request-Quarantine $RunId $test $Repository)) {
+            $body += "`n$completed"
         }
     }
     if ($issue) { Invoke-Gh issue comment $issue.number --repo $Repository --body $body | Out-Null }
@@ -246,7 +258,6 @@ function Publish-MainRed($run, [string]$Repository, $Recovery) {
         Invoke-Gh label create main-red --repo $Repository --color B60205 --description 'CI is red on main' --force | Out-Null
         Invoke-Gh issue create --repo $Repository --title $title --label main-red --body $body | Out-Null
     }
-    if ($request) { Request-Quarantine $RunId $test $Repository }
 }
 
 if ($MyInvocation.InvocationName -eq '.') { return }

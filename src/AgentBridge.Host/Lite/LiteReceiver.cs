@@ -17,11 +17,20 @@ public sealed record LiteAck(
     [property: JsonPropertyName("killEpoch")] long KillEpoch);
 
 // What the receiver needs to know about the channel a request came in on (read from the SecureChannel and the relay).
-public sealed record LiteChannel(string PeerId, string PeerKind, byte[]? PeerStatic, string Self, string Account, bool InPresence);
+public sealed record LiteChannel(string PeerId, string PeerKind, byte[]? PeerStatic, string Self, string Account, bool InPresence)
+{
+    public static LiteChannel Of(SecureChannel c) => new(c.PeerId, c.PeerKind, c.PeerStatic, c.Relay.DeviceId, c.Relay.AccountId,
+        c.Relay.Presence.Any(p => p.Id == c.PeerId && p.Kind == "host"));
+
+    // The one trust rule for lite sends and kills (owner, Nov 19): a host the relay lists as present on this signed-in account,
+    // whose channel static key hashes to its device id. No pin. Null when trusted, else the refusal code.
+    public string? Untrusted => PeerKind != "host" || !InPresence || string.IsNullOrEmpty(Account) ? LiteReceiver.NotSameAccount
+        : PeerStatic is not { } s || Wire.DeviceId(s) != PeerId ? LiteReceiver.NotPeer : null;
+}
 
 // AP5-lite L4 (#728): serves agent.lite.send. Refuses in a fixed order, each with its own code, and answers
 // delivered only when the delivery interface says it typed the text. Types nothing itself.
-public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver deliver, TimeProvider? time = null)
+public sealed class LiteReceiver(ILiteMode mode, ILiteDeliver deliver, TimeProvider? time = null)
 {
     public const string Op = "agent.lite.send";
     public const int MaxText = 4096;
@@ -34,18 +43,16 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
 
     public async Task<object?> ServeAsync(SecureChannel channel, JsonElement data, CancellationToken ct)
     {
-        var seen = new LiteChannel(channel.PeerId, channel.PeerKind, channel.PeerStatic, channel.Relay.DeviceId, channel.Relay.AccountId,
-            channel.Relay.Presence.Any(p => p.Id == channel.PeerId && p.Kind == "host"));
+        var seen = LiteChannel.Of(channel);
         return await ReceiveAsync(seen, data, ct);
     }
 
     public async Task<LiteAck> ReceiveAsync(LiteChannel channel, JsonElement data, CancellationToken ct)
     {
         if (!mode.On) { return new LiteAck("refused", Off, "", mode.KillEpoch); }
-        if (channel.PeerKind != "host" || !channel.InPresence) { return Refuse(NotSameAccount); }
-        if (!peers.TryFind(channel.PeerId, out var peer) || channel.PeerStatic is not { } staticKey
-            || Wire.DeviceId(staticKey) != channel.PeerId) { return Refuse(NotPeer); }
-        // L6: the sender's kill epoch rides unsigned, believed only from this authenticated pinned host, and only turns off.
+        if (channel.Untrusted is { } untrusted) { return Refuse(untrusted); }
+        var staticKey = channel.PeerStatic!;
+        // L6: the sender's kill epoch rides unsigned, believed only from this authenticated present host, and only turns off.
         if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("killEpoch", out var k) && k.ValueKind == JsonValueKind.Number
             && k.TryGetInt64(out var killEpoch) && killEpoch > mode.KillEpoch)
         {
@@ -53,16 +60,19 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
             if (!mode.On) { return Refuse(Off); }
         }
 
+        // signPoint is the sender's agent signing key. It is believed only because it arrived on this channel, which the
+        // sender's device static key authenticates, and the envelope it verifies must still name that device and key.
         string? text; UnverifiedEnvelope envelope;
         if (data.ValueKind != JsonValueKind.Object
             || !data.TryGetProperty("envelope", out var e) || e.ValueKind != JsonValueKind.String
             || !data.TryGetProperty("text", out var t) || t.ValueKind != JsonValueKind.String
+            || !data.TryGetProperty("signPoint", out var p) || p.ValueKind != JsonValueKind.String
             || (text = t.GetString()) is null || text.Length > MaxText
-            || !Codec.TryBase64Url(e.GetString()!, out var bytes)) { return Refuse(Malformed); }
+            || !Codec.TryBase64Url(e.GetString()!, out var bytes) || !Codec.TryBase64Url(p.GetString()!, out var signPoint)) { return Refuse(Malformed); }
         try { envelope = Envelope.Parse(bytes); }
         catch (EnvelopeException x) { return Refuse(x.Code); }
 
-        VerifiedEnvelope verified; try { verified = LiteProfile.Check(envelope, peer.SignPoint, channel.Account, Encoding.UTF8.GetBytes(text), time.GetUtcNow().ToUnixTimeSeconds()); }
+        VerifiedEnvelope verified; try { verified = LiteProfile.Check(envelope, signPoint, channel.Account, Encoding.UTF8.GetBytes(text), time.GetUtcNow().ToUnixTimeSeconds()); }
         catch (EnvelopeException x) { return Refuse(x.Code); }
 
         var body = verified.Body; // trusted now: must name this channel's peer and this machine

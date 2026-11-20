@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -25,12 +26,16 @@ public sealed partial class HaConnector
     // The inbox shows only its oldest undelivered entry, so what a restart left there comes back one at
     // a time: the oldest first, and each next one once the one before is marked delivered, all ahead of
     // anything queued since (which the inbox holds after them). Marks owed go first, in the order taken.
+    // #3359: an ended session whose entries could not be dropped is dropped before its id restores anything.
+    // A mark that failed is retried here, but Since stays the lifetime's first restore.
     bool Restore(Published p)
     {
         var log = p.Reply.Log;
-        if (log.Restored || Inbox is null) { return true; }
+        if (Inbox is null) { return true; }
+        if (undiscarded.ContainsKey(p.Node) && !Discard(p.Node)) { return false; }
+        if (log.Restored) { return true; }
         if (!Mark(p)) { return false; }
-        log.Since = time.GetUtcNow();
+        if (log.Since == default) { log.Since = time.GetUtcNow(); }
         return log.Restored = true;
     }
 
@@ -70,14 +75,34 @@ public sealed partial class HaConnector
         return kept.DeliveredAt < p.Reply.Log.Since ? ("unconfirmed", null) : (null, "reply inbox unavailable");
     }
 
-    // A session's end drops its queue, and a session back under the same id starts empty: its entries are
-    // marked delivered, the only way the inbox lets them go.
-    void Discard(IEnumerable<string> sessionIds)
+    // #3359: with no question open, a rid the inbox marked delivered before this lifetime is a duplicate too.
+    // An unreadable inbox leaves the reply to the rids remembered in memory, as before the inbox.
+    bool DeliveredBefore(Published p, string rid)
     {
-        foreach (var node in sessionIds.Select(HaContract.NodeId))
+        if (Inbox is not { } box || !Restore(p)) { return false; }
+        InboxMessage? kept = null;
+        return Durably("look up a reply", () => kept = box.Find(p.Node, rid)) && kept?.DeliveredAt < p.Reply.Log.Since;
+    }
+
+    // A session's end drops its queue, and a session back under the same id starts empty: its entries are
+    // marked delivered, the only way the inbox lets them go. One that fails is tried again (#3359).
+    readonly ConcurrentDictionary<string, byte> undiscarded = new(StringComparer.Ordinal);
+
+    void Ended(string sessionId) => undiscarded.TryAdd(HaContract.NodeId(sessionId), 0);
+
+    void Discard()
+    {
+        foreach (var node in undiscarded.Keys) { Discard(node); }
+    }
+
+    bool Discard(string node)
+    {
+        if (Inbox is { } box && !Durably("drop an ended session's replies", () => { while (box.Peek(node) is { } m) { box.Deliver(node, m.Rid, time.GetUtcNow()); } }))
         {
-            if (Inbox is { } box) { Durably("drop an ended session's replies", () => { while (box.Peek(node) is { } m) { box.Deliver(node, m.Rid, time.GetUtcNow()); } }); }
+            return false;
         }
+        undiscarded.TryRemove(node, out _);
+        return true;
     }
 
     // The Send presses remembered for a session. For tests.
@@ -201,7 +226,7 @@ public sealed partial class HaConnector
             var read = await CardReplyAsync(sessionId, p, next, ct, queued: true);
             p.Reply.Log.Queued.RemoveAt(0);
             if (Inbox is not null && CleanRid(Str(next.Attributes, "rid")) is { } rid) { p.Reply.Log.Marks.Add(rid); }
-            Mark(p);
+            if (!Mark(p)) { p.Reply.Log.Restored = false; }
             if (read == CardRead.Delivering) { return true; }
         }
         return false;

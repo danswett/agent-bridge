@@ -268,7 +268,7 @@ public sealed class SessionService
             case Lite.LiteReceiver.Op when LiteReceiver is not null && channel is SecureChannel secure:
                 return await LiteReceiver.ServeAsync(secure, data, CancellationToken.None);
             case Lite.LiteKill.Op when LiteKill is not null && channel is SecureChannel secure:
-                return LiteKill.HandleKill(secure.PeerId, secure.PeerKind, data);
+                return LiteKill.HandleKill(Lite.LiteChannel.Of(secure), data);
             // A person's device through the relay, with a command it signed. Never this machine's
             // pipe, which agents and the MCP server reach, nor the Home Assistant connector.
             case TrustProtocol.Answer when TrustAnswers is not null && channel is SecureChannel secure:

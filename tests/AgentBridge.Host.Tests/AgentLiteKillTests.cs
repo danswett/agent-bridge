@@ -7,19 +7,11 @@ namespace AgentBridge.Host.Tests;
 
 public sealed class AgentLiteKillTests : IDisposable
 {
-    const string Pinned = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const string Stranger = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    // "Pinned" is historical: no pin exists; it is a present same-account host whose static key hashes to its id.
+    static readonly byte[] Key = [.. Enumerable.Range(1, 32).Select(i => (byte)i)];
+    static readonly LiteChannel Pinned = new(AgentBridge.Transport.Wire.DeviceId(Key), "host", Key, "self", "account", true);
+    static readonly LiteChannel Stranger = Pinned with { InPresence = false };
     readonly string root = Path.Combine(Path.GetTempPath(), "ablite-" + Guid.NewGuid().ToString("N")[..8]);
-
-    sealed class Peers(params string[] ids) : ILitePeers
-    {
-        public bool TryFind(string deviceId, out LitePeer peer)
-        {
-            peer = new LitePeer(deviceId, [], "peer");
-            return ids.Contains(deviceId);
-        }
-        public IReadOnlyList<LitePeer> All() => [];
-    }
 
     sealed class WatchClock(DateTimeOffset start) : FakeTimeProvider(start)
     {
@@ -48,7 +40,7 @@ public sealed class AgentLiteKillTests : IDisposable
     static void TurnOn(string folder) =>
         Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.remote", "own-account"], folder, TextWriter.Null, TextWriter.Null));
 
-    LiteKill Host(string folder, params string[] pinned) => new(folder, new Peers(pinned));
+    LiteKill Host(string folder) => new(folder);
 
     static JsonElement Epoch(long n) => JsonDocument.Parse($"{{\"epoch\":{n}}}").RootElement;
 
@@ -67,24 +59,26 @@ public sealed class AgentLiteKillTests : IDisposable
     [Fact]
     public void A_higher_epoch_from_a_pinned_peer_turns_it_off()
     {
-        var lite = Host(NewHost("a"), Pinned);
+        var lite = Host(NewHost("a"));
         Assert.True(lite.Observe(Pinned, 5));
         Assert.False(lite.On);
         Assert.Equal(5, lite.KillEpoch);
     }
 
     [Fact]
-    public void An_unpinned_or_unknown_sender_does_nothing()
+    public void An_absent_other_account_or_wrong_key_sender_does_nothing()
     {
         var logged = new List<string>();
-        var lite = new LiteKill(NewHost("a"), new Peers(Pinned), logged.Add);
+        var lite = new LiteKill(NewHost("a"), logged.Add);
         Assert.False(lite.Observe(Stranger, 99));
+        Assert.False(lite.Observe(Pinned with { Account = "" }, 99));
+        Assert.False(lite.Observe(Pinned with { PeerStatic = [.. Key.Reverse()] }, 99));
         Assert.True(lite.On);
         Assert.Equal(0, lite.KillEpoch);
-        Assert.Contains(logged, l => l.Contains("not a pinned"));
-        var refused = JsonSerializer.Serialize(lite.HandleKill(Stranger, "host", Epoch(99)));
+        Assert.Contains(logged, l => l.Contains(LiteReceiver.NotPeer));
+        var refused = JsonSerializer.Serialize(lite.HandleKill(Stranger, Epoch(99)));
         Assert.Contains("false", refused);
-        Assert.Contains("false", JsonSerializer.Serialize(lite.HandleKill(Pinned, "person", Epoch(99))));
+        Assert.Contains("false", JsonSerializer.Serialize(lite.HandleKill(Pinned with { PeerKind = "person" }, Epoch(99))));
         Assert.True(lite.On);
     }
 
@@ -92,7 +86,7 @@ public sealed class AgentLiteKillTests : IDisposable
     public void A_lower_or_equal_epoch_does_nothing()
     {
         var folder = NewHost("a");
-        var lite = Host(folder, Pinned);
+        var lite = Host(folder);
         lite.RaiseEpoch(10);
         TurnOn(folder);
         Assert.False(lite.Observe(Pinned, 10));
@@ -105,10 +99,10 @@ public sealed class AgentLiteKillTests : IDisposable
     public void Nothing_a_peer_sends_can_turn_the_mode_on()
     {
         var folder = NewHost("a");
-        var lite = Host(folder, Pinned);
+        var lite = Host(folder);
         lite.Kill();
-        lite.HandleKill(Pinned, "host", Epoch(0));
-        lite.HandleKill(Pinned, "host", Epoch(-1));
+        lite.HandleKill(Pinned, Epoch(0));
+        lite.HandleKill(Pinned, Epoch(-1));
         lite.Observe(Pinned, long.MaxValue);
         Assert.False(lite.On);
         // Only a person at the machine, with the setting, brings it back.
@@ -119,7 +113,7 @@ public sealed class AgentLiteKillTests : IDisposable
     [Fact]
     public void An_epoch_far_ahead_of_the_clock_is_not_believed()
     {
-        var lite = Host(NewHost("a"), Pinned);
+        var lite = Host(NewHost("a"));
         Assert.False(lite.Observe(Pinned, long.MaxValue));
         Assert.True(lite.On);
         Assert.Equal(0, lite.KillEpoch);
@@ -150,7 +144,7 @@ public sealed class AgentLiteKillTests : IDisposable
     public void The_epoch_survives_a_restart_and_only_rises()
     {
         var folder = NewHost("a");
-        var first = Host(folder, Pinned);
+        var first = Host(folder);
         first.RaiseEpoch(42);
         first.RaiseEpoch(7);
         Assert.Equal(42, Host(folder).KillEpoch);
@@ -159,12 +153,12 @@ public sealed class AgentLiteKillTests : IDisposable
     }
 
     [Fact]
-    public void A_kill_on_one_host_reaches_another_pinned_host()
+    public void A_kill_on_one_host_reaches_another_present_host_with_no_pin()
     {
         var a = Host(NewHost("a"));
-        var b = Host(NewHost("b"), Pinned);
+        var b = Host(NewHost("b"));
         var epoch = a.Kill();
-        b.HandleKill(Pinned, "host", Epoch(epoch));
+        b.HandleKill(Pinned, Epoch(epoch));
         Assert.False(b.On);
         Assert.Equal(epoch, b.KillEpoch);
     }
@@ -174,7 +168,7 @@ public sealed class AgentLiteKillTests : IDisposable
     {
         var folder = NewHost("a");
         Directory.CreateDirectory(Path.Combine(folder, LiteKill.FileName));
-        var lite = Host(folder, Pinned);
+        var lite = Host(folder);
         Assert.True(lite.Observe(Pinned, 5));
         Assert.False(lite.On);
         lite.Kill();
@@ -184,19 +178,19 @@ public sealed class AgentLiteKillTests : IDisposable
     [Fact]
     public void A_rejected_epoch_is_not_applied_and_does_not_silence_the_next_push()
     {
-        var lite = Host(NewHost("a"), Pinned);
+        var lite = Host(NewHost("a"));
         var far = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 10 * 86400;
-        Assert.Equal(false, ((dynamic)lite.HandleKill(Pinned, "host", Epoch(far))).applied);
+        Assert.Equal(false, ((dynamic)lite.HandleKill(Pinned, Epoch(far))).applied);
         Assert.True(lite.On);
-        Assert.Equal(true, ((dynamic)lite.HandleKill(Pinned, "host", Epoch(5))).applied);
+        Assert.Equal(true, ((dynamic)lite.HandleKill(Pinned, Epoch(5))).applied);
     }
 
     [Fact]
-    public void HandleKill_ignores_a_peer_that_is_not_a_pinned_host()
+    public void HandleKill_ignores_a_peer_that_is_not_a_present_same_account_host()
     {
-        var lite = Host(NewHost("a"), Pinned);
-        Assert.Equal(false, ((dynamic)lite.HandleKill(Pinned, "phone", Epoch(5))).applied);
-        Assert.Equal(false, ((dynamic)lite.HandleKill(Stranger, "host", Epoch(5))).applied);
+        var lite = Host(NewHost("a"));
+        Assert.Equal(false, ((dynamic)lite.HandleKill(Pinned with { PeerKind = "phone" }, Epoch(5))).applied);
+        Assert.Equal(false, ((dynamic)lite.HandleKill(Stranger, Epoch(5))).applied);
         Assert.True(lite.On);
     }
 
@@ -204,7 +198,7 @@ public sealed class AgentLiteKillTests : IDisposable
     public void An_unreadable_epoch_file_stays_off_and_does_not_replay_a_lower_kill()
     {
         var folder = NewHost("a");
-        var lite = Host(folder, Pinned);
+        var lite = Host(folder);
         lite.RaiseEpoch(50);
         TurnOn(folder);
         File.WriteAllText(Path.Combine(folder, LiteKill.FileName), "garbage");
@@ -224,7 +218,7 @@ public sealed class AgentLiteKillTests : IDisposable
     public void A_malformed_epoch_file_fails_closed_and_keeps_the_high_water_mark(string content)
     {
         var folder = NewHost("a");
-        var lite = Host(folder, Pinned);
+        var lite = Host(folder);
         lite.RaiseEpoch(50);
         TurnOn(folder);
         File.WriteAllText(Path.Combine(folder, LiteKill.FileName), content);
@@ -238,7 +232,7 @@ public sealed class AgentLiteKillTests : IDisposable
     public void A_missing_epoch_file_after_a_kill_keeps_the_mark_and_stays_off()
     {
         var folder = NewHost("a");
-        var lite = Host(folder, Pinned);
+        var lite = Host(folder);
         lite.RaiseEpoch(50);
         TurnOn(folder);
         File.Delete(Path.Combine(folder, LiteKill.FileName));
@@ -252,7 +246,7 @@ public sealed class AgentLiteKillTests : IDisposable
     {
         var folder = NewHost("a");
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        var host = new LiteKill(folder, new Peers(), time: time);
+        var host = new LiteKill(folder, time: time);
         var started = new TaskCompletionSource();
         var send = host.GuardAsync("r1", async ct => { started.SetResult(); await Task.Delay(Timeout.Infinite, ct); return new LiteOutcome(LiteKind.Delivered, null, "r1"); }, default);
         await started.Task;
@@ -267,7 +261,7 @@ public sealed class AgentLiteKillTests : IDisposable
     {
         var folder = NewHost("a");
         var time = new WatchClock(DateTimeOffset.UtcNow);
-        var host = new LiteKill(folder, new Peers(), time: time);
+        var host = new LiteKill(folder, time: time);
         var outcome = await host.GuardAsync("r1", async ct =>
         {
             Assert.True(time.Armed, "The kill watcher must be armed on its clock before the send starts.");
@@ -285,8 +279,8 @@ public sealed class AgentLiteKillTests : IDisposable
     [Fact]
     public void A_non_numeric_epoch_is_rejected()
     {
-        var lite = Host(NewHost("a"), Pinned);
-        Assert.Throws<ArgumentException>(() => lite.HandleKill(Pinned, "host", JsonDocument.Parse("{\"epoch\":\"x\"}").RootElement));
+        var lite = Host(NewHost("a"));
+        Assert.Throws<ArgumentException>(() => lite.HandleKill(Pinned, JsonDocument.Parse("{\"epoch\":\"x\"}").RootElement));
         Assert.True(lite.On);
     }
 
@@ -354,13 +348,14 @@ public sealed class AgentLiteKillTests : IDisposable
         while (!File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent ?? throw new IOException("repository root not found"); }
         var program = File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "Program.cs"));
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(program, @"new AgentBridge\.Host\.Lite\.LiteKill\("));
-        Assert.Contains("new OwnPeers(identity.Folder, () => true, () => identity.Account?.AccountId)), Log);", program);
-        Assert.Contains("LiteReceiver(liteKill, litePeers, liteDeliver)", program);
+        Assert.Contains("new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);", program);
+        Assert.Contains("LiteReceiver(liteKill, liteDeliver)", program);
         Assert.Contains("LiteKill = liteKill,", program);
-        Assert.Contains("AgentLiteSender.ForHost(identity.Folder, liteKill, litePeers,", program);
+        Assert.Contains("AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink,", program);
         Assert.Contains("await liteKill.PushAsync(relay, hub, current.Token);", program);
-        // The kill op is a host role's under trusted-peer enforcement, like agent.lite.send.
+        // The kill op is a host role's under trusted-peer enforcement, like agent.lite.send, and judged by the same channel rule.
         Assert.Contains("Lite.LiteReceiver.Op, Lite.LiteKill.Op];", File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "RemoteAuthorization.cs")));
+        Assert.Contains("LiteKill.HandleKill(Lite.LiteChannel.Of(secure), data)", File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "SessionService.cs")));
     }
 
     [Fact]
