@@ -11,21 +11,28 @@ namespace AgentBridge.App;
 public sealed partial class SessionView
 {
     readonly HashSet<uint> scrollbarPointers = [];
-    bool navigationPending;
+    Func<bool>? navigationPending;
 
     void HookConversationInput(ScrollViewer scroll)
     {
-        follow.HoldEnded += FollowPinnedEnd;
+        follow.HoldEnded += () =>
+        {
+            FollowPinnedEnd();
+            if (historyFirstFrame is null && history is { } stored && historyVisible < stored.Turns.Count) { historyDraw?.Start(); }
+        };
         // Question navigation and UIA ScrollIntoView own their destination, even without focus.
         scroll.BringIntoViewRequested += (_, e) =>
         {
-            var top = e.TargetElement.TransformToVisual(scroll).TransformPoint(new Point(e.TargetRect.X, e.TargetRect.Y)).Y;
-            // Nearest-edge navigation also leaves a target spanning both viewport edges still.
-            if (double.IsNaN(e.VerticalAlignmentRatio) && e.VerticalOffset == 0
-                && (ConversationKeyboard.WhollyInView(top, e.TargetRect.Height, scroll.ViewportHeight)
-                    || top <= 0 && top + e.TargetRect.Height >= scroll.ViewportHeight)) { return; }
+            var (target, rect) = (e.TargetElement, e.TargetRect);
+            double Top() => target.TransformToVisual(scroll).TransformPoint(new Point(rect.X, rect.Y)).Y;
+            var gap = scroll.ViewportHeight - rect.Height;
+            var goal = (double.IsNaN(e.VerticalAlignmentRatio)
+                ? Math.Clamp(Top(), Math.Min(0, gap), Math.Max(0, gap)) : gap * e.VerticalAlignmentRatio) + e.VerticalOffset;
+            bool Pending() => target is not FrameworkElement { IsLoaded: false } && Math.Abs(scroll.VerticalOffset
+                - Math.Clamp(scroll.VerticalOffset + Top() - goal, 0, scroll.ScrollableHeight)) > 0.5;
+            if (!Pending()) { return; }
             ReleasePin();
-            navigationPending = true;
+            navigationPending = Pending;
         };
         scroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, _) => ReleasePin()), true);
         // Scrollbar parts handle their presses; release before their first ViewChanged or layout.
@@ -72,11 +79,13 @@ public sealed partial class SessionView
             && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5)) { ReleasePin(); }
         seen = (offset, extent);
     }
+    // A final event can belong to a correction queued before this navigation request.
+    void CompleteNavigation() { if (navigationPending?.Invoke() == false) { navigationPending = null; } }
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
-    internal void ReleasePin() { pinEnd = false; navigationPending = false; anchoring = null; pinReleases++; }
+    internal void ReleasePin() { pinEnd = false; navigationPending = null; anchoring = null; pinReleases++; }
 
-    bool HistoryAtEnd() => !navigationPending && scrollbarPointers.Count == 0 && (pinEnd || !panning && !scrolling && keyTarget is null
+    bool HistoryAtEnd() => navigationPending is null && scrollbarPointers.Count == 0 && (pinEnd || !panning && !scrolling && keyTarget is null
         && ConversationScroll is { ScrollableHeight: > 0 } scroll && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack);
 
     // Older turns can finish measuring after KeepPlace restored an earlier end. Follow the
