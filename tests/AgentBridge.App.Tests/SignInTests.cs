@@ -208,7 +208,31 @@ public sealed class SignInTests
     }
 
     static IReadOnlyList<SignInBanners.Banner> Banners(IReadOnlyList<Session> sessions, bool canSignIn = true, Dictionary<string, SignInBanners.Flow>? flows = null, Dictionary<string, SignInBanners.Resolved>? resolved = null) =>
-        SignInBanners.For([new SignInBanners.Source("m1", "DEV-VM1", sessions, canSignIn)], flows ?? [], resolved ?? [], DateTimeOffset.Parse("2026-11-05T00:45:00Z"));
+        SignInBanners.For([new SignInBanners.Source("m1", "node-a", sessions, canSignIn)], flows ?? [], resolved ?? [], DateTimeOffset.Parse("2026-11-05T00:45:00Z"));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void An_expired_or_unshowable_code_fills_Cancel_not_Try_again_and_a_new_request_restores_the_code_rule(bool refused)
+    {
+        var code = AuthState.ReadCode(Json(Code()))!;
+        var key = SignInBanners.KeyOf("m1", AgentKind.Copilot, "octocat");
+        var banner = Banners([Needing("a")], flows: new() { [key] = new("pending", Code: code) }).Single();
+        var sheet = new SignInSheetViewModel(banner);
+        Assert.False(sheet.CancelIsDefault);
+        sheet.Update(banner with { Code = refused ? AuthState.ReadCode(Json(Code(uri: "https://evil.example/device"))) : null, Expired = !refused });
+        Assert.True(sheet.CancelIsDefault);
+        Assert.True(sheet.CanRetry);
+        Assert.False(sheet.HasCode);
+        sheet.Update(sheet.Banner with { CanSignIn = false });
+        Assert.True(sheet.CancelIsDefault);
+        Assert.False(sheet.CanRetry);
+        sheet.Update(banner with { Code = null });
+        Assert.False(sheet.CancelIsDefault);
+        sheet.Update(banner);
+        Assert.True(sheet.HasCode);
+        Assert.False(sheet.CancelIsDefault);
+    }
 
     [Fact]
     public void One_banner_per_machine_agent_and_account_lists_its_sessions()
@@ -218,7 +242,7 @@ public sealed class SignInTests
         Assert.Equal(3, banners.Count);
         var b = banners.Single(x => x.Account == "octocat" && x.Agent == AgentKind.Copilot);
         Assert.Equal(new[] { "a", "b" }, b.Sessions.Select(s => s.Id).Order());
-        Assert.Equal(("Copilot on DEV-VM1 needs sign-in · @octocat", "2 sessions affected: Session a, Session b", "Copilot on DEV-VM1 needs sign-in"), SignInBanners.Words(b));
+        Assert.Equal(("Copilot on node-a needs sign-in · @octocat", "2 sessions affected: Session a, Session b", "Copilot on node-a needs sign-in"), SignInBanners.Words(b));
         Assert.Equal("Sign in", SignInBanners.Verb(b));
     }
 
@@ -292,9 +316,9 @@ public sealed class SignInTests
         Assert.Equal("Sign-in failed · The code was not entered in time", SignInBanners.Words(failed).Line);
         // While this device's own flow runs, its sheet is open and the banner offers nothing.
         Assert.Null(SignInBanners.Verb(Banners([Needing("a")], flows: new() { [key] = new SignInBanners.Flow("pending", "flow-1") }).Single()));
-        var signedIn = Banners([], resolved: new() { [key] = new SignInBanners.Resolved("signedIn", 2, DateTimeOffset.Parse("2026-11-05T00:44:30Z"), AgentKind.Copilot, "octocat", "m1", "DEV-VM1") }).Single();
-        Assert.Equal(("Copilot on DEV-VM1 · @octocat", "Signed in · 2 sessions recovered"), (SignInBanners.Words(signedIn).Head, SignInBanners.Words(signedIn).Line));
-        Assert.Empty(Banners([], resolved: new() { [key] = new SignInBanners.Resolved("signedIn", 2, DateTimeOffset.Parse("2026-11-05T00:43:00Z"), AgentKind.Copilot, "octocat", "m1", "DEV-VM1") }));
+        var signedIn = Banners([], resolved: new() { [key] = new SignInBanners.Resolved("signedIn", 2, DateTimeOffset.Parse("2026-11-05T00:44:30Z"), AgentKind.Copilot, "octocat", "m1", "node-a") }).Single();
+        Assert.Equal(("Copilot on node-a · @octocat", "Signed in · 2 sessions recovered"), (SignInBanners.Words(signedIn).Head, SignInBanners.Words(signedIn).Line));
+        Assert.Empty(Banners([], resolved: new() { [key] = new SignInBanners.Resolved("signedIn", 2, DateTimeOffset.Parse("2026-11-05T00:43:00Z"), AgentKind.Copilot, "octocat", "m1", "node-a") }));
     }
 
     [Fact]
@@ -319,6 +343,27 @@ public sealed class SignInTests
         // One fails sign-in again: needed, counting it alone.
         var again = Banners([Needing("a", recovery: "pending"), Needing("b", recovery: "failed")]).Single();
         Assert.Equal(("needed", "1 session affected: Session b", "Sign in"), (again.State, SignInBanners.Words(again).Line, SignInBanners.Verb(again)));
+    }
+
+    [Fact]
+    public void Signed_in_before_the_host_says_pending_holds_Sign_in_and_says_waiting_never_Show_code_or_Waiting_for_sign_in()
+    {
+        var key = SignInBanners.KeyOf("m1", AgentKind.Copilot, "octocat");
+        var held = new Dictionary<string, SignInBanners.Flow> { [key] = new("done", Outcome: "signedIn") };
+        // The host still says another sign-in is under way (signingIn): a signin.done alone must not flip the verb.
+        var b = Banners([Needing("a", recovery: "signingIn"), Needing("b", recovery: "signingIn")], flows: held).Single();
+        Assert.Equal(("Copilot on node-a · @octocat", "Signed in · waiting for 2 sessions to confirm", "Sign in", false), (SignInBanners.Words(b).Head, SignInBanners.Words(b).Line, SignInBanners.Verb(b), SignInBanners.ListsSessions(b)));
+        // Said once as confirming, so the host's pending says nothing more.
+        Assert.Equal(("confirming", "Copilot on node-a: Signed in · waiting for 2 sessions to confirm"), SignInBanners.Said(b));
+        var pending = Banners([Needing("a", recovery: "pending"), Needing("b", recovery: "pending")], flows: held).Single();
+        Assert.Equal(("confirming", "confirming", (string?)null), (pending.State, SignInBanners.Said(pending).State, SignInBanners.Verb(pending)));
+        // With no marker, or once the hold has lapsed with no pending, the banner follows the host again.
+        Assert.Equal("Show code", SignInBanners.Verb(Banners([Needing("a", recovery: "signingIn")]).Single()));
+        SignInBanners.Flow Stamped(string at) => new("done", Outcome: "signedIn", SignedInAt: DateTimeOffset.Parse(at));
+        var within = Banners([Needing("a", recovery: "signingIn")], flows: new() { [key] = Stamped("2026-11-05T00:44:56Z") }).Single();
+        Assert.Equal(("Signed in · waiting for 1 session to confirm", "Sign in"), (SignInBanners.Words(within).Line, SignInBanners.Verb(within)));
+        var lapsed = Banners([Needing("a", recovery: "signingIn")], flows: new() { [key] = Stamped("2026-11-05T00:44:54Z") }).Single();
+        Assert.Equal(("Waiting for sign-in", "Show code"), (SignInBanners.Words(lapsed).Line, SignInBanners.Verb(lapsed)));
     }
 
     // The demo's other machine, as the app reaches it, running #800's scenario.
@@ -980,6 +1025,47 @@ public sealed class SignInTests
         await Wait.UntilAsync(() => demo.Main.SignIns.Any(b => b.Line == "Signed in · 3 sessions recovered"), "recovered", why: () => string.Join(" | ", demo.Main.SignIns.Select(b => b.Line)));
         Assert.Contains("Copilot on Build server: Signed in · 3 sessions recovered", demo.Said);
         Assert.True(TestUi.Read(() => DemoHost.SignInSessions.All(id => demo.Main.Sessions.Single(c => c.Id == id).Line.FirstFact == "Idle")));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Signed_in_before_the_host_says_pending_never_flashes_Show_code_and_nothing_is_said_twice()
+    {
+        await using var demo = new Demo();
+        await demo.Host.NeedSignInAsync();
+        await Wait.UntilAsync(() => demo.Banner is { Sessions.Count: 3 }, "the sign-in banner");
+        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
+        await Wait.UntilAsync(() => demo.Main.SignInSheet is { HasCode: true }, "the code");
+        // Another sign-in is under way at the host (signingIn), and this one's done comes before its pending.
+        await demo.Host.SignInUnderWayAsync(true);
+        await demo.Host.FinishSignInAsync("signedIn", pendingFirst: false);
+        await Wait.UntilAsync(() => demo.Main.SignInSheet is null, "the sheet to close");
+        var lines = TestUi.Read(() => demo.Main.SignIns.Select(b => (b.Line, b.VerbText)).ToList());
+        Assert.Equal([("Signed in · waiting for 3 sessions to confirm", "Sign in")], lines);
+
+        await demo.Host.SignedInPendingAsync();
+        await Wait.UntilAsync(() => demo.Main.SignIns.Any(b => !b.Needed), "confirming");
+        Assert.DoesNotContain(TestUi.Read(() => demo.Main.SignIns.Select(b => b.VerbText).ToList()), v => v == "Show code");
+        Assert.Single(demo.Said, "Copilot on Build server: Signed in · waiting for 3 sessions to confirm");
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_signed_in_hold_with_no_pending_ends_on_its_second_and_the_banner_follows_the_host_again()
+    {
+        await using var demo = new Demo();
+        await demo.Host.NeedSignInAsync();
+        await Wait.UntilAsync(() => demo.Banner is { Sessions.Count: 3 }, "the sign-in banner");
+        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
+        await Wait.UntilAsync(() => demo.Main.SignInSheet is { HasCode: true }, "the code");
+        await demo.Host.SignInUnderWayAsync(true);
+        await demo.Host.FinishSignInAsync("signedIn", pendingFirst: false);
+        await Wait.UntilAsync(() => demo.Main.SignInSheet is null, "the sheet to close");
+        Assert.Equal("Sign in", TestUi.Read(() => demo.Main.SignIns.Single().VerbText));
+        await Task.Delay(AuthState.SignedInHold + TimeSpan.FromMilliseconds(200));
+        // The first tick: not the five-second sweep, so only the hold's own deadline can end it.
+        TestUi.Read(() => { demo.Main.Tick(); return 0; });
+        Assert.Equal(("Waiting for sign-in", "Show code"), TestUi.Read(() => (demo.Main.SignIns.Single().Line, demo.Main.SignIns.Single().VerbText)));
     }
 
     [Fact]

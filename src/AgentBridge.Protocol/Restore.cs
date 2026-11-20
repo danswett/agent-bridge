@@ -51,9 +51,11 @@ public static class RestoreProtocol
 }
 
 // Why the sessions went. Reboot: the machine started again, or the person signed out, so every
-// agent went with it. Crash: the host stopped without saying so, in the same logon. Restart: the
-// host stopped cleanly (an update, a stop or a restart) in the same logon, and sessions went while
-// it was away. A cause a client does not know reads as Crash, which says the least about why.
+// agent went with it. Crash is the legacy wire name for an unexpected host stop in the same logon,
+// not proof of a crash: an external stop or the launcher's job closing leaves the same record.
+// Restart: the host stopped cleanly (an update, a stop or a restart) in the same logon, and sessions
+// went while it was away. An unknown cause still reads as Crash for compatibility; its wording
+// must stay neutral because neither that fallback nor a missing clean-stop marker proves a crash.
 [UnknownAs(Crash)]
 public enum RestoreCause { Reboot, Crash, Restart }
 

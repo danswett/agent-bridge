@@ -104,6 +104,7 @@ var isolatedRead = Flag("--read-root");
 
 if (command == "audit")
 {
+    if (arguments.ElementAtOrDefault(1) == "archive" && Refused("archive the audit log")) { return 4; }
     return AuditCommands.Run(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
 }
 
@@ -183,7 +184,7 @@ var options = new SessionSourceOptions
     PhoneSignIn = PhoneSignInSetup.Agents(settings, signInCopilot is not null),
     PhoneSignInPinned = () => PersonDevices.Any(personRoster, rosterAccount()),
     Log = command == "serve" ? Log : null,
-    // Only serve keeps what it listed for its next start (#147); no other command reads or writes it.
+    // Serve persists process-generation resume guards, not roster membership (#147).
     StateFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "sessions-listed.json") : null,
     // session.history's cursors outlive a restart of serve (docs/protocol/v1-history.md).
     HistoryKeyFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "history-cursor.key") : null,
@@ -233,7 +234,7 @@ switch (command)
     case "agents":
         {
             return await AgentCommands.RunWithProfileAsync(arguments, Identity.DefaultRoot,
-                () => Refused("adopt a session or end its adoption"), Console.Out, Console.Error);
+                () => Refused(arguments.ElementAtOrDefault(1) == "lite" ? "kill own-agents messaging" : "adopt a session or end its adoption"), Console.Out, Console.Error);
         }
     case "watch":
         {
@@ -607,7 +608,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit);
     launcher.SessionStarted += restore.Launched;
     launcher.StartScanning();
-    var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => settings.AgentMessaging.AllowAllTargets, launcher, Log);
+    var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => HostSettings.CurrentAgentMessaging(identity.Folder), launcher, Log);
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
     // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
@@ -739,6 +740,8 @@ async Task<int> ServeAsync(HostHandover handover)
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
         name: fleetNames.Get, log: Log, sign: fleetTrust.Sign);
     var loadService = new LoadService(source, () => load.Current, () => settings.LoadEnabled, Log);
+    // L6: one kill switch is the mode of both sides; it trusts present same-account hosts, no pins.
+    var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         LoadEnabled = () => settings.LoadEnabled,
@@ -757,7 +760,8 @@ async Task<int> ServeAsync(HostHandover handover)
         SignInDevices = self => PersonDevices.View(personRoster, rosterAccount(), self),
         Manage = manage,
         Diagnostics = diagnostics,
-        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)),         new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteDeliver),
+        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(liteKill, liteDeliver),
+        LiteKill = liteKill,
     };
     Log(settings.LoadStatus);
     // Who is on the other end of the pipe: the app beside this host, or something inside an
@@ -917,9 +921,9 @@ async Task<int> ServeAsync(HostHandover handover)
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
-    var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.VerifiedRoster);
+    var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
@@ -996,6 +1000,20 @@ async Task<int> ServeAsync(HostHandover handover)
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
             liteLink.Attach(relay, hub);
+            // L6: tells the other pinned hosts of a newer kill, including one `agents lite kill` made in another process.
+            _ = Task.Run(async () =>
+            {
+                using var tick = new PeriodicTimer(TimeSpan.FromSeconds(5));
+                try
+                {
+                    while (!relay.Completion.IsCompleted && await tick.WaitForNextTickAsync(current.Token))
+                    {
+                        try { await liteKill.PushAsync(relay, hub, current.Token); }
+                        catch (Exception e) when (e is not OperationCanceledException) { Log($"lite: kill push failed ({e.GetType().Name})"); }
+                    }
+                }
+                catch (OperationCanceledException) { }
+            });
             fleetRoster.Attach(relay);
             usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);
@@ -1115,6 +1133,8 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,
         CodexHome = options.CodexHome,
         Config = settings.Launch,
+        HomeAssistantEnabled = settings.HomeAssistant.Enabled || settings.HomeAssistant.EnabledRequested,
+        HomeAssistantBaseUrl = settings.HomeAssistant.BaseUrl,
         // A session waiting to be restored keeps its worktree as a live one does (#780).
         WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),
         Transfers = transfers,

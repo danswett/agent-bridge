@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readHello, readSession } from '../../js/protocol.js';
 import { ALLOWED_VERIFICATION_URIS, RESOLVED_SHOWN_MS, agentText, plainText, allowedVerificationUri, flowExpired, readAttention, readCode, readDone, readStartResult, shownUserCode, spelled, tokenShaped } from '../../js/auth-state.js';
 import { needsYou } from '../../js/needs-you.js';
-import { bannerVerb, bannerWords, signInBanners } from '../../js/ui/sign-in-view.js';
+import { bannerSaid, bannerVerb, bannerWords, signInBanners } from '../../js/ui/sign-in-view.js';
 
 const GITHUB = 'https://github.com/login/device';
 // Credentials' shapes, made up and put together here, so no scanner takes the file for a leak.
@@ -97,7 +97,7 @@ test('a refused start\'s reason is shown only in this client\'s words for one of
     assert.equal(readStartResult({ outcome: 'refused', reason: raw }).reason, null, String(raw));
   }
   const one = [readSession({ id: 's1', agent: 'copilot', title: 'One', status: 'idle', attention: signInAttention() })];
-  const [b] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: one, canSignIn: true }], { flows: new Map([['m\ncopilot\noctocat', { state: 'done', outcome: 'refused', reason: readStartResult({ outcome: 'refused', reason: 'Error: EACCES C:\\Users\\mona' }).reason }]]) });
+  const [b] = signInBanners([{ hostId: 'm', name: 'Machine A', sessions: one, canSignIn: true }], { flows: new Map([['m\ncopilot\noctocat', { state: 'done', outcome: 'refused', reason: readStartResult({ outcome: 'refused', reason: 'Error: EACCES C:\\Users\\mona' }).reason }]]) });
   assert.equal(bannerWords(b).line, 'Sign-in refused');
 });
 
@@ -164,7 +164,7 @@ test('a session\'s attention is read over its truthful status; an unknown kind i
 });
 
 test('hello reads its machine\'s sign-ins needed, leaving out an entry with no agent', () => {
-  const h = readHello({ protocol: 1, machine: { id: 'm', name: 'DEV-VM1', signIn: [{ agent: 'copilot', account: 'octocat', sessions: ['a', 'b', 'a'], signIn: 'phone' }, { sessions: ['c'] }] }, capabilities: [] });
+  const h = readHello({ protocol: 1, machine: { id: 'm', name: 'Machine A', signIn: [{ agent: 'copilot', account: 'octocat', sessions: ['a', 'b', 'a'], signIn: 'phone' }, { sessions: ['c'] }] }, capabilities: [] });
   assert.deepEqual(h.machine.signIn, [{ agent: 'copilot', account: 'octocat', since: null, sessions: ['a', 'b'], signIn: 'phone', recovery: null }]);
 });
 
@@ -176,7 +176,7 @@ test('a code that has run out by this device\'s clock is expired, whatever the h
 
 test('Needs you counts questions and approvals only: a session that needs sign-in is its banner\'s, and neither are errors counted', () => {
   const session = readSession({ id: 's1', agent: 'copilot', title: 'Coordinate the Shiproom', status: 'idle', attention: signInAttention() });
-  assert.deepEqual(needsYou([{ hostId: 'm', session }], { nameOf: () => 'DEV-VM1' }), []);
+  assert.deepEqual(needsYou([{ hostId: 'm', session }], { nameOf: () => 'Machine A' }), []);
   const failed = readSession({ id: 's2', status: 'idle', attention: { kind: 'error', errorClass: 'quota' } });
   const stalled = readSession({ id: 's3', status: 'working', attention: { kind: 'notResponding' } });
   assert.deepEqual(needsYou([{ hostId: 'm', session: failed }, { hostId: 'm', session: stalled }]), []);
@@ -185,17 +185,17 @@ test('Needs you counts questions and approvals only: a session that needs sign-i
 const sessions = (n, attention = signInAttention()) => Array.from({ length: n }, (_, i) => readSession({ id: `s${i + 1}`, agent: 'copilot', title: `Session ${i + 1}`, status: 'idle', attention }));
 
 test('one banner per machine, agent and account rolls up every session it holds up, from the sessions alone if need be', () => {
-  const [b] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: sessions(4), canSignIn: true }]);
+  const [b] = signInBanners([{ hostId: 'm', name: 'Machine A', sessions: sessions(4), canSignIn: true }]);
   assert.equal(b.sessions.length, 4);
-  assert.deepEqual([bannerWords(b).head, bannerWords(b).line], ['Copilot on DEV-VM1 needs sign-in \u00b7 @octocat', '4 sessions affected: Session 4, Session 3, Session 2, Session 1']);
+  assert.deepEqual([bannerWords(b).head, bannerWords(b).line], ['Copilot on Machine A needs sign-in \u00b7 @octocat', '4 sessions affected: Session 4, Session 3, Session 2, Session 1']);
   assert.equal(bannerVerb(b), 'Sign in');
-  const two = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: [...sessions(2), readSession({ id: 'c1', agent: 'claude', status: 'idle', attention: signInAttention({ agent: 'claude', account: null }) })] }]);
+  const two = signInBanners([{ hostId: 'm', name: 'Machine A', sessions: [...sessions(2), readSession({ id: 'c1', agent: 'claude', status: 'idle', attention: signInAttention({ agent: 'claude', account: null }) })] }]);
   assert.deepEqual(two.map((x) => [x.agent, x.sessions.length]).sort(), [['claude', 1], ['copilot', 2]]);
 });
 
 test('a banner shows a long title with bidi characters bounded and revealed, and opens it by its id (#979)', () => {
   const title = `Fix \u202Etxt.exe\u202C the relay ${'x'.repeat(10_000)}`;
-  const [b] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: [readSession({ id: 's1', agent: 'copilot', title, status: 'idle', attention: signInAttention() })], canSignIn: true }]);
+  const [b] = signInBanners([{ hostId: 'm', name: 'Machine A', sessions: [readSession({ id: 's1', agent: 'copilot', title, status: 'idle', attention: signInAttention() })], canSignIn: true }]);
   assert.equal(b.sessions[0].id, 's1');
   assert.equal(b.sessions[0].title.length, 120);
   assert.ok(b.sessions[0].title.startsWith('Fix \\u202Etxt.exe\\u202C the relay x'));
@@ -204,22 +204,22 @@ test('a banner shows a long title with bidi characters bounded and revealed, and
 });
 
 test('only a provider the host says has no device flow is "at the machine"; without the capability there is no button, and no such claim', () => {
-  const [machine] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: sessions(1, signInAttention({ signIn: 'machine' })), canSignIn: true }]);
+  const [machine] = signInBanners([{ hostId: 'm', name: 'Machine A', sessions: sessions(1, signInAttention({ signIn: 'machine' })), canSignIn: true }]);
   assert.equal(bannerWords(machine).line, 'Sign in at the machine');
   assert.equal(bannerVerb(machine), null);
   // None said, or a word this client doesn't know: "Needs sign-in" with no action and no claim.
-  const [unsaid] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: sessions(1, signInAttention({ signIn: undefined })), canSignIn: true }]);
+  const [unsaid] = signInBanners([{ hostId: 'm', name: 'Machine A', sessions: sessions(1, signInAttention({ signIn: undefined })), canSignIn: true }]);
   assert.deepEqual([bannerVerb(unsaid), bannerWords(unsaid).line], [null, '1 session affected: Session 1']);
   // A word this client doesn't know: no Sign in the host may not relay, and no claim about the machine.
-  const [unknown] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: sessions(1, signInAttention({ signIn: 'carrier-pigeon' })), canSignIn: true }]);
+  const [unknown] = signInBanners([{ hostId: 'm', name: 'Machine A', sessions: sessions(1, signInAttention({ signIn: 'carrier-pigeon' })), canSignIn: true }]);
   assert.deepEqual([bannerVerb(unknown), bannerWords(unknown).line], [null, '1 session affected: Session 1']);
-  const [older] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: sessions(1), canSignIn: false }]);
+  const [older] = signInBanners([{ hostId: 'm', name: 'Machine A', sessions: sessions(1), canSignIn: false }]);
   assert.deepEqual([bannerVerb(older), bannerWords(older).line], [null, '1 session affected: Session 1']);
 });
 
 test('a flow under way offers no verb; one running elsewhere offers Show code; a failed or expired one, Try again', () => {
   const flows = (f) => new Map([['m\ncopilot\noctocat', f]]);
-  const one = (f, attention) => signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: sessions(1, attention), canSignIn: true }], { flows: f ? flows(f) : new Map() })[0];
+  const one = (f, attention) => signInBanners([{ hostId: 'm', name: 'Machine A', sessions: sessions(1, attention), canSignIn: true }], { flows: f ? flows(f) : new Map() })[0];
   assert.equal(bannerVerb(one({ state: 'pending', flow: 'f1', code: readCode(codeEvent()) })), null);
   assert.equal(bannerVerb(one(null, signInAttention({ recovery: 'signingIn' }))), 'Show code');
   assert.equal(bannerVerb(one({ state: 'done', outcome: 'failed', reason: 'The code was declined.' })), 'Try again');
@@ -231,9 +231,9 @@ test('a flow under way offers no verb; one running elsewhere offers Show code; a
 
 test('"signed in" and "recovered by itself" are said for a minute, then go', () => {
   const at = Date.now();
-  const resolved = new Map([['m\ncopilot\noctocat', { kind: 'signedIn', count: 4, at, agent: 'copilot', account: 'octocat', hostId: 'm', name: 'DEV-VM1' }]]);
+  const resolved = new Map([['m\ncopilot\noctocat', { kind: 'signedIn', count: 4, at, agent: 'copilot', account: 'octocat', hostId: 'm', name: 'Machine A' }]]);
   const [b] = signInBanners([], { resolved, now: at + 1000 });
-  assert.deepEqual([bannerWords(b).head, bannerWords(b).line], ['Copilot on DEV-VM1 · @octocat', 'Signed in · 4 sessions recovered']);
+  assert.deepEqual([bannerWords(b).head, bannerWords(b).line], ['Copilot on Machine A · @octocat', 'Signed in · 4 sessions recovered']);
   assert.deepEqual(signInBanners([], { resolved, now: at + RESOLVED_SHOWN_MS }), []);
   resolved.set('m\ncopilot\noctocat', { ...resolved.get('m\ncopilot\noctocat'), kind: 'recovered' });
   assert.equal(bannerWords(signInBanners([], { resolved, now: at })[0]).line, 'Recovered by itself');
@@ -246,7 +246,7 @@ test('the code is read a character at a time, in its two halves', () => {
 test('the sessions are the live word: a stale roll-up neither overrides their recovery nor keeps a session in the account it left', () => {
   const s = readSession({ id: 's1', agent: 'copilot', title: 'One', status: 'idle', attention: signInAttention({ account: 'hubot', recovery: 'signingIn' }) });
   const rollUp = [{ agent: 'copilot', account: 'octocat', sessions: ['s1'], signIn: 'phone', recovery: 'checking' }, { agent: 'copilot', account: 'hubot', sessions: ['s1'], signIn: 'phone', recovery: 'checking' }];
-  const banners = signInBanners([{ hostId: 'm', name: 'DEV-VM1', rollUp, sessions: [s], canSignIn: true }]);
+  const banners = signInBanners([{ hostId: 'm', name: 'Machine A', rollUp, sessions: [s], canSignIn: true }]);
   assert.deepEqual(banners.map((b) => [b.account, b.sessions.length, b.recovery]), [['hubot', 1, 'signingIn']]);
 });
 
@@ -254,23 +254,23 @@ test('the newest session needing sign-in decides how, and its no claim wins over
   const at = (id, since, signIn) => readSession({ id, agent: 'copilot', title: id, status: 'idle', attention: signInAttention({ since, signIn }) });
   const rollUp = [{ agent: 'copilot', account: 'octocat', sessions: ['new', 'old'], signIn: 'phone' }];
   for (const [newest, older] of [['future-flow', 'phone'], [undefined, 'phone'], ['future-flow', 'machine'], [undefined, 'machine']]) {
-    const [b] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', rollUp, sessions: [at('old', '2026-11-04T22:00:00.000Z', older), at('new', '2026-11-04T23:00:00.000Z', newest)], canSignIn: true }]);
+    const [b] = signInBanners([{ hostId: 'm', name: 'Machine A', rollUp, sessions: [at('old', '2026-11-04T22:00:00.000Z', older), at('new', '2026-11-04T23:00:00.000Z', newest)], canSignIn: true }]);
     assert.deepEqual([b.canSignIn, b.atMachine, bannerVerb(b), bannerWords(b).line], [false, false, null, '2 sessions affected: new, old'], `${newest} over ${older}`);
   }
   // The newest saying phone is Sign in, whatever an older one said.
-  const [p] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: [at('old', '2026-11-04T22:00:00.000Z', 'machine'), at('new', '2026-11-04T23:00:00.000Z', 'phone')], canSignIn: true }]);
+  const [p] = signInBanners([{ hostId: 'm', name: 'Machine A', sessions: [at('old', '2026-11-04T22:00:00.000Z', 'machine'), at('new', '2026-11-04T23:00:00.000Z', 'phone')], canSignIn: true }]);
   assert.equal(bannerVerb(p), 'Sign in');
 });
 
 test('only a flow still under way keeps a banner whose sessions have gone; one that ended keeps nothing', () => {
   const key = 'm\ncopilot\noctocat';
-  const one = (f) => signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: [], canSignIn: true }], { flows: new Map([[key, f]]) });
+  const one = (f) => signInBanners([{ hostId: 'm', name: 'Machine A', sessions: [], canSignIn: true }], { flows: new Map([[key, f]]) });
   assert.equal(one({ state: 'pending', flow: 'f1' }).length, 1);
   assert.deepEqual(one({ state: 'done', outcome: 'failed' }), []);
 });
 
 test('signed in and waiting for the sessions to confirm is never recovered, and a new failure makes it needed again', () => {
-  const links = (recoveries) => [{ hostId: 'm', name: 'DEV-VM1', sessions: recoveries.map((r, i) => readSession({ id: `s${i}`, agent: 'copilot', title: `S${i}`, status: 'idle', attention: signInAttention({ recovery: r }) })), canSignIn: true }];
+  const links = (recoveries) => [{ hostId: 'm', name: 'Machine A', sessions: recoveries.map((r, i) => readSession({ id: `s${i}`, agent: 'copilot', title: `S${i}`, status: 'idle', attention: signInAttention({ recovery: r }) })), canSignIn: true }];
   const [b] = signInBanners(links(['pending', 'pending']));
   assert.deepEqual([b.state, bannerWords(b).line, bannerVerb(b)], ['confirming', 'Signed in · waiting for 2 sessions to confirm', null]);
   // One fails sign-in again: needed, counting it alone.
@@ -278,5 +278,23 @@ test('signed in and waiting for the sessions to confirm is never recovered, and 
   assert.deepEqual([again.state, bannerWords(again).line, bannerVerb(again)], ['needed', '1 session affected: S1', 'Sign in']);
   // Neither counts in Needs you while confirming.
   assert.deepEqual(needsYou(links(['pending'])[0].sessions.map((session) => ({ hostId: 'm', session }))), []);
+});
+
+test('signed in before the host says pending holds Sign in and says so, never Show code or "Waiting for sign-in" (#902)', () => {
+  const key = 'm\ncopilot\noctocat';
+  const at = Date.now();
+  const held = new Map([[key, { state: 'done', outcome: 'signedIn', flow: null, code: null, at }]]);
+  const links = (recovery) => [{ hostId: 'm', name: 'Machine A', sessions: sessions(2, signInAttention({ recovery })), canSignIn: true }];
+  // The host still says another sign-in is under way: the verb and line a signin.done alone would otherwise flip.
+  const [b] = signInBanners(links('signingIn'), { flows: held });
+  assert.deepEqual([b.state, bannerWords(b).head, bannerWords(b).line, bannerVerb(b)], ['needed', 'Copilot on Machine A \u00b7 @octocat', 'Signed in \u00b7 waiting for 2 sessions to confirm', 'Sign in']);
+  // Said once as confirming, so the host's pending says nothing more.
+  assert.deepEqual(bannerSaid(b), { state: 'confirming', words: 'Copilot on Machine A: Signed in \u00b7 waiting for 2 sessions to confirm' });
+  const [pending] = signInBanners(links('pending'), { flows: held });
+  assert.deepEqual([pending.state, bannerSaid(pending).state, bannerVerb(pending)], ['confirming', 'confirming', null]);
+  // Without the hold, or once it has lapsed with no pending, the banner follows the host: Show code.
+  assert.equal(bannerVerb(signInBanners(links('signingIn'))[0]), 'Show code');
+  const [lapsed] = signInBanners(links('signingIn'), { flows: held, now: at + 60000 });
+  assert.deepEqual([bannerVerb(lapsed), bannerWords(lapsed).line], ['Show code', 'Waiting for sign-in']);
 });
 

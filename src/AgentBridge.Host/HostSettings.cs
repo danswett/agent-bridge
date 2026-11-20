@@ -4,6 +4,7 @@ using AgentBridge.Host.Core.AgentMessaging;
 using AgentBridge.Host.Core.DevBox;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Host.Reaping;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
@@ -45,8 +46,9 @@ namespace AgentBridge.Host;
 // KeepAwakeService). Off unless turned on; a file that cannot be read leaves it off.
 //
 // agentMessaging (#728): the temporary AP5-lite mode (AgentMessagingSettings). remote "off" (the
-// default) or "own-account"; allowAllTargets false (the default) or true. Anything else, or a file
-// that cannot be read, is off and false. Read afresh by CurrentAgentMessaging: no restart needed.
+// default) or "own-account"; allowAllTargets false (the default) or true, with allow-all sessions
+// also requiring an exact id in allowAllTargetSessions. Invalid values fail closed. Read afresh by
+// CurrentAgentMessaging: no restart needed.
 //
 // agents (#1295): the agents policy (AgentPolicy, docs/host-config.md). Absent means agents are off;
 // a section that cannot be read denies everything and is said; a bad key takes its narrowest value.
@@ -137,6 +139,7 @@ public sealed record HostSettings(bool RemoteApproval)
     public string LoadStatus => $"relay load sharing is {(LoadEnabled ? "on" : "off")} (load.enabled); machine totals and per-session numbers only";
 
     public bool ReadOnly { get; init; }
+    public SessionReaperSettings Reaper { get; init; } = SessionReaperSettings.Default;
     public bool TrustedPeers { get; init; }
     // permissions.remoteManage: a person's device may restart this host and repair its hooks
     // through the relay (docs/protocol/v1-sessions.md, "Managing a machine"; #801). On unless turned off here; the one
@@ -213,6 +216,7 @@ public sealed record HostSettings(bool RemoteApproval)
             var (security, securityProblems) = SecuritySettings.Read(root.TryGetProperty("security", out var sec) ? sec : null);
             var settings = Default with
             {
+                Reaper = SessionReaperSettings.Read(root),
                 FleetLaunchRule = ReadFleetLaunchRule(root),
                 Agents = agents,
                 AgentsProblems = agentsProblems.Count == 0 ? [] : agentsProblems,
