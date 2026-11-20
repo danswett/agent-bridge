@@ -40,6 +40,19 @@ Failures retain their step and structured error type/code, never exception messa
 B2 supplies the native adapter and closed packaging; B3 supplies private staging and
 the app/launcher cutover. This layer alone changes no production apply path.
 
+### B2 part 1: adapter seams and build closure
+
+The shared request, process interface and launch specifications separate native
+process ownership from the coordinator flow. Apply arguments keep the verified
+cached package form; app restart arguments preserve the original profile.
+The launcher references the shared coordinator and contracts in its self-contained
+bundle instead of compiling private copies.
+
+Respawn observation uses the same deadline and releases the package lock on
+timeout/cancellation. An entered native start cannot be revoked: its late outcome
+stays unknown, never retry authority. `RespawnFinished` retains that late outcome
+for the native adapter in part 2; this slice starts no native updater.
+
 ## C/D: approved design basis, not activation proof
 
 Use immutable `root\slots\<release-identity>-<package-digest>` payloads. One validated
