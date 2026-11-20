@@ -1404,8 +1404,59 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData("app")]
+    [InlineData("host")]
+    [InlineData("launcher")]
+    public async Task A_profile_refusal_banner_names_the_blocking_profile_and_process(string kind)
+    {
+        var refusal = $"bridge profile 'work' {kind} (pid 4242) runs from this installation";
+        var banner = new AppUpdateViewModel(() => "0.2.0", _ => Task.FromResult<string?>(refusal));
+
+        Assert.Equal(refusal, await banner.RestartAsync(null));
+
+        Assert.Equal($"The update didn't install because {refusal}.", banner.Message);
+        Assert.True(banner.Failed);
+        Assert.Equal("Try again", banner.ActionLabel);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Restart_to_update_proceeds_with_only_the_default_profiles_host_and_launcher()
+    {
+        await StartAsync(FakeHost.StatusOf() with { ProcessId = 20 });
+        othersProbe = () => PackageProcesses.Others(app, "default", 10, othersAskedFor,
+            [new(20, "agent-bridge-host", Path.Combine(app, "agent-bridge-host.exe"), "host.exe serve --profile default") { StartedAt = Make.T0 },
+             new(30, "agent-bridge-hostw", Path.Combine(app, "agent-bridge-hostw.exe"), "hostw.exe serve --profile default") { StartedAt = Make.T0 }]);
+        await auto.TickAsync();
+
+        Assert.Null(await auto.RestartToUpdateAsync());
+        Assert.True(updater.Applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Restart_to_update_refuses_a_real_second_profile_before_stopping_anything_and_names_it()
+    {
+        await StartAsync(FakeHost.StatusOf() with { ProcessId = 20 });
+        othersProbe = () => PackageProcesses.Others(app, "default", 10, othersAskedFor,
+            [new(4242, "agent-bridge-host", Path.Combine(app, "agent-bridge-host.exe"), "host.exe serve --profile work") { StartedAt = Make.T0 }]);
+        await auto.TickAsync();
+        var banner = AppUpdateViewModel.For(auto);
+
+        await banner.RestartAsync(null);
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal("The update didn't install because bridge profile 'work' host (pid 4242) runs from this installation.", banner.Message);
+        Assert.Equal("Try again", banner.ActionLabel);
+    }
+
+    [Theory]
     [InlineData("another profile's app (pid 4242) runs from this installation", "another bridge profile is running from this installation")]
     [InlineData("agent-bridge-host (pid 12) runs and cannot be looked at", "another bridge profile is running from this installation")]
+    [InlineData("bridge profile '../work' host (pid 4242) runs from this installation", "another bridge profile is running from this installation")]
+    [InlineData("bridge profile 'work' host (pid 4242) runs from this installation\nprivate detail", "another bridge profile is running from this installation")]
     [InlineData(@"installing 0.2.0 failed: C:\Users\dana\AppData\Local\AgentBridge\Update.exe is missing", "the installer reported an error")]
     [InlineData("the host's status could not be read: pipe agent-bridge-7 broken", "the host didn't answer")]
     [InlineData("the update downloaded changed while the host stopped (0.2.0 is no longer the one ready): 0.3.0 is ready now, so choose Restart to update again", "a newer update was downloaded meanwhile")]
