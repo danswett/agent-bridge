@@ -349,7 +349,7 @@ public sealed partial class SessionView
     void Land(UIElement container, DependencyObject stop)
     {
         var hold = stop is FrameworkElement e && ConversationScroll is { } s
-            ? ConversationKeyboard.HoldsFocusScroll(Landing, Top(e, s), e.ActualHeight, s.ViewportHeight)
+            ? ConversationKeyboard.HoldsFocusScroll(Landing, Top(e, s), e.ActualHeight, s.ViewportHeight, Top(container, s))
             : Landing == TabLanding.BlockStart;
         var source = stop as UIElement ?? (stop as TextElement)?.ContentStart?.VisualParent;
         // Focus already there moves nothing, so asks for no scroll to hold.
