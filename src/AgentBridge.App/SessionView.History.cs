@@ -55,6 +55,7 @@ public sealed partial class SessionView
         if (history is not null) { history.Changed -= OnHistoryChanged; }
         history = null;
         historyDrawKey = null;
+        navigationPending = null;
     }
 
     // Raised on whichever thread finished the load.

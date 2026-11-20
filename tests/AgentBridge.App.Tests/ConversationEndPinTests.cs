@@ -123,11 +123,12 @@ public sealed class ConversationEndPinTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public void An_unloaded_or_replaced_session_drops_scrollbar_custody_without_a_release(bool switchSession)
+    public void An_unloaded_or_replaced_session_drops_scrollbar_and_navigation_custody_without_a_release(bool switchSession)
     {
         var view = new SessionView();
         view.PrepareHistoryForProbe();
         view.Scroller.Press(new Microsoft.UI.Xaml.Controls.Primitives.ScrollBar { Parent = view.Scroller }, 7);
+        view.Scroller.Bring(new Microsoft.UI.Xaml.UIElement { Top = -50, Height = 200 }, 0);
         if (switchSession) { view.SwitchForProbe(); }
         else { view.DetachForProbe(); }
         view.Scroller.VerticalOffset = view.Scroller.ScrollableHeight;
