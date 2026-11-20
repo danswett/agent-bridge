@@ -174,7 +174,17 @@ static partial class SelfTest
                 var entryGap = Gap();
                 requiredRows = startCount + 64;
                 growthFloor = startExtent + 1.5;
+                // The repeater realises history rows during layout, a frame or more after the last update
+                // burst; sampling at once passed only when realisation happened to win the race (drawn
+                // history 0 with a long surface). Wait on rendered frames for the unchanged validity
+                // rule, bounded by the same frame budget as the control's settle.
                 var entry = Surface();
+                for (var settle = 0; settle < 60 && !(entry.Valid && Gap() > 1.5); settle++)
+                {
+                    await Frame();
+                    entry = Surface();
+                }
+                entryGap = Gap();
                 Record("reference-prerequisites");
                 check(entry.Valid && entryGap > 1.5,
                     $"bottom bounce rapid setup: valid long drawn surface away from end (valid {entry.Valid}, gap {entryGap:0.##}, drawn history {entry.DrawnHistory}, in-view history/response {entry.VisibleHistory}/{entry.VisibleResponse})");
