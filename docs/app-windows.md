@@ -64,6 +64,10 @@ and reading position; a missing or stale session falls back to the first availab
 The record contains only opaque session/turn keys and scroll geometry, not transcript text.
 This recovery is independent of crash reporting and sends nothing.
 
+Scrolling upward releases the conversation's end pin and resumes drawing undrawn cached
+turns even while the pointer remains over the conversation. Older drawing still waits for
+the latest exchange's first frame and pauses during active navigation or scrolling.
+
 Sent person-message bubbles recognise host-staged attachment references, including earlier
 turns. Images available on a local disk show thumbnails that open a named image viewer;
 missing, oversized and non-image attachments keep filename chips without exposing paths.
