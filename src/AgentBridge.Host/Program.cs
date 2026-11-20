@@ -233,7 +233,7 @@ switch (command)
     case "agents":
         {
             return await AgentCommands.RunWithProfileAsync(arguments, Identity.DefaultRoot,
-                () => Refused("adopt a session or end its adoption"), Console.Out, Console.Error);
+                () => Refused(arguments.ElementAtOrDefault(1) == "lite" ? "kill own-agents messaging" : "adopt a session or end its adoption"), Console.Out, Console.Error);
         }
     case "watch":
         {
@@ -739,6 +739,8 @@ async Task<int> ServeAsync(HostHandover handover)
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
         name: fleetNames.Get, log: Log, sign: fleetTrust.Sign);
     var loadService = new LoadService(source, () => load.Current, () => settings.LoadEnabled, Log);
+    // L6: one kill switch is the mode of both sides; it trusts present same-account hosts, no pins.
+    var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         LoadEnabled = () => settings.LoadEnabled,
@@ -757,7 +759,8 @@ async Task<int> ServeAsync(HostHandover handover)
         SignInDevices = self => PersonDevices.View(personRoster, rosterAccount(), self),
         Manage = manage,
         Diagnostics = diagnostics,
-        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)),         new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteDeliver),
+        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(liteKill, liteDeliver),
+        LiteKill = liteKill,
     };
     Log(settings.LoadStatus);
     // Who is on the other end of the pipe: the app beside this host, or something inside an
@@ -919,7 +922,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
     var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
@@ -996,6 +999,20 @@ async Task<int> ServeAsync(HostHandover handover)
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
             liteLink.Attach(relay, hub);
+            // L6: tells the other pinned hosts of a newer kill, including one `agents lite kill` made in another process.
+            _ = Task.Run(async () =>
+            {
+                using var tick = new PeriodicTimer(TimeSpan.FromSeconds(5));
+                try
+                {
+                    while (!relay.Completion.IsCompleted && await tick.WaitForNextTickAsync(current.Token))
+                    {
+                        try { await liteKill.PushAsync(relay, hub, current.Token); }
+                        catch (Exception e) when (e is not OperationCanceledException) { Log($"lite: kill push failed ({e.GetType().Name})"); }
+                    }
+                }
+                catch (OperationCanceledException) { }
+            });
             fleetRoster.Attach(relay);
             usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);

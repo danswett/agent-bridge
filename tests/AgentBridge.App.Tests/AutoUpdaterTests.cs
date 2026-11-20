@@ -73,6 +73,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public Action<Action<int>, Action<long, long?>>? DownloadWithBytes;
         public TaskCompletionSource? DownloadGate;
         public string? InstalledVersion { get; set; } = "0.1.0";
+        public HaltPolicySnapshot? HaltPolicy { get; set; }
         public DateTimeOffset? DiscoveredAt { get; set; }
         public string? CheckSource { get; set; }
         public int? GitHubRemaining { get; set; }
@@ -469,6 +470,62 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.NotEmpty(late.Sent(HostOps.ProbeHold));
     }
 
+    // #3241: a held host can end while another profile's hold is awaited and its pid go to a host
+    // never held, which the settlement took by pid. Another profile's is held before the update
+    // goes ahead; one under this profile's own pid, its host already stopped, refuses it, as it does
+    // when this profile's host's start time could not be read as the update began.
+    [Theory]
+    [InlineData(6161, true)]
+    [InlineData(4242, true)]
+    [InlineData(4242, false)]
+    [Trait("Category", "Network")]
+    public async Task A_held_hosts_pid_taken_by_another_host_before_the_holds_settle_is_not_taken_for_the_held_one(int reused, bool ownStartKnown)
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        if (ownStartKnown) { processes.StartTimes[4242] = Make.T0; }
+        processes.StartTimes[6161] = processes.StartTimes[7171] = Make.T0;
+        await using var first = new FakeHost();
+        await using var last = new FakeHost();
+        first.Start();
+        last.Start();
+        first.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        last.Status = FakeHost.StatusOf() with { ProcessId = 7171 };
+        first.On(HostOps.ProbeHold, _ => new ProbeHoldResult(false));
+        var holdsAtReuse = -1;
+        last.On(HostOps.ProbeHold, _ =>
+        {
+            // The last round's first hold is answered; then that host ends and its pid is taken.
+            if (host.Sent(HostOps.Stop).Count > 0 && holdsAtReuse < 0)
+            {
+                holdsAtReuse = first.Sent(HostOps.ProbeHold).Count;
+                processes.StartTimes[reused] = Make.T0.AddSeconds(5);
+            }
+            return new ProbeHoldResult(false);
+        });
+        host.On(HostOps.Stop, data =>
+        {
+            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
+            return new { stopping = true };
+        });
+        var updating = Manager(others: [first.Folder, last.Folder], package: [4242, 6161, 7171], startsKnown: false);
+        var applied = false;
+
+        var update = updating.StopAndApplyAsync(() => { }, () => applied = true);
+        if (reused == 6161)
+        {
+            await update;
+            Assert.True(applied);
+            Assert.True(first.Sent(HostOps.ProbeHold).Count > holdsAtReuse, "the host under the reused pid was never held");
+            return;
+        }
+        var refused = await Assert.ThrowsAsync<HostBusyException>(() => update);
+
+        Assert.Contains("pid 4242", refused.Message, StringComparison.Ordinal);
+        Assert.False(applied);
+        Assert.Single(processes.Started);
+    }
+
     // #2884 review: a host started from the installation during the scan after the stop's waits was
     // never held, and that scan passes the package's own processes; the update would end it mid-probe.
     // One whose pid was reused, or whose start time could not be read when held, is not confirmed.
@@ -618,8 +675,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
-    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null, TimeSpan? connectTimeout = null, bool startsKnown = true) =>
-        new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
+    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null, TimeSpan? connectTimeout = null, bool startsKnown = true)
+    {
+        // This profile's host's start time is known when an update reads it, before the package's.
+        if (startsKnown) { processes.StartTimes.TryAdd(4242, Make.T0); }
+        return new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
             ct => LocalClient.ConnectAsync(host.Endpoint, connectTimeout ?? TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
         {
             StartTimeout = TimeSpan.FromSeconds(5),
@@ -642,6 +702,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             // test needs to run out is advanced by hand.
             Time = held,
         };
+    }
 
     // #238: the switch turned off while the host answers about its probes stops the install. Since
     // #516 that switch, "Download updates automatically", is what lets Install between turns
@@ -1081,6 +1142,28 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Contains(log, l => l.StartsWith("auto-update: installing 0.2.0, as it installs between turns", StringComparison.Ordinal));
     }
 
+    // #3307: unasked, nothing installs over bad-release protection this machine could not check
+    // (stale or unreadable); it holds and says why. A fresh policy installs as before.
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Set_to_install_between_turns_an_install_holds_while_bad_release_protection_is_stale_or_unreadable(bool readable, bool fresh)
+    {
+        InstallBetweenTurns();
+        updater.HaltPolicy = new(readable ? new(1, """{"v":1,"halted":[]}""", []) : null, Make.T0, fresh);
+        await StartAsync();
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        if (fresh) { await Wait.UntilAsync(() => updater.Applied, "the install between turns", TimeSpan.FromSeconds(5)); return; }
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Contains(AutoUpdater.PolicyHold, auto.State.Waiting);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Set_to_install_between_turns_nothing_installs_while_a_turn_runs_or_a_question_waits()
@@ -1344,8 +1427,59 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData("app")]
+    [InlineData("host")]
+    [InlineData("launcher")]
+    public async Task A_profile_refusal_banner_names_the_blocking_profile_and_process(string kind)
+    {
+        var refusal = $"bridge profile 'work' {kind} (pid 4242) runs from this installation";
+        var banner = new AppUpdateViewModel(() => "0.2.0", _ => Task.FromResult<string?>(refusal));
+
+        Assert.Equal(refusal, await banner.RestartAsync(null));
+
+        Assert.Equal($"The update didn't install because {refusal}.", banner.Message);
+        Assert.True(banner.Failed);
+        Assert.Equal("Try again", banner.ActionLabel);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Restart_to_update_proceeds_with_only_the_default_profiles_host_and_launcher()
+    {
+        await StartAsync(FakeHost.StatusOf() with { ProcessId = 20 });
+        othersProbe = () => PackageProcesses.Others(app, "default", 10, othersAskedFor,
+            [new(20, "agent-bridge-host", Path.Combine(app, "agent-bridge-host.exe"), "host.exe serve --profile default") { StartedAt = Make.T0 },
+             new(30, "agent-bridge-hostw", Path.Combine(app, "agent-bridge-hostw.exe"), "hostw.exe serve --profile default") { StartedAt = Make.T0 }]);
+        await auto.TickAsync();
+
+        Assert.Null(await auto.RestartToUpdateAsync());
+        Assert.True(updater.Applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Restart_to_update_refuses_a_real_second_profile_before_stopping_anything_and_names_it()
+    {
+        await StartAsync(FakeHost.StatusOf() with { ProcessId = 20 });
+        othersProbe = () => PackageProcesses.Others(app, "default", 10, othersAskedFor,
+            [new(4242, "agent-bridge-host", Path.Combine(app, "agent-bridge-host.exe"), "host.exe serve --profile work") { StartedAt = Make.T0 }]);
+        await auto.TickAsync();
+        var banner = AppUpdateViewModel.For(auto);
+
+        await banner.RestartAsync(null);
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal("The update didn't install because bridge profile 'work' host (pid 4242) runs from this installation.", banner.Message);
+        Assert.Equal("Try again", banner.ActionLabel);
+    }
+
+    [Theory]
     [InlineData("another profile's app (pid 4242) runs from this installation", "another bridge profile is running from this installation")]
     [InlineData("agent-bridge-host (pid 12) runs and cannot be looked at", "another bridge profile is running from this installation")]
+    [InlineData("bridge profile '../work' host (pid 4242) runs from this installation", "another bridge profile is running from this installation")]
+    [InlineData("bridge profile 'work' host (pid 4242) runs from this installation\nprivate detail", "another bridge profile is running from this installation")]
     [InlineData(@"installing 0.2.0 failed: C:\Users\dana\AppData\Local\AgentBridge\Update.exe is missing", "the installer reported an error")]
     [InlineData("the host's status could not be read: pipe agent-bridge-7 broken", "the host didn't answer")]
     [InlineData("the update downloaded changed while the host stopped (0.2.0 is no longer the one ready): 0.3.0 is ready now, so choose Restart to update again", "a newer update was downloaded meanwhile")]

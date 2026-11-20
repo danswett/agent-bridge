@@ -349,7 +349,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    (its own output, and it runs in the whole ring whatever the plan says, except `app` and
    `app-installer`, which always require their own output to be true: the whole ring alone
    brings neither job to a pull request or main push, and a pull request's whole ring leaves the
-   `windows-11-arm` product leg to `main`, #1249); the plan
+   `windows-11-arm` product leg to `main`, #1249; a job whose every leg is post-merge puts
+   `github.event_name != 'pull_request' &&` before it, #3209); the plan
    step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
    compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
    delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, `sign`, each pinned to
@@ -432,6 +433,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      Install failure stays fatal. Successful cold downloads stage debs before install and save even on later failure.
      Keys include OS, arch, image, exact dry-run package-list hash and ref hash; restores share only image/list matches.
      PR entries stay PR-scoped; main seeds its own. Bad exact keys cannot be overwritten: `gh cache delete <key>`.
+     Invalid exact-key hits still require authenticated redownloads, but use apt `-qq` to suppress
+     repeated progress, not errors; one warning explains the immutable key and deletion recovery.
+     Prefix-hit downloads and forced fallback proof keep their normal output.
      Fakes model the trusted Release/index/archive chain; hosted Linux cache-hit proof is still required.
      The four subsequent browser
      installs omit `--with-deps`, so they cannot trigger another apt update.
@@ -439,9 +443,16 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      (#2025; outage runs 43039845647 and 43039976393). A healthy but slow cold update
      now has less time per attempt than the old five-minute limit. Forced-proof checks
      below are unchanged.
-     Each of those jobs gets 35 minutes, so a
-     fallback download still leaves time for the tests; the browsers' own download, on a cache
-     miss, is unchanged. To prove that fallback once without waiting for a slow mirror, once this
+     **Retry budget versus the 35-minute job cap:** limits apply per attempt and per mirror,
+     not to the total step. Conservatively including the 30-second kill grace on every attempt,
+     Canonical updates allow `4 * (60 + 30) + 15 + 30 + 60 = 465 s` (7m45s), and downloads
+     allow `3 * (600 + 30) + 5 + 20 = 1915 s` (31m55s). Combined, `2380 s` (39m40s)
+     already exceeds the job's `2100 s`; earlier Azure attempts and its up-to-seven-second
+     DNS probe can add more. The job timeout is the final bound, not a guarantee of test
+     headroom. Local planning/offline dpkg install, browser downloads, setup and tests are
+     outside these network retry budgets; dpkg is deliberately not wrapped in the network
+     timeout. These fakes establish bounds/branches, not hosted cold-run success.
+     To prove that fallback once without waiting for a slow mirror, once this
      `workflow_dispatch` trigger is on `main` (until then a branch's run by hand may not
      start): make a new commit of its own on a throwaway branch from `main` (an empty one,
      `git commit --allow-empty`, with the usual trailers), push the branch, never open a pull
@@ -617,8 +628,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      and the log marks it `[post-merge]`; on a pull request's CI run a post-merge job that
      failed or is running counts as passed and the description adds `post-merge, not counted:`.
      Any other tier, a renamed job, or a missing or unreadable catalog blocks. The arm64 waiver
-     applies first, so a waived job still needs its receipt. ci.yml's own gate (quality-gate)
-     still waits on those jobs until B2.
+     applies first, so a waived job still needs its receipt. ci.yml runs post-merge jobs on main
+     and manual runs only (#3209): a pull request leaves out app's and pwa-ui's post-merge legs
+     (their matrix include adds them only when the event isn't `pull_request`), skips a job whose
+     every leg is post-merge (`github.event_name != 'pull_request' &&` before its gate shape) and
+     its quality-gate doesn't count those jobs as selected (the check step's `PR_OFF`). The catalog
+     check holds all three to the catalog's `tier_jobs`. Required checks still run on every pull
+     request, so the ruleset needs no change; main's quality-gate still needs every leg to publish.
    - The standing rule (owner decision 2026-11-08, replacing the 2026-11-05 label of #955):
      Copilot and Codex reviews are optional extras, and the receipts are the gate. A PR needs a
      success independent-review receipt on its head from a listed poster and no Copilot review,
@@ -936,19 +952,45 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
 - **Main-red detection** ([issue 3074](https://github.com/danswett/agent-bridge/issues/3074)):
   `main-red.yml` handles completed CI push runs on main using main's trusted script, with no polling.
   Failure, timeout and startup failure open or update one bot-authored `main-red` issue; success
-  closes it, including reruns. Cancelled, skipped, stale and duplicate events make no changes.
-  An incomplete rerun does not hide red: the detector reads the latest completed attempt and its
-  attempt-specific jobs immediately, preserving the five-minute reporting SLA without waiting for
-  the rerun. A newer completed push still supersedes an older event.
+  closes it, including reruns. Every detector applies the newest decisive (red or green) attempt across
+  main's recent push runs and all their attempts, whichever event started it: cancelled, skipped and
+  still-running attempts are neither a verdict nor a hold, and writes only move past the newest recorded
+  attempt, so every delivery order converges. The completed event preserves its attempt and verdict
+  if a retry has already started; job evidence comes from that exact attempt. Duplicate evidence,
+  including a recovered incident, is not reposted; a recovery whose close failed is closed on redelivery.
+  An intervening successful attempt resets consecutive failures and quarantine-request state even when its
+  event is delayed; retained evidence from a recovered attempt cannot generate a quarantine request.
+  Historical entries remain, and a newer red verdict keeps the incident open.
+  Older-run red evidence is not backfilled across a newer decisive run; output explains this explicitly.
+  A missing old-run entry still leaves automatic revert fail-safe, with no change to its evidence requirements.
   Evidence contains capped, mention-neutralised job/test names, never raw logs; unreadable logs are noted.
   GitHub issues and the label are the only alert channel: no assignee, owner mention or phone notification.
   Tiered gating B3 ([issue 3210](https://github.com/danswett/agent-bridge/issues/3210)): a failed job named
   in a `tier: post-merge` suite's `tier_jobs` in `catalog.yml` is listed as `Job (post-merge-tier)`. When
   only such jobs failed (the `quality-gate` aggregate aside), the entry says so: an alert that never feeds
-  a pull request's merge verdict. The issue stays open until main's CI is green; quarantine proposals are
-  B3b. Missing or IO-unreadable tier data means blocking (an unreadable catalog emits a warning,
-  not a lost alert). If a later entry includes a blocking failure, a post-merge-only issue title
-  is promoted to the ordinary main-red title before that entry is posted.
+  a pull request's merge verdict. The issue stays open until main's CI is green. Missing or unreadable tier data
+  means blocking (an unreadable catalog warns; it never loses the alert). If a later entry has a blocking
+  failure, a post-merge-only issue title is promoted to the ordinary main-red title before that entry is posted.
+  B3b: when two entries in a row (no green between) name the same single test, and every failed job in
+  each but `quality-gate` is post-merge tier, the second entry adds one `quarantine-request: test=<name>`
+  line, once per unrecovered streak, with the [S3b generator](https://github.com/danswett/agent-bridge/pull/3078)
+  command. `main-red.ps1` then calls `quarantine-pr.ps1` by path (24 h expiry, draft `fixes-main` PR), but
+  only while `MAIN_RED_QUARANTINE` is exactly `on` in its environment and the script exists (until PR 3078
+  lands, the request is only recorded). The generator keeps its own fences: the repository variable rechecked
+  before each write, and only attempt 2 of one failed run; a refusal is a warning, never a failed detection.
+  The first request reserves the one opportunity for that test across the unrecovered streak, not one
+  per distinct test. The intent line is written to the alert before the generator runs, so a failed write
+  runs nothing. A successful generator invocation then adds `quarantine-completed: test=<name> run=<id>
+  attempt=<n>` in its own comment, naming the attempt that requested it; a refusal, nonzero exit, missing
+  script, disabled switch or failed completion write leaves the intent pending. Later eligible entries for
+  the requested test may try again until completion; duplicate events still do nothing. A completion is
+  bound to its streak: it suppresses that unrecovered streak only (a change of the latest failing test alone
+  is not a new streak), never a fresh streak after a recovery. A legacy completion without `run=` applies
+  only to the streak open when GitHub recorded the comment (`createdAt`), which ends at the next recovery. If
+  a completion comment is malformed, lacks a timestamp, or shares its second with entries on both sides of a
+  recovery, that entry's evaluation fails before its own write or any generator call rather than guess (a
+  retained earlier entry published by the same detection is independent evidence and may already be recorded).
+  Nothing here posts a status, check or label, so no merge verdict reads it.
   Offline test: `quality/test-main-red.ps1` (catalog suite `main-red`).
 - **Culprit auto-revert** ([issue 3211](https://github.com/danswett/agent-bridge/issues/3211)):
   `pwsh quality/revert-culprit.ps1 -Repository <owner/repo>` acts once main has been red for 15 minutes
@@ -970,7 +1012,8 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
-- **The win-arm64 waiver** (#2564, owner decision 2026-11-13, until **2026-11-20 00:00 PT**, 08:00 UTC):
+- **The win-arm64 waiver** (#2564, owner decision 2026-11-13, renewed by the owner
+  2026-11-19 22:50 PT until **2026-11-27 00:00 PT**, exactly `2026-11-27T08:00:00Z`):
   while the repository variable `ARM64_WAIVER` is exactly `on` (off or unset waives nothing; the owner
   sets it), `quality-gate` counts a failed needed job as success when its only failures are
   `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly,
@@ -982,7 +1025,19 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   skipped leg waive nothing. The Arm64 jobs still run and stay red, and `publish-gate` still reads
   `app`'s raw result, so main doesn't publish while app legs fail. Remove it (script, test, catalog suite,
   the gate's two steps) once #2563 and the self-test fix are on main and three main push runs in a
-  row show all three jobs green; extending it needs a new owner decision.
+  row show all three jobs green. The Nov 19 renewal supersedes the earlier Nov 20 hard expiry;
+  it changes neither the three-job scope nor the switch or safeguards. The waiver applies only
+  strictly before the new cutoff and waives nothing at or after it; any further extension needs
+  a new owner decision. This is not proof of Arm64 runtime correctness or landing authorization.
+  **Should win-arm64 gate publishing? Yes** (B3b, #3210): a release ships and signs both architectures
+  whole, and the Arm64 package is uploaded only after its own self-test passes, so publishing without
+  it would ship nothing, or an untested build, to Arm64 copies. But one self-test flake (#2026) should not
+  hold a release: the smallest safe change, proposed to Quality in the B3b PR, retries only that step,
+  once, on win-arm64, with a warning naming #2026. `publish-gate` is unchanged; two failures still block.
+  A crash can leave high contrast on, so the retry would skip the contrast transition: on CI,
+  `build/app-self-test.ps1` records the setting before the first attempt, and a later attempt stops
+  what is left of the app, puts the setting back and refuses to run if it cannot
+  (`build/test-app-self-test-desktop.ps1`, fake boundaries).
   Offline test: `quality/test-arm64-waiver.ps1` (catalog suite `arm64-waiver-script`).
 - **The weekly report** (`weekly-report`, [weekly-report.yml](../.github/workflows/weekly-report.yml))
   is how the flake record gets read, so flakes are fixed rather than re-run. Every Monday at 08:00

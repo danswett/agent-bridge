@@ -8,7 +8,8 @@ public sealed class InstallationScanTimeoutTests
     public async Task A_clear_59_second_scan_is_reused_by_the_remaining_preflight_checks()
     {
         var clock = new FakeTimeProvider();
-        var budget = new InstallationFiles.Budget(clock);
+        // An unchanged lock footprint, as the app's: what lets a clear scan be reused.
+        var budget = new InstallationFiles.Budget(clock) { LockedFiles = () => [] };
         var scans = 0;
         string? Scan()
         {
@@ -99,6 +100,19 @@ public sealed class InstallationScanTimeoutTests
             Assert.Equal(2, scans);
         }
         finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    // #3241: a budget given no lock footprint (the app always gives one) could not see an image
+    // newly held, so it keeps no clear scan to reuse.
+    [Fact]
+    public async Task A_clear_scan_without_a_lock_footprint_is_not_reused()
+    {
+        var budget = new InstallationFiles.Budget(new FakeTimeProvider());
+        var scans = 0;
+        string? Scan() => Interlocked.Increment(ref scans) == 1 ? null : "fixture (pid 42)";
+
+        Assert.Null(await budget.ProbeOnceAsync(Scan, default));
+        Assert.Equal("fixture (pid 42)", await budget.ProbeOnceAsync(Scan, default));
     }
 
     [Fact]

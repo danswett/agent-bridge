@@ -51,6 +51,11 @@ public static class HaCommands
                 {
                     var token = readSecret();
                     if (token is null) { error.WriteLine("No token was given; nothing changed."); return 1; }
+                    if (token.Length == 0)
+                    {
+                        error.WriteLine("Nothing was entered (0 characters). Paste the token and press Enter, or pipe it: Get-Clipboard | agent-bridge-host ha token set");
+                        return 1;
+                    }
                     SecretInput.Received(token, output, fingerprint: true);
                     if (SecretInput.HaFormatProblem(token) is { } malformed)
                     {

@@ -214,7 +214,7 @@ public class PlanScriptTests
                         : new[] { "ubuntu-latest", "windows-latest", "windows-11-arm" },
                     JsonSerializer.Deserialize<string[]>(outputs["product-os"]));
             Assert.Equal("needs.plan.outputs.app == 'true'", ((YamlMappingNode)jobs["app"])["if"].ToString());
-            Assert.Equal("!cancelled() && (needs.plan.outputs.app-installer == 'true')",
+            Assert.Equal("!cancelled() && github.event_name != 'pull_request' && (needs.plan.outputs.app-installer == 'true')",
                 ((YamlMappingNode)jobs["app-installer"])["if"].ToString());
             Assert.Equal("${{ steps.whole-ring.outputs.base-known }}",
                 ((YamlMappingNode)select["env"])["BASE_KNOWN"].ToString());
