@@ -1,5 +1,8 @@
 using System.Collections.ObjectModel;
+using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Hosting;
@@ -11,6 +14,77 @@ namespace AgentBridge.App;
 
 static partial class SelfTest
 {
+    public static async Task RunMoveDownProbeAsync(MainWindow window, string outFile, Action<int> exit)
+    {
+        var passed = new List<string>();
+        var failed = new List<string>();
+        void Check(bool ok, string what)
+        {
+            (ok ? passed : failed).Add(what);
+            if (!ok) { AppLog.Write($"self-test: failed: {what}; {ForegroundOwner()}"); }
+        }
+        var list = window.Sessions.Rows;
+        try
+        {
+            if (!await Until(() => Rows(window).Any(r => r.Card?.Row?.CanMoveDown == true
+                && list.ContainerFromItem(r.Card) is ListViewItem item
+                && ElementCompositionPreview.GetElementVisual(item).ImplicitAnimations?.ContainsKey("Offset") == true),
+                TimeSpan.FromSeconds(10))) { throw new InvalidOperationException("No movable demo row with row-shift motion ready."); }
+            Check(Motion.Enabled, "MoveDown probe runs with animation effects enabled");
+            foreach (var menu in new[] { false, true })
+            {
+                await Task.Delay(300);
+                var row = Rows(window).First(r => r.Card?.Row?.CanMoveDown == true
+                    && list.ContainerFromItem(r.Card) is ListViewItem { ContentTemplateRoot: SessionRow drawn } && drawn == r);
+                var card = row.Card!;
+                var before = list.Items.IndexOf(card);
+                if (menu)
+                {
+                    row.OpenMenu();
+                    await CaptureFrame(window.RootElement);
+                    var move = (MenuFlyoutItem)row.FindName("MoveDownItem");
+                    ((IInvokeProvider)new MenuFlyoutItemAutomationPeer(move).GetPattern(PatternInterface.Invoke)).Invoke();
+                }
+                else { row.MoveBy(1); } // The Alt+Down handler's shared entry point.
+                var observed = new TaskCompletionSource<(bool Offset, bool Translation)>();
+                var paused = new List<AnimationController>();
+                void Sample(object? sender, object args)
+                {
+                    if (observed.Task.IsCompleted || list.Items.IndexOf(card) != before + 1
+                        || list.ContainerFromItem(card) is not ListViewItem item || !ReferenceEquals(item.Content, card)) { return; }
+                    var visual = ElementCompositionPreview.GetElementVisual(item);
+                    var offset = visual.TryGetAnimationController("Offset");
+                    var translation = visual.TryGetAnimationController("Translation");
+                    if (offset is null && translation is null) { return; }
+                    foreach (var controller in new[] { offset, translation }.OfType<AnimationController>())
+                    {
+                        controller.Pause();
+                        paused.Add(controller);
+                    }
+                    observed.TrySetResult((offset is not null, translation is not null));
+                }
+                // Subscribe after MoveBy's AfterLayout callback, so its explicit slide is included.
+                list.LayoutUpdated += Sample;
+                try
+                {
+                    list.UpdateLayout();
+                    var active = await observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    var count = (active.Offset ? 1 : 0) + (active.Translation ? 1 : 0);
+                    Check(count == 1, $"{(menu ? "menu" : "keyboard")} MoveDown surviving row has exactly one active offset animation " +
+                        $"(count={count}, Offset={active.Offset}, Translation={active.Translation})");
+                }
+                finally
+                {
+                    list.LayoutUpdated -= Sample;
+                    foreach (var controller in paused) { controller.Resume(); }
+                }
+            }
+        }
+        catch (Exception e) { Check(false, $"MoveDown probe crashed: {e}"); }
+        await Write(outFile, new Dictionary<string, object?>(), passed, failed, null);
+        exit(failed.Count == 0 ? 0 : 1);
+    }
+
     static async Task CheckRowMotion(MainWindow window, Action<bool, string> check, string outFile)
     {
         var root = (Panel)window.RootElement;
