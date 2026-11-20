@@ -100,6 +100,25 @@ public sealed class MotionCatalogue
     public static bool Loops(bool animations) => animations;
 }
 
+public enum ExceptionLineMotion { None, Enter, Leave }
+public readonly record struct ExceptionLineChange(ExceptionLineMotion Motion, string Text, Tone Tone);
+
+// Only changed exception words move; a cleared line leaves a drawn-only copy of its last words.
+public sealed class ExceptionLineFade
+{
+    string text = "";
+    Tone tone;
+
+    public ExceptionLineChange Read(string next, Tone nextTone, bool reset = false)
+    {
+        var old = new ExceptionLineChange(ExceptionLineMotion.Leave, text, tone);
+        var changed = text != next;
+        (text, tone) = (next, nextTone);
+        if (reset || !changed) { return new(ExceptionLineMotion.None, next, nextTone); }
+        return next.Length > 0 ? new(ExceptionLineMotion.Enter, next, nextTone) : old;
+    }
+}
+
 // Scroll to a question (ui.md §5.3): the conversation follows a question that arrives only while
 // the person is at its end, and never while they have scrolled back through it, are touching it, or
 // have the pointer over it (#261's guard: a pointer over the conversation counts as a finger on it).
