@@ -1,6 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
-using System.Text;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace AgentBridge.Host.Core.Launch;
@@ -51,7 +51,7 @@ public sealed class LaunchRequestStore
             try { bytes = File.ReadAllBytes(path); }
             catch (Exception absent) when (absent is FileNotFoundException or DirectoryNotFoundException)
             {
-                return (new LaunchRequestStore(path, time, maxPending, new(StringComparer.OrdinalIgnoreCase)), null);
+                return (new LaunchRequestStore(path, time, maxPending, new(StringComparer.Ordinal)), null);
             }
             if (Parse(bytes) is not { } records) { return (null, $"{path} is damaged; it is kept as found and no launch request is accepted"); }
             var now = time.GetUtcNow();
@@ -77,7 +77,8 @@ public sealed class LaunchRequestStore
     public EnqueueResult Enqueue(string id, string launchText)
     {
         if (!IsValidId(id)) { return new(EnqueueStatus.InvalidId, null); }
-        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(launchText)));
+        // The UTF-16 units as they are: UTF-8 would read two different lone surrogates as one U+FFFD.
+        var hash = Convert.ToHexStringLower(SHA256.HashData(MemoryMarshal.AsBytes(launchText.AsSpan())));
         lock (_gate)
         {
             var now = _time.GetUtcNow();
@@ -194,7 +195,7 @@ public sealed class LaunchRequestStore
         using var doc = JsonDocument.Parse(bytes);
         var e = doc.RootElement;
         if (e.ValueKind != JsonValueKind.Object || Json.Int(e, "version") != Version || Json.Arr(e, "requests") is not { } list) { return null; }
-        var records = new Dictionary<string, LaunchRequestRecord>(StringComparer.OrdinalIgnoreCase);
+        var records = new Dictionary<string, LaunchRequestRecord>(StringComparer.Ordinal);
         foreach (var item in list.EnumerateArray())
         {
             var id = Json.Str(item, "id");
@@ -204,7 +205,7 @@ public sealed class LaunchRequestStore
             var stateText = Json.Str(item, "state");
             LaunchRequestState? state = Enum.GetValues<LaunchRequestState>().Where(s => Name(s) == stateText).Select(s => (LaunchRequestState?)s).FirstOrDefault();
             if (!IsValidId(id) || state is not { } known || hash is not { Length: 64 } || !hash.All(char.IsAsciiHexDigitLower)
-                || Json.Time(item, "queuedAt") is not { } queued || Json.Time(item, "changedAt") is not { } changed
+                || Json.Time(item, "queuedAt") is not { } queued || Json.Time(item, "changedAt") is not { } changed || changed < queued
                 || (session is not null && !IsToken(session, 128)) || (code is not null && !IsToken(code, 128))
                 || (known == LaunchRequestState.Launched) != (session is not null)
                 || (known is LaunchRequestState.Refused or LaunchRequestState.Failed) != (code is not null)
