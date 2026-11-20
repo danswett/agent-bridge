@@ -182,7 +182,8 @@ function watchVisibility(doc) {
       }
     } else {
       for (const a of paused) {
-        if (a.playState === 'paused' && a.effect?.target?.isConnected) { a.play(); }
+        // Detached targets can return later; release our pause before forgetting the animation.
+        if (a.playState === 'paused') { a.play(); }
       }
       paused.clear();
     }
