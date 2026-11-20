@@ -165,7 +165,7 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
     }
 
     // Every process's parent, from one snapshot.
-    static Dictionary<int, int>? Parents()
+    internal static Dictionary<int, int>? Parents()
     {
         var snapshot = CreateToolhelp32Snapshot(Th32csSnapProcess, 0);
         if (snapshot == -1) { return null; }
@@ -177,12 +177,13 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
             {
                 map[(int)entry.ProcessId] = (int)entry.ParentProcessId;
             }
-            return map;
+            // An interrupted enumeration is unknown, never an authorized partial tree.
+            return map.Count > 0 && Marshal.GetLastWin32Error() == 18 /* ERROR_NO_MORE_FILES */ ? map : null;
         }
         finally { CloseHandle(snapshot); }
     }
 
-    static DateTimeOffset? CreatedAt(int processId)
+    internal static DateTimeOffset? CreatedAt(int processId)
     {
         var process = OpenProcess(ProcessQueryLimitedInformation, false, (uint)processId);
         if (process == 0) { return null; }

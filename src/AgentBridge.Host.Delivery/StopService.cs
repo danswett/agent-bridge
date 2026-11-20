@@ -28,6 +28,7 @@ public sealed record HeldOpen(IHeldProcess? Process, bool Gone, string? Refusal)
 public interface IHeldProcess : IDisposable
 {
     int Id { get; }
+    string? ExitProblem => null;
 
     // True once the process has exited; false if it is still running after timeout.
     Task<bool> WaitForExitAsync(TimeSpan timeout);
@@ -76,7 +77,7 @@ public sealed class StopOptions
 //     session.stop. An otherwise idle session ends on one press.
 //   * Graceful first: /exit typed into the agent's console, as a reply would be, so the CLI
 //     writes its transcript and releases its lock, and the session stays resumable. If it is
-//     still running after Grace, the process alone is terminated, never its tree.
+//     still running after Grace, its verified process tree is terminated.
 //   * Never the wrong process: the process discovery bound the session to, by id and start
 //     time, must be the one running under that id now, both when arming and when
 //     confirming, and is held open by handle from then until it has gone, so its id cannot
@@ -329,6 +330,11 @@ public sealed class StopService : ISessionStopper
             {
                 log($"ended {Short(session.Id)}: {(typed ? $"did not exit within {options.Grace.TotalSeconds:0} s; " : "")}terminated pid {pid}");
                 return Ended(true);
+            }
+            if (held.ExitProblem is { } problem)
+            {
+                log($"end of {Short(session.Id)} (pid {pid}) could not verify tree exit: {problem}");
+                return Failed("the machine couldn't end the session");
             }
             return Failed(refused is not null
                 ? "the machine couldn't end the session"
