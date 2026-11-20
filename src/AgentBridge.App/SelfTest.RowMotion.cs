@@ -98,10 +98,12 @@ static partial class SelfTest
             retarget.Pause();
             retarget.Progress = 0;
             var moving = await RowMotionSettled(root, TrackedTop, check, "retarget start");
+            if (!double.IsFinite(moving)) { return; }
             check(moving > slot.Y + 1 && moving < original, $"row neighbour is mid-shift ({original}, {moving}, {slot.Y})");
             var target = original;
             retarget.Progress = 0.25f;
             var later = await RowMotionSettled(root, TrackedTop, check, "retarget quarter progress");
+            if (!double.IsFinite(later)) { return; }
             check(later >= moving - 5 && later <= target + 1,
                 $"interrupted shift continues from its drawn position ({moving}, {later}, {target})");
             var progress = (later - moving) / (target - moving);
@@ -110,7 +112,8 @@ static partial class SelfTest
             check(progress > standard + 0.12,
                 $"interrupted shift decelerates toward its new position ({t:0.00} timeline, {progress:0.00} progress)");
             retarget.Progress = 0;
-            var paused = await RowMotionSettled(root, TrackedTop, check, "retarget rewind");
+            var paused = await RowMotionSettled(root, TrackedTop, check, $"retarget rewind (moving={moving}, original={original}, slot.Y={slot.Y})");
+            if (!double.IsFinite(paused)) { return; }
             await CaptureFrame(root);
             var held = TrackedTop();
             check(retarget.Progress == 0 && double.IsFinite(paused) && Math.Abs(held - paused) <= 1 && Math.Abs(paused - moving) <= 3,
