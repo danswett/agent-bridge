@@ -459,8 +459,9 @@ public sealed class LaunchPieceTests : IDisposable
         var (starter, me) = (new WindowsAgentStarter(hidden: true), Process.GetCurrentProcess());
         var started = new Started(me.Id, new DateTimeOffset(me.StartTime).ToUniversalTime());
         var tick = started with { StartedAt = started.StartedAt.AddTicks(1) };
-        Assert.Equal<(bool?, bool?, bool?, bool?, bool)>((true, false, null, true, true), (starter.OwnsExactly(started, me.Id), starter.OwnsExactly(tick, me.Id),
-            starter.OwnsExactly(started with { ProcessId = 0 }, me.Id), starter.Owns(tick, me.Id), starter.Running(started with { StartedAt = started.StartedAt.AddMilliseconds(500) })));
+        Assert.Equal<(bool?, bool?, bool?, bool?, bool, bool?)>((true, false, null, true, true, false), (starter.OwnsExactly(started, me.Id), starter.OwnsExactly(tick, me.Id),
+            starter.OwnsExactly(started with { ProcessId = 0 }, me.Id), starter.Owns(tick, me.Id), starter.Running(started with { StartedAt = started.StartedAt.AddMilliseconds(500) }),
+            starter.OwnsExactly(WindowsAgentStarter.Identity(me.Id, created: null) with { StartedAt = started.StartedAt }, me.Id))); // a failed read's clock value equal to the live one
     }
 
     static string Echo => Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "agent-bridge-console-echo.exe" : "agent-bridge-console-echo");

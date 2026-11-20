@@ -569,8 +569,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal((o.Session, "copilot", "API", "ask"), (id, launched.Agent, launched.Workspace, launched.Permissions));
     }
 
-    // Relay A: only a session.launch request (HA, a device, or an agent under a grant) marks its
-    // session a fleet target; a restore and a verification launch never do.
+    // Relay A: only a session.launch request (HA, a device, or an agent under a grant) marks its session a fleet target; a restore and a verification launch never do.
     [Fact]
     public async Task Only_a_fleet_target_launch_marks_its_session_never_a_restore_or_verification_launch()
     {
@@ -579,11 +578,9 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var launcher = Launcher(Config());
         var fleet = new List<string>();
         launcher.FleetTargetStarted += (id, _) => { lock (fleet) { fleet.Add(id); } };
-
         var launched = await launcher.LaunchFleetTargetAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "home-assistant", null);
         var restored = await launcher.ResumeAsync(new ResumeAsk(Restored, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
         var verified = await launcher.LaunchVerificationAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-1");
-
         Assert.All([launched, restored, verified], r => Assert.Equal(LaunchOutcome.Started, r.Outcome));
         lock (fleet) { Assert.Equal([launched.Session!], fleet); }
     }
@@ -595,16 +592,13 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var launcher = Launcher(Config());
         var fleet = new List<string>();
         launcher.FleetTargetStarted += (id, _) => { lock (fleet) { fleet.Add(id); } };
-
         var plain = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-1");
         var audited = await launcher.LaunchAuditedAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-2", _ => _ => { });
-
         Assert.All([plain, audited], r => Assert.Equal(LaunchOutcome.Started, r.Outcome));
         lock (fleet) { Assert.Empty(fleet); }
     }
 
-    // The registry keeps the process the launch started, as it started it: one that takes the session id
-    // before the note (here in a SessionStarted handler, which runs first) inherits nothing; it leaves on exit.
+    // The registry keeps the process the launch started: one taking the session id before the note (a SessionStarted handler runs first) inherits nothing; it leaves on exit.
     [Theory, InlineData(false), InlineData(true)]
     public async Task A_fleet_target_is_the_process_its_launch_started_never_one_that_replaced_it_before_the_note(bool replaced)
     {

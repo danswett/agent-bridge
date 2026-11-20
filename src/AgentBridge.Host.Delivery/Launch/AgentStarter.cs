@@ -26,7 +26,7 @@ internal static class ConsoleStartup
 
 // A started process, by id and start time (which tells it from a later one given the same id),
 // or why nothing started.
-public sealed record Started(int ProcessId, DateTimeOffset StartedAt);
+public sealed record Started(int ProcessId, DateTimeOffset StartedAt, bool Unverified = false);
 
 // Starts an agent in a console window of its own on the person's desktop. The real one is
 // WindowsAgentStarter; tests use a fake, so no test ever starts an agent.
@@ -119,19 +119,17 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
 
     static Started Finish(ProcessInformation process)
     {
-        try
-        {
-            var startedAt = GetProcessTimes(process.Process, out var created, out _, out _, out _)
-                ? DateTimeOffset.FromFileTime(created)
-                : DateTimeOffset.UtcNow;
-            return new Started(process.ProcessId, startedAt.ToUniversalTime());
-        }
+        try { return Identity(process.ProcessId, GetProcessTimes(process.Process, out var created, out _, out _, out _) ? created : null); }
         finally
         {
             CloseHandle(process.Thread);
             CloseHandle(process.Process);
         }
     }
+
+    // An unread creation time is a clock reading marked Unverified: never a fleet identity, whatever a later read says.
+    internal static Started Identity(int processId, long? created) => created is { } at
+        ? new(processId, DateTimeOffset.FromFileTime(at).ToUniversalTime()) : new(processId, DateTimeOffset.UtcNow.ToUniversalTime(), Unverified: true);
 
     public bool Running(Started started)
     {
@@ -148,7 +146,7 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
     }
 
     // The handle's creation time to the tick, before and after the walk (a launch whose own read failed never matches).
-    public bool? OwnsExactly(Started started, int processId) => Exactly(started) is not true and var at ? at : Owns(started, processId) is not true and var own ? own : Exactly(started);
+    public bool? OwnsExactly(Started started, int processId) => started.Unverified ? false : Exactly(started) is not true and var at ? at : Owns(started, processId) is not true and var own ? own : Exactly(started);
     static bool? Exactly(Started started) => CreatedAt(started.ProcessId) is { } at ? at == started.StartedAt : null;
 
     public bool? Owns(Started started, int processId)

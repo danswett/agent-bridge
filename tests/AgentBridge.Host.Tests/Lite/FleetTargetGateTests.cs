@@ -20,7 +20,6 @@ public sealed class FleetTargetGateTests
 
     public FleetTargetGateTests()
     {
-        // As AgentStarter.OwnsExactly: whether the live process is the one started (same pid and start time); null when it cannot be told.
         launches = new(id => id == Target ? current : null, (started, pid) => unreadable ? null : current?.Id == pid && current.StartedAt == started.StartedAt);
         world.Genesis("P");
         world.Add("H", "P", "H", "G", kind: "host");
@@ -41,13 +40,6 @@ public sealed class FleetTargetGateTests
 
     async Task<bool> Allowed(Func<RosterVerifier?> roster, string target = Target, string? sender = null) =>
         (await new FleetTargetGate(launches, roster).CheckAsync(From(sender ?? world.Id("H")), target)).Allowed;
-
-    [Fact]
-    public async Task A_fleet_launched_allow_all_session_is_allowed_for_a_serving_host_sender()
-    {
-        Launch();
-        Assert.True(await Allowed(() => signed));
-    }
 
     [Fact]
     public async Task An_allow_all_session_launched_here_without_the_fleet_flag_is_refused()
@@ -123,6 +115,9 @@ public sealed class FleetTargetGateTests
         unreadable = false;
         Assert.True(await Allowed(() => signed));
         current = new(42, null);
+        Assert.False(await Allowed(() => signed));
+        current = new(42, DateTimeOffset.UnixEpoch);
+        launches.FleetLaunched(Target, new(42, DateTimeOffset.UnixEpoch, Unverified: true)); // a launch whose creation time could not be read
         Assert.False(await Allowed(() => signed));
     }
 }

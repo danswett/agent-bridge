@@ -48,7 +48,7 @@ public sealed class LiteLaunchLog(Func<string, SessionProcess?>? current = null,
     readonly ConcurrentDictionary<string, Started> fleet = new(StringComparer.Ordinal);
     public void Launched(string session, LaunchedWith with) => modes[session] = with.Permissions;
     public string? PermissionsOf(string session) => modes.GetValueOrDefault(session);
-    public void FleetLaunched(string session, Started started) => fleet[session] = started;
+    public void FleetLaunched(string session, Started started) { if (started.Unverified) { fleet.TryRemove(session, out _); } else { fleet[session] = started; } }
     public bool IsFleetTarget(string session)
     {
         if (!fleet.TryGetValue(session, out var launched)) { return false; }

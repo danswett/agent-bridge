@@ -389,8 +389,7 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(typed ? 1 : 0, f.Plans.Count);
     }
 
-    // Relay test 3 (Nov 20 12:33 PT): a forced-ask or listed allow-all session with no transcript yet gets its first relay message through the real replier.
-    [Theory, InlineData(LaunchProtocol.Ask), InlineData(LaunchProtocol.AllowAll)]
+    [Theory, InlineData(LaunchProtocol.Ask), InlineData(LaunchProtocol.AllowAll)] // relay test 3 (Nov 20 12:33 PT), through the real replier
     public async Task A_forced_ask_or_listed_session_with_no_transcript_yet_gets_its_first_relay_message(string permissions)
     {
         using var home = new global::Fixture();

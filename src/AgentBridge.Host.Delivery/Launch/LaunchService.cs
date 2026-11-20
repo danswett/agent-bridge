@@ -24,8 +24,7 @@ public interface ISessionLauncher
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot write durable launch evidence."));
 
     Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
-    // Relay A: a launch whose session becomes a fleet reply target, called only from Home Assistant's
-    // launch path and an agent's launch under a grant; a person's app or PWA launch never comes here.
+    // Relay A: a launch whose session becomes a fleet reply target (Home Assistant's launch path, an agent under a grant; never a person's app or PWA).
     Task<LaunchResult> LaunchFleetTargetAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare,
         CancellationToken cancellationToken = default) =>
         prepare is null ? LaunchAsync(request, peer, cancellationToken) : LaunchAuditedAsync(request, peer, prepare, cancellationToken);
@@ -268,10 +267,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // is decided; a handler that throws costs only itself.
     public event Action<string, LaunchedWith>? SessionStarted;
 
-    // The same moment, only for a session Home Assistant's launch path or an agent under a grant
-    // started: never a person's app or PWA launch, a restore or a verification launch. The lite
-    // fleet-target gate's registry; raised by this host alone, with the process the launch started as it
-    // started it (pid and start time), never one read later. A handler that throws costs only itself.
+    // The same moment, only for a session Home Assistant's launch path or an agent under a grant started (never a person's app
+    // or PWA launch, a restore or a verification launch), with the identity its launch read, never an unverified one. The lite
+    // fleet-target gate's registry; raised by this host alone. A handler that throws costs only itself.
     public event Action<string, Started>? FleetTargetStarted;
     public bool? Owns(Started started, int processId) => starter.OwnsExactly(started, processId);
 
@@ -1705,7 +1703,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         p.NotedId = id;
         try { SessionStarted?.Invoke(id, p.Launched); }
         catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the restore record could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
-        try { if (p.FleetTarget) { FleetTargetStarted?.Invoke(id, p.Started); } }
+        try { if (p.FleetTarget && !p.Started.Unverified) { FleetTargetStarted?.Invoke(id, p.Started); } }
         catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the fleet-target registry could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
     }
 
