@@ -249,7 +249,7 @@ only this repository's script on what the first wrote, as data. Every run that m
 issue shares one concurrency group, so two can never each open one.
 
 To re-pin, as its own pull request: regenerate from the new commit
-(`pwsh -NoProfile -File tools/ha-contract/Export-HaContract.ps1 -Source <checkout>`), make the
+(`pwsh -NoProfile -File tools/ha-contract/Export-HaContract.ps1 -Source <checkout> -Machine <machine>`), make the
 contract tests pass by implementing what moved (or withdrawing it, with the stage that will serve
 it), update this document, and close the issue by merging. The re-pin to `42fc551` added the
 heartbeat's attributes topic, the update-check button, the launch outcomes topic and the usage

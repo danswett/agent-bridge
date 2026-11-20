@@ -1243,7 +1243,7 @@ public sealed class AuthBackoffCallerTests : AuthBackoffFixture
         var log = new List<string>();
         void Log(string m) { lock (log) { log.Add(m); } }
         var guard = new HaAuthGuard(Record, time, Log);
-        await using var c = new HaConnector(new HaConnectorOptions { MachineName = "DSWETT-ARM8", Version = "0.1.914", Dev = true },
+        await using var c = new HaConnector(new HaConnectorOptions { MachineName = "host-a", Version = "0.1.914", Dev = true },
             Client(ha, guard), new FakeSessions(), () => null, log: Log, time: time);
 
         for (var t = TimeSpan.Zero; t < TimeSpan.FromHours(6); t += TimeSpan.FromSeconds(30))
@@ -1267,7 +1267,7 @@ public sealed class AuthBackoffCallerTests : AuthBackoffFixture
         var ha = new Answering(time) { Status = HttpStatusCode.InternalServerError };
         var log = new List<string>();
         var guard = new HaAuthGuard(Record, time);
-        await using var c = new HaConnector(new HaConnectorOptions { MachineName = "DSWETT-ARM8", Version = "0.1.914", Dev = true },
+        await using var c = new HaConnector(new HaConnectorOptions { MachineName = "host-a", Version = "0.1.914", Dev = true },
             Client(ha, guard), new FakeSessions(), () => null, log: m => { lock (log) { log.Add(m); } }, time: time);
 
         for (var t = TimeSpan.Zero; t < TimeSpan.FromMinutes(10); t += TimeSpan.FromSeconds(30))
