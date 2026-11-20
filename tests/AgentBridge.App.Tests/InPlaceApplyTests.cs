@@ -112,16 +112,102 @@ public sealed class InPlaceApplyTests : IDisposable
         Assert.Equal(before, Snapshot(Current));
     }
 
+    // A held file the new version replaces with a folder: the copy into it fails last (files are
+    // copied in name order), after old files moved aside and new ones were written.
+    void FailLast()
+    {
+        Write(Current, "x", "held, a folder in 2");
+        Write(Staged, @"x\y.dll", "added in 2");
+    }
+
     [Fact]
     public void A_file_that_cannot_be_written_mid_way_puts_the_old_version_back()
     {
-        // A folder where the new version has a file: the copy fails after old files moved aside.
-        Write(Current, @"lib\new.dll\inner.txt", "in the way");
+        FailLast();
         var before = Snapshot(Current);
 
-        var e = Assert.Throws<InPlaceApplyException>(() => Install(() => false, "mscordaccore.dll"));
+        var e = Assert.Throws<InPlaceApplyException>(() => Install(() => false, "x"));
 
-        Assert.Contains("put back", e.Message);
+        Assert.Contains("old version was put back", e.Message);
         Assert.Equal(before, Snapshot(Current));
+        Assert.False(Directory.Exists(Backup));
+    }
+
+    [Fact]
+    public void A_read_only_new_file_is_removed_when_the_old_version_is_put_back()
+    {
+        Write(Staged, "a.dll", "added in 2");
+        File.SetAttributes(Path.Combine(Staged, "a.dll"), FileAttributes.ReadOnly);
+        FailLast();
+        var before = Snapshot(Current);
+
+        var e = Assert.Throws<InPlaceApplyException>(() => Install(() => false, "x"));
+
+        Assert.Contains("old version was put back", e.Message);
+        Assert.Equal(before, Snapshot(Current));
+    }
+
+    [Fact]
+    public void A_read_only_old_file_does_not_leave_the_backup_behind()
+    {
+        File.SetAttributes(Held("AgentBridge.dll"), FileAttributes.ReadOnly);
+
+        Assert.True(Install(() => false, "mscordaccore.dll"));
+
+        Assert.Equal(Snapshot(Staged), Snapshot(Current));
+        Assert.False(Directory.Exists(Backup));
+    }
+
+    [Fact]
+    public void A_folder_the_new_version_replaces_with_a_file_installs()
+    {
+        Write(Current, @"lib\new.dll\inner.txt", "a folder in 1");
+
+        Assert.True(Install(() => false, "mscordaccore.dll"));
+
+        Assert.Equal(Snapshot(Staged), Snapshot(Current));
+    }
+
+    [Fact]
+    public void A_file_the_new_version_replaces_with_a_folder_is_put_back_on_failure()
+    {
+        Write(Current, "plugins", "a file in 1");
+        Write(Staged, @"plugins\p.dll", "a folder in 2");
+        FailLast();
+        var before = Snapshot(Current);
+
+        var e = Assert.Throws<InPlaceApplyException>(() => Install(() => false, "x"));
+
+        Assert.Contains("old version was put back", e.Message);
+        Assert.Equal(before, Snapshot(Current));
+    }
+
+    [Fact]
+    public void A_leftover_backup_whose_files_are_all_in_current_is_cleared_and_said()
+    {
+        Write(Backup, "AgentBridge.dll", "app 0");
+        File.SetAttributes(Path.Combine(Backup, "AgentBridge.dll"), FileAttributes.ReadOnly);
+        var log = new List<string>();
+
+        Assert.True(InPlaceApply.Install(() => false, () => [Held("mscordaccore.dll")], Staged, Current, Backup, log.Add));
+
+        Assert.Equal(Snapshot(Staged), Snapshot(Current));
+        Assert.False(Directory.Exists(Backup));
+        Assert.Contains(log, l => l.Contains("removed") && l.Contains(Backup));
+    }
+
+    [Fact]
+    public void A_leftover_backup_holding_the_only_copy_of_a_file_is_kept_aside_and_said()
+    {
+        Write(Backup, "only.dll", "nowhere else");
+        var log = new List<string>();
+
+        Assert.True(InPlaceApply.Install(() => false, () => [Held("mscordaccore.dll")], Staged, Current, Backup, log.Add));
+
+        Assert.Equal(Snapshot(Staged), Snapshot(Current));
+        Assert.False(Directory.Exists(Backup));
+        var kept = Assert.Single(Directory.GetDirectories(root, "current-inplace-*"));
+        Assert.Equal("nowhere else", File.ReadAllText(Path.Combine(kept, "only.dll")));
+        Assert.Contains(log, l => l.Contains("kept") && l.Contains(kept));
     }
 }

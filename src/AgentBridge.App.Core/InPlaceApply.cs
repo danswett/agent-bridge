@@ -45,9 +45,11 @@ public static class InPlaceApply
                 throw new InPlaceApplyException($"current{Path.DirectorySeparatorChar}{rel} is held by another program and is not the same in the new version; nothing was installed");
             }
         }
-        if (Directory.Exists(backup)) { throw new InPlaceApplyException($"an earlier install's backup is still at {backup}; nothing was installed"); }
+        if (Directory.Exists(backup)) { Recover(current, backup, log); }
         var moved = new List<string>();
         var written = new List<string>();
+        var created = new List<string>();
+        var removed = new List<string>();
         try
         {
             foreach (var rel in Files(current).Where(r => !keep.Contains(r)))
@@ -57,49 +59,100 @@ public static class InPlaceApply
                 File.Move(Path.Combine(current, rel), to);
                 moved.Add(rel);
             }
-            foreach (var rel in next.Where(r => !keep.Contains(r)))
+            // A folder left empty is in the way of a file of the same name in the new version.
+            foreach (var dir in Directory.EnumerateDirectories(current, "*", SearchOption.AllDirectories).OrderByDescending(d => d.Length).ToList())
+            {
+                if (!Directory.EnumerateFileSystemEntries(dir).Any()) { Directory.Delete(dir); removed.Add(dir); }
+            }
+            foreach (var rel in next.Where(r => !keep.Contains(r)).Order(StringComparer.OrdinalIgnoreCase))
             {
                 var to = Path.Combine(current, rel);
-                Directory.CreateDirectory(Path.GetDirectoryName(to)!);
-                File.Copy(Path.Combine(staged, rel), to);
+                var parent = Path.GetDirectoryName(to)!;
+                var missing = new List<string>();
+                for (var d = parent; d.Length > current.Length && !Directory.Exists(d); d = Path.GetDirectoryName(d)!) { missing.Add(d); }
+                Directory.CreateDirectory(parent);
+                created.AddRange(missing);
+                // Listed before the copy, so a copy that fails part way is removed with the rest.
                 written.Add(rel);
+                File.Copy(Path.Combine(staged, rel), to);
             }
             if (next.FirstOrDefault(rel => !Same(Path.Combine(staged, rel), Path.Combine(current, rel))) is { } bad)
             {
                 throw new IOException($"current{Path.DirectorySeparatorChar}{bad} is not the new version's bytes after copying");
             }
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            var back = Restore(current, backup, written, moved);
+            var back = Restore(current, backup, written, moved, created, removed);
             throw new InPlaceApplyException(back
                 ? $"the in-place install failed and the old version was put back; nothing was installed: {e.Message}"
-                : $"the in-place install failed and the old version could not all be put back (what is missing is in {backup}); nothing was installed: {e.Message}", e);
+                : $"the in-place install failed and current is partly updated; what could not be put back is in {backup}: {e.Message}", e);
         }
-        try { Directory.Delete(backup, recursive: true); }
+        try { DeleteTree(backup); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
-    // Undo in reverse: the new files out, the old ones back. False when any could not be.
-    static bool Restore(string current, string backup, List<string> written, List<string> moved)
+    // A backup an earlier install left (a crash, or a final delete that failed) blocked every later
+    // one. Where every file in it is also in current it is only a leftover; where one is not, it may
+    // hold the only copy, so it is kept beside it, never deleted.
+    static void Recover(string current, string backup, Action<string>? log)
+    {
+        try
+        {
+            if (Files(backup).All(rel => File.Exists(Path.Combine(current, rel))))
+            {
+                DeleteTree(backup);
+                log?.Invoke($"update: removed an earlier install's leftover backup at {backup}; every file in it is also in current");
+                return;
+            }
+            var kept = $"{backup}-{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+            Directory.Move(backup, kept);
+            log?.Invoke($"update: an earlier install's backup holds files that are not in current; it was kept at {kept}");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            throw new InPlaceApplyException($"an earlier install's backup at {backup} could not be cleared ({e.Message}); nothing was installed", e);
+        }
+    }
+
+    // Undo in reverse: the new files and folders out, the old ones back. False when any could not be.
+    static bool Restore(string current, string backup, List<string> written, List<string> moved, List<string> created, List<string> removed)
     {
         var whole = true;
-        foreach (var rel in written)
+        void Try(Action undo)
         {
-            try { File.Delete(Path.Combine(current, rel)); }
+            try { undo(); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { whole = false; }
         }
+        // A copy keeps the new version's read-only attribute, which File.Delete refuses.
+        foreach (var to in written.Select(rel => Path.Combine(current, rel)).Where(File.Exists))
+        {
+            Try(() => { File.SetAttributes(to, FileAttributes.Normal); File.Delete(to); });
+        }
+        // Deepest first, and only empty: a folder the new version made where a file was.
+        foreach (var dir in created.Distinct().OrderByDescending(d => d.Length).Where(Directory.Exists))
+        {
+            Try(() => { if (!Directory.EnumerateFileSystemEntries(dir).Any()) { Directory.Delete(dir); } });
+        }
+        foreach (var dir in removed) { Try(() => Directory.CreateDirectory(dir)); }
         foreach (var rel in moved)
         {
-            try { File.Move(Path.Combine(backup, rel), Path.Combine(current, rel)); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { whole = false; }
+            var to = Path.Combine(current, rel);
+            Try(() => { Directory.CreateDirectory(Path.GetDirectoryName(to)!); File.Move(Path.Combine(backup, rel), to); });
         }
         if (whole)
         {
-            try { Directory.Delete(backup, recursive: true); }
+            try { DeleteTree(backup); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
         return whole;
+    }
+
+    // Only for files nothing needs any more: Directory.Delete refuses a read-only one.
+    static void DeleteTree(string dir)
+    {
+        foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)) { File.SetAttributes(file, FileAttributes.Normal); }
+        Directory.Delete(dir, recursive: true);
     }
 
     static HashSet<string> Files(string dir) =>
