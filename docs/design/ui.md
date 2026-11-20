@@ -3337,6 +3337,7 @@ that survives a failed turn never hides the error behind "Delegating".
 | Code shown | "Waiting for sign-in · code expires *time*" | None (the sheet is open) |
 | Code expired | "Code expired" | Try again (a new request) |
 | Signed in, confirming (`recovery: pending`) | "Signed in · waiting for *n* sessions to confirm" | None |
+| Signed in here, the host's `pending` not yet come (`signin.done` first) | Same line, said once, held at most 5 s | Sign in (never Show code, whatever `recovery` says) |
 | Recovered (the host cleared `signInNeeded`) | "Signed in · *n* sessions recovered" for 60 s, then gone; or "Recovered by itself" when no person signed in | None |
 | Refused (the machine refused the request) | "Sign-in refused · *reason*" | Try again (a new request) |
 | Failed | "Sign-in failed" (`signin.done` carries no reason) | Try again (a new request) |
