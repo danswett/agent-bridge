@@ -4,13 +4,29 @@ using AgentBridge.Host.Delivery.Windows;
 using AgentBridge.Protocol;
 using Xunit;
 
-// #2144: what is already in Copilot's box when a reply comes, a person's or this host's own,
-// is refused as already typed and never touched.
+// #2144: words this host typed into Copilot's box and never sent are cleared before the next
+// reply; anything a person may have typed is never touched.
 public sealed class ReplyResidueTests
 {
     const string Id = "88888888-8888-4888-8888-888888888888";
     const string Words = "please rebase onto main and report the new head";
     const string Typed = "something is already typed in Copilot's input box";
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task The_hosts_own_unsent_words_are_cleared_audited_and_the_next_reply_delivered(bool enterSwallowed, bool wrapped)
+    {
+        await using var h = await Harness.Create();
+        await h.LeaveUnsent(enterSwallowed, wrapped);
+        var result = await h.Replier.ReplyAsync(h.Request("go on"));
+        Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
+        Assert.Equal(1, h.Clears);
+        Assert.Equal(["go on"], h.Sent);
+        Assert.Contains(h.Log, line => line.Contains("residue", StringComparison.Ordinal) && line.Contains($"{Words.Length} characters", StringComparison.Ordinal));
+        Assert.DoesNotContain(h.Log, line => line.Contains(Words, StringComparison.Ordinal));
+    }
 
     [Fact]
     public async Task Words_a_person_typed_are_refused_unchanged()
@@ -64,6 +80,61 @@ public sealed class ReplyResidueTests
         Assert.Equal(Words, h.Draft);
     }
 
+    [Theory]
+    [InlineData("stuck")]
+    [InlineData("person-typed-before-keys")]
+    public async Task A_clear_that_fails_refuses_and_types_nothing(string how)
+    {
+        await using var h = await Harness.Create();
+        await h.LeaveUnsent();
+        if (how == "stuck") h.Stuck = true;
+        else h.BeforeKeys = () => h.Draft = Words + " x";
+        var result = await h.Replier.ReplyAsync(h.Request("go on"));
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Empty(h.Sent);
+        Assert.Equal(how == "stuck" ? 1 : 0, h.Clears);
+        Assert.Equal(how == "stuck" ? Words : Words + " x", h.Draft);
+    }
+
+    [Fact]
+    public async Task A_replacement_process_reusing_the_pid_never_inherits_the_clear()
+    {
+        await using var h = await Harness.Create();
+        await h.LeaveUnsent();
+        await h.ReplaceProcess();
+        AssertUntouched(h, await h.Replier.ReplyAsync(h.Request("go on")), Words);
+    }
+
+    [Fact]
+    public async Task A_retry_that_goes_stale_before_the_clear_keeps_the_words_and_is_stale()
+    {
+        await using var h = await Harness.Create();
+        await h.LeaveUnsent();
+        var current = true;
+        h.BeforeKeys = () => current = false;
+        var result = await h.Replier.ReplyAsync(h.Request("go on") with { StillCurrent = () => current });
+        Assert.Equal(AnswerOutcome.Stale, result.Outcome);
+        Assert.Equal(0, h.Clears);
+        Assert.Empty(h.Sent);
+        Assert.Equal(Words, h.Draft);
+    }
+
+    [Theory]
+    [InlineData("G5")]
+    [InlineData("launch")]
+    [InlineData("guard")]
+    [InlineData("question")]
+    public async Task A_guard_that_changes_after_the_clear_stops_the_reply(string change)
+    {
+        await using var h = await Harness.Create();
+        await h.LeaveUnsent();
+        h.BeforeKeys = () => { if (h.Clears > 0) h.Hold(change); };
+        var result = await h.Replier.ReplyAsync(h.Request("go on"));
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Equal(1, h.Clears);
+        Assert.Empty(h.Sent);
+    }
+
     static void AssertUntouched(Harness h, ReplyResult result, string draft)
     {
         Assert.Equal(AnswerOutcome.Refused, result.Outcome);
@@ -82,8 +153,10 @@ public sealed class ReplyResidueTests
         public readonly List<string> Log = [];
         public readonly List<string> Sent = [];
         public string Draft = "";
-        public bool Shell;
+        public bool Shell, Stuck;
         public int Clears;
+        public Action? BeforeKeys;
+        string? active, refused;
         // How the next reply's words are left in the box instead of sent: null sends them.
         (bool Swallowed, bool Wrapped)? unsent;
 
@@ -117,6 +190,26 @@ public sealed class ReplyResidueTests
             await source.RefreshAsync();
         }
 
+        // Another Copilot given the same pid: only its start time tells it apart.
+        public async Task ReplaceProcess()
+        {
+            var before = source.ProcessOf(Id);
+            f.Processes.Run(AgentKind.Copilot, 100, startedAt: Fixture.T0.AddSeconds(-1));
+            await source.RefreshAsync();
+            Assert.NotEqual(before, source.ProcessOf(Id));
+        }
+
+        public void Hold(string change)
+        {
+            switch (change)
+            {
+                case "G5": active = "agent-ha-bridge is running"; break;
+                case "launch": Replier.LaunchHeld = _ => "a launch holds the session"; break;
+                case "guard": refused = "the target is elevated"; break;
+                default: Fixture.Append(events, Copilot.Event("permission.requested", new { requestId = "r", permissionRequest = new { kind = "shell" } }, 5)); break;
+            }
+        }
+
         // A reply whose words reach the box but are never sent: its Enter held back by a box
         // that changed (partway), or pressed and not taken (swallowed).
         public async Task LeaveUnsent(bool swallowed = false, bool wrapped = false)
@@ -131,6 +224,7 @@ public sealed class ReplyResidueTests
 
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default)
         {
+            BeforeKeys?.Invoke();
             if (plan.Proceed?.Invoke() is { } why) return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, why));
             var rows = Rows();
             if (plan.Sends.Any(s => (s.Expect ?? []).Any(r => r.Row >= rows.Count || rows[r.Row].TrimEnd(' ') != r.Text.TrimEnd(' '))
@@ -140,7 +234,7 @@ public sealed class ReplyResidueTests
             {
                 Assert.Equal("\u001b[1;5F\u0015", Assert.Single(plan.Sends).Text);
                 Clears++;
-                Draft = "";
+                if (!Stuck) Draft = "";
                 return Task.FromResult(new InjectionResult(InjectionStatus.Typed, ""));
             }
             Assert.Equal("", Draft);
@@ -165,8 +259,8 @@ public sealed class ReplyResidueTests
              Shell ? " Shell \u00B7 Allow All" : Draft.Length == 0 ? " Interactive \u00B7 / commands \u00B7 ? help" : " Interactive \u00B7 @ files \u00B7 # issues"];
 
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken ct = default) => Task.FromResult(new ConsoleScreen(Rows(), null));
-        public string? Active() => null;
-        public string? Refuse(int processId) => null;
+        public string? Active() => active;
+        public string? Refuse(int processId) => refused;
         public async ValueTask DisposeAsync() { await source.DisposeAsync(); f.Dispose(); }
     }
 }

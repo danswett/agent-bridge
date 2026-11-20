@@ -655,9 +655,10 @@ delivered (#150); check the session before resending. Exit 2: `unconfirmed` (it 
 `duplicate` ack (the host handled the rid earlier and typed nothing now, so it is never reported as sent). Exit 3: `refused`, or no ack within `-AckSeconds` (default 20); retry with `-Rid` so the
 host drops a duplicate. Exit 1: not sent (bad input, no token, Home Assistant unreachable). Exit 4: the reply is
 stuck in the session's input box (#150): refused because text is already typed there, or `unconfirmed` because
-the host typed it but its Enter never went and its words are still in the box. Every later reply is refused
-too, so stop retrying until it is sent or cleared at the machine. Sends from one machine are serialized by a
-lock.
+the host typed it but its Enter never went and its words are still in the box. Unless those are the host's own
+words, unchanged, in a Copilot session (the next reply clears them and goes on: [host-replies.md](host-replies.md),
+#2144), every later reply is refused too, so stop retrying until it is sent or cleared at the machine. Sends from
+one machine are serialized by a lock.
 
 **The reply card** publishes `{at, text, images: [{id, name, content_type}], files: [{name,
 content_type, b64}], driver?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read
