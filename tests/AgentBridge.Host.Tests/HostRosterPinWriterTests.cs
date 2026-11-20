@@ -111,8 +111,8 @@ public sealed class HostRosterPinWriterTests : IDisposable
         var callers = Directory.EnumerateFiles(Path.Combine(src.FullName, "src"), "*.cs", SearchOption.AllDirectories)
             .Where(f => Regex.IsMatch(File.ReadAllText(f), @"HostRosterPinWriter\.Write\(|RosterPinCommands\."))
             .Select(f => Path.GetFileName(f)!).Order().ToArray();
-        // A (same-PC app) and B (enrollment) will be added here deliberately, never a relay, HA or pipe handler.
-        Assert.Equal(["Program.cs", "RosterPinCommands.cs"], callers);
+        // A (same-PC app, the pipe's App-only handoff) is here; B (enrollment) will be added deliberately, never a relay or HA handler.
+        Assert.Equal(["Program.cs", "RosterPinCommands.cs", "SamePcPinHandoff.cs"], callers);
         var program = File.ReadAllText(Path.Combine(src.FullName, "src", "AgentBridge.Host", "Program.cs"));
         Assert.Contains("if (command == \"roster-pin\")\n{\n    if (arguments.ElementAtOrDefault(1) != \"show\" && Refused(\"pin this host's device roster\", stateOnly: true)) { return 4; }",
             program.ReplaceLineEndings("\n"));

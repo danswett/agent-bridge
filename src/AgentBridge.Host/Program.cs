@@ -944,7 +944,11 @@ async Task<int> ServeAsync(HostHandover handover)
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
     var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
+    RelayClient? pinRelay = null;
+    // Same-PC trust (#3450): the app's handoff reads the chain over this host's live relay connection.
+    var samePcPin = new SamePcPinHandoff(identity.Folder, () => identity.Account?.AccountId,
+        ct => Volatile.Read(ref pinRelay) is { } r ? r.GetRosterAsync(ct) : throw new InvalidOperationException("not connected"), hostRoster, HostRoster.Now);
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit, samePcPin: samePcPin), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
@@ -1036,6 +1040,7 @@ async Task<int> ServeAsync(HostHandover handover)
                 catch (OperationCanceledException) { }
             });
             fleetRoster.Attach(relay);
+            Volatile.Write(ref pinRelay, relay);
             usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);
             escapedApprovals.Attach(relay);

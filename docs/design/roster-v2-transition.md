@@ -75,9 +75,14 @@ Only then may the host verify and persist the person's transition command,
 and only after that commit may it evaluate its own v2 add. A prefix pin alone
 never means "enrolled": the host stays pending until its complete verified roster
 contains the matching, person's approved v2 add. Engineering must rule on this
-bootstrap sequencing before the enrollment cut; no automatic pin creation is granted.
+bootstrap sequencing before the enrollment cut; Engineering ruled (Nov 20, 13:30 PT, #3450) that only
+(A) the signed-in app on the same machine or (B) a person's approve gesture may supply that genesis.
 The fleet-operator explicit local action is `agent-bridge-host roster-pin set` (#3450, owner
 Nov 20, 13:21 PT; [runbook](../runbooks/roster-pin.md)); it pins a v1 prefix and enables nothing.
+(A) is `host.roster.pin` on the local pipe, from the app only: the app offers account, generation,
+genesis and heads only while its own device is active, a person's and past probation in the roster
+it verified; the host pins only if unpinned and the account is its own, and the running reader picks
+the pin up without a restart. The relay, agents, scripts and HA cannot reach it.
 
 ## Proposed command and capability precondition
 
