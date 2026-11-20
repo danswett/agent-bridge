@@ -61,7 +61,9 @@ public static class InstallHolder
 // An install that could not go ahead because something outside the app holds files in the
 // installation, found before the host was stopped (HostManager.StopAndApplyAsync's preflight).
 public sealed class UpdateBlockedException(string blockers)
-    : InvalidOperationException($"{Prefix}{blockers}; the old install is intact; try again after Windows releases these files")
+    : InvalidOperationException(blockers == InstallationFiles.Unknown || blockers == InstallationFiles.TimedOut
+        ? $"{blockers}; the old install is intact; try again"
+        : $"{Prefix}{blockers}; the old install is intact; try again after Windows releases these files")
 {
     public const string Prefix = "files in the installation are held by ";
 }

@@ -290,7 +290,7 @@ function reportOf(a) {
   if (!Number.isFinite(Date.parse(a.endedAt ?? '')) || (a.status !== 'idle' && a.status !== 'ended')) { return null; }
   return a.outcome === 'failed' ? { glyph: 'failed', said: 'failed' }
     : a.outcome === 'done' ? { glyph: 'done', said: 'reported back' }
-      : a.status === 'ended' ? { glyph: 'ended', said: 'ended' } : { glyph: 'idle', said: 'reported back' };
+      : a.status === 'ended' ? { glyph: 'ended', said: 'ended' } : { glyph: 'idle', said: 'ended' };
 }
 
 // The conversation's delegate events (ui.md §6.4, #661): a past-tense record of the main agent's
