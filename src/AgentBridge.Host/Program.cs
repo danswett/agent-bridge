@@ -739,9 +739,8 @@ async Task<int> ServeAsync(HostHandover handover)
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
         name: fleetNames.Get, log: Log, sign: fleetTrust.Sign);
     var loadService = new LoadService(source, () => load.Current, () => settings.LoadEnabled, Log);
-    var litePeers = new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId));
-    // L6: one kill switch is the mode of both sides. Its pins hold while the mode is off, so a killed host still tells the others.
-    var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => true, () => identity.Account?.AccountId)), Log);
+    // L6: one kill switch is the mode of both sides; it trusts present same-account hosts, no pins.
+    var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         LoadEnabled = () => settings.LoadEnabled,
@@ -760,7 +759,7 @@ async Task<int> ServeAsync(HostHandover handover)
         SignInDevices = self => PersonDevices.View(personRoster, rosterAccount(), self),
         Manage = manage,
         Diagnostics = diagnostics,
-        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(liteKill, litePeers, liteDeliver),
+        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(liteKill, liteDeliver),
         LiteKill = liteKill,
     };
     Log(settings.LoadStatus);
@@ -923,7 +922,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
     var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, litePeers, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
