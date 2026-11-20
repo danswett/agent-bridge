@@ -67,7 +67,7 @@ own-agents-only.
 3. One machine only: set `agentMessaging.remote` to `off`; it holds from the next message, and the default never
    overrides an explicit `"off"`.
 4. Turning back on takes a person at that machine setting `agentMessaging.remote` to `own-account`. Nothing remote
-   can, and after a kill removing the key (`config unset`) does not either.
+   can, and after a recorded kill removing the key (`config unset`) does not either.
 
 **Roll back at once** on any one of: more than 1 percent of messages late or lost; p99 delivery over 250 ms for
 10 minutes; the relay down for more than 2 minutes; or any message delivered to the wrong session. Then tell the
