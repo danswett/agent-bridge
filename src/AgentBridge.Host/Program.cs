@@ -1040,10 +1040,10 @@ async Task<int> ServeAsync(HostHandover handover)
             {
                 JsonOptions = ProtocolJson.Options,
                 // The approver's enrollment steps reach only an attempt the person opened on this machine,
-                // and, while device pins are on, only from a pinned person device.
+                // only from a device the relay asserts is a person's and, while device pins are on, a pinned one.
                 Handler = (ch, op, data) => op.StartsWith(HostEnrollment.StepPrefix, StringComparison.Ordinal)
                     ? Task.FromResult<object?>(HostEnrollment.Remote(trustedPeers.HasRole(ch, TrustedPeerStore.Person) ? Enrollment() : null,
-                        ch.HandshakeHash, ch.PeerStatic, op, data)) : remote(ch, op, data),
+                        ch.HandshakeHash, ch.PeerStatic, ch.Relay.Presence.FirstOrDefault(p => p.Id == ch.PeerId), op, data)) : remote(ch, op, data),
                 // Answered from an IK first message (#603), which a relay can replay: hello only
                 // reads, so running it again changes nothing.
                 EarlyOps = [Ops.Hello],

@@ -229,18 +229,28 @@ public sealed class HostEnrollmentTests : IDisposable
     static byte[] G => World.Keys("G").Dh.Public;
     RelayRoster Relay(params string[] labels) => new("off", w.GenerationId, [.. new[] { "G" }.Concat(labels).Select(l => w.Entry(l).Canonical())]);
 
+    static PresenceEntry Asserted(byte[] key, string kind, string name) => new(Ids.Device(key), name, kind, DateTimeOffset.UnixEpoch);
+    static PresenceEntry Person => Asserted(G, "phone", "Dan's phone");
+
     (HostEnrollment Host, EnrollmentApprover Approver, byte[] H) Exchanged(FakeTimeProvider time)
     {
         var host = new HostEnrollment(Unpinned(), Account, null, name: "H", time: time);
         Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        var (a, h) = Join(host, time);
+        return (host, a, h);
+    }
+
+    static (EnrollmentApprover Approver, byte[] H) Join(HostEnrollment host, FakeTimeProvider time)
+    {
         var h = RandomNumberGenerator.GetBytes(32);
         DateTimeOffset Now() => time.GetUtcNow();
-        var a = new EnrollmentApprover(Account, h, w.Id("H"), new(EnrollmentLockout.Counts.WrongEntries, Now), Now);
-        var offer = a.OnCommit(host.Exchange(h, G, "commit", []).Value!)!;
-        Assert.True(a.OnReveal(host.Exchange(h, G, "offer", offer).Value!));
-        Assert.Equal(DateTimeOffset.UnixEpoch + EnrollmentLockout.AttemptLifetime, host.Shown.Expires);
+        var a = new EnrollmentApprover(Account, h, Ids.Device(World.Keys("H").Dh.Public), new(EnrollmentLockout.Counts.WrongEntries, Now), Now);
+        var offer = a.OnCommit(host.Exchange(h, G, Person, "commit", []).Value!)!;
+        Assert.True(a.OnReveal(host.Exchange(h, G, Person, "offer", offer).Value!));
+        Assert.True(host.Shown.Expires > time.GetUtcNow());
+        Assert.Equal("Dan's phone", host.Shown.Peer);
         Assert.Equal(CodeResult.Match, a.EnterCode1(host.Shown.Code!));
-        return (host, a, h);
+        return (a, h);
     }
 
     [WindowsFact("host enrollment runs on the Windows host")]
@@ -251,9 +261,9 @@ public sealed class HostEnrollmentTests : IDisposable
         using (host)
         {
             w.Genesis();
-            Assert.Equal("not-matched", host.Exchange(h, G, "genesis", w.Entry("G").Hash).Refusal);
+            Assert.Equal("not-matched", host.Exchange(h, G, Person, "genesis", w.Entry("G").Hash).Refusal);
             Assert.Equal("match", host.EnterCode2(a.Code2Shown!));
-            Assert.Null(host.Exchange(h, G, "genesis", w.Entry("G").Hash).Refusal);
+            Assert.Null(host.Exchange(h, G, Person, "genesis", w.Entry("G").Hash).Refusal);
             Assert.Equal("not-added", host.Finish(Relay(), PinPath, () => w.Now, _ => true));
             w.Add("+H", "G", "H", "G", kind: "host", transcript: a.TranscriptToSign);
             Assert.Equal("pinned", host.Finish(Relay("+H"), PinPath, () => w.Now, _ => true));
@@ -276,7 +286,7 @@ public sealed class HostEnrollmentTests : IDisposable
         if (mischief == "not-started")
         {
             using var idle = new HostEnrollment(Unpinned(), Account, null, time: time);
-            Assert.Equal("no-attempt", idle.Exchange(RandomNumberGenerator.GetBytes(32), G, "commit", []).Refusal);
+            Assert.Equal("no-attempt", idle.Exchange(RandomNumberGenerator.GetBytes(32), G, Person, "commit", []).Refusal);
             Assert.Equal(expected, idle.Finish(Relay(), PinPath, () => w.Now, _ => true));
             Assert.False(File.Exists(PinPath));
             return;
@@ -290,29 +300,112 @@ public sealed class HostEnrollmentTests : IDisposable
         }
         else { Assert.Equal("match", host.EnterCode2(a.Code2Shown!)); }
         var other = RandomNumberGenerator.GetBytes(32);
-        if (mischief == "second-channel") { Assert.Equal("attempt-bound", host.Exchange(other, G, "genesis", w.Entry("G").Hash).Refusal); }
-        else { host.Exchange(h, G, "genesis", mischief == "other-genesis" ? other : w.Entry("G").Hash); }
+        if (mischief == "second-channel") { Assert.Equal("attempt-bound", host.Exchange(other, G, Person, "genesis", w.Entry("G").Hash).Refusal); }
+        else { host.Exchange(h, G, Person, "genesis", mischief == "other-genesis" ? other : w.Entry("G").Hash); }
         w.Add("+H", "G", "H", "G", kind: "host", transcript: a.TranscriptToSign);
         if (mischief == "expired") { time.Advance(EnrollmentLockout.AttemptLifetime); }
         Assert.Equal(expected, host.Finish(Relay("+H"), PinPath, () => w.Now, _ => true));
         Assert.False(File.Exists(PinPath));
     }
 
+    string AttemptLog => Path.Combine(Path.GetDirectoryName(PinPath)!, "enrollment-attempts.json");
+
+    // Brief 198: only the person's wrong code 2 at this host is charged, across restarts; 3 an hour lock.
     [WindowsFact("host enrollment runs on the Windows host")]
-    public void Three_attempts_in_an_hour_lock_joining_across_restarts_until_the_lock_ends()
+    public void Person_typed_wrong_codes_count_across_restarts_and_three_in_an_hour_lock_until_the_lock_ends()
     {
         var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
-        foreach (var minute in new[] { 0, 1, 55 })
+        foreach (var (minute, wrongs) in new[] { (0, 1), (1, 1), (55, 1) })
         {
             time.SetUtcNow(DateTimeOffset.UnixEpoch.AddMinutes(minute));
-            using var host = new HostEnrollment(Unpinned(), Account, null, time: time);
-            Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+            var (host, a, _) = Exchanged(time);
+            using (host)
+            {
+                var wrong = a.Code2Shown!.Replace(" ", "") == "000000" ? "111111" : "000000";
+                for (var i = 0; i < wrongs; i++) { Assert.Equal("wrong", host.EnterCode2(wrong)); }
+            }
         }
+        Assert.Equal(3, JsonSerializer.Deserialize<long[]>(File.ReadAllBytes(AttemptLog))!.Length);
         using var later = new HostEnrollment(Unpinned(), Account, null, time: time);
         time.SetUtcNow(DateTimeOffset.UnixEpoch.AddMinutes(61));
         Assert.Equal("locked", later.Describe(profile, World.Keys("H").Dh.Public).Refusal);
         time.SetUtcNow(DateTimeOffset.UnixEpoch.AddMinutes(55) + EnrollmentLockout.LockFor);
         Assert.Null(later.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        Assert.Equal(3, later.Charged.Count);
+    }
+
+    [HostSignKeyTests.WindowsHostSignTheory]
+    [InlineData("malformed-commit")]
+    [InlineData("malformed-reveal")]
+    [InlineData("bind")]
+    [InlineData("abandon")]
+    [InlineData("expiry")]
+    [InlineData("abandon-reopen")]
+    [InlineData("bad-commits")]
+    public void Remote_only_sequences_never_charge_the_lockout_and_a_real_approver_then_pins(string sequence)
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        w.Genesis();
+        using var host = new HostEnrollment(Unpinned(), Account, null, name: "H", time: time);
+        var mallory = World.Keys("X").Dh.Public;
+        var asserted = Asserted(mallory, "phone", "Mallory");
+        var hx = RandomNumberGenerator.GetBytes(32);
+        string? Step(string step, byte[] value) => host.Exchange(hx, mallory, asserted, step, value).Refusal;
+        for (var round = 0; round < 3; round++)
+        {
+            Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+            switch (sequence)
+            {
+                case "malformed-commit": Assert.Equal("invalid-value", Step("commit", [1, 2])); break;
+                case "malformed-reveal": Assert.Null(Step("commit", [])); Assert.Equal("attempt-ended", Step("offer", [1])); break;
+                case "bind":
+                    Assert.Null(Step("commit", []));
+                    Assert.Equal("Mallory", host.Shown.Peer);
+                    Assert.Equal("attempt-bound", host.Exchange(RandomNumberGenerator.GetBytes(32), G, Person, "commit", []).Refusal);
+                    break;
+                case "abandon": Assert.Null(Step("commit", [])); Assert.Null(Step("abandon", [])); break;
+                case "abandon-reopen": Assert.Null(Step("commit", [])); Assert.Null(Step("abandon", [])); Assert.Equal("no-attempt", Step("commit", [])); break;
+                case "bad-commits":
+                    var refusals = Enumerable.Range(0, 100).Select(_ => Step("commit", [9])).ToList();
+                    Assert.Equal("invalid-value", refusals[0]);
+                    Assert.All(refusals.Skip(1), r => Assert.Equal("throttled", r));
+                    break;
+            }
+            time.Advance(EnrollmentLockout.AttemptLifetime);
+            Assert.Null(host.Shown.Expires);
+        }
+        Assert.False(File.Exists(AttemptLog));
+        Assert.Empty(host.Charged);
+        Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        var (a, h) = Join(host, time);
+        Assert.Equal("match", host.EnterCode2(a.Code2Shown!));
+        Assert.Null(host.Exchange(h, G, Person, "genesis", w.Entry("G").Hash).Refusal);
+        w.Add("+H", "G", "H", "G", kind: "host", transcript: a.TranscriptToSign);
+        Assert.Equal("pinned", host.Finish(Relay("+H"), PinPath, () => w.Now, _ => true));
+    }
+
+    [WindowsFact("host enrollment runs on the Windows host")]
+    public void Enroll_steps_are_refused_from_any_peer_the_relay_does_not_assert_is_a_person_and_commits_are_throttled()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        using var host = new HostEnrollment(Unpinned(), Account, null, name: "H", time: time);
+        Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        var h = RandomNumberGenerator.GetBytes(32);
+        foreach (var asserted in new PresenceEntry?[] { null, Asserted(G, "host", "Desk"), Asserted(G, "test", "agent"), Asserted(G, "agent", "agent"),
+            Asserted(World.Keys("X").Dh.Public, "phone", "Not G") })
+        {
+            Assert.Equal("not-person", host.Exchange(h, G, asserted, "commit", []).Refusal);
+        }
+        Assert.Null(host.Shown.Peer);
+        Assert.Null(host.Exchange(h, G, Person, "commit", []).Refusal);
+        var hy = RandomNumberGenerator.GetBytes(32);
+        var other = World.Keys("Y").Dh.Public;
+        Assert.Equal("attempt-bound", host.Exchange(hy, other, Asserted(other, "app", "Laptop"), "commit", []).Refusal);
+        Assert.Equal("throttled", host.Exchange(hy, other, Asserted(other, "app", "Laptop"), "commit", []).Refusal);
+        time.Advance(TimeSpan.FromSeconds(10));
+        Assert.Equal("attempt-bound", host.Exchange(hy, other, Asserted(other, "app", "Laptop"), "commit", []).Refusal);
+        Assert.Equal("attempt-bound", host.Exchange(hy, other, Asserted(other, "app", "Laptop"), "abandon", []).Refusal);
+        Assert.Equal("Dan's phone", host.Shown.Peer);
     }
 
     [WindowsFact("host enrollment runs on the Windows host")]
@@ -336,6 +429,7 @@ public sealed class HostEnrollmentTests : IDisposable
         var status = JsonSerializer.SerializeToElement(await control.HandleAsync(null!, AgentBridge.Local.HostOps.EnrollStatus, default));
         Assert.Equal("pending", status.GetProperty("state").GetString());
         Assert.Equal(JsonValueKind.Null, status.GetProperty("code").ValueKind);
+        Assert.Equal(JsonValueKind.Null, status.GetProperty("peer").ValueKind);
         Assert.True(status.GetProperty("expires").GetDateTimeOffset() > DateTimeOffset.UtcNow);
         var typed = JsonSerializer.SerializeToElement(await control.HandleAsync(null!, AgentBridge.Local.HostOps.EnrollCode,
             JsonSerializer.SerializeToElement(new { code = "000 000" })));

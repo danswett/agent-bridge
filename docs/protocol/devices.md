@@ -206,12 +206,14 @@ Neither the relay nor the other device can reset them. An expiry blocks no pendi
 approver. A relay that ends both channels has two different `h`, so the codes it could read off one
 leg do not match the other.
 
-`EnrollmentLockout` holds its counts in memory only. The host joiner (brief 184b) persists them: each
-attempt it opens is logged in `enrollment-attempts.json` in the pin's private roster folder before it
-is shown, counts as ended unless it pins, and is replayed into the joiner's lockout, so a restart
-cannot reset §4.4. An unreadable log refuses (`attempt-store`); three attempts in an hour refuse
-(`locked`) for 15 minutes. Marks are kept for the hour plus the lock, so a replay never ends a lock
-early. The relay keeps no pending state for it.
+`EnrollmentLockout` holds its counts in memory only. The host joiner (brief 184b, brief 198) charges
+only what a person does at the host: each wrong code 2 typed on the local control surface is logged
+in `enrollment-attempts.json` in the pin's private roster folder before it is answered, and replayed
+into the joiner's lockout (counting wrong entries), so a restart cannot reset §4.4. Opening an
+attempt, a peer binding or abandoning it, expiry and any peer message charge nothing, so a relay
+peer cannot spend the person's lockout. An unreadable log refuses (`attempt-store`); three wrong
+entries end the attempt, and three in an hour refuse (`locked`) for 15 minutes. Marks are kept for
+the hour plus the lock, so a replay never ends a lock early. The relay keeps no pending state for it.
 
 Not here: the channel, the relay's `pending` list and its 8-pending and 20-attempts limits (R2),
 the QR paths (§4.3), signing the `add`, and any screen.
@@ -245,11 +247,15 @@ on) and the joiner accepts its approver and matched exchange; otherwise `pending
 `not-enrolled`. The CLI remains dormant.
 
 **The exchange and the pin (brief 184b, Engineering ruling (b)).** The host is the joiner. The
-approver sends `enroll.commit`, `enroll.offer` and `enroll.genesis` (`{ "value": base64url }`, answered
+approver sends `enroll.commit`, `enroll.offer`, `enroll.genesis` and `enroll.abandon` (`{ "value": base64url }`, answered
 `{ "value"?, "refusal"? }`) on its Noise channel to the host, which answers them only for a peer
-holding the trusted-person role; they reach only an attempt the person
+the relay's presence asserts is a person device (`app`, `pwa`, `phone`; a host or agent principal
+gets `not-person`) and, while device pins are on, holding the trusted-person role. The first valid
+commit binds one peer, shown by name in `host.enroll.status`; another cannot rebind
+(`attempt-bound`), and each peer may commit once per 10 seconds (`throttled`). They reach only an attempt the person
 opened here (`no-attempt` otherwise), and only from the channel, by handshake hash `h` and
-authenticated static key, that sent the commit (`attempt-bound`). The person types code 2 at the
+authenticated static key, that sent the commit (`attempt-bound`). The bound peer can only end its
+attempt (`enroll.abandon`, or an offer that fails), never charge the lockout. The person types code 2 at the
 host (`host.enroll.code`). Only after it matched does the host take the approver's full 32-byte
 genesis hash (`not-matched`, `invalid-genesis`), never the 16-hex fingerprint. `host.enroll.finish` then
 reads the roster over the serving relay connection, verifies the chain itself, and pins through

@@ -21,17 +21,24 @@ internal interface IHostEnrollmentKey : IDisposable
 internal sealed class HostEnrollment(HostRosterReader reader, string account, string? generation,
     Func<string, IHostEnrollmentKey>? openKey = null, string name = "host", TimeProvider? time = null) : IDisposable
 {
-    sealed record Attempt(DeviceDescriptor Own, IDisposable Held, ITimer Expiry, EnrollmentLockout Lockout, DateTimeOffset Expires)
+    sealed record Attempt(DeviceDescriptor Own, IDisposable Held, ITimer Expiry, EnrollmentLockout Lockout, DateTimeOffset Expires, string Log)
     {
         public EnrollmentJoiner? Joiner;
         public byte[]? H;
         public string? Approver;
+        public string? PeerName;
         public bool Matched;
         public byte[]? Genesis;
     }
     Attempt? open;
     readonly object sync = new();
     TimeProvider Clock => time ?? TimeProvider.System;
+    // The relay's person kinds (RelayHub.PersonKinds); a host, test or agent principal never reaches an attempt.
+    static readonly HashSet<string> PersonKinds = ["app", "pwa", "phone"];
+    public static readonly TimeSpan CommitEvery = TimeSpan.FromSeconds(10);
+    readonly Dictionary<string, DateTimeOffset> commits = new(StringComparer.Ordinal);
+    List<long> charged = [];
+    internal IReadOnlyList<long> Charged { get { lock (sync) { return [.. charged]; } } }
 
     public string Account => account;
 
@@ -60,31 +67,20 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
                 try { marks = File.Exists(log) ? JsonSerializer.Deserialize<long[]>(File.ReadAllBytes(log)) ?? throw new InvalidDataException() : []; }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidDataException) { return (null, "attempt-store"); }
                 var now = Clock.GetUtcNow();
-                marks = [.. marks.Where(m => now - DateTimeOffset.FromUnixTimeSeconds(m) < EnrollmentLockout.Window + EnrollmentLockout.LockFor)];
-                // §4.4: replay the persisted attempts so a restart cannot reset joining's lockout; a lock set by
-                // the third attempt in an hour outlasts the first one's hour, so the log keeps hour + lock.
+                charged = [.. marks.Where(m => now - DateTimeOffset.FromUnixTimeSeconds(m) < EnrollmentLockout.Window + EnrollmentLockout.LockFor)];
+                // §4.4, brief 198: only the person's wrong code 2 typed here is charged (never opening, binding,
+                // abandoning, expiry or a peer's message); replayed so a restart cannot reset the lockout, and
+                // kept for hour + lock since a third mark's lock outlasts the first mark's hour.
                 DateTimeOffset? replay = null;
-                var lockout = new EnrollmentLockout(EnrollmentLockout.Counts.EndedAttempts, () => replay ?? Clock.GetUtcNow());
-                foreach (var mark in marks) { replay = DateTimeOffset.FromUnixTimeSeconds(mark); lockout.RecordEnded("attempt"); }
+                var lockout = new EnrollmentLockout(EnrollmentLockout.Counts.WrongEntries, () => replay ?? Clock.GetUtcNow());
+                foreach (var mark in charged) { replay = DateTimeOffset.FromUnixTimeSeconds(mark); lockout.RecordWrong("replay"); }
                 replay = null;
                 if (lockout.IsBlocked("attempt")) { return (null, "locked"); }
                 var (descriptor, json, refused) = v2 && OperatingSystem.IsWindows() ? HostSigned(profile, dh) : V1(dh);
                 if (descriptor is null) { return (null, refused); }
-                // Every attempt counts as ended until it pins; logged before it is shown.
-                var temporary = log + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                try
-                {
-                    using (var stream = PrivateFolder.CreateNew(temporary)) { JsonSerializer.Serialize(stream, marks.Append(now.ToUnixTimeSeconds())); }
-                    File.Move(temporary, log, overwrite: true);
-                }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                {
-                    try { File.Delete(temporary); } catch (Exception f) when (f is IOException or UnauthorizedAccessException) { }
-                    return (null, "attempt-store");
-                }
                 Attempt? attempt = null;
                 var expiry = Clock.CreateTimer(_ => End(attempt!), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-                (open, held) = (attempt = new Attempt(descriptor, held, expiry, lockout, Clock.GetUtcNow() + EnrollmentLockout.AttemptLifetime), null);
+                (open, held) = (attempt = new Attempt(descriptor, held, expiry, lockout, now + EnrollmentLockout.AttemptLifetime, log), null);
                 expiry.Change(EnrollmentLockout.AttemptLifetime, Timeout.InfiniteTimeSpan);
                 return (json, null);
             }
@@ -137,27 +133,40 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
         { return (null, null, "missing-key"); }
     }
 
-    // A4: the host is the joiner, so the person reads code 1 and its expiry here.
-    public (string? Code, DateTimeOffset? Expires) Shown { get { lock (sync) { return (open?.Joiner?.Code1Shown, open?.Expires); } } }
+    // A4: the host is the joiner, so the person reads code 1, its expiry and the bound peer here.
+    public (string? Code, DateTimeOffset? Expires, string? Peer) Shown { get { lock (sync) { return (open?.Joiner?.Code1Shown, open?.Expires, open?.PeerName); } } }
 
-    // The approver's steps (§4.2), over its Noise channel: only into an attempt the person opened here,
-    // and only from the channel (handshake hash h, authenticated static key) that sent the commit.
-    // The full 32-byte genesis is taken only after code 2 matched, so it is bound to that channel.
-    public (byte[]? Value, string? Refusal) Exchange(byte[] h, byte[] peerStatic, string step, byte[] value)
+    // The approver's steps (§4.2), over its Noise channel: only from a device the relay asserts is a
+    // person's, only into an attempt the person opened here, and only from the channel (handshake hash
+    // h, authenticated static key) whose commit bound it. A peer can end its attempt but never charge
+    // the lockout. The full 32-byte genesis is taken only after code 2 matched, so it is bound to that channel.
+    public (byte[]? Value, string? Refusal) Exchange(byte[] h, byte[] peerStatic, PresenceEntry? asserted, string step, byte[] value)
     {
         lock (sync)
         {
-            if (open is not { } attempt) { return (null, "no-attempt"); }
             var approver = Ids.Device(peerStatic);
+            if (asserted is null || asserted.Id != approver || !PersonKinds.Contains(asserted.Kind)) { return (null, "not-person"); }
+            if (open is not { } attempt) { return (null, "no-attempt"); }
             if (step == "commit")
             {
+                var now = Clock.GetUtcNow();
+                if (commits.TryGetValue(approver, out var last) && now - last < CommitEvery) { return (null, "throttled"); }
+                foreach (var stale in commits.Where(c => now - c.Value >= CommitEvery).Select(c => c.Key).ToList()) { commits.Remove(stale); }
+                commits[approver] = now;
                 if (attempt.Joiner is not null) { return (null, "attempt-bound"); }
-                (attempt.H, attempt.Approver) = (h.ToArray(), approver);
+                if (value.Length != 0) { return (null, "invalid-value"); }
+                (attempt.H, attempt.Approver, attempt.PeerName) = (h.ToArray(), approver, HostConfigFile.CleanName(asserted.Name));
                 attempt.Joiner = new EnrollmentJoiner(account, attempt.H, attempt.Lockout, Clock.GetUtcNow);
                 return attempt.Joiner.Commit() is { } commit ? (commit, null) : (null, "locked");
             }
             if (attempt.Joiner is null || !CryptographicOperations.FixedTimeEquals(attempt.H, h) || attempt.Approver != approver) { return (null, "attempt-bound"); }
-            if (step == "offer") { return attempt.Joiner.OnOffer(value) is { } reveal ? (reveal, null) : (null, "attempt-ended"); }
+            if (step == "abandon") { End(attempt); return ([], null); }
+            if (step == "offer")
+            {
+                if (attempt.Joiner.OnOffer(value) is { } reveal) { return (reveal, null); }
+                End(attempt);
+                return (null, "attempt-ended");
+            }
             if (step != "genesis") { return (null, "unknown-step"); }
             if (!attempt.Matched) { return (null, "not-matched"); }
             if (value.Length != 32 || attempt.Genesis is not null) { return (null, "invalid-genesis"); }
@@ -166,20 +175,41 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
         }
     }
 
-    // Code 2 as the person typed it here; three wrong entries end the attempt.
+    // Code 2 as the person typed it here; the only thing charged to the lockout (persisted before the
+    // answer is given). Three wrong entries end the attempt; three in an hour lock joining.
     public string EnterCode2(string typed)
     {
         Attempt? ended = null;
         CodeResult result;
+        string? stored = null;
         lock (sync)
         {
             if (open is not { Joiner: { } joiner } attempt) { return "no-exchange"; }
+            var live = joiner.Code1Shown is not null && Clock.GetUtcNow() < attempt.Expires;
             result = joiner.EnterCode2(typed);
             attempt.Matched |= result == CodeResult.Match;
-            if (result == CodeResult.Ended) { ended = attempt; }
+            if (result == CodeResult.Wrong || result == CodeResult.Ended && live) { stored = Charge(attempt.Log); }
+            if (result == CodeResult.Ended || stored is not null) { ended = attempt; }
         }
         if (ended is not null) { End(ended); }
-        return result.ToString().ToLowerInvariant();
+        return stored ?? result.ToString().ToLowerInvariant();
+    }
+
+    string? Charge(string log)
+    {
+        charged.Add(Clock.GetUtcNow().ToUnixTimeSeconds());
+        var temporary = log + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var stream = PrivateFolder.CreateNew(temporary)) { JsonSerializer.Serialize(stream, charged); }
+            File.Move(temporary, log, overwrite: true);
+            return null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            try { File.Delete(temporary); } catch (Exception f) when (f is IOException or UnauthorizedAccessException) { }
+            return "attempt-store";
+        }
     }
 
     // Ruling (b): the host verifies the relay's chain itself and pins only when its root is the genesis
@@ -207,14 +237,15 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
         }
     }
 
-    // The remote steps' wire form (ops enroll.commit, enroll.offer, enroll.genesis; value base64url).
+    // The remote steps' wire form (ops enroll.commit, enroll.offer, enroll.genesis, enroll.abandon; value
+    // base64url); asserted is the relay's presence entry for the channel's peer.
     public const string StepPrefix = "enroll.";
-    public static object Remote(HostEnrollment? enrollment, byte[] h, byte[]? peerStatic, string op, JsonElement data)
+    public static object Remote(HostEnrollment? enrollment, byte[] h, byte[]? peerStatic, PresenceEntry? asserted, string op, JsonElement data)
     {
         byte[] value;
         try { value = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("value", out var v) ? Codec.FromBase64Url(v.GetString() ?? "", "value") : []; }
         catch (RosterFormatException) { return new { value = (string?)null, refusal = "invalid-value" }; }
-        var (reply, refusal) = enrollment is null || peerStatic is null ? (null, "no-attempt") : enrollment.Exchange(h, peerStatic, op[StepPrefix.Length..], value);
+        var (reply, refusal) = enrollment is null || peerStatic is null ? (null, "no-attempt") : enrollment.Exchange(h, peerStatic, asserted, op[StepPrefix.Length..], value);
         return new { value = reply is null ? null : Codec.Base64Url(reply), refusal };
     }
 
