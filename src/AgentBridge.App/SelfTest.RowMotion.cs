@@ -47,12 +47,18 @@ static partial class SelfTest
         try
         {
             await CaptureFrame(root);
-            await Task.Delay(250);
+            await Task.Delay(Motion.Catalogue.Enter("Shift", true).Duration);
             var neighbour = (ListViewItem)list.ContainerFromItem(tracked);
             var original = TrackedTop();
             items.Remove(first);
             list.UpdateLayout();
             var slot = LayoutInformation.GetLayoutSlot(neighbour);
+            var initial = ElementCompositionPreview.GetElementVisual(neighbour).TryGetAnimationController("Offset")
+                ?? throw new InvalidOperationException("The initial row shift has no Offset animation controller.");
+            // Commit an interior point before replacing the first animation. Otherwise
+            // both layout changes can reach composition together and travel nowhere.
+            initial.Pause();
+            initial.Progress = 0.25f;
             await CaptureFrame(root);
             check(LayoutInformation.GetLayoutSlot(neighbour) == slot, "row shift does not change the layout between frames");
             items.Insert(0, added);
