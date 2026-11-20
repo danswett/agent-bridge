@@ -34,7 +34,7 @@ public sealed partial class SessionView
     {
         UnwatchHistory();
         history = Card?.Stored;
-        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; openPrompts.Clear(); historyVisible = 1; }
+        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; seen = null; openPrompts.Clear(); historyVisible = 1; }
         if (history is null) { ShowHistory(); return; }
         history.Changed += OnHistoryChanged;
         ShowHistory();

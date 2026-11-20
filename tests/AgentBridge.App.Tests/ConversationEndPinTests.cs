@@ -45,6 +45,19 @@ public sealed class ConversationEndPinTests
         Assert.Equal([300.0, 200.0], view.Scroller.Targets);
     }
 
+    [Fact]
+    public void Rewatching_the_same_session_still_releases_the_pin_on_the_first_move_back_from_the_end()
+    {
+        var view = new SessionView();
+        view.Moved(200);
+        view.ResetSessionForProbe();
+        view.Follow();
+        view.Moved(50);
+        view.Follow();
+        Assert.False(view.Pinned);
+        Assert.Empty(view.Scroller.Targets);
+    }
+
     [Theory]
     [InlineData("release", false)]
     [InlineData("cancel", false)]

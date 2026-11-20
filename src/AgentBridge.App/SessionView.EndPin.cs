@@ -41,11 +41,11 @@ public sealed partial class SessionView
         if (scrollbarPointers.Remove(pointer)) { follow.Released(pointer); }
     }
     // A rewatch forgets these presses, so their follow hold goes too: nothing could release it later.
+    // The measured view stays: the same session keeps its pin, so its first move back must still release.
     void ResetScrollbarGestures()
     {
         foreach (var pointer in scrollbarPointers) { follow.Released(pointer); }
         scrollbarPointers.Clear();
-        seen = null;
     }
 
     (double Offset, double Extent)? seen;
