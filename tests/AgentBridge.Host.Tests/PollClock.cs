@@ -1,5 +1,3 @@
-using Stopwatch = System.Diagnostics.Stopwatch;
-
 // The time a service that polls sees: it moves on only while the service waits, and then by
 // exactly what it waits for, so each look is PollInterval after the last however slow the
 // machine is. On the wall clock, a test host stalled under load ran AnswerService's 2 s
@@ -12,6 +10,7 @@ using Stopwatch = System.Diagnostics.Stopwatch;
 sealed class PollClock : TimeProvider, IAsyncDisposable
 {
     readonly DateTimeOffset epoch;
+    readonly TimeProvider activityTime;
 
     readonly object gate = new();
     readonly List<Wait> waits = [];
@@ -24,7 +23,7 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
     bool frozen;
     // Once a frozen clock has been let run: its time moves, but a budget only after a quiet moment.
     bool afterFrozen;
-    long lastActive = Stopwatch.GetTimestamp();
+    long lastActive;
     static readonly TimeSpan Quiet = TimeSpan.FromMilliseconds(200);
     // The longest wait a frozen clock still fires: a service's look-again interval, not its budget.
     static readonly long SteadyTicks = TimeSpan.FromMilliseconds(100).Ticks;
@@ -36,16 +35,18 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
     // at the time it was armed. Run() lets time move on, for a test that is about a budget
     // running out (#421: a launch test's 5 s budget ran out under load before the host's first
     // look at the window, so its trust question was never seen).
-    public PollClock(DateTimeOffset? start = null, bool frozen = false)
+    public PollClock(DateTimeOffset? start = null, bool frozen = false, TimeProvider? activityTime = null)
     {
         epoch = start ?? new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        this.activityTime = activityTime ?? TimeProvider.System;
+        lastActive = this.activityTime.GetTimestamp();
         this.frozen = frozen;
         driving = Task.Run(DriveAsync);
     }
 
     public void Run()
     {
-        lock (gate) { afterFrozen = frozen; frozen = false; lastActive = Stopwatch.GetTimestamp(); }
+        lock (gate) { afterFrozen = frozen; frozen = false; lastActive = activityTime.GetTimestamp(); }
         armed.Release();
     }
 
@@ -85,14 +86,14 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
                     // is the soonest wait only because the service is between two looks, and
                     // jumping then ran it out before its first look (a 400 ms wait, before the
                     // session it waited for was even seen).
-                    if (still || Stopwatch.GetElapsedTime(lastActive) < Quiet) { due = null; gated = !still; }
+                    if (still || activityTime.GetElapsedTime(lastActive) < Quiet) { due = null; gated = !still; }
                 }
                 if (due is not null)
                 {
                     if (!still && due.DueAt > now) { Interlocked.Exchange(ref now, due.DueAt); }
                     waits.Remove(due);
                     if (due.Period is { } every) { due.Arm(now + every); }
-                    lastActive = Stopwatch.GetTimestamp();
+                    lastActive = activityTime.GetTimestamp();
                 }
             }
             if (due is not null)
@@ -131,7 +132,7 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
         {
             DueAt = at;
             Order = clock.order++;
-            clock.lastActive = Stopwatch.GetTimestamp();
+            clock.lastActive = clock.activityTime.GetTimestamp();
             clock.waits.Add(this);
         }
 

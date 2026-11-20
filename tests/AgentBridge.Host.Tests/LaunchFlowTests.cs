@@ -92,14 +92,14 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     }
 
     private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null, IDiagnosticsJournal? journal = null,
-        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null)
+        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null, PollClock? time = null)
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
         return new(discovery ?? source, gate ?? probe, screens, starter,         locator, new AgencyCatalog(agency, log: logged.Enqueue), new LaunchServiceOptions
         {
             MachineName = machineName,
-            Time = clock,
+            Time = time ?? clock,
             CopilotHome = homes?.Copilot ?? f.CopilotHome,
             ClaudeHome = homes?.Claude ?? f.ClaudeHome,
             ClaudeConfigDirExplicit = homes?.ClaudeConfigDirExplicit,
@@ -1051,11 +1051,37 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     [Fact]
     public async Task A_Copilot_that_registers_but_whose_window_is_never_seen_ready_is_unconfirmed_and_still_named()
     {
+        var quietTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        await using var polling = new PollClock(frozen: true, activityTime: quietTime);
+        polling.Run();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        starter.Registers = false;
+        screens.Reading = () => { reading.TrySetResult(); return release.Task; };
         screens.Rows = null;
-        Serve(Config(), readyWait: TimeSpan.FromMilliseconds(300));
+        var launcher = Launcher(Config(), readyWait: TimeSpan.FromMilliseconds(300), time: polling);
+        launcher.SessionStarted += (_, _) => registered.TrySetResult();
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"), launcher: launcher).HandleAsync;
         var ch = await OpenAsync();
 
-        var o = await LaunchAsync(ch, new { workspace = "App" });
+        Outcome o;
+        try
+        {
+            var launch = LaunchAsync(ch, new { workspace = "App" });
+            await reading.Task.WaitAsync(Patience);
+            Assert.False(launch.IsCompleted);
+            starter.Register(Assert.Single(starter.Specs));
+            await source.RefreshAsync();
+            release.TrySetResult();
+            await registered.Task.WaitAsync(Patience);
+
+            // Discovery and the first registered poll must finish before a quiet window can
+            // expire the registration budget; the clock's quiet time is not wall time.
+            quietTime.Advance(TimeSpan.FromMilliseconds(201));
+            o = await launch.WaitAsync(Patience);
+        }
+        finally { release.TrySetResult(); }
 
         Assert.Equal(("unconfirmed", "Copilot started in App, but its window was not seen ready, so whether it is waiting on a question there is not known; check its window"), Pair(o));
         Assert.Equal(starter.Specs[0].Arguments[1], o.Session);
