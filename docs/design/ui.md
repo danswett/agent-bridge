@@ -1727,7 +1727,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   A held end-pinned view stops the older-prepend timer until the last hold ends, so no prepend lacks its end correction.
   Opening another session still places its latest reply despite an inherited hold; subsequent
   scrolling or navigation cancels that queued placement. Unloading or replacing the session
-  clears scrollbar custody. A nearest-edge bring request already spanning the viewport takes
+  clears scrollbar and navigation custody. A nearest-edge bring request already spanning the viewport takes
   no navigation latch unless an explicit alignment or offset asks it to move.
   Reasoning, tool lines, delegate events and questions are still to come. The Windows app loads earlier turns a page
   at a time through "Load earlier messages" or scrolling upward within a screen of the top
