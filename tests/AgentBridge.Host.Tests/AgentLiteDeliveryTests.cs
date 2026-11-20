@@ -26,6 +26,9 @@ public sealed class AgentLiteDeliveryTests
         public int Gets, TargetGets;
         public int? PidOnRecheck;
         public readonly List<string> Others = [];
+        public bool HideOthersFromSnapshot;
+        public Action? OnSnapshot, OnReadScreen, OnReply;
+        public DiscoveryHeld? Held { get; set; }
         public AnswerOutcome Outcome = AnswerOutcome.Delivered;
         public ReplyRefusal Refusal;
         public readonly TaskCompletionSource ReplyScreenRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -52,13 +55,23 @@ public sealed class AgentLiteDeliveryTests
             if (id == Target && Exists) { return Live(id, PidOnRecheck is { } pid && ++TargetGets >= 2 ? pid : 42); }
             return Others.Contains(id) ? Live(id, 43) : null;
         }
-        public IReadOnlyList<Session> Snapshot() => [.. (Exists ? new[] { Target } : Array.Empty<string>()).Concat(Others).Select(id => Live(id, 42))];
+        public IReadOnlyList<Session> Snapshot()
+        {
+            Session[] listed = [.. (Exists ? new[] { Target } : []).Concat(HideOthersFromSnapshot ? [] : Others).Select(id => Live(id, 42))];
+            OnSnapshot?.Invoke();
+            return listed;
+        }
         Session Live(string id, int pid) => new() { Id = id, Agent = AgentKind.Copilot, Status = Status, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, ProcessId = pid, Activity = new Activity() };
         public SessionSubscription Subscribe() => throw new NotSupportedException();
         public Task RefreshAsync(CancellationToken ct = default) => Task.CompletedTask; public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask; public bool Available => true;
         public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken ct = default, DeliveryWatch? watch = null)
-        { Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal }); }
+        {
+            // As ReplyService: the fence is run once the typing slot is held, and a stale one types nothing.
+            OnReply?.Invoke();
+            if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "changed")); }
+            Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal });
+        }
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default)
         {
             Plans.Add(plan);
@@ -67,6 +80,7 @@ public sealed class AgentLiteDeliveryTests
         }
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken ct = default)
         {
+            OnReadScreen?.Invoke();
             if (Interlocked.Increment(ref reads) == 2) { ReplyScreenRead.TrySetResult(); }
             return Task.FromResult(new ConsoleScreen(Rows, null));
         }
@@ -149,6 +163,48 @@ public sealed class AgentLiteDeliveryTests
                     Assert.Single(f.Typed);
                     Assert.Equal(2, f.TargetGets);
                 }
+
+    // A held pass may not list a live sibling with the same node id (#3401 review).
+    static DiscoveryHeld Hold => new("a live session could not be read", [AgentKind.Copilot]);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_node_id_is_refused_while_discovery_is_held_whether_the_hold_came_before_or_during_the_scan(bool duringScan)
+    {
+        var f = new Fixture { HideOthersFromSnapshot = true }; f.Launch(LaunchProtocol.Ask);
+        f.Others.Add(Sibling);
+        if (duringScan) { f.OnSnapshot = () => f.Held = Hold; } else { f.Held = Hold; }
+        Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
+        Assert.Empty(f.Typed);
+    }
+
+    [Fact]
+    public async Task A_full_session_id_still_types_while_held_and_a_node_id_resolves_again_once_the_hold_is_released()
+    {
+        var f = new Fixture { Held = Hold }; f.Launch(LaunchProtocol.Ask);
+        Assert.True((await SendTo(f, Target)).Typed);
+        Assert.Null(Assert.Single(f.Typed).StillCurrent);
+        Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
+        f.Held = null;
+        Assert.True((await SendTo(f, Node)).Typed);
+        Assert.All(f.Typed, t => Assert.Equal(Target, t.Id));
+        Assert.Equal(2, f.Typed.Count);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task A_node_id_is_refused_when_a_sibling_or_a_hold_appears_while_the_composer_is_read_or_the_typing_slot_is_awaited(bool hold, bool inSlot)
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        Action change = () => { if (hold) { f.Held = Hold; } else { f.Others.Add(Sibling); } };
+        if (inSlot) { f.OnReply = change; } else { f.OnReadScreen = change; }
+        Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
+        Assert.Empty(f.Typed);
+    }
     [Fact]
     public async Task Script_delivery_is_labelled_and_logged_as_a_script_never_an_agent()
     {
