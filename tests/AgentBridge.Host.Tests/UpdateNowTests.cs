@@ -251,6 +251,40 @@ public sealed class UpdateNowTests : IAsyncLifetime
         Assert.Contains(log, line => line.Contains("Bad-release protection could not be checked on this machine", StringComparison.Ordinal));
     }
 
+    // #3307: a person's press through the warning installs, and host.log says so, with whose press.
+    [Theory]
+    [InlineData("stale", "stale")]
+    [InlineData("missing", "unreadable")]
+    [InlineData("read-failure", "unreadable")]
+    public async Task A_persons_press_through_the_warning_installs_and_the_log_says_the_protection_was_not_checked_and_who_pressed(string given, string said)
+    {
+        policy = given == "stale" ? new(new(1, """{"v":1,"halted":[]}""", []), Now.AddHours(-7), false) : new(null, null, false);
+        if (given == "read-failure") { policyFailure = new IOException("unreadable policy storage"); }
+        var (phone, ch) = await OpenAsync();
+        var args = Args();
+        args["unchecked"] = true;
+        var press = Sign(phone.Key, args);
+        Assert.Equal(UpdateAck.Accepted, (await PressAsync(ch, press)).Outcome);
+        Assert.Contains(log, l => l.StartsWith($"update now: Bad-release protection could not be checked on this machine ({said}); pwa ", StringComparison.Ordinal)
+            && l.EndsWith(" pressed Update now through the warning", StringComparison.Ordinal));
+        Assert.Equal(UpdateDepartureOutcome.Committed, (await updates.DepartAsync(RequestOf(press))).Outcome);
+        var audit = Assert.Single(log, l => l.StartsWith("restart for update: 0.4.0 to 0.5.0, asked from pwa ", StringComparison.Ordinal));
+        Assert.EndsWith($", bad-release protection {said}: the person pressed through the warning", audit, StringComparison.Ordinal);
+    }
+
+    // Anything without a person's press through the warning still refuses on a stale or unreadable policy.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Without_the_persons_warning_a_stale_or_unreadable_policy_still_refuses_and_nothing_installs(bool stale)
+    {
+        policy = stale ? new(new(1, """{"v":1,"halted":[]}""", []), Now.AddHours(-7), false) : new(null, null, false);
+        var (phone, ch) = await OpenAsync();
+        Assert.Equal("policy-unreadable", (await PressAsync(ch, Press(phone))).Code);
+        Assert.Empty(updates.Asks);
+        Assert.DoesNotContain(log, l => l.StartsWith("restart for update", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
