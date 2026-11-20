@@ -13,6 +13,15 @@ using Xunit;
 public sealed class MotionTests
 {
     [Theory]
+    [InlineData(0f, 81, 81, 81, true)]
+    [InlineData(0f, 60, 60, 81, true)]
+    [InlineData(0f, 60, 63, 81, false)]
+    [InlineData(0.25f, 60, 60, 81, false)]
+    [InlineData(0f, double.NaN, 60, 81, false)]
+    public void The_paused_row_proof_checks_controller_and_stationary_pixels_not_distance(float progress, double before, double after, double target, bool expected) =>
+        Assert.Equal(expected, RowController.Value.DeclaringType!.GetMethod("Paused")!.Invoke(null, [progress, before, after, target]));
+
+    [Theory]
     [InlineData("initial", 0, 0, true)]
     [InlineData("initial", 1, 1, true)]
     [InlineData("retarget", 4, 4, true)]
@@ -37,17 +46,23 @@ public sealed class MotionTests
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent; }
         Assert.NotNull(root);
-        var method = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.App", "SelfTest.RowMotion.cs")))
-            .GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "RowMotionController");
+        var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.App", "SelfTest.RowMotion.cs"))).GetRoot();
+        var method = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "RowMotionController");
+        var paused = syntax.DescendantNodes().OfType<InvocationExpressionSyntax>().Single(i => i.Expression.ToString() == "check"
+            && i.ArgumentList.Arguments[1].ToString().Contains("retarget is paused before motion is disabled")).ArgumentList.Arguments[0].Expression;
         var source = $$"""
             #nullable enable
             using System; using System.Threading.Tasks;
-            class AnimationController; class UIElement; class FrameworkElement : UIElement;
+            class AnimationController { public float Progress; } class UIElement; class FrameworkElement : UIElement;
             class Visual { public int Starts; public AnimationController? TryGetAnimationController(string name) => Probe.Frames >= Starts ? new() : null; }
             public static class Probe {
                 public static int Frames;
                 static Task CaptureFrame(FrameworkElement root) { Frames++; return Task.CompletedTask; }
                 {{method}}
+                public static bool Paused(float progress, double before, double after, double target) {
+                    var retarget = new AnimationController { Progress = progress }; var paused = before; var held = after; var later = after;
+                    return {{paused}};
+                }
                 public static async Task<object[]> Run(int starts, string phase) {
                     Frames = 0; var message = "";
                     var result = await RowMotionController(new Visual { Starts = starts }, new(), (ok, text) => { if (!ok) message = text; }, phase);

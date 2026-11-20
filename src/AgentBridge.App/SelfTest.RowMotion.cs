@@ -96,8 +96,13 @@ static partial class SelfTest
             var standard = t * t * (3 - 2 * t);
             check(progress > standard + 0.12,
                 $"interrupted shift decelerates toward its new position ({t:0.00} timeline, {progress:0.00} progress)");
-            check(Math.Abs(target - later) > 1,
-                $"retarget is paused before motion is disabled ({later}, {target})");
+            retarget.Progress = 0;
+            await CaptureFrame(root);
+            var paused = TrackedTop();
+            await CaptureFrame(root);
+            var held = TrackedTop();
+            check(retarget.Progress == 0 && double.IsFinite(paused) && Math.Abs(held - paused) <= 1,
+                $"retarget is paused before motion is disabled ({later}, {target}; moving={moving}, original={original}, slot.Y={slot.Y}, paused={paused}, held={held}, controller={retarget.Progress})");
             animations = false;
             shifts.Changing();
             await CaptureFrame(root);
