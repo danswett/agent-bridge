@@ -54,37 +54,31 @@ static partial class SelfTest
             list.UpdateLayout();
             var slot = LayoutInformation.GetLayoutSlot(neighbour);
             await CaptureFrame(root);
-            var moving = TrackedTop();
-            check(moving > slot.Y + 1 && moving < original, $"row neighbour is mid-shift ({original}, {moving}, {slot.Y})");
             check(LayoutInformation.GetLayoutSlot(neighbour) == slot, "row shift does not change the layout between frames");
             items.Insert(0, added);
             list.UpdateLayout();
-            var target = LayoutInformation.GetLayoutSlot(neighbour).Y;
-            var clock = System.Diagnostics.Stopwatch.StartNew();
-            await Task.Delay(10);
+            var retarget = ElementCompositionPreview.GetElementVisual(neighbour).TryGetAnimationController("Offset")
+                ?? throw new InvalidOperationException("The interrupted row shift has no Offset animation controller.");
+            // A window capture blocks the UI thread, not the compositor. Sample the
+            // retarget's own paused start, not an earlier picture of the first shift.
+            retarget.Pause();
+            retarget.Progress = 0;
+            await CaptureFrame(root);
+            var moving = TrackedTop();
+            check(moving > slot.Y + 1 && moving < original, $"row neighbour is mid-shift ({original}, {moving}, {slot.Y})");
+            var target = original;
+            retarget.Progress = 0.25f;
             await CaptureFrame(root);
             var later = TrackedTop();
-            var elapsed = clock.Elapsed.TotalMilliseconds;
             check(later >= moving - 5 && later <= target + 1,
                 $"interrupted shift continues from its drawn position ({moving}, {later}, {target})");
             var progress = (later - moving) / (target - moving);
-            var t = Math.Clamp(elapsed / Motion.Catalogue.Enter("Shift", true).Duration.TotalMilliseconds, 0, 1);
+            const double t = 0.25;
             var standard = t * t * (3 - 2 * t);
-            check(elapsed < 120 && progress > standard + 0.12,
-                $"interrupted shift decelerates toward its new position ({elapsed:0} ms, {progress:0.00} progress)");
-            await Task.Delay(250);
-            items.Remove(added);
-            list.UpdateLayout();
-            await Task.Delay(40);
-            items.Insert(0, added);
-            list.UpdateLayout();
-            var retarget = ElementCompositionPreview.GetElementVisual(neighbour).TryGetAnimationController("Offset");
-            retarget?.Pause();
-            if (retarget is not null) { retarget.Progress = 0.25f; }
-            await CaptureFrame(root);
-            var paused = TrackedTop();
-            check(retarget is not null && Math.Abs(target - paused) > 1,
-                $"retarget is paused before motion is disabled ({paused}, {target})");
+            check(progress > standard + 0.12,
+                $"interrupted shift decelerates toward its new position ({t:0.00} timeline, {progress:0.00} progress)");
+            check(Math.Abs(target - later) > 1,
+                $"retarget is paused before motion is disabled ({later}, {target})");
             animations = false;
             shifts.Changing();
             await CaptureFrame(root);
