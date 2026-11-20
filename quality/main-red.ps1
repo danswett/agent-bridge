@@ -136,14 +136,21 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
     $recent = (Invoke-Gh api "repos/$Repository/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=100" | ConvertFrom-Json).workflow_runs
     $latest = $recent | Where-Object { $_.status -eq 'completed' -or $_.run_attempt -gt 1 } |
         Sort-Object run_number -Descending | Select-Object -First 1
-    if ($latest -and $latest.status -ne 'completed') {
-        $latest = Invoke-Gh api "repos/$Repository/actions/runs/$($latest.id)/attempts/$($latest.run_attempt - 1)" | ConvertFrom-Json
+    $attemptFloor = 0
+    # Neutral attempts cannot erase a decisive verdict or let older events replay over it.
+    while ($latest -and $latest.run_attempt -gt 1 -and
+        ($latest.status -ne 'completed' -or (Get-RedVerdict $latest.conclusion) -eq 'none')) {
+        $previousId = $latest.id; $previousAttempt = $latest.run_attempt - 1
+        $latest = Invoke-Gh api "repos/$Repository/actions/runs/$previousId/attempts/$previousAttempt" | ConvertFrom-Json
+        if ($latest.id -ne $previousId -or $latest.run_attempt -ne $previousAttempt) { throw 'Previous CI attempt does not match the requested run and attempt.' }
+        $attemptFloor = $previousAttempt
     }
     $completed = @(@($run) + @($latest) | Where-Object { $null -ne $_ -and $_.status -eq 'completed' } | Sort-Object run_number -Descending)
     if ($completed.Count -eq 0) { return }
     foreach ($candidate in $completed | Where-Object { $_.run_number -eq $completed[0].run_number } | Sort-Object run_attempt -Unique) {
         if ($candidate.path -ne '.github/workflows/ci.yml' -or $candidate.event -ne 'push' -or $candidate.head_branch -ne 'main' -or
             $candidate.head_repository.full_name -ne $Repository -or $candidate.run_attempt -lt 1) { throw 'Invalid completed main CI run.' }
+        if ($attemptFloor -gt 0 -and $candidate.id -eq $latest.id -and $candidate.run_attempt -lt $attemptFloor) { continue }
         # A delayed recovery cannot close over a newer attempt that is still running.
         if ($candidate.conclusion -eq 'success' -and @($recent | Where-Object {
                     $_.id -eq $candidate.id -and $_.status -ne 'completed' -and $_.run_attempt -gt $candidate.run_attempt

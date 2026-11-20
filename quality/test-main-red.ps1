@@ -58,7 +58,9 @@ function Fake-Gh {
         }
         '^api repos/o/r/actions/runs/(100|101)/attempts/(\d+)$' {
             $run.id = [long]$Matches[1]; $run.run_number = $run.id; $run.run_attempt = [int]$Matches[2]
-            $run.status = 'completed'; $run.conclusion = 'failure'; $run | ConvertTo-Json; return
+            $run.status = 'completed'
+            $run.conclusion = if ($s.ContainsKey('attempts')) { $s.attempts[$run.run_attempt] } else { 'failure' }
+            $run | ConvertTo-Json; return
         }
         '^api repos/o/r/actions/runs/(100|101)/(attempts/\d+/)?jobs' {
             @{ jobs = @(@{ id = 7; name = $s.jobName; conclusion = $s.jobConclusion }) + $s.extraJobs } | ConvertTo-Json; return
@@ -171,6 +173,19 @@ try {
         } else { $s.attempt = 4; $s.status = 'in_progress' }
         Detect
         Assert ($s.writes -notcontains 'close' -and $s.open) "a delayed successful attempt two never closes over newer $newer evidence (writes=$($s.writes -join ','); open=$($s.open))"
+    }
+    foreach ($neutral in 'cancelled', 'skipped') {
+        Reset-Scenario; $s.attempt = 2; $s.conclusion = 'success'
+        $s.attempts = @{ 1 = 'failure'; 2 = 'success'; 3 = $neutral }
+        $completed.run_attempt = 2; $completed.conclusion = 'success'
+        @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+        Detect
+        $quietRecovery = -not $s.open -and $s.writes.Count -eq 0
+        $s.attempt = 3; $s.conclusion = $neutral
+        $completed.run_attempt = 1; $completed.conclusion = 'failure'
+        @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+        Detect
+        Assert ($quietRecovery -and -not $s.open -and $s.writes.Count -eq 0) "a retained failure cannot reopen after a quiet successful retry and a $neutral third attempt (writes=$($s.writes -join ','); open=$($s.open))"
     }
 } finally {
     $env:GITHUB_EVENT_NAME = $savedEventName; $env:GITHUB_EVENT_PATH = $savedEventPath
