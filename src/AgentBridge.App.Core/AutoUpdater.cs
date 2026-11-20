@@ -162,7 +162,7 @@ public sealed class AutoUpdater
     readonly IUiDispatcher ui;
     // Names what holds files in the installation, or null: asked before the host is stopped
     // (HostManager.StopAndApplyAsync), so an update that cannot replace them stops nothing.
-    readonly Func<string?>? preflight;
+    readonly Func<CancellationToken, string?>? preflight;
     DateTimeOffset? checkedAt;
     // The last check's end, and its failure if it failed, which a press soon after is answered with.
     DateTimeOffset? lastCheckAt;
@@ -255,7 +255,7 @@ public sealed class AutoUpdater
     // for what waits on the person, and an update can wait (Creative, #231 for a found agent).
     public AutoUpdater(IUpdater updater, HostConnection host, HostManager manager, Func<AppPreferences> prefs, Action<AppPreferences> save, Action<string> log,
         Func<int?, string?> othersInPackage,         TimeProvider? time = null, IUiDispatcher? ui = null,
-                Func<string?>? preflight = null)
+                Func<CancellationToken, string?>? preflight = null)
     {
                 this.preflight = preflight;
         this.updater = updater as ObservedUpdater ?? new ObservedUpdater(updater, time);
@@ -1627,7 +1627,7 @@ public sealed class AutoUpdater
     // or why it couldn't install, with Try again); otherwise a toast does (#1167). A failed install
     // is never silent: Update.exe, silent, says nothing itself, and restarts this old version.
     public static UpdateAnnouncement? Announce(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, IToastSink sink, Action<string> log,
-        TimeProvider? time = null, Func<string?>? blockers = null)
+        TimeProvider? time = null, Func<CancellationToken, string?>? blockers = null)
     {
         if (prefs().UpdatedFrom is not { } from) { return null; }
         var notes = prefs().UpdateNotes;
@@ -1673,7 +1673,8 @@ public sealed class AutoUpdater
             // holds the files is named, best effort.
             save(UpdateBackoff.Failed(prefs(), at, prefs().UpdateFailedRelease, out var retryAt));
             string? held = null;
-            try { held = blockers?.Invoke(); }
+            // Bounded like the update's own wait (#2858): a stuck scan must not hold up startup.
+            try { held = new InstallationFiles.Budget(time ?? TimeProvider.System).ProbeOnceAsync(blockers, default).GetAwaiter().GetResult(); }
             catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { }
             log($"the update from {from} did not take: still {now ?? "not installed"}{(held is null ? "" : $"; {UpdateBlockedException.Prefix}{held}")}; update failed, retrying at {retryAt.ToLocalTime():t}");
             var failed = new UpdateAnnouncement(false, from, now ?? from, attempted, open);

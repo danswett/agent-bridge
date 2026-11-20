@@ -151,7 +151,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Elevated = () => false,
             Time = held,
         };
-        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi, () => preflight?.Invoke())
+        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi, _ => preflight?.Invoke())
         {
             WindowOpen = () => windowOpen,
         };
@@ -542,7 +542,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var started = false;
         var updating = Manager(packageNow: () => Volatile.Read(ref started) ? [4242, 7171] : [4242], startsKnown: change != "unknown");
         var applied = false;
-        string? Scan()
+        string? Scan(CancellationToken _)
         {
             if (host.Sent(HostOps.Stop).Count > 0 && change == "arrives") { Volatile.Write(ref started, true); }
             if (host.Sent(HostOps.Stop).Count > 0 && change == "restarted") { processes.StartTimes[4242] = Make.T0.AddSeconds(5); }
@@ -1919,7 +1919,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     public void An_update_that_did_not_take_is_counted_and_names_what_holds_the_installation_and_one_that_took_clears_the_count()
     {
         prefs = prefs with { UpdatedFrom = "0.1.0", UpdateHandedOver = true };
-        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time, () => "svchost.exe (DiagTrack, pid 4242)");
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time, _ => "svchost.exe (DiagTrack, pid 4242)");
 
         Assert.Equal(1, prefs.UpdateFailures);
         Assert.Equal(time.GetUtcNow() + UpdateBackoff.First, prefs.UpdateRetryAt);
@@ -1931,6 +1931,39 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Null(prefs.UpdateFailures);
         Assert.Null(prefs.UpdateRetryAt);
+    }
+
+    // A stuck holder scan at startup once had no bound: the first start after a failed update hung.
+    [Fact]
+    public async Task A_failed_update_start_stops_a_stuck_holder_scan_at_the_two_minute_budget_on_a_ui_thread()
+    {
+        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateHandedOver = true };
+        var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        UpdateAnnouncement? said = null;
+        var ui = new Thread(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new Unpumped());
+            said = AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time,
+                token => { entered.TrySetResult(token); release.Wait(); return null; });
+        });
+        ui.Start();
+        try
+        {
+            var scan = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            time.Advance(InstallationFiles.ReleaseWait);
+            Assert.True(ui.Join(TimeSpan.FromSeconds(5)), "startup still waiting on the holder scan");
+            Assert.True(scan.IsCancellationRequested);
+            Assert.NotNull(said);
+            Assert.Contains(log, l => l.Contains(InstallationFiles.TimedOut, StringComparison.Ordinal) && l.Contains("update failed, retrying at", StringComparison.Ordinal));
+        }
+        finally { release.Set(); ui.Join(TimeSpan.FromSeconds(5)); }
+    }
+
+    // A UI thread blocked on startup never runs posted continuations.
+    sealed class Unpumped : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state) { }
     }
 
     [Fact]
