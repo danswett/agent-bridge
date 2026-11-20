@@ -11,7 +11,7 @@ namespace AgentBridge.Protocol;
 // the pipe, data and config paths, environment variables, Home Assistant ids and names, and
 // protocol labels.
 //
-// Compiled into agent-bridge-hostw too (a linked file), which keeps to one small assembly.
+// Also included by reference in agent-bridge-hostw's self-contained bundle.
 #if AGENT_BRIDGE_HOSTW
 internal
 #else
