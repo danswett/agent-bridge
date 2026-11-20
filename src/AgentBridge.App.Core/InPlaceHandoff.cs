@@ -1,6 +1,9 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO.Compression;
+using System.Xml;
+using System.Xml.Linq;
 
 namespace AgentBridge.App.Core;
 
@@ -23,19 +26,53 @@ public sealed record InPlaceHandoff(string Package, PackageDigest Digest, string
         catch (Exception e) when (e is ArgumentException or InvalidOperationException) { return true; }
     }
 
+    // The helper's whole run. Anyone can start the exe with these arguments, and Update.exe stops the
+    // package's hosts, so it first asks what Velopack's hooks ask (LifecycleGuard, #67): a refused
+    // caller installs and starts nothing. The app asked too before handing over, as its ancestry
+    // leaves this one's once it exits. Then the install, and the app again either way; 1 when not all was installed.
+    public int Run(Func<string?> refusal, string staged, Func<IReadOnlyList<string>, int> updateExe, Func<IReadOnlyList<string>> held, Action<IReadOnlyList<string>> restart, Action<string> log)
+    {
+        if (refusal() is { } why) { log($"update: nothing was installed or started: this is running {why}. Installing is for a person."); return 4; }
+        var code = 0;
+        try
+        {
+            if (!WaitForApp(TimeSpan.FromMinutes(1))) { throw new InvalidOperationException("the app that handed the update over did not exit; nothing was installed"); }
+            log(Install(staged, updateExe, held, log) ? "update: installed in place; the held files were left as they were" : "update: installed");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException or Win32Exception)
+        { log($"update: {e.Message}"); code = 1; }
+        try { restart(Restart); }
+        catch (Exception e) when (e is IOException or Win32Exception) { log($"update: the app could not be started again: {e.Message}"); code = 1; }
+        return code;
+    }
+
     // updateExe: Update.exe run with these arguments, its exit code. The package is held and checked against the
     // digest the app verified, and staged from that handle. True when installed in place, false when apply took.
     public bool Install(string staged, Func<IReadOnlyList<string>, int> updateExe, Func<IReadOnlyList<string>> held, Action<string>? log = null)
     {
         using var package = DownloadMark.Hold(Package, Digest)
             ?? throw new PackageMismatchException("the update handed over is no longer the bytes verified for it; nothing was installed");
+        FileStream? locked = null;
         try
         {
             return InPlaceApply.Install(() => updateExe(PackageHandoff.Arguments(Package, Root, Packages, [], wait: false)) == 0,
-                () => held() is { Count: > 0 } files ? Extract(package, staged, files) : [],
+                () => { locked = Lock(); return held() is { Count: > 0 } files ? Extract(package, staged, files) : []; },
                 staged, Path.Combine(Root, "current"), Path.Combine(Root, "current-inplace"), log);
         }
-        finally { try { if (Directory.Exists(staged)) { InPlaceApply.DeleteTree(staged); } } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { } }
+        finally { locked?.Dispose(); try { if (Directory.Exists(staged)) { InPlaceApply.DeleteTree(staged); } } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { } }
+    }
+
+    // Velopack's install lock (locator.rs try_get_exclusive_lock): another profile's Update.exe changes
+    // current while it holds it. Taken once Update.exe has exited, and kept through any rollback.
+    FileStream Lock()
+    {
+        try
+        {
+            Directory.CreateDirectory(Packages);
+            return new FileStream(Path.Combine(Packages, ".velopack_lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        { throw new InPlaceApplyException($"another install holds {Path.Combine(Packages, ".velopack_lock")} ({e.Message}); nothing was installed", e); }
     }
 
     // As Velopack 1.2.161 extracts into current: the nuspec as sq.version, then lib/<framework>/'s
@@ -55,7 +92,24 @@ public sealed record InPlaceHandoff(string Package, PackageDigest Digest, string
             Directory.CreateDirectory(Path.GetDirectoryName(to)!);
             entry.ExtractToFile(to, overwrite: true);
         }
+        // The digest says which bytes, not that they are an app: one without its manifest (bundle.rs
+        // read_manifest) or the app it names would leave current empty once mirrored.
+        if (MainExe(staged) is not { } main || !File.Exists(Path.Combine(staged, main)))
+        {
+            throw new PackageMismatchException("the update has no manifest naming its app, or not that app, so it is not installed in place; nothing was installed");
+        }
         return held;
+    }
+
+    static string? MainExe(string staged)
+    {
+        try
+        {
+            var doc = XDocument.Load(Path.Combine(staged, "sq.version"));
+            string? Of(string name) => doc.Descendants().FirstOrDefault(e => e.Name.LocalName == name)?.Value.Trim() is { Length: > 0 } v ? v : null;
+            return Of("id") is null || Of("version") is null || Of("mainExe") is not { } main || Path.GetFileName(main) != main ? null : main;
+        }
+        catch (Exception e) when (e is IOException or XmlException) { return null; }
     }
 
     // The app's whole folder, where neither Velopack's rename nor its stop reaches. The app is

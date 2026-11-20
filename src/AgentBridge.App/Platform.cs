@@ -208,6 +208,8 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         {
             throw new InvalidOperationException("the installation's folders can't be told, so nothing was installed");
         }
+        // #67: the helper asks too, but this app's ancestry leaves the helper's once this app exits.
+        if (LifecycleGuard.Refusal() is { } why) { throw new InvalidOperationException($"this is running {why}, so nothing was installed: updating is for a person"); }
         handedOver?.Dispose();
         handedOver = null;
         var copy = handoff.Prepare(file, version, source!);
