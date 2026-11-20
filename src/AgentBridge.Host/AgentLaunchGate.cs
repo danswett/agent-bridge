@@ -6,7 +6,7 @@ namespace AgentBridge.Host;
 public sealed record AgentLaunchPolicyVerdict(bool Allowed, string? Reason, AgentLaunchLimits? Limits,
     int RetryAfterSeconds = 0, bool Duplicate = false);
 
-// The pipe stays closed until the caller/content checks and launch-service wiring land.
+// Composed with the caller/content checks and the launch service by AgentPipeLaunch (#3237 S3).
 public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock = null, TimeProvider? auditTime = null)
 {
     readonly AgentLimits limits = new(clock);
