@@ -830,11 +830,19 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   PowerShell compares them, and the host is given the offered spelling; permissions alone must
   be exact. Its outcome (`starting`, then `started`,
   `refused`, `busy`, `failed` or `unconfirmed`, with the session id and what was launched) is
-  kept with the four before it, newest first, on `new_session_result`'s `recent`, which is what
-  the bridge's MCP `launch_agent_session` reads. A request published after the press waits for
+  published newest first on `new_session_result`'s `recent`, which is what the bridge's MCP
+  `launch_agent_session` reads. The host keeps each request in its launch request store
+  (`launch-requests.json` in the host profile folder, #3237): `recent` lists every request it
+  still holds (finished ones for 15 minutes), up to 20 entries and 15,000 bytes so the attribute
+  stays under Home Assistant's 16 KiB recorder limit. Without a store (tests, other callers) it
+  keeps the newest five, as before. A request published after the press waits for
   its own; one more than 60 s older than the press is skipped, words and all, and the press
-  launches from the card; an id not matching `^[A-Za-z0-9-]{8,64}$` is refused; one already
-  served is never served again; and one that reached the machine more than five minutes after
+  launches from the card; an id not matching `^[A-Za-z0-9-]{8,64}$` is refused; one the store
+  already holds is never launched again, whatever its state, and a second press reports its
+  stored outcome; the same id with different text or settings is refused as a conflict, the
+  first request standing; when the store cannot be read or written, request launches are refused
+  with that reason (and a log line) rather than launched without dedupe, while a person's press
+  still launches; and one that reached the machine more than five minutes after
   its press is refused rather than started late. An agent's second press within 10 s of the one
   that took a request launches nothing (the daemon's guard against two presses for one request).
   A press whose prompt payload cannot be read waits for the next pass rather than launching from
@@ -858,10 +866,16 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   press meanwhile launches nothing, and a request hears `busy`, even when the launch finished
   before the press was read: the card still said `Starting...` when it was made.
 * **A restart**, or taking the machine back after agent-ha-bridge had it, reads the outcomes back
-  before taking any press: what Home Assistant holds is the newest account, the requests it
-  names are not served again, the history agents read carries on, and one left at `starting`
-  (other than the connector's own launch still under way) is reported `unconfirmed` rather than
-  launched a second time.
+  before taking any press: the launch request store is the account (Home Assistant's `recent`
+  only adds notes and what was launched), so a served request is not served again even when
+  Home Assistant no longer lists it; requests Home Assistant names that the store does not are
+  not served again either; the history agents read carries on, and one left at `starting`,
+  queued or launching (other than the connector's own launch still under way) is reported
+  `unconfirmed` rather than launched a second time.
+* **One payload slot per machine.** The prompt payload is still a single retained slot, so two
+  coordinators writing it before the press can overwrite each other before the host reads it;
+  the store cannot see a request it never read. A pipe operation that bypasses the slot
+  (#3237, a later slice) removes that.
 * What the button holds when the connector first reads it is not a press, and the note is
   cleared after ten minutes, as the daemon clears it. A note that cannot be shown does not stop
   the launch it describes.
