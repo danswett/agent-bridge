@@ -387,6 +387,26 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
 
 ### Updates: Velopack, one version for app and host
 
+**Completion evidence** ([updater follow-up](https://github.com/danswett/agent-bridge/issues/2869)):
+`UpdateApplyCompletion` is a platform-neutral observer seam, not yet wired to apply or
+respawn. Its adapter must track the actual apply operation, including delegated workers,
+and freshly read the active installation's normalized version. A launcher exit, target
+files appearing, or a cached locator version does not establish worker completion.
+Each run supplies a new operation generation; evidence with another (or no) generation
+is `Unknown`. Adapters must bind it to that operation's actual process, never re-tag a
+cached snapshot, and sample the active manifest after completion. Release identity
+uses the shared `UpdateVersions` normalizer (whitespace, one optional `v`, metadata
+ignored; case-insensitive comparison; `0.0.0` unknown).
+Only authoritative worker completion, a known zero apply exit code, and the matching
+active version produce `Completed`. A known nonzero worker exit produces `Failed`.
+Missing evidence, unreadable state, a timeout or a version mismatch stays `Unknown`;
+none authorizes a retry or claims app/host convergence. Any result arriving at or after
+the observation window is `Unknown`, even success. Cancellation stops observation,
+not the updater. The asynchronous probe must return promptly and cancel only its wait.
+Results retain the operation step, target/observed versions, actual exit/native error
+code when available, offset-bearing observation time and monotonic elapsed time,
+without copying exception messages or inventing holder PID/path evidence.
+
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
 into one folder with one version. An app update is a host update, so they never skew.
@@ -610,10 +630,11 @@ controls consume that same contract; this extraction does not disable or remove 
     of their words said once (ready, restarting, failed; a release that became ready while
     Settings was busy, once it is idle), and Settings' own download at most every quarter
     (ui.md §9.1 A6). Errors name the next step in one sentence: "The update didn't download.
-    *Product* will try again at *time*.", or "The update didn't install because another bridge
-    profile is running from this installation.", its reason a kind (another profile running, the
-    installer's error, a newer update downloaded meanwhile, the host not answering), never a
-    process id, a path or an error's own words, which go to the log. A failed install is a
+    *Product* will try again at *time*.", or "The update didn't install because bridge
+    profile 'work' host (pid 4242) runs from this installation." Profile blockers name the
+    profile and PID (or explicitly say the profile is unknown); other reasons stay a kind
+    (the installer's error, a newer download, the host not answering), never a path or an error's
+    own words. A failed install is a
     warning bar whose button reads **Try again**; while restarting, the button shows its progress
     ring, ignores presses, keeps focus and says "Restarting…" to a screen reader, never drawn at
     rest in accent (Creative on #719, 6675195544). There is one restart with one state, whichever
@@ -713,8 +734,19 @@ controls consume that same contract; this extraction does not disable or remove 
     which refuses while another profile's app or host runs from this installation (below), asking
     the host for its own pid first. The banner offers only a release the updater has ready: while a
     newer one found since is still downloading, or held after a failed download, it offers nothing.
-  * **Files held by Windows** (#2345, #2353): before stopping the host, wait at most two minutes
-    for Restart Manager's holders to release, with checks backing off to ten seconds.
+  * **Files held by Windows** (#2345, #2353, [timeout fix](https://github.com/danswett/agent-bridge/issues/2866)):
+    before stopping the host, check only locked installation files (any type, including `.pri`)
+    with Restart Manager. A completed clear scan serves only the duplicate checks right after the
+    wait and as the stop begins (cheap
+    file checks invalidate it if the locked-file set changes); the last check before the host stops,
+    after any confirmation or departure, always scans again, since an outside process can take an
+    image the app already holds without changing which files are locked. A last scan runs after the
+    stop's probe and other-profile waits, right before the handoff; a holder found then is named,
+    the host is started again and the install refused.
+    The cheap check opens each file exclusively for an instant, so a lazy assembly load in that
+    instant could see a sharing violation; a shared open would miss holders that allow writes.
+    Each scan has its own two-minute deadline, independent of the two-minute release wait
+    (checks back off to ten seconds). A scan started within that wait may finish afterwards.
     An unreadable/changing holder list is unknown, never permission to install. A SYSTEM service
     is named even when its image is unreadable; refusals include process/service name and PID,
     never the absolute image path. Verify a confirmed external holder's association with one installation file
@@ -723,7 +755,8 @@ controls consume that same contract; this extraction does not disable or remove 
     releases between queries or changes creation time is unknown, never a guessed filename; holders
     already confirmed in the same check stay named beside it.
     Match PID plus creation time throughout. Include non-executable resources such as `.pri`
-    files, not only DLLs and executables.
+    files, not only DLLs and executables. A scan timeout names Restart Manager and 120 s, never
+    claiming a confirmed holder.
     Waiting carries no Installing credit; timeout
     keeps the old install intact with recovery text and the existing 10/20/40/60-minute backoff.
     This path never stops a service or self-elevates; it does not replace the later slot design.
@@ -741,7 +774,13 @@ controls consume that same contract; this extraction does not disable or remove 
     waited for the same way, since Velopack ends them too, each held again every round and once
     more just before the hand-over, with the package looked at again once they are done (a host
     started meanwhile is held too); one that cannot confirm, or a host of the package no pipe
-    reaches, stops the update before anything is stopped. Quitting gives up those waits, never a
+    reaches, stops the update before anything is stopped. A host of the package that starts during
+    the last file scan, after those holds, or one not confirmed as held by its start time, refuses
+    the update and this host is started again. Each held host's start time is read when it is
+    first held, through its own pipe, and checked once the holds are done: a host that took the pid
+    of one that ended while another was waited for is held in turn (another profile's) or refuses
+    the update (this profile's, already stopped) rather than being taken for the held one.
+    Quitting gives up those waits, never a
     probe, so a host already stopped for the update is started again within Quit's 25 s.
   * **Never at startup:** Velopack applies a downloaded release by itself whenever the exe starts,
     by default, a second start that only shows the window included, stopping every process in the
@@ -756,7 +795,13 @@ controls consume that same contract; this extraction does not disable or remove 
     button below), and replacing the app and host touches neither the agents' consoles nor
     agent-ha-bridge. That is how a shadow beside agent-ha-bridge keeps itself current.
   * It never installs while another profile's app or host runs from this installation (Velopack
-    stops every process in the package and restarts only this profile). An Install pressed on
+    stops every process in the package and restarts only this profile). Running apps, hosts and
+    host launchers are identified by a held process handle, creation time, executable folder and
+    command-line profile, never a cached host PID alone: this
+    profile's host/launcher pair is not another profile, even without a connected host PID.
+    Leftover profile markers alone never block; unreadable process identity still refuses.
+    A demo app is a separate blocking instance, even when it names the updating profile.
+    An Install pressed on
     another device also waits while the host is not running or its sessions are not yet read in
     full (`sessions.synced`), so that it cannot say whether they are busy. Just before stopping the
     host it asks again: `host.status` from the host itself, and the processes running from the

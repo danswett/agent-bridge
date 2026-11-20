@@ -48,6 +48,7 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
                         state = s.Status, since = s.StatusSince,
                         startedAt = source.ProcessOf(s.Id) is { Id: > 0, StartedAt: { } started }
                             ? started.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture) : null,
+                        owner = Outcome("owner", s.Owner), pr = Outcome("pr", s.Pr), finished = Outcome("finished", s.Finished),
                     };
                 }).ToList();
             var truncated = usable.Length > 64;
@@ -78,5 +79,15 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
             return true;
         }
         finally { publishing.Release(); }
+    }
+
+    // Unknown is sent as absent, which readers already treat as unknown, so a relay older than
+    // this allow-list (it refuses unknown members) sees nothing new until a value is known.
+    // Malformed own evidence is dropped here rather than having the relay refuse the whole record.
+    static JsonElement? Outcome(string member, object? evidence)
+    {
+        if (evidence is null) { return null; }
+        var value = JsonSerializer.SerializeToElement(evidence, evidence.GetType(), ProtocolJson.Options);
+        return value.TryGetProperty("state", out var state) && state.GetString() != "unknown" && SessionEvidence.Outcome(member, value) ? value : null;
     }
 }

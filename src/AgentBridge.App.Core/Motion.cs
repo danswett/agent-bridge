@@ -119,6 +119,9 @@ public sealed class ConversationFollow
     public bool AtEnd { get; private set; } = true;
     // A finger on the conversation, a pan under way, or a mouse or pen over it or pressed in it.
     public bool Held => contacts.Count > 0 || manipulating || over.Count > 0 || pressed.Count > 0;
+    public event Action? HoldEnded;
+
+    void EndedHold(bool held) { if (held && !Held) { HoldEnded?.Invoke(); } }
 
     // The view moved. Only a move of the view counts: the conversation growing or shrinking under
     // a still view (a response streaming in, a question laid out above) leaves the person where
@@ -139,20 +142,20 @@ public sealed class ConversationFollow
 
     // Each finger by its pointer id: the view is free only once the last one lifts.
     public void TouchDown(uint pointer) => contacts.Add(pointer);
-    public void TouchUp(uint pointer) => contacts.Remove(pointer);
+    public void TouchUp(uint pointer) => EndedHold(contacts.Remove(pointer));
     // A touch the panning took over from: Windows cancels the pointer while the finger is still
     // down, and the manipulation carries on. Only a cancel with no pan under way ends the touch.
-    public void TouchCanceled(uint pointer) { if (!manipulating) { contacts.Remove(pointer); } }
+    public void TouchCanceled(uint pointer) { if (!manipulating) { TouchUp(pointer); } }
     public void PanStarted() => manipulating = true;
-    public void PanEnded() { manipulating = false; contacts.Clear(); }
+    public void PanEnded() { var held = Held; manipulating = false; contacts.Clear(); EndedHold(held); }
 
     // A mouse or pen over the conversation, by pointer id, until it leaves (or is lost).
     public void PointerOver(uint pointer) => over.Add(pointer);
-    public void PointerLeft(uint pointer) => over.Remove(pointer);
+    public void PointerLeft(uint pointer) => EndedHold(over.Remove(pointer));
     // A mouse button or pen pressed in the conversation holds it until released anywhere: a drag
     // (selecting text, the scroll bar's thumb) carries on after the pointer has left it.
     public void Pressed(uint pointer) => pressed.Add(pointer);
-    public void Released(uint pointer) => pressed.Remove(pointer);
+    public void Released(uint pointer) => EndedHold(pressed.Remove(pointer));
 
     // A question arrived on the session shown: whether to bring it into view.
     public bool Follows => AtEnd && !Held;

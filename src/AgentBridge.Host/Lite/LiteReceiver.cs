@@ -45,6 +45,13 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
         if (channel.PeerKind != "host" || !channel.InPresence) { return Refuse(NotSameAccount); }
         if (!peers.TryFind(channel.PeerId, out var peer) || channel.PeerStatic is not { } staticKey
             || Wire.DeviceId(staticKey) != channel.PeerId) { return Refuse(NotPeer); }
+        // L6: the sender's kill epoch rides unsigned, believed only from this authenticated pinned host, and only turns off.
+        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("killEpoch", out var k) && k.ValueKind == JsonValueKind.Number
+            && k.TryGetInt64(out var killEpoch) && killEpoch > mode.KillEpoch)
+        {
+            mode.RaiseEpoch(killEpoch);
+            if (!mode.On) { return Refuse(Off); }
+        }
 
         string? text; UnverifiedEnvelope envelope;
         if (data.ValueKind != JsonValueKind.Object

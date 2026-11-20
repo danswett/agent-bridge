@@ -1916,10 +1916,9 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal("This install uses staging.relay.example:8443", release.RelayNote);
         Assert.Equal("Sign in with GitHub to staging.relay.example:8443", release.SignInLabel);
     }
-    // Home Assistant refusing this machine is shown in the host's words, a rejected token and a ban
-    // alike, and goes when the host says it has; each change is announced, so the page redraws.
+    // Keep the host's refusal, but make its token remedy usable without the executable on PATH.
     [Fact]
-    public async Task Home_Assistant_refusing_this_machine_is_shown_in_the_hosts_words_and_goes_when_the_host_says_so()
+    public async Task Home_Assistant_refusal_banner_gives_the_installed_token_command_and_pipe_form_and_clears()
     {
         await Connected();
         Assert.False(settings.HasHomeAssistantRefused);
@@ -1933,16 +1932,19 @@ public sealed class SettingsTests : IAsyncLifetime
         };
         bool Told((string?, bool) seen) { lock (told) { return told.Contains(seen); } }
 
-        foreach (var said in new[]
+        const string command = """& "$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe" ha token set""";
+        const string banned = "Home Assistant has banned this machine's address; see docs/ha-connector.md, Troubleshooting";
+        foreach (var (said, banner) in new[]
         {
-            "Home Assistant rejected the token: run `agent-bridge-host ha token set`, then restart the host. Stopped after 3 refused attempts with it",
-            "Home Assistant has banned this machine's address; see docs/ha-connector.md, Troubleshooting",
+            ("Home Assistant rejected the token: run `agent-bridge-host ha token set`, then restart the host. Stopped after 3 refused attempts with it",
+             $"Home Assistant rejected the token: run `{command}` (or pipe it: `Get-Clipboard | {command}`), then restart the host. Stopped after 3 refused attempts with it"),
+            (banned, banned),
         })
         {
             host.Status = FakeHost.StatusOf() with { HomeAssistant = said };
             await host.SendAsync(HostOps.StatusEvent, host.Status);
-            await Wait.UntilAsync(() => Told((said, true)), "the refusal, announced");
-            Assert.Equal(said, settings.HomeAssistantRefused);
+            await Wait.UntilAsync(() => Told((banner, true)), "the refusal, announced");
+            Assert.Equal(banner, settings.HomeAssistantRefused);
             Assert.True(settings.HasHomeAssistantRefused);
         }
 

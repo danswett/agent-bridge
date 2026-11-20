@@ -219,7 +219,7 @@ public partial class App : Application
         {
             var announced = AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write, blockers: InstallBlockers.Find);
             MainWindow shownIn = window;
-            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others, ui: ui, preflight: InstallBlockers.Find)
+            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, pid => PackageProcesses.Others(options.Profile, pid), ui: ui, preflight: InstallBlockers.Find)
             {
                 WindowOpen = () => shownIn.IsOpen,
                 // After an update that took, the new host is watched for ten minutes (#1308).

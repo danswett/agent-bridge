@@ -27,9 +27,13 @@ public static class SignInBanners
     // that started it, so a result that comes back after a Cancel or a later press isn't applied.
     // Joined: a flow another device started, which this one joined (busy). Cancel here only closes
     // the sheet: signin.cancel would end the other device's sign-in too.
-    public sealed record Flow(string State, string? Id = null, DeviceCode? Code = null, string? Outcome = null, string? Reason = null, string? Problem = null, string? Attempt = null, IReadOnlyList<string>? Orphans = null, bool Joined = false)
+    // SignedInAt: a done signedIn held for AuthState.SignedInHold until the host says pending, so the
+    // banner never flips to Show code meanwhile (#902); unstamped, it is held until the host says.
+    public sealed record Flow(string State, string? Id = null, DeviceCode? Code = null, string? Outcome = null, string? Reason = null, string? Problem = null, string? Attempt = null, IReadOnlyList<string>? Orphans = null, bool Joined = false, DateTimeOffset? SignedInAt = null)
     {
         public bool Active => State is "starting" or "pending";
+        public bool Held => State == "done" && Outcome == "signedIn";
+        public bool Lapsed(DateTimeOffset now) => Held && SignedInAt is { } at && now - at >= AuthState.SignedInHold;
     }
 
     // A banner whose sessions the host has cleared: Kind is signedIn (a person here signed in) or
@@ -44,6 +48,8 @@ public static class SignInBanners
     {
         public string AgentName => AuthState.AgentName(Agent);
         public string Subject => $"{AgentName} on {Machine}";
+        // Signed in here, the host not yet saying pending: worded and said as confirming (#902).
+        public bool Held => State == "needed" && Flow is { Held: true };
     }
 
     public static string KeyOf(string machineKey, AgentKind agent, string? account) => $"{machineKey}\n{AuthState.WireName(agent)}\n{account ?? ""}";
@@ -91,6 +97,8 @@ public static class SignInBanners
             {
                 live.Add(key);
                 var flow = flows.GetValueOrDefault(key);
+                // A lapsed hold is gone: the banner follows the host again.
+                if (flow?.Lapsed(now) == true) { flow = null; }
                 var code = flow?.Code is { Refused: false } c && !AuthState.Expired(c, now) ? c : flow?.Code is { Refused: true } r ? r : null;
                 var expired = flow?.Code is { Refused: false } && code is null || flow?.Outcome == "expired";
                 var atMachine = g.SignIn == "machine";
@@ -129,7 +137,7 @@ public static class SignInBanners
             return ($"{who}{acct}", recovered, $"{who}: {recovered}");
         }
         if (b.State == "recovered") { return ($"{who}{acct}", "Recovered by itself", $"{who} recovered by itself"); }
-        if (b.State == "confirming")
+        if (b.State == "confirming" || b.Held)
         {
             var confirming = $"Signed in \u00b7 waiting for {Core.Words.Plural(b.Sessions.Count, "session", "sessions")} to confirm";
             return ($"{who}{acct}", confirming, $"{who}: {confirming}");
@@ -157,7 +165,7 @@ public static class SignInBanners
     public static string Affected(Banner b) => $"{Core.Words.Plural(b.Sessions.Count, "session", "sessions")} affected" + (b.Sessions.Count > 0 ? ": " : "");
 
     // Whether the banner's line names its sessions: a needed banner with nothing else to say.
-    public static bool ListsSessions(Banner b) => b.State == "needed" && b.Sessions.Count > 0 && StateLine(b) is null;
+    public static bool ListsSessions(Banner b) => b.State == "needed" && !b.Held && b.Sessions.Count > 0 && StateLine(b) is null;
 
     // What is said aloud as a banner changes, once each (§9.1 A6): every way an attempt can end, as the
     // banner or the sheet shows it, so none passes unsaid. Never the machine's own words, nor the code.
@@ -165,6 +173,7 @@ public static class SignInBanners
     {
         var who = b.Subject;
         if (b.State != "needed") { return (b.State, Words(b).Said); }
+        if (b.Held) { return ("confirming", Words(b).Said); }
         var f = b.Flow;
         return b.AtMachine ? ("machine", $"{who} needs sign-in at the machine")
             : f?.Outcome == "failed" ? ("failed", $"Sign-in failed for {who}")
@@ -182,6 +191,7 @@ public static class SignInBanners
         if (!b.CanSignIn) { return null; }
         var f = b.Flow;
         if (f is { Active: true } && !b.Expired) { return null; }
+        if (b.Held) { return "Sign in"; }
         if (b.Expired || f?.Outcome is "failed" or "refused" or "expired") { return "Try again"; }
         if (b.Recovery == "signingIn") { return "Show code"; }
         return "Sign in";
@@ -282,6 +292,7 @@ public sealed class SignInSheetViewModel : Observable
     // Not GitHub's link, or not GitHub's kind of code: possibly phishing, so none of it is shown.
     public bool Refused => Shape == "refused";
     public bool Expired => Shape == "expired";
+    public bool CancelIsDefault => Refused || Expired;
     // Try again, in the sheet: a new request (ui.md §6.13), only while the host still offers this
     // device sign-in (sessions.signin, not read-only, the newest session's signIn phone).
     public bool CanRetry => (Refused || Expired) && banner.CanSignIn;

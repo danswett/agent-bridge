@@ -79,9 +79,39 @@ public sealed partial class HaConnector
         // their own Send press, the ones counted; and each Send press read with whether it was the agent's.
         public readonly List<HaState> Queued = [];
         public readonly List<string> AgentSends = [];
-        public (string State, string? At, string? Before)? UncertainPayload;
+        // #2780: whether the durable inbox was read back (Restore), when, and the queued rids taken but not yet
+        // marked delivered there, oldest first.
+        public bool Restored;
+        public DateTimeOffset Since;
+        public readonly List<string> Marks = [];
+        // Updated: when Home Assistant last wrote the split snapshot, so a complete one written later ends it (#3224).
+        public (string State, string? At, string? Before, DateTimeOffset? Updated)? UncertainPayload;
         public readonly List<string> PayloadStamps = [];
         public readonly Dictionary<string, bool> Presses = new(StringComparer.Ordinal);
+        // #3224: presses taken as the agent's only because no payload could be read, owing nothing yet.
+        public readonly List<string> Unmatched = [];
+        // #3224: the most recent presses are kept; one at or before the newest forgotten is never taken anew,
+        // so a forgotten agent press read again can never become the owner's.
+        readonly Queue<(string Press, DateTimeOffset At)> pressOrder = new();
+        DateTimeOffset? forgotten;
+
+        public bool TakePress(string press, bool agent)
+        {
+            var at = DateTimeOffset.TryParse(press, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) ? parsed : (DateTimeOffset?)null;
+            if (Presses.ContainsKey(press) || at <= forgotten) { return false; }
+            Presses[press] = agent;
+            // Not a Home Assistant press stamp, so it has no place in the order: kept, never forgotten.
+            if (at is not { } when) { return true; }
+            pressOrder.Enqueue((press, when));
+            if (pressOrder.Count > 64)
+            {
+                var (gone, goneAt) = pressOrder.Dequeue();
+                Presses.Remove(gone);
+                Unmatched.Remove(gone);
+                if (!(goneAt <= forgotten)) { forgotten = goneAt; }
+            }
+            return true;
+        }
 
         public void Drop()
         {
@@ -90,6 +120,9 @@ public sealed partial class HaConnector
             UncertainPayload = null;
             PayloadStamps.Clear();
             Presses.Clear();
+            Unmatched.Clear();
+            pressOrder.Clear();
+            forgotten = null;
         }
         // The last acknowledgement: which rid the host delivered, published with the card's activity.
         public JsonObject? Ack;
