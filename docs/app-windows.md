@@ -1234,6 +1234,14 @@ claim who answered; only a confirmed local delivery says "You answered". Approva
 messages use the existing literal, escaped rendering path. The Windows view and
 closure wiring are a separate slice; this model alone does not replace the old receipt.
 
+**Sort menu** ([issue 191](https://github.com/danswett/agent-bridge/issues/191)):
+when the order file cannot be saved, the list uses Most recent and Your order is
+disabled. A later successful save enables Your order again; it stays unselected
+until the person chooses it. If the file could not be loaded, Your order stays
+disabled until the app restarts and reads it successfully; no changes overwrite
+the unread file. The menu item's tooltip distinguishes a load failure from a
+save failure.
+
 **Inline mono** ([ui.md](design/ui.md) §4.2, #215): a path, an id, a branch or a tool call on a line of text is in Slipgates Mono at that line's role's generated inline size (`AbInlineMono*`, through the app's `InlineMonoRow` and `InlineMonoMeta` styles), so its x-height is Slipgates Sans', on the role's own line height and weight; a code span in a response is scaled the same way (`AbInlineMonoScale`). Repository, machine and model names are in the text face, and separators are always text. Code standing on its own lines keeps the Code role.
 
 **The window** ([ui.md](design/ui.md) §7, #180): Mica behind the app's own 48 px title bar, which carries the mark (its native 20 px cut, in Bridge, which is Highlight in high contrast), the product's name and a search box (Ctrl+K), beside the system caption buttons, which the app paints in its theme on the UI thread (not with the title bar's `PreferredTheme`, whose repaint from a thread-pool thread crashed the app on a high-contrast switch, #240) and leaves in the system's colours in high contrast; a compact rail of Sessions, Machines, Launch and Usage, with Settings at its foot and a 3×16 Bridge pill on the page shown; and the pages on a layer with an 8 px top-left radius. Each page has its title in the type ramp's title role. The search box finds sessions on every machine by the words of their title, repository, branch, agent or machine, titles starting with them first, then the most recently updated, whichever machine the list shows, and opens the one chosen as a toast does. The window resizes freely down to 360×600 and opens where it was left (`<profile>-window.json`, maximised too), unless that is off every screen, when it opens centred on the main display at 1280×860 or as large as the display allows. WinUI's controls that follow the system accent (accent buttons, the rail's pill, checked controls, focused fields, selected text and links) are Bridge, from the generated accent palette ([design/README.md](../design/README.md)); high contrast keeps the system's colours.

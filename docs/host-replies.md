@@ -18,6 +18,24 @@ one session at once.
 
 ## The keys (Copilot)
 
+**Slice A (#2808).** A draft returns `refusal: "occupied"` without typing.
+Existing working/busy admission stays; no host queue or new-ID deduplication.
+A failed paste gets at most one Ctrl+E, Ctrl+U clear, never Enter, only with native
+count/hash proof that Enter was not written and an identical complete, anchored,
+idle, single-row input outside shell/vim-normal mode. Multiline input is ambiguous
+(hard newline or soft wrap), so cleanup ends without keys. An anchored empty box
+or any transcript advance after the pre-injection boundary ends cleanup permanently,
+including on the final worker check; retyping the same prefix cannot revive it.
+Cleanup takes one observation: shell/vim-normal, non-main, unreadable or otherwise
+unsafe input ends it permanently. Raw row matching preserves leading-space edits,
+excluding only the renderer's glyph and its one padding space.
+Process, transcript, G5 and worker
+screen guards are rechecked inside the original typing admission, bounded by
+submit patience/shutdown. Edited drafts, dialogs or unknown evidence stay untouched;
+no ownership or keys survive its uncertain receipt. Logs never contain reply text.
+The cleanup key sequence has fake-injector regression coverage only; there is no
+live-CLI proof yet.
+
 Ported from agent-ha-bridge (`hooks/decision-inject.ps1`, `Send-CopilotSessionPrompt`):
 the words as one burst, 300 ms, then a submit key of its own. The CLI takes a burst
 as a paste. Enter submits as before; #2468's queue path uses Ctrl+Q while working.
@@ -146,8 +164,8 @@ changed just as the reply was to be typed"). The submit key is a send of its own
 Copilot's 300 ms pause, held to the box's bottom edge and to the same footer checks, and
 to the box's first text row not starting with '!' (the frame-off box's shell glyph): if
 any fails (a dialog drawn in the input area's place, Home then '!' while the words were
-typed, Esc), no submit key goes, and the reply is `unconfirmed`, its words left in the box for
-the person to send or clear. A box that grows down the screen with the words (a short
+typed, Esc), no submit key goes, and the reply is `unconfirmed`; the guarded cleanup
+above clears only proven, unchanged host text. A box that grows down the screen with the words (a short
 screen, a long reply) moves its edge too, and is reported the same way; one that grows up a
 full screen moves its first text row, which then leaves the '!' check to the footer's. What
 no check can close is the moment between the worker's read and the CLI taking the key: a
