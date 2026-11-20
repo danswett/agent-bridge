@@ -615,7 +615,10 @@ public sealed partial class ReplyService : ISessionReplier
             && source.Get(session.Id) is { Agent: AgentKind.Copilot, Status: SessionStatus.Idle, Question: null } live && live.ProcessId == process.Id
             && inputs.TryGetValue(transcript, out var input)
             // Any transcript advance relinquishes ownership, including before the worker's keys.
+            // ScannedTo moves only at a newline, so the file's own length must still be the
+            // boundary too: a record written without its newline yet is an advance (#3153 review).
             && (input.Read() is { Readable: true, Asking: false, Resumed: false } latest && latest.ScannedTo == from
+                    && Jsonl.Length(transcript) == from
                 || from == 0 && NotYetWritten(transcript, live))
                 ? null : "failed reply cleanup is no longer safe";
     }
