@@ -65,6 +65,10 @@ public sealed class SessionOrder
         public List<string> Pinned { get; set; } = [];
         public List<string> Order { get; set; } = [];
         public Dictionary<string, string?> SeenTurns { get; set; } = [];
+        public Dictionary<string, GroupRegister> Groups { get; set; } = [];
+        public Dictionary<string, GroupRegister> Membership { get; set; } = [];
+        public Dictionary<string, DateTimeOffset> GroupListed { get; set; } = [];
+        public string? GroupDeviceTag { get; set; }
     }
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -79,7 +83,15 @@ public sealed class SessionOrder
         this.time = time ?? TimeProvider.System;
         state = Load(path, out var usable);
         Usable = usable;
+        if (!Guid.TryParseExact(state.GroupDeviceTag, "N", out _)) { state.GroupDeviceTag = Guid.NewGuid().ToString("N"); }
+        Groups = new(state.Groups ??= [], state.Membership ??= [], state.GroupListed ??= [],
+            state.GroupDeviceTag, this.time, Save, key =>
+            {
+                if (!IsPinned(key)) { state.Order.Remove(key); state.Order.Insert(0, key); }
+            }, () => shownSessions);
     }
+
+    public SessionGroups Groups { get; }
 
     public static string KeyOf(string machine, string session) => $"{machine}\n{session}";
 
@@ -151,11 +163,12 @@ public sealed class SessionOrder
     // shows(machine): whether a machine is shown, for the Ended group. settled(machine): whether a
     // machine has sent its whole list. Its sessions are placed only then, all together, newest
     // first: a snapshot arrives one session at a time, and placing each as it came would put them
-    // in reverse. Until then they show at the top, newest first.
-    public Arrangement Arrange(IReadOnlyList<OrderEntry> entries, Func<string, string?>? nameOf = null, Func<string, bool>? shows = null, Func<string, bool>? settled = null)
+    // in reverse. Until then they show at the top, newest first. knownLive: the unfiltered known-live
+    // rows for membership retention, independently of the rows shown and counted.
+    public Arrangement Arrange(IReadOnlyList<OrderEntry> entries, Func<string, string?>? nameOf = null, Func<string, bool>? shows = null, Func<string, bool>? settled = null, IReadOnlyList<OrderEntry>? knownLive = null)
     {
         foreach (var e in entries) { Observe(e.Machine, e.Session, snapshot: settled?.Invoke(e.Machine) == false); }
-        PlaceNew(entries.Where(e => settled?.Invoke(e.Machine) ?? true).ToList(), entries);
+        PlaceNew(entries.Where(e => settled?.Invoke(e.Machine) ?? true).ToList(), entries, knownLive ?? entries);
         var placed = state.Pinned.Concat(state.Order).ToHashSet(StringComparer.Ordinal);
         var unplaced = entries.Where(e => !placed.Contains(e.Key)).ToList();
         unplaced.Sort(Newer);
@@ -194,12 +207,12 @@ public sealed class SessionOrder
 
     // Sessions never placed go to the top of the unpinned rows, once; a session seen for the
     // first time starts read. all: every session shown, which the trim never forgets.
-    void PlaceNew(IReadOnlyList<OrderEntry> entries, IReadOnlyList<OrderEntry> all)
+    void PlaceNew(IReadOnlyList<OrderEntry> entries, IReadOnlyList<OrderEntry> all, IReadOnlyList<OrderEntry> liveEntries)
     {
         var placed = state.Pinned.Concat(state.Order).ToHashSet(StringComparer.Ordinal);
         var fresh = entries.Where(e => !placed.Contains(e.Key)).ToList();
         fresh.Sort(Newer);
-        var changed = fresh.Count > 0;
+        var changed = Groups.Remember(liveEntries) || fresh.Count > 0;
         state.Order.InsertRange(0, fresh.Select(e => e.Key).Distinct(StringComparer.Ordinal));
         foreach (var e in all)
         {
@@ -218,7 +231,8 @@ public sealed class SessionOrder
         if (changed) { Save(); }
     }
 
-    List<string>? GroupOf(string key) => shownPinned.Contains(key, StringComparer.Ordinal) ? shownPinned : shownSessions.Contains(key, StringComparer.Ordinal) ? shownSessions : null;
+    List<string>? GroupOf(string key) => shownPinned.Contains(key, StringComparer.Ordinal) ? shownPinned
+        : shownSessions.Contains(key, StringComparer.Ordinal) ? shownSessions.Where(k => Groups.GroupOf(k) == Groups.GroupOf(key)).ToList() : null;
 
     // Whether a row on screen can move by one (-1 up, 1 down) within its group: not a row its machine
     // hasn't finished sending, nor past one.
@@ -244,6 +258,7 @@ public sealed class SessionOrder
     public bool Place(string key, string target, bool after)
     {
         if (Sort != SessionSort.Yours || key == target || GroupOf(key) is null || GroupOf(target) is null || pending.Contains(key) || pending.Contains(target)) { return false; }
+        if (!IsPinned(key) && !IsPinned(target) && Groups.GroupOf(key) != Groups.GroupOf(target)) { return false; }
         Insert(key, target, after);
         return true;
     }
@@ -285,10 +300,10 @@ public sealed class SessionOrder
         seenDirty = true;
     }
 
-    // Writes what MarkSeen noted, if anything: every few seconds and when the app quits.
+    // Writes seen turns and exact group listing times: every few seconds and when the app quits.
     public void Flush()
     {
-        if (seenDirty) { Save(); }
+        if (seenDirty || Groups.ListingDirty) { Save(); }
     }
 
     // A session a host removed has ended.
@@ -318,6 +333,7 @@ public sealed class SessionOrder
     void Save()
     {
         seenDirty = false;
+        Groups.Saved();
         if (!Usable || path is null) { return; }
         try
         {

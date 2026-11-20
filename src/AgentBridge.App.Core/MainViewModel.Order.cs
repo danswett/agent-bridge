@@ -11,6 +11,20 @@ public sealed partial class MainViewModel
     public static IReadOnlyList<string> SortChoices { get; } = ["Your order", "Most recent", "Machine"];
 
     public SessionOrder Order { get; }
+    public IReadOnlyList<SessionGroup> Groups => Order.Groups.Items;
+    public IReadOnlyDictionary<string, int> GroupCounts => Order.Groups.Counts();
+
+    public string CreateGroup(string name)
+    {
+        var id = Order.Groups.Create(name);
+        Rearrange(chosen: true);
+        return id;
+    }
+
+    public void RenameGroup(string id, string name) { Order.Groups.Rename(id, name); Rearrange(chosen: true); }
+    public void DeleteGroup(string id) { Order.Groups.Delete(id); Rearrange(chosen: true); }
+    public void MoveToGroup(SessionCardViewModel card, string id) { Order.Groups.SetGroup(KeyOf(card), id); Rearrange(chosen: true); }
+    public void RemoveFromGroup(SessionCardViewModel card) { Order.Groups.SetGroup(KeyOf(card), null); Rearrange(chosen: true); }
     // The sort the picker was last told of: a failed save anywhere (a pin, a drop, a host's list)
     // turns the list to Most recent, and the next arrangement says so.
     SessionSort toldSort;
@@ -109,6 +123,8 @@ public sealed partial class MainViewModel
             if (c.Pinned) { pinnedSeen = true; } else { restSeen = true; }
         }
         SyncEnded(a.Ended);
+        Raise(nameof(Groups));
+        Raise(nameof(GroupCounts));
         // Saving failed (the file can't be written), here or in the change before: the list is Most
         // recent now, and says so.
         if (Order.Sort != toldSort)
@@ -140,7 +156,8 @@ public sealed partial class MainViewModel
         byId.Values.Where(Visible).Select(c => new OrderEntry(owner[c].Key, c.Session)).ToList(),
         nameOf: k => MachineOf(k)?.Name,
         shows: k => MachineOf(k) is { } m && Shows(m),
-        settled: k => MachineOf(k)?.Host.Sessions.Complete != false);
+        settled: k => MachineOf(k)?.Host.Sessions.Complete != false,
+        knownLive: byId.Values.Select(c => new OrderEntry(owner[c].Key, c.Session)).ToList());
 
     // "ended 3m ago" moves on with the clock.
     void RefreshEnded() => SyncEnded(Arranged().Ended);
