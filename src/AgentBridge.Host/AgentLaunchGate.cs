@@ -4,9 +4,9 @@ using AgentBridge.Protocol;
 namespace AgentBridge.Host;
 
 public sealed record AgentLaunchPolicyVerdict(bool Allowed, string? Reason, AgentLaunchLimits? Limits,
-    int RetryAfterSeconds = 0, bool Duplicate = false);
+    int RetryAfterSeconds = 0, bool Duplicate = false, AgentLaunchGrant? Grant = null);
 
-// The pipe stays closed until the caller/content checks and launch-service wiring land.
+// Shared policy and reservations for credentialed local launches.
 public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock = null, TimeProvider? auditTime = null)
 {
     readonly AgentLimits limits = new(clock);
@@ -81,6 +81,6 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
         if (problem is not null) { return new(false, problem, null); }
         if (!policy.LaunchEnabled) { return new(false, "agents.launch.enabled is off or missing on this machine", null); }
         if (!policy.Enabled) { return new(false, "agents.enabled is off on this machine", null); }
-        return new(true, null, policy.Limits.Launch);
+        return new(true, null, policy.Limits.Launch, Grant: policy.InboundLocal.Launch);
     }
 }

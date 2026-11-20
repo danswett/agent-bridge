@@ -31,6 +31,7 @@ public sealed class SessionService
     readonly ISessionStopper? stops;
     readonly UsageService? usage;
     readonly ISessionLauncher? launcher;
+    internal ISessionLauncher? AgentLauncher => launcher;
     readonly SessionTransfers? transfers;
     readonly ConcurrentDictionary<IProtocolChannel, Subscriber> subscribers = new();
 

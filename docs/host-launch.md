@@ -51,9 +51,8 @@ session's credential, including launch scope and readback, immediately. The comm
 is refused inside an agent session; an already-running child is not stopped.
 
 An authenticated local agent repeats the same `session.launch` request, including its
-original settings, to read its own remembered outcome. This only reads: a new request,
-changed content or another principal's request still meets the existing refusal path.
-No new launch operation or agent launch authority is enabled here. Outcomes remain
+original settings, to read its own remembered outcome. Read scope only reads: a new request,
+changed content or another principal's request still meets the refusal path. Outcomes remain
 in memory for 25 minutes after settling; durable caps and results belong to C2.
 Readback removes working-directory, resume, transfer, profile and trust-question data.
 A reason outside the fixed safe list becomes a generic sentence; host paths stay private.
@@ -73,7 +72,18 @@ change. Refusal audit records share the pipe's per-principal windowing: 60 per h
 then counted summaries at most once a minute. Live limits, idle ending, restart durability
 and temporary raises are C2 work, not guarantees of this staged readback.
 
-## Dispatch facts seam (#2788, not wired)
+## Credentialed local agent launches (#2774)
+
+A live `read+reply+launch` session credential may now launch locally when the machine
+switch and inbound local launch grant permit it. The pipe checks explicit ask permissions,
+raw request fields, configured extra arguments, caller depth/adoption, and approved isolated
+workspace labels before reserving the existing hourly/live gate. Durable launch intent
+precedes dispatch, which rechecks credential liveness, policy and arguments before starting.
+Refusals are audited; missing audit evidence fails closed. Read-only credentials and person
+launches retain their existing paths. This wiring does not add restart-durable caps or an
+idle-ending loop; unresolved/live reservations remain conservative.
+
+## Dispatch facts seam (#2788)
 
 `LaunchService.CaptureDispatch` lets a trusted dispatcher take a read-only copy of
 the resolved launcher's configured extra arguments at dispatch time, together with
@@ -81,7 +91,7 @@ the explicitly authenticated principal. Later configuration changes cannot alter
 an existing snapshot. Missing or unauthenticated identity is passed as null; empty
 or whitespace identity is also reported as null, never inferred from request fields
 or a peer label. Capturing these facts performs no launch, gate check or audit write.
-No existing launch path calls this seam yet; LocalApi and CheckLaunch wiring is #2774.
+The credentialed LocalApi launch path uses this seam for its request and dispatch checks.
 
 ## What agent-ha-bridge does
 
