@@ -104,6 +104,7 @@ public class PlanScriptTests
                     triggers: [build/**, docs/protocol/**]
                     command: see ci.yml app
                     where: ci.yml app
+                    tier: post_merge
                     status: exists
                   - id: app-installer
                     validation_plan: native
@@ -116,6 +117,8 @@ public class PlanScriptTests
                     triggers: [build/**, docs/protocol/**]
                     command: see ci.yml app-installer
                     where: ci.yml app-installer
+                    tier: post-merge
+                    tier_jobs: [app-installer (win-arm64)]
                     status: exists
                   - id: tests
                     validation_plan: native
@@ -197,6 +200,11 @@ public class PlanScriptTests
                     && !wholeRing && anotherFile is null && changed != "tests/Example.Tests/Shared.cs" ? "false"
                     : wholeRing || changed != "docs/guide.md" ? "true" : "false", outputs[job]);
             Assert.Equal("true", outputs["light"]);
+            // An unknown tier (app's post_merge) plans as blocking; only exact post-merge names are listed.
+            Assert.Equal(new Dictionary<string, string> { ["app"] = "blocking", ["app-installer"] = "blocking", ["app-installer (win-arm64)"] = "post-merge" },
+                JsonSerializer.Deserialize<Dictionary<string, string>>(outputs["tiers"])!.Where(t => t.Key.StartsWith("app", StringComparison.Ordinal)).ToDictionary());
+            Assert.Contains("| app-installer | " + (outputs["app-installer"] == "true" ? "yes" : "skipped") + " | blocking; post-merge: `app-installer (win-arm64)` |",
+                File.ReadAllText(Path.Combine(folder, "summary")), StringComparison.Ordinal);
             if (wholeRing)
                 Assert.Contains("Validation plans (reporting only): native=4, ha-compatibility=1.",
                     File.ReadAllText(Path.Combine(folder, "summary")), StringComparison.Ordinal);
@@ -206,7 +214,7 @@ public class PlanScriptTests
                         : new[] { "ubuntu-latest", "windows-latest", "windows-11-arm" },
                     JsonSerializer.Deserialize<string[]>(outputs["product-os"]));
             Assert.Equal("needs.plan.outputs.app == 'true'", ((YamlMappingNode)jobs["app"])["if"].ToString());
-            Assert.Equal("!cancelled() && (needs.plan.outputs.app-installer == 'true')",
+            Assert.Equal("!cancelled() && github.event_name != 'pull_request' && (needs.plan.outputs.app-installer == 'true')",
                 ((YamlMappingNode)jobs["app-installer"])["if"].ToString());
             Assert.Equal("${{ steps.whole-ring.outputs.base-known }}",
                 ((YamlMappingNode)select["env"])["BASE_KNOWN"].ToString());

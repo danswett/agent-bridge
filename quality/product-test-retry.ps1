@@ -1,4 +1,4 @@
-#Requires -Version 7.4
+#Requires -Version 5.1
 . (Join-Path $PSScriptRoot 'dotnet-test-command.ps1')
 
 function Read-ProductTrx([string]$Directory) {
@@ -50,9 +50,10 @@ function Read-ProductTrx([string]$Directory) {
             if (-not $method.className -or -not $method.name -or -not $row.testName -or -not $definition.storage) {
                 throw 'TRX does not identify a test case and its assembly.'
             }
+            $methodName = ([string]$method.name -split '\(', 2)[0]
             [pscustomobject]@{
                 Assembly = [IO.Path]::GetFileNameWithoutExtension($definition.storage)
-                FullyQualifiedName = "$($method.className).$($method.name)"
+                FullyQualifiedName = "$($method.className).$methodName"
                 Name = [string]$row.testName
                 Outcome = [string]$row.outcome
             }
@@ -123,18 +124,20 @@ function Invoke-ProductTestRetry {
     foreach ($group in $failed | Group-Object Assembly) {
         $group.Group | ForEach-Object { '- <code>' + [Net.WebUtility]::HtmlEncode("$($_.Assembly): $($_.Name)") + '</code>' } |
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
-        # DisplayName keeps passed data rows of the same theory out of the retry.
-        $clauses = foreach ($test in $group.Group) {
-            $fqn = $test.FullyQualifiedName -replace '([\\()&|=!~])', '\$1'
-            $display = $test.Name -replace '([\\()&|=!~])', '\$1'
-            "(FullyQualifiedName=$fqn&DisplayName=$display)"
+        # Display names can break MSBuild property parsing; retry whole methods.
+        $methods = @($group.Group.FullyQualifiedName | Sort-Object -Unique -CaseSensitive)
+        $clauses = foreach ($method in $methods) {
+            $fqn = $method -replace '([\\()&|=!~])', '\$1'
+            "FullyQualifiedName=$fqn"
         }
         $retryDirectory = Join-Path $ResultsDirectory "retry-$($group.Name)"
         dotnet test $projects[$group.Name] -c Release --no-build --nologo --blame-crash --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory $retryDirectory --logger trx --filter ($clauses -join '|') | Out-Host
         $code = $LASTEXITCODE
         if ($code -ne 0) { $retryExit = 1; continue }
         $retried = @(Read-ProductTrx $retryDirectory)
-        if ($retried.Count -ne $group.Count) { $retryExit = 1 }
+        if (@($retried | Where-Object {
+            $_.Assembly -ne $group.Name -or $_.FullyQualifiedName -cnotin $methods
+        }).Count) { $retryExit = 1 }
         foreach ($test in $group.Group) {
             $matches = @($retried | Where-Object {
                 $_.Assembly -eq $test.Assembly -and $_.FullyQualifiedName -ceq $test.FullyQualifiedName -and $_.Name -ceq $test.Name

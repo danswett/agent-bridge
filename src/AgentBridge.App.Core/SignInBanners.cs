@@ -282,6 +282,7 @@ public sealed class SignInSheetViewModel : Observable
     // Not GitHub's link, or not GitHub's kind of code: possibly phishing, so none of it is shown.
     public bool Refused => Shape == "refused";
     public bool Expired => Shape == "expired";
+    public bool CancelIsDefault => Refused || Expired;
     // Try again, in the sheet: a new request (ui.md §6.13), only while the host still offers this
     // device sign-in (sessions.signin, not read-only, the newest session's signIn phone).
     public bool CanRetry => (Refused || Expired) && banner.CanSignIn;

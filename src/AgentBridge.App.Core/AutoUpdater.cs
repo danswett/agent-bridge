@@ -1343,7 +1343,8 @@ public sealed class AutoUpdater
                 code: UpdateCode.ReleaseChanged);
             return;
         }
-        try { await WaitForFilesAsync(); }
+        InstallationFiles.Budget fileBudget;
+        try { fileBudget = await WaitForFilesAsync(); }
         catch (UpdateBlockedException e)
         {
             if (DropExpired()) { return; }
@@ -1381,7 +1382,7 @@ public sealed class AutoUpdater
                 log($"update now: pressed on {by ?? "another device"}, going over {(accept is null ? "nothing busy" : $"{accept.Working} with a turn running and {accept.Waiting} with a question or approval waiting{(accept.Unknown == true ? ", with sessions not yet reported" : "")}")}");
                 // The host left for this press: it is the one installed and answered, even should
                 // another have replaced it while the host was asked.
-                await InstallAsync(because, (request, true));
+                await InstallAsync(because, (request, true), fileBudget: fileBudget);
                 return;
             case UpdateDepartOutcome.Waiting:
                 var code = UpdateProtocol.IsCode(left.Code) ? left.Code : UpdateWaitingCode.Unknown;
@@ -1421,7 +1422,7 @@ public sealed class AutoUpdater
         try
         {
             await manager.WaitForInstallationFilesAsync(preflight,
-                why => { fileWait = $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time, fileBudget);
+                why => { fileWait = why == InstallationFiles.Unknown ? why : $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time, fileBudget);
             await manager.CheckInstallationFilesAsync(preflight, fileBudget);
             return fileBudget;
         }
@@ -1438,7 +1439,7 @@ public sealed class AutoUpdater
     // not, still on this version with the host back. answers: the press this install answers, as
     // the tick decided it, and whether the host departed for it (an Update now), which it then
     // answers whatever press has come since; else the one being carried out now.
-    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null, Func<string, Task<bool>>? confirm = null)
+    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null, Func<string, Task<bool>>? confirm = null, InstallationFiles.Budget? fileBudget = null)
     {
         var to = Pending!;
         var source = updater.Source;
@@ -1455,7 +1456,7 @@ public sealed class AutoUpdater
         {
             if (departed is null)
             {
-                var fileBudget = await WaitForFilesAsync();
+                fileBudget ??= await WaitForFilesAsync();
                 var nonFileWork = time.GetTimestamp();
                 if (local && host.State == LinkState.Connected) { await manager.WaitForUsageProbesAsync(); }
                 if (!local && await ProbeBusyAsync() is { } probe) { lastProbe = probe; Changed(); return NotNow; }
@@ -1471,15 +1472,17 @@ public sealed class AutoUpdater
                     if (vetted.Why is { } since) { throw new InstallRefusedException(since, vetted.Code); }
                 }
                 fileBudget.ExcludeSince(nonFileWork);
-                await manager.CheckInstallationFilesAsync(preflight, fileBudget);
+                await manager.CheckInstallationFilesAsync(preflight, fileBudget, fresh: true);
             }
-            else { await manager.CheckInstallationFilesAsync(preflight, new InstallationFiles.Budget(time)); }
+            else { await manager.CheckInstallationFilesAsync(preflight, fileBudget ??= new InstallationFiles.Budget(time), fresh: true); }
             Validate();
             updatingIn = open ? to : null;
             installingAt = null;
             installing = true;
             Changed();
             log($"auto-update: installing {to}, as {because}");
+            // The same budget, so the entry check reuses the clear scan just made; the last scan
+            // runs after the stop's waits, right before the handoff (#2884 review).
             await manager.StopAndApplyAsync(() =>
             {
                 Validate();
@@ -1493,7 +1496,7 @@ public sealed class AutoUpdater
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
                 if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
                 updater.ApplyAndRestart(to, HandedOver(prefs, save));
-            }, waitForFiles: false);
+            }, preflight, waitForFiles: false, fileBudget: fileBudget);
             return null;
         }
         // Replaced while the host stopped: nothing failed, and the host is back (HostManager). What

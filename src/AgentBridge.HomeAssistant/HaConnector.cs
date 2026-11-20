@@ -741,6 +741,8 @@ public sealed partial class HaConnector : IAsyncDisposable
             foreach (var id in ridLogs.Keys)
             {
                 if (!live.ContainsKey(id) && !underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
+                // A delivery still running keeps the history, not the queue: the same id back is a new lifetime.
+                else if (!live.ContainsKey(id) && ridLogs.TryGetValue(id, out var ended)) { ended.Drop(); }
             }
         }
         if (gone.Count > 0) { WatchSetChanged(); }
@@ -872,6 +874,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         if (p.Stop.Asking(now)) { summary = HaStop.ConfirmNote; detail["hint"] = p.Stop.Hint; }
         // The last delivered reply id stays on the card, so a sender can read it after the session moves on.
         if (p.Reply.Ack is { } replyAck) { detail["reply_ack"] = replyAck.DeepClone(); }
+        detail["reply_queue_count"] = QueueCount(s.Id);
         var activitySignature = summary + "\n" + Signature(detail);
         if (activitySignature != p.Activity)
         {
