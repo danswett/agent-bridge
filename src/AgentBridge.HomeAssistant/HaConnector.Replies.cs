@@ -102,6 +102,11 @@ public sealed partial class HaConnector
             else { AgentSends.RemoveAt(0); }
         }
 
+        // #2780: whether the durable inbox was read back (Restore), when, and the queued rids taken but not yet
+        // marked delivered there, oldest first.
+        public bool Restored;
+        public DateTimeOffset Since;
+        public readonly List<string> Marks = [];
         // Updated: when Home Assistant last wrote the split snapshot, so a complete one written later ends it (#3224).
         public (string State, string? At, string? Before, DateTimeOffset? Updated)? UncertainPayload;
         public readonly List<string> PayloadStamps = [];

@@ -20,8 +20,9 @@ public class LiteReceiverTests
     {
         public bool On { get; set; } = true;
         public long KillEpoch => 7;
+        public long Raised;
         public void TurnOff(string why) { }
-        public void RaiseEpoch(long epoch) { }
+        public void RaiseEpoch(long epoch) { Raised = epoch; On = false; }
     }
     sealed class Peers(LitePeer? peer) : ILitePeers
     {
@@ -51,13 +52,13 @@ public class LiteReceiverTests
         }
 
         public void Dispose() => Key.Dispose();
-        public JsonElement Request(string text = "hello", string? id = null, string? machine = null, string? add = null, string? target = null, string? signedText = null)
+        public JsonElement Request(string text = "hello", string? id = null, string? machine = null, string? add = null, string? target = null, string? signedText = null, long killEpoch = 0)
         {
             var sender = new LiteSender(Account, machine ?? Peer, add ?? Codec.Base64Url(SHA256.HashData(PeerStatic)), "agent-a1",
                 Codec.Base64Url(new byte[12]), Codec.Base64Url(new byte[16]), "copilot", "agent-bridge");
             var sealedBytes = LiteProfile.Seal(sender, new LiteTarget(target ?? Self, "agent-b2", Codec.Base64Url(new byte[12])), id ?? Id("1"),
                 Encoding.UTF8.GetBytes(signedText ?? text), Time.GetUtcNow().ToUnixTimeSeconds(), new EcdsaEnvelopeSigner(Key));
-            return JsonSerializer.SerializeToElement(new { envelope = Codec.Base64Url(sealedBytes), text, killEpoch = 0 });
+            return JsonSerializer.SerializeToElement(new { envelope = Codec.Base64Url(sealedBytes), text, killEpoch });
         }
 
         public Task<LiteAck> Send(JsonElement data) => Receiver.ReceiveAsync(Channel, data, default);
@@ -97,6 +98,20 @@ public class LiteReceiverTests
     sealed class Cancelling(CancellationToken? caller = null) : ILiteDeliver
     {
         public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) => throw new OperationCanceledException(caller ?? default);
+    }
+
+    [Fact]
+    public async Task A_higher_kill_epoch_from_the_pinned_host_turns_the_mode_off_before_any_delivery()
+    {
+        using var stranger = new Rig(knownPeer: false);
+        Refused(await stranger.Send(stranger.Request(killEpoch: 9)), LiteReceiver.NotPeer);
+        Assert.Equal(0, stranger.Mode.Raised);
+        using var r = new Rig();
+        Assert.Equal("delivered", (await r.Send(r.Request(killEpoch: 7))).Status);
+        Assert.Equal(0, r.Mode.Raised);
+        Refused(await r.Send(r.Request(id: Id("2"), killEpoch: 9)), LiteReceiver.Off);
+        Assert.Equal(9, r.Mode.Raised);
+        Assert.Equal(1, r.Deliver.Calls);
     }
 
     [Fact]

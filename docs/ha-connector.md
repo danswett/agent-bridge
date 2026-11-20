@@ -582,10 +582,21 @@ FIFO, at most 16 per session, and is acked `queued` (a rid already waiting is re
 `duplicate: true`). A 17th is refused with `queue full`, never replacing one already waiting. The
 activity sensor shows `reply_queue_count`. A question that is replaced or cleared keeps what agents
 had already sent to it. Once no question is open, waiting messages go through the normal reply
-delivery, oldest first, one at a time, ahead of anything sent after. There is **no durable
-persistence**: a host restart drops the queue (the count shows 0 again, and nothing waiting is
-delivered), and so does the session ending; a session back under the same id starts empty. Senders
-that see `queued` and then a count that drops without their rid being acked `delivered` send again.
+delivery, oldest first, one at a time, ahead of anything sent after. Each queued message is also kept
+in the `DurableInbox` at `ha-reply-inbox.json`, next to `ha-connector.json` in the host identity folder
+(the directory of `HaConnectorOptions.StateFile`; no state file, no inbox), under the session's node
+([#2780](https://github.com/danswett/agent-bridge/issues/2780) slice a). A message is queued only once the inbox
+has kept it: when it cannot be written (or the node's 100 or the inbox's 1000 entries are taken) the message
+is refused with `reply inbox unavailable` and never typed (fail closed). A message is marked delivered in the
+inbox once its delivery is taken, so a host restart no longer drops waiting messages: after a restart the
+oldest undelivered one is read back ahead of anything new, then the next once that one is taken, oldest first.
+`reply_queue_count` and the 16-message cap count only messages read back so far. A rid still waiting after a
+restart is a duplicate acked `queued`; one delivered before the restart is a duplicate acked `unconfirmed`, and
+one already delivered since this start is refused. The session ending still discards its queue (each entry is
+marked delivered); a session that ended while the host was down leaves its entries in the file (counting toward
+the 1000), and they are delivered if a session returns under that id. A crash after a message was typed but before it was marked types it again after the
+restart. The `reply_ack` protocol (slice b) and the end-to-end restart proof across roster and relay (slice c)
+are separate. Senders that see `queued` and then a count that drops without their rid being acked `delivered` send again.
 An agent's own Send press is not taken as the owner's confirmation, by count: while an agent
 message still owes its press, the next new Send press is taken as the agent's, and a press read when the payload
 cannot be read is too (fail closed). A mixed watched stamp remains uncertain even if REST still
@@ -613,7 +624,8 @@ and never spends an agent message's debt. The latest 64 owed Sends are remembere
 as a count, still each taking a press as the agent's, but a later read can no longer settle them, so the owner may
 have to press again ([#3356](https://github.com/danswett/agent-bridge/issues/3356)).
 
-**Durable inbox foundation.** `DurableInbox` is an internal, not-yet-connected store: it
+**Durable inbox foundation.** `DurableInbox` is an internal store, connected only to the question-time queue
+above (#2780 slice a); the paragraph below describes the store itself: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,
 and returns the original entry on a matching rid retry, even if a retry is restamped. It keeps
 at most 100 entries per node and 1000 total; when full, it prunes the oldest delivered entries
@@ -624,10 +636,9 @@ For #2780 integration, deduplication lasts only while that metadata is retained 
 delivered rid is accepted as new and may be delivered again; this is not permanent deduplication.
 Load and save remove this inbox's GUID-named crash-leftover temporary files under its lock,
 so obsolete copies cannot retain payloads after a later delivery.
-Power-loss durability is not established. It does not change the live reply path, publish acks,
-or provide native receipt. A later slice must provide an access-controlled storage directory,
-one dispatcher per node (a peek does not reserve a message), and reconcile the crash window
-between typing and recording delivery before enabling it.
+Power-loss durability is not established. Beyond that queue it does not change the live reply path,
+publish acks, or provide native receipt. Slice a stores it in the host identity folder and drains each node only
+from that session's reply pass; the crash window between typing and recording delivery remains (see above).
 
 **`tools/agents/reply-session.ps1`** is the in-repo sender. It posts the payload with a rid, waits
 for the reply sensor to show its own stamp (there is one slot per node, so rapid sends can overwrite

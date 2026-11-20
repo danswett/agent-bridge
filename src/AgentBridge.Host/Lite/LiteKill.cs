@@ -28,6 +28,8 @@ public sealed class LiteKill : ILiteMode
     readonly ConcurrentDictionary<CancellationTokenSource, byte> inFlight = new();
     volatile bool off;
     volatile bool latched;
+    // A kill whose "off" the setting did not take, kept in the epoch file so a restart cannot undo it.
+    volatile bool held;
     long pushed;
     long seen;
 
@@ -39,11 +41,12 @@ public sealed class LiteKill : ILiteMode
         this.time = time ?? TimeProvider.System;
         // The epoch already on disk is the baseline; only a higher one later is a new kill.
         ReadEpoch(baseline: true);
+        if (held) { TurnOff("a kill that had not set agentMessaging.remote off before the restart"); }
     }
 
     // Reading the record each time lets an unreadable one latch the mode off, and a kill made by
     // another process (`agents lite kill`) cancel the sends in flight here.
-    public bool On { get { ReadEpoch(); return !off && !latched && HostSettings.CurrentAgentMessaging(folder).RemoteEnabled; } }
+    public bool On { get { ReadEpoch(); return !off && !latched && !held && HostSettings.CurrentAgentMessaging(folder).RemoteEnabled; } }
 
     public long KillEpoch => ReadEpoch();
 
@@ -59,7 +62,12 @@ public sealed class LiteKill : ILiteMode
         off = failed;
         if (failed)
         {
-            log($"lite: could not write agentMessaging.remote=off ({error.ToString().Trim()}); off until restart");
+            log($"lite: could not write agentMessaging.remote=off ({error.ToString().Trim()}); held off, also across a restart");
+        }
+        if (failed != held)
+        {
+            try { Locked(() => { if (ReadEpoch() is > 0 and var epoch) { WriteEpoch(epoch, failed); } return 0; }); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log($"lite: could not save the held kill ({e.GetType().Name})"); }
         }
         log($"lite: own-agents messaging turned off ({why})");
     }
@@ -148,11 +156,8 @@ public sealed class LiteKill : ILiteMode
         catch (Exception e) when (e is OperationCanceledException or ObjectDisposedException) { }
     }
 
-    // In front of the hub's handler, so the kill op is judged here: only a pinned own host, and
-    // only to turn the mode off.
-    public Func<SecureChannel, string, JsonElement, Task<object?>> Wrap(Func<SecureChannel, string, JsonElement, Task<object?>> inner) =>
-        (channel, op, data) => op != Op ? inner(channel, op, data) : Task.FromResult<object?>(HandleKill(channel.PeerId, channel.PeerKind, data));
-
+    // agent.lite.kill, through SessionService after the trusted-peer role check: only a pinned own
+    // host, and only to turn the mode off.
     public object HandleKill(string peerId, string peerKind, JsonElement data)
     {
         if (peerKind != UsagePeers.HostKind || !peers.TryFind(peerId, out _))
@@ -185,8 +190,12 @@ public sealed class LiteKill : ILiteMode
             try
             {
                 ch = await hub.OpenAsync(p.Id, TimeSpan.FromSeconds(10));
-                await ch.RequestAsync(Op, new { epoch }, TimeSpan.FromSeconds(10), ct);
-                told++;
+                // Told once the peer holds this epoch, or refused us as not its pinned host; a clock refusal is tried again.
+                var answer = await ch.RequestAsync(Op, new { epoch }, TimeSpan.FromSeconds(10), ct);
+                if (answer.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True && answer.TryGetProperty("result", out var result)
+                    && result.ValueKind == JsonValueKind.Object && result.TryGetProperty("applied", out var judged) && judged.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    && (!result.TryGetProperty("epoch", out var known) || (known.TryGetInt64(out var at) && at >= epoch))) { told++; }
+                else { failed = true; log($"lite: {Short(p.Id)} did not take the kill"); }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception e) { failed = true; log($"lite: could not tell {Short(p.Id)} of the kill ({e.GetType().Name})"); }
@@ -216,6 +225,7 @@ public sealed class LiteKill : ILiteMode
                 Unreadable("malformed");
                 return Interlocked.Read(ref seen);
             }
+            held = doc.RootElement.TryGetProperty("held", out var h) && h.ValueKind == JsonValueKind.True;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -267,13 +277,14 @@ public sealed class LiteKill : ILiteMode
         }
     }
 
-    // The mode is already latched off, so a failed write cannot leave a kill unapplied.
+    // The mode is already latched off, so a failed write cannot leave a kill unapplied. Held until
+    // the setting is off, so a stop in between cannot let a restart undo it.
     void TryWrite(long epoch)
     {
         Raise(epoch);
         try
         {
-            WriteEpoch(epoch);
+            WriteEpoch(epoch, hold: true);
             latched = false;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -283,13 +294,14 @@ public sealed class LiteKill : ILiteMode
         }
     }
 
-    void WriteEpoch(long epoch)
+    void WriteEpoch(long epoch, bool hold)
     {
         Directory.CreateDirectory(folder);
         var path = Path.Combine(folder, FileName);
         var temp = $"{path}.{Environment.ProcessId}.tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(new { epoch }));
+        File.WriteAllText(temp, hold ? JsonSerializer.Serialize(new { epoch, held = true }) : JsonSerializer.Serialize(new { epoch }));
         File.Move(temp, path, overwrite: true);
+        held = hold;
     }
 
     static string Short(string id) => id[..Math.Min(8, id.Length)];
