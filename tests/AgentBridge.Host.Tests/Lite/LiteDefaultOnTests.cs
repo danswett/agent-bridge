@@ -108,6 +108,19 @@ public sealed class LiteDefaultOnTests : IDisposable
     }
 
     [Fact]
+    public async Task A_kill_whose_record_could_not_be_written_is_not_undone_by_a_restart_and_an_unset()
+    {
+        Directory.CreateDirectory(Path.Combine(Folder("a"), LiteKill.FileName));
+        await AgentCommands.RunAsync(["agents", "lite", "kill"], Folder("a"), () => false, TextWriter.Null, TextWriter.Null);
+        Assert.False(HostSettings.CurrentAgentMessaging(Folder("a")).RemoteEnabled);
+        Assert.Equal(0, Config(Folder("a"), "unset", "agentMessaging.remote"));
+        Assert.False(new LiteKill(Folder("a")).On);
+        var (sender, link, _) = Pair();
+        Assert.Equal(LiteKind.Off, (await Send(sender)).Kind);
+        Assert.Equal(0, link.Opened);
+    }
+
+    [Fact]
     public void A_newer_kill_from_a_present_peer_turns_a_default_on_machine_off_for_good()
     {
         var b = new LiteKill(Folder("b"));

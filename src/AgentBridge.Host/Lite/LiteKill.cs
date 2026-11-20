@@ -223,8 +223,9 @@ public sealed class LiteKill : ILiteMode
             var path = Path.Combine(folder, FileName);
             if (!File.Exists(path))
             {
-                // Missing is normal only before any kill; after one it means the record was lost.
-                if (Interlocked.Read(ref seen) > 0) { Unreadable("missing"); }
+                // Missing is normal only before any kill; after one it means the record was lost. A path that is
+                // there but not a file is a kill whose record could not be written, so the default stays off.
+                if (Interlocked.Read(ref seen) > 0 || Path.Exists(path)) { Unreadable("missing"); }
                 return Interlocked.Read(ref seen);
             }
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
