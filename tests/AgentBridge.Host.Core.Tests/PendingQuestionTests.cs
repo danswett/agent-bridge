@@ -1,7 +1,7 @@
-using System.Diagnostics;
 using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 using Xunit;
+using Xunit.Abstractions;
 
 public class PendingQuestionTests
 {
@@ -112,40 +112,64 @@ public class PendingQuestionTests
 }
 
 [Collection(nameof(PendingQuestionGrowthTests))]
-public class PendingQuestionGrowthTests
+public class PendingQuestionGrowthTests(ITestOutputHelper output)
 {
-    // Azure/CI only: do not include this timing probe in focused runs on a live bridge machine.
+    // Azure/CI only: do not include this growth probe in focused runs on a live bridge machine.
     [Fact]
     [Trait("Category", "Performance")]
     public void Delegate_asks_and_repeated_main_failures_grow_linearly()
     {
-        static (double Ask, double Fail) Measure(int n)
+        static (long Ask, long Fail) Measure(int n)
         {
             var state = new SessionState();
             var questions = Enumerable.Range(0, n).Select(i => PendingQuestionTests.Q("q" + i, "delegate")).ToArray();
-            var clock = Stopwatch.StartNew();
-            foreach (var question in questions) { state.Ask(question); }
-            var ask = clock.Elapsed.TotalMilliseconds;
-            clock.Restart();
-            for (var i = 0; i < n; i++) { state.FailTurn(Fixture.T0); }
-            var fail = clock.Elapsed.TotalMilliseconds;
+            var ask = Allocated(() =>
+            {
+                foreach (var question in questions) { state.Ask(question); }
+            });
+            var fail = Allocated(() =>
+            {
+                for (var i = 0; i < n; i++) { state.FailTurn(Fixture.T0); }
+            });
             Assert.Equal(n, state.Pending.Count);
             return (ask, fail);
         }
 
         Measure(256);
-        var small = (Ask: double.MaxValue, Fail: double.MaxValue);
-        var large = small;
-        for (var run = 0; run < 3; run++)
-        {
-            var s = Measure(1_000);
-            var l = Measure(16_000);
-            small = (Math.Min(small.Ask, s.Ask), Math.Min(small.Fail, s.Fail));
-            large = (Math.Min(large.Ask, l.Ask), Math.Min(large.Fail, l.Fail));
-        }
-        Assert.True(large.Ask < 100 * Math.Max(small.Ask, 0.1), $"16x the asks took {large.Ask / Math.Max(small.Ask, 0.1):F1}x as long");
-        Assert.True(large.Fail < 100 * Math.Max(small.Fail, 0.1), $"16x the failures took {large.Fail / Math.Max(small.Fail, 0.1):F1}x as long");
+        var small = Measure(1_000);
+        var large = Measure(16_000);
+        output.WriteLine($"Allocated bytes (1,000 / 16,000): asks {small.Ask} / {large.Ask}; failures {small.Fail} / {large.Fail}");
+        AssertLinearAllocations(small.Ask, large.Ask, "asks");
+        AssertLinearAllocations(small.Fail, large.Fail, "failures");
     }
+
+    [Fact]
+    [Trait("Category", "Performance")]
+    public void Allocation_growth_check_rejects_quadratic_allocation()
+    {
+        static void Quadratic(int n)
+        {
+            for (var i = 0; i < n; i++) { GC.KeepAlive(new byte[n]); }
+        }
+
+        Quadratic(16);
+        var small = Allocated(() => Quadratic(64));
+        var large = Allocated(() => Quadratic(1_024));
+        output.WriteLine($"Quadratic stand-in allocated {small} / {large} bytes ({(double)large / small:F1}x)");
+        Assert.Throws<Xunit.Sdk.TrueException>(() => AssertLinearAllocations(small, large, "quadratic stand-in"));
+    }
+
+    // Keep setup and assertion allocations outside the synchronous, same-thread work window.
+    static long Allocated(Action work)
+    {
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        work();
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
+    static void AssertLinearAllocations(long small, long large, string operation) =>
+        Assert.True(large < 40 * Math.Max(small, 1),
+            $"16x the {operation} allocated {small} / {large} bytes ({(double)large / Math.Max(small, 1):F1}x; limit 40x)");
 }
 
 [CollectionDefinition(nameof(PendingQuestionGrowthTests), DisableParallelization = true)]
