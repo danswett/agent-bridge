@@ -582,7 +582,8 @@ public sealed partial class HaConnector
         if (age < 0) { return new("newer"); }
         if (age > 60) { return new("stale"); }
         var id = idElement.ValueKind == JsonValueKind.String ? idElement.GetString() : null;
-        if (id is null || !RequestIdPattern().IsMatch(id)) { return new("malformed"); }
+        // "pipe-" is the host's own (an agent's pipe launches, #3237): never HA's, so never its record or sensor.
+        if (id is null || !RequestIdPattern().IsMatch(id) || id.StartsWith("pipe-", StringComparison.Ordinal)) { return new("malformed"); }
         if (launchRequestsHandled.Contains(id, StringComparer.Ordinal)) { return new("handled"); }
 
         var parsed = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -947,13 +948,14 @@ public sealed partial class HaConnector
         // What Home Assistant holds is the newest account, whoever wrote it; with the host's
         // record, the record's own requests are told as it says.
         launchOutcomes.Clear();
-        var cut = store is not null;
+        // An agent's pipe launches ("pipe-", #3237) never reach Home Assistant; any an older account shows is taken down.
+        static bool Piped(JsonElement i) => i.ValueKind == JsonValueKind.Object && i.TryGetProperty("request", out var q)
+            && q.ValueKind == JsonValueKind.String && q.GetString()!.StartsWith("pipe-", StringComparison.Ordinal);
+        var cut = store is not null || recent?.EnumerateArray().Any(Piped) == true;
         var shown = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
-        foreach (var item in recent?.EnumerateArray().Take(store is null ? HaContract.LaunchOutcomesKept : HaContract.LaunchOutcomesPublished) ?? [])
+        foreach (var item in recent?.EnumerateArray().Where(i => !Piped(i)).Take(store is null ? HaContract.LaunchOutcomesKept : HaContract.LaunchOutcomesPublished) ?? [])
         {
-            // An agent's pipe launches ("pipe-", #3237) never reach Home Assistant, even from an older account.
-            if (JsonNode.Parse(item.GetRawText()) is not JsonObject o || o["request"] is not JsonValue v0 || !v0.TryGetValue<string>(out var id)
-                || id.StartsWith("pipe-", StringComparison.Ordinal)) { continue; }
+            if (JsonNode.Parse(item.GetRawText()) is not JsonObject o || o["request"] is not JsonValue v0 || !v0.TryGetValue<string>(out var id)) { continue; }
             if (store?.Get(id) is not null) { shown.TryAdd(id, o); continue; }
             if (o["outcome"] is JsonValue v && v.TryGetValue<string>(out var outcome) && outcome == "starting" && id != launchInFlight)
             {

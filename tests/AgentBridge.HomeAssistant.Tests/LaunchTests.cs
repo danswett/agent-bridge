@@ -883,11 +883,25 @@ public sealed class LaunchTests : IDisposable
 
         await using var c = await Ready(Store());
         await Request(c, "req-0150-abcd");
+        await Request(c, "pipe-0001");
 
+        Assert.Single(launched);
         Assert.Equal(["req-0150-abcd"], Recent().Select(o => o!["request"]!.GetValue<string>()));
         Assert.DoesNotContain("pipe", ha.Retained[HaContract.LaunchOutcomeTopic(Slug)], StringComparison.Ordinal);
         Assert.DoesNotContain("old00", ha.Retained[HaContract.LaunchOutcomeTopic(Slug)], StringComparison.Ordinal);
         Assert.Equal(LaunchRequestState.Queued, Store().Get("pipe-0002")!.State);
+    }
+
+    [Fact]
+    public async Task Without_the_hosts_record_a_pipe_launch_home_assistant_still_shows_is_taken_down_at_start()
+    {
+        var held = string.Join(",", Enumerable.Range(0, 5).Select(i => $$"""{"request":"req-015{{i}}-abcd","outcome":"started","session":"t"}"""));
+        ha.Seed(HaContract.LaunchOutcomeTopic(Slug), $$"""{"recent":[{{held}},{"request":"pipe-0003","outcome":"started","session":"s"}]}""");
+
+        await using var c = await Ready();
+
+        Assert.Equal(Enumerable.Range(0, 5).Select(i => $"req-015{i}-abcd"), Recent().Select(o => o!["request"]!.GetValue<string>()));
+        Assert.DoesNotContain("pipe", ha.Retained[HaContract.LaunchOutcomeTopic(Slug)], StringComparison.Ordinal);
     }
 
     [Fact]
