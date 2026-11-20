@@ -45,10 +45,15 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     readonly TimeProvider clock;
     readonly Dictionary<string, (FleetMachine Machine, long Seen)> cache = new(StringComparer.Ordinal);
 
-    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null)
+    readonly Func<RelayClient, CancellationToken, Task>? refreshRoster;
+
+    // refresh re-reads the signed device roster before each lookup, so who counts as a fleet host
+    // is never older than the lookup itself (#2643).
+    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null, Func<RelayClient, CancellationToken, Task>? refresh = null)
     {
         signedRoster = verifiedRoster;
         clock = time ?? TimeProvider.System;
+        refreshRoster = refresh;
     }
 
     // design/fleet-session-registry.md "Offline machines and the cache": a machine's last accepted
@@ -108,6 +113,12 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     {
         var current = Volatile.Read(ref relay) ?? throw new InvalidOperationException("refused: this host isn't connected to the relay");
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
+        if (refreshRoster is not null)
+        {
+            // A roster that can't be read leaves the lookup on the one it already holds.
+            try { await refreshRoster(current, ct); }
+            catch (Exception e) when (e is not OperationCanceledException) { }
+        }
         var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
         lock (cache)
         {

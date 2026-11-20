@@ -10,7 +10,7 @@ public class MachineNameScanTests
 {
     // The shapes the fleet's machine names take (a numbered VM, also inside an underscore slug,
     // or the owner's name as a prefix), so that no name itself is written here.
-    static readonly Regex MachineName = new(@"(?<![a-z0-9])vm[1-9]\d*(?![a-z0-9])|\bdswett-[a-z0-9]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    static readonly Regex MachineName = new(@"(?<![a-z0-9])vm[1-9]\d*(?![a-z0-9])|(?<![a-z0-9])dswett-[a-z0-9]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // A name written bare, without its owner prefix, has no shape to match. Only SHA-256 digests of
     // such upper-case words are kept, so the names are not written here either. Upper case only:
@@ -23,11 +23,14 @@ public class MachineNameScanTests
     // left in it fails until it is removed.
     static readonly string[] NotYetCleaned =
     [
-        "design/", "pwa/",
+        "design/",
     ];
 
     static bool Names(string text) => MachineName.IsMatch(text) || UpperWord.Matches(text).Select(m => m.Value).Distinct(StringComparer.Ordinal)
         .Any(word => BareNames.Contains(Convert.ToHexStringLower(SHA256.HashData(Encoding.ASCII.GetBytes(word)))));
+
+    [Fact]
+    public void A_name_inside_an_underscore_slug_is_still_a_name() => Assert.True(Names("agent_" + "dswett" + "-box"));
 
     [Fact]
     public void Repo_scan_finds_no_machine_names_outside_fixtures()

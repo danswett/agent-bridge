@@ -29,7 +29,7 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 //   never in active or neutral (§3).
 //   spoken: the words as they read mid-sentence, for the glyph's accessible name. Each fact has
 //   no comma of its own there (aloud): statusLabel joins with ", ", and a delegate named "x,
-//   idle, DEV-VM2" would read as facts of its own to a screen reader (#303's security review).
+//   idle, BUILD-2" would read as facts of its own to a screen reader (#303's security review).
 // The rules for an agent that needs sign-in, failed or stopped answering (#800).
 export const ATTENTION_RULES = new Set([10, 11, 12]);
 
@@ -157,7 +157,7 @@ export function rowAt(s) {
 }
 
 // The glyph's accessible name (ui.md §9): "Plan Migration to Windows App, delegating to 3
-// agents, DEV-VM1", with the driver said in words, since the badge is only a shape.
+// agents, BUILD-1", with the driver said in words, since the badge is only a shape.
 export function statusLabel(status, { title, machine = null } = {}) {
   return [title ? aloud(title) : 'Untitled session', status.spoken, status.driven ? 'driven by an agent' : null, machine].filter(Boolean).join(', ');
 }

@@ -16,7 +16,7 @@ function setup(t, kind = 'reply') {
   const said = [];
   const checks = [];
   const clock = new ReceiptClock({
-    describe: (entry, { stalled }) => (entry.state === 'done' ? outcome(kind) : describeInFlight(kind, entry, { machineName: 'ULTRA', stalled })),
+    describe: (entry, { stalled }) => (entry.state === 'done' ? outcome(kind) : describeInFlight(kind, entry, { machineName: 'DESK', stalled })),
     draw: (d) => drawn.push(receiptText(d)),
     say: (text) => said.push(text),
     delivered: () => checks.push(entry.request),
@@ -90,7 +90,7 @@ test('Sent with nothing after it for 5 s says it is still waiting on the machine
   tick(ReceiptTiming.sentStallMs - ReceiptTiming.quietMs - 1);
   assert.equal(shown(), '');
   tick(1);
-  assert.equal(shown(), 'Sent · still waiting on ULTRA');
+  assert.equal(shown(), 'Sent · still waiting on DESK');
 });
 
 test('Passed to an idle agent with nothing after it for 10 s says not picked up yet, and Up next never stalls', (t) => {
@@ -115,7 +115,7 @@ test('a wait says why on the line: the first copy still being delivered, no answ
   show({ state: 'waiting', reason: 'timed out' });
   assert.equal(shown(), 'Still sending…');
   show({ state: 'waiting', reason: 'not connected' });
-  assert.equal(shown(), 'Waiting for ULTRA · it goes when ULTRA is back');
+  assert.equal(shown(), 'Waiting for DESK · it goes when DESK is back');
   assert.equal(describeInFlight('reply', { state: 'waiting', reason: 'not connected' }).still, true);
 });
 
@@ -124,7 +124,7 @@ test('the line goes when the next stage makes it untrue', (t) => {
   show({ stage: 'received' });
   tick(ReceiptTiming.quietMs);
   tick(ReceiptTiming.sentStallMs - ReceiptTiming.quietMs);
-  assert.equal(shown(), 'Sent · still waiting on ULTRA');
+  assert.equal(shown(), 'Sent · still waiting on DESK');
   show({ stage: 'typed' });
   assert.equal(shown(), '');
 });
@@ -144,7 +144,7 @@ test('a resend that meets the first copy in flight keeps saying still being deli
   }
   tick(ReceiptTiming.announceGapMs);
   assert.equal(shown(), 'Sent · still being delivered');
-  assert.equal(drawn.filter((d) => d === 'Sent · still waiting on ULTRA').length, 1);
+  assert.equal(drawn.filter((d) => d === 'Sent · still waiting on DESK').length, 1);
   assert.equal(said.filter((s) => s === 'Reply still being delivered').length, 1);
   assert.equal(said.at(-1), 'Reply still being delivered');
 });
@@ -192,15 +192,15 @@ test('the timing belongs to the request, not the drawing: a question card drawn 
   const drawn = [];
   const said = [];
   const again = new ReceiptClock({
-    describe: (e, { stalled }) => describeInFlight('answer', e, { machineName: 'ULTRA', stalled }),
+    describe: (e, { stalled }) => describeInFlight('answer', e, { machineName: 'DESK', stalled }),
     draw: (d) => drawn.push(receiptText(d)),
     say: (text) => said.push(text),
   });
   again.show(entry);
   assert.deepEqual(drawn, ['']);
   first.tick(ReceiptTiming.sentStallMs - ReceiptTiming.quietMs);
-  assert.equal(drawn.at(-1), 'Sent · still waiting on ULTRA');
-  assert.deepEqual(said, ['Answer sent, still waiting on ULTRA']);
+  assert.equal(drawn.at(-1), 'Sent · still waiting on DESK');
+  assert.deepEqual(said, ['Answer sent, still waiting on DESK']);
 });
 
 test('a stage still waiting out the one-second limit when its view is drawn afresh is said by the new view, after the same second', (t) => {
@@ -211,7 +211,7 @@ test('a stage still waiting out the one-second limit when its view is drawn afre
   assert.deepEqual(first.said, ['Answer sent']);
   first.clock.destroy();
   const said = [];
-  const again = new ReceiptClock({ describe: (e, { stalled }) => describeInFlight('answer', e, { machineName: 'ULTRA', stalled }), draw: () => {}, say: (text) => said.push(text) });
+  const again = new ReceiptClock({ describe: (e, { stalled }) => describeInFlight('answer', e, { machineName: 'DESK', stalled }), draw: () => {}, say: (text) => said.push(text) });
   const entry = { request: `r${n}`, state: 'sending', stage: 'typed', attempts: 1, reason: null, progress: null };
   again.show(entry);
   assert.deepEqual(said, []);
@@ -226,7 +226,7 @@ test('of two views of a request the one on screen says it, and a line moved on t
   const { tick } = setup(t);
   const said = [];
   const view = (name, heard) => new ReceiptClock({
-    describe: (e, { stalled }) => describeInFlight('reply', e, { machineName: 'ULTRA', stalled }),
+    describe: (e, { stalled }) => describeInFlight('reply', e, { machineName: 'DESK', stalled }),
     draw: () => {},
     say: (text) => said.push(`${name}: ${text}`),
     heard: () => heard,
@@ -292,7 +292,7 @@ test('Try again that fails the same way is heard again, once for each attempt', 
   const said = [];
   const failed = { key: 'failed', text: 'Not sent', more: null, tone: 'warn', line: true, speech: 'Reply not sent: no answer from the machine' };
   const clock = new ReceiptClock({
-    describe: (e, { stalled }) => (e.state === 'failed' ? failed : describeInFlight('reply', e, { machineName: 'ULTRA', stalled })),
+    describe: (e, { stalled }) => (e.state === 'failed' ? failed : describeInFlight('reply', e, { machineName: 'DESK', stalled })),
     draw: () => {},
     say: (s) => said.push(s),
   });
@@ -311,7 +311,7 @@ test('Try again that fails the same way is heard again, once for each attempt', 
 // afresh for it.
 test('a request whose view goes while it is on its way is still heard to its outcome, once', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
-  const describe = (entry, { stalled }) => (entry.state === 'done' ? outcome('reply') : describeInFlight('reply', entry, { machineName: 'ULTRA', stalled }));
+  const describe = (entry, { stalled }) => (entry.state === 'done' ? outcome('reply') : describeInFlight('reply', entry, { machineName: 'DESK', stalled }));
   const said = [];
   const page = [];
   let listener = null;
@@ -337,7 +337,7 @@ test('a request whose view goes while it is on its way is still heard to its out
 
 test('a request followed after its view went is let go at its give-up however it stands', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
-  const describe = (entry, { stalled }) => describeInFlight('answer', entry, { machineName: 'ULTRA', stalled });
+  const describe = (entry, { stalled }) => describeInFlight('answer', entry, { machineName: 'DESK', stalled });
   let listener = null;
   const clock = new ReceiptClock({ describe, draw: () => {}, page: () => {}, follow: (fn) => { listener = fn; return () => { listener = null; }; } });
   clock.show({ request: `r${++n}`, state: 'waiting', reason: 'not connected', stage: null, attempts: 0, progress: null });
@@ -354,7 +354,7 @@ test('the view that sent an answer shows its check before You answered, and says
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
   const describe = (entry, { stalled }) => (entry.state === 'done'
     ? { key: 'delivered', text: 'You answered', more: 'Yes', tone: 'done', line: true, speech: 'Answer delivered. You answered Yes' }
-    : describeInFlight('answer', entry, { machineName: 'ULTRA', stalled }));
+    : describeInFlight('answer', entry, { machineName: 'DESK', stalled }));
   const drawn = [];
   const said = [];
   let checks = 0;
@@ -382,7 +382,7 @@ test('the view that sent an answer shows its check before You answered, and says
 // said on the sign-in screen.
 test('after a sign-out nothing more is announced: not a follower, not one waiting, not a card removed later', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
-  const describe = (entry, { stalled }) => (entry.state === 'done' ? outcome('reply') : describeInFlight('reply', entry, { machineName: 'ULTRA', stalled }));
+  const describe = (entry, { stalled }) => (entry.state === 'done' ? outcome('reply') : describeInFlight('reply', entry, { machineName: 'DESK', stalled }));
   const page = [];
   const listeners = [];
   const follow = (fn) => { listeners.push(fn); return () => { listeners.splice(listeners.indexOf(fn), 1); }; };

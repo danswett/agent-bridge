@@ -32,7 +32,7 @@
 // reads as the target would and Studio PC would check.
 //
 // ?machines=2 adds a second machine to the account, Laptop, with sessions of its own;
-// ?machines=3 adds a third, DEV-VM1 (shadow), which watches only, as a machine where
+// ?machines=3 adds a third, BUILD-1 (shadow), which watches only, as a machine where
 // agent-ha-bridge still runs does. Each is its own DemoHost behind DemoConnection, the relay's
 // presence and channels in the page, so the app shows them as it shows real ones: one at a
 // time, or every machine at once.
@@ -1382,7 +1382,7 @@ export class DemoBlobStore {
 }
 
 // ?signin=1 (#800): four Copilot sessions on this machine that stopped because its sign-in expired
-// (the VM1 fixture's words), rolled up into one sign-in needed; a session whose turn ended on the
+// (the BUILD-1 fixture's words), rolled up into one sign-in needed; a session whose turn ended on the
 // quota; and one that has said nothing past the host's threshold while working. Each says so in
 // its attention, over a truthful status. The sessions are added to the host given.
 export function demoSignIn(host, base = Date.now()) {
@@ -1410,7 +1410,7 @@ export function demoSignIn(host, base = Date.now()) {
 }
 
 // The demo's other machines, after the first (?machines=): Laptop, with a session to reply to
-// and one asking a question, and DEV-VM1 (shadow), which takes nothing from the phone.
+// and one asking a question, and BUILD-1 (shadow), which takes nothing from the phone.
 // diagnosing: the laptop offers its diagnostics (#802); the shadow never does.
 export function demoMachines(count, { answerDelayMs = 700, stopWindowMs = 10000, diagnosing = false } = {}) {
   const at = (ms) => new Date(Date.now() - ms).toISOString();
@@ -1449,7 +1449,7 @@ export function demoMachines(count, { answerDelayMs = 700, stopWindowMs = 10000,
         },
       }],
     }, {
-      machineId: 'demo-shadow', machineName: 'DEV-VM1 (shadow)', answerDelayMs, stopWindowMs, answering: false,
+      machineId: 'demo-shadow', machineName: 'BUILD-1 (shadow)', answerDelayMs, stopWindowMs, answering: false,
       diagnosticsReason: 'pinning-off',
       readOnly: 'agent-ha-bridge is running for this user (AgentBridgeDaemon); answer at the machine or through it',
     }));
