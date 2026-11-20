@@ -174,10 +174,13 @@ static partial class SelfTest
                 var entryGap = Gap();
                 requiredRows = startCount + 64;
                 growthFloor = startExtent + 1.5;
-                // The repeater realises history rows during layout, a frame or more after the last update
-                // burst; sampling at once passed only when realisation happened to win the race (drawn
-                // history 0 with a long surface). Wait on rendered frames for the unchanged validity
-                // rule, bounded by the same frame budget as the control's settle.
+                // Hosted CI showed drawn history 0 after 60 settled frames: the update bursts leave the
+                // viewport over the live response rows (gap ~8000), so the history repeater, which sits
+                // above them, realises nothing. Waiting cannot fix that. Start the rapid burst from the
+                // top of the history instead, and wait on rendered frames for the unchanged validity rule.
+                view.ReleasePin();
+                scroll.ChangeView(null, Math.Max(0, scroll.VerticalOffset + rows.TransformToVisual(scroll).TransformPoint(default).Y),
+                    null, disableAnimation: true);
                 var entry = Surface();
                 for (var settle = 0; settle < 60 && !(entry.Valid && Gap() > 1.5); settle++)
                 {
