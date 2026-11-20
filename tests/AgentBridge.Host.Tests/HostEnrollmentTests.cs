@@ -238,7 +238,8 @@ public sealed class HostEnrollmentTests : IDisposable
         var a = new EnrollmentApprover(Account, h, w.Id("H"), new(EnrollmentLockout.Counts.WrongEntries, Now), Now);
         var offer = a.OnCommit(host.Exchange(h, G, "commit", []).Value!)!;
         Assert.True(a.OnReveal(host.Exchange(h, G, "offer", offer).Value!));
-        Assert.Equal(CodeResult.Match, a.EnterCode1(host.Code!));
+        Assert.Equal(DateTimeOffset.UnixEpoch + EnrollmentLockout.AttemptLifetime, host.Shown.Expires);
+        Assert.Equal(CodeResult.Match, a.EnterCode1(host.Shown.Code!));
         return (host, a, h);
     }
 
@@ -251,7 +252,7 @@ public sealed class HostEnrollmentTests : IDisposable
         {
             w.Genesis();
             Assert.Equal("not-matched", host.Exchange(h, G, "genesis", w.Entry("G").Hash).Refusal);
-            Assert.Equal("match", host.EnterCode(a.Code2Shown!));
+            Assert.Equal("match", host.EnterCode2(a.Code2Shown!));
             Assert.Null(host.Exchange(h, G, "genesis", w.Entry("G").Hash).Refusal);
             Assert.Equal("not-added", host.Finish(Relay(), PinPath, () => w.Now, _ => true));
             w.Add("+H", "G", "H", "G", kind: "host", transcript: a.TranscriptToSign);
@@ -285,9 +286,9 @@ public sealed class HostEnrollmentTests : IDisposable
         if (mischief == "wrong-code")
         {
             var wrong = a.Code2Shown!.Replace(" ", "") == "000000" ? "111111" : "000000";
-            Assert.Equal(["wrong", "wrong", "ended"], new[] { host.EnterCode(wrong), host.EnterCode(wrong), host.EnterCode(wrong) });
+            Assert.Equal(["wrong", "wrong", "ended"], new[] { host.EnterCode2(wrong), host.EnterCode2(wrong), host.EnterCode2(wrong) });
         }
-        else { Assert.Equal("match", host.EnterCode(a.Code2Shown!)); }
+        else { Assert.Equal("match", host.EnterCode2(a.Code2Shown!)); }
         var other = RandomNumberGenerator.GetBytes(32);
         if (mischief == "second-channel") { Assert.Equal("attempt-bound", host.Exchange(other, G, "genesis", w.Entry("G").Hash).Refusal); }
         else { host.Exchange(h, G, "genesis", mischief == "other-genesis" ? other : w.Entry("G").Hash); }
@@ -326,13 +327,16 @@ public sealed class HostEnrollmentTests : IDisposable
             Stop = () => { }, Restart = () => { },
             EnrollDescribe = () => enrollment.Describe(profile, World.Keys("H").Dh.Public),
             EnrollStatus = () => enrollment.Status(null, ""),
-            EnrollCode = typed => enrollment.EnterCode(typed),
+            EnrollShown = () => enrollment.Shown,
+            EnrollCode = typed => enrollment.EnterCode2(typed),
             EnrollFinish = () => Task.FromResult(enrollment.Finish(Relay(), PinPath, () => w.Now)),
         }, _ => { });
         var described = JsonSerializer.SerializeToElement(await control.HandleAsync(null!, AgentBridge.Local.HostOps.EnrollDescribe, default));
         Assert.Equal(w.Id("H"), described.GetProperty("device").GetProperty("id").GetString());
         var status = JsonSerializer.SerializeToElement(await control.HandleAsync(null!, AgentBridge.Local.HostOps.EnrollStatus, default));
         Assert.Equal("pending", status.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, status.GetProperty("code").ValueKind);
+        Assert.True(status.GetProperty("expires").GetDateTimeOffset() > DateTimeOffset.UtcNow);
         var typed = JsonSerializer.SerializeToElement(await control.HandleAsync(null!, AgentBridge.Local.HostOps.EnrollCode,
             JsonSerializer.SerializeToElement(new { code = "000 000" })));
         Assert.Equal("no-exchange", typed.GetProperty("result").GetString());

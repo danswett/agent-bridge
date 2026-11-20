@@ -927,8 +927,8 @@ async Task<int> ServeAsync(HostHandover handover)
         AgentSignIn = agentSignIn,
         EnrollDescribe = () => Enrollment()?.Describe(identity.Folder, identity.Key.Public) ?? (null, "signed-out"),
         EnrollStatus = () => Enrollment()?.Status() ?? "not-enrolled",
-        EnrollShown = () => Enrollment()?.Code,
-        EnrollCode = typed => Enrollment()?.EnterCode(typed) ?? "signed-out",
+        EnrollShown = () => Enrollment()?.Shown ?? default,
+        EnrollCode = typed => Enrollment()?.EnterCode2(typed) ?? "signed-out",
         EnrollFinish = async () =>
         {
             if (Enrollment() is not { } joining) { return "signed-out"; }

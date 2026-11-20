@@ -21,7 +21,7 @@ internal interface IHostEnrollmentKey : IDisposable
 internal sealed class HostEnrollment(HostRosterReader reader, string account, string? generation,
     Func<string, IHostEnrollmentKey>? openKey = null, string name = "host", TimeProvider? time = null) : IDisposable
 {
-    sealed record Attempt(DeviceDescriptor Own, IDisposable Held, ITimer Expiry, EnrollmentLockout Lockout)
+    sealed record Attempt(DeviceDescriptor Own, IDisposable Held, ITimer Expiry, EnrollmentLockout Lockout, DateTimeOffset Expires)
     {
         public EnrollmentJoiner? Joiner;
         public byte[]? H;
@@ -84,7 +84,7 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
                 }
                 Attempt? attempt = null;
                 var expiry = Clock.CreateTimer(_ => End(attempt!), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-                (open, held) = (attempt = new Attempt(descriptor, held, expiry, lockout), null);
+                (open, held) = (attempt = new Attempt(descriptor, held, expiry, lockout, Clock.GetUtcNow() + EnrollmentLockout.AttemptLifetime), null);
                 expiry.Change(EnrollmentLockout.AttemptLifetime, Timeout.InfiniteTimeSpan);
                 return (json, null);
             }
@@ -137,7 +137,8 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
         { return (null, null, "missing-key"); }
     }
 
-    public string? Code { get { lock (sync) { return open?.Joiner?.Code1Shown; } } }
+    // A4: the host is the joiner, so the person reads code 1 and its expiry here.
+    public (string? Code, DateTimeOffset? Expires) Shown { get { lock (sync) { return (open?.Joiner?.Code1Shown, open?.Expires); } } }
 
     // The approver's steps (§4.2), over its Noise channel: only into an attempt the person opened here,
     // and only from the channel (handshake hash h, authenticated static key) that sent the commit.
@@ -166,7 +167,7 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
     }
 
     // Code 2 as the person typed it here; three wrong entries end the attempt.
-    public string EnterCode(string typed)
+    public string EnterCode2(string typed)
     {
         Attempt? ended = null;
         CodeResult result;
