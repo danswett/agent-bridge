@@ -62,14 +62,16 @@ public sealed class LiteDeliver(
         if (!Idle(now)) { return Refused(LiteCodes.Busy); }
         if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
-        // just before the injector starts (Stale, refused below as noSuchSession); a full id gets no fence, as on main.
-        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true, StillCurrent = byNode ? () => FromNodeId(target) == id : null };
+        // just before the injector starts (Stale, refused below); every gate (all synchronous) is asked again there, so a sender or target that stopped qualifying meanwhile gets nothing typed.
+        var revoked = false;
+        bool StillCurrent() => (!byNode || FromNodeId(target) == id) && !(revoked = AllowedAsync(envelope, id) is not { IsCompletedSuccessfully: true, Result: true });
+        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true, StillCurrent = StillCurrent };
         var result = await replier.ReplyAsync(reply, null, ct);
         return result.Outcome switch
         {
             AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed => new LiteDelivery(true, null),
             AnswerOutcome.Busy => Refused(LiteCodes.Busy),
-            AnswerOutcome.Stale => Refused(LiteCodes.NoSuchSession),
+            AnswerOutcome.Stale => Refused(revoked ? LiteCodes.NotReplyTarget : LiteCodes.NoSuchSession),
             _ => Refused(result.Refusal switch { ReplyRefusal.Asking or ReplyRefusal.Busy => LiteCodes.Busy, ReplyRefusal.ComposerUnverified or ReplyRefusal.Occupied => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
         };
     }

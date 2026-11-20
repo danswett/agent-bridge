@@ -1,4 +1,5 @@
 using AgentBridge.AgentEnvelope;
+using AgentBridge.Host.Core;
 using AgentBridge.Host.Lite;
 using AgentBridge.Protocol;
 using AgentBridge.Roster;
@@ -13,10 +14,12 @@ public sealed class FleetTargetGateTests
     const string Target = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     readonly World world = new();
     readonly RosterVerifier signed;
-    readonly LiteLaunchLog launches = new();
+    readonly LiteLaunchLog launches;
+    SessionProcess? current = new(42, DateTimeOffset.UnixEpoch);
 
     public FleetTargetGateTests()
     {
+        launches = new(id => id == Target ? current : null);
         world.Genesis("P");
         world.Add("H", "P", "H", "G", kind: "host");
         world.Add("Q", "P", "Q", "H");
@@ -96,9 +99,32 @@ public sealed class FleetTargetGateTests
     public async Task The_fleet_flag_dies_with_the_session_so_a_later_resume_of_the_same_id_is_refused()
     {
         Launch();
-        launches.Ended(Target);
+        current = null;
+        Assert.False(launches.IsFleetTarget(Target)); // as the session source's change notification does
+        current = new(42, DateTimeOffset.UnixEpoch);
         Assert.False(await Allowed(() => signed));
         // What the forced-ask gate reads is untouched by the fleet registry.
         Assert.Equal(LaunchProtocol.AllowAll, launches.PermissionsOf(Target));
+    }
+
+    [Fact]
+    public async Task A_later_process_taking_the_same_session_id_does_not_inherit_fleet_authority()
+    {
+        Launch();
+        Assert.True(await Allowed(() => signed));
+        current = new(42, DateTimeOffset.UnixEpoch.AddMinutes(1)); // the same id and pid, another process
+        Assert.False(await Allowed(() => signed));
+        current = new(42, DateTimeOffset.UnixEpoch);
+        Assert.False(await Allowed(() => signed));
+    }
+
+    [Fact]
+    public async Task A_launch_whose_process_identity_cannot_be_verified_is_never_a_fleet_target()
+    {
+        current = new(42, null);
+        Launch();
+        Assert.False(await Allowed(() => signed));
+        current = new(42, DateTimeOffset.UnixEpoch);
+        Assert.False(await Allowed(() => signed));
     }
 }

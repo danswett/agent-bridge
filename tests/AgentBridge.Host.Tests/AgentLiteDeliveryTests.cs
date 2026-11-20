@@ -36,11 +36,13 @@ public sealed class AgentLiteDeliveryTests
         public readonly List<KeyPlan> Plans = [];
         int reads;
         public readonly List<ReplyRequest> Typed = []; public readonly List<string> Log = [];
-        public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches = new();
+        public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches;
+        public Fixture() => Launches = new(ProcessOf);
+        public SessionProcess? Process = new(42, DateTimeOffset.UnixEpoch); public SessionProcess? ProcessOf(string id) => id == Target ? Process : null;
         public Func<AgentBridge.Roster.RosterVerifier?> Roster = () => null;
         public Question? Asking;
         public LiteDeliver Build() => new([
-            new FleetTargetGate(Launches, Roster),
+            new FleetTargetGate(Launches, () => Roster()),
             new ForcedAskGate(Launches),
             new AllowlistedAllTargetsGate(Launches, () => new AgentMessagingSettings
             {
@@ -187,7 +189,7 @@ public sealed class AgentLiteDeliveryTests
     {
         var f = new Fixture { Held = Hold }; f.Launch(LaunchProtocol.Ask);
         Assert.True((await SendTo(f, Target)).Typed);
-        Assert.Null(Assert.Single(f.Typed).StillCurrent);
+        Assert.True(Assert.Single(f.Typed).StillCurrent!());
         Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
         f.Held = null;
         Assert.True((await SendTo(f, Node)).Typed);
@@ -350,7 +352,7 @@ public sealed class AgentLiteDeliveryTests
         using var home = new global::Fixture();
         var events = home.CopilotSession(Target, 42);
         global::Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
-        home.Processes.Run(AgentKind.Copilot, 42);
+        home.Processes.Run(AgentKind.Copilot, 42, startedAt: DateTimeOffset.UnixEpoch); // the process f.ProcessOf names
         var f = new Fixture();
         f.Launch(LaunchProtocol.Ask);
         f.OnInject = plan => global::Fixture.Append(events, Copilot.User(plan.Sends[0].Text, 4));
@@ -463,5 +465,18 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(new LiteDelivery(false, "busy"), await f.Build().DeliverAsync(Envelope("1", machine: host), "1", default));
         Assert.Empty(f.Typed);
         Assert.Empty(f.Plans);
+    }
+
+    // A message that waited (composer read, the shared typing slot) is authorized again just
+    // before keys go: a sender dropped from the roster or a target replaced meanwhile gets nothing typed.
+    [Theory, InlineData("revoked"), InlineData("replaced"), InlineData("unchanged")]
+    public async Task A_waiting_fleet_message_is_authorized_again_at_injection(string change)
+    {
+        var (roster, host) = VerifiedHost();
+        var f = new Fixture { Roster = roster }; f.Launch(LaunchProtocol.AllowAll); f.Launches.FleetLaunched(Target);
+        f.OnReply = change switch { "revoked" => () => f.Roster = () => null, "replaced" => () => f.Process = new(42, DateTimeOffset.UnixEpoch.AddMinutes(1)), _ => null };
+        var delivered = change == "unchanged";
+        Assert.Equal(new LiteDelivery(delivered, delivered ? null : "notReplyTarget"), await f.Build().DeliverAsync(Envelope("hi", machine: host), "hi", default));
+        Assert.Equal(delivered ? 1 : 0, f.Typed.Count);
     }
 }

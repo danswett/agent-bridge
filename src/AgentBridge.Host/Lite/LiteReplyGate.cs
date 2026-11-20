@@ -40,17 +40,22 @@ public interface ILiteLaunches
 }
 
 // unknown and refused: the safe direction. In memory only, so a restart forgets every fleet target
-// (relay A has no persistence). A fleet entry is keyed by the exact id the launch registered and
-// leaves when the session does, so a later resume of the same id (a restore) is not one.
-public sealed class LiteLaunchLog : ILiteLaunches
+// (relay A has no persistence). A fleet entry holds the exact id and the process this host launched (pid
+// and start time): a later process taking that id is not it, and the entry leaves once seen gone or replaced.
+public sealed class LiteLaunchLog(Func<string, SessionProcess?>? current = null) : ILiteLaunches
 {
     readonly ConcurrentDictionary<string, string> modes = new(StringComparer.Ordinal);
-    readonly ConcurrentDictionary<string, byte> fleet = new(StringComparer.Ordinal);
+    readonly ConcurrentDictionary<string, SessionProcess> fleet = new(StringComparer.Ordinal);
     public void Launched(string session, LaunchedWith with) => modes[session] = with.Permissions;
     public string? PermissionsOf(string session) => modes.GetValueOrDefault(session);
-    public void FleetLaunched(string session) => fleet[session] = 0;
-    public void Ended(string session) => fleet.TryRemove(session, out _);
-    public bool IsFleetTarget(string session) => fleet.ContainsKey(session);
+    // An unknown start time cannot be told from a successor's, so it is never recorded.
+    public void FleetLaunched(string session) { if (current?.Invoke(session) is { StartedAt: not null } p) { fleet[session] = p; } else { fleet.TryRemove(session, out _); } }
+    public bool IsFleetTarget(string session)
+    {
+        if (!fleet.TryGetValue(session, out var launched) || current?.Invoke(session) == launched) { return launched is not null; }
+        fleet.TryRemove(new(session, launched)); // only this entry, never a newer launch's
+        return false;
+    }
 }
 
 // Registers the delivery routine's forced-ask, allowlisted allow-all and fleet-target gates;
@@ -60,11 +65,12 @@ public static class LiteComposition
     public static LiteDeliver Create(ISessionSource source, ISessionReplier replier, IConsoleInjector injector, Func<AgentMessagingSettings> currentSettings, LaunchService launcher,
         Func<RosterVerifier?> roster, Action<string> log)
     {
-        var launches = new LiteLaunchLog();
+        var launches = new LiteLaunchLog(source.ProcessOf);
         launcher.SessionStarted += launches.Launched;
         // Only the host raises this, from its own launch path; nothing a caller or session sends sets it.
         launcher.FleetTargetStarted += launches.FleetLaunched;
-        source.Changed += (_, change) => { if (change.Kind == SessionChangeKind.Removed) { launches.Ended(change.Id); } };
+        // Checked against the live process, not taken as an ending: an older generation's late removal keeps a newer entry.
+        source.Changed += (_, change) => launches.IsFleetTarget(change.Id);
         IReplyTargetGate[] gates = [new ForcedAskGate(launches), new AllowlistedAllTargetsGate(launches, currentSettings), new FleetTargetGate(launches, roster)];
         return new LiteDeliver(gates, source, replier, injector, log);
     }
@@ -103,6 +109,8 @@ public sealed class AllowlistedAllTargetsGate(ILiteLaunches launches, Func<Agent
 public sealed class FleetTargetGate(ILiteLaunches launches, Func<RosterVerifier?> roster) : IReplyTargetGate
 {
     public const string Reason = "the session is not a fleet target for a serving-host sender";
+    // Three missed 5-minute observe refreshes (#181); until then a pinned host refuses 15 minutes after verifying.
+    public static readonly TimeSpan MaxRosterAge = TimeSpan.FromMinutes(15);
 
     public Task<GateDecision> CheckAsync(VerifiedEnvelope env, string targetSession) =>
         Task.FromResult(launches.IsFleetTarget(targetSession) && ServingHost(env.Body.Principal.Machine) ? GateDecision.Allow() : GateDecision.Refuse(Reason));

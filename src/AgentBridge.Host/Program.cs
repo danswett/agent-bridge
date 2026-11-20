@@ -610,7 +610,7 @@ async Task<int> ServeAsync(HostHandover handover)
     launcher.StartScanning();
     var hostRoster = new HostRosterReader(Path.Combine(identity.Folder, "roster-pin.json"), HostRoster.Now);
     var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => HostSettings.CurrentAgentMessaging(identity.Folder), launcher,
-        () => hostRoster.Pinned(identity.Account?.AccountId), Log);
+        () => hostRoster.Fresh(identity.Account?.AccountId, AgentBridge.Host.Lite.FleetTargetGate.MaxRosterAge), Log);
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
     // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
