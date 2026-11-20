@@ -1350,7 +1350,16 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     · #4" for a schedule (its `userMessageLabel`: "#" before a number, anything else in
     quotes); the
     `driven-badge` diamond and "Sent by an agent" for an agent, with `driverPrincipal` after it in
-    secondary text when the host knows; the diamond and "Automatic prompt" for `other`. Then the
+    secondary text when the host knows. On Windows, a nonempty agent `userMessageLabel` instead
+    reads "From: <session>" in that same agent-colour line, live and in history (#2928).
+    `PromptOrigin.Fact` cleans the untrusted name and caps it at 64 UTF-8 bytes; an empty cleaned
+    name keeps "Sent by an agent". The sender is not inferred from `driverPrincipal`.
+    The host captures `Limits.KeepStart(agentPrincipal, Limits.UserMessageLabel)` at arm time,
+    then binds that agent-principal snapshot to the prompt and keeps it in the turn's history
+    metadata, so a later driver never renames an earlier sender. The snapshot is display-only,
+    not an authenticated identity or an authorization/trust decision. Restoring an arm discards
+    unmatched attribution; labels already bound to a prompt stay.
+    For `other`, the diamond still reads "Automatic prompt". Then the
     age in meta style: when its turn began (`statusSince` when it started running, seen here). The
     protocol doesn't date a prompt, so one first seen after its turn has no age.
   - **Collapsed by default:** two lines of it in secondary text, then **Show prompt**, with the
