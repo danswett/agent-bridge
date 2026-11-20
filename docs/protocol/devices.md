@@ -216,12 +216,20 @@ the QR paths (§4.3), signing the `add`, and any screen.
 
 ### Host descriptor foundation (#2289)
 
-The dormant `HostEnrollment` library requires a private pinned `HostRosterReader`,
+The `HostEnrollment` library, live behind the app's local pipe since brief 184 (#3450), describes
+this host for approve-gesture enrollment. With host-sign v2 off it describes a v1 host (`id dh kind
+platform name`, the machine's name), pinned or not and without opening custody; a v2 descriptor is
+made only while a verified pin's `AcceptHostSign` switch is on, with the custody rules below. A
+held pin must be readable and this account's (and generation's when one is named). One attempt is
+open per profile: an `enrollment.lock` file in the pin's private roster folder
+(`HostRosterPinWriter.PinPath`) holds it across instances and processes, for the exchange's
+5 minutes. A pin written while the host serves is used from the next verify, without a restart.
+For v2, it requires a private pinned `HostRosterReader`,
 matching account and generation, and its verified `AcceptHostSign` switch before
 opening existing hostSign custody. It neither provisions nor repairs keys, writes
 the roster, nor contacts a relay. Refusals are content-free codes (`no-switch`,
-`missing-key`, `account`, `generation`, `not-pinned`, `invalid-descriptor`,
-`attempt-already-open`); absent, unreadable and wrong-tier keys all use `missing-key`.
+`missing-key`, `account`, `generation`, `not-pinned`, `pin-unreadable`, `invalid-descriptor`,
+`attempt-already-open`, `attempt-store`, and `signed-out` on the pipe); absent, unreadable and wrong-tier keys all use `missing-key`.
 Custody opens and signs outside the reader lock; the account, generation and switch
 are checked again before publication. Same-instance attempts are serialized.
 The key loader consumes the exact privately validated reference and encrypted-key
@@ -230,9 +238,9 @@ bytes without reopening either file. Expected custody/provider failures use
 The descriptor carries only public device fields and the hostSign binding proof.
 The existing person-approver exchange is the sole add path; descriptor equality
 also covers `hostSign`, `hostSignAlg` and `hostSignProof`. Status is `enrolled` only
-when the host's own pinned verifier holds the exact matching active v2 add and the
-joiner accepts its approver and matched exchange; otherwise `pending` or
-`not-enrolled`. The CLI remains dormant pending #2367 and host wiring.
+when the host's own verifier holds the exact matching active add (v1, or v2 while the switch is
+on) and the joiner accepts its approver and matched exchange; otherwise `pending` or
+`not-enrolled`. The CLI remains dormant; the exchange and the pin it writes are brief 184b.
 
 ## Acceptance and state
 

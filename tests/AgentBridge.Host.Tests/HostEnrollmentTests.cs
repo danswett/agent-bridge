@@ -33,7 +33,7 @@ public sealed class HostEnrollmentTests : IDisposable
         var reader = Reader();
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
-        var enrollment = new HostEnrollment(reader, Account, Generation, _ => new ProbeKey(() =>
+        using var enrollment = new HostEnrollment(reader, Account, Generation, _ => new ProbeKey(() =>
         {
             entered.Set();
             Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
@@ -83,7 +83,7 @@ public sealed class HostEnrollmentTests : IDisposable
             _ => new System.Security.SecurityException("private sentinel"),
         };
         var opens = 0;
-        var enrollment = new HostEnrollment(Reader(), Account, Generation, _ =>
+        using var enrollment = new HostEnrollment(Reader(), Account, Generation, _ =>
             ++opens == 1 ? throw Failure() : new ProbeKey(() => throw Failure()));
         for (var attempt = 0; attempt < 2; attempt++)
         {
@@ -99,7 +99,7 @@ public sealed class HostEnrollmentTests : IDisposable
     public async Task Concurrent_descriptors_open_custody_once_per_instance()
     {
         var opens = 0;
-        var enrollment = new HostEnrollment(Reader(), Account, Generation, _ =>
+        using var enrollment = new HostEnrollment(Reader(), Account, Generation, _ =>
         {
             Interlocked.Increment(ref opens);
             return new ProbeKey(() => { });
@@ -124,7 +124,8 @@ public sealed class HostEnrollmentTests : IDisposable
             using var imported = ECDsa.Create();
             imported.ImportPkcs8PrivateKey(clear, out _);
             scalar = imported.ExportParameters(true).D!;
-            var descriptor = new HostEnrollment(reader, Account, Generation).Describe(profile, World.Keys("H").Dh.Public).Descriptor!;
+            using var enrollment = new HostEnrollment(reader, Account, Generation);
+            var descriptor = enrollment.Describe(profile, World.Keys("H").Dh.Public).Descriptor!;
             var device = JsonNode.Parse(descriptor)!;
             var point = Codec.FromBase64Url(device["hostSign"]!.GetValue<string>(), "hostSign");
             Assert.True(P256.Verify(point, HostKey.Binding(Account, Generation, World.Keys("H").Dh.Public),
@@ -172,20 +173,76 @@ public sealed class HostEnrollmentTests : IDisposable
     }
 
     [HostSignKeyTests.WindowsHostSignTheory]
-    [InlineData("no-switch")]
     [InlineData("account")]
     [InlineData("generation")]
-    [InlineData("not-pinned")]
     public void Refusal_precedes_any_custody_access_and_reveals_no_identity(string code)
     {
-        var reader = code == "not-pinned" ? new HostRosterReader(Path.Combine(profile, "absent"), () => w.Now) : Reader(code != "no-switch");
-        var enrollment = new HostEnrollment(reader,
+        var reader = Reader();
+        using var enrollment = new HostEnrollment(reader,
             code == "account" ? "another-account" : Account, code == "generation" ? new string('f', 32) : Generation);
         var result = enrollment.Describe(profile, World.Keys("H").Dh.Public);
         Assert.Equal(code, result.Refusal);
         Assert.Null(result.Descriptor);
         Assert.False(Directory.Exists(Path.Combine(profile, "host-sign")));
         Assert.Equal("not-enrolled", enrollment.Status(null, w.Id("G")));
+    }
+
+    HostRosterReader Unpinned() => new(HostRosterPinWriter.PinPath(profile), () => w.Now);
+
+    [HostSignKeyTests.WindowsHostSignTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void An_unpinned_or_switched_off_host_describes_a_v1_host_without_opening_custody(bool pinned)
+    {
+        using var enrollment = new HostEnrollment(pinned ? Reader(switched: false) : Unpinned(), Account, Generation,
+            _ => throw new InvalidOperationException("custody opened"), "Desk");
+        var (descriptor, refusal) = enrollment.Describe(profile, World.Keys("H").Dh.Public);
+        Assert.Null(refusal);
+        var device = JsonNode.Parse(descriptor!)!.AsObject();
+        Assert.Equal(["id", "dh", "kind", "platform", "name"], device.Select(p => p.Key));
+        Assert.Equal((w.Id("H"), "host", "windows", "Desk"), (device["id"]!.GetValue<string>(), device["kind"]!.GetValue<string>(),
+            device["platform"]!.GetValue<string>(), device["name"]!.GetValue<string>()));
+        Assert.Equal("pending", enrollment.Status(null, w.Id("G")));
+        Assert.False(File.Exists(HostRosterPinWriter.PinPath(profile)));
+    }
+
+    [WindowsFact("host enrollment runs on the Windows host")]
+    public void One_attempt_is_open_per_profile_across_instances_until_it_expires()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var reader = Unpinned();
+        using var first = new HostEnrollment(reader, Account, null, name: "Desk", time: time);
+        using var second = new HostEnrollment(reader, Account, null, name: "Desk", time: time);
+        Assert.Null(first.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        Assert.Equal("attempt-already-open", second.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        Assert.Equal("attempt-already-open", first.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(HostRosterPinWriter.PinPath(profile))!, "enrollment.lock")));
+        time.Advance(EnrollmentLockout.AttemptLifetime);
+        Assert.Equal("not-enrolled", first.Status(null, w.Id("G")));
+        Assert.Null(second.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        Assert.False(File.Exists(HostRosterPinWriter.PinPath(profile)));
+    }
+
+    [WindowsFact("host enrollment runs on the Windows host")]
+    public async Task Enrollment_ops_are_answered_only_by_the_local_app_surface()
+    {
+        using var enrollment = new HostEnrollment(Unpinned(), Account, null, name: "Desk");
+        var control = new HostControl(new HostControlOptions
+        {
+            Profile = "fixture", Folder = profile, Version = "0.1.0", Running = new(false),
+            Machine = new("machine", "Desk", "windows", "0.1.0"),
+            SignIn = (_, _, _) => throw new NotSupportedException(), SignedIn = (_, _) => { },
+            Stop = () => { }, Restart = () => { },
+            EnrollDescribe = () => enrollment.Describe(profile, World.Keys("H").Dh.Public),
+            EnrollStatus = () => enrollment.Status(null, ""),
+        }, _ => { });
+        var described = JsonSerializer.SerializeToElement(await control.HandleAsync(null!, AgentBridge.Local.HostOps.EnrollDescribe, default));
+        Assert.Equal(w.Id("H"), described.GetProperty("device").GetProperty("id").GetString());
+        var status = JsonSerializer.SerializeToElement(await control.HandleAsync(null!, AgentBridge.Local.HostOps.EnrollStatus, default));
+        Assert.Equal("pending", status.GetProperty("state").GetString());
+        var reads = (HashSet<string>)typeof(LocalApi).GetField("Reads", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.GetValue(null)!;
+        Assert.DoesNotContain(AgentBridge.Local.HostOps.EnrollDescribe, reads);
+        Assert.DoesNotContain(AgentBridge.Local.HostOps.EnrollStatus, reads);
     }
 
     [WindowsFact("host enrollment CLI refuses before Windows identity access")]
@@ -208,7 +265,7 @@ public sealed class HostEnrollmentTests : IDisposable
     public void Descriptor_proof_round_trips_but_only_the_exact_active_approver_add_and_matched_exchange_enroll()
     {
         var reader = Reader();
-        var enrollment = new HostEnrollment(reader, Account, Generation);
+        using var enrollment = new HostEnrollment(reader, Account, Generation);
         Assert.Equal("missing-key", enrollment.Describe(profile, World.Keys("H").Dh.Public).Refusal);
         using var key = HostSignKey.LoadOrCreate(profile, KeyStorage.Dpapi);
         var result = enrollment.Describe(profile, World.Keys("H").Dh.Public);

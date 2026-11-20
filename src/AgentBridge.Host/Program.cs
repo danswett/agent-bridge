@@ -871,6 +871,22 @@ async Task<int> ServeAsync(HostHandover handover)
     }
     await using var agentVerification = OperatingSystem.IsWindows()
         ? new AgentVerificationService(source, launcher, intake, VerificationUnavailable, Log, stop.Token) : null;
+    // Approve-gesture enrollment (#3450, brief 184): one attempt holder per signed-in account, app-only on the pipe.
+    var enrollmentGate = new object();
+    HostEnrollment? enrollment = null;
+    HostEnrollment? Enrollment()
+    {
+        lock (enrollmentGate)
+        {
+            var id = identity.Account?.AccountId;
+            if (enrollment?.Account != id)
+            {
+                enrollment?.Dispose();
+                enrollment = id is null ? null : new HostEnrollment(hostRoster, id, null, name: machine.Name);
+            }
+            return enrollment;
+        }
+    }
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -908,6 +924,8 @@ async Task<int> ServeAsync(HostHandover handover)
         SignInDevices = signIn is null ? null : self => PersonDevices.View(personRoster, rosterAccount(), self),
         AgentVerification = agentVerification,
         AgentSignIn = agentSignIn,
+        EnrollDescribe = () => Enrollment()?.Describe(identity.Folder, identity.Key.Public) ?? (null, "signed-out"),
+        EnrollStatus = () => Enrollment()?.Status(null, "") ?? "not-enrolled",
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
