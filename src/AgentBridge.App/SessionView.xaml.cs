@@ -244,7 +244,7 @@ public sealed partial class SessionView : UserControl
         follow.Reset();
         ShowResponse(reset: true);
         WatchHistory();
-        ConversationScroll?.ChangeView(null, 0, null, disableAnimation: true);
+        if (ConversationScroll is { VerticalOffset: > 0.5 } top) { Anchoring(top, 0); }
         TakeFocus();
     }
 

@@ -15,6 +15,36 @@ public sealed class ConversationEndPinTests
         Assert.True(view.HistoryEnd);
     }
 
+    [Fact]
+    public void Resetting_a_session_lets_go_of_the_hold_its_scrollbar_press_left_behind()
+    {
+        var view = new SessionView();
+        view.Scroller.Press(new Microsoft.UI.Xaml.Controls.Primitives.ScrollBar { Parent = view.Scroller }, 7);
+        view.FollowState.Pressed(7);
+        view.ResetSessionForProbe();
+        view.Scroller.EndGesture("capture lost", pointer: 7, contact: true);
+        Assert.False(view.FollowState.Held);
+    }
+
+    [Fact]
+    public void A_screen_reader_moving_the_view_back_from_the_end_releases_the_pin_where_growth_does_not()
+    {
+        var view = new SessionView();
+        view.Moved(200);
+        view.Scroller.ScrollableHeight = 300;
+        view.Follow();
+        // Content above shrinks under an anchored view, then the pin's own correction lands.
+        view.Scroller.ScrollableHeight = 200;
+        view.Moved(100);
+        view.Follow();
+        view.Moved(200);
+        Assert.True(view.Pinned);
+        view.Moved(50);
+        view.Follow();
+        Assert.False(view.Pinned);
+        Assert.Equal([300.0, 200.0], view.Scroller.Targets);
+    }
+
     [Theory]
     [InlineData("release", false)]
     [InlineData("cancel", false)]

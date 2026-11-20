@@ -40,7 +40,26 @@ public sealed partial class SessionView
     {
         if (scrollbarPointers.Remove(pointer)) { follow.Released(pointer); }
     }
-    void ResetScrollbarGestures() => scrollbarPointers.Clear();
+    // A rewatch forgets these presses, so their follow hold goes too: nothing could release it later.
+    void ResetScrollbarGestures()
+    {
+        foreach (var pointer in scrollbarPointers) { follow.Released(pointer); }
+        scrollbarPointers.Clear();
+        seen = null;
+    }
+
+    (double Offset, double Extent)? seen;
+
+    // UIA or a screen reader can move the view back from the end with no wheel or press: that is the
+    // person's move too, or the final view change pulls it back. Growth or an anchored shrink above
+    // leaves the distance from the end as it was, and our own requests never release.
+    void PinViewChanged(ScrollViewer scroll)
+    {
+        var (offset, extent) = (scroll.VerticalOffset, scroll.ScrollableHeight);
+        if (pinEnd && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5
+            && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5)) { ReleasePin(); }
+        seen = (offset, extent);
+    }
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
     internal void ReleasePin() { pinEnd = false; anchoring = null; pinReleases++; }
@@ -52,6 +71,8 @@ public sealed partial class SessionView
     // measured end on layout and final view changes, including while an older target is pending.
     void FollowPinnedEnd()
     {
+        // Growth under a still view, measured so a later anchored shrink above is not read as a move.
+        if (ConversationScroll is { } still && seen is { } was && Math.Abs(still.VerticalOffset - was.Offset) < 0.5) { seen = (was.Offset, still.ScrollableHeight); }
         if (scrollbarPointers.Count > 0 || panning || scrolling && anchoring is null || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
         if (ConversationEndPin.Correction(pinEnd, scroll.VerticalOffset, scroll.ScrollableHeight, anchoring) is { } to) { Anchoring(scroll, to); }
     }
