@@ -87,6 +87,9 @@ public sealed class MachineUpdateViewModel : Observable
     long nowConnection;
     long nowSnapshot;
     bool nowWasCurrent;
+    // The press last taken and its connection: the one whose answer may ask again, consumed by the
+    // next PrepareNow whatever it is, and withdrawn by CancelNow.
+    (MachineUpdateNowChoice Choice, long Connection)? nowTaken;
     bool retired;
     public bool CanUpdateNow => !retired && !busy && !machine.IsLocal && !machine.Offline
         && machine.Host.State == LinkState.Connected && machine.Host.Can(UpdateProtocol.Capability)
@@ -94,24 +97,34 @@ public sealed class MachineUpdateViewModel : Observable
     bool NowCurrent => CanUpdateNow && ReferenceEquals(State, nowState) && machine.Host.ConnectionNumber == nowConnection
         && machine.Host.Sessions.Snapshots == nowSnapshot && machine.Current == nowWasCurrent;
 
-    // Preparation only: the UI/send slice consumes a choice, never sends from this model.
-    public MachineUpdateNowPrompt? PrepareNow(UpdateCommandResult? again = null)
+    // Preparation only: the UI/send slice consumes a choice, never sends from this model. again: the
+    // machine's answer to the press of; only confirm, or policy-unreadable once to the press last
+    // taken (#3307), asks again.
+    public MachineUpdateNowPrompt? PrepareNow(UpdateCommandResult? again = null, MachineUpdateNowChoice? of = null)
     {
-        CancelNow();
+        Close();
+        var taken = nowTaken;
+        nowTaken = null;
         if (!CanUpdateNow) { return null; }
-        var state = again is { Outcome: UpdateAck.Confirm } ? again.State : State;
+        var confirm = again is { Outcome: UpdateAck.Confirm };
+        var policy = again is { Outcome: UpdateAck.Refused, Code: UpdateCode.PolicyUnreadable };
+        var ours = taken is { } t && ReferenceEquals(t.Choice, of) && t.Choice.Release == State?.Available
+            && t.Connection == machine.Host.ConnectionNumber;
+        if ((again is not null && !confirm && !policy) || (policy && (!ours || of!.Unchecked))) { return null; }
+        var uncheckedPolicy = again is not null && ours && (policy || of!.Unchecked);
+        var state = confirm ? again!.State : policy ? again!.State ?? State : State;
         if (state is not { CanUpdateNow: true, Available: { } release } || release != State?.Available) { return null; }
         var b = UpdateNowWords.Read(state.Busy);
         if (!machine.Current) { b = b with { Unknown = true }; }
-        var sheet = again is { Outcome: UpdateAck.Confirm } || !UpdateNowWords.Quiet(b)
+        var sheet = confirm || uncheckedPolicy || !UpdateNowWords.Quiet(b)
             ? UpdateNowWords.Sheet(Name, b, id => machine.Host.Sessions.Get(id) is { } s
-                ? string.IsNullOrEmpty(s.Title) ? "Untitled session" : s.Title : null)
+                ? string.IsNullOrEmpty(s.Title) ? "Untitled session" : s.Title : null, uncheckedPolicy)
             : null;
         nowState = State;
         nowConnection = machine.Host.ConnectionNumber;
         nowSnapshot = machine.Host.Sessions.Snapshots;
         nowWasCurrent = machine.Current;
-        return nowPrompt = new(release, sheet);
+        return nowPrompt = new(release, sheet, uncheckedPolicy);
     }
 
     public MachineUpdateNowChoice? TakeNow(MachineUpdateNowPrompt prompt, bool confirmed = false)
@@ -119,10 +132,18 @@ public sealed class MachineUpdateViewModel : Observable
         if (!ReferenceEquals(prompt, nowPrompt)) { return null; }
         if (!NowCurrent || prompt.Cancelled || (prompt.Sheet is not null && !confirmed)) { CancelNow(); return null; }
         nowPrompt = null;
-        return new(prompt.Release, prompt.Sheet is { } sheet ? UpdateNowWords.AcceptOf(sheet.Busy) : null);
+        var choice = new MachineUpdateNowChoice(prompt.Release, prompt.Sheet is { } sheet ? UpdateNowWords.AcceptOf(sheet.Busy) : null, prompt.Unchecked);
+        nowTaken = (choice, nowConnection);
+        return choice;
     }
 
     public void CancelNow()
+    {
+        nowTaken = null;
+        Close();
+    }
+
+    void Close()
     {
         var prompt = nowPrompt;
         nowPrompt = null;
@@ -165,7 +186,7 @@ public sealed class MachineUpdateViewModel : Observable
     // The machine's state changed, or a second passed (the "checked 3 minutes ago").
     internal void Changed()
     {
-        if (!NowCurrent) { CancelNow(); }
+        if (!NowCurrent) { Close(); }
         Raise(nameof(CanUpdateNow));
         Raise(nameof(Name));
         Raise(nameof(StatusText));
@@ -180,12 +201,13 @@ public sealed class MachineUpdateViewModel : Observable
     }
 }
 
-public sealed class MachineUpdateNowPrompt(string release, UpdateNowSheet? sheet) : Observable
+public sealed class MachineUpdateNowPrompt(string release, UpdateNowSheet? sheet, bool uncheckedPolicy = false) : Observable
 {
     public string Release { get; } = release;
     public UpdateNowSheet? Sheet { get; } = sheet;
+    public bool Unchecked { get; } = uncheckedPolicy;
     public bool Cancelled { get; private set; }
     internal void Cancel() { Cancelled = true; Raise(nameof(Cancelled)); }
 }
 
-public sealed record MachineUpdateNowChoice(string Release, UpdateBusy? Accept);
+public sealed record MachineUpdateNowChoice(string Release, UpdateBusy? Accept, bool Unchecked = false);

@@ -58,6 +58,9 @@ public static partial class AuthState
 
     // How long "signed in" or "recovered by itself" stays.
     public static readonly TimeSpan ResolvedShown = TimeSpan.FromSeconds(60);
+    // How long a banner holds "Signed in · waiting to confirm" after signin.done signedIn while the host
+    // has not yet said pending (#902); the pwa's SIGNED_IN_HOLD_MS.
+    public static readonly TimeSpan SignedInHold = TimeSpan.FromSeconds(5);
 
     public static string AgentName(AgentKind agent) => agent switch
     {

@@ -1176,6 +1176,10 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     {
         // The same prompt drawn just after one of the writes went: the host's own read before the
         // next write sees it below the form (CopilotFormScreen), and nothing more is attempted.
+        await using var clock = new PollClock();
+        // Rechecks and the last write's missing-answer wait must not spend the channel's real-time budget.
+        Serve(Answerer(time: clock));
+        var started = clock.GetTimestamp();
         await AskFormAsync();
         var grown = false;
         injector.Screen = () => grown ? [.. FormScreen(Picked(), WordsTyped(), moved: Moved()), .. PermissionPrompt] : FormScreen(Picked(), WordsTyped(), moved: Moved());
@@ -1184,9 +1188,11 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
 
-        Assert.NotEqual("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
         Assert.Equal(write + 1, injector.Attempts.Count);
         Assert.Equal(write + 1, injector.Plans.Count);
+        Assert.True(clock.GetElapsedTime(started) >= TimeSpan.FromSeconds(2),
+            "The form recheck or missing-answer confirmation must exhaust the service's clock, not the channel's wall-clock budget.");
     }
 
     [Fact]
@@ -2441,6 +2447,10 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [InlineData("under")]
     public async Task A_permission_prompt_drawn_against_the_form_still_stops_the_answer(string where)
     {
+        await using var clock = new PollClock(frozen: true);
+        Serve(Answerer(time: clock));
+        var rechecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        clock.OnNextWait(() => rechecking.TrySetResult());
         List<string> prompt = where switch
         {
             "above, boxed with hints" => ["\u256D\u2500\u2500\u2500\u2500\u256E", "\u2502 Run command \u2502", "\u2502 Do you want to run this command? \u2502", "\u2502 \u276F 1. Yes \u2502", "\u2502   2. Yes, and approve git for the rest of the running \u2502", "\u2502      session \u2502", "\u2502   3. No, and tell Copilot what to do differently (Esc to stop) \u2502", "\u2502 \u2502", "\u2502 \u2191\u2193 to navigate \u00B7 enter to select \u00B7 esc to \u2502", "\u2502 cancel \u2502", "\u2570\u2500\u2500\u2500\u2500\u256F"],
@@ -2450,7 +2460,16 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         injector.Screen = () => where == "under" ? [.. WhichOne, .. prompt] : [.. prompt, "", .. WhichOne];
         var ch = await OpenAsync();
 
-        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+        var answering = AnswerAsync(ch, new { pick = "b" });
+        try
+        {
+            // Observe the refusal's recheck with its budget held still, however late this test resumes.
+            await rechecking.Task.WaitAsync(Patience);
+            Assert.False(answering.IsCompleted);
+            Assert.Empty(injector.Attempts);
+        }
+        finally { clock.Run(); }
+        var (outcome, reason) = await answering;
 
         Assert.Equal("refused", outcome);
         Assert.Contains("permission prompt", reason);
