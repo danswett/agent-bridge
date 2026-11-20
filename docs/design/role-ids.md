@@ -6,6 +6,13 @@ under [fleet parity](https://github.com/danswett/agent-bridge/issues/1396).
 Owner decisions, Nov 19, 2026 PT: GUID addressing, names display-only (12:10);
 unique SESSION ID and successor-stable ROLE ID per fleet session (12:12).
 
+## Decisions
+
+Owner decisions, Nov 19, 2026, 14:55 PT:
+1. Q1 holder claims are person-signed assignments only: a person-approved relay role-authority key plus an enrolled host key possession proof; self-appointed or unsigned claims are rejected.
+2. Q2 succession needs per-successor owner approval plus a confirmed stop of the old holder; no autonomous or time-based takeover; an unknown-outcome never counts as stopped.
+3. Q3 a new SESSION GUID per activation, a stable ROLE GUID across approved resume, move and host recovery; a compromised role is retired permanently.
+
 ## Existing work and the missing trust
 
 [The earlier role-roster design](role-roster.md) and its
@@ -23,7 +30,7 @@ Do not equate their role strings, installations or tokens with a ROLE ID.
 
 ## 1. Identity format and minting
 
-Recommend two distinct typed fields, `sessionId` and `roleId`, each a full random
+Use two distinct typed fields, `sessionId` and `roleId`, each a full random
 UUIDv4, canonical lowercase hyphenated GUID text. Validate version/variant and reject
 nil, truncated, malformed or wrong-field values; never derive either from a name.
 An enrolled host mints the SESSION ID once per execution activation, before publication.
@@ -44,9 +51,9 @@ Never expand them into GUIDs or guess a locator from GUID prefixes.
 
 ## 2. Published holder claim and authority
 
-Recommend a person-approved, purpose-specific relay role-authority signing key.
+Require a person-approved, purpose-specific relay role-authority signing key.
 This explicitly adds online assignment authority to the relay, unlike today's untrusted
-registry relay. It needs owner approval (Q1); existing relay TLS is not enrollment.
+registry relay, as decided in Q1; existing relay TLS is not enrollment.
 A new domain-separated person `capSign` delegation pins the authority public key,
 account, roster generation and allowed role operations; no implicit new key purpose.
 Hosts prove session possession with enrolled `hostSign`; that signature alone cannot
@@ -72,14 +79,14 @@ without online fencing: respectively they lack provenance, ownership or currentn
 
 ## 3. Atomic succession and the actual send fence
 
-Recommend per-role linearizable transactions shared by all authority replicas:
+Require per-role linearizable transactions shared by all authority replicas:
 `active(epoch E) -> quiescing(E) -> active(E+1)` or `revoked(E+1)`.
-The person approves the exact successor; agents may request, never authorize, transfer.
+The owner approves each exact successor; agents may request, never authorize, transfer.
 Compare-and-swap includes account/generation, role, old epoch and expected old session.
-Two successor requests cannot both commit; losers must obtain new person approval.
+Two successor requests cannot both commit; losers must obtain new owner approval.
 Quiescing first closes old-epoch admission, cancels unissued sends and drains every
 issued delivery reservation to authenticated `delivered` or `notDelivered`.
-The old host persists its fence and acknowledges quiescence. Only then may the
+The old host persists its fence and confirms the old holder stopped, not just quiesced. Only then may the
 authority atomically activate the ready successor and publish its higher epoch.
 
 Each role send reserves a unique request ID against the exact current binding.
@@ -88,11 +95,11 @@ before terminal injection and retains it until injection's terminal outcome is d
 Transfer waits for those reservations, including delayed/in-flight transport requests;
 a timeout, expired claim or lost response never proves that injection cannot occur.
 Hosts durably deduplicate reservation outcomes and reject replay after restart.
-An uncertain reservation or missing old-host fence acknowledgement blocks activation,
+An uncertain reservation or missing confirmed old-holder stop blocks activation,
 potentially indefinitely. Never expire a lock and assume the old holder stopped.
 Thus no old-holder injection can occur after successor activation, and no request
 can be delivered to both holders. An earlier delivered message cannot be recalled.
-This trades availability for safety; Q2 asks the Chief to confirm that trade.
+This trades availability for safety, as decided in Q2; unknown-outcome never counts as stopped.
 It assumes conforming trusted hosts/authority: a compromised host cannot be made
 to forget plaintext already received, and no cryptographic design can promise that.
 
@@ -121,24 +128,24 @@ An uncertain outcome retains its request/binding and never creates a second send
 
 ## 5. Resume, host moves and compromise
 
-Recommend keeping role identity in the protected replicated relay ledger; hosts keep
+Keep role identity in the protected replicated relay ledger; hosts keep
 only their session bindings, proofs and durable delivery/fence journal.
 Resolver/sender code runs on any authorized connected host; authority replicas run
 in the relay service. No named machine, agent session or watcher is the coordinator.
 When a client node leaves, another independently enrolled client can resolve afresh.
-When the holder leaves, its role becomes unavailable; unproven quiescence blocks
+When the holder leaves, its role becomes unavailable; an unconfirmed stop blocks
 replacement rather than silently granting the role to a different machine.
 Relay restart recovers ledger, epochs, tombstones and unresolved reservations before
 serving sends; absent durable state or loss of quorum refuses all role operations.
 
 Resume or host move uses a new SESSION GUID, the same ROLE GUID, and the same atomic
-person-approved successor procedure; copied workspace labels confer no ownership.
+owner-approved successor procedure; copied workspace labels confer no ownership.
 Revoke a compromised host add, its claims and outstanding unissued permits; block
 delivery on every check and retain unresolved issued permits until proven terminal.
-Recommend preserving the role after host compromise only by a fresh person-signed
-rebind to a newly enrolled host after quiescence. If assignment-authority trust is
-compromised, suspend routing, re-enroll authority and permanently retire affected
-roles; mint replacement ROLE GUIDs, never reset epochs or resurrect tombstones (Q3).
+Approved host recovery retains an uncompromised role only after owner-approved
+rebind, fresh enrolled-host proof and confirmed old-holder stop. A compromised role
+is retired permanently; authority compromise suspends routing and requires person-approved
+authority re-enrollment and affected-role retirement. Mint replacement ROLE GUIDs, never reset epochs or resurrect tombstones.
 Key rotation needs person-approved delegation continuity; a relay-provided new key
 alone is refused. Roster-generation change invalidates all old claims/delegations.
 
@@ -158,7 +165,7 @@ empty roster. Valid older signed epochs are historical, never competing live hol
 
 ## 7. Migration and ordered implementation slices
 
-Recommend additive, default-off negotiation, then explicit person enrollment of each
+Use additive, default-off negotiation, then explicit person enrollment of each
 role and existing session; do not infer assignments from matching labels.
 Rename/display-name changes update display only, preserving both GUIDs and the epoch.
 The person-only rename path keeps its existing disclosure and caller refusals.
@@ -168,33 +175,25 @@ keep legacy name lookup display-only/deprecated, with no role-send fallback.
 
 Below are ordered WHOLE-line budgets including tests/docs, each strictly below 250;
 split further before exceeding its budget. They extend the linked existing work,
-not new issues or grants. No slice activates until its dependencies and Q1-Q3 clear.
-| Order | Slice and maximum changed lines | Acceptance/dependency |
-|---|---|---|
-| 1 | Protocol types/vectors, 180 | Distinct GUID fields, claim canonical bytes, wrong versions/purposes refuse |
-| 2 | Person authority enrollment, 220 | Q1; pinned delegation, wrong account/generation/key/agent setter refuse |
-| 3 | Host activation identity, 220 | 1; provider resume/restart/process continuity and cloned-state refusal |
-| 4 | Signed session GUID publication/reading, 220 | 3, existing hostSign chain; legacy locator mapping verified, no GUID truncation |
-| 5 | Durable role ledger/CAS, 220 | 2; mint/tombstone/recovery, concurrent assignment and quorum-loss cases |
-| 6 | Claim publisher/verifier, 220 | 4-5; wrong ownership/proof, stale claim and two-claim refusal |
-| 7 | Durable quiescence/reservation core, 240 | 5-6, Q2; drain, crash, lost acknowledgement and blocked takeover |
-| 8 | Fenced-send host/protocol integration, 240 | 7; injection interleavings, delayed old send, dedupe, no legacy downgrade |
-| 9 | `fleet.find`, role projection and MCP, 220 | 6,8; typed unique holder, refusal parity, scoped proof and no name echo |
-| 10 | Fleet messenger, `find-nodes`, `reply-session`, 240 | 8-9; explicit role/session parameters; Fleet 996 A/B transfer regression |
-| 11 | Dispatcher roster/planner and send adapter, 220 | 10; replace name regex/Target-name routing with verified role/session fields; retain machine pins/caps, refuse stale assignment |
-| 12 | PWA verified role display/resolver, 220 | 6,9; copy separate GUIDs, plain-text labels, stale/revoked UI; no rename/assignment authority implied |
-| 13 | PWA role-send binding, 220 | 8,12; keep session reply/answer drafts pinned; changed holder requires explicit new action, uncertain request never retargets |
-| 14 | Person assignment/recovery UI and migration, 240 | 2,7-13, Q3; explicit enrollment/retirement, rename invariance, no fallback on rollback |
+not new issues or grants. Q1-Q3 are decided; implementation still requires dependency completion and explicit rollout authority.
+Repos: Bridge = [agent-bridge](https://github.com/danswett/agent-bridge); Fleet = [slipgates-fleet](https://github.com/danswett/slipgates-fleet).
+Sensitive means credentials, auth, trust, protocol or approval rendering: every Yes requires an Opus builder plus two independent, distinct-family readers.
+Slice 1 is first. After 1, slices 2 and 3 can run in parallel; after 9, 10 and 12 can run in parallel; after 8, 14 can run alongside 9-13.
 
-## 8. Open owner decisions for the Chief
-
-1. **Who signs and is trusted?** Recommend person-approved relay role-authority
-   signing plus person-signed assignments and hostSign possession; reject host
-   self-claims, unsigned relay assertions and implicit reuse of existing key purposes.
-2. **How strict is succession?** Recommend person approval per successor and durable
-   quiescence, even indefinite unavailability; reject autonomous holder takeover,
-   offline/TTL fencing and treating unknown delivery as safe to replace.
-3. **Which lifecycle/recovery policy?** Recommend new SESSION GUID per activation,
-   stable ROLE GUID across approved resume/move/host recovery, but permanent affected
-   role retirement after authority compromise; reject name-derived continuity,
-   copied-state adoption, automatic generation rebinding and retired-ID reuse.
+| Order | Repo | Slice and maximum WHOLE lines | Depends on | Sensitive | Acceptance test |
+|---|---|---|---|---|---|
+| 1 (first) | Bridge | Protocol types/vectors, 180 | None | Yes | Distinct GUID fields, canonical claim bytes; wrong versions/purposes refuse |
+| 2 | Bridge | Person authority enrollment, 220 | 1 | Yes | Pinned person delegation; wrong account/generation/key and agent setters refuse |
+| 3 | Bridge | Host activation identity, 220 | 1 | No | Resume/restart mints new SESSION GUID; proven same-process continuity and cloned-state refusal |
+| 4 | Bridge | Signed session GUID publication/reading, 220 | 3, existing hostSign chain | Yes | Verify legacy locator mapping and enrolled host proof; never truncate GUIDs |
+| 5 | Bridge | Durable role ledger/CAS, 220 | 2 | Yes | Mint/tombstone/recovery, concurrent assignment and quorum-loss refusal |
+| 6 | Bridge | Claim signing/publisher/verifier, 220 | 4-5 | Yes | Reject unsigned/self-appointed claims, wrong assignment/host proof, stale and conflicting claims |
+| 7 | Bridge | Durable stop/reservation core, 240 | 5-6 | Yes | Drain/crash/lost acknowledgement: require per-successor owner approval and confirmed stop; unknown-outcome blocks takeover |
+| 8 | Bridge | Fenced-send host/protocol integration, 240 | 7 | Yes | Injection interleavings, delayed old send, dedupe; no legacy downgrade |
+| 9 | Bridge | `fleet.find`, role projection and MCP, 220 | 6,8 | Yes | Typed unique holder, refusal parity, scoped proof and no name echo |
+| 10 | Fleet | Messenger, `find-nodes`, `reply-session`, 240 | 8-9 | Yes | Explicit role/session selectors; A/B name-transfer regression and stale-binding refusal |
+| 11 | Fleet | Dispatcher roster/planner/send adapter, 220 | 10 | Yes | Replace name regex/Target-name routing with verified IDs; preserve existing pins/caps and reject stale assignments |
+| 12 | Bridge | PWA verified role display/resolver, 220 | 6,9 | Yes | Copy separate GUIDs, plain-text labels, stale/revoked UI; no implicit assignment authority |
+| 13 | Bridge | PWA role-send binding, 220 | 8,12 | Yes | Session reply/answer drafts stay pinned; changed holder requires new action; uncertain request never retargets |
+| 14 | Bridge | Person assignment/recovery approval UI, 240 | 2,7-8 | Yes | Per-successor owner approval and confirmed stop; resume/move/host recovery preserves ROLE, renews SESSION; compromised ROLE stays retired |
+| 15 | Fleet | Explicit name-to-ID configuration migration, 220 | 10-14 | Yes | Person-enrolled mappings only; rename leaves GUIDs/epoch unchanged; legacy names display-only, rollback cannot restore name-send fallback |
