@@ -192,6 +192,7 @@ test('a hidden delegate stops polling and returns with its last words and curren
   await expect(fact(page, 'status')).not.toHaveText(age);
   await expect(pane(page).locator('[role="status"]')).toBeHidden();
   await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+  await page.clock.runFor(await page.evaluate(() => window.agentBridgeDemo.host.answerDelayMs));
   await expect.poll(async () => {
     await page.clock.runFor(1);
     return latest.textContent();
