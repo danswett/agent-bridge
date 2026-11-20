@@ -8,8 +8,8 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-// Dormant foundation: the enrollment writer and live observe integration are separate slices.
-// The disk pin is read once, never created or advanced by a relay snapshot.
+// Live observe integration is a separate slice. The disk pin is read once, created only by
+// HostRosterPinWriter from a person's genesis, and never created or advanced by a relay snapshot.
 public sealed partial class HostRosterReader
 {
     sealed record Pin(string Account, string Generation, byte[] Genesis, byte[][] Heads);
@@ -119,6 +119,13 @@ public sealed partial class HostRosterReader
         {
             return (null, "pin-unreadable");
         }
+    }
+
+    // The pin command's read-back: what this host has pinned, or why not; never the relay's view.
+    internal static (string? Account, byte[]? Genesis, string? Problem) ReadPinned(string path)
+    {
+        var (pin, problem) = ReadPin(path);
+        return (pin?.Account, pin?.Genesis, problem);
     }
 
     static (Pin? Pin, string? Problem) ReadPin(string path) =>

@@ -76,6 +76,9 @@ and only after that commit may it evaluate its own v2 add. A prefix pin alone
 never means "enrolled": the host stays pending until its complete verified roster
 contains the matching, person's approved v2 add. Engineering must rule on this
 bootstrap sequencing before the enrollment cut; no automatic pin creation is granted.
+The fleet-operator explicit local action is `agent-bridge-host roster-pin set` (#3450, owner
+Nov 20, 13:21 PT; [runbook](../runbooks/roster-pin.md)); it pins only a v3 genesis whose person
+descriptor carries capSign (owner 13:36 PT; refuses until K1's parser is wired) and enables nothing.
 
 ## Proposed command and capability precondition
 
