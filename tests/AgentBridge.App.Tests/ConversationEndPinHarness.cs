@@ -180,7 +180,7 @@ namespace AgentBridge.App
         public void Follow() => FollowPinnedEnd();
         public void Moved(double offset) { Scroller.VerticalOffset = offset; PinViewChanged(Scroller); anchoring = null; }
         public void Scrolling(double? correction = null) { scrolling = true; anchoring = correction; }
-        public void StopScrolling() => scrolling = false;
+        public void StopScrolling() { scrolling = false; navigationPending = false; }
         public bool HasAnchor => anchor is not null;
         public int ShownCount => historyShown.Count;
         public void DrawEarlierForProbe() => DrawEarlier();
