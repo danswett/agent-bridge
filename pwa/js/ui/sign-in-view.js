@@ -114,7 +114,7 @@ export function signInBanners(links, { flows = new Map(), resolved = new Map(), 
 }
 
 // What a banner says, and what is read aloud when it comes or changes (ui.md §6.13): "Copilot on
-// DEV-VM1 needs sign-in · @octocat" over "2 sessions affected: Fix the relay, Draft the notes".
+// machine-a needs sign-in · @octocat" over "2 sessions affected: Fix the relay, Draft the notes".
 export function bannerWords(b) {
   const who = `${b.agentName} on ${b.machine}`;
   const acct = b.account ? ` \u00b7 @${b.account}` : '';
