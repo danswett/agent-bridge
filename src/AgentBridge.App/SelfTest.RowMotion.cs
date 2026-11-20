@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -11,6 +12,18 @@ namespace AgentBridge.App;
 
 static partial class SelfTest
 {
+    static async Task<AnimationController?> RowMotionController(Visual visual, FrameworkElement root, Action<bool, string> check, string phase)
+    {
+        const int frames = 4;
+        for (var waited = 0; waited <= frames; waited++)
+        {
+            if (visual.TryGetAnimationController("Offset") is { } controller) { return controller; }
+            if (waited < frames) { await CaptureFrame(root); }
+        }
+        check(false, $"{phase} row shift Offset animation never started while sampled: no controller observed after {frames} capture frames.");
+        return null;
+    }
+
     static async Task CheckRowMotion(MainWindow window, Action<bool, string> check, string outFile)
     {
         var root = (Panel)window.RootElement;
@@ -53,8 +66,8 @@ static partial class SelfTest
             items.Remove(first);
             list.UpdateLayout();
             var slot = LayoutInformation.GetLayoutSlot(neighbour);
-            var initial = ElementCompositionPreview.GetElementVisual(neighbour).TryGetAnimationController("Offset")
-                ?? throw new InvalidOperationException("The initial row shift has no Offset animation controller.");
+            var initial = await RowMotionController(ElementCompositionPreview.GetElementVisual(neighbour), root, check, "initial");
+            if (initial is null) { return; }
             // Commit an interior point before replacing the first animation. Otherwise
             // both layout changes can reach composition together and travel nowhere.
             initial.Pause();
@@ -63,8 +76,8 @@ static partial class SelfTest
             check(LayoutInformation.GetLayoutSlot(neighbour) == slot, "row shift does not change the layout between frames");
             items.Insert(0, added);
             list.UpdateLayout();
-            var retarget = ElementCompositionPreview.GetElementVisual(neighbour).TryGetAnimationController("Offset")
-                ?? throw new InvalidOperationException("The interrupted row shift has no Offset animation controller.");
+            var retarget = await RowMotionController(ElementCompositionPreview.GetElementVisual(neighbour), root, check, "retarget");
+            if (retarget is null) { return; }
             // A window capture blocks the UI thread, not the compositor. Sample the
             // retarget's own paused start, not an earlier picture of the first shift.
             retarget.Pause();

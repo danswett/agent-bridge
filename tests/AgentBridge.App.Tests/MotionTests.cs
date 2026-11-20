@@ -1,5 +1,9 @@
 using System.Xml.Linq;
+using System.Reflection;
 using AgentBridge.App.Core;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 
 // Motion (ui.md §5.3, #232): every entry timed by the generated AbMotion* resources and nothing
@@ -8,6 +12,57 @@ using Xunit;
 // at its end and not touching it.
 public sealed class MotionTests
 {
+    [Theory]
+    [InlineData("initial", 0, 0, true)]
+    [InlineData("initial", 1, 1, true)]
+    [InlineData("retarget", 4, 4, true)]
+    [InlineData("initial", 5, 4, false)]
+    [InlineData("retarget", 5, 4, false)]
+    public async Task The_row_sampler_waits_bounded_frames_for_each_controller_and_reports_absence(string phase, int starts, int frames, bool found)
+    {
+        var result = await (Task<object[]>)RowController.Value.Invoke(null, [starts, phase])!;
+        Assert.Equal(found, result[0]);
+        Assert.Equal(frames, result[1]);
+        if (found) { Assert.Equal("", result[2]); }
+        else
+        {
+            Assert.Contains(phase, (string)result[2]);
+            Assert.Contains("4 capture frames", (string)result[2]);
+            Assert.Contains("never started", (string)result[2]);
+        }
+    }
+
+    static readonly Lazy<MethodInfo> RowController = new(() =>
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent; }
+        Assert.NotNull(root);
+        var method = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.App", "SelfTest.RowMotion.cs")))
+            .GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "RowMotionController");
+        var source = $$"""
+            #nullable enable
+            using System; using System.Threading.Tasks;
+            class AnimationController; class UIElement; class FrameworkElement : UIElement;
+            class Visual { public int Starts; public AnimationController? TryGetAnimationController(string name) => Probe.Frames >= Starts ? new() : null; }
+            public static class Probe {
+                public static int Frames;
+                static Task CaptureFrame(FrameworkElement root) { Frames++; return Task.CompletedTask; }
+                {{method}}
+                public static async Task<object[]> Run(int starts, string phase) {
+                    Frames = 0; var message = "";
+                    var result = await RowMotionController(new Visual { Starts = starts }, new(), (ok, text) => { if (!ok) message = text; }, phase);
+                    return [result is not null, Frames, message];
+                }
+            }
+            """;
+        var refs = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator).Select(p => MetadataReference.CreateFromFile(p));
+        using var output = new MemoryStream();
+        var result = CSharpCompilation.Create("RowControllerProbe", [CSharpSyntaxTree.ParseText(source)], refs,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)).Emit(output);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        return Assembly.Load(output.ToArray()).GetType("Probe")!.GetMethod("Run")!;
+    });
+
     // The generated file the app loads (tools/design-gen), read as the app reads it: by key.
     static readonly MotionCatalogue Catalogue = MotionCatalogue.From(Generated());
 
