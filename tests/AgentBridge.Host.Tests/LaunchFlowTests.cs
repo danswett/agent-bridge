@@ -1079,6 +1079,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal("unconfirmed", o.Outcome_);
         // Under load the clock can run out the registration wait before the host's first look, so the
         // outcome returns first and the session is told to the restore record when that look sees it.
+        await source.RefreshAsync();
         await WaitAsync(() => { lock (told) { return Task.FromResult(told.Count > 0); } });
         lock (told) { Assert.Equal([o.Session!], told); }
     }
