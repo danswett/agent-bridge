@@ -958,6 +958,11 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   attempt, so every delivery order converges. The completed event preserves its attempt and verdict
   if a retry has already started; job evidence comes from that exact attempt. Duplicate evidence,
   including a recovered incident, is not reposted; a recovery whose close failed is closed on redelivery.
+  An intervening successful attempt resets consecutive failures and quarantine-request state even when its
+  event is delayed; retained evidence from a recovered attempt cannot generate a quarantine request.
+  Historical entries remain, and a newer red verdict keeps the incident open.
+  Older-run red evidence is not backfilled across a newer decisive run; output explains this explicitly.
+  A missing old-run entry still leaves automatic revert fail-safe, with no change to its evidence requirements.
   Evidence contains capped, mention-neutralised job/test names, never raw logs; unreadable logs are noted.
   GitHub issues and the label are the only alert channel: no assignee, owner mention or phone notification.
   Tiered gating B3 ([issue 3210](https://github.com/danswett/agent-bridge/issues/3210)): a failed job named
@@ -966,12 +971,12 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   a pull request's merge verdict. The issue stays open until main's CI is green. Missing tier data means blocking.
   B3b: when two entries in a row (no green between) name the same single test, and every failed job in
   each but `quality-gate` is post-merge tier, the second entry adds one `quarantine-request: test=<name>`
-  line, once per open issue, with the [S3b generator](https://github.com/danswett/agent-bridge/pull/3078)
+  line, once per unrecovered streak, with the [S3b generator](https://github.com/danswett/agent-bridge/pull/3078)
   command. `main-red.ps1` then calls `quarantine-pr.ps1` by path (24 h expiry, draft `fixes-main` PR), but
   only while `MAIN_RED_QUARANTINE` is exactly `on` in its environment and the script exists (until PR 3078
   lands, the request is only recorded). The generator keeps its own fences: the repository variable rechecked
   before each write, and only attempt 2 of one failed run; a refusal is a warning, never a failed detection.
-  The first request reserves the one opportunity for that test across the entire open issue, not one
+  The first request reserves the one opportunity for that test across the unrecovered streak, not one
   per distinct test. A successful generator invocation adds `quarantine-completed: test=<name>` to the
   alert; a refusal, nonzero exit, missing script or disabled switch leaves the intent pending. Later
   eligible entries for the requested test may try again until completion; duplicate events still do nothing.
