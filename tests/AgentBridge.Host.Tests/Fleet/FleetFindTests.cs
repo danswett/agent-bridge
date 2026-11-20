@@ -126,7 +126,7 @@ public sealed class FleetFindTests : IDisposable
             Assert.Equal(uuid, row.GetProperty("sessionId").GetString());
             Assert.Null(registry.Put("account-a", "fixture", record));
             return Task.CompletedTask;
-        }));
+        }, relaySupportsSessionId: true));
         var result = await Find(new FleetList(store, new RegistryRoster(registry, "account-a"), audit: new AgentAuditLog(root)),
             new { name = "SG Quality", sessionId = "caller-spoof" });
         Assert.Equal("found", result.GetProperty("result").GetString());
@@ -135,6 +135,55 @@ public sealed class FleetFindTests : IDisposable
         Assert.Equal("agent_bridge_" + hex, found.GetProperty("node").GetString());
         Assert.Equal(uuid, found.GetProperty("sessionId").GetString());
         Assert.DoesNotContain("caller-spoof", result.GetRawText());
+    }
+
+    // An older relay refuses the whole record for any member off its allow-list, so the host sends
+    // sessionId only to a connection whose relay advertised it, and never carries that over.
+    [Fact]
+    public async Task Session_ids_go_only_to_a_connection_whose_relay_advertised_them_and_a_reconnect_without_it_drops_them()
+    {
+        const string uuid = "12345678-1234-5678-9abc-def012345678";
+        var source = new FleetPublisherTests.Source { Sessions = [FleetPublisherTests.NewSession(1) with { Id = uuid }] };
+        var publication = new FleetPublication(source, "fixture", share: true);
+        var registry = new SessionRegistry(TimeProvider.System);
+        var sent = new List<JsonElement>();
+        foreach (var advertised in new[] { false, true, false })
+        {
+            var disconnected = new TaskCompletionSource();
+            await publication.RunAsync((record, _) =>
+            {
+                sent.Add(record);
+                Assert.Null(registry.Put("account-a", "fixture", record));
+                disconnected.TrySetResult();
+                return Task.CompletedTask;
+            }, disconnected.Task, relaySupportsSessionId: advertised).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        var rows = sent.Select(r => Assert.Single(r.GetProperty("sessions").EnumerateArray())).ToList();
+        Assert.Equal(new[] { false, true, false }, rows.Select(r => r.TryGetProperty("sessionId", out _)));
+        Assert.Equal(uuid, rows[1].GetProperty("sessionId").GetString());
+        // Without the capability the record is exactly what a publisher without sessionId sends,
+        // and the relay still takes it.
+        Assert.DoesNotContain("sessionId", sent[2].GetRawText());
+        Assert.Null(RosterFields.Check(sent[2], "fixture", out _, out _, out _));
+    }
+
+    [Theory]
+    [InlineData("""{"t":"ready","device":"d","account":"1","login":"x"}""", false)]
+    [InlineData("""{"t":"ready","capabilities":["rosterSessionId"]}""", true)]
+    [InlineData("""{"t":"ready","capabilities":["futureThing","rosterSessionId",7,null]}""", true)]
+    [InlineData("""{"t":"ready","capabilities":["futureThing","rostersessionid","rosterSessionId2"]}""", false)]
+    [InlineData("""{"t":"ready","capabilities":"rosterSessionId"}""", false)]
+    [InlineData("""{"t":"ready","capabilities":{"rosterSessionId":true}}""", false)]
+    public void Only_an_exact_advertised_capability_enables_session_ids_and_unknown_or_malformed_ones_are_ignored(string ready, bool expected) =>
+        Assert.Equal(expected, RelayClient.ReadCapabilities(JsonDocument.Parse(ready).RootElement).Contains(FleetSessionId.RelayCapability));
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_relay_advertises_session_id_support_in_ready()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "host", "host");
+        Assert.Contains(FleetSessionId.RelayCapability, host.Relay.Capabilities);
     }
 
     [Theory]

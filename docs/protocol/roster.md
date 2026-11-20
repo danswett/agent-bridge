@@ -170,7 +170,10 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
   Older publishers omit it; hosts publish it only when it binds to `node` and verify that
   binding again before returning `fleet.find`'s `found.session.sessionId`
   ([agent-operations.md](agent-operations.md#fleetfind)). An older relay that lacks this
-  allow-list entry refuses records containing it; upgrade the relay before publishers.
+  allow-list entry refuses the whole record, so a host sends `sessionId` only on a connection
+  whose relay's `ready` lists `"rosterSessionId"` in its optional `capabilities` string array.
+  The host reads that on each connection and forgets it on reconnect; a missing, malformed or
+  unknown capability means omit. Relay and host may therefore deploy in either order.
   Optional session evidence is `stale, attention, openAsks, unsentLength, unsentHash,
   observedAt, lastReplyAt, provenance, senderVerified, owner, pr, finished`, with the bounded types and
   rejection rules in [agent-operations.md](agent-operations.md#fleetlist).
