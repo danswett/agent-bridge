@@ -547,6 +547,17 @@ audited, as the #1401 row in design/agent-launch-scope.md requires: the log says
 host log and again when writing resumes, and the caller must refuse and release any slot when the
 write returns false.
 
+At the machine, a person can run `agent-bridge-host audit archive [--profile <name>]`.
+It holds the audit folder's exclusive lock, verifies both streams and their durable heads,
+and refuses incomplete or broken evidence before moving anything. It moves only expired,
+closed `agents-*.jsonl` days unchanged into the owner-only `<profile>\audit\archive\`,
+using automatic retention's 30-day cutoff, clock-jump safeguard and durable head advancement.
+It never changes today's file or overwrites an archive; it prints the number moved.
+Unlike automatic size pruning, it does not retire recent days just to meet the byte quota.
+Launch files remain untouched: launch-evidence pruning is still deferred as described below.
+An archive is not an evidence repair; later retained-tail truncation still reports a coverage break.
+Agent sessions are refused by the host CLI.
+
 `session.launch` records use a separate owner-only file,
 `<profile>\audit\launches-YYYY-MM-DD.jsonl` (#1998, #1401 A2), with the same record shape
 and privacy rules. All launch files together have their own 16 MiB quota: existing bytes,

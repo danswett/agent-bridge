@@ -977,9 +977,17 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   lands, the request is only recorded). The generator keeps its own fences: the repository variable rechecked
   before each write, and only attempt 2 of one failed run; a refusal is a warning, never a failed detection.
   The first request reserves the one opportunity for that test across the unrecovered streak, not one
-  per distinct test. A successful generator invocation adds `quarantine-completed: test=<name>` to the
-  alert; a refusal, nonzero exit, missing script or disabled switch leaves the intent pending. Later
-  eligible entries for the requested test may try again until completion; duplicate events still do nothing.
+  per distinct test. The intent line is written to the alert before the generator runs, so a failed write
+  runs nothing. A successful generator invocation then adds `quarantine-completed: test=<name> run=<id>
+  attempt=<n>` in its own comment, naming the attempt that requested it; a refusal, nonzero exit, missing
+  script, disabled switch or failed completion write leaves the intent pending. Later eligible entries for
+  the requested test may try again until completion; duplicate events still do nothing. A completion is
+  bound to its streak: it suppresses that unrecovered streak only (a change of the latest failing test alone
+  is not a new streak), never a fresh streak after a recovery. A legacy completion without `run=` applies
+  only to the streak open when GitHub recorded the comment (`createdAt`), which ends at the next recovery. If
+  a completion comment is malformed, lacks a timestamp, or shares its second with entries on both sides of a
+  recovery, that entry's evaluation fails before its own write or any generator call rather than guess (a
+  retained earlier entry published by the same detection is independent evidence and may already be recorded).
   Nothing here posts a status, check or label, so no merge verdict reads it.
   Offline test: `quality/test-main-red.ps1` (catalog suite `main-red`).
 - **Culprit auto-revert** ([issue 3211](https://github.com/danswett/agent-bridge/issues/3211)):
