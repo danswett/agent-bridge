@@ -219,6 +219,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         try { handedOverTo?.Invoke(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { log?.Invoke($"update: the hand-over could not be recorded: {e.Message}"); }
         // As ApplyUpdatesAndRestart ends: Update.exe waits for this process to exit (--wait).
+        Program.CompleteRun();
         locator.Process.Exit(0);
     }
 }

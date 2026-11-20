@@ -8,43 +8,68 @@ public sealed record PreviousRun(bool Unclean, string? Version = null, DateTimeO
     string? Crash = null, HangRecord? Hang = null);
 
 // Local evidence only. Callers supply diagnostics, never conversation/transcript text.
-public sealed class RunMarker
+public sealed class RunMarker : IDisposable
 {
     [ThreadStatic] internal static Action<string, byte[]>? WriteFileOverride;
-    const string FileName = "run-marker.json";
     readonly object gate = new();
     readonly string path;
     readonly TimeProvider clock;
+    readonly FileStream ownership;
     PreviousRun current;
-    bool completed;
+    bool completed, disposed;
 
     public PreviousRun Previous { get; }
 
     RunMarker(string dir, string version, TimeProvider clock)
     {
         this.clock = clock;
-        path = Path.Combine(dir, FileName);
-        Previous = ReadPrevious(dir);
+        path = Path.Combine(dir, $"run-marker.{Guid.NewGuid():N}.json");
         current = new(true, FeedbackRedactor.Redact(version), clock.GetUtcNow());
         Directory.CreateDirectory(dir);
-        Save();
+        ownership = UserLock.TryTake(path + ".lock", deleteOnClose: true) ?? throw new IOException("The new run record is already owned.");
+        var saved = false;
+        try
+        {
+            Previous = ReadPrevious(dir, out var recovered);
+            Save();
+            if (recovered is not null)
+            {
+                using var owner = UserLock.TryTake(recovered + ".lock", deleteOnClose: true);
+                if (owner is not null) { File.Delete(recovered); }
+            }
+            saved = true;
+        }
+        finally { if (!saved) { ownership.Dispose(); } }
     }
 
     public static RunMarker Start(string dir, string version, TimeProvider? clock = null) =>
         new(dir, version, clock ?? TimeProvider.System);
 
-    public static PreviousRun ReadPrevious(string dir)
+    public static PreviousRun ReadPrevious(string dir) => ReadPrevious(dir, out _);
+
+    static PreviousRun ReadPrevious(string dir, out string? record)
     {
+        record = null;
         try
         {
-            return (JsonSerializer.Deserialize<PreviousRun>(File.ReadAllText(Path.Combine(dir, FileName)))
-                ?? new(true)) with { Unclean = true };
+            PreviousRun previous = new(false);
+            foreach (var file in Directory.EnumerateFiles(dir, "run-marker*.json"))
+            {
+                // A lifetime lease, not a PID or a session-local mutex, proves this run is gone.
+                using var owner = UserLock.TryTake(file + ".lock", deleteOnClose: true);
+                if (owner is null) { continue; }
+                PreviousRun candidate;
+                try { candidate = (JsonSerializer.Deserialize<PreviousRun>(File.ReadAllText(file)) ?? new(true)) with { Unclean = true }; }
+                catch (FileNotFoundException) { continue; }
+                catch (JsonException) { candidate = new(true); }
+                if (!previous.Unclean || candidate.StartedAt.GetValueOrDefault() >= previous.StartedAt.GetValueOrDefault()) { previous = candidate; record = file; }
+            }
+            return previous;
         }
-        catch (FileNotFoundException) { return new(false); }
-        catch (DirectoryNotFoundException) { return new(false); }
-        catch (JsonException) { return new(true); }
+        catch (DirectoryNotFoundException) { record = null; return new(false); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
+            record = null;
             return new(true, Crash: "The run marker could not be read.");
         }
     }
@@ -53,7 +78,7 @@ public sealed class RunMarker
     {
         lock (gate)
         {
-            if (completed) { return; }
+            if (completed || disposed) { return; }
             var lines = FeedbackRedactor.RedactLogLines(string.Join('\n', lastLogLines))
                 .Split('\n').TakeLast(40).Select(line => Limit(line, 2048)).ToArray();
             current = current with { Hang = new(clock.GetUtcNow(), threadId, stalled.TotalSeconds, lines) };
@@ -65,6 +90,7 @@ public sealed class RunMarker
     {
         lock (gate)
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
             completed = false;
             // Exception messages can contain transcript text; only type and frames belong here.
             current = current with { Crash = DescribeCrash(error) };
@@ -80,10 +106,17 @@ public sealed class RunMarker
     {
         lock (gate)
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
             if (completed || current.Crash is not null) { return; }
             File.Delete(path);
             completed = true;
         }
+    }
+
+    // Letting go without Complete represents an abandoned run; its evidence stays.
+    public void Dispose()
+    {
+        lock (gate) { disposed = true; ownership.Dispose(); }
     }
 
     static string Limit(string text, int length) => text.Length <= length ? text : text[..length];
