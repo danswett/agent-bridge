@@ -73,6 +73,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public Action<Action<int>, Action<long, long?>>? DownloadWithBytes;
         public TaskCompletionSource? DownloadGate;
         public string? InstalledVersion { get; set; } = "0.1.0";
+        public HaltPolicySnapshot? HaltPolicy { get; set; }
         public DateTimeOffset? DiscoveredAt { get; set; }
         public string? CheckSource { get; set; }
         public int? GitHubRemaining { get; set; }
@@ -1139,6 +1140,28 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.True(AutoUpdater.SettleFor < AutoUpdater.IdleFor);
         Assert.Single(host.Sent(HostOps.Stop));
         Assert.Contains(log, l => l.StartsWith("auto-update: installing 0.2.0, as it installs between turns", StringComparison.Ordinal));
+    }
+
+    // #3307: unasked, nothing installs over bad-release protection this machine could not check
+    // (stale or unreadable); it holds and says why. A fresh policy installs as before.
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Set_to_install_between_turns_an_install_holds_while_bad_release_protection_is_stale_or_unreadable(bool readable, bool fresh)
+    {
+        InstallBetweenTurns();
+        updater.HaltPolicy = new(readable ? new(1, """{"v":1,"halted":[]}""", []) : null, Make.T0, fresh);
+        await StartAsync();
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        if (fresh) { await Wait.UntilAsync(() => updater.Applied, "the install between turns", TimeSpan.FromSeconds(5)); return; }
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Contains(AutoUpdater.PolicyHold, auto.State.Waiting);
     }
 
     [Fact]
