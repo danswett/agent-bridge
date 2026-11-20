@@ -88,7 +88,7 @@ What the sender gets, and what the messenger does:
 | Outcome | The messenger |
 | --- | --- |
 | `delivered` | success; the only success |
-| `off`, `undeliverable` (machine offline, nothing queued), `unconfirmed` (no acknowledgement in 10 seconds, or the mode went off while waiting) | falls back to Home Assistant once; after `unconfirmed` the first message may still have been typed, so the fallback can deliver it twice |
+| `off` (including the mode turned off while the signing key was made; nothing sent), `undeliverable` (machine offline, nothing queued; a device id matches only the present host with that id, never a host name), `unconfirmed` (no acknowledgement in 10 seconds, or the mode went off while waiting) | falls back to Home Assistant once; after `unconfirmed` the first message may still have been typed, so the fallback can deliver it twice |
 | `refused` with `busy` or `notReplyTarget` | falls back to Home Assistant |
 | `refused` with `rate` | final failure shown to the sender; never sent over Home Assistant |
 | any other `refused` (other account, `ambiguousMachine` (a name shared by two present hosts), replay, size, and so on) | final failure shown to the sender |
