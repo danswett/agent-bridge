@@ -401,6 +401,7 @@ public sealed class AgentLiteDeliveryTests
     [InlineData(AnswerOutcome.Refused, ReplyRefusal.Asking, "busy")]
     [InlineData(AnswerOutcome.Refused, ReplyRefusal.Busy, "busy")]
     [InlineData(AnswerOutcome.Refused, ReplyRefusal.ComposerUnverified, "composerNotEmpty")]
+    [InlineData(AnswerOutcome.Refused, ReplyRefusal.Occupied, "composerNotEmpty")]
     [InlineData(AnswerOutcome.Refused, ReplyRefusal.Other, "notReplyTarget")]
     public async Task A_replier_that_does_not_deliver_is_reported_with_its_own_refusal_code(AnswerOutcome outcome, ReplyRefusal refusal, string code)
     {
