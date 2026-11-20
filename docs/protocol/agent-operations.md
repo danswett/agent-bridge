@@ -76,3 +76,14 @@ Only explicit host-owned names publish; no inferred fallback or agent rename.
 After incomplete/unverified checks, same-host live duplicates stay ambiguous; cross-host proof is specified there.
 This is not implemented. #1776 and the design's unowned reader/clock prerequisites
 still gate verification and routing: no interim key and no unsigned `found`.
+
+### Spec-only counter ordering (#2936)
+
+The [newest-wins evidence profile](../design/fleet-session-registry.md#newest-wins-evidence-profile-2936-spec-only)
+and [shared vectors](vectors/fleet-registry-order.json) pin signed `at` within 60 seconds
+of the reader, then higher session-bound monotonic `epoch`, then `seq`. Equal/missing or
+incomparable evidence is ambiguous; malformed or unverified live evidence refuses.
+Independent machines' counters are incomparable. Unsigned local times never rank.
+Current random host epochs and snapshot sequences are **not** this creation-order
+evidence. The file is a post-verification test model, not a new wire format or result.
+No `FleetList`/PWA reader, selector precedence or routing behavior changes in this slice.

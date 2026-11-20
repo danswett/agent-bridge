@@ -459,7 +459,7 @@ process wins only when the reader can prove one strictly newest signed `startedA
 It is a host-observed process-start instant, bound positively to that session's process,
 stable when only the host restarts, and renewed when the session process resumes/replaces.
 Unprovable observations are omitted, never invented from transcript/filesystem times.
-Never order by state `since`, snapshot `at`, `seq`, epoch, relay arrival or node text.
+Never order by state `since`, snapshot `at`/`seq`, random wire epoch, relay arrival or node text.
 Valid ordering metadata must pass the shared timestamp contract and signature verification;
 every competing live match must have it. A single verified live match needs no tie-break.
 Wire form: `YYYY-MM-DDTHH:mm:ssZ`, UTC whole seconds, floored; offsets/fractions/non-calendar
@@ -489,6 +489,49 @@ Callers continue pinning the selected machine/node; no retries, rate-limit bypas
 Deploy the strict relay contract and shared vectors before emitting `startedAt`; older
 relays refuse unknown members. Legacy records remain readable, but cannot rank duplicates.
 The byte-budget/truncation contract above preserves all caps; no silent rollout fallback.
+
+### Newest-wins evidence profile (#2936; spec only)
+
+[The accepted brief](https://github.com/danswett/agent-bridge/issues/2936#issuecomment-6969128343)
+defines a counter-based creation-order contract and
+[shared cases](../protocol/vectors/fleet-registry-order.json), not a product reader change.
+The existing wire `epoch` is random per host restart; snapshot `seq` is not session
+creation order. **Neither satisfies this profile.** Do not parse hex epochs as ordinals,
+derive counters from arrival/local times, or treat a signed snapshot as proof of creation.
+The same-host hold above remains until #1776 and the producer/reader integration can
+supply independently verified, session-bound monotonic evidence. No wire migration,
+retained counter store, deployment or cross-machine clock authority is supplied here.
+
+The reference input is a complete, authenticated-account/exact-name candidate set after
+the existing incomplete check. Each candidate binds its session and machine to one signed
+evidence tuple: `epoch`, `seq`, `at`. `verified: true` in a fixture is trusted test setup
+for enrolled-key/signature and replay verification, never a self-asserted registry field.
+Cryptographic verification stays covered by `fleet-registry-signing.json`, not these models.
+
+- `at` is the signed UTC instant, normalized without rounding to Unix milliseconds;
+  `readerAt` is the reader's clock in the same units. Require absolute difference
+  <=60,000 ms, including both boundaries. This proves freshness, never creation order.
+- In this proposed profile, `epoch` strictly increases for each new session in one
+  authenticated machine's creation-order domain; `seq` strictly increases within an epoch.
+  A new epoch may reset `seq`. Counters and normalized milliseconds are JSON integers
+  from 0 through 9,007,199,254,740,991, exactly representable by C# and JavaScript.
+  A fixture's optional `previous` is the trusted earlier epoch/seq checkpoint for that
+  evidence stream, not another candidate or relay-provided history; rollback/replay refuses.
+- Unverified/forged/unsigned live matches never participate and block selection, even
+  beside verified evidence. Invalid types, negative/fractional/out-of-range values and
+  freshness violations refuse. Missing/null tuple members cannot prove order: ambiguous,
+  never select a complete competitor by dropping the incomplete one.
+- Within one comparable domain, higher `epoch` wins, then higher `seq`; exactly one
+  maximum yields `found` and its fixture ID. Equal maxima or incomparable evidence yield
+  `ambiguous`, with no selected ID. Distinct machines are incomparable: their independent
+  counters cannot establish a fleet-wide order. A still-live predecessor competes normally;
+  offline candidates do not compete. No live candidate yields refusal in this small oracle.
+- Unsigned local timestamps, `startedAt`, state `since`, relay arrival and lexical IDs
+  are never tie-breakers. Both reference models replay each case in both input orders.
+
+`refused` is the fixture's fail-closed verdict, not a new `fleet.find` wire result:
+production retains `incomplete`/`unverified` and its existing offline/not-found behavior.
+These fixtures neither set `Verified` nor lift #2360's routing or clock-evidence gates.
 
 ## Who may read, and how a client authenticates
 
