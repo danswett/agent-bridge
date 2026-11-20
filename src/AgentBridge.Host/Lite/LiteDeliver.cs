@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using AgentBridge.AgentEnvelope;
+using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Copilot;
@@ -45,16 +46,24 @@ public sealed class LiteDeliver(
         try { safe = Escape(text); }
         catch (ArgumentException) { return Refused(LiteCodes.NotReplyTarget); } // not valid Unicode
         if (string.IsNullOrEmpty(text) || text.Length > MaxChars || !body.BindsData(Encoding.UTF8.GetBytes(text)) || target.Length == 0 || !Guid.TryParseExact(body.Request, "D", out _)) { return Refused(LiteCodes.NotReplyTarget); }
-        if (source.Get(target) is not { } session) { return Refused(LiteCodes.NoSuchSession); }
-        if (!await AllowedAsync(envelope, target)) { return Refused(LiteCodes.NotReplyTarget); }
+        var id = target;
+        var session = source.Get(target);
+        var byNode = false;
+        if (session is null && FromNodeId(target) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
+        if (session is null) { return Refused(LiteCodes.NoSuchSession); }
+        if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
         if (session.Agent != AgentKind.Copilot || session.ProcessId is not { } pid) { return Refused(LiteCodes.NotReplyTarget); }
         if (!Idle(session)) { return Refused(LiteCodes.Busy); }
         if (!await ComposerEmptyAsync(pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
         // Check before handing off; RequireIdle also rechecks once the replier holds the typing slot.
-        if (source.Get(target) is not { } now || now.ProcessId != pid) { return Refused(LiteCodes.NoSuchSession); }
+        // A node id is resolved again: a sibling or a hold that appeared while the composer was read
+        // makes it ambiguous now, whatever it named a moment ago.
+        if (source.Get(id) is not { } now || now.ProcessId != pid || (byNode && FromNodeId(target) != id)) { return Refused(LiteCodes.NoSuchSession); }
         if (!Idle(now)) { return Refused(LiteCodes.Busy); }
-        if (!WithinRate(target)) { return Refused(LiteCodes.Busy); }
-        var reply = new ReplyRequest { Id = target, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true };
+        if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
+        // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
+        // just before the injector starts (Stale, refused below as noSuchSession); a full id gets no fence, as on main.
+        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true, StillCurrent = byNode ? () => FromNodeId(target) == id : null };
         var result = await replier.ReplyAsync(reply, null, ct);
         return result.Outcome switch
         {
@@ -79,6 +88,28 @@ public sealed class LiteDeliver(
             catch (Exception e) when (e is not OperationCanceledException) { log($"lite deliver: to {Clean(target)} request {Clean(envelope.Body.Request)} gate {gate.GetType().Name}: failed: {e.GetType().Name}"); }
         }
         return false;
+    }
+
+    // The roster and fleet.find publish only the lossy HA node id, so a fleet sender can name no
+    // other target (#3399). Accept it only when exactly one live session maps to it: guessing
+    // between several would type into a session the sender never chose. "Exactly one" is only
+    // known while discovery is not held (ISessionSource.Held): a held pass may not list a second
+    // live session with the same node id. So Held is read before the one materialised snapshot and
+    // again after scanning it, as FleetPublisher does; either refuses. Exact ids never come here.
+    string? FromNodeId(string target)
+    {
+        const string prefix = "agent_bridge_";
+        if (target.Length != prefix.Length + 16 || !target.StartsWith(prefix, StringComparison.Ordinal)
+            || target.AsSpan(prefix.Length).ContainsAnyExcept("0123456789abcdef")) { return null; }
+        if (source.Held is not null) { return null; }
+        string? found = null;
+        foreach (var s in source.Snapshot())
+        {
+            if (!string.Equals(HaContract.NodeId(s.Id), target, StringComparison.Ordinal)) { continue; }
+            if (found is not null && !string.Equals(found, s.Id, StringComparison.Ordinal)) { return null; }
+            found = s.Id;
+        }
+        return source.Held is null ? found : null;
     }
 
     static bool Idle(Session s) => s.Status == SessionStatus.Idle && s.Question is null;
