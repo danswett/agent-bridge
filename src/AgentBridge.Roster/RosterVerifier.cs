@@ -40,7 +40,7 @@ public static class Invalid
     public const string Evidence = "evidence";
     // A v2 host add on a roster whose verifier has not switched v2 on.
     public const string Version = "version";
-    // A hostSign key that is, or is made by this add the same as, another device's key of any kind.
+    // A hostSign or capSign key that is, or is made by this add the same as, another device's key of any kind.
     public const string HostKey = "host-key";
 
     // A veto (§5.6) naming another reset than the one held.
@@ -80,8 +80,8 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     // until then a v2 add is refused.
     public bool AcceptHostSign { get; init; }
 
-    // A hostSign is for nothing but its host's own statements: it equals no other device's dh,
-    // sign, webauthn key or hostSign, whichever add came first.
+    // A hostSign or capSign is for nothing but its own statements: it equals no other device's dh,
+    // sign, webauthn key, hostSign or capSign, whichever add came first (devices.md L589-594).
     static bool HostKeyCollides(DeviceDescriptor added, DeviceDescriptor other)
     {
         static IEnumerable<byte[]> Keys(DeviceDescriptor d)
@@ -89,10 +89,11 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             yield return d.Dh;
             if (d.Sign is not null) { yield return d.Sign; }
             if (d.WebAuthn is not null) { yield return d.WebAuthn.Key; }
+            if (d.CapSign is not null) { yield return d.CapSign; }
         }
         bool Hit(byte[]? hostSign, DeviceDescriptor d) =>
             hostSign is not null && (Keys(d).Any(k => k.AsSpan().SequenceEqual(hostSign)) || (d.HostSign is not null && d.HostSign.AsSpan().SequenceEqual(hostSign)));
-        return Hit(added.HostSign, other) || Hit(other.HostSign, added);
+        return Hit(added.HostSign, other) || Hit(other.HostSign, added) || Hit(added.CapSign, other) || Hit(other.CapSign, added);
     }
     internal int AddCap { get; init; } = MaxAdds;
     internal int EntryCap { get; init; } = MaxEntries;
