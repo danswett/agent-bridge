@@ -18,7 +18,8 @@ public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSes
 
 public sealed record FleetSession(string Node, string? Name, string State, DateTimeOffset Since, string? Id = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model = null,
-    [property: JsonIgnore] SessionEvidence? Evidence = null);
+    [property: JsonIgnore] SessionEvidence? Evidence = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SessionId = null);
 
 public interface IFleetRoster
 {
@@ -148,7 +149,8 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
                 {
                     sessions.Add(new FleetSession(s.GetProperty("node").GetString()!, s.TryGetProperty("name", out var n) ? n.GetString() : null,
                         s.GetProperty("state").GetString()!, s.GetProperty("since").GetDateTimeOffset(), s.TryGetProperty("id", out var sid) ? sid.GetString() : null,
-                        s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null, SessionEvidence.Read(s, futureAttention: true)));
+                        s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null, SessionEvidence.Read(s, futureAttention: true),
+                        s.TryGetProperty("sessionId", out var fullId) && fullId.ValueKind == JsonValueKind.String ? fullId.GetString() : null));
                 }
             }
             machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name, LastSeen: LastSeen(f), HasRegistryRecord: hasRegistryRecord, Order: order));
@@ -290,7 +292,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
             return new { result = "notFound", fleetScope };
         }
         // Only reachable once records can be verified (hostSign): one verified live match.
-        return new { result = "found", fleetScope, session = cands[0] };
+        return new { result = "found", fleetScope, session = cands[0] with { SessionId = FleetSessionId.ForNode(live[0].Sessions[0].SessionId, cands[0].Node) } };
     }
 
     sealed record FindMachine(string Machine,
@@ -299,7 +301,8 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
 
     sealed record FindSession(string Id, string? Node, string Machine, string State, DateTimeOffset Since, bool Online,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SessionId = null);
 
     AgentCredential Authorize(IProtocolChannel channel, string op)
     {
