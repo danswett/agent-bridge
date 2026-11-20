@@ -232,32 +232,40 @@ public sealed class HostEnrollmentTests : IDisposable
     static PresenceEntry Asserted(byte[] key, string kind, string name) => new(Ids.Device(key), name, kind, DateTimeOffset.UnixEpoch);
     static PresenceEntry Person => Asserted(G, "phone", "Dan's phone");
 
-    (HostEnrollment Host, EnrollmentApprover Approver, byte[] H) Exchanged(FakeTimeProvider time)
+    (HostEnrollment Host, EnrollmentApprover Approver, byte[] H) Exchanged(FakeTimeProvider time, string by = "G", HostRosterReader? reader = null)
     {
-        var host = new HostEnrollment(Unpinned(), Account, null, name: "H", time: time);
+        var host = new HostEnrollment(reader ?? Unpinned(), Account, null, name: "H", time: time);
         Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
-        var (a, h) = Join(host, time);
+        var (a, h) = Join(host, time, by);
         return (host, a, h);
     }
 
-    static (EnrollmentApprover Approver, byte[] H) Join(HostEnrollment host, FakeTimeProvider time)
+    static (EnrollmentApprover Approver, byte[] H) Join(HostEnrollment host, FakeTimeProvider time, string by = "G")
     {
         var h = RandomNumberGenerator.GetBytes(32);
+        var (key, name) = (World.Keys(by).Dh.Public, by == "G" ? "Dan's phone" : by);
         DateTimeOffset Now() => time.GetUtcNow();
         var a = new EnrollmentApprover(Account, h, Ids.Device(World.Keys("H").Dh.Public), new(EnrollmentLockout.Counts.WrongEntries, Now), Now);
-        var offer = a.OnCommit(host.Exchange(h, G, Person, "commit", []).Value!)!;
-        Assert.True(a.OnReveal(host.Exchange(h, G, Person, "offer", offer).Value!));
+        var offer = a.OnCommit(host.Exchange(h, key, Asserted(key, "phone", name), "commit", []).Value!)!;
+        Assert.True(a.OnReveal(host.Exchange(h, key, Asserted(key, "phone", name), "offer", offer).Value!));
         Assert.True(host.Shown.Expires > time.GetUtcNow());
-        Assert.Equal("Dan's phone", host.Shown.Peer);
+        Assert.Equal(name, host.Shown.Peer);
         Assert.Equal(CodeResult.Match, a.EnterCode1(host.Shown.Code!));
         return (a, h);
+    }
+
+    // Its expiry timer never fires, so Finish's own expiry check is what refuses.
+    sealed class StalledTimers() : FakeTimeProvider(DateTimeOffset.UnixEpoch)
+    {
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) => new FakeTimeProvider().CreateTimer(callback, state, dueTime, period);
     }
 
     [WindowsFact("host enrollment runs on the Windows host")]
     public void A_matched_exchange_pins_the_approvers_genesis_once_its_host_add_is_in_the_chain()
     {
         var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
-        var (host, a, h) = Exchanged(time);
+        var reader = Unpinned();
+        var (host, a, h) = Exchanged(time, reader: reader);
         using (host)
         {
             w.Genesis();
@@ -267,22 +275,29 @@ public sealed class HostEnrollmentTests : IDisposable
             Assert.Equal("not-added", host.Finish(Relay(), PinPath, () => w.Now, _ => true));
             w.Add("+H", "G", "H", "G", kind: "host", transcript: a.TranscriptToSign);
             Assert.Equal("pinned", host.Finish(Relay("+H"), PinPath, () => w.Now, _ => true));
+            Assert.NotNull(reader.Pinned(Account)); // brief 207: the retained reader holds the pin at once
             Assert.Equal("verified", Unpinned().Update(Relay("+H"), Account).Outcome);
         }
     }
 
+    // Brief 207: a probationary or held approver (§4.4), an account replaced mid roster read, an expiry the timer missed.
     [HostSignKeyTests.WindowsHostSignTheory]
     [InlineData("not-started", "no-attempt")]
     [InlineData("wrong-code", "no-attempt")]
-    [InlineData("expired", "no-attempt")]
+    [InlineData("expired", "expired")]
     [InlineData("other-genesis", "genesis-mismatch")]
     [InlineData("second-channel", "no-genesis")]
     [InlineData("other-account", "chain-invalid")]
-    public void A_refused_exchange_writes_no_pin(string mischief, string expected)
+    [InlineData("probation", "approver-probation")]
+    [InlineData("held", "approver-probation")]
+    [InlineData("replaced", "no-attempt")]
+    [InlineData("account-changed", "account-changed")]
+    public async Task A_refused_exchange_writes_no_pin(string mischief, string expected)
     {
-        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var time = new StalledTimers();
         if (mischief == "other-account") { w.AccountId = "other@example"; }
         w.Genesis();
+        w.Add("+P", "G", "P", "G"); w.Add("+Q", "P", "Q", "+P");
         if (mischief == "not-started")
         {
             using var idle = new HostEnrollment(Unpinned(), Account, null, time: time);
@@ -291,8 +306,10 @@ public sealed class HostEnrollmentTests : IDisposable
             Assert.False(File.Exists(PinPath));
             return;
         }
-        var (host, a, h) = Exchanged(time);
+        var by = mischief switch { "probation" => "P", "held" => "Q", _ => "G" };
+        var (host, a, h) = Exchanged(time, by);
         using var _ = host;
+        var (key, peer) = (World.Keys(by).Dh.Public, Asserted(World.Keys(by).Dh.Public, "phone", by));
         if (mischief == "wrong-code")
         {
             var wrong = a.Code2Shown!.Replace(" ", "") == "000000" ? "111111" : "000000";
@@ -300,11 +317,16 @@ public sealed class HostEnrollmentTests : IDisposable
         }
         else { Assert.Equal("match", host.EnterCode2(a.Code2Shown!)); }
         var other = RandomNumberGenerator.GetBytes(32);
-        if (mischief == "second-channel") { Assert.Equal("attempt-bound", host.Exchange(other, G, Person, "genesis", w.Entry("G").Hash).Refusal); }
-        else { host.Exchange(h, G, Person, "genesis", mischief == "other-genesis" ? other : w.Entry("G").Hash); }
-        w.Add("+H", "G", "H", "G", kind: "host", transcript: a.TranscriptToSign);
+        if (mischief == "second-channel") { Assert.Equal("attempt-bound", host.Exchange(other, key, peer, "genesis", w.Entry("G").Hash).Refusal); }
+        else { host.Exchange(h, key, peer, "genesis", mischief == "other-genesis" ? other : w.Entry("G").Hash); }
+        w.Add("+H", by, "H", by == "G" ? "+Q" : "+" + by, kind: "host", transcript: a.TranscriptToSign);
         if (mischief == "expired") { time.Advance(EnrollmentLockout.AttemptLifetime); }
-        Assert.Equal(expected, host.Finish(Relay("+H"), PinPath, () => w.Now, _ => true));
+        var (roster, current) = (new TaskCompletionSource<RelayRoster?>(), Account);
+        var finishing = HostEnrollment.FinishAsync(host, () => roster.Task, PinPath, () => w.Now, () => current, _ => true);
+        if (mischief is "replaced" or "account-changed") { current = "other@example"; }
+        if (mischief == "replaced") { host.Dispose(); }
+        roster.SetResult(Relay("+P", "+Q", "+H"));
+        Assert.Equal(expected, await finishing);
         Assert.False(File.Exists(PinPath));
     }
 

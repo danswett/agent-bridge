@@ -261,7 +261,9 @@ genesis hash (`not-matched`, `invalid-genesis`), never the 16-hex fingerprint. `
 reads the roster over the serving relay connection, verifies the chain itself, and pins through
 `HostRosterPinWriter` only when its root is that genesis (`genesis-mismatch`) and it holds this
 host's exact v1 add by the matched approver, an active person device, carrying this exchange's
-transcript (`not-added`). A held pin is never replaced (`pin-exists`), and the writer's capSign (v3)
+transcript (`not-added`), and that approver is neither on probation nor held (§4.4,
+`approver-probation`). The attempt and account are checked again with the write (`account-changed`,
+`expired`); signing in as another account ends the attempt. A held pin is never replaced (`pin-exists`), and the writer's capSign (v3)
 gate still applies.
 
 ## Acceptance and state

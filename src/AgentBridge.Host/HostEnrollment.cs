@@ -23,12 +23,7 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
 {
     sealed record Attempt(DeviceDescriptor Own, IDisposable Held, ITimer Expiry, EnrollmentLockout Lockout, DateTimeOffset Expires, string Log)
     {
-        public EnrollmentJoiner? Joiner;
-        public byte[]? H;
-        public string? Approver;
-        public string? PeerName;
-        public bool Matched;
-        public byte[]? Genesis;
+        public EnrollmentJoiner? Joiner; public byte[]? H, Genesis; public string? Approver, PeerName; public bool Matched;
     }
     Attempt? open;
     readonly object sync = new();
@@ -68,9 +63,8 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidDataException) { return (null, "attempt-store"); }
                 var now = Clock.GetUtcNow();
                 charged = [.. marks.Where(m => now - DateTimeOffset.FromUnixTimeSeconds(m) < EnrollmentLockout.Window + EnrollmentLockout.LockFor)];
-                // §4.4, brief 198: only the person's wrong code 2 typed here is charged (never opening, binding,
-                // abandoning, expiry or a peer's message); replayed so a restart cannot reset the lockout, and
-                // kept for hour + lock since a third mark's lock outlasts the first mark's hour.
+                // §4.4, brief 198: only the person's wrong code 2 typed here is charged (never opening, binding, abandoning, expiry
+                // or a peer's message); replayed so a restart cannot reset it, kept for hour + lock (a third mark's lock outlasts the first's hour).
                 DateTimeOffset? replay = null;
                 var lockout = new EnrollmentLockout(EnrollmentLockout.Counts.WrongEntries, () => replay ?? Clock.GetUtcNow());
                 foreach (var mark in charged) { replay = DateTimeOffset.FromUnixTimeSeconds(mark); lockout.RecordWrong("replay"); }
@@ -136,10 +130,9 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
     // A4: the host is the joiner, so the person reads code 1, its expiry and the bound peer here.
     public (string? Code, DateTimeOffset? Expires, string? Peer) Shown { get { lock (sync) { return (open?.Joiner?.Code1Shown, open?.Expires, open?.PeerName); } } }
 
-    // The approver's steps (§4.2), over its Noise channel: only from a device the relay asserts is a
-    // person's, only into an attempt the person opened here, and only from the channel (handshake hash
-    // h, authenticated static key) whose commit bound it. A peer can end its attempt but never charge
-    // the lockout. The full 32-byte genesis is taken only after code 2 matched, so it is bound to that channel.
+    // The approver's steps (§4.2), over its Noise channel: only from a device the relay asserts is a person's, only into
+    // an attempt the person opened here, and only from the channel (handshake hash h, authenticated static key) whose commit
+    // bound it. A peer can end its attempt but never charge the lockout. The full 32-byte genesis is taken only after code 2 matched.
     public (byte[]? Value, string? Refusal) Exchange(byte[] h, byte[] peerStatic, PresenceEntry? asserted, string step, byte[] value)
     {
         lock (sync)
@@ -161,12 +154,8 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
             }
             if (attempt.Joiner is null || !CryptographicOperations.FixedTimeEquals(attempt.H, h) || attempt.Approver != approver) { return (null, "attempt-bound"); }
             if (step == "abandon") { End(attempt); return ([], null); }
-            if (step == "offer")
-            {
-                if (attempt.Joiner.OnOffer(value) is { } reveal) { return (reveal, null); }
-                End(attempt);
-                return (null, "attempt-ended");
-            }
+            if (step == "offer" && attempt.Joiner.OnOffer(value) is { } reveal) { return (reveal, null); }
+            if (step == "offer") { End(attempt); return (null, "attempt-ended"); } // a failed offer ends it, charging nothing
             if (step != "genesis") { return (null, "unknown-step"); }
             if (!attempt.Matched) { return (null, "not-matched"); }
             if (value.Length != 32 || attempt.Genesis is not null) { return (null, "invalid-genesis"); }
@@ -175,13 +164,10 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
         }
     }
 
-    // Code 2 as the person typed it here; the only thing charged to the lockout (persisted before the
-    // answer is given). Three wrong entries end the attempt; three in an hour lock joining.
+    // Code 2 as the person typed it here: the only thing charged (persisted before the answer). Three wrong end the attempt; three an hour lock.
     public string EnterCode2(string typed)
     {
-        Attempt? ended = null;
-        CodeResult result;
-        string? stored = null;
+        Attempt? ended = null; CodeResult result; string? stored = null;
         lock (sync)
         {
             if (open is not { Joiner: { } joiner } attempt) { return "no-exchange"; }
@@ -212,14 +198,31 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
         }
     }
 
-    // Ruling (b): the host verifies the relay's chain itself and pins only when its root is the genesis
-    // sent on the matched channel and it holds this exact host's add, by the approver the person
-    // matched (an active person device), carrying this exchange's transcript. Only the 182 writer pins.
-    public string Finish(RelayRoster relay, string pinPath, Func<TimeSpan> clock, Func<byte[], bool>? isCapSignGenesis = null)
+    // Ruling (b): the host verifies the relay's chain itself and pins only when its root is the genesis sent on the
+    // matched channel and it holds this host's exact add by the matched approver (an active person device, not on
+    // probation or held), carrying this exchange's transcript. Only the 182 writer pins. The attempt and account are
+    // captured before the roster read and checked again with the write, under sync; Program.SignedIn ends the attempt first.
+    public static async Task<string> FinishAsync(HostEnrollment? joining, Func<Task<RelayRoster?>>? roster, string pinPath,
+        Func<TimeSpan> clock, Func<string?> currentAccount, Func<byte[], bool>? isCapSignGenesis = null)
+    {
+        if (joining is null) { return "signed-out"; }
+        var attempt = Volatile.Read(ref joining.open);
+        RelayRoster? relay;
+        try { relay = await (roster ?? throw new InvalidOperationException())(); }
+        catch (Exception e) when (e is not OutOfMemoryException) { return "no-roster"; }
+        return relay is null ? "no-roster" : joining.Finish(attempt, relay, pinPath, clock, currentAccount, isCapSignGenesis);
+    }
+
+    internal string Finish(RelayRoster relay, string pinPath, Func<TimeSpan> clock, Func<byte[], bool>? isCapSignGenesis = null) =>
+        Finish(Volatile.Read(ref open), relay, pinPath, clock, () => account, isCapSignGenesis);
+
+    string Finish(Attempt? expected, RelayRoster relay, string pinPath, Func<TimeSpan> clock, Func<string?> currentAccount, Func<byte[], bool>? isCapSignGenesis)
     {
         lock (sync)
         {
-            if (open is not { } attempt) { return "no-attempt"; }
+            if (open is not { } attempt || !ReferenceEquals(attempt, expected)) { return "no-attempt"; }
+            if (currentAccount() != account) { return "account-changed"; }
+            if (Clock.GetUtcNow() >= attempt.Expires) { End(attempt); return "expired"; }
             if (!attempt.Matched || attempt.Joiner is not { } joiner) { return "not-matched"; }
             if (attempt.Genesis is not { } genesis) { return "no-genesis"; }
             if (relay.Generation is not { } generationId || relay.Entries.Count == 0) { return "no-roster"; }
@@ -233,7 +236,10 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
             if (!CryptographicOperations.FixedTimeEquals(verifier.Graph[0].Hash, genesis)) { return "genesis-mismatch"; }
             if (!verifier.State.PersonDevices.Contains(attempt.Approver) || verifier.State.ActiveAdd(attempt.Own.Id) is not { } add
                 || !joiner.Accepts(verifier.Graph[add].Entry, attempt.Own, attempt.Approver!)) { return "not-added"; }
-            return HostRosterPinWriter.Write(pinPath, new PersonGenesis("enrollment", genesis), relay, account, clock, isCapSignGenesis);
+            if (verifier.State.ActiveAdd(attempt.Approver!) is not { } by || verifier.OnProbation(by) || verifier.Held.Contains(attempt.Approver!)) { return "approver-probation"; }
+            var written = HostRosterPinWriter.Write(pinPath, new PersonGenesis("enrollment", genesis), relay, account, clock, isCapSignGenesis);
+            if (written == "pinned") { reader.Update(relay, account); }
+            return written;
         }
     }
 

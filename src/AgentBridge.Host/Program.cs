@@ -929,14 +929,8 @@ async Task<int> ServeAsync(HostHandover handover)
         EnrollStatus = () => Enrollment()?.Status() ?? "not-enrolled",
         EnrollShown = () => Enrollment()?.Shown ?? default,
         EnrollCode = typed => Enrollment()?.EnterCode2(typed) ?? "signed-out",
-        EnrollFinish = async () =>
-        {
-            if (Enrollment() is not { } joining) { return "signed-out"; }
-            RelayRoster? roster;
-            try { roster = await (liveRoster ?? throw new InvalidOperationException())(); }
-            catch (Exception e) when (e is not OutOfMemoryException) { return "no-roster"; }
-            return roster is null ? "no-roster" : joining.Finish(roster, HostRosterPinWriter.PinPath(identity.Folder), HostRoster.Now);
-        },
+        EnrollFinish = () => HostEnrollment.FinishAsync(Enrollment(), liveRoster, HostRosterPinWriter.PinPath(identity.Folder), HostRoster.Now,
+            () => identity.Account?.AccountId),
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -947,6 +941,8 @@ async Task<int> ServeAsync(HostHandover handover)
             // Before anything says the new account: other machines' readings kept for the one before
             // are never served under it, even while the relay reconnects.
             peerUsage?.Bind(result.AccountId);
+            // An enrollment attempt for the account before ends first; a Finish already writing completes before it.
+            lock (enrollmentGate) { enrollment?.Dispose(); enrollment = null; }
             identity.Save(result);
             File.WriteAllText(Path.Combine(identity.Folder, "relay.txt"), relay.ToString());
             signedInRelay = relay;
@@ -1039,8 +1035,7 @@ async Task<int> ServeAsync(HostHandover handover)
             var hub = new ChannelHub(relay, identity.Key, name, "host", trustedPeers.Allows)
             {
                 JsonOptions = ProtocolJson.Options,
-                // The approver's enrollment steps reach only an attempt the person opened on this machine,
-                // only from a device the relay asserts is a person's and, while device pins are on, a pinned one.
+                // The approver's enrollment steps reach only an attempt the person opened here, from a relay-asserted person (pinned while device pins are on).
                 Handler = (ch, op, data) => op.StartsWith(HostEnrollment.StepPrefix, StringComparison.Ordinal)
                     ? Task.FromResult<object?>(HostEnrollment.Remote(trustedPeers.HasRole(ch, TrustedPeerStore.Person) ? Enrollment() : null,
                         ch.HandshakeHash, ch.PeerStatic, ch.Relay.Presence.FirstOrDefault(p => p.Id == ch.PeerId), op, data)) : remote(ch, op, data),
