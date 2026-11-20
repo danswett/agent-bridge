@@ -111,6 +111,75 @@ public sealed class FleetFindTests : IDisposable
     }
 
     [Fact]
+    public async Task A_protocol_shaped_session_returns_its_full_uuid_without_changing_id_or_node()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        const string uuid = "12345678-1234-5678-9abc-def012345678";
+        const string hex = "1234567812345678";
+        var source = new FleetPublisherTests.Source { Sessions = [FleetPublisherTests.NewSession(1) with { Id = uuid }] };
+        var registry = new SessionRegistry(TimeProvider.System);
+        Assert.True(await new FleetPublisher(source, "fixture", _ => "SG Quality").PublishAsync((record, _) =>
+        {
+            var row = Assert.Single(record.GetProperty("sessions").EnumerateArray());
+            Assert.Equal(hex, row.GetProperty("id").GetString());
+            Assert.Equal("agent_bridge_" + hex, row.GetProperty("node").GetString());
+            Assert.Equal(uuid, row.GetProperty("sessionId").GetString());
+            Assert.Null(registry.Put("account-a", "fixture", record));
+            return Task.CompletedTask;
+        }));
+        var result = await Find(new FleetList(store, new RegistryRoster(registry, "account-a"), audit: new AgentAuditLog(root)),
+            new { name = "SG Quality", sessionId = "caller-spoof" });
+        Assert.Equal("found", result.GetProperty("result").GetString());
+        var found = result.GetProperty("session");
+        Assert.Equal(hex, found.GetProperty("id").GetString());
+        Assert.Equal("agent_bridge_" + hex, found.GetProperty("node").GetString());
+        Assert.Equal(uuid, found.GetProperty("sessionId").GetString());
+        Assert.DoesNotContain("caller-spoof", result.GetRawText());
+    }
+
+    [Theory]
+    [InlineData("87654321-1234-5678-9abc-def012345678")]
+    [InlineData("12345678-1234-5678-9ABC-DEF012345678")]
+    [InlineData("12345678123456789abcdef012345678")]
+    [InlineData(" 12345678-1234-5678-9abc-def012345678 ")]
+    [InlineData(null)]
+    public async Task An_unbound_or_noncanonical_session_uuid_is_omitted_from_found(string? uuid)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var frame = Body(new
+        {
+            machine = "fixture", online = true,
+            record = new { sessions = new[] { new
+            {
+                id = "1234567812345678", node = "agent_bridge_1234567812345678", sessionId = uuid,
+                name = "SG Quality", state = "idle", since = Started,
+            } } },
+        });
+        var machine = Assert.Single(RelayFleetRoster.Parse([frame])) with { Verified = true };
+        var result = await Find(Op(machine), new { name = "SG Quality" });
+        Assert.Equal("found", result.GetProperty("result").GetString());
+        Assert.False(result.GetProperty("session").TryGetProperty("sessionId", out _));
+    }
+
+    [Fact]
+    public void The_relay_refuses_noncanonical_session_ids_instead_of_carrying_arbitrary_identity_text()
+    {
+        foreach (var uuid in new[] { "SG Quality", "12345678123456789abcdef012345678", "12345678-1234-5678-9ABC-DEF012345678" })
+        {
+            var record = Body(new
+            {
+                v = 1, machine = "fixture", epoch = "1234567812345678", seq = 1, at = Started, truncated = false,
+                sessions = new[] { new
+                {
+                    id = "1234567812345678", node = "agent_bridge_1234567812345678", sessionId = uuid,
+                    state = "idle", since = Started,
+                } },
+            });
+            Assert.Equal("bad-record", RosterFields.Check(record, "fixture", out _, out _, out _));
+        }
+    }
+
+    [Fact]
     public void The_roster_preserves_a_supplied_model_instead_of_guessing_one()
     {
         var frame = Body(new

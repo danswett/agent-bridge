@@ -166,6 +166,11 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
   name at most 64 printable ASCII characters; at most 64 sessions). Any other member, such as
   a prompt, a question, a path or a token, refuses the whole record. Time in state is now minus
   `since`.
+  Optional `sessionId` carries the full lowercase hyphenated 36-character session UUID.
+  Older publishers omit it; hosts publish it only when it binds to `node` and verify that
+  binding again before returning `fleet.find`'s `found.session.sessionId`
+  ([agent-operations.md](agent-operations.md#fleetfind)). An older relay that lacks this
+  allow-list entry refuses records containing it; upgrade the relay before publishers.
   Optional session evidence is `stale, attention, openAsks, unsentLength, unsentHash,
   observedAt, lastReplyAt, provenance, senderVerified, owner, pr, finished`, with the bounded types and
   rejection rules in [agent-operations.md](agent-operations.md#fleetlist).

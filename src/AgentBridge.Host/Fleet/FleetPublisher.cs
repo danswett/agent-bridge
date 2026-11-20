@@ -45,6 +45,7 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
                     return new
                     {
                         id, node, name = displayName is not null && FleetNames.IsValidName(displayName) ? displayName : null,
+                        sessionId = FleetSessionId.ForNode(s.Id, node),
                         state = s.Status, since = s.StatusSince,
                         startedAt = source.ProcessOf(s.Id) is { Id: > 0, StartedAt: { } started }
                             ? started.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture) : null,
