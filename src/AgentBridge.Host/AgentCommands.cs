@@ -6,7 +6,7 @@ namespace AgentBridge.Host;
 
 public static class AgentCommands
 {
-    public const string Usage = "agent-bridge-host agents adopt <session> [--scope read|read+reply] | agents revoke <session> | agents credential [--profile <name>]";
+    public const string Usage = "agent-bridge-host agents adopt <session> [--scope read|read+reply] | agents revoke <session> | agents credential | agents lite kill [--profile <name>]";
 
     public static Task<int> RunWithProfileAsync(IReadOnlyList<string> args, string root, Func<bool> refused, TextWriter output, TextWriter error)
     {
@@ -26,6 +26,7 @@ public static class AgentCommands
         var valid = args switch
         {
             ["agents", "credential"] => true,
+            ["agents", "lite", "kill"] => true,
             ["agents", "revoke" or "adopt", var session] => !string.IsNullOrWhiteSpace(session) && !session.StartsWith("--", StringComparison.Ordinal),
             ["agents", "adopt", var session, "--scope", var scope] => !string.IsNullOrWhiteSpace(session)
                 && !session.StartsWith("--", StringComparison.Ordinal) && AgentProtocol.AdoptableScopes.Contains(scope, StringComparer.Ordinal),
@@ -33,6 +34,15 @@ public static class AgentCommands
         };
         if (!valid) { error.WriteLine("usage: " + Usage); return 2; }
         if (verb != "credential" && refused()) { return 4; }
+        if (verb == "lite")
+        {
+            // L6: no pipe needed. The running host reads the epoch file afresh, stops its sends and tells the other hosts.
+            var epoch = new Lite.LiteKill(folder, new Lite.NoLitePeers(), error.WriteLine).Kill();
+            // The running host stays off only through the setting, so a failed write is a failed kill here.
+            if (HostSettings.CurrentAgentMessaging(folder).RemoteEnabled) { error.WriteLine($"agent-bridge-host: kill epoch {epoch} saved, but agentMessaging.remote is still on; set it off"); return 1; }
+            output.WriteLine($"own-agents messaging killed on this machine (epoch {epoch}); turning it on again takes config set agentMessaging.remote own-account here.");
+            return 0;
+        }
         if (!OperatingSystem.IsWindows()) { error.WriteLine("agent-bridge-host: adopting a session is Windows only for now"); return 2; }
         try
         {
