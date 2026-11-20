@@ -182,7 +182,23 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
         finally { CloseHandle(snapshot); }
     }
 
-    static DateTimeOffset? CreatedAt(int processId)
+    internal static int ScanParents(Func<int, int, bool> add)
+    {
+        var snapshot = CreateToolhelp32Snapshot(Th32csSnapProcess, 0);
+        if (snapshot == -1) { return Marshal.GetLastWin32Error(); }
+        try
+        {
+            var entry = new ProcessEntry32 { Size = Marshal.SizeOf<ProcessEntry32>() };
+            for (var more = Process32FirstW(snapshot, ref entry); more; more = Process32NextW(snapshot, ref entry))
+            {
+                if (!add((int)entry.ProcessId, (int)entry.ParentProcessId)) { return 0; }
+            }
+            return Marshal.GetLastWin32Error();
+        }
+        finally { CloseHandle(snapshot); }
+    }
+
+    internal static DateTimeOffset? CreatedAt(int processId)
     {
         var process = OpenProcess(ProcessQueryLimitedInformation, false, (uint)processId);
         if (process == 0) { return null; }

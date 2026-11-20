@@ -726,6 +726,9 @@ answers Busy. While any failed injector worker (this stop's or an earlier delive
 exited, a stop never terminates or reports ended: it returns Failed and keeps the PID handle, and its
 own typing fence, until the worker's exit is proven, and for good if it never can be.
 
+Held-descendant and complete-snapshot evidence primitives are prepared separately.
+They do not yet enable descendant-tree termination in the Windows Stop path.
+
 Pre-Ending hypotheses for [2910](https://github.com/danswett/agent-bridge/issues/2910),
 not established incident causes:
 * HA: disabled/read-only connector, baselined/busy press, confirmation timing or dispatch failure.
