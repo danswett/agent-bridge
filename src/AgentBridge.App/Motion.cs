@@ -39,14 +39,25 @@ public static partial class Motion
     public static void Slide(UIElement element, string entry, Vector2 offset) =>
         Run(element, Catalogue.Enter(entry, Enabled) is { Runs: true } step ? step : MotionStep.None, new Vector3(offset, 0), fade: false, scaled: false);
 
+    public static void Select(UIElement pill, LookBox? previous, LookBox? next, LookBox viewport, bool animate)
+    {
+        var move = SelectionMotion.Between(previous, next, viewport, animate && Enabled);
+        switch (move.Kind)
+        {
+            case SelectionMotionKind.Slide: Slide(pill, "Selection", new Vector2((float)move.X, (float)move.Y)); break;
+            case SelectionMotionKind.Fade: Enter(pill, "Selection"); break;
+            default: Settle(pill); break;
+        }
+    }
+
     // A copy of what left (a glyph, a dot), fading out where it was, and collapsed once done. The
     // copy is drawn only: the caller keeps it out of hit testing and the automation tree.
-    public static void Leave(UIElement ghost, string entry)
+    public static void Leave(UIElement ghost, string entry, Action? completed = null)
     {
         var generation = Generation(ghost);
         var step = Catalogue.Exit(entry, Enabled);
         Settle(ghost);
-        if (!step.Runs) { ghost.Visibility = Visibility.Collapsed; return; }
+        if (!step.Runs) { ghost.Visibility = Visibility.Collapsed; completed?.Invoke(); return; }
         ghost.Visibility = Visibility.Visible;
         Animated.AddOrUpdate(ghost, Marker);
         var visual = ElementCompositionPreview.GetElementVisual(ghost);
@@ -57,14 +68,15 @@ public static partial class Motion
         fade.Duration = step.Duration;
         var batch = c.CreateScopedBatch(CompositionBatchTypes.Animation);
         visual.StartAnimation("Opacity", fade);
-        batch.End();
         // Only the latest: a copy faded out again before this one finished stays for that one.
         batch.Completed += (_, _) =>
         {
             if (generation != Generations.GetValue(ghost, _ => new()).Value) { return; }
             ghost.Visibility = Visibility.Collapsed;
             visual.Opacity = 1;
+            completed?.Invoke();
         };
+        batch.End();
     }
 
     // A copy put away at once: the next state is drawn without it.

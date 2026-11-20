@@ -22,6 +22,9 @@ public static class Program
     {
         AppDomain.CurrentDomain.UnhandledException += (_, e) => CrashLog.Write(e.ExceptionObject as Exception);
 
+        // #3343: a copy of the app outside the installation, handed an update; before Velopack's own.
+        if (InPlaceHandoff.Parse(args) is { } handoff) { return InstallHandedOver(handoff); }
+
         // First: Velopack starts the installed exe with hook arguments on install, update and
         // uninstall, and Run() handles those and exits. The host lives in the app's folder, so
         // it is stopped before an update replaces the folder and started by the new version;
@@ -81,6 +84,17 @@ public static class Program
         // exit code 1, and this tells the app's own code from what happened after it.
         if (options.SelfTest is not null) { AppLog.Write($"self-test: the app ends with exit code {App.ExitCode}"); }
         return App.ExitCode;
+    }
+
+    // Update.exe's apply, or in place when a held file refuses it; then the app again either way (InPlaceHandoff.Run).
+    // What this starts runs in the root: it must not keep the helper folder in use.
+    static int InstallHandedOver(InPlaceHandoff handoff)
+    {
+        System.Diagnostics.Process Start(string exe, IReadOnlyList<string> a) =>
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, a) { WorkingDirectory = handoff.Root, CreateNoWindow = true })!;
+        return handoff.Run(LifecycleGuard.Refusal, AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar) + "-staged",
+            a => { using var p = Start(Path.Combine(handoff.Root, "Update.exe"), a); p.WaitForExit(); return p.ExitCode; },
+            () => InstallBlockers.HeldFiles(handoff.Root), a => Start(Path.Combine(handoff.Root, "current", "AgentBridge.exe"), a).Dispose(), AppLog.Write);
     }
 }
 

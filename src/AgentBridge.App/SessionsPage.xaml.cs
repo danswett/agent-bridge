@@ -33,9 +33,18 @@ public sealed partial class SessionsPage : UserControl
         // reads where they are first (LanePointerLets).
         laneAnswers = new AnswerWatch(LaneItems, null, GuardLane);
         LaneItems.AddHandler(PointerPressedEvent, new PointerEventHandler(OnLanePressed), true);
-        Loaded += (_, _) => { Measure(); SyncList(); Ready(); laneAnswers.Start(); if (!LaneItems.IsHitTestVisible) { GuardLane(); } };
+        Loaded += (_, _) =>
+        {
+            Measure();
+            SyncList();
+            SettleSelection();
+            pillSelection.Change(List.SelectedItem as SessionCardViewModel, viewModel?.Selected);
+            Ready();
+            laneAnswers.Start();
+            if (!LaneItems.IsHitTestVisible) { GuardLane(); }
+        };
         // A lane held as the page went keeps no timer running; it is held afresh as the page comes back.
-        Unloaded += (_, _) => { laneTimer?.Stop(); laneAnswers.Stop(); };
+        Unloaded += (_, _) => { laneTimer?.Stop(); laneAnswers.Stop(); SettleSelection(); };
         // The list shown for the first time (one column, after a session opened at start).
         List.SizeChanged += (_, _) => Ready();
         List.Loaded += (_, _) => WatchListScroll();
@@ -137,7 +146,7 @@ public sealed partial class SessionsPage : UserControl
     {
         if (viewModel is null) { return; }
         var want = viewModel.Selected;
-        if (List.SelectedItem == want) { return; }
+        if (List.SelectedItem == want) { MoveSelection(); return; }
         syncing = true;
         try { List.SelectedItem = want; }
         finally { syncing = false; }
@@ -218,12 +227,59 @@ public sealed partial class SessionsPage : UserControl
 
     void OnRowChosen(object sender, SelectionChangedEventArgs e)
     {
+        MoveSelection();
         if (syncing || viewModel is null) { return; }
         if (List.SelectedItem is SessionCardViewModel card) { viewModel.Selected = card; return; }
         // The list lets go of its selection as rows move (a reorder is a remove and an insert), and
         // on Ctrl+click: the session stays open. Only Back, its end or its machine's tab closes it
         // (MainViewModel.Selected).
         if (viewModel.Selected is not null) { DispatcherQueue.TryEnqueue(SyncList); }
+    }
+
+    readonly SelectionTracker<SessionCardViewModel> pillSelection = new();
+    int pillGeneration;
+
+    static FrameworkElement? SelectionBar(FrameworkElement container) =>
+        VisualTreeHelper.GetChildrenCount(container) > 0
+            ? (VisualTreeHelper.GetChild(container, 0) as FrameworkElement)?.FindName("SelectionBar") as FrameworkElement
+            : null;
+
+    LookBox? SelectionBox(object? item)
+    {
+        if (item is null || List.ContainerFromItem(item) is not FrameworkElement container) { return null; }
+        var at = container.TransformToVisual(List).TransformPoint(default);
+        return new(at.X, at.Y, container.ActualWidth, container.ActualHeight);
+    }
+
+    void SettleSelection()
+    {
+        pillGeneration++;
+        SettleSelectionBar(pillSelection.Current);
+        pillSelection.Reset();
+    }
+
+    void SettleSelectionBar(SessionCardViewModel? selected)
+    {
+        if (selected is not null && List.ContainerFromItem(selected) is FrameworkElement container
+            && SelectionBar(container) is { } bar) { Motion.Settle(bar); }
+    }
+
+    void MoveSelection()
+    {
+        var next = List.SelectedItem as SessionCardViewModel;
+        var previous = pillSelection.Current;
+        if (!pillSelection.Change(next, viewModel?.Selected)) { return; }
+        pillGeneration++;
+        SettleSelectionBar(previous);
+        if (next is null) { return; }
+        var generation = pillGeneration;
+        Motion.AfterLayout(List, next, container =>
+        {
+            if (generation != pillGeneration || !ReferenceEquals(List.SelectedItem, next)
+                || !ReferenceEquals(List.ContainerFromItem(next), container) || SelectionBar(container) is not { } bar) { return; }
+            Motion.Select(bar, SelectionBox(previous), SelectionBox(next),
+                new LookBox(0, 0, List.ActualWidth, List.ActualHeight), ready && IsLoaded && Layout?.ShowList == true);
+        });
     }
     // A row put aside for reuse stays loaded in the list's recycle queue, still holding its old
     // session, and is loaded again there: it lets go of that session, rather than listening to one
@@ -233,6 +289,7 @@ public sealed partial class SessionsPage : UserControl
         if (args.ItemContainer?.ContentTemplateRoot is not SessionRow row) { return; }
         // A row put aside or given to another session shows that one as it is.
         Motion.Settle(args.ItemContainer);
+        if (SelectionBar(args.ItemContainer) is { } bar) { Motion.Settle(bar); }
         if (args.InRecycleQueue) { row.Park(); }
         else { row.Unpark(); }
     }
@@ -593,7 +650,12 @@ public sealed partial class SessionsPage : UserControl
         for (var i = 0; i < MainViewModel.SortChoices.Count; i++)
         {
             var index = i;
-            var item = new RadioMenuFlyoutItem { Text = MainViewModel.SortChoices[i], GroupName = "Sort", IsChecked = viewModel.SortIndex == i };
+            var item = new RadioMenuFlyoutItem
+            {
+                Text = MainViewModel.SortChoices[i], GroupName = "Sort",
+                IsChecked = viewModel.SortIndex == i, IsEnabled = viewModel.CanSort(i),
+            };
+            if (i == (int)SessionSort.Yours) { ToolTipService.SetToolTip(item, viewModel.Order.FailureMessage); }
             item.Click += (_, _) => viewModel.SortIndex = index;
             SortMenu.Items.Add(item);
         }

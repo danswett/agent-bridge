@@ -131,6 +131,96 @@ public sealed class MotionTests
     }
 
     [Fact]
+    public void Reply_exception_words_fade_in_and_the_departing_words_keep_their_tone()
+    {
+        var line = new ExceptionLineFade();
+        Assert.Equal(new ExceptionLineChange(ExceptionLineMotion.Enter, "Waiting for machine", Tone.Warn),
+            line.Read("Waiting for machine", Tone.Warn));
+        Assert.Equal(ExceptionLineMotion.None, line.Read("Waiting for machine", Tone.Warn).Motion);
+        Assert.Equal(new ExceptionLineChange(ExceptionLineMotion.Leave, "Waiting for machine", Tone.Warn),
+            line.Read("", Tone.None));
+        Assert.Equal(ExceptionLineMotion.None, line.Read("", Tone.None).Motion);
+    }
+
+    [Fact]
+    public void A_new_exception_replaces_the_departing_one_and_another_session_never_replays_it()
+    {
+        var line = new ExceptionLineFade();
+        line.Read("Waiting", Tone.Warn);
+        line.Read("", Tone.None);
+        Assert.Equal(ExceptionLineMotion.Enter, line.Read("Refused", Tone.Bad).Motion);
+        Assert.Equal(ExceptionLineMotion.None, line.Read("Already shown", Tone.Warn, reset: true).Motion);
+        Assert.Equal(new ExceptionLineChange(ExceptionLineMotion.Leave, "Already shown", Tone.Warn),
+            line.Read("", Tone.None));
+        Assert.Equal(ExceptionLineMotion.None, line.Read("", Tone.None, reset: true).Motion);
+    }
+
+    [Fact]
+    public void The_selection_bar_slides_between_visible_rows_in_either_direction()
+    {
+        var viewport = new LookBox(0, 0, 320, 600);
+        var old = new LookBox(0, 80, 320, 72);
+        var next = new LookBox(0, 240, 320, 96);
+        Assert.Equal(new SelectionMove(SelectionMotionKind.Slide, 0, -160),
+            SelectionMotion.Between(old, next, viewport, animations: true));
+        Assert.Equal(new SelectionMove(SelectionMotionKind.Slide, 0, 160),
+            SelectionMotion.Between(next, old, viewport, animations: true));
+    }
+
+    [Fact]
+    public void The_selection_bar_fades_in_if_the_old_row_is_unrealized_or_outside_the_viewport()
+    {
+        var viewport = new LookBox(0, 0, 320, 600);
+        var next = new LookBox(0, 80, 320, 72);
+        foreach (var old in new LookBox?[] { null, new(0, -72, 320, 72), new(0, 600, 320, 72), new(320, 80, 320, 72) })
+        {
+            Assert.Equal(new SelectionMove(SelectionMotionKind.Fade),
+                SelectionMotion.Between(old, next, viewport, animations: true));
+        }
+        Assert.Equal(SelectionMotionKind.Slide,
+            SelectionMotion.Between(new(0, -71, 320, 72), next, viewport, animations: true).Kind);
+    }
+
+    [Fact]
+    public void The_selection_bar_never_animates_with_reduced_motion_or_an_invisible_destination()
+    {
+        var viewport = new LookBox(0, 0, 320, 600);
+        var old = new LookBox(0, 80, 320, 72);
+        Assert.Equal(SelectionMotionKind.None, SelectionMotion.Between(old, new(0, 240, 320, 72), viewport, animations: false).Kind);
+        Assert.Equal(SelectionMotionKind.None, SelectionMotion.Between(null, old, viewport, animations: false).Kind);
+        foreach (var next in new LookBox?[] { null, new(0, 600, 320, 72), new(0, 80, 0, 72), new(0, double.NaN, 320, 72) })
+        {
+            Assert.Equal(SelectionMotionKind.None, SelectionMotion.Between(old, next, viewport, animations: true).Kind);
+        }
+    }
+
+    [Fact]
+    public void A_reordered_or_ctrl_clicked_selection_does_not_fade_in_again_when_the_list_restores_it()
+    {
+        var row = new object();
+        var selection = new SelectionTracker<object>();
+        Assert.True(selection.Change(row, row));
+        Assert.False(selection.Change(null, row));
+        Assert.Same(row, selection.Current);
+        Assert.False(selection.Change(row, row));
+        Assert.True(selection.Change(new object(), row));
+    }
+
+    [Fact]
+    public void A_real_deselection_or_unload_forgets_the_old_selection()
+    {
+        var row = new object();
+        var selection = new SelectionTracker<object>();
+        selection.Change(row, row);
+        Assert.True(selection.Change(null, null));
+        Assert.Null(selection.Current);
+        Assert.True(selection.Change(row, row));
+        selection.Reset();
+        Assert.Null(selection.Current);
+        Assert.True(selection.Change(row, row));
+    }
+
+    [Fact]
     public void The_glyphs_turn_at_the_generated_periods()
     {
         Assert.Equal(TimeSpan.FromSeconds(1.2), Catalogue.WorkingPeriod);
