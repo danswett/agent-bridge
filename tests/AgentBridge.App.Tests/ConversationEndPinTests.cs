@@ -4,6 +4,59 @@ namespace AgentBridge.App.Tests;
 
 public sealed class ConversationEndPinTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Scrolling_up_while_still_hovered_resumes_cached_history_drawing(bool heldBeforeFrame)
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        if (heldBeforeFrame) { view.FollowState.PointerOver(7); }
+        view.FirstFrameForProbe();
+        if (!heldBeforeFrame)
+        {
+            view.FollowState.PointerOver(7);
+            view.DrawEarlierForProbe();
+        }
+        Assert.False(view.HistoryDrawing);
+        Assert.Equal(1, view.ShownCount);
+        view.Scroller.Wheel();
+        view.Moved(50);
+        Assert.False(view.Pinned);
+        Assert.True(view.FollowState.Held);
+        Assert.True(view.HistoryDrawing);
+        view.DrawEarlierForProbe();
+        Assert.Equal(2, view.ShownCount);
+    }
+
+    [Fact]
+    public void Releasing_the_pin_before_the_first_frame_keeps_cached_drawing_deferred()
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.FollowState.PointerOver(7);
+        view.Scroller.Wheel();
+        view.Moved(50);
+        Assert.False(view.HistoryDrawing);
+        view.FirstFrameForProbe();
+        Assert.True(view.HistoryDrawing);
+        view.DrawEarlierForProbe();
+        Assert.Equal(2, view.ShownCount);
+    }
+
+    [Fact]
+    public void Releasing_the_pin_after_cached_history_is_drawn_does_not_restart_the_timer()
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.FirstFrameForProbe();
+        view.DrawEarlierForProbe();
+        Assert.Equal(2, view.ShownCount);
+        Assert.False(view.HistoryDrawing);
+        view.Scroller.Wheel();
+        Assert.False(view.HistoryDrawing);
+    }
+
     [Fact]
     public void Resetting_a_session_forgets_scrollbar_custody_without_a_release()
     {
