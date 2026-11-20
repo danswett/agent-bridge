@@ -88,6 +88,12 @@ in `pwa/test/unit/order-merge.test.mjs`. Ties the rules leave open (the same dev
 different values) resolve to a tombstone first, then by the value's JSON, so the merge stays the
 same in either order.
 
+S1w ports the pure merge to `src/AgentBridge.App.Core/OrderMerge.cs`. Both clients consume
+`tests/fixtures/order-merge.json`, including convergence, tombstones and forward-only markers.
+Live registers normalize missing values to null. JSON ties spell non-finite numbers as null,
+including nested values; row-key string conversion retains JavaScript's NaN and Infinity spelling.
+This adds no Windows UI, persistence or sync integration.
+
 G1 (#1614) keeps group-name and membership registers in the PWA's local order record, using that
 merge schema and increasing counters. `SessionOrder` exposes create, rename, delete and membership
 operations; group headers and move menus follow in G2/G3. Pinning keeps membership, Ended remains
