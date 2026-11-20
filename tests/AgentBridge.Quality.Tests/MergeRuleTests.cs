@@ -9,7 +9,13 @@ public class MergeRuleTests
     const string Head = "abcdef0123456789abcdef0123456789abcdef01";
     const string Older = "0000000123456789abcdef0123456789abcdef01";
 
-    static readonly MergeRuleConfig Config = MergeRuleConfig.Parse("""
+    static readonly MergeRuleConfig Config = MergeRuleConfig.Parse(ConfigYaml);
+
+    // The source-fix route (#3471) is off unless the rules turn it on.
+    static readonly MergeRuleConfig BypassConfig = MergeRuleConfig.Parse(ConfigYaml.Replace(
+        "  exempt_labels: [fixes-main]", "  exempt_labels: [fixes-main]\n  source_bypass: true\n  source_bypass_max_lines: 40", StringComparison.Ordinal));
+
+    const string ConfigYaml = """
         base: main
         status_poster: github-actions
         copilot_reviewer: copilot-pull-request-reviewer
@@ -37,7 +43,7 @@ public class MergeRuleTests
           - .github/**
           - src/AgentBridge.Transport/**
           - src/**pair**
-        """);
+        """;
 
     static readonly MainFact MainGreen = new("success", "main's CI 2222222 passed");
 
@@ -284,6 +290,161 @@ public class MergeRuleTests
 
         Assert.Equal("failure", verdict.State);
         Assert.Equal([RedMain], verdict.Reasons);
+    }
+
+    // The source-fix route (owner decision 2026-11-20, #3471): a labelled source fix that names
+    // the failing main test, stays small, leaves the rule alone and has both families on its head.
+    const string FixedTest = "AgentBridge.Host.Tests.SessionStoreTests.Answers_reach_the_right_session";
+
+    static PullRequestFacts SourceFix(string[]? files = null, string? body = null, int? lines = 12, StatusFact[]? statuses = null,
+        string[]? labels = null, bool draft = false, bool filesComplete = true) =>
+        Pr(files ?? ["src/AgentBridge.Host/SessionStore.cs", "tests/AgentBridge.Host.Tests/SessionStoreTests.cs"],
+            statuses: statuses ?? [First(), Second()], labels: labels ?? ["fixes-main"], draft: draft, filesComplete: filesComplete)
+        with { Body = body ?? $"Fixes main.\r\n\r\nfixes-main-test: {FixedTest}\r\n", ChangedLines = lines };
+
+    static MergeVerdict OnRedMain(PullRequestFacts pr, MergeRuleConfig? config = null) =>
+        MergeRule.Evaluate(config ?? BypassConfig, new MainFact("failure", RedMain), pr)!;
+
+    [Fact]
+    public void A_source_fix_meeting_every_condition_passes_a_red_main_and_says_so_first()
+    {
+        var verdict = OnRedMain(SourceFix());
+
+        Assert.Equal("success", verdict.State);
+        Assert.StartsWith($"Source bypass used (fixes-main: {FixedTest}); Copilot reviewed abcdef0", verdict.Description);
+        Assert.True(verdict.Description.Length <= 140);
+        Assert.Equal(6, verdict.SourceBypassLog.Count);
+        Assert.All(verdict.SourceBypassLog, line => Assert.StartsWith("ok: ", line));
+    }
+
+    [Fact]
+    public void A_source_fix_without_the_fixes_main_label_waits_on_a_red_main()
+    {
+        var verdict = OnRedMain(SourceFix(labels: []));
+
+        Assert.Equal([RedMain], verdict.Reasons);
+        Assert.Empty(verdict.SourceBypassLog);
+    }
+
+    [Theory]
+    [InlineData("Fixes main.")]
+    [InlineData("fixes-main-test: the host test that broke")]
+    [InlineData("fixes-main-test:")]
+    public void A_source_fix_that_does_not_name_the_failing_main_test_in_one_well_formed_line_is_refused(string body)
+    {
+        var verdict = OnRedMain(SourceFix(body: body));
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Equal(RedMain, verdict.Reasons[0]);
+        Assert.Contains(verdict.Reasons, r => r.StartsWith("source bypass refused: name the failing main test", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(40, "success")]
+    [InlineData(41, "failure")]
+    public void A_source_fix_may_change_at_most_the_configured_lines(int lines, string state)
+    {
+        var verdict = OnRedMain(SourceFix(lines: lines));
+
+        Assert.Equal(state, verdict.State);
+        Assert.Equal(state == "failure", verdict.Reasons.Contains("source bypass refused: 41 changed lines outside docs/, over the cap of 40"));
+    }
+
+    [Theory]
+    [InlineData(".github/workflows/ci.yml")]
+    [InlineData("quality/merge-rule.yml")]
+    [InlineData("tools/AgentBridge.Quality/MergeRule.cs")]
+    public void A_source_fix_can_never_waive_the_rule_or_the_workflows(string path)
+    {
+        var verdict = OnRedMain(SourceFix(files: ["src/AgentBridge.Host/SessionStore.cs", path]));
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Contains($"source bypass refused: it touches {path}, and the rule can't waive itself or the workflows", verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_source_fix_needs_both_families_receipts_not_one()
+    {
+        var oneReceipt = OnRedMain(SourceFix(statuses: [First()]));
+        var oneFamily = OnRedMain(SourceFix(statuses: [First(), Second(model: "claude-sonnet-5")]));
+
+        Assert.All(new[] { oneReceipt, oneFamily }, v => Assert.Contains(
+            "source bypass refused: needs success independent-review and independent-review-2 on abcdef0, from different model families", v.Reasons));
+    }
+
+    [Fact]
+    public void A_source_fix_whose_receipts_are_on_an_older_head_is_refused()
+    {
+        var read = MergeRuleCommand.ParseFacts(JsonDocument.Parse(GraphQLPullRequest(Head, commitOid: Older, labels: ["fixes-main"]))
+            .RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), BypassConfig);
+        var pr = read with { Files = ["src/AgentBridge.Host/SessionStore.cs"], Body = $"fixes-main-test: {FixedTest}", ChangedLines = 3, FullyRead = true };
+
+        var verdict = OnRedMain(pr);
+
+        Assert.Empty(read.Statuses);
+        Assert.Contains("source bypass refused: needs success independent-review and independent-review-2 on abcdef0, from different model families", verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_source_fix_whose_file_list_is_incomplete_or_unread_is_refused()
+    {
+        var incomplete = OnRedMain(SourceFix(filesComplete: false));
+        var unread = OnRedMain(SourceFix() with { FullyRead = false });
+
+        Assert.All(new[] { incomplete, unread }, v =>
+            Assert.Contains("source bypass refused: its file list isn't fully read and complete", v.Reasons));
+    }
+
+    [Fact]
+    public void A_source_fix_still_fails_on_a_hold_label_or_as_a_draft_and_only_the_red_main_is_waived()
+    {
+        var held = OnRedMain(SourceFix(labels: ["fixes-main", "hold"]));
+        var draft = OnRedMain(SourceFix(draft: true));
+
+        Assert.Equal(["held by the label 'hold'"], held.Reasons);
+        Assert.Equal(["draft: mark it ready for review"], draft.Reasons);
+    }
+
+    [Fact]
+    public void A_source_fix_on_a_green_main_reads_as_any_other_pull_request()
+    {
+        var verdict = MergeRule.Evaluate(BypassConfig, MainGreen, SourceFix())!;
+
+        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file"), (verdict.State, verdict.Description));
+        Assert.Empty(verdict.SourceBypassLog);
+    }
+
+    [Fact]
+    public void The_tests_only_bypass_is_unchanged_beside_the_source_bypass_and_the_source_bypass_is_off_by_default()
+    {
+        var testsOnly = OnRedMain(SourceFix(files: ["tests/AgentBridge.Quality.Tests/MergeRuleTests.cs"], body: ""));
+        var off = OnRedMain(SourceFix(), Config);
+
+        Assert.Equal("Copilot reviewed abcdef0; every check passed; independent review on file; fixes-main tests-only bypass used", testsOnly.Description);
+        Assert.Equal([RedMain], off.Reasons);
+        Assert.Equal(40, Config.MainGreen.SourceBypassMaxLines);
+    }
+
+    [Fact]
+    public void The_command_reads_the_description_and_counts_changed_lines_outside_docs_for_the_source_bypass()
+    {
+        var pr = GraphQLPullRequest(Head, labels: ["fixes-main"], body: $"fixes-main-test: {FixedTest}", extraStatuses: [
+            new { context = "independent-review", state = "SUCCESS", description = "CLEAN claude-opus-5.5", createdAt = "2026-11-03T20:02:00Z", creator = new { login = "danswett" } },
+            new { context = "independent-review-2", state = "SUCCESS", description = "CLEAN gpt-6.1-sol", createdAt = "2026-11-03T20:02:00Z", creator = new { login = "danswett" } }]);
+        var github = new FakeGitHub(pr, mainRuns: MainRuns((5, "completed", "failure", 1)), files: """
+            {"files": [{"filename": "src/AgentBridge.Host/SessionStore.cs", "additions": 30, "deletions": 10},
+                       {"filename": "docs/pipeline-rules.md", "additions": 90, "deletions": 0}]}
+            """);
+        var config = WriteConfig(sourceBypass: true);
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], output, github, OnMain);
+
+            Assert.StartsWith($"{Head} success merge-rule Source bypass used (fixes-main: {FixedTest})", Assert.Single(github.Posted));
+            Assert.Contains("source bypass ok: 40 changed lines outside docs/, within the cap of 40", output.ToString(), StringComparison.Ordinal);
+        }
+        finally { File.Delete(config); }
     }
 
     [Fact]
@@ -2482,7 +2643,7 @@ public class MergeRuleTests
         finally { File.Delete(config); }
     }
 
-    static string WriteConfig(bool arm64Waiver = false)
+    static string WriteConfig(bool arm64Waiver = false, bool sourceBypass = false)
     {
         var path = Path.Combine(AppContext.BaseDirectory, $"merge-rule-{Guid.NewGuid():N}.yml");
         File.WriteAllText(path, """
@@ -2495,7 +2656,8 @@ public class MergeRuleTests
             main_green: { workflow: ci.yml, exempt_labels: [fixes-main], exempt_paths: [tests/AgentBridge.*.Tests/**], jobs: [light, app (win-x64), app (win-arm64), product] }
             copilot_waiver: { second_review: independent-review-2 }
             sensitive_paths: [docs/old.md]
-            """ + (arm64Waiver ? "\n" + WaiverYaml : ""));
+            """.Replace("jobs: [light", sourceBypass ? "source_bypass: true, jobs: [light" : "jobs: [light", StringComparison.Ordinal)
+            + (arm64Waiver ? "\n" + WaiverYaml : ""));
         return path;
     }
 
@@ -2517,7 +2679,7 @@ public class MergeRuleTests
 
     static object Job(long id, string name, string status, string? conclusion = null) => new { databaseId = id, name, status, conclusion };
 
-    static string GraphQLPullRequest(string head, string? commitOid = null, (string State, string Description)? mergeRule = null, string[]? labels = null, string receiptCreator = "danswett", string mergeRuleCreator = "github-actions", int number = 42, object[]? extraSuites = null, object[]? extraStatuses = null, int? labelsTotal = null, string title = "A change", string reviewBody = GenuineReview)
+    static string GraphQLPullRequest(string head, string? commitOid = null, (string State, string Description)? mergeRule = null, string[]? labels = null, string receiptCreator = "danswett", string mergeRuleCreator = "github-actions", int number = 42, object[]? extraSuites = null, object[]? extraStatuses = null, int? labelsTotal = null, string title = "A change", string reviewBody = GenuineReview, string? body = null)
     {
         var statuses = new List<object>
         {
@@ -2530,6 +2692,7 @@ public class MergeRuleTests
         {
             number,
             title,
+            body,
             state = "OPEN",
             isDraft = false,
             baseRefName = "main",
