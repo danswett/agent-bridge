@@ -499,6 +499,10 @@ static class MergeRuleCommand
                     || (job.GetProperty("conclusion").GetString() == "skipped" && !Unresolved(job))
                     || Exempt(job)
                     || Waived(job.GetProperty("name").GetString() ?? "", job.GetProperty("conclusion").GetString())));
+            static bool SkippedFamily(string name, string family, JsonElement job) =>
+                (name == family || (name.StartsWith($"{family} (${{{{ matrix.", StringComparison.Ordinal)
+                    && name.EndsWith(" }})", StringComparison.Ordinal)))
+                && job.GetProperty("status").GetString() == "completed" && job.GetProperty("conclusion").GetString() == "skipped";
             bool Passed(string name)
             {
                 // An exact post-merge job never holds main, run or not; a family name still checks its instances.
@@ -513,9 +517,7 @@ static class MergeRuleCommand
                     return Green(job);
                 var family = name.Split(" (", StringSplitOptions.None)[0];
                 // GitHub doesn't expand a matrix when the selector skips the whole family.
-                return latest.Any(j => (j.Key == family || (j.Key.StartsWith($"{family} (${{{{ matrix.", StringComparison.Ordinal)
-                    && j.Key.EndsWith(" }})", StringComparison.Ordinal)))
-                    && j.Value.GetProperty("status").GetString() == "completed" && j.Value.GetProperty("conclusion").GetString() == "skipped");
+                return latest.Any(j => SkippedFamily(j.Key, family, j.Value));
             }
             var held = planGreen ? config.MainGreen.Jobs.Where(name => !Passed(name)).ToList() : ["plan"];
             var families = config.MainGreen.LegFamilies;
@@ -523,6 +525,12 @@ static class MergeRuleCommand
             var stems = legs.Select(n => n.Split(" (", StringSplitOptions.None)[0]).ToHashSet(StringComparer.Ordinal);
             var present = latest.Keys.Where(n => stems.Contains(n.Split(" (", StringSplitOptions.None)[0]))
                 .ToHashSet(StringComparer.Ordinal);
+            // An absent post-merge name is allowed, but its renamed replacement is not an exemption.
+            var pinned = config.MainGreen.Jobs.Concat(legs).ToHashSet(StringComparer.Ordinal);
+            foreach (var family in config.MainGreen.Jobs.Where(n => n.Contains(" (", StringComparison.Ordinal))
+                .Select(n => n.Split(" (", StringSplitOptions.None)[0]).Distinct(StringComparer.Ordinal).Where(f => !pinned.Contains(f)))
+                held.AddRange(latest.Where(j => (j.Key == family || j.Key.StartsWith($"{family} (", StringComparison.Ordinal))
+                    && !pinned.Contains(j.Key) && !SkippedFamily(j.Key, family, j.Value)).Select(j => $"unexpected leg {j.Key}"));
             if (families.Count > 0)
             {
                 var exact = families.Where(f => present.SetEquals(f)).ToList();
@@ -533,12 +541,16 @@ static class MergeRuleCommand
                 else if (unexpected.Count > 0)
                     held.Add($"unexpected leg {string.Join(", ", unexpected)}");
                 else if (exact.Count == 1)
-                    held.AddRange(exact[0].Where(n => latest[n].GetProperty("conclusion").GetString() != "success"
-                        && !Exempt(latest[n]) && !session.PostMerge.Contains(n)));
+                    held.AddRange(exact[0].Where(n => !session.PostMerge.Contains(n)
+                        && latest[n].GetProperty("conclusion").GetString() != "success" && !Exempt(latest[n])));
                 else if (exact.Count > 1)
                     held.Add("mixed or ambiguous leg families");
                 else if (possible.Count > 0)
+                {
+                    held.AddRange(present.Where(n => !session.PostMerge.Contains(n)
+                        && latest[n].GetProperty("conclusion").GetString() != "success" && !Exempt(latest[n])));
                     held.AddRange(possible.SelectMany(f => f).Except(present, StringComparer.Ordinal).Where(n => !session.PostMerge.Contains(n)));
+                }
                 else
                     held.Add("mixed leg families");
             }
@@ -606,6 +618,9 @@ static class MergeRuleCommand
                 // A concurrency-displaced run is cancelled before any job exists.
                 if (jobs.Count == 0 && (Incomplete(run) || run.GetProperty("conclusion").GetString() == "cancelled"))
                     continue;
+                if (jobs.Any(j => !j.TryGetProperty("name", out var name) || name.ValueKind != JsonValueKind.String
+                    || string.IsNullOrWhiteSpace(name.GetString())))
+                    throw new InvalidOperationException("CI job has missing or invalid name");
                 // Failed-jobs-only reruns retain earlier successful instances.
                 var latest = jobs.GroupBy(j => j.GetProperty("name").GetString() ?? "", StringComparer.Ordinal)
                     .ToDictionary(g => g.Key, g => g.OrderByDescending(RunAttempt).ThenByDescending(j => j.GetProperty("id").GetInt64()).First(), StringComparer.Ordinal);
