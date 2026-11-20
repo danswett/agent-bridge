@@ -312,8 +312,16 @@ public sealed class AgentCredentialsTests : IDisposable
     }
 
     // A scheduled task as a user-level host sees it: svchost (Schedule, unreadable) > wscript > pwsh.
-    const string BoundTask = @"\Slipgates\pump-wake", Wscript = @"C:\Windows\System32\wscript.exe";
-    const string Vbs = @"C:\ProgramData\Slipgates\pump-wake.vbs", Ps1 = @"C:\ProgramData\Slipgates\pump-wake.ps1";
+    const string BoundTask = @"\Slipgates\pump-wake";
+    static readonly string Wscript = Native(@"C:\Windows\System32\wscript.exe");
+    static readonly string Vbs = Native(@"C:\ProgramData\Slipgates\pump-wake.vbs"), Ps1 = Native(@"C:\ProgramData\Slipgates\pump-wake.ps1");
+
+    // Pin refuses a path that isn't fully qualified on the host's own OS, and C:\ is relative on
+    // Linux, so the pinned files are written as that OS's absolute paths (unchanged on Windows).
+    static string Native(string windows) => OperatingSystem.IsWindows() ? windows : "/" + windows[3..].Replace('\\', '/');
+
+    public static TheoryData<string> ChangedParts => new() { BoundTask, Vbs, Ps1 };
+    public static TheoryData<string> WritableParts => new() { BoundTask, Wscript, Ps1 };
 
     static ProcessAncestry FromTask(string? agent = null) =>
         new([
@@ -386,7 +394,7 @@ public sealed class AgentCredentialsTests : IDisposable
         chain[0] = chain[0] with { StartedAt = null };
         Assert.EndsWith("could not be read again at hello", store.Check(token, new(chain, true)).Refusal);
         chain = FromTask().Processes.ToArray();
-        chain[1] = chain[1] with { Image = @"C:\Users\me\wscript.exe" };
+        chain[1] = chain[1] with { Image = Native(@"C:\Users\me\wscript.exe") };
         atHello = new(chain, true);
         Assert.EndsWith("is not the program the bound task runs", store.Check(token, atHello).Refusal);
     }
@@ -419,7 +427,7 @@ public sealed class AgentCredentialsTests : IDisposable
     {
         var tasks = new FakeTasks();
         var (token, store) = BoundScript(tasks);
-        var many = Enumerable.Range(0, 15).Select(i => $@"C:\ProgramData\Slipgates\{i}.ps1").ToArray();
+        var many = Enumerable.Range(0, 15).Select(i => Native($@"C:\ProgramData\Slipgates\{i}.ps1")).ToArray();
         Assert.Contains("at most 16 files", Assert.Throws<InvalidOperationException>(() => store.MintScript("many", task: BoundTask, files: many)).Message);
         tasks.Hashes[BoundTask] = "not-a-hash";
         Assert.Throws<InvalidOperationException>(() => store.MintScript("odd", task: BoundTask));
@@ -431,9 +439,7 @@ public sealed class AgentCredentialsTests : IDisposable
     }
 
     [Theory]
-    [InlineData(BoundTask)]
-    [InlineData(Vbs)]
-    [InlineData(Ps1)]
+    [MemberData(nameof(ChangedParts))]
     public void A_changed_task_definition_or_script_is_refused(string changed)
     {
         var tasks = new FakeTasks();
@@ -443,9 +449,7 @@ public sealed class AgentCredentialsTests : IDisposable
     }
 
     [Theory]
-    [InlineData(BoundTask)]
-    [InlineData(Wscript)]
-    [InlineData(Ps1)]
+    [MemberData(nameof(WritableParts))]
     public void A_task_or_file_the_user_can_write_is_refused_at_mint_and_at_accept(string writable)
     {
         var tasks = new FakeTasks();
