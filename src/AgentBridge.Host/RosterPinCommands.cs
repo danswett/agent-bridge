@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 
@@ -11,6 +12,9 @@ internal sealed record PinFetch(RelayRoster? Roster, string? Account, string? Re
 // terminal typing the fingerprint they compared out of band; show reads back only what is pinned.
 internal static class RosterPinCommands
 {
+    public static CallerGuard Guard(Func<IReadOnlyList<KnownProcess>> known, Func<string?> processPath) =>
+        new(known, null, hostImage: processPath());
+
     public static async Task<int> RunAsync(IReadOnlyList<string> args, string root, Func<Caller> caller, bool credential, Func<string?>? typed,
         Func<string, CancellationToken, Task<PinFetch>> fetch, Func<TimeSpan> clock, TextWriter output, TextWriter error,
         CancellationToken ct = default)
@@ -27,10 +31,10 @@ internal static class RosterPinCommands
         var pinPath = HostRosterPinWriter.PinPath(Path.Combine(root, profile));
         if (verb == "show")
         {
-            var (account, genesis, problem) = HostRosterReader.ReadPinned(pinPath);
-            return genesis is null
-                ? Say(output, 1, new { state = problem ?? "unpinned" })
-                : Say(output, 0, new { state = "pinned", account, fingerprint = HostRosterPinWriter.Fingerprint(genesis) });
+            var (_, genesis, problem) = HostRosterReader.ReadPinned(pinPath);
+            // Only this host's own file, so a label rather than a verdict: compare it out of band.
+            output.WriteLine(genesis is null ? problem ?? "unpinned" : $"UNTRUSTED genesis fingerprint: {HostRosterPinWriter.Fingerprint(genesis)}");
+            return genesis is null ? 1 : 0;
         }
 
         // Trust is a person's decision (roster-v2-transition.md, first-host bootstrap): never an
@@ -46,6 +50,7 @@ internal static class RosterPinCommands
         if (fetched.Account is null) { return Say(error, 1, new { state = "no-account" }); }
         if (fetched.Account != fetched.RelayAccount) { return Say(error, 1, new { state = "account-mismatch" }); }
         var result = HostRosterPinWriter.Write(pinPath, source, fetched.Roster, fetched.Account, clock);
+        if (result == "genesis-not-v3") { error.WriteLine("pin refused: genesis predates capSign; the account needs a v3 genesis"); }
         return result == "pinned"
             ? Say(output, 0, new { state = result, account = fetched.Account, fingerprint = HostRosterPinWriter.Fingerprint(source.Expected) })
             : Say(error, 1, new { state = result });

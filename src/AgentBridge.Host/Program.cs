@@ -135,8 +135,7 @@ if (command == "host-sign")
 if (command == "roster-pin")
 {
     if (arguments.ElementAtOrDefault(1) != "show" && Refused("pin this host's device roster", stateOnly: true)) { return 4; }
-    var callers = new CallerGuard(() => KnownAgents.Running(new SystemProcessInspector()), null,
-        hostImage: OperatingSystem.IsWindows() ? Environment.ProcessPath : null);
+    var callers = RosterPinCommands.Guard(() => KnownAgents.Running(new SystemProcessInspector()), () => Environment.ProcessPath);
     // The relay only supplies the chain; the person's typed fingerprint decides (HostRosterPinWriter).
     return await RosterPinCommands.RunAsync(arguments, Identity.DefaultRoot, () => callers.Classify(ProcessChain.Read(Environment.ProcessId)),
         !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_BRIDGE_TOKEN")), Console.IsInputRedirected ? null : Console.ReadLine,
