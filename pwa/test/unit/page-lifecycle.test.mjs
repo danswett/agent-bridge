@@ -59,9 +59,12 @@ test('pagehide alone pauses motion and blocks new motion until a persisted visib
   const animation = { playState: 'running', effect: { target: { isConnected: true } },
     pause() { this.playState = 'paused'; }, play() { this.playState = 'running'; } };
   doc.getAnimations = () => [animation];
-  const previous = globalThis.getComputedStyle;
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'getComputedStyle');
   globalThis.getComputedStyle = () => ({ getPropertyValue: (key) => key.endsWith('-duration') ? '100ms' : 'linear' });
-  t.after(() => { globalThis.getComputedStyle = previous; });
+  t.after(() => {
+    if (previous) { Object.defineProperty(globalThis, 'getComputedStyle', previous); }
+    else { delete globalThis.getComputedStyle; }
+  });
   let starts = 0;
   const el = { isConnected: true, ownerDocument: doc, animate: () => { starts++; return {}; } };
   watchPresses(doc);

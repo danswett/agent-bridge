@@ -14,10 +14,18 @@ test('a paused animation-less stub fails the indicator presence assertion', () =
   }
 });
 
-function surface() {
+function surface(t) {
   const doc = new EventTarget();
   doc.visibilityState = 'visible';
   doc.defaultView = new EventTarget();
+  const listeners = [];
+  for (const target of [doc, doc.defaultView]) {
+    target.addEventListener = (type, listener, options) => {
+      EventTarget.prototype.addEventListener.call(target, type, listener, options);
+      listeners.push(() => target.removeEventListener(type, listener, options));
+    };
+  }
+  t.after(() => { for (const remove of listeners) { remove(); } });
   doc.documentElement = { toggleAttribute: (_, hidden) => { doc.motionHidden = hidden; } };
   const target = { isConnected: true };
   const animation = { effect: { target }, playState: 'running',
@@ -31,8 +39,8 @@ function surface() {
   return { doc, target, animation, show };
 }
 
-test('motion resumes after pagehide and a visible visibilitychange without persisted pageshow', () => {
-  const { doc, animation, show } = surface();
+test('motion resumes after pagehide and a visible visibilitychange without persisted pageshow', (t) => {
+  const { doc, animation, show } = surface(t);
   doc.defaultView.dispatchEvent(new Event('pagehide'));
   assert.equal(animation.playState, 'paused');
   assert.equal(doc.motionHidden, true);
@@ -43,8 +51,8 @@ test('motion resumes after pagehide and a visible visibilitychange without persi
   assert.equal(animation.playState, 'running');
 });
 
-test('motion detached and reconnected while hidden resumes on return', () => {
-  const { target, animation, show } = surface();
+test('motion detached and reconnected while hidden resumes on return', (t) => {
+  const { target, animation, show } = surface(t);
   show(false);
   target.isConnected = false;
   show(false);
@@ -53,8 +61,8 @@ test('motion detached and reconnected while hidden resumes on return', () => {
   assert.equal(animation.playState, 'running');
 });
 
-test('motion is not stranded if its target is detached when visibility returns', () => {
-  const { target, animation, show } = surface();
+test('motion is not stranded if its target is detached when visibility returns', (t) => {
+  const { target, animation, show } = surface(t);
   show(false);
   target.isConnected = false;
   show(true);
@@ -62,8 +70,8 @@ test('motion is not stranded if its target is detached when visibility returns',
   assert.equal(animation.playState, 'running');
 });
 
-test('motion cancelled while hidden is not restarted on return', () => {
-  const { animation, show } = surface();
+test('motion cancelled while hidden is not restarted on return', (t) => {
+  const { animation, show } = surface(t);
   show(false);
   animation.playState = 'idle';
   show(true);

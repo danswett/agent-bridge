@@ -9,6 +9,7 @@ test('a clock ticks only while the page is in sight, and catches up once as it c
   const show = (visible) => { doc.visibilityState = visible ? 'visible' : 'hidden'; for (const fn of [...listeners]) { fn(); } };
   let ticks = 0;
   const ticker = whileVisible(() => { ticks++; }, 15000, doc);
+  t.after(() => ticker.stop());
 
   t.mock.timers.tick(30000);
   assert.equal(ticks, 2);
@@ -36,6 +37,7 @@ test('a visible visibilitychange releases pagehide once without a persisted page
   doc.defaultView = new EventTarget();
   let ticks = 0;
   const ticker = whileVisible(() => ticks++, 15000, doc);
+  t.after(() => ticker.stop());
   doc.defaultView.dispatchEvent(new Event('pagehide'));
   t.mock.timers.tick(15000);
   assert.equal(ticks, 0);
