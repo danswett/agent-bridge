@@ -854,9 +854,17 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
 * **The purple edge**: a session an agent's press launched is `agent`-driven from the moment it
   appears, for the turn it was launched with (already under way or still to come); the turn
   after that is whoever's it is.
-* **One at a time.** The launch runs beside the passes (the host follows it to registration); a
-  press meanwhile launches nothing, and a request hears `busy`, even when the launch finished
-  before the press was read: the card still said `Starting...` when it was made.
+* **One at a time.** The launch runs beside the passes (the host follows it to registration).
+  Card presses meanwhile launch nothing; identified requests queue with `starting` outcomes.
+  The watch snapshots each request payload and press before another writer can replace the
+  shared slot. Each press takes the oldest preceding, distinct request snapshot, preserving
+  its prompt and settings; a payload alone never launches. Repeated request ids do not launch
+  from the card, and an admitted id is remembered for this connector's lifetime. Queued
+  requests older than five minutes are refused before dispatch. Snapshots and queued requests
+  exist only in this connector's memory and are lost when it stops; they are not saved to
+  disk. Events missed while the watch is disconnected cannot be reconstructed from an
+  overwritten slot. Durable dedupe and at-least-fifteen-minute outcome history remain separate
+  follow-up work; this queue does not change the existing five-entry history.
 * **A restart**, or taking the machine back after agent-ha-bridge had it, reads the outcomes back
   before taking any press: what Home Assistant holds is the newest account, the requests it
   names are not served again, the history agents read carries on, and one left at `starting`
