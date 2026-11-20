@@ -609,7 +609,9 @@ A press taken as the agent's only because no payload
 could be read is matched to that payload once it is read, if the press came at or after the payload changed
 (both on Home Assistant's clock; for a split's attributes, when the snapshot was last updated): the payload then owes no further press. The latest 64 Send presses per session
 are remembered; a press at or before the newest forgotten one is never classified again, so it is never the owner's
-and never spends an agent message's debt.
+and never spends an agent message's debt. The latest 64 owed Sends are remembered by stamp; older debts are kept
+as a count, still each taking a press as the agent's, but a later read can no longer settle them, so the owner may
+have to press again ([#3356](https://github.com/danswett/agent-bridge/issues/3356)).
 
 **Durable inbox foundation.** `DurableInbox` is an internal, not-yet-connected store: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,

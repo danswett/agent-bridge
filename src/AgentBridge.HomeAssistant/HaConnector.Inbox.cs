@@ -13,13 +13,16 @@ public sealed partial class HaConnector
     // The Send presses remembered for a session. For tests.
     internal int PressesKept(string sessionId) => ridLogs.TryGetValue(sessionId, out var log) ? log.Presses.Count : 0;
 
+    // The owed agent Sends remembered by stamp for a session. For tests.
+    internal int OwedSendsKept(string sessionId) => ridLogs.TryGetValue(sessionId, out var log) ? log.AgentSends.Count : 0;
+
     static bool OwnerPress(RidLog log, string? press) => press is not null && log.Presses.TryGetValue(press, out var agent) && !agent;
 
     static void ClassifyPress(RidLog log, string press, bool uncertain)
     {
-        var owed = log.AgentSends.Count > 0;
+        var owed = log.OwesSend;
         if (!log.TakePress(press, owed || uncertain)) { return; }
-        if (owed) { log.AgentSends.RemoveAt(0); }
+        if (owed) { log.PaySend(); }
         else if (uncertain)
         {
             log.Unmatched.Add(press);
@@ -104,8 +107,8 @@ public sealed partial class HaConnector
             // already came (#3224), including when a split recorded the debt before this complete read. Each half of a
             // split settles only a press at or after it was written: its stamp's last_changed, its attributes' last_updated.
             if (agent && (fresh || (!mixed && log.AgentSends.Contains(stamp))) && SettledByEarlierPress(log, stamp == state.State ? state.LastChanged : state.LastUpdated)) { log.AgentSends.Remove(stamp); }
-            else if (fresh && agent) { log.AgentSends.Add(stamp); }
-            if (unseen is not null && !SettledByEarlierPress(log, state.LastUpdated)) { log.AgentSends.Add(unseen); }
+            else if (fresh && agent) { log.OweSend(stamp); }
+            if (unseen is not null && !SettledByEarlierPress(log, state.LastUpdated)) { log.OweSend(unseen); }
             if (mixed || Str(a, "driver") != "agent" || !string.IsNullOrEmpty(Str(a, "decision_id")) || !ServesReplies || CleanRid(Str(a, "rid")) is not { } rid
                 || HasAttachments(state) || string.IsNullOrWhiteSpace(Str(a, "text"))) { continue; }
             var queue = log.Queued;

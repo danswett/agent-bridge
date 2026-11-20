@@ -585,6 +585,26 @@ public sealed partial class ReplyTests
         Assert.Single(answered);
     }
 
+    // #3356: agent messages whose Sends never come are remembered by stamp only up to a bound, but every one
+    // still owes its Send: each later agent press stays the agent's, and only the owner's press after them answers.
+    [Fact]
+    public async Task Owed_agent_sends_are_kept_bounded_and_every_one_still_makes_its_press_the_agents()
+    {
+        await using var c = await Asking();
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        for (var n = 1; n <= 70; n++)
+        {
+            c.Observe(ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
+            await Pass(c);
+        }
+        Assert.InRange(c.OwedSendsKept(A), 1, 64);
+        for (var n = 1; n <= 70; n++) { await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user")); }
+        Assert.Empty(answered);
+        Assert.Equal(0, c.OwedSendsKept(A));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+    }
+
     // #3296: a split of two missed agent publishes owes both their Sends, whether they come after the newer
     // completes or one before and one after: neither is ever the owner's answer to the completed form.
     // With pressedUnread, both came while no payload could be read; they settle both halves, so the owner's

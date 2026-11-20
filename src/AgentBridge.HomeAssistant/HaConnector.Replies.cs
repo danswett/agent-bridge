@@ -79,6 +79,29 @@ public sealed partial class HaConnector
         // their own Send press, the ones counted; and each Send press read with whether it was the agent's.
         public readonly List<HaState> Queued = [];
         public readonly List<string> AgentSends = [];
+        // #3356: messages whose Sends never came grew AgentSends for the session's life. Past the newest 64, the
+        // oldest keep only their debt, here: each still makes a press the agent's (fail closed), but no later read
+        // of its stamp can settle it, so an owner may have to press again, but an agent press never answers.
+        int forgottenSends;
+        public bool OwesSend => forgottenSends > 0 || AgentSends.Count > 0;
+
+        public void OweSend(string stamp)
+        {
+            AgentSends.Add(stamp);
+            if (AgentSends.Count > 64)
+            {
+                AgentSends.RemoveAt(0);
+                forgottenSends++;
+            }
+        }
+
+        // The oldest debt first, as presses come in the order their messages did.
+        public void PaySend()
+        {
+            if (forgottenSends > 0) { forgottenSends--; }
+            else { AgentSends.RemoveAt(0); }
+        }
+
         // Updated: when Home Assistant last wrote the split snapshot, so a complete one written later ends it (#3224).
         public (string State, string? At, string? Before, DateTimeOffset? Updated)? UncertainPayload;
         public readonly List<string> PayloadStamps = [];
@@ -112,6 +135,7 @@ public sealed partial class HaConnector
         {
             Queued.Clear();
             AgentSends.Clear();
+            forgottenSends = 0;
             UncertainPayload = null;
             PayloadStamps.Clear();
             Presses.Clear();
