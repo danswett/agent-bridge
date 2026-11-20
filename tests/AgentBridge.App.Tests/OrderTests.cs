@@ -230,6 +230,43 @@ public sealed class OrderTests : IDisposable
     }
 
     [Theory]
+    [InlineData("discover")]
+    [InlineData("pin")]
+    [InlineData("flush")]
+    public void A_failed_load_never_overwrites_the_unread_order_after_the_file_is_unlocked(string change)
+    {
+        var saved = new SessionOrder(File);
+        saved.Arrange([E("a", 2), E("b", 1)]);
+        saved.SetPinned(K("b"), true);
+        saved.Sort = SessionSort.Machine;
+        var original = System.IO.File.ReadAllText(File);
+        SessionOrder order;
+        using (var locked = System.IO.File.Open(File, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            order = new SessionOrder(File);
+            Assert.False(order.Usable);
+            order.Arrange([E("a", 2)]);
+        }
+
+        switch (change)
+        {
+            case "discover": order.Arrange([E("a", 2), E("new", 3)]); break;
+            case "pin": order.SetPinned(K("new"), true); break;
+            case "flush": order.MarkSeen(K("a"), "new-response"); order.Flush(); break;
+        }
+
+        Assert.Equal(original, System.IO.File.ReadAllText(File));
+        Assert.False(order.Usable);
+        Assert.Equal(SessionOrderFailure.LoadFailed, order.Failure);
+        Assert.Equal("Your order couldn't be loaded. Restart the app to try again.", order.FailureMessage);
+        Assert.Equal(SessionSort.Recent, order.Sort);
+        var again = new SessionOrder(File);
+        Assert.True(again.Usable);
+        Assert.True(again.IsPinned(K("b")));
+        Assert.Equal(SessionSort.Machine, again.Sort);
+    }
+
+    [Theory]
     [InlineData(AgentKind.Copilot)]
     [InlineData(AgentKind.Claude)]
     [InlineData(AgentKind.Codex)]
