@@ -159,6 +159,19 @@ try {
         $s.body -match 'attempt=3') 'a new failure after recovery opens a new incident instead of extending the closed one'
     Detect
     Assert (($s.writes -join ',') -eq 'label,create,comment,close,label,create') 'a late earlier attempt cannot add out-of-order evidence to the newer incident'
+    $completed.run_attempt = 2; $completed.conclusion = 'success'
+    @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+    foreach ($newer in 'body', 'comment', 'running') {
+        Reset-Scenario; $s.open = $true; $s.created = $true
+        $s.body = 'main-red: run=100 attempt=1 sha=abcdef01'
+        $s.attempt = 3
+        if ($newer -eq 'body') { $s.body = 'main-red: run=100 attempt=3 sha=abcdef01' }
+        elseif ($newer -eq 'comment') {
+            $s.comments = @(@{ body = 'main-red: run=100 attempt=3 sha=abcdef01'; author = @{ login = 'github-actions' } })
+        } else { $s.attempt = 4; $s.status = 'in_progress' }
+        Detect
+        Assert ($s.writes -notcontains 'close' -and $s.open) "a delayed successful attempt two never closes over newer $newer evidence (writes=$($s.writes -join ','); open=$($s.open))"
+    }
 } finally {
     $env:GITHUB_EVENT_NAME = $savedEventName; $env:GITHUB_EVENT_PATH = $savedEventPath
     Remove-Item -LiteralPath $eventPath

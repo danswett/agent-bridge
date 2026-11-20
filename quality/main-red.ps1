@@ -144,6 +144,10 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
     foreach ($candidate in $completed | Where-Object { $_.run_number -eq $completed[0].run_number } | Sort-Object run_attempt -Unique) {
         if ($candidate.path -ne '.github/workflows/ci.yml' -or $candidate.event -ne 'push' -or $candidate.head_branch -ne 'main' -or
             $candidate.head_repository.full_name -ne $Repository -or $candidate.run_attempt -lt 1) { throw 'Invalid completed main CI run.' }
+        # A delayed recovery cannot close over a newer attempt that is still running.
+        if ($candidate.conclusion -eq 'success' -and @($recent | Where-Object {
+                    $_.id -eq $candidate.id -and $_.status -ne 'completed' -and $_.run_attempt -gt $candidate.run_attempt
+                }).Count -gt 0) { continue }
         Publish-MainRed $candidate $Repository
     }
 }
@@ -154,6 +158,17 @@ function Publish-MainRed($run, [string]$Repository) {
     if ($verdict -eq 'none') { return }
     $issue = Get-MainRedIssue $Repository -IncludeClosed:($verdict -eq 'red')
     $sha = $run.head_sha.Substring(0, 8)
+    $marker = "main-red: run=$RunId attempt=$($run.run_attempt) sha=$sha"
+    $comments = @()
+    if ($issue) {
+        if ($verdict -eq 'red' -and ($issue.body -split '\r?\n') -ccontains $marker) { return }
+        $comments = @((Invoke-Gh issue view $issue.number --repo $Repository --json comments | ConvertFrom-Json).comments |
+                Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') })
+        if ($verdict -eq 'red' -and @($comments | Where-Object { ($_.body -split '\r?\n') -ccontains $marker }).Count -gt 0) { return }
+        $entries = @($issue.body) + @($comments | ForEach-Object { $_.body })
+        if (@($entries | Where-Object { $_ -cmatch "(?m)^main-red: run=$RunId attempt=(\d+) sha=" -and
+                    [long]$Matches[1] -gt $run.run_attempt }).Count -gt 0) { return }
+    }
     if ($verdict -eq 'green') {
         if ($issue) {
             Invoke-Gh issue comment $issue.number --repo $Repository --body "main-red: green again, run=$RunId attempt=$($run.run_attempt), sha=$sha" | Out-Null
@@ -161,18 +176,7 @@ function Publish-MainRed($run, [string]$Repository) {
         }
         return
     }
-    $marker = "main-red: run=$RunId attempt=$($run.run_attempt) sha=$sha"
-    $comments = @()
-    if ($issue) {
-        if (($issue.body -split '\r?\n') -ccontains $marker) { return }
-        $comments = @((Invoke-Gh issue view $issue.number --repo $Repository --json comments | ConvertFrom-Json).comments |
-                Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') })
-        if (@($comments | Where-Object { ($_.body -split '\r?\n') -ccontains $marker }).Count -gt 0) { return }
-        $entries = @($issue.body) + @($comments | ForEach-Object { $_.body })
-        if (@($entries | Where-Object { $_ -cmatch "(?m)^main-red: run=$RunId attempt=(\d+) sha=" -and
-                    [long]$Matches[1] -gt $run.run_attempt }).Count -gt 0) { return }
-        if ($issue.state -eq 'CLOSED') { $issue = $null; $comments = @() }
-    }
+    if ($issue -and $issue.state -eq 'CLOSED') { $issue = $null; $comments = @() }
     $jobs = @(Get-FailedJobs $RunId $Repository (Get-PostMergeJobs $script:CatalogPath) $run.run_attempt)
     # The PR verdict's main-green skips post-merge tier jobs (#3219); say so, so this isn't read as a hold.
     # quality-gate only sums the other ci.yml jobs and main-green never lists it, so it echoes them.
