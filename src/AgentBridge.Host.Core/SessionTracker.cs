@@ -217,7 +217,7 @@ internal sealed class SessionTracker
         var pending = _state.Asking;
         // Status precedence (docs/design/subagents.md §4): the session's own question wins over
         // a sub-agent's (rule 1, "question wins"), and a sub-agent's makes it waiting too (rule 2).
-        var question = pending.LastOrDefault(q => q.Agent is null) ?? (pending.Count > 0 ? pending[^1] : null);
+        var question = _state.ShownQuestion;
         // Copilot asks a permission for each of a batch of parallel tool calls at once, and its
         // one dialog shows them one at a time; seen answered at the machine in the order asked
         // (#690). Listing the newest offered Approve once for a request the screen was not
@@ -344,6 +344,10 @@ internal sealed class SessionTracker
         return new Session
         {
             Id = d.Id,
+            Machine = _hostId,
+            Owner = _hostId is null ? null : new(),
+            Pr = _hostId is null ? null : new(),
+            Finished = _hostId is null ? null : new(),
             Agent = d.Agent,
             Title = Text.Title(title),
             Cwd = ws?.Cwd ?? _state.Cwd ?? reg?.WorkingDirectory,
@@ -354,7 +358,6 @@ internal sealed class SessionTracker
             Context = Text.NonBlank(_state.Context),
             Status = effective,
             StatusSince = since,
-            StartedAt = ws?.CreatedAt ?? _state.StartedAt,
             UpdatedAt = _state.UpdatedAt ?? reg?.Updated ?? ws?.UpdatedAt ?? _firstSeen,
             ProcessId = d.ProcessId,
             TranscriptBytes = _transcriptSize?.Bytes,

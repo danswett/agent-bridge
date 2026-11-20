@@ -156,12 +156,12 @@ test('A session the host is ending reads "Ending session…" with the ended glyp
 });
 
 test('The glyph is named with its state, as ui.md §9 reads a row: title, status, machine', () => {
-  const name = (fields, machine = 'DEV-VM1') => statusLabel(sessionStatus(session(fields)), { title: session(fields).title, machine });
-  assert.equal(name(RULES[4]), 'Plan Migration to Windows App, delegating to 2 agents, DEV-VM1');
-  assert.equal(name(RULES[2]), 'Plan Migration to Windows App, Delegate Read witness shell logic asks, DEV-VM1');
-  assert.equal(name(RULES[5]), 'Plan Migration to Windows App, 1 background command, DEV-VM1');
+  const name = (fields, machine = 'Machine A') => statusLabel(sessionStatus(session(fields)), { title: session(fields).title, machine });
+  assert.equal(name(RULES[4]), 'Plan Migration to Windows App, delegating to 2 agents, Machine A');
+  assert.equal(name(RULES[2]), 'Plan Migration to Windows App, Delegate Read witness shell logic asks, Machine A');
+  assert.equal(name(RULES[5]), 'Plan Migration to Windows App, 1 background command, Machine A');
   // The diamond is only a shape, so the name says it in words.
-  assert.equal(name({ status: 'working', driver: 'agent' }), 'Plan Migration to Windows App, working, driven by an agent, DEV-VM1');
+  assert.equal(name({ status: 'working', driver: 'agent' }), 'Plan Migration to Windows App, working, driven by an agent, Machine A');
   assert.equal(statusLabel(sessionStatus(session({ title: null })), { title: null }), 'Untitled session, idle');
 });
 
@@ -194,12 +194,12 @@ test('Every rule gives its facts as a list, so a row takes the first and nothing
 
 test('Read aloud, a delegate\'s name has no comma of its own, so it can\'t add facts to the glyph\'s name; drawn, it keeps them', () => {
   const asking = (name) => sessionStatus(session({ status: 'waiting', waitingOn: 'x1', subagents: [{ id: 'x1', kind: 'task', status: 'waiting', name }] }));
-  const label = (name) => statusLabel(asking(name), { title: 'Fix', machine: 'DEV-VM1' });
-  assert.equal(label('x, idle, DEV-VM2'), 'Fix, Delegate x idle DEV-VM2 asks, DEV-VM1');
-  assert.equal(asking('x, idle, DEV-VM2').text, 'Delegate x, idle, DEV-VM2 asks');
+  const label = (name) => statusLabel(asking(name), { title: 'Fix', machine: 'Machine A' });
+  assert.equal(label('x, idle, Machine B'), 'Fix, Delegate x idle Machine B asks, Machine A');
+  assert.equal(asking('x, idle, Machine B').text, 'Delegate x, idle, Machine B asks');
   // The commas other scripts and forms draw like it.
   for (const comma of ['\u055d', '\u060c', '\u066b', '\u07f8', '\u1363', '\u1802', '\u1808', '\u201a', '\u2e41', '\u2e4c', '\u3001', '\ua4fe', '\ua60d', '\ua6f5', '\ufe10', '\ufe11', '\ufe50', '\ufe51', '\uff0c', '\uff64']) {
-    assert.equal(label(`x${comma} idle${comma} DEV-VM2`), 'Fix, Delegate x idle DEV-VM2 asks, DEV-VM1', `U+${comma.codePointAt(0).toString(16)}`);
+    assert.equal(label(`x${comma} idle${comma} Machine B`), 'Fix, Delegate x idle Machine B asks, Machine A', `U+${comma.codePointAt(0).toString(16)}`);
   }
   // Rule 3's task too.
   const working = sessionStatus(session({ status: 'working', subagents: [delegate('t', { kind: 'task', name: 'Lint, idle' })] }));
@@ -208,8 +208,8 @@ test('Read aloud, a delegate\'s name has no comma of its own, so it can\'t add f
 
 test('Read aloud, a title cannot end the line early or add a fact: its commas, semicolons and stops are spaces', () => {
   const idle = sessionStatus(session({}));
-  assert.equal(statusLabel(idle, { title: 'Fix. Idle; done, ok!', machine: 'DEV-VM1' }), 'Fix Idle done ok, idle, DEV-VM1');
-  assert.equal(statusLabel(idle, { title: 'v1.2 fix', machine: 'DEV-VM1' }), 'v1.2 fix, idle, DEV-VM1');
+  assert.equal(statusLabel(idle, { title: 'Fix. Idle; done, ok!', machine: 'Machine A' }), 'Fix Idle done ok, idle, Machine A');
+  assert.equal(statusLabel(idle, { title: 'v1.2 fix', machine: 'Machine A' }), 'v1.2 fix, idle, Machine A');
 });
 
 // #800: Session.attention, shown over a truthful status: an agent that can't run until a person
@@ -222,7 +222,7 @@ test('Rule 10: a session that needs sign-in reads "Needs sign-in" with its agent
   assert.equal(said({ status: 'idle', attention: signIn({ account: 'octocat' }) }).text, 'Needs sign-in · Copilot · @octocat');
   // Its own question still comes first: the agent asked before it stopped.
   assert.equal(said({ status: 'waiting', question: { id: 'q' }, attention: signIn() }).rule, 1);
-  assert.equal(statusLabel(sessionStatus(session({ attention: signIn() })), { title: 'Fix', machine: 'DEV-VM1' }), 'Fix, needs sign-in · Copilot, DEV-VM1');
+  assert.equal(statusLabel(sessionStatus(session({ attention: signIn() })), { title: 'Fix', machine: 'Machine A' }), 'Fix, needs sign-in · Copilot, Machine A');
   // A row shows the first fact only.
   assert.equal(sessionStatus(session({ attention: signIn({ account: 'octocat' }) })).facts[0], 'Needs sign-in');
 });

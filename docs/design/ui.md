@@ -3361,6 +3361,9 @@ count, and its row to "Needs sign-in". Sessions that confirm leave the count one
   and it doesn't send the person to the machine: that's only for the host's `signIn: machine`.
 - **Expired:** the code is hidden and the sheet says "Code expired" with Try again, even before
   the host updates.
+- In the expired and couldn't-be-shown states, on both clients **Cancel** is the one filled
+  (accent) button and the default, as well as the Escape action; **Try again** is secondary.
+  The code-shown rule above is unchanged.
 - **Success:** the sheet closes and the banner goes to "Signed in · waiting for *n* sessions to
   confirm", not to recovered. Nothing is typed for the sessions, so each confirms on its next
   turn. A session that died mid-turn is to offer a **Continue** like §6.12's, from `signin.done`'s

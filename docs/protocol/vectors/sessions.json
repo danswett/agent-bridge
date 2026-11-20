@@ -1305,7 +1305,7 @@
           "name": "full",
           "json": {
             "id": "53d1997f0a1b2c3d4e5f60718293a4b5",
-            "name": "DEV-VM1",
+            "name": "node-a",
             "os": "windows",
             "hostVersion": "0.1.200",
             "dev": true,
@@ -1318,7 +1318,7 @@
           "name": "role",
           "json": {
             "id": "53d1997f0a1b2c3d4e5f60718293a4b5",
-            "name": "DEV-VM1",
+            "name": "node-a",
             "os": "windows",
             "hostVersion": "0.1.200",
             "dev": true,
@@ -1343,7 +1343,7 @@
           "name": "wrong-type-id",
           "json": {
             "id": 42,
-            "name": "DEV-VM1",
+            "name": "node-a",
             "os": "windows",
             "hostVersion": "0.1.200",
             "dev": true,
@@ -1364,7 +1364,7 @@
             "protocol": 1,
             "machine": {
               "id": "53d1997f0a1b2c3d4e5f60718293a4b5",
-              "name": "DEV-VM1",
+              "name": "node-a",
               "os": "windows",
               "hostVersion": "0.1.200",
               "dev": true,
@@ -1408,7 +1408,7 @@
             "protocol": 1,
             "machine": {
               "id": "53d1997f0a1b2c3d4e5f60718293a4b5",
-              "name": "DEV-VM1",
+              "name": "node-a",
               "os": "windows",
               "hostVersion": "0.2.0"
             },
@@ -1422,7 +1422,7 @@
             "protocol": 1,
             "machine": {
               "id": "53d1997f0a1b2c3d4e5f60718293a4b5",
-              "name": "DEV-VM1",
+              "name": "node-a",
               "os": "windows",
               "hostVersion": "0.2.0"
             },
@@ -1440,7 +1440,7 @@
             "protocol": "many",
             "machine": {
               "id": "53d1997f0a1b2c3d4e5f60718293a4b5",
-              "name": "DEV-VM1",
+              "name": "node-a",
               "os": "windows",
               "hostVersion": "0.1.200",
               "dev": true,
@@ -3632,6 +3632,27 @@
           "name": "minimal",
           "json": {
             "id": "b7e1c2d3-0000-4000-8000-000000000001",
+            "agent": "claude",
+            "status": "idle",
+            "statusSince": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:22:43.182Z",
+            "activity": {}
+          }
+        },
+        {
+          "name": "host-roster-with-unknown-outcomes",
+          "json": {
+            "id": "b7e1c2d3-0000-4000-8000-000000000001",
+            "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+            "owner": {
+              "state": "unknown"
+            },
+            "pr": {
+              "state": "unknown"
+            },
+            "finished": {
+              "state": "unknown"
+            },
             "agent": "claude",
             "status": "idle",
             "statusSince": "2026-10-28T04:22:43.182Z",
@@ -9412,6 +9433,46 @@
           "refusedBy": "parse"
         }
       ]
+    },
+    "ClearedComposer": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "a-plain-draft",
+          "json": {
+            "text": "  rerun the tests ",
+            "marks": [],
+            "truncated": false
+          }
+        },
+        {
+          "name": "an-escaped-draft",
+          "json": {
+            "text": "rerun the build\\u202E gol",
+            "marks": [
+              [
+                15,
+                6
+              ]
+            ],
+            "truncated": false
+          }
+        },
+        {
+          "name": "wrong-type-text",
+          "json": {
+            "text": 42,
+            "marks": [],
+            "truncated": false
+          },
+          "reads": {
+            "text": "",
+            "marks": [],
+            "truncated": false
+          }
+        }
+      ],
+      "refused": []
     },
     "ReplyResult": {
       "direction": "host",

@@ -2245,12 +2245,17 @@ Each slice adds its own. Together they cover:
   after C1's add, the same removal takes P and C1: C1's approver P is junior to S, so it is the
   tie through P below. P and C1 are revoked, what C1 enrolls after M is void, C2 and what it
   enrolls survive, and anything J or K adds there is void.
-* **A partial cascade with a fabricated pair.** Stolen D adds J and K on the main line; E, which D
-  enrolled before the theft, joins heads and enrolls E2, whose add descends from J and K. The
-  person's one removal of D keeps E and E2, and so takes J and K. On a fork from before it, D confirms J
-  and K and adds Y, and J and K cosign a removal of D (rank 2). Y and D's confirms of J and K are
-  D's concurrent grants and void; J's and K's removal revokes no signer of the person's, so it
-  shields nothing; E and E2 stay active.
+* **A partial cascade with a fabricated pair.** G approves D, which enrolls E before it is
+  stolen. Stolen D adds J and K on the main line; E joins heads and enrolls E2, whose add
+  descends from J and K. The person's one removal of D, signed by G alone (rank 1),
+  keeps E and E2 and so takes J and K. On a fork that does not contain E's add, D
+  confirms J and K and adds Y, and J and K cosign a removal of D (rank 2), keeping
+  themselves. Y and D's confirms of J and K are D's concurrent grants and void;
+  J's and K's removal revokes no signer of the person's, so it shields nothing.
+  But their removal also revokes D, and E's add is not an ancestor of it, so E and E2 are void
+  until enrolled again (§3.5). The person's rank-1 removal cannot shield against the
+  rank-2 removal; in any case E's and E2's adds precede the person's removal, while a
+  shield protects only its descendants. The active set is {G}, in every delivery order.
 * **A quarantined descendant does not block the recovery.** At head P the roster holds G, S, and
   C1 and C2, which G approved and confirmed independently of S. The honest line advances 9
   entries; S then submits `add(J)` on P, which every verifier quarantines. C1 and C2 remove S,
