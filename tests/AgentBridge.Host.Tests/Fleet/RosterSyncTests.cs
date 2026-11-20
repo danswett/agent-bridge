@@ -107,6 +107,23 @@ public sealed class RosterSyncTests
     }
 
     [Fact]
+    public void A_record_more_than_60_s_from_this_hosts_clock_is_stale_even_while_the_relay_says_online()
+    {
+        var old = Assert.Single(reader.Read([Frame("H", seq: 1, at: -61, ids: ["a"])]));
+        Assert.False(old.Online);
+        Assert.Equal(["a"], Ids(old));
+        Assert.False(Assert.Single(reader.Read([Frame("H", seq: 2, at: 61, ids: ["a"])])).Online);
+        Assert.True(Assert.Single(reader.Read([Frame("H", seq: 3, at: 60, ids: ["b"])])).Online);
+        // A half-open host: the relay still lists its last record as online, but nothing new comes.
+        time.Advance(TimeSpan.FromMinutes(2));
+        Assert.True(Assert.Single(reader.Read([Frame("H", seq: 3, at: 60, ids: ["b"])])).Online);
+        time.Advance(TimeSpan.FromSeconds(1));
+        var silent = Assert.Single(reader.Read([Frame("H", seq: 3, at: 60, ids: ["b"])]));
+        Assert.False(silent.Online);
+        Assert.Equal(["b"], Ids(silent));
+    }
+
+    [Fact]
     public async Task Peer_rows_from_a_host_in_the_signed_device_roster_appear_with_all_A1_fields()
     {
         var source = new FleetPublisherTests.Source();

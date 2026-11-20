@@ -38,6 +38,7 @@ public interface IScopedFleetRoster : IFleetRoster
 public sealed class RelayFleetRoster : IScopedFleetRoster
 {
     public static readonly TimeSpan CacheAge = TimeSpan.FromHours(24);
+    public static readonly TimeSpan Freshness = TimeSpan.FromSeconds(60);
     RelayClient? relay;
     readonly Func<RosterVerifier?>? signedRoster;
     readonly TimeProvider clock;
@@ -55,7 +56,9 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     // (`at` is protocol ordering only). Within an epoch seq never falls (a jump is just a newer whole
     // snapshot); a new epoch needs a later `at`. Once an order is cached, a record whose own order is
     // missing or malformed is refused too, so the relay cannot erase it. A refused record leaves the
-    // last accepted rows stale.
+    // last accepted rows stale. An accepted record is live only while its `at` is within Freshness of
+    // this host's wall clock, either way ("Freshness and replay"): a silent host the relay still calls
+    // online goes stale, and an old replay never reads live.
     public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames)
     {
         lock (cache)
@@ -71,6 +74,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
                 if (m.Online && m.HasRegistryRecord && (held?.Order is not { } a || m.Order is { } b && (a.Epoch == b.Epoch ? b.Seq >= a.Seq : b.At > a.At)))
                 {
                     cache[m.Id] = (m, now);
+                    if (m.Order is { } o && (clock.GetUtcNow() - o.At).Duration() > Freshness) { machines[i] = m with { Online = false, Verified = false, HasRegistryRecord = false }; }
                 }
                 else if (held is not null)
                 {
