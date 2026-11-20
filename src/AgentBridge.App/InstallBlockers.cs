@@ -23,8 +23,10 @@ static class InstallBlockers
     internal readonly record struct Holder(int Pid, long Started, string Name, string Service, string? Image);
 
     // The processes outside the installation holding files in it, with their confirmed file, or
-    // null only when the completed scan found none; a failed scan is explicitly unknown.
-    public static string? Find()
+    // null only when the completed scan found none; a failed scan is explicitly unknown. Quit and
+    // the scan deadline stop it between Restart Manager calls; a call already in flight finishes
+    // on its own thread and keeps the scan lock, so scans never overlap.
+    public static string? Find(CancellationToken cancellation)
     {
         if (!Monitor.TryEnter(scan)) { return InstallationFiles.Unknown; }
         try
@@ -32,7 +34,8 @@ static class InstallBlockers
             if (!OperatingSystem.IsWindows()) { return null; }
             if (!VelopackLocator.IsCurrentSet) { return InstallationFiles.Unknown; }
             if (VelopackLocator.Current.RootAppDir is not { Length: > 0 } root) { return InstallationFiles.Unknown; }
-            return Find(root, () => Directory.EnumerateFiles(Path.Combine(root, "current"), "*", SearchOption.AllDirectories).ToList(), Held);
+            return Find(root, () => InstallationFiles.LockedImages(Path.Combine(root, "current")).ToList(),
+                files => Held(files, cancellation), cancellation);
         }
         catch (InvalidOperationException e)
         {
@@ -42,13 +45,15 @@ static class InstallBlockers
         finally { Monitor.Exit(scan); }
     }
 
-    internal static string? Find(string root, Func<List<string>> installationFiles, Func<List<string>, List<Holder>> query)
+    internal static string? Find(string root, Func<List<string>> installationFiles, Func<List<string>, List<Holder>> query,
+        CancellationToken cancellation = default)
     {
         try
         {
             var files = installationFiles();
             if (files.Count == 0) { return null; }
             var own = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            cancellation.ThrowIfCancellationRequested();
             var held = query(files);
             var found = held.Where(p => InstallHolder.Blocks(p.Pid, Environment.ProcessId, p.Image, own, p.Service)).ToList();
             if (found.Count == 0)
@@ -62,7 +67,7 @@ static class InstallBlockers
             {
                 // One holder that releases or can't be re-queried must not hide another's confirmed file.
                 string? file = null;
-                try { file = HeldFile(files, p, query); }
+                try { file = HeldFile(files, p, query, cancellation); }
                 catch (Exception e) when (Unreadable(e)) { AppLog.Write($"installation file holder {p.Name} (pid {p.Pid}) could not be confirmed: {e.Message}"); }
                 if (file is null) { unconfirmed++; continue; }
                 names.Add($"{p.Name} ({(p.Service.Length > 0 ? p.Service + ", " : "")}pid {p.Pid}) holding {Path.GetRelativePath(root, file)}");
@@ -71,6 +76,8 @@ static class InstallBlockers
             return string.Join(", ", names) + (found.Count > MostNamed ? $" and {found.Count - MostNamed} more" : "")
                 + (unconfirmed > 0 ? $"; {InstallationFiles.Unknown} for {unconfirmed} other" : "");
         }
+        // A stopped scan names nothing: a half-bisected holder would point at the wrong file.
+        catch (OperationCanceledException) { return InstallationFiles.Unknown; }
         catch (Exception e) when (Unreadable(e))
         {
             AppLog.Write($"installation file holders could not be checked: {e.Message}");
@@ -101,14 +108,15 @@ static class InstallBlockers
 
     // The aggregate RM result has no resource association. Bisect only for confirmed external
     // holders, then verify the single file: listing every registered file would falsely blame it.
-    static string? HeldFile(List<string> files, Holder holder, Func<List<string>, List<Holder>> query)
+    static string? HeldFile(List<string> files, Holder holder, Func<List<string>, List<Holder>> query, CancellationToken cancellation)
     {
         bool Matches(Holder p) => p.Pid == holder.Pid && p.Started == holder.Started;
+        cancellation.ThrowIfCancellationRequested();
         if (files.Count == 1) { return query(files).Any(Matches) ? files[0] : null; }
         var half = files.Count / 2;
         var first = files.Take(half).ToList();
         var matches = query(first).Any(Matches);
-        return HeldFile(matches ? first : files.Skip(half).ToList(), holder, query);
+        return HeldFile(matches ? first : files.Skip(half).ToList(), holder, query, cancellation);
     }
 
     static long Stamp(System.Runtime.InteropServices.ComTypes.FILETIME time) => ((long)time.dwHighDateTime << 32) | (uint)time.dwLowDateTime;
@@ -129,7 +137,7 @@ static class InstallBlockers
     [return: MarshalAs(UnmanagedType.Bool)]
     static extern bool CloseHandle(IntPtr handle);
 
-    static List<Holder> Held(List<string> files)
+    static List<Holder> Held(List<string> files, CancellationToken cancellation)
     {
         var found = new List<Holder>();
         var key = new StringBuilder(33);
@@ -139,6 +147,7 @@ static class InstallBlockers
         {
             for (var i = 0; i < files.Count; i += Batch)
             {
+                cancellation.ThrowIfCancellationRequested();
                 var part = files.Skip(i).Take(Batch).ToArray();
                 var registered = RmRegisterResources(session, (uint)part.Length, part, 0, null, 0, null);
                 if (registered != 0) { throw new System.ComponentModel.Win32Exception(registered); }
@@ -148,6 +157,7 @@ static class InstallBlockers
             var attempts = 0;
             while (true)
             {
+                cancellation.ThrowIfCancellationRequested();
                 var result = RmGetList(session, out var needed, ref have, info, out _);
                 if (result == 0) { break; }
                 if (result != MoreData) { throw new System.ComponentModel.Win32Exception(result); }
@@ -157,6 +167,7 @@ static class InstallBlockers
             }
             foreach (var p in info.Take((int)have))
             {
+                cancellation.ThrowIfCancellationRequested();
                 var startedAt = Stamp(p.Process.ProcessStartTime);
                 if (!found.Any(f => f.Pid == p.Process.ProcessId && f.Started == startedAt))
                 {

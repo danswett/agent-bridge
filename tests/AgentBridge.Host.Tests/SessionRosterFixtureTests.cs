@@ -27,6 +27,27 @@ public sealed class SessionRosterFixtureTests
         Assert.Equal(1, subscription.Result.Count);
     }
 
+    [Fact]
+    public async Task Case_distinct_registration_ids_remain_distinct_across_roots()
+    {
+        using var f = new Fixture();
+        const string lower = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        var upper = lower.ToUpperInvariant();
+        f.CodexRegistration(lower, 950, null);
+        var other = Directory.CreateDirectory(Path.Combine(f.Root, "other-registrations")).FullName;
+        File.WriteAllText(Path.Combine(other, upper + ".json"), JsonSerializer.Serialize(new
+        {
+            SessionId = upper, ProcessId = 951, Updated = Fixture.T0,
+        }));
+        f.Processes.Run(AgentKind.Codex, 950, "codex.exe");
+        f.Processes.Run(AgentKind.Codex, 951, "codex.exe");
+        await using var source = new SessionSource(f.Options(codexRoots: [f.CodexRegistrations, other]),
+            f.Processes, f.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal([upper, lower], source.Snapshot().Select(s => s.Id).Order(StringComparer.Ordinal));
+        Assert.Null(source.Held);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -240,6 +261,352 @@ public sealed class SessionRosterFixtureTests
             channel.Close();
             await running.WaitAsync(Patience);
         }
+    }
+
+    [Theory]
+    [InlineData("alive")]
+    [InlineData("unidentified")]
+    [InlineData("gone")]
+    [InlineData("pidless")]
+    [InlineData("reused")]
+    public async Task Positive_ended_evidence_removes_a_session_even_while_another_process_holds_its_agent(string process)
+    {
+        using var fixture = new Fixture();
+        fixture.CodexRegistration(Id, 950, null);
+        fixture.Processes.Run(AgentKind.Codex, 950, "codex.exe");
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(SessionStatus.Working, source.Get(Id)!.Status);
+        using var subscription = source.Subscribe();
+        while (subscription.Events.TryRead(out _)) { }
+        fixture.Processes.RunUndated(AgentKind.Codex, 960, "codex.exe");
+        fixture.CodexRegistration(Id, process == "pidless" ? 0 : 950, null, status: "ended", ended: true);
+        if (process == "unidentified") { fixture.Processes.Unidentify(AgentKind.Codex, 950); }
+        if (process == "gone") { fixture.Processes.Exit(AgentKind.Codex, 950); }
+        if (process == "reused") { fixture.Processes.Run(AgentKind.Codex, 950, "codex.exe", Fixture.T0.AddMinutes(5)); }
+        await source.RefreshAsync();
+        Assert.NotNull(source.Held);
+        Assert.Null(source.Get(Id));
+        Assert.Empty(source.List().Sessions);
+        var changes = new List<SessionEvent>();
+        while (subscription.Events.TryRead(out var change)) { changes.Add(change); }
+        Assert.Equal(Id, Assert.IsType<SessionRemoved>(Assert.Single(changes, c => c.Name == Events.SessionRemove).Data).Id);
+    }
+
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("empty")]
+    [InlineData("corrupt")]
+    [InlineData("missing")]
+    public async Task Disk_resume_guards_never_supply_host_roster_membership_when_discovery_is_incomplete(string state)
+    {
+        using var fixture = new Fixture();
+        var path = Path.Combine(fixture.Root, "sessions-listed.json");
+        string? saved = state switch
+        {
+            "valid" => JsonSerializer.Serialize(new { sessions = new[] { new { id = Id, agent = "codex", pid = 950, processStartedAt = Fixture.T0.AddHours(-1) } } }),
+            "empty" => "",
+            "corrupt" => "{",
+            _ => null,
+        };
+        if (saved is not null) { File.WriteAllText(path, saved); }
+        fixture.CodexRegistration(Id, 950, null);
+        File.WriteAllText(Path.Combine(fixture.CodexRegistrations, Id + ".json"), "{");
+        fixture.Processes.Run(AgentKind.Codex, 950, "codex.exe");
+        await using var source = new SessionSource(fixture.Options(stateFile: path), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.NotNull(source.Held);
+        Assert.Empty(source.Snapshot());
+        Assert.Null(source.Get(Id));
+        using var subscription = source.Subscribe();
+        Assert.Equal(0, subscription.Result.Count);
+    }
+
+    [Fact]
+    public async Task A_full_roster_holds_overflow_and_admits_it_when_an_ended_session_frees_a_slot()
+    {
+        using var fixture = new Fixture();
+        var ids = Enumerable.Range(0, 251).Select(i => $"{i:D8}-0000-4000-8000-000000000000").ToArray();
+        for (var i = 0; i < ids.Length; i++)
+        {
+            fixture.CodexRegistration(ids[i], 1000 + i, null);
+            fixture.Processes.Run(AgentKind.Codex, 1000 + i, "codex.exe");
+        }
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(250, source.Snapshot().Count);
+        Assert.Contains("250-session roster limit", source.Held!.Reason);
+        var omitted = Assert.Single(ids.Except(source.Snapshot().Select(s => s.Id)));
+        var ended = source.Snapshot()[0].Id;
+        fixture.CodexRegistration(ended, 1000 + Array.IndexOf(ids, ended), null, status: "ended", ended: true);
+        await source.RefreshAsync();
+        Assert.Equal(250, source.Snapshot().Count);
+        Assert.Null(source.Get(ended));
+        Assert.NotNull(source.Get(omitted));
+        Assert.Null(source.Held);
+        using var subscription = source.Subscribe();
+        Assert.Equal(250, subscription.Result.Count);
+    }
+
+    [Fact]
+    public async Task An_ended_Claude_registration_cannot_be_readmitted_by_its_own_session_file_during_a_hold()
+    {
+        using var fixture = new Fixture();
+        fixture.ClaudeSessionFile(700, Id);
+        fixture.ClaudeRegistration(Id, 700, null);
+        fixture.Processes.Run(AgentKind.Claude, 700, "claude.exe");
+        fixture.ClaudeSessionFile(701, "99999999-9999-4999-8999-999999999999");
+        fixture.Processes.RunUndated(AgentKind.Claude, 701, "claude.exe");
+        fixture.Processes.Unidentify(AgentKind.Claude, 701);
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(Id, Assert.Single(source.List().Sessions).Id);
+        Assert.Contains("could not be read (pid 701)", source.Held!.Reason);
+        using var subscription = source.Subscribe();
+        while (subscription.Events.TryRead(out _)) { }
+        var path = Path.Combine(fixture.ClaudeRegistrations, Id + ".json");
+        var registration = JsonNode.Parse(File.ReadAllText(path))!;
+        registration["Ended"] = true;
+        File.WriteAllText(path, registration.ToJsonString());
+
+        await source.RefreshAsync();
+
+        var changes = new List<SessionEvent>();
+        while (subscription.Events.TryRead(out var change)) { changes.Add(change); }
+        Assert.Equal([Events.SessionRemove], changes.Select(c => c.Name));
+        Assert.Equal(Id, Assert.IsType<SessionRemoved>(changes[0].Data).Id);
+        Assert.Null(source.Get(Id));
+        Assert.Empty(source.List().Sessions);
+        Assert.NotNull(source.Held);
+        using var fresh = source.Subscribe();
+        Assert.Equal(0, fresh.Result.Count);
+        await source.RefreshAsync();
+        Assert.False(subscription.Events.TryRead(out _));
+        Assert.Null(source.Get(Id));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Overflow_is_held_before_mid_pass_reads_and_old_holds_survive_until_admission_completes(bool previousHold)
+    {
+        using var fixture = new Fixture();
+        var admissionPatience = TimeSpan.FromSeconds(30);
+        var ids = Enumerable.Range(0, 251).Select(i => $"{i:D8}-0000-4000-8000-000000000000").ToArray();
+        for (var i = 0; i < 250; i++)
+        {
+            fixture.CodexRegistration(ids[i], 1000 + i, null);
+            fixture.Processes.Run(AgentKind.Codex, 1000 + i, "codex.exe");
+        }
+        if (previousHold)
+        {
+            fixture.ClaudeSessionFile(700, Id);
+            fixture.Processes.RunUndated(AgentKind.Claude, 700, "claude.exe");
+            fixture.Processes.Unidentify(AgentKind.Claude, 700);
+        }
+        TaskCompletionSource? entered = null;
+        using var proceed = new ManualResetEventSlim(true);
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, fixture.Time, answerAttempted: _ =>
+        {
+            if (entered is { } paused)
+            {
+                paused.TrySetResult();
+                if (!proceed.Wait(admissionPatience)) { throw new TimeoutException("Paused roster pass was not released."); }
+            }
+            return false;
+        }, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(250, source.Snapshot().Count);
+        fixture.CodexRegistration(ids[250], 1250, null);
+        fixture.Processes.Run(AgentKind.Codex, 1250, "codex.exe");
+        fixture.Processes.Exit(AgentKind.Claude, 700);
+
+        async Task DuringAdmission(Action inspect)
+        {
+            proceed.Reset();
+            entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var pass = Task.Factory.StartNew(() => source.RefreshAsync(), CancellationToken.None,
+                TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
+            try { await entered.Task.WaitAsync(admissionPatience); inspect(); }
+            finally { entered = null; proceed.Set(); await pass.WaitAsync(admissionPatience); }
+        }
+        void AssertHeld()
+        {
+            Assert.Contains(AgentKind.Codex, Assert.IsType<DiscoveryHeld>(source.Held).Agents);
+            Assert.Contains(AgentKind.Codex, source.List().DiscoveryHeld!.Agents);
+            Assert.Null(source.Get(ids[250]));
+            using var subscription = source.Subscribe();
+            SessionEvent? last = null;
+            while (subscription.Events.TryRead(out var change)) { last = change; }
+            Assert.Contains(AgentKind.Codex, Assert.IsType<SessionsSynced>(last!.Data).DiscoveryHeld!.Agents);
+        }
+        await DuringAdmission(() =>
+        {
+            AssertHeld();
+            Assert.Contains("250-session roster limit", source.Held!.Reason);
+            if (previousHold) { Assert.Contains(AgentKind.Claude, source.Held.Agents); }
+        });
+        Assert.Equal([AgentKind.Codex], source.Held!.Agents);
+        var ended = source.Snapshot()[0].Id;
+        fixture.CodexRegistration(ended, 1000 + Array.IndexOf(ids, ended), null, status: "ended", ended: true);
+        await DuringAdmission(() => { AssertHeld(); Assert.Null(source.Get(ended)); });
+        Assert.NotNull(source.Get(ids[250]));
+        Assert.Null(source.Held);
+        Assert.Equal(250, source.Snapshot().Count);
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Claude, 700, false)]
+    [InlineData(AgentKind.Claude, 701, false)]
+    [InlineData(AgentKind.Codex, 700, false)]
+    [InlineData(AgentKind.Codex, 701, false)]
+    [InlineData(AgentKind.Claude, 701, true)]
+    [InlineData(AgentKind.Codex, 701, true)]
+    public async Task Native_successor_generation_supersedes_an_ended_registration_without_an_unlisted_unheld_moment(AgentKind agent, int successor, bool listed)
+    {
+        using var f = new Fixture();
+        if (agent == AgentKind.Claude) { f.ClaudeRegistration(Id, 700, null); }
+        else { f.CodexRegistration(Id, 700, null); }
+        var exe = agent == AgentKind.Claude ? "claude.exe" : "codex.exe";
+        var (replacing, gap) = (false, false);
+        SessionSource? seen = null;
+        await using var source = new SessionSource(f.Options(), f.Processes, f.Time, answerAttempted: _ =>
+        {
+            gap |= replacing && seen!.Get(Id) is null && seen.Held is null;
+            return false;
+        }, hostId: "host-id");
+        seen = source;
+        if (listed)
+        {
+            f.Processes.Run(agent, 700, exe);
+            await source.RefreshAsync();
+            Assert.Equal(700, source.Get(Id)!.ProcessId);
+            f.Processes.Exit(agent, 700);
+        }
+        var root = agent == AgentKind.Claude ? f.ClaudeRegistrations : f.CodexRegistrations;
+        var path = Path.Combine(root, Id + ".json");
+        var registration = JsonNode.Parse(File.ReadAllText(path))!;
+        registration["Ended"] = true;
+        File.WriteAllText(path, registration.ToJsonString());
+        var birth = Fixture.T0.AddMinutes(5);
+        f.Processes.Run(agent, successor, exe, birth);
+        if (agent == AgentKind.Claude) { f.ClaudeSessionFile(successor, Id, birth); }
+        else { f.Processes.Holders[f.CodexLock(Id)] = [successor]; }
+        replacing = listed;
+        await source.RefreshAsync();
+        Assert.Equal(successor, Assert.Single(source.Snapshot()).ProcessId);
+        Assert.False(gap, "A mid-pass reader saw neither the live successor nor a discovery hold.");
+        await source.RefreshAsync();
+        Assert.Equal(successor, Assert.Single(source.Snapshot()).ProcessId);
+        Assert.Null(source.Held);
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Claude, false)]
+    [InlineData(AgentKind.Claude, true)]
+    [InlineData(AgentKind.Codex, false)]
+    [InlineData(AgentKind.Codex, true)]
+    public async Task An_undated_native_successor_holds_until_its_birth_is_proved_or_it_exits(AgentKind agent, bool exits)
+    {
+        using var f = new Fixture();
+        if (agent == AgentKind.Claude) { f.ClaudeRegistration(Id, 700, null); }
+        else { f.CodexRegistration(Id, 700, null); }
+        var exe = agent == AgentKind.Claude ? "claude.exe" : "codex.exe";
+        f.Processes.Run(agent, 700, exe);
+        await using var source = new SessionSource(f.Options(), f.Processes, f.Time, hostId: "host-id");
+        await source.RefreshAsync();
+        Assert.Equal(700, source.Get(Id)!.ProcessId);
+        using var subscription = source.Subscribe();
+        while (subscription.Events.TryRead(out _)) { }
+        var root = agent == AgentKind.Claude ? f.ClaudeRegistrations : f.CodexRegistrations;
+        var path = Path.Combine(root, Id + ".json");
+        var registration = JsonNode.Parse(File.ReadAllText(path))!;
+        registration["Ended"] = true;
+        File.WriteAllText(path, registration.ToJsonString());
+        f.Processes.Exit(agent, 700);
+        f.Processes.RunUndated(agent, 701, exe);
+        var birth = Fixture.T0.AddMinutes(5);
+        if (agent == AgentKind.Claude) { f.ClaudeSessionFile(701, Id, birth); }
+        else { f.Processes.Holders[f.CodexLock(Id)] = [701]; }
+        await source.RefreshAsync();
+        Assert.Contains(agent, Assert.IsType<DiscoveryHeld>(source.Held).Agents);
+        Assert.Null(source.Get(Id));
+        Assert.True(subscription.Events.TryRead(out var first));
+        Assert.Equal(Events.DiscoveryChanged, first!.Name);
+        f.Time.Advance(TimeSpan.FromHours(1));
+        await source.RefreshAsync();
+        Assert.Contains(agent, source.Held!.Agents);
+        if (exits) { f.Processes.Exit(agent, 701); }
+        else { f.Processes.Run(agent, 701, exe, birth); }
+        await source.RefreshAsync();
+        Assert.Null(source.Held);
+        if (exits) { Assert.Empty(source.Snapshot()); }
+        else { Assert.Equal(701, Assert.Single(source.Snapshot()).ProcessId); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public async Task An_overflowed_runtime_keeps_its_resume_guard_while_it_runs_across_passes_and_restarts(bool restart, bool dated = true)
+    {
+        using var f = new Fixture();
+        var ids = Enumerable.Range(0, 251).Select(i => $"{i:D8}-0000-4000-8000-000000000000").ToArray();
+        for (var i = 0; i < ids.Length; i++)
+        {
+            f.CopilotSession(ids[i], null);
+            var line = $"node C:/npm/node_modules/@github/copilot/index.js --session-id {ids[i]}";
+            if (dated) { f.Processes.Run(AgentKind.Copilot, 1000 + i, line); } else { f.Processes.RunUndated(AgentKind.Copilot, 1000 + i, line); }
+        }
+        var options = f.Options(stateFile: Path.Combine(f.Root, "sessions-listed.json"));
+        var source = new SessionSource(options, f.Processes, f.Time, hostId: "host-id");
+        try
+        {
+            await source.RefreshAsync();
+            var pid = 1000 + Array.IndexOf(ids, Assert.Single(ids.Except(source.Snapshot().Select(s => s.Id))));
+            f.Processes.Unidentify(AgentKind.Copilot, pid);
+            if (restart) { await source.DisposeAsync(); source = new SessionSource(options, f.Processes, f.Time, hostId: "host-id"); }
+            await source.RefreshAsync();
+            await source.RefreshAsync();
+            Assert.Contains($"could not be read (pid {pid})", source.Held!.Reason);
+            f.Processes.Exit(AgentKind.Copilot, pid);
+            await source.RefreshAsync();
+            Assert.Null(source.Held);
+            Assert.Empty((HashSet<string>)typeof(SessionSource).GetField("_omitted", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(source)!);
+        }
+        finally { await source.DisposeAsync(); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_host_restart_keeps_resume_guard_but_not_roster_membership_for_an_unreadable_runtime(bool reused)
+    {
+        using var f = new Fixture();
+        Fixture.Append(f.CopilotSession(Id, null), Copilot.User("resumed", 1));
+        var command = $"node C:/npm/node_modules/@github/copilot/index.js --session-id {Id}";
+        f.Processes.Run(AgentKind.Copilot, 300, command);
+        var options = f.Options(stateFile: Path.Combine(f.Root, "sessions-listed.json"));
+        await using (var before = new SessionSource(options, f.Processes, f.Time, hostId: "host-id"))
+        {
+            await before.RefreshAsync();
+            Assert.Single(before.Snapshot());
+        }
+        f.Processes.Unidentify(AgentKind.Copilot, 300, reused ? Fixture.T0.AddMinutes(2) : null);
+        for (var restart = 0; restart < 2; restart++)
+        {
+            await using var after = new SessionSource(options, f.Processes, f.Time, hostId: "host-id");
+            await after.RefreshAsync();
+            await after.RefreshAsync();
+            Assert.Empty(after.Snapshot());
+            Assert.Equal(!reused, after.Held?.Agents.Contains(AgentKind.Copilot) == true);
+            Assert.Null(after.ProcessOf(Id));
+        }
+        f.Processes.Exit(AgentKind.Copilot, 300);
+        await using var departed = new SessionSource(options, f.Processes, f.Time, hostId: "host-id");
+        await departed.RefreshAsync();
+        Assert.Null(departed.Held);
     }
 
     static void AssertRow(JsonElement row, string machine)

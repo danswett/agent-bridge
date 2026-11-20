@@ -125,7 +125,9 @@ case "$*" in
       cp "$APT_CHAIN_SOURCE/cached.deb" "$PLAYWRIGHT_APT_ARCHIVES/cached.deb"
       archive_matches_index || { echo 'E: downloaded archive hash mismatch' >&2; exit 100; }
     fi
-    [ -z "${APT_GETS:-}" ] || printf '%s\n' "$APT_GETS"
+    if [[ " $* " != *" -qq "* ]]; then
+      [ -z "${APT_GETS:-}" ] || printf '%s\n' "$APT_GETS"
+    fi
     exit "${APT_DOWNLOAD_EXIT:-0}" ;;
 esac
 exit 99
@@ -165,7 +167,7 @@ reset() {
   unset APT_SLOW APT_UPDATE_SLOW APT_UPDATE_EXIT APT_DOWNLOAD_EXIT APT_GETS PLAYWRIGHT_APT_FORCE_FALLBACK CHECK_BROWSERS
   unset APT_ERROR APT_FAIL_COUNT APT_AZURE_ONLY APT_DOWNLOAD_TIMEOUTS APT_DOWNLOAD_SECONDS
   unset APT_DNS_EXIT APT_DNS_OUTPUT APT_UPDATE_ERROR APT_UPDATE_FAIL_COUNT
-  unset DEBS_CACHE_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
+  unset DEBS_CACHE_HIT DEBS_CACHE_EXACT_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
   unset APT_VERIFY_ERROR APT_VERIFY_URI
   unset APT_CHAIN_SOURCE APT_TRUSTED_RELEASE APT_CHAIN_INSTALLED
 }
@@ -265,6 +267,44 @@ if [ "${1:-}" = --cache-auth ]; then
   cache_ref_case
   cache_copy_cases
   echo "cache-auth: $failures failure(s)"
+  [ "$failures" -eq 0 ]; exit
+fi
+
+followup_cases() {
+  reset "$azure" "$canonical"; export APT_DOWNLOAD_SECONDS=120
+  unset PLAYWRIGHT_APT_LIMIT PLAYWRIGHT_APT_ATTEMPTS PLAYWRIGHT_APT_RETRY_DELAY
+  check "Azure keeps a two-minute download within its default 180-second escape bound" \
+    0 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
+  grep -qx -- "--kill-after=30s 180s apt-get $download" "$TIMEOUT_LOG" \
+    || { echo "FAIL: Azure's production download bound is not 180 seconds"; failures=$((failures + 1)); }
+
+  reset "$canonical"; export DEBS_CACHE_HIT=true DEBS_CACHE_EXACT_HIT=true APT_GETS='Get:1 noisy archive progress'
+  printf 'evil! deb\n' > "$HOME/.cache/playwright-apt-debs/cached.deb"
+  check "an invalid exact-key hit redownloads quietly after live verification" \
+    0 "$(printf 'update\n%s\n-qq %s' "$verify" "$download")" "$canonical"
+  ! grep -q '^Get:' "$work/out" && grep -q 'immutable exact-key cache' "$work/out" &&
+    grep -qF 'DEBS_CACHE_EXACT_HIT: ${{ steps.debs.outputs.cache-hit }}' "$here/action.yml" &&
+    grep -q 'cache-ready=true' "$GITHUB_OUTPUT" \
+    || { echo "FAIL: invalid exact-key recovery lost its quiet output, explanation or replacement archives"; failures=$((failures + 1)); }
+
+  reset "$canonical"; export DEBS_CACHE_HIT=true DEBS_CACHE_EXACT_HIT=false APT_GETS='Get:1 normal archive progress'
+  printf 'evil! deb\n' > "$HOME/.cache/playwright-apt-debs/cached.deb"
+  check "an invalid prefix hit retains normal authenticated download output" \
+    0 "$(printf 'update\n%s\n%s' "$verify" "$download")" "$canonical"
+  grep -q '^Get:1 normal archive progress' "$work/out" \
+    || { echo "FAIL: prefix-hit downloads were silenced"; failures=$((failures + 1)); }
+
+  reset "$canonical"; export DEBS_CACHE_HIT=true DEBS_CACHE_EXACT_HIT=true APT_ERROR='E: Hash Sum mismatch'
+  printf 'evil! deb\n' > "$HOME/.cache/playwright-apt-debs/cached.deb"
+  check "quiet exact-key recovery still reports fatal download errors without installing or saving" \
+    100 "$(printf 'update\n%s\n-qq %s' "$verify" "$download")" "$canonical"
+  grep -q '^E: Hash Sum mismatch' "$work/out" && grep -q '^::error::apt download failed' "$work/out" &&
+    [ ! -s "$GITHUB_OUTPUT" ] \
+    || { echo "FAIL: quiet download recovery hid an error or authorized saving"; failures=$((failures + 1)); }
+}
+if [ "${1:-}" = --followups ]; then
+  followup_cases
+  echo "followups: $failures failure(s)"
   [ "$failures" -eq 0 ]; exit
 fi
 
@@ -658,6 +698,7 @@ fi
 cache_auth_cases
 cache_ref_case
 cache_copy_cases
+followup_cases
 fi
 if [ "$failures" -ne 0 ]; then
   echo "::error::$failures of download.sh's checks failed"; exit 1

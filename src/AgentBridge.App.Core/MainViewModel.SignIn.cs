@@ -123,8 +123,12 @@ public sealed partial class MainViewModel
             var cleared = all.Select(m.Host.Sessions.Get).Count(s => s is not null && AuthState.Of(s) is var at && !AuthState.NeedsSignIn(at) && !AuthState.Confirming(at));
             if (cleared > 0) { Resolve(b, here ? "signedIn" : "recovered", cleared); }
         }
-        // An ended flow whose banner has gone keeps nothing.
-        foreach (var (k, f) in signInFlows.ToList()) { if (!f.Active && !live.Contains(k)) { signInFlows.Remove(k); } }
+        // An ended flow whose banner has gone keeps nothing; nor does a hold that has lapsed or whose
+        // banner the host now says is confirming (#902).
+        foreach (var (k, f) in signInFlows.ToList())
+        {
+            if (!f.Active && (!live.Contains(k) || f.Lapsed(now) || f.Held && first.Any(b => b.Key == k && b.State == "confirming"))) { signInFlows.Remove(k); }
+        }
         var want = SignInBanners.For(sources, signInFlows, signInResolved, now);
         var shown = SignIns.ToDictionary(b => b.Key, StringComparer.Ordinal);
         var keep = new List<SignInBannerViewModel>();
@@ -447,8 +451,10 @@ public sealed partial class MainViewModel
         {
             // Signing in isn't recovery (ui.md §6.13): the banner and rows follow the host, which says
             // pending (waiting for the session to confirm) and clears the sessions only once the model
-            // answers. All this device keeps is that a person here signed in.
-            signInFlows.Remove(key);
+            // answers. All this device keeps is that a person here signed in, and for a moment
+            // (AuthState.SignedInHold) the banner's words, so it never flips to Show code before the
+            // host's pending lands (#902).
+            signInFlows[key] = new SignInBanners.Flow("done", Outcome: "signedIn", SignedInAt: Time.GetUtcNow());
             signedInHere.Add(key);
         }
         else if (done.Outcome == "cancelled") { signInFlows.Remove(key); }
