@@ -328,7 +328,7 @@ suites:
     validation_plan: native
     kind: unit
     ring: 0
-    select: affected
+    select: always             # expiry sentinel must run even for unrelated product changes
     # The selector and its catalog checks (quality/README.md §4). A change to it can change any
     # selection, so it's in global_triggers: the whole ring runs, its own tests included (#487).
     platforms: [win-x64, linux-x64]

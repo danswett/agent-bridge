@@ -901,6 +901,25 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   Tests still run and report; there is no automatic skip or quarantine.
   This guidance approves no active quarantine. The flake record is the `flaky`
   label and its issues, one per test, each with its run links and counts.
+  - **Main-red-only superseding approval (owner, Nov 17 23:49 PT):**
+    [S3b](https://github.com/danswett/agent-bridge/issues/3073) pre-approves one-test
+    Skip quarantine for the same single test failing main CI attempts 1 and 2.
+    This supersedes the Nov 15 automatic-quarantine/skip ban only for main-red;
+    ordinary flake policy is unchanged. `quarantine-pr.ps1 -RunId <id> -TestName
+    <namespace.class.method-or-spec.mjs:line> -Repository <owner/repo> [-Hours 24]` refuses longer expiry.
+    Quality owns invocation: `MAIN_RED_QUARANTINE` must be exactly `on` (unset/off
+    refuses), rechecked before writes; use only approved in-memory credentials.
+    It creates/reuses a tracking issue and DRAFT `fixes-main` PR with one xUnit
+    attribute or Playwright declaration-line `test.skip` edit through git data,
+    no checkout/workflow changes. It never readies,
+    arms or merges; independent Sol + Sonnet exact-head receipts remain mandatory.
+    Owner/Chief can close the draft or disable the variable. Notify Main-Green
+    and Chief only, never the owner's phone. Unsupported/ambiguous declarations refuse.
+    `QuarantineExpiryTests` in the existing Quality project fails on expired or
+    malformed expiry markers in test sources; `quality-tool` is now a sentinel
+    on product changes, and the expiry enforcer cannot quarantine itself.
+    Offline fake-gh coverage runs via
+    `test-quarantine-pr.ps1`, also called by the existing rerun-known-flakes suite.
   - **The nightly flake hunt** (`flake-hunt`, ring 3, [flake-hunt.yml](../.github/workflows/flake-hunt.yml),
     #509) finds them before they turn a pull request or `main` red. At about 02:30 PT it runs
     every .NET test project 10 times on `ubuntu-latest`, `windows-latest` and `windows-11-arm`.
