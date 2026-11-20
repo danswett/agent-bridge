@@ -619,6 +619,7 @@ public sealed partial class ReplyTests
         await Do(c, ha.Press(SessionEntities.Submit(Node)));
         Assert.Single(answered);
         await CardCloses(c);
+        await c.DeliveredAsync(); await Pass(c);
         Assert.Equal(["first", "second"], replied.Select(r => r.Text));
     }
 
@@ -662,6 +663,7 @@ public sealed partial class ReplyTests
         await Do(c, ha.Press(SessionEntities.Submit(Node)));
         Assert.Single(answered);
         await CardCloses(c);
+        await c.DeliveredAsync(); await Pass(c);
         Assert.Equal(["first", "second"], replied.Select(r => r.Text));
     }
 
