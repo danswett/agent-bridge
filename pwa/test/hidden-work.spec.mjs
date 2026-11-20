@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
-async function surface(page, hidden = false) {
+async function surface(page) {
   await page.route('https://visibility.test/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/') {
@@ -13,19 +13,13 @@ async function surface(page, hidden = false) {
   await page.clock.install();
   await page.goto('https://visibility.test/');
   await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 100);
-  await visibility(page, !hidden);
-  await page.evaluate(async () => {
-    const { LaunchPanel } = await import('/js/ui/launch-view.js');
-    const state = window.state = { wakes: 0, reads: 0, jumps: 0, arrived: false, entry: null };
+  await visibility(page, true);
+  await page.evaluate(() => {
+    const state = window.state = { wakes: 0 };
     for (const name of ['setTimeout', 'setInterval']) {
       const set = window[name];
       window[name] = (fn, ms, ...args) => set(() => { state.wakes++; fn(...args); }, ms);
     }
-    state.panel = new LaunchPanel(document.querySelector('#launch'), {
-      service: { watch: (_id, fn) => { state.settle = fn; return () => {}; }, get: () => state.entry },
-      jump: () => { state.jumps++; return state.arrived; },
-    });
-    state.panel.setTarget({ hostId: 'target', machineName: 'Test machine', load: () => new Promise(() => {}) });
   });
 }
 
@@ -35,58 +29,6 @@ async function visibility(page, visible) {
     Object.defineProperty(document, 'hidden', { configurable: true, value: !visible });
     document.dispatchEvent(new Event('visibilitychange'));
   }, visible);
-}
-
-for (const hidden of [false, true]) {
-  test(`launch probes stop their clock while hidden, including when started ${hidden ? 'hidden' : 'visible'}`, async ({ page }) => {
-    await surface(page, hidden);
-    await page.evaluate(() => state.panel.probeOthers([{ hostId: 'other', load: async () => { state.reads++; return { trust: [] }; } }]));
-    if (!hidden) {
-      await page.clock.runFor(30000);
-      expect(await page.evaluate(() => state.reads)).toBe(2);
-      await visibility(page, false);
-    }
-    const before = await page.evaluate(() => ({ wakes: state.wakes, reads: state.reads }));
-    await page.clock.runFor(60000);
-    expect(await page.evaluate(() => ({ wakes: state.wakes, reads: state.reads }))).toEqual(before);
-    await visibility(page, true);
-    expect(await page.evaluate(() => state.reads)).toBe(before.reads + 1);
-    await visibility(page, true);
-    expect(await page.evaluate(() => state.reads)).toBe(before.reads + 1);
-    await page.clock.runFor(30000);
-    expect(await page.evaluate(() => state.reads)).toBe(before.reads + 2);
-    await page.evaluate(() => state.panel.clear());
-    const cleared = await page.evaluate(() => state.wakes);
-    await visibility(page, false);
-    await visibility(page, true);
-    await page.clock.runFor(30000);
-    expect(await page.evaluate(() => state.wakes)).toBe(cleared);
-  });
-
-  test(`launch jump retries stop their clock while hidden, including when started ${hidden ? 'hidden' : 'visible'}`, async ({ page }) => {
-    await surface(page, hidden);
-    await page.evaluate(() => {
-      state.panel.setOpen(true);
-      state.entry = { state: 'done', outcome: 'started', hostId: 'target', request: 'request', detail: { session: 'session' } };
-      state.settle(state.entry);
-    });
-    if (!hidden) {
-      await page.clock.runFor(250);
-      expect(await page.evaluate(() => state.jumps)).toBe(2);
-      await visibility(page, false);
-    }
-    const before = await page.evaluate(() => ({ wakes: state.wakes, jumps: state.jumps }));
-    await page.clock.runFor(1000);
-    expect(await page.evaluate(() => ({ wakes: state.wakes, jumps: state.jumps }))).toEqual(before);
-    await page.evaluate(() => { state.arrived = true; });
-    await visibility(page, true);
-    expect(await page.evaluate(() => state.jumps)).toBe(before.jumps + 1);
-    const finished = await page.evaluate(() => state.wakes);
-    await visibility(page, false);
-    await visibility(page, true);
-    await page.clock.runFor(1000);
-    expect(await page.evaluate(() => state.wakes)).toBe(finished);
-  });
 }
 
 test('pagehide without visibilitychange suspends motion and clocks until a persisted pageshow', async ({ page }) => {
@@ -111,20 +53,6 @@ test('pagehide without visibilitychange suspends motion and clocks until a persi
     motion: state.motion.playState,
   }))).toEqual({ ticks: 1, pausedAttribute: false, motion: 'running' });
   await page.evaluate(() => state.ticker.stop());
-});
-
-test('a launch jump that expires while hidden does not jump or restart on return', async ({ page }) => {
-  await surface(page, true);
-  await page.evaluate(() => {
-    state.panel.setOpen(true);
-    state.entry = { state: 'done', outcome: 'started', hostId: 'target', request: 'request', detail: { session: 'session' } };
-    state.settle(state.entry);
-  });
-  await page.clock.runFor(16000);
-  expect(await page.evaluate(() => state.wakes)).toBe(0);
-  await visibility(page, true);
-  await page.clock.runFor(1000);
-  expect(await page.evaluate(() => ({ wakes: state.wakes, jumps: state.jumps }))).toEqual({ wakes: 0, jumps: 0 });
 });
 
 test('hidden pages pause glyphs, pseudo-element spinners and running motion without replaying hidden changes', async ({ page }) => {

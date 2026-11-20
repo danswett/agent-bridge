@@ -25,7 +25,6 @@ import { ago } from './time.js';
 import { ASK, ALLOW_ALL, MAX_PROMPT, TRUST, checkLaunch } from '../launch.js';
 import { LaunchFollow, sameQuestion, samePrompt } from '../launch-follow.js';
 import { LINGER_READ_MS } from './receipt.js';
-import { isPageHidden, whileVisible } from './ticker.js';
 
 export const APPROVE_HINT = 'agent-bridge-host workspace add <folder>';
 export const RESUMABLE_INCOMPLETE_NOTE = "Some sessions weren't checked in time. Reload choices to try again.";
@@ -127,6 +126,7 @@ export class LaunchPanel {
   // with nothing else on this page changing.
   #others = [];
   #probeTimer = null;
+  #probeVisibility = null;
   #target = null;
   #options = null;
   // When #options was read from its machine (ms), for the age shown beside them.
@@ -176,6 +176,7 @@ export class LaunchPanel {
   #alive = new AbortController();
   // The jump to a session's card still waiting for it to arrive (#jumpTo).
   #jumpTimer = null;
+  #jumpVisibility = null;
   // By machine, the launch shown as started since its unconfirmed outcome: { request, session },
   // its session's id when it is known: the one its outcome named, or a Trust answered here started.
   #lateStarted = new Map();
@@ -196,7 +197,6 @@ export class LaunchPanel {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
-    this.#stopProbes();
     clearTimeout(this.#busyTimer);
     clearTimeout(this.#trustGoneTimer);
     this.#busyTimer = null;
@@ -209,6 +209,7 @@ export class LaunchPanel {
     this.#follow.clear();
     this.#alive.abort();
     this.#cancelJump();
+    this.#stopProbes();
     this.#lateStarted.clear();
   }
 
@@ -382,22 +383,40 @@ export class LaunchPanel {
 
   #armProbes() {
     if (!this.#others.length) { this.#stopProbes(); return; }
-    if (this.#probeTimer) { return; }
-    this.#probeTimer = whileVisible(() => {
-      if (!this.#others.length) { this.#stopProbes(); return; }
+    if (!this.#probeVisibility) {
+      let hidden = !!globalThis.document?.hidden;
+      this.#probeVisibility = () => {
+        const next = !!globalThis.document?.hidden;
+        if (hidden === next) { return; }
+        hidden = next;
+        clearTimeout(this.#probeTimer);
+        this.#probeTimer = null;
+        if (!hidden) {
+          for (const o of this.#others) { this.#probe(o.hostId, o.load, true); }
+          this.#armProbes();
+        }
+      };
+      globalThis.document?.addEventListener?.('visibilitychange', this.#probeVisibility);
+    }
+    if (globalThis.document?.hidden || this.#probeTimer !== null) { return; }
+    this.#probeTimer = setTimeout(() => {
+      this.#probeTimer = null;
       for (const o of this.#others) { this.#probe(o.hostId, o.load, true); }
+      this.#armProbes();
     }, Math.max(LaunchPanel.recheckMs, 250));
   }
 
   #stopProbes() {
-    this.#probeTimer?.stop();
+    clearTimeout(this.#probeTimer);
     this.#probeTimer = null;
+    globalThis.document?.removeEventListener?.('visibilitychange', this.#probeVisibility);
+    this.#probeVisibility = null;
     this.#others = [];
   }
 
   #probe(hostId, load, due = false) {
     // Nobody is looking at a hidden tab: its machines aren't asked until it shows again.
-    if (!this.#target || hostId === this.#target.hostId || isPageHidden(globalThis.document)) { return; }
+    if (!this.#target || hostId === this.#target.hostId || globalThis.document?.visibilityState === 'hidden') { return; }
     const last = this.#probes.get(hostId);
     if (last && !due && Date.now() - last.at < LaunchPanel.recheckMs) { return; }
     const token = ++this.#probeSeq;
@@ -976,18 +995,31 @@ export class LaunchPanel {
     this.#cancelJump();
     const wanted = () => this.#open && this.#target?.hostId === hostId && (!request || this.service.get(hostId)?.request === request);
     if (!wanted()) { return; }
-    if (!isPageHidden(globalThis.document) && this.jump(id, hostId)) { return; }
+    if (!globalThis.document?.hidden && this.jump(id, hostId)) { return; }
     const until = Date.now() + 15000;
-    this.#jumpTimer = whileVisible(() => {
+    const tick = () => {
       if (!wanted() || Date.now() > until) { this.#cancelJump(); return; }
-      if (isPageHidden(globalThis.document)) { return; }
+      if (globalThis.document?.hidden) { return; }
       if (this.jump(id, hostId)) { this.#cancelJump(); }
-    }, 250);
+    };
+    this.#jumpVisibility = () => {
+      if (!wanted() || Date.now() > until) { this.#cancelJump(); return; }
+      if (globalThis.document?.hidden) {
+        clearInterval(this.#jumpTimer);
+        this.#jumpTimer = null;
+      } else if (this.#jumpTimer === null) {
+        this.#jumpTimer = setInterval(tick, 250);
+      }
+    };
+    globalThis.document?.addEventListener?.('visibilitychange', this.#jumpVisibility);
+    this.#jumpVisibility();
   }
 
   #cancelJump() {
-    this.#jumpTimer?.stop();
+    if (this.#jumpTimer !== null) { clearInterval(this.#jumpTimer); }
     this.#jumpTimer = null;
+    globalThis.document?.removeEventListener?.('visibilitychange', this.#jumpVisibility);
+    this.#jumpVisibility = null;
   }
 
   #show(entry) {

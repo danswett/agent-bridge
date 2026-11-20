@@ -414,6 +414,7 @@ public static class ProtocolVectors
         f.Record<Session>(Host)
             .Valid("full", FullSession)
             .Valid("minimal", MinimalSession)
+            .Valid("host-roster-with-unknown-outcomes", MinimalSession with { Machine = MachineId, Owner = new(), Pr = new(), Finished = new(), StartedAt = null })
             .Valid("transcript-file-size", MinimalSession with { TranscriptBytes = 52_428_801, TranscriptObservation = transcriptObservation })
             .Valid("transcript-unavailable", MinimalSession with { TranscriptBytesUnavailable = "not-found", TranscriptObservation = transcriptObservation })
             .Valid("waiting-on-a-delegate", MinimalSession with { Agent = AgentKind.Copilot, Status = SessionStatus.Waiting, Question = Plain with { Agent = "agent-1", AnswerAtMachine = true }, Subagents = [Delegate with { Status = SubagentStatus.Waiting }], WaitingOn = "agent-1" })
@@ -627,6 +628,11 @@ public static class ProtocolVectors
             Id = FileA, Ref = @"@C:\bridge\attachments\0123456789abcdef0123456789abcdef-shot.png",
         };
         f.Record<ReplyAttachmentBinding>(Host).Valid("a-staged-reference", binding);
+        // A guarded clear's escrow (#804): the whole draft escaped as the host shows it, spaces kept.
+        var hidden = ShownText.RevealMarked("rerun the build\u202E gol", rightToLeft: true);
+        f.Record<ClearedComposer>(Host)
+            .Valid("a-plain-draft", new ClearedComposer("  rerun the tests ", []))
+            .Valid("an-escaped-draft", new ClearedComposer(hidden.Shown, [.. hidden.Marks.Select(m => (IReadOnlyList<int>)[m.Start, m.Length])]));
         f.Record<ReplyResult>(Host)
             .Valid("delivered", new ReplyResult(AnswerOutcome.Delivered))
             .Valid("delivered-with-bindings", new ReplyResult(AnswerOutcome.Delivered) { Attachments = [binding] })

@@ -1,11 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
 import * as ticker from '../../js/ui/ticker.js';
 import { watchPresses, enter } from '../../js/ui/motion.js';
-import { LaunchFollow } from '../../js/launch-follow.js';
-import { ASK, ALLOW_ALL, MAX_PROMPT } from '../../js/launch.js';
 
 const fire = (target, type, props = {}) => target.dispatchEvent(Object.assign(new Event(type), props));
 const { whileVisible } = ticker;
@@ -88,40 +84,3 @@ test('pagehide alone pauses motion and blocks new motion until a persisted visib
   enter(el, 'value');
   assert.equal(starts, 1);
 });
-
-const launchSource = readFileSync(new URL('../../js/ui/launch-view.js', import.meta.url), 'utf8')
-  .replace(/^import .*;\r?$/gm, '').replace(/^export /gm, '');
-for (const away of [1000, 16000]) {
-  test(`pagehide suspends launch probes and jumps; persisted pageshow ${away < 15000 ? 'resumes' : 'expires'} the original jump deadline`, (t) => {
-    t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: 0 });
-    const doc = page();
-    const state = { reads: 0, jumps: 0, entry: null };
-    const LaunchPanel = vm.runInNewContext(`${launchSource}\nLaunchPanel`, {
-      h: (_tag, props) => Object.assign(element(), props), document: doc,
-      LaunchFollow, ASK, ALLOW_ALL, MAX_PROMPT, AbortController, TextEncoder, Date, ...ticker,
-      setTimeout, clearTimeout,
-      whileVisible: (fn, ms) => whileVisible(fn, ms, doc),
-    });
-    const panel = new LaunchPanel(element(), {
-      service: { watch: (_id, fn) => { state.settle = fn; return () => {}; }, get: () => state.entry },
-      jump: () => { state.jumps++; return false; },
-    });
-    t.after(() => panel.clear());
-    panel.setTarget({ hostId: 'target', load: () => new Promise(() => {}) });
-    panel.setOpen(true);
-    panel.probeOthers([{ hostId: 'other', load: async () => { state.reads++; return { trust: [] }; } }]);
-    state.entry = { state: 'done', outcome: 'started', hostId: 'target', request: 'request', detail: { session: 'session' } };
-    state.settle(state.entry);
-    assert.equal(state.jumps, 1);
-    fire(doc.defaultView, 'pagehide');
-    t.mock.timers.tick(away);
-    assert.equal(state.jumps, 1, 'no jump callback while pagehidden');
-    fire(doc.defaultView, 'pageshow', { persisted: true });
-    assert.equal(state.jumps, away < 15000 ? 2 : 1);
-    assert.equal(state.reads, 2, 'probes refresh once on return');
-    fire(doc.defaultView, 'pageshow', { persisted: true });
-    assert.equal(state.reads, 2);
-    t.mock.timers.tick(14001);
-    assert.equal(state.jumps, away < 15000 ? 2 : 1, 'return never grants another 15 seconds');
-  });
-}

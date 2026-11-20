@@ -219,7 +219,7 @@ public partial class App : Application
         {
             var announced = AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write, blockers: InstallBlockers.Find);
             MainWindow shownIn = window;
-            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others, ui: ui, preflight: InstallBlockers.Find)
+            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, pid => PackageProcesses.Others(options.Profile, pid), ui: ui, preflight: InstallBlockers.Find)
             {
                 WindowOpen = () => shownIn.IsOpen,
                 // After an update that took, the new host is watched for ten minutes (#1308).
@@ -382,9 +382,19 @@ public partial class App : Application
     // Closing the window keeps the app in the notification area, where its toasts come from.
     void OnWindowClosing(Microsoft.UI.Windowing.AppWindowClosingEventArgs e)
     {
-        if (quitting || tray is null) { return; }
-        e.Cancel = true;
-        window?.HideToTray();
+        if (!quitting && tray is not null)
+        {
+            e.Cancel = true;
+            window?.HideToTray();
+            return;
+        }
+        CompleteRun();
+    }
+
+    void CompleteRun()
+    {
+        try { Program.Marker?.Complete(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { AppLog.Write($"run marker not cleared: {error.GetType().Name}"); }
     }
 
     void Quit()
@@ -413,7 +423,7 @@ public partial class App : Application
             if (d is not null) { await d.DisposeAsync(); }
         });
         if (options.SelfTest is not null) { AppLog.Write("self-test: closing the window and exiting"); }
-        if (window is null) { Exit(); return; }
+        if (window is null) { CompleteRun(); Exit(); return; }
         // Window.Close disconnects UI Automation, and that cross-apartment call pumps messages: a
         // window-position message still waiting is then handled by a window already half torn down,
         // and WinUI faults in CWindowChrome::UpdateBridgeWindowSizePosition (0xC0000005, #1537, seen

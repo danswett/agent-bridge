@@ -167,8 +167,9 @@ public sealed class FleetTests : IAsyncLifetime
         using var hostKey = P256KeyPair.Generate();
         link.UpdateNowSigner = request => Transfers.SignUpdateNow(app, hostKey.Public, "0.5.0", null, clock.GetUtcNow(), request);
         var request = Guid.NewGuid().ToString();
-        var signed = fleet.SignUpdateNow(hostKey.Public, "remote-id", "0.5.0", null, request);
+        var signed = fleet.SignUpdateNow(hostKey.Public, "remote-id", "0.5.0", null, request, uncheckedPolicy: true);
         Assert.NotNull(signed);
+        Assert.True(link.SignedUnchecked);
         remoteHost.OnAsync(UpdateProtocol.Install, async _ => { await remoteHost.StopAsync(); return new UpdateCommandResult(UpdateAck.Accepted); });
         await Assert.ThrowsAnyAsync<IOException>(() => Remote().Host.ReadAsync<UpdateCommandResult>(UpdateProtocol.Install, new { now = signed }));
         await Wait.UntilAsync(() => TestUi.Read(() => main.MachineUpdates.Count) == 0, "the old row removed");
@@ -1637,7 +1638,12 @@ public sealed class FleetTests : IAsyncLifetime
     internal sealed class FakeFleetLink : IFleetLink
     {
         public Func<string, SignedCommand?>? UpdateNowSigner { get; set; }
-        public SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request) => UpdateNowSigner?.Invoke(request);
+        public bool SignedUnchecked { get; private set; }
+        public SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request, bool uncheckedPolicy = false)
+        {
+            SignedUnchecked = uncheckedPolicy;
+            return UpdateNowSigner?.Invoke(request);
+        }
         // The relay's roster: offline machines, null for a relay without one.
         public IReadOnlyList<KnownMachine>? Known { get; set; }
         // Runs once, as the next read of the offline machines starts: a drop just before it.
@@ -2010,6 +2016,9 @@ public sealed class RelayFleetLinkTests
         // On a quiet machine nothing was shown, and the press carries no accept.
         var quiet = Transfers.SignUpdateNow(app, machine.Public, "0.5.0", null, at, "8e1a4b3f-2d5c-4e6f-9071-223344556677");
         Assert.Equal("""{"now":true,"release":"0.5.0"}""", JsonSerializer.Deserialize<CommandBody>(BlobFormat.FromBase64Url(quiet.Body)!, ProtocolJson.Options)!.Args!.Value.GetRawText());
+        // Only a person's confirmation of the policy warning signs unchecked (#3307).
+        var policy = Transfers.SignUpdateNow(app, machine.Public, "0.5.0", null, at, "9f2b5c40-3e6d-4f70-a182-334455667788", uncheckedPolicy: true);
+        Assert.Equal("""{"now":true,"release":"0.5.0","unchecked":true}""", JsonSerializer.Deserialize<CommandBody>(BlobFormat.FromBase64Url(policy.Body)!, ProtocolJson.Options)!.Args!.Value.GetRawText());
     }
 
     // #603: the app reconnecting after sleep opened each machine's channel with XX and then asked

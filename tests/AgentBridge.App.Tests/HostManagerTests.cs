@@ -713,7 +713,9 @@ public sealed class HostManagerTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(50),
             ProbeWait = TimeSpan.FromSeconds(5),
             ProbePoll = TimeSpan.FromMilliseconds(50),
-            PackageHosts = () => [4242],
+            // A pid given to another program is no longer the package's (#3241: one from the
+            // package under this host's pid was never held, and refuses the update).
+            PackageHosts = () => { lock (processes) { return processes.StartTimes[4242] == Make.T0 ? [4242] : []; } },
         };
         processes.Alive.Add(4242);
         processes.StartTimes[4242] = Make.T0;
