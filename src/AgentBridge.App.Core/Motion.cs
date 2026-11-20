@@ -103,6 +103,22 @@ public sealed class MotionCatalogue
 public enum SelectionMotionKind { None, Slide, Fade }
 public readonly record struct SelectionMove(SelectionMotionKind Kind, double X = 0, double Y = 0);
 
+public sealed class SelectionTracker<T> where T : class
+{
+    public T? Current { get; private set; }
+
+    public bool Change(T? next, T? chosen)
+    {
+        // ListView may clear selection while moving a container, or on Ctrl+click; the chosen
+        // session stays open and SyncList restores it. That is not another selection.
+        if (ReferenceEquals(Current, next) || next is null && Current is not null && ReferenceEquals(Current, chosen)) { return false; }
+        Current = next;
+        return true;
+    }
+
+    public void Reset() => Current = null;
+}
+
 public static class SelectionMotion
 {
     public static SelectionMove Between(LookBox? previous, LookBox? next, LookBox viewport, bool animations)

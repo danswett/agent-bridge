@@ -100,6 +100,32 @@ public sealed class MotionTests
     }
 
     [Fact]
+    public void A_reordered_or_ctrl_clicked_selection_does_not_fade_in_again_when_the_list_restores_it()
+    {
+        var row = new object();
+        var selection = new SelectionTracker<object>();
+        Assert.True(selection.Change(row, row));
+        Assert.False(selection.Change(null, row));
+        Assert.Same(row, selection.Current);
+        Assert.False(selection.Change(row, row));
+        Assert.True(selection.Change(new object(), row));
+    }
+
+    [Fact]
+    public void A_real_deselection_or_unload_forgets_the_old_selection()
+    {
+        var row = new object();
+        var selection = new SelectionTracker<object>();
+        selection.Change(row, row);
+        Assert.True(selection.Change(null, null));
+        Assert.Null(selection.Current);
+        Assert.True(selection.Change(row, row));
+        selection.Reset();
+        Assert.Null(selection.Current);
+        Assert.True(selection.Change(row, row));
+    }
+
+    [Fact]
     public void The_glyphs_turn_at_the_generated_periods()
     {
         Assert.Equal(TimeSpan.FromSeconds(1.2), Catalogue.WorkingPeriod);

@@ -31,7 +31,16 @@ public sealed partial class SessionsPage : UserControl
         // reads where they are first (LanePointerLets).
         laneAnswers = new AnswerWatch(LaneItems, null, GuardLane);
         LaneItems.AddHandler(PointerPressedEvent, new PointerEventHandler(OnLanePressed), true);
-        Loaded += (_, _) => { Measure(); SyncList(); Ready(); laneAnswers.Start(); if (!LaneItems.IsHitTestVisible) { GuardLane(); } };
+        Loaded += (_, _) =>
+        {
+            Measure();
+            SyncList();
+            SettleSelection();
+            pillSelection.Change(List.SelectedItem as SessionCardViewModel, viewModel?.Selected);
+            Ready();
+            laneAnswers.Start();
+            if (!LaneItems.IsHitTestVisible) { GuardLane(); }
+        };
         // A lane held as the page went keeps no timer running; it is held afresh as the page comes back.
         Unloaded += (_, _) => { laneTimer?.Stop(); laneAnswers.Stop(); SettleSelection(); };
         // The list shown for the first time (one column, after a session opened at start).
@@ -134,7 +143,7 @@ public sealed partial class SessionsPage : UserControl
     {
         if (viewModel is null) { return; }
         var want = viewModel.Selected;
-        if (List.SelectedItem == want) { return; }
+        if (List.SelectedItem == want) { MoveSelection(); return; }
         syncing = true;
         try { List.SelectedItem = want; }
         finally { syncing = false; }
@@ -224,7 +233,7 @@ public sealed partial class SessionsPage : UserControl
         if (viewModel.Selected is not null) { DispatcherQueue.TryEnqueue(SyncList); }
     }
 
-    SessionCardViewModel? pillSelection;
+    readonly SelectionTracker<SessionCardViewModel> pillSelection = new();
     int pillGeneration;
 
     static FrameworkElement? SelectionBar(FrameworkElement container) =>
@@ -242,18 +251,23 @@ public sealed partial class SessionsPage : UserControl
     void SettleSelection()
     {
         pillGeneration++;
-        if (pillSelection is { } selected && List.ContainerFromItem(selected) is FrameworkElement container
+        SettleSelectionBar(pillSelection.Current);
+        pillSelection.Reset();
+    }
+
+    void SettleSelectionBar(SessionCardViewModel? selected)
+    {
+        if (selected is not null && List.ContainerFromItem(selected) is FrameworkElement container
             && SelectionBar(container) is { } bar) { Motion.Settle(bar); }
-        pillSelection = null;
     }
 
     void MoveSelection()
     {
         var next = List.SelectedItem as SessionCardViewModel;
-        if (ReferenceEquals(next, pillSelection)) { return; }
-        var previous = pillSelection;
-        SettleSelection();
-        pillSelection = next;
+        var previous = pillSelection.Current;
+        if (!pillSelection.Change(next, viewModel?.Selected)) { return; }
+        pillGeneration++;
+        SettleSelectionBar(previous);
         if (next is null) { return; }
         var generation = pillGeneration;
         Motion.AfterLayout(List, next, container =>
