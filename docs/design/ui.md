@@ -585,6 +585,17 @@ easing in, its duration out, and how far it travels.
 | Reorder | The session list (#164, #592) | A touch hold then drag; a mouse or pen drag; Alt+↑/↓; Move up or Move down; a screen reader's move action; an order change during a return's grace (§6.1, #950) | The whole card lifts, then follows the pointer 1:1 with no easing. Its neighbours ease one slot aside, leaving a card-sized gap where it will land: no insertion line. The order commits at release; the card settles into the gap and lowers. A key, menu or screen-reader move trades the moved card and its neighbours together, without a lift. Automatic return updates use the move, never the lift; return-grace order changes retarget changed rows from their drawn places. Only rows whose places changed move | `reorder`: standard, standard | Windows: pointer-driven in-list drag, Composition `Translation`, not OLE drag, its ghost or caption, nor `ReorderThemeTransition`. PWA: Pointer Events and transforms with frame-coalesced FLIP, not HTML5 drag-and-drop. Apple and Android: system list drag mapped to this contract | Instant gap, neighbours, drop and cancel. Only the held card follows the pointer |
 | Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
 
+Windows' reply-box exception line fades in place with `acknowledge`, including its
+reduced-motion cross-fade. On clearing, a drawn-only copy fades out with the same
+entry's exit token; it has no hit testing or automation presence. The live line's
+words and announcements change immediately, without waiting for that copy.
+
+Windows animates the list's existing selection bar using `selection`: it slides
+between realized rows intersecting the viewport, or fades in when the previous row
+is off screen. First draw and reduced motion are instant; recycling and unloading
+settle the bar. The row fill and the shipped container-relative bar geometry stay
+unchanged.
+
 **Lift and make room (#592).** The lift uses `fast` and `decelerate`: scale 1.02 about
 the card's centre, a 5% Bridge tint on `card` (4% in light), the drag shadow, a `stroke2`
 edge and `radius.card`. A selected card keeps its selection pill and selected overlay;
@@ -1335,6 +1346,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     draws chrome, that the last block is found by its name, which no other block has, and that every
     block, found and realised as a screen reader does it (FindItemByProperty, then Realize), is a
     list item numbered 1 to N in a set of N, none -1 ([app-windows.md](../app-windows.md)).
+    A Copy-Tab failure records the starting and landing focus paths, each Tab attempt, block
+    indices and realization, scroll offset/viewport/extent and rasterization scale. Focus-scroll
+    suppression uses the stop's position after leading alignment, even while that scroll is pending.
 - **Your messages:** a bubble at the right edge of the conversation's column (card fill,
   platform radius), at most 85% of the column's width, so a short message beside a short reply
   is still at the right (#255). The same in the stored turns above the live exchange, in the

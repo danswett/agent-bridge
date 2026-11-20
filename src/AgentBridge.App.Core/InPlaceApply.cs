@@ -33,6 +33,7 @@ public static class InPlaceApply
     {
         var next = Files(staged);
         var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string? kept = null;
         foreach (var file in held)
         {
             var rel = Path.GetRelativePath(current, file);
@@ -45,7 +46,7 @@ public static class InPlaceApply
                 throw new InPlaceApplyException($"current{Path.DirectorySeparatorChar}{rel} is held by another program and is not the same in the new version; nothing was installed");
             }
         }
-        if (Directory.Exists(backup)) { Recover(current, backup, log); }
+        if (Directory.Exists(backup)) { kept = Recover(current, backup, log); }
         var moved = new List<string>();
         var written = new List<string>();
         var created = new List<string>();
@@ -84,30 +85,32 @@ public static class InPlaceApply
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
             var back = Restore(current, backup, written, moved, created, removed);
+            var earlier = kept is null ? "" : $"; an earlier install's backup, which may hold the only intact old files, is kept at {kept}";
             throw new InPlaceApplyException(back
-                ? $"the in-place install failed and the old version was put back; nothing was installed: {e.Message}"
-                : $"the in-place install failed and current is partly updated; what could not be put back is in {backup}: {e.Message}", e);
+                ? $"the in-place install failed and the old version was put back; nothing was installed{earlier}: {e.Message}"
+                : $"the in-place install failed and current is partly updated; what could not be put back is in {backup}{earlier}: {e.Message}", e);
         }
         try { DeleteTree(backup); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
     // A backup an earlier install left (a crash, or a final delete that failed) blocked every later
-    // one. Where every file in it is also in current it is only a leftover; where one is not, it may
-    // hold the only copy, so it is kept beside it, never deleted.
-    static void Recover(string current, string backup, Action<string>? log)
+    // one. Where every file in it is the same in current it is only a leftover; where one is not, it may
+    // hold the only copy (an interrupted copy truncates current's: r4639323971), so it is kept beside it, never deleted.
+    static string? Recover(string current, string backup, Action<string>? log)
     {
         try
         {
-            if (Files(backup).All(rel => File.Exists(Path.Combine(current, rel))))
+            if (Files(backup).All(rel => Same(Path.Combine(backup, rel), Path.Combine(current, rel))))
             {
                 DeleteTree(backup);
                 log?.Invoke($"update: removed an earlier install's leftover backup at {backup}; every file in it is also in current");
-                return;
+                return null;
             }
             var kept = $"{backup}-{DateTime.UtcNow:yyyyMMddHHmmssfff}";
             Directory.Move(backup, kept);
-            log?.Invoke($"update: an earlier install's backup holds files that are not in current; it was kept at {kept}");
+            log?.Invoke($"update: an earlier install's backup holds files that are not the same in current; it was kept at {kept}");
+            return kept;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -149,7 +152,7 @@ public static class InPlaceApply
     }
 
     // Only for files nothing needs any more: Directory.Delete refuses a read-only one.
-    static void DeleteTree(string dir)
+    internal static void DeleteTree(string dir)
     {
         foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)) { File.SetAttributes(file, FileAttributes.Normal); }
         Directory.Delete(dir, recursive: true);

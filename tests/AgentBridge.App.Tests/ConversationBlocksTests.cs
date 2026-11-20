@@ -636,6 +636,23 @@ public sealed class ConversationKeyboardTests
         Assert.True(ConversationKeyboard.HoldsFocusScroll(TabLanding.BlockStart, 12, 32, 576));
     }
 
+    [Theory]
+    [InlineData(560)]
+    [InlineData(-40)]
+    public void A_Copy_stop_is_held_using_its_position_after_the_pending_leading_scroll(double blockTop)
+    {
+        Assert.True(ConversationKeyboard.HoldsFocusScroll(TabLanding.FocusVisible, blockTop + 12, 32, 576, blockTop));
+    }
+
+    [Theory]
+    [InlineData(560)]
+    [InlineData(-200)]
+    public void A_stop_beyond_the_view_after_the_pending_leading_scroll_still_scrolls_into_view(double blockTop)
+    {
+        Assert.False(ConversationKeyboard.HoldsFocusScroll(TabLanding.FocusVisible, blockTop + 700, 32, 576, blockTop));
+        Assert.True(ConversationKeyboard.HoldsFocusScroll(TabLanding.BlockStart, blockTop + 700, 32, 576, blockTop));
+    }
+
     [Fact]
     public void A_stop_below_the_view_in_a_block_taller_than_it_is_brought_in_when_focus_wins_and_left_when_the_block_start_wins()
     {
