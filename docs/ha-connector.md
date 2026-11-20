@@ -1038,6 +1038,11 @@ device.
   nothing newer says `current`, `Checked just now; <version> is the latest release.` for ten
   minutes, until a check finds a newer one. A press while a check is already under way gets a
   check of its own once that one is done, so "just now" is never an earlier check's answer.
+  A press is not answered from the release list kept for background checks (#3441): the CDN's
+  copy may be most of an hour old, so a press asks GitHub (conditionally, on a list GitHub gave),
+  and uses the CDN's only while GitHub is backed off or refuses. Every press ends with a host log line,
+  `update check pressed:` and the newer release, `no newer release`, `failed: <why>`, or why
+  an update under way answers instead.
 * **Install.** A press shows `checking` at once (`in_progress`, the spinner), then looks for the
   newest release again, downloads it (`downloading` with `update_percentage`), records the
   attempt in the connector's state file (an attempt that cannot be recorded is not handed
