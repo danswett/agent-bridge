@@ -12,6 +12,21 @@ namespace AgentBridge.App;
 
 static partial class SelfTest
 {
+    static async Task<double> RowMotionSettled(FrameworkElement root, Func<double> read, Action<bool, string> check, string phase)
+    {
+        const int frames = 8;
+        double previous = double.NaN, current = double.NaN;
+        for (var frame = 0; frame < frames; frame++)
+        {
+            previous = current;
+            await CaptureFrame(root);
+            current = read();
+            if (double.IsFinite(previous) && double.IsFinite(current) && Math.Abs(current - previous) <= 1) { return current; }
+        }
+        check(false, $"{phase} drawn position did not settle after {frames} capture frames ({previous}, {current}).");
+        return double.NaN;
+    }
+
     static async Task<AnimationController?> RowMotionController(Visual visual, FrameworkElement root, Action<bool, string> check, string phase)
     {
         const int frames = 4;
@@ -82,13 +97,11 @@ static partial class SelfTest
             // retarget's own paused start, not an earlier picture of the first shift.
             retarget.Pause();
             retarget.Progress = 0;
-            await CaptureFrame(root);
-            var moving = TrackedTop();
+            var moving = await RowMotionSettled(root, TrackedTop, check, "retarget start");
             check(moving > slot.Y + 1 && moving < original, $"row neighbour is mid-shift ({original}, {moving}, {slot.Y})");
             var target = original;
             retarget.Progress = 0.25f;
-            await CaptureFrame(root);
-            var later = TrackedTop();
+            var later = await RowMotionSettled(root, TrackedTop, check, "retarget quarter progress");
             check(later >= moving - 5 && later <= target + 1,
                 $"interrupted shift continues from its drawn position ({moving}, {later}, {target})");
             var progress = (later - moving) / (target - moving);
@@ -97,11 +110,10 @@ static partial class SelfTest
             check(progress > standard + 0.12,
                 $"interrupted shift decelerates toward its new position ({t:0.00} timeline, {progress:0.00} progress)");
             retarget.Progress = 0;
-            await CaptureFrame(root);
-            var paused = TrackedTop();
+            var paused = await RowMotionSettled(root, TrackedTop, check, "retarget rewind");
             await CaptureFrame(root);
             var held = TrackedTop();
-            check(retarget.Progress == 0 && double.IsFinite(paused) && Math.Abs(held - paused) <= 1,
+            check(retarget.Progress == 0 && double.IsFinite(paused) && Math.Abs(held - paused) <= 1 && Math.Abs(paused - moving) <= 3,
                 $"retarget is paused before motion is disabled ({later}, {target}; moving={moving}, original={original}, slot.Y={slot.Y}, paused={paused}, held={held}, controller={retarget.Progress})");
             animations = false;
             shifts.Changing();

@@ -13,13 +13,32 @@ using Xunit;
 public sealed class MotionTests
 {
     [Theory]
-    [InlineData(0f, 81, 81, 81, true)]
-    [InlineData(0f, 60, 60, 81, true)]
-    [InlineData(0f, 60, 63, 81, false)]
-    [InlineData(0.25f, 60, 60, 81, false)]
-    [InlineData(0f, double.NaN, 60, 81, false)]
-    public void The_paused_row_proof_checks_controller_and_stationary_pixels_not_distance(float progress, double before, double after, double target, bool expected) =>
-        Assert.Equal(expected, RowController.Value.DeclaringType!.GetMethod("Paused")!.Invoke(null, [progress, before, after, target]));
+    [InlineData(0f, 81, 81, 1, false)]
+    [InlineData(0f, 1, 1, 1, true)]
+    [InlineData(0f, 1, 4, 1, false)]
+    [InlineData(0.25f, 1, 1, 1, false)]
+    [InlineData(0f, double.NaN, 1, 1, false)]
+    public void The_paused_row_proof_requires_stationary_pixels_near_its_own_start(float progress, double before, double after, double moving, bool expected) =>
+        Assert.Equal(expected, RowController.Value.DeclaringType!.GetMethod("Paused")!.Invoke(null, [progress, before, after, moving]));
+
+    [Theory]
+    [InlineData(new double[] { 1, 1 }, 1, 2)]
+    [InlineData(new double[] { 24, 46, 1, 1 }, 1, 4)]
+    [InlineData(new double[] { double.NaN, 1, 1 }, 1, 3)]
+    [InlineData(new double[] { 10, 20, 30, 40, 50, 60, 1, 1 }, 1, 8)]
+    [InlineData(new double[] { 1, 4, 8, 16, 32, 48, 64, 128 }, double.NaN, 8)]
+    public async Task The_row_sampler_waits_for_drawn_settlement_and_fails_with_last_pixels(double[] pixels, double expected, int frames)
+    {
+        var result = await (Task<object[]>)RowController.Value.DeclaringType!.GetMethod("Settle")!.Invoke(null, [pixels])!;
+        Assert.Equal(expected, (double)result[0]);
+        Assert.Equal(frames, result[1]);
+        if (double.IsNaN(expected))
+        {
+            Assert.Contains("8 capture frames", (string)result[2]);
+            Assert.Contains("64, 128", (string)result[2]);
+        }
+        else { Assert.Equal("", result[2]); }
+    }
 
     [Theory]
     [InlineData("initial", 0, 0, true)]
@@ -48,6 +67,7 @@ public sealed class MotionTests
         Assert.NotNull(root);
         var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.App", "SelfTest.RowMotion.cs"))).GetRoot();
         var method = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "RowMotionController");
+        var settle = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "RowMotionSettled");
         var paused = syntax.DescendantNodes().OfType<InvocationExpressionSyntax>().Single(i => i.Expression.ToString() == "check"
             && i.ArgumentList.Arguments[1].ToString().Contains("retarget is paused before motion is disabled")).ArgumentList.Arguments[0].Expression;
         var source = $$"""
@@ -59,7 +79,13 @@ public sealed class MotionTests
                 public static int Frames;
                 static Task CaptureFrame(FrameworkElement root) { Frames++; return Task.CompletedTask; }
                 {{method}}
-                public static bool Paused(float progress, double before, double after, double target) {
+                {{settle}}
+                public static async Task<object[]> Settle(double[] pixels) {
+                    Frames = 0; var message = "";
+                    var value = await RowMotionSettled(new(), () => pixels[Math.Min(Frames - 1, pixels.Length - 1)], (ok, text) => { if (!ok) message = text; }, "retarget");
+                    return [value, Frames, message];
+                }
+                public static bool Paused(float progress, double before, double after, double moving) {
                     var retarget = new AnimationController { Progress = progress }; var paused = before; var held = after; var later = after;
                     return {{paused}};
                 }
