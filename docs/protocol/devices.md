@@ -506,9 +506,9 @@ A read-only query over a verifier (`PinnedDevices.Query`), for #972 slice 2 and 
 
 ## The host's verifier (OFF mode)
 
-A host reads the relay's copy with `roster-get` once after each connection and verifies it for itself, on its own clock: the generation is taken from the first genesis the relay holds for the account, every entry is offered to a `RosterVerifier`, and the host logs one line: entries read, how many were accepted, quarantined, refused or unreadable, and the head hashes (first 12 hex digits). It is `security.roster` = `off` (the only value this slice reads; anything else is reported in the log and read as `off`).
+A host reads the relay's copy with `roster-get` once after each connection and verifies it for itself, on its own clock: the generation is taken from the first genesis the relay holds for the account, every entry is offered to a `RosterVerifier`, and the host logs one line: entries read, how many were accepted, quarantined, refused or unreadable, and the head hashes (first 12 hex digits). It is `security.roster` = `off` (the default; `observe` is [below](#observe-mode); anything else is reported in the log and read as `off`).
 
-Off mode enforces nothing. No connection, command or approval is refused or changed because of what the roster holds or fails to hold, and a relay that does not answer, or answers with no roster, costs one log line. The roster reply is the one text frame the host reads past the ordinary frame bound (up to six times the relay's 224 KiB stored cap, for JSON escaping); a reply past even that is discarded as no roster, and the relay connection stays up (up to 4 MiB drained; beyond that, or for any other oversized text frame, the connection is closed as for any oversized frame). The generation is not pinned, so against a hostile relay this check protects nothing yet; observe and enforce modes, pinning and the ChannelHub gate are later slices.
+Off mode enforces nothing. No connection, command or approval is refused or changed because of what the roster holds or fails to hold, and a relay that does not answer, or answers with no roster, costs one log line. The roster reply is the one text frame the host reads past the ordinary frame bound (up to six times the relay's 224 KiB stored cap, for JSON escaping); a reply past even that is discarded as no roster, and the relay connection stays up (up to 4 MiB drained; beyond that, or for any other oversized text frame, the connection is closed as for any oversized frame). The generation is not pinned, so against a hostile relay this check protects nothing yet; enforce mode, pinning and the ChannelHub gate are later slices.
 
 ### Retained pin-reader foundation (#1358, part 1)
 
@@ -526,10 +526,25 @@ A missing pin reports `unpinned` and gives no trusted reader; a damaged, inacces
 oversize or public pin reports the fixed `pin-unreadable` code. A failed sync reports
 `no-roster` without discarding the retained reader.
 
-This foundation is not wired into the running host yet, enables no mode and refuses no
-operation. The running OFF verifier now explicitly reports `unpinned`. Observe/report
-integration and durable advancement of accepted heads remain follow-up #1358 work;
-this reader never advances a disk pin or claims rollback protection beyond it after restart.
+This reader enables no mode by itself and refuses no operation. The OFF verifier never feeds it
+and explicitly reports `unpinned`; only observe mode (next section) does. Durable advancement of
+accepted heads remains follow-up work; this reader never advances a disk pin or claims rollback
+protection beyond it after restart.
+
+### Observe mode
+
+`security.roster` = `observe` (#3450, default `off`) feeds the relay's roster to `HostRosterReader`
+on each connection and again about every five minutes while connected (plus or minus 20 percent;
+doubling after each failed pass, up to 40 minutes), because the relay sends hosts no notice when
+the device roster changes. It is read-only: it never creates, writes, expands or re-pins
+`roster-pin.json`, and the only decision it moves is the pinned, verified roster that fleet
+membership and the fleet-target gate read. A failed fetch, signature, account, generation or
+genesis leaves an unverified reader unverified, so those refuse; with no pin they behave as today.
+The host logs one line per change of state with a closed code (`verified`, `unpinned`, `no-roster`,
+`pin-mismatch`, `head-regress`, `pin-unreadable`, `not-verified` or `unavailable`), never the
+roster's contents. A restart re-verifies from the pin, so a relay serving an older valid roster
+after a restart is not detected across restarts; this matters for removals only (follow-up #3460).
+Pin creation and enforce mode are separate slices.
 
 ### Fail-closed transition persistence foundation (#2288, slice 2b-1)
 

@@ -736,6 +736,7 @@ async Task<int> ServeAsync(HostHandover handover)
         log: Log);
     var fleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder);
     var hostRoster = new HostRosterReader(Path.Combine(identity.Folder, "roster-pin.json"), HostRoster.Now);
+    var rosterObserve = new HostRosterObserve(hostRoster, () => settings.Security.Roster, HostRoster.Now, Log);
     var fleetTrust = new AgentBridge.Host.Fleet.FleetTrust(hostRoster, identity.Folder, () => identity.Account?.AccountId);
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
         name: fleetNames.Get, log: Log, sign: fleetTrust.Sign);
@@ -1023,12 +1024,8 @@ async Task<int> ServeAsync(HostHandover handover)
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff.Reset();
-            // Off mode: read and verify the roster in the background, log what it says, enforce nothing.
-            _ = Task.Run(async () =>
-            {
-                var check = await HostRoster.SyncAsync(relay, HostRoster.Now, current.Token, hostRoster);
-                Log($"device roster (security.roster {settings.Security.Roster}): {check.Summary}");
-            });
+            // security.roster: off reads, verifies and logs once; observe keeps the pinned reader fed, read-only.
+            _ = Task.Run(() => rosterObserve.ConnectedAsync(relay.GetRosterAsync, relay.AccountId, relay.Completion, current.Token));
             since.Restart();
             await fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token);
             (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);

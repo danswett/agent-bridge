@@ -142,6 +142,96 @@ public sealed class HostRosterPinTests : IDisposable
         Assert.True(reader.Verified!.Serving.ContainsKey(w.Id("B")));
     }
 
+    // security.roster on connect (#3450, brief 181); a completed `closed` stops after the first pass.
+    async Task<List<string>> Connect(HostRosterReader reader, string mode, Func<RelayRoster?> relay, List<string>? log = null)
+    {
+        log ??= [];
+        await new HostRosterObserve(reader, () => mode, () => w.Now, log.Add)
+            .ConnectedAsync(_ => Task.FromResult(relay()), RosterFixture.Account, Task.CompletedTask, default);
+        return log;
+    }
+
+    [Fact]
+    public async Task Off_never_feeds_the_pinned_reader_and_logs_todays_report()
+    {
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "off", () => Relay("G", "B"));
+        Assert.Null(reader.Verified);
+        Assert.Throws<InvalidOperationException>(() => reader.Pinned(RosterFixture.Account));
+        Assert.Equal("device roster (security.roster off): " + HostRoster.Verify(Relay("G", "B"), RosterFixture.Account, () => w.Now).Summary, Assert.Single(log));
+    }
+
+    [Fact]
+    public async Task Observe_feeds_a_matching_pinned_chain_so_pinned_lists_the_serving_host_and_the_pin_is_unchanged()
+    {
+        Pin();
+        var before = File.ReadAllBytes(PathName);
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "observe", () => Relay("G", "B"));
+        Assert.True(reader.Pinned(RosterFixture.Account)!.Serving.ContainsKey(w.Id("B")));
+        Assert.Equal("device roster (security.roster observe): verified", Assert.Single(log));
+        Assert.Equal(before, File.ReadAllBytes(PathName));
+    }
+
+    [Fact]
+    public async Task Observe_without_a_pin_keeps_the_unpinned_answer_and_creates_no_pin()
+    {
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "observe", () => Relay("G", "B"));
+        Assert.Null(reader.Pinned(RosterFixture.Account));
+        Assert.Null(reader.Verified);
+        Assert.False(File.Exists(PathName));
+        Assert.Equal("device roster (security.roster observe): unpinned", Assert.Single(log));
+    }
+
+    [Fact]
+    public async Task Observe_refuses_an_unverifiable_snapshot_or_a_failed_fetch()
+    {
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "observe", () => new RelayRoster("observe", w.GenerationId, ["not an entry"]));
+        await Connect(reader, "observe", () => throw new IOException("relay connection ended"), log);
+        Assert.Throws<InvalidOperationException>(() => reader.Pinned(RosterFixture.Account));
+        Assert.Equal(["device roster (security.roster observe): pin-mismatch", "device roster (security.roster observe): unavailable"], log);
+    }
+
+    [Fact]
+    public async Task Observe_refuses_a_relay_serving_another_accounts_roster()
+    {
+        Pin();
+        var other = new World { AccountId = "someone-else@example" };
+        other.Genesis();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "observe", () => new RelayRoster("observe", other.GenerationId, [other.Entry("G").Canonical()]));
+        Assert.Throws<InvalidOperationException>(() => reader.Pinned(RosterFixture.Account));
+        Assert.Equal("device roster (security.roster observe): pin-mismatch", Assert.Single(log));
+    }
+
+    [Fact]
+    public async Task Observe_logs_one_line_per_state_change_and_no_roster_contents()
+    {
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = new List<string>();
+        var observe = new HostRosterObserve(reader, () => "observe", () => w.Now, log.Add);
+        foreach (var _ in Enumerable.Range(0, 3))
+        {
+            await observe.ConnectedAsync(_ => Task.FromResult<RelayRoster?>(Relay("G", "B")), RosterFixture.Account, Task.CompletedTask, default);
+        }
+        Assert.Equal("device roster (security.roster observe): verified", Assert.Single(log));
+        Assert.DoesNotContain(log, l => l.Contains(Convert.ToHexString(w.Entry("B").Hash)[..12], StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(0, 0.5, 5.0)]
+    [InlineData(0, 0.0, 4.0)]
+    [InlineData(0, 1.0, 6.0)]
+    [InlineData(1, 0.5, 10.0)]
+    [InlineData(9, 0.5, 40.0)]
+    public void Observe_refetches_about_every_five_minutes_with_jitter_and_backs_off_on_failure(int failures, double random, double minutes) =>
+        Assert.Equal(TimeSpan.FromMinutes(minutes), HostRosterObserve.Next(failures, random));
+
     [Fact]
     public void Repeated_sync_does_not_restart_the_verifiers_probation_clock()
     {
