@@ -15,6 +15,7 @@ public static class Framing
     public const string PresenceLabel = "agent-bridge presence v1";
     public const string EnrollCommitLabel = "agent-bridge enroll commit v1";
     public const string EnrollLabel = "agent-bridge enroll v1";
+    public const string EnrollCapSignLabel = "agent-bridge enroll capSign v1";
     public const string EnrollCode1Label = "agent-bridge enroll code1 v1";
     public const string EnrollCode2Label = "agent-bridge enroll code2 v1";
     public const string EnrollKeyLabel = "agent-bridge enroll key v1";
@@ -25,6 +26,7 @@ public static class Framing
     public const string PersonCommandLabel = "agent-bridge person command v1";
     public const string VetoLabel = "agent-bridge reset veto v1";
     public const string HostKeyBindingLabel = "agent-bridge host key binding v1";
+    public const string VerifierKeyBindingLabel = "agent-bridge verifier key binding v1";
 
     public static byte[] F(params byte[][] parts)
     {

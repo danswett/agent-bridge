@@ -119,4 +119,58 @@ public sealed class RosterEncodingTests
         Assert.NotEqual(Presence.Challenge(Presence.RoleBy, body), Presence.Challenge(Presence.RoleCosigner, body));
         Assert.NotEqual(Presence.Challenge(Presence.RoleBy, body), Presence.Challenge(Presence.RoleBy, [.. body, 0x20]));
     }
+
+    [Theory]
+    [InlineData("remove")]
+    [InlineData("rename")]
+    [InlineData("confirm")]
+    [InlineData("merge")]
+    [InlineData("future")]
+    [InlineData("Add")]
+    [InlineData("")]
+    public void V3_on_any_op_but_genesis_or_add_is_refused_version(string op)
+    {
+        var body = new JsonObject { ["v"] = 3, ["op"] = op };
+        Assert.Equal(Refusal.Version, Code(() => EntryBody.Parse(Bytes(body))));
+    }
+
+    [Theory]
+    [InlineData(1, "future")]
+    [InlineData(1, "Add")]
+    [InlineData(1, "")]
+    [InlineData(2, "future")]
+    [InlineData(2, "Add")]
+    [InlineData(2, "")]
+    public void Legacy_unknown_ops_remain_refused_value(int version, string op)
+    {
+        var body = new JsonObject { ["v"] = version, ["op"] = op };
+        Assert.Equal(Refusal.Value, Code(() => EntryBody.Parse(Bytes(body))));
+    }
+
+    [Fact]
+    public void Domain_label_is_distinct_from_every_existing_label()
+    {
+        var shared = JsonNode.Parse(File.ReadAllText(Path.Combine(VectorFiles.Folder, "roster.json")))!["capSignV3"];
+        Assert.NotNull(shared);
+        var binding = shared["exampleBinding"]!.GetValue<string>();
+        var point = Codec.FromBase64Url(shared["exampleCapSign"]!.GetValue<string>(), "vector key");
+        var dh = Codec.FromBase64Url(shared["exampleDh"]!.GetValue<string>(), "vector dh");
+        Assert.Equal(Codec.FromBase64Url(binding, "vector binding"), VerifierKey.Binding(Account, Generation, dh));
+        var domains = shared["domains"]!.AsArray();
+        var transcript = domains.Single(v => v!["label"]!.GetValue<string>() == "agent-bridge enroll capSign v1")!;
+        var message = Codec.FromBase64Url(transcript["framed"]!.GetValue<string>(), "vector frame");
+        var signature = Codec.FromBase64Url(transcript["signature"]!.GetValue<string>(), "vector signature");
+        Assert.Contains(domains, v => v!["label"]!.GetValue<string>() == "agent-bridge fleet registry v1");
+        Assert.Equal(domains.Count, domains.Select(v => v!["label"]!.GetValue<string>()).Distinct(StringComparer.Ordinal).Count());
+        foreach (var vector in domains)
+        {
+            var label = vector!["label"]!.GetValue<string>();
+            var framed = Codec.FromBase64Url(vector["framed"]!.GetValue<string>(), "vector frame");
+            var proof = Codec.FromBase64Url(vector["signature"]!.GetValue<string>(), "vector signature");
+            Assert.Equal(framed, Framing.F(Framing.Label(label), Framing.Utf8(Account), Framing.Utf8(Generation), dh));
+            Assert.True(P256.Verify(point, framed, proof), label);
+            Assert.Equal(label == "agent-bridge enroll capSign v1", P256.Verify(point, framed, signature));
+            Assert.Equal(label == "agent-bridge enroll capSign v1", P256.Verify(point, message, proof));
+        }
+    }
 }

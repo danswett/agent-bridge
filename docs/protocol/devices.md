@@ -852,12 +852,13 @@ Later executable vectors must pin low-S signatures and each independent refusal
 mutation. Their artifacts/tests belong to #2366; end-to-end positive baselines
 cannot be built before the required host/person purpose-key enrollment exists.
 
-## Person capability-key enrollment (#2385, design only)
+## Person capability-key enrollment (#2385, staged readers)
 
-**Proposed contract, no implementation or rollout grant.** This is #1825 / #55,
+**Contract and staged implementation, no rollout grant.** This is #1825 / #55,
 under #1396. Every real person verifier remains unsupported until its capability
-key is enrolled and the dependent code is reviewed. This slice changes no parser,
-key store, roster pin, command, transition bit or live enrollment.
+key is enrolled and the dependent code is reviewed. C# parses v3 descriptors, but
+its verifier refuses v3 with `version` until collision checks and client parity land.
+Key stores, roster pins, commands, transition bits and live enrollment are unchanged.
 
 **Encoding baseline.** At commit
 `e16dc3674e21f4974dabd51b8bdee3ebd6ad07b3`, this file's lines 75-109 define the
@@ -929,6 +930,10 @@ The unchanged field checks keep their existing codes. For the new fields:
 | Well-formed proof fails under capSign or its binding | `cap-proof` (parser-only), after platform/name |
 | Any capSign field on a v1 descriptor or a v2 host | `unknown-member` (v2 person remains `version`) |
 | Oversize entry | existing `size`; no increased 8 KiB bound |
+
+The v3 op rule includes unknown string values and case variants: they refuse
+`version` before op enumeration or body member checks. V1/v2 keep their existing
+`value` verdict for unknown ops.
 
 At `approval`, after `device`, a v3 add requires method `code` or `qr` and its
 32-byte transcript; `grandfather` or `genesis` refuses `approval`, even with a
@@ -1039,6 +1044,12 @@ existing revocation/seniority rules; no mutation of old signed descriptors.
 Do not silently remove old enrollments or claim old evidence covers the new add.
 Evidence `v: 1` is unchanged; advertising host-v2 support does not authorize v3
 enrollment or prove an old reader understands it.
+
+The C# v3 descriptor parser's fixed valid and first-refusal cases are in
+[capsign-descriptor.json](vectors/capsign-descriptor.json), generated from the same
+corpus as `roster.json`'s new `capSignV3` key. That key also pins cross-domain
+framing/signatures, including fleet registry v1. The PWA's existing replay reads
+only the legacy sections, not `capSignV3`, until C3 adds its v3 reader/replay.
 Keep `acceptHostSign` false until #2366, #2369 and #2370 and their enrollment
 prerequisites are in; #2367 is last. Existing first-host bootstrap remains separate.
 
