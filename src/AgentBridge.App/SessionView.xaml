@@ -1069,7 +1069,7 @@
                 <!-- The receipt (ui.md §6.5, #600, #617): words only, and only for an exception (a stall,
                      a wait, an outcome other than Delivered), in room kept from Send until the box is
                      next typed in; a polite live region, which hears every stage. -->
-                <Grid Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowStatus), Mode=OneWay, FallbackValue=Collapsed}">
+                <Grid x:Name="ReplyStatusSpace" Visibility="Collapsed">
                     <!-- The room the longest outcome needs, drawn clear and unheard (ReceiptWords.Room). -->
                     <TextBlock
                         Style="{StaticResource AbTypeMeta}"
@@ -1079,6 +1079,7 @@
                         AutomationProperties.AccessibilityView="Raw"
                         Text="{x:Bind Card.Reply.StatusRoom, Mode=OneWay}" />
                     <TextBlock
+                        x:Name="ReplyStatusLine"
                         Style="{StaticResource AbTypeMeta}"
                         TextWrapping="Wrap"
                         IsTextSelectionEnabled="True"
@@ -1088,6 +1089,13 @@
                         local:ReceiptMarkView.Announcement="{x:Bind Card.Reply.Announcement, Mode=OneWay}"
                         Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
                         local:ReceiptMarkView.Tone="{x:Bind Card.Reply.StatusTone, Mode=OneWay}" />
+                    <TextBlock
+                        x:Name="ReplyStatusGone"
+                        Style="{StaticResource AbTypeMeta}"
+                        TextWrapping="Wrap"
+                        Visibility="Collapsed"
+                        IsHitTestVisible="False"
+                        AutomationProperties.AccessibilityView="Raw" />
                 </Grid>
             </local:ReadingColumn>
         </ScrollViewer>

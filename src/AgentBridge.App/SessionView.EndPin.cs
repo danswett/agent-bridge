@@ -94,7 +94,11 @@ public sealed partial class SessionView
     void CompleteNavigation() { if (navigationPending?.Invoke() == false) { navigationPending = null; } }
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
-    internal void ReleasePin() { restoreReading = null; pinEnd = false; navigationPending = null; anchoring = null; pinReleases++; }
+    internal void ReleasePin()
+    {
+        restoreReading = null; pinEnd = false; navigationPending = null; anchoring = null; pinReleases++;
+        if (historyFirstFrame is null && history is { } stored && historyVisible < stored.Turns.Count) { historyDraw?.Start(); }
+    }
 
     bool HistoryAtEnd() => navigationPending is null && scrollbarPointers.Count == 0 && (pinEnd || !panning && !scrolling && keyTarget is null
         && ConversationScroll is { ScrollableHeight: > 0 } scroll && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack);
