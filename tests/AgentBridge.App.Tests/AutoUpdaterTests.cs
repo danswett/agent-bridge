@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
+using AgentBridge.App;
 using AgentBridge.App.Core;
+using AgentBridge.Host;
 using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -1162,6 +1164,75 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.False(updater.Applied);
         Assert.Empty(host.Sent(HostOps.Stop));
         Assert.Contains(AutoUpdater.PolicyHold, auto.State.Waiting);
+    }
+
+    // #3307: the app's own policy reader (UpdaterHaltPolicy, as VelopackUpdater composes it, over
+    // the host's GitHubHaltListSource and a shared ReleaseDiscovery). Before, production said
+    // nothing (null), so an unasked install went over protection never checked. Unknown,
+    // unreadable or stale now holds it with the hold's words; Restart to update, a person's press,
+    // still installs once. A fresh policy installs unasked as before.
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData("unknown")]
+    [InlineData("unreadable")]
+    [InlineData("stale")]
+    [InlineData("fresh")]
+    public async Task The_app_updaters_own_policy_reader_holds_unasked_installs_unless_fresh_while_a_persons_press_still_installs(string policy)
+    {
+        InstallBetweenTurns();
+        var halts = await HaltsAsync(policy);
+        updater.HaltPolicy = halts.Snapshot;
+        Assert.Equal(policy == "fresh", halts.Snapshot.Fresh);
+        Assert.Equal(policy is "fresh" or "stale", halts.Snapshot.Policy is not null);
+        await StartAsync();
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        if (policy == "fresh") { await Wait.UntilAsync(() => updater.Applied, "the install between turns", TimeSpan.FromSeconds(5)); return; }
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Contains(AutoUpdater.PolicyHold, auto.State.Waiting);
+        if (policy == "unreadable") { Assert.Contains(log, l => l.StartsWith("update policy: protection could not be read (IOException)", StringComparison.Ordinal)); }
+
+        Assert.Null(await auto.RestartToUpdateAsync());
+        Assert.Equal("0.2.0", updater.AppliedVersion);
+    }
+
+    async Task<UpdaterHaltPolicy> HaltsAsync(string policy)
+    {
+        var folder = Path.Combine(app, "policy");
+        Directory.CreateDirectory(folder);
+        // A cache generation behind its verified one: the reader throws rather than read.
+        if (policy == "unreadable") { File.WriteAllText(Path.Combine(folder, ReleaseDiscovery.FileName), """{"haltPolicy":{"notBefore":"0001-01-01T00:00:00+00:00","attempt":0,"verified":1}}"""); }
+        var body = """{"v":1,"halted":[]}"""u8.ToArray();
+        var metadata = JsonSerializer.SerializeToUtf8Bytes(new[] { new { tag_name = "v0.1.2349", draft = false, assets = new[] { new { name = "halts.json",
+            browser_download_url = "https://github.com/danswett/agent-bridge/releases/download/v0.1.2349/halts.json",
+            size = body.Length, digest = "sha256:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(body)) } } } });
+        var up = policy is "fresh" or "stale";
+        var github = new PolicyGitHub(uri => !up ? null : uri.AbsoluteUri == ReleaseDiscovery.HaltPolicyList ? metadata : body);
+        var clock = new FakeTimeProvider(Make.T0);
+        var halts = new UpdaterHaltPolicy(new GitHubHaltListSource(new HttpClient(github), new ReleaseDiscovery(folder, github, clock, random: () => 0)), log.Add, clock);
+        Assert.Equal(new HaltPolicySnapshot(null, null, false), halts.Snapshot);
+        await halts.RefreshAsync();
+        if (policy == "stale")
+        {
+            up = false;
+            Assert.True(halts.Snapshot.Fresh);
+            clock.Advance(ReleaseDiscovery.GithubRevalidateEvery);
+            // Past its six hours it is stale before any check renews it.
+            Assert.False(halts.Snapshot.Fresh);
+            await halts.RefreshAsync();
+        }
+        return halts;
+    }
+
+    sealed class PolicyGitHub(Func<Uri, byte[]?> read) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(read(request.RequestUri!) is { } bytes
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) }
+                : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
     }
 
     [Fact]

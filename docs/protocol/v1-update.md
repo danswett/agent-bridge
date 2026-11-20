@@ -499,6 +499,10 @@ host's own text (#826). "Bridge", never "host".
   line: "Bad-release protection could not be checked on this machine." Cancel sends nothing and
   leaves no note; Update now there sends the press again signed `unchecked`. A second
   `policy-unreadable`, or `halted`, is not asked again: it reads "Not updated: *reason*" (below).
+  The app's own updater renews the same machine copy at each check, through the same reader and
+  hourly budget. While that protection is unknown, unreadable or stale, an install nobody asked
+  for holds with the bad-release-protection waiting line. Restart to update, a device-asked
+  Install and Update now still install.
 * **Forgetting the machine, or clearing the account, withdraws a press** (#3324): an open
   confirmation closes as Cancel, a press still waiting for its channel is never signed, and a
   late answer changes nothing: no confirmation, note, state or further press.
