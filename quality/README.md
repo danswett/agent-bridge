@@ -624,11 +624,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      tests-only bypass used`). Owner decision Nov 20 14:16 PT
      ([#3471](https://github.com/danswett/agent-bridge/issues/3471)): with
      `main_green.source_bypass: true` (off when absent), a labelled source fix skips it too when
-     all of these hold, each refused with its own reason: its file list is fully read and
+     all of these hold, each refused with its own reason: main's CI read as a failure (an
+     `error` or pending main is never waived); its file list is fully read and
      complete; its description has a well-formed `fixes-main-test: <fully qualified test name>`
      line per test (the evaluator checks only the form: Quality checks the name against main's
-     failing run before adding the label); additions plus deletions outside `docs/` are at most
-     `main_green.source_bypass_max_lines` (40 when absent); nothing under `.github/`, `quality/`
+     failing run before adding the label); additions plus deletions are at most
+     `main_green.source_bypass_max_lines` (40 when absent; zero, negative or not a whole number
+     refuses), counting everything but prose Markdown (`docs/**/*.md` outside `docs/protocol/`,
+     and a rename only when its old path is prose too); nothing under `.github/`, `quality/`
      or `tools/AgentBridge.Quality/`; and success `independent-review` and
      `independent-review-2` receipts from different model families on the head (statuses are
      read from the head commit only, so an older head's never count; this also covers any

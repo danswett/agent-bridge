@@ -786,7 +786,7 @@ static class MergeRuleCommand
     /// What a commit changes since it left the base: compare base...sha, three dots, as a pull
     /// request's own diff does. GitHub lists at most 300 files there, so 300 means "maybe more",
     /// which counts as incomplete, as a missing list does. Renamed files' old paths count too.
-    /// Lines are additions plus deletions outside docs/, null when any file lacks them.
+    /// Lines are additions plus deletions outside prose docs (ProseDoc), null when any file lacks them.
     /// </summary>
     static (List<string> Files, bool Complete, int? Lines) FilesOf(Session session, string sha)
     {
@@ -802,9 +802,11 @@ static class MergeRuleCommand
             {
                 var path = file.GetProperty("filename").GetString()!;
                 files.Add(path);
-                if (file.TryGetProperty("previous_filename", out var previous) && previous.GetString() is { } old)
+                string? old = null;
+                if (file.TryGetProperty("previous_filename", out var previous) && (old = previous.GetString()) is not null)
                     files.Add(old);
-                if (path.StartsWith("docs/", StringComparison.OrdinalIgnoreCase))
+                // A rename leaves the count only when both ends are prose: src/Big.cs -> docs/Big.md still counts.
+                if (ProseDoc(path) && (old is null || ProseDoc(old)))
                     continue;
                 lines = file.TryGetProperty("additions", out var added) && file.TryGetProperty("deletions", out var deleted)
                     ? lines + added.GetInt32() + deleted.GetInt32() : null;
@@ -813,6 +815,11 @@ static class MergeRuleCommand
         }
         return session.FilesBySha[sha] = (files, complete, complete ? lines : null);
     }
+
+    /// <summary>Prose Markdown under docs/, outside docs/protocol/: the only lines a source fix's cap leaves out.</summary>
+    static bool ProseDoc(string path) =>
+        path.StartsWith("docs/", StringComparison.OrdinalIgnoreCase) && path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+        && !path.StartsWith("docs/protocol/", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The open list, light: no checks, files or receipt history (Assess reads them, where a read

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
@@ -115,8 +116,12 @@ sealed class MainGreenConfig
     /// <summary>The source-fix route (#3471): off unless the rules turn it on.</summary>
     public bool SourceBypass { get; set; }
 
-    /// <summary>The most lines (additions plus deletions, outside docs/) a source fix may change.</summary>
-    public int SourceBypassMaxLines { get; set; } = 40;
+    /// <summary>The most lines (additions plus deletions, prose docs/*.md aside) a source fix may change, as written.</summary>
+    public string? SourceBypassMaxLines { get; set; }
+
+    /// <summary>The cap: 40 when absent, null when not a positive whole number, which refuses the route.</summary>
+    public int? SourceBypassCap => SourceBypassMaxLines is null ? 40
+        : int.TryParse(SourceBypassMaxLines, NumberStyles.None, CultureInfo.InvariantCulture, out var cap) && cap > 0 ? cap : null;
 }
 
 sealed class Arm64WaiverConfig
@@ -210,7 +215,7 @@ sealed record PullRequestFacts(
     /// <summary>The description, where a source fix names the main test it fixes. Read only with the checks.</summary>
     public string Body { get; init; } = "";
 
-    /// <summary>Additions plus deletions against the base outside docs/; null when not read.</summary>
+    /// <summary>Additions plus deletions against the base, prose docs/*.md aside; null when not read.</summary>
     public int? ChangedLines { get; init; }
 }
 
@@ -277,7 +282,7 @@ static class MergeRule
         // Otherwise, with the route on, a source fix may pass on what SourceBypass checks (#3471).
         var labelled = pr.Labels.Any(l => config.MainGreen.ExemptLabels.Contains(l, StringComparer.OrdinalIgnoreCase));
         var (fixedTest, bypassLog) = labelled && exemptBy is null && main.State != "success" && config.MainGreen.SourceBypass
-            ? SourceBypass(config, pr) : (null, []);
+            ? SourceBypass(config, main, pr) : (null, []);
         var mainBlocks = main.State != "success" && exemptBy is null && fixedTest is null;
         if (mainBlocks)
             failures.Add(main.Reason);
@@ -416,11 +421,13 @@ static class MergeRule
     /// none is refused. The evaluator checks only that the test line is well formed: Quality
     /// verifies it against main's run when it adds the label.
     /// </summary>
-    static (string? Test, List<string> Log) SourceBypass(MergeRuleConfig config, PullRequestFacts pr)
+    static (string? Test, List<string> Log) SourceBypass(MergeRuleConfig config, MainFact main, PullRequestFacts pr)
     {
         var log = new List<string>();
         void Check(bool ok, string pass, string fail) => log.Add(ok ? "ok: " + pass : "refused: " + fail);
         var sha = Short(pr.HeadSha);
+        // Only a red main it could read is waived: error or pending could hide anything.
+        Check(main.State == "failure", "main's CI read as failing", $"main's CI is {main.State}, not a read failure, and only a red main it could read is waived");
         Check(true, "the fixes-main label is on it (added by Quality, with triage rights)", "");
         var listed = pr.FullyRead && pr.FilesComplete && pr.Files.Count > 0;
         Check(listed, "its file list is fully read and complete", "its file list isn't fully read and complete");
@@ -429,9 +436,12 @@ static class MergeRule
         var named = tests.Count > 0 && tests.All(m => m.Success);
         Check(named, $"it names {string.Join(", ", tests.Select(m => m.Groups[1].Value))}",
             "name the failing main test (a line 'fixes-main-test: <fully qualified test name>' in the description)");
-        var cap = config.MainGreen.SourceBypassMaxLines;
-        Check(pr.ChangedLines <= cap, $"{pr.ChangedLines} changed lines outside docs/, within the cap of {cap}",
-            pr.ChangedLines is { } n ? $"{n} changed lines outside docs/, over the cap of {cap}" : "its changed lines weren't read");
+        var cap = config.MainGreen.SourceBypassCap;
+        if (cap is null)
+            Check(false, "", "main_green.source_bypass_max_lines isn't a positive whole number");
+        else
+            Check(pr.ChangedLines <= cap, $"{pr.ChangedLines} changed lines, not counting prose docs/*.md, within the cap of {cap}",
+                pr.ChangedLines is { } n ? $"{n} changed lines, not counting prose docs/*.md, over the cap of {cap}" : "its changed lines weren't read");
         var own = listed ? pr.Files.FirstOrDefault(f => RuleOwnPaths.Any(g => g.IsMatch(f))) : null;
         Check(listed && own is null, "it touches nothing under .github/, quality/ or tools/AgentBridge.Quality/",
             own is null ? "its files weren't read" : $"it touches {Printable(own)}, and the rule can't waive itself or the workflows");

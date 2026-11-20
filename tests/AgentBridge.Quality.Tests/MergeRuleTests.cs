@@ -313,7 +313,7 @@ public class MergeRuleTests
         Assert.Equal("success", verdict.State);
         Assert.StartsWith($"Source bypass used (fixes-main: {FixedTest}); Copilot reviewed abcdef0", verdict.Description);
         Assert.True(verdict.Description.Length <= 140);
-        Assert.Equal(6, verdict.SourceBypassLog.Count);
+        Assert.Equal(7, verdict.SourceBypassLog.Count);
         Assert.All(verdict.SourceBypassLog, line => Assert.StartsWith("ok: ", line));
     }
 
@@ -347,7 +347,34 @@ public class MergeRuleTests
         var verdict = OnRedMain(SourceFix(lines: lines));
 
         Assert.Equal(state, verdict.State);
-        Assert.Equal(state == "failure", verdict.Reasons.Contains("source bypass refused: 41 changed lines outside docs/, over the cap of 40"));
+        Assert.Equal(state == "failure", verdict.Reasons.Contains("source bypass refused: 41 changed lines, not counting prose docs/*.md, over the cap of 40"));
+    }
+
+    [Theory]
+    [InlineData("error")]
+    [InlineData("pending")]
+    public void A_source_fix_never_waives_a_main_whose_CI_could_not_be_read_as_red(string state)
+    {
+        var verdict = MergeRule.Evaluate(BypassConfig, new MainFact(state, RedMain), SourceFix())!;
+
+        Assert.NotEqual("success", verdict.State);
+        Assert.Contains($"source bypass refused: main's CI is {state}, not a read failure, and only a red main it could read is waived", verdict.Reasons);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("4.5")]
+    [InlineData("forty")]
+    public void A_source_fix_is_refused_when_the_line_cap_is_not_a_positive_whole_number(string cap)
+    {
+        var config = MergeRuleConfig.Parse(ConfigYaml.Replace("  exempt_labels: [fixes-main]",
+            $"  exempt_labels: [fixes-main]\n  source_bypass: true\n  source_bypass_max_lines: '{cap}'", StringComparison.Ordinal));
+
+        var verdict = OnRedMain(SourceFix(lines: 1), config);
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Contains("source bypass refused: main_green.source_bypass_max_lines isn't a positive whole number", verdict.Reasons);
     }
 
     [Theory]
@@ -422,27 +449,39 @@ public class MergeRuleTests
 
         Assert.Equal("Copilot reviewed abcdef0; every check passed; independent review on file; fixes-main tests-only bypass used", testsOnly.Description);
         Assert.Equal([RedMain], off.Reasons);
-        Assert.Equal(40, Config.MainGreen.SourceBypassMaxLines);
+        Assert.Equal(40, Config.MainGreen.SourceBypassCap);
     }
 
-    [Fact]
-    public void The_command_reads_the_description_and_counts_changed_lines_outside_docs_for_the_source_bypass()
+    const string FiveLineSource = """{"filename": "src/AgentBridge.Host/SessionStore.cs", "additions": 3, "deletions": 2}""";
+
+    // Only prose Markdown under docs/ is left out, and a rename only when its old path is prose too.
+    [Theory]
+    [InlineData("""{"filename": "src/AgentBridge.Host/SessionStore.cs", "additions": 30, "deletions": 10}, {"filename": "docs/pipeline-rules.md", "additions": 90, "deletions": 0}, {"filename": "docs/new.md", "previous_filename": "docs/old.md", "additions": 9, "deletions": 9}""",
+        "success", "ok: 40 changed lines, not counting prose docs/*.md, within the cap of 40")]
+    [InlineData(FiveLineSource + """, {"filename": "docs/Moved.cs", "previous_filename": "src/AgentBridge.Host/Big.cs", "additions": 50, "deletions": 10}""",
+        "failure", "refused: 65 changed lines, not counting prose docs/*.md, over the cap of 40")]
+    [InlineData(FiveLineSource + """, {"filename": "docs/Moved.md", "previous_filename": "src/AgentBridge.Host/Big.cs", "additions": 50, "deletions": 10}""",
+        "failure", "refused: 65 changed lines, not counting prose docs/*.md, over the cap of 40")]
+    [InlineData(FiveLineSource + """, {"filename": "docs/protocol/wire.md", "additions": 40, "deletions": 0}""",
+        "failure", "refused: 45 changed lines, not counting prose docs/*.md, over the cap of 40")]
+    [InlineData(FiveLineSource + """, {"filename": "docs/fleet-load-limits.json", "additions": 40, "deletions": 0}""",
+        "failure", "refused: 45 changed lines, not counting prose docs/*.md, over the cap of 40")]
+    [InlineData("""{"filename": "src/AgentBridge.Host/SessionStore.cs"}""",
+        "failure", "refused: its changed lines weren't read")]
+    public void The_command_reads_the_description_and_counts_changed_lines_but_prose_docs_for_the_source_bypass(string files, string state, string log)
     {
         var pr = GraphQLPullRequest(Head, labels: ["fixes-main"], body: $"fixes-main-test: {FixedTest}", extraStatuses: [
             new { context = "independent-review", state = "SUCCESS", description = "CLEAN claude-opus-5.5", createdAt = "2026-11-03T20:02:00Z", creator = new { login = "danswett" } },
             new { context = "independent-review-2", state = "SUCCESS", description = "CLEAN gpt-6.1-sol", createdAt = "2026-11-03T20:02:00Z", creator = new { login = "danswett" } }]);
-        var github = new FakeGitHub(pr, mainRuns: MainRuns((5, "completed", "failure", 1)), files: """
-            {"files": [{"filename": "src/AgentBridge.Host/SessionStore.cs", "additions": 30, "deletions": 10},
-                       {"filename": "docs/pipeline-rules.md", "additions": 90, "deletions": 0}]}
-            """);
+        var github = new FakeGitHub(pr, mainRuns: MainRuns((5, "completed", "failure", 1)), files: $$"""{"files": [{{files}}]}""");
         var config = WriteConfig(sourceBypass: true);
         try
         {
             var output = new StringWriter();
             MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], output, github, OnMain);
 
-            Assert.StartsWith($"{Head} success merge-rule Source bypass used (fixes-main: {FixedTest})", Assert.Single(github.Posted));
-            Assert.Contains("source bypass ok: 40 changed lines outside docs/, within the cap of 40", output.ToString(), StringComparison.Ordinal);
+            Assert.StartsWith(state == "success" ? $"{Head} success merge-rule Source bypass used (fixes-main: {FixedTest})" : $"{Head} failure merge-rule ", Assert.Single(github.Posted));
+            Assert.Contains($"source bypass {log}", output.ToString(), StringComparison.Ordinal);
         }
         finally { File.Delete(config); }
     }
