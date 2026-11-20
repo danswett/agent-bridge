@@ -40,9 +40,8 @@ public interface ILiteLaunches
 }
 
 // unknown and refused: the safe direction. In memory only, so a restart forgets every fleet target
-// (relay A has no persistence). A fleet entry holds the exact id and the process LaunchService started for it
-// (pid and start time, captured as it started it): a session whose live process is not that one or under it
-// (an npm shim's cmd.exe starts the agent) is not it, and the entry leaves once seen gone or replaced.
+// (relay A has no persistence). A fleet entry holds the exact id and the process LaunchService started for it, as it started it: a session
+// whose live process is not that one or under it (an npm shim's cmd.exe starts the agent) is not it, and the entry leaves once seen gone or replaced.
 public sealed class LiteLaunchLog(Func<string, SessionProcess?>? current = null, Func<Started, int, bool?>? owns = null) : ILiteLaunches
 {
     readonly ConcurrentDictionary<string, string> modes = new(StringComparer.Ordinal);

@@ -273,7 +273,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // fleet-target gate's registry; raised by this host alone, with the process the launch started as it
     // started it (pid and start time), never one read later. A handler that throws costs only itself.
     public event Action<string, Started>? FleetTargetStarted;
-    public bool? Owns(Started started, int processId) => starter.Owns(started, processId);
+    public bool? Owns(Started started, int processId) => starter.OwnsExactly(started, processId);
 
     // A launch already answered Unconfirmed (its window not seen ready in time) whose window is seen
     // ready later, while it is still followed: the restore record counts and shows it restored then

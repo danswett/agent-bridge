@@ -1793,6 +1793,7 @@ public abstract partial class LaunchFlowFixture
                 return processId == started.ProcessId || parents.GetValueOrDefault(processId) == started.ProcessId;
             }
         }
+        public bool? OwnsExactly(Started started, int processId) => Owns(started, processId);
 
         // As the process goes: for the host's discovery too, which lists the agent's processes. It
         // was only forgotten here, so discovery still listed the "closed" agent's process: the

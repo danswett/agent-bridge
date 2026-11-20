@@ -20,7 +20,7 @@ public sealed class FleetTargetGateTests
 
     public FleetTargetGateTests()
     {
-        // As AgentStarter.Owns: whether the live process is the one started (same pid and start time); null when it cannot be told.
+        // As AgentStarter.OwnsExactly: whether the live process is the one started (same pid and start time); null when it cannot be told.
         launches = new(id => id == Target ? current : null, (started, pid) => unreadable ? null : current?.Id == pid && current.StartedAt == started.StartedAt);
         world.Genesis("P");
         world.Add("H", "P", "H", "G", kind: "host");
@@ -81,15 +81,10 @@ public sealed class FleetTargetGateTests
     public async Task A_session_launched_before_a_restart_is_refused_because_the_registry_starts_empty()
     {
         Launch();
-        var restarted = new LiteLaunchLog();
-        Assert.False((await new FleetTargetGate(restarted, () => signed).CheckAsync(From(world.Id("H")), Target)).Allowed);
+        Assert.False((await new FleetTargetGate(new LiteLaunchLog(), () => signed).CheckAsync(From(world.Id("H")), Target)).Allowed);
     }
 
-    [Theory]
-    [InlineData("aaaaaaaa")]
-    [InlineData("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa")]
-    [InlineData("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")]
-    [InlineData("agent_bridge_aaaaaaaaaaaaaaaa")]
+    [Theory, InlineData("aaaaaaaa"), InlineData("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa"), InlineData("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"), InlineData("agent_bridge_aaaaaaaaaaaaaaaa")]
     public async Task Only_the_exact_session_id_matches_never_a_prefix_case_change_or_node_id(string guess)
     {
         Launch();
@@ -105,8 +100,7 @@ public sealed class FleetTargetGateTests
         Assert.False(launches.IsFleetTarget(Target)); // as the session source's change notification does
         current = new(42, DateTimeOffset.UnixEpoch);
         Assert.False(await Allowed(() => signed));
-        // What the forced-ask gate reads is untouched by the fleet registry.
-        Assert.Equal(LaunchProtocol.AllowAll, launches.PermissionsOf(Target));
+        Assert.Equal(LaunchProtocol.AllowAll, launches.PermissionsOf(Target)); // what the forced-ask gate reads is untouched
     }
 
     [Fact]

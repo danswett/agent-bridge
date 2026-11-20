@@ -438,6 +438,7 @@ public sealed class LaunchPieceTests : IDisposable
             }
             Assert.NotEqual(0, agent);
             Assert.True(starter.Owns(started, agent));
+            Assert.True(starter.OwnsExactly(started, agent)); // the launch recorded the OS creation time itself
             Assert.True(starter.Owns(started, started.ProcessId));
             Assert.False(starter.Owns(started, Environment.ProcessId));
         }
@@ -449,6 +450,17 @@ public sealed class LaunchPieceTests : IDisposable
         while (starter.Running(started) && DateTime.UtcNow < gone) { Thread.Sleep(50); }
         // Once the launcher has gone, nothing can be traced to it.
         Assert.Null(starter.Owns(started, agent));
+    }
+
+    [WindowsFact]
+    public void A_fleet_target_is_owned_only_at_its_exact_creation_time_while_other_callers_keep_the_tolerance()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var (starter, me) = (new WindowsAgentStarter(hidden: true), Process.GetCurrentProcess());
+        var started = new Started(me.Id, new DateTimeOffset(me.StartTime).ToUniversalTime());
+        var tick = started with { StartedAt = started.StartedAt.AddTicks(1) };
+        Assert.Equal<(bool?, bool?, bool?, bool?, bool)>((true, false, null, true, true), (starter.OwnsExactly(started, me.Id), starter.OwnsExactly(tick, me.Id),
+            starter.OwnsExactly(started with { ProcessId = 0 }, me.Id), starter.Owns(tick, me.Id), starter.Running(started with { StartedAt = started.StartedAt.AddMilliseconds(500) })));
     }
 
     static string Echo => Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "agent-bridge-console-echo.exe" : "agent-bridge-console-echo");

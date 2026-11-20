@@ -62,9 +62,8 @@ public sealed class LiteDeliver(
         if (!Idle(now)) { return Refused(LiteCodes.Busy); }
         if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
-        // just before the injector starts (Stale, refused below). Only a fleet target's delivery asks every gate again there, so a
-        // sender or target that stopped qualifying meanwhile gets nothing typed; a forced-ask or listed allow-all one keeps main's
-        // path, since StillCurrent also turns on the transcript fence a session with no first prompt yet fails (relay test 3).
+        // just before the injector starts (Stale, refused below). Only a fleet target's delivery asks every gate again there, so a sender or target that
+        // stopped qualifying meanwhile gets nothing typed; forced-ask and listed allow-all keep main's path (StillCurrent also turns on the transcript fence).
         var revoked = false;
         bool Authorized() => (!byNode || FromNodeId(target) == id) && !(revoked = AllowedAsync(envelope, id) is not { IsCompletedSuccessfully: true, Result: not null });
         var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true, StillCurrent = allowedBy is FleetTargetGate ? Authorized : byNode ? () => FromNodeId(target) == id : null };
