@@ -29,13 +29,24 @@ function Reset-Scenario {
     $script:s = @{ conclusion = 'failure'; attempt = 1; newest = 100; status = 'completed'; event = 'push'
         branch = 'main'; repo = 'o/r'; path = '.github/workflows/ci.yml'; open = $false
         log = '  Failed A.B.C.Method [1 s]'; unreadable = $false; jobName = 'product'; jobConclusion = 'failure'
-        body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = '' }
+        body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = ''; created = $false
+        closeFails = 0; closeAttempts = 0 }
+}
+# $s.runs maps run number to its attempts' conclusions, oldest first; 'running' is an unfinished attempt.
+function New-FakeAttempt([int]$Id, [int]$N) {
+    $c = $s.runs[$Id][$N - 1]
+    @{ id = $Id; run_number = $Id; run_attempt = $N; status = $(if ($c -eq 'running') { 'in_progress' } else { 'completed' })
+        conclusion = $(if ($c -ne 'running') { $c }); head_sha = 'abcdef0123456789'; head_branch = 'main'; event = 'push'
+        path = '.github/workflows/ci.yml'; head_repository = @{ full_name = 'o/r' } }
 }
 function Fake-Gh {
     $a = $args -join ' '
     $s.calls += ,@($args)
+    $run = @{ id = 100; run_number = 100; conclusion = $s.conclusion; status = $s.status; run_attempt = $s.attempt
+        head_sha = 'abcdef0123456789'; head_branch = $s.branch; event = $s.event; path = $s.path
+        head_repository = @{ full_name = $s.repo } }
     if ($args[0] -eq 'issue' -and $args[1] -in @('list', 'view')) {
-        $fields = if ($args[1] -eq 'list') { 'number,body,author' } else { 'comments' }
+        $fields = if ($args[1] -eq 'view') { 'comments' } elseif ($args -contains 'all') { 'number,body,author,state' } else { 'number,body,author' }
         $json = [array]::IndexOf($args, '--json')
         if ($json -lt 0 -or $args.Count -ne $json + 2 -or $args[$json + 1] -isnot [string] -or
             $args[$json + 1] -cne $fields) {
@@ -44,15 +55,24 @@ function Fake-Gh {
     }
     switch -Regex ($a) {
         '^api repos/o/r/actions/runs/100$' {
-            @{ id = 100; conclusion = $s.conclusion; status = $s.status; run_attempt = $s.attempt
-                head_sha = 'abcdef0123456789'; head_branch = $s.branch; event = $s.event; path = $s.path
-                head_repository = @{ full_name = $s.repo } } | ConvertTo-Json; return
+            if ($s.ContainsKey('triggerConclusion')) { $run.conclusion = $s.triggerConclusion }
+            $run | ConvertTo-Json; return
         }
         '^api repos/o/r/actions/workflows/ci.yml/runs\?' {
-            if ($a -notmatch 'status=completed' -or $a -notmatch 'per_page=1') { throw 'Require one newest finished run' }
-            @{ workflow_runs = @(@{ id = $s.newest; run_attempt = $s.attempt }) } | ConvertTo-Json; return
+            if ($a -notmatch 'per_page=100' -or $a -match 'status=completed') { throw 'Require one bounded page including in-flight retries' }
+            $run.id = $s.newest; $run.run_number = $s.newest
+            $runs = if ($s.ContainsKey('runs')) { @(foreach ($k in $s.runs.Keys) { New-FakeAttempt $k $s.runs[$k].Count }) }
+            elseif ($s.ContainsKey('latest')) { @($s.latest) } else { @($run) }
+            @{ workflow_runs = @($runs) } | ConvertTo-Json -Depth 5; return
         }
-        '^api repos/o/r/actions/runs/100/jobs' {
+        '^api repos/o/r/actions/runs/(\d+)/attempts/(\d+)$' {
+            if ($s.ContainsKey('runs')) { New-FakeAttempt $Matches[1] $Matches[2] | ConvertTo-Json -Depth 5; return }
+            $run.id = [long]$Matches[1]; $run.run_number = $run.id; $run.run_attempt = [int]$Matches[2]
+            $run.status = 'completed'
+            $run.conclusion = if ($s.ContainsKey('attempts')) { $s.attempts[$run.run_attempt] } else { 'failure' }
+            $run | ConvertTo-Json; return
+        }
+        '^api repos/o/r/actions/runs/\d+/(attempts/\d+/)?jobs' {
             @{ jobs = @(@{ id = 7; name = $s.jobName; conclusion = $s.jobConclusion }) + $s.extraJobs } | ConvertTo-Json; return
         }
         '^api repos/o/r/actions/jobs/\d+/logs --allow-escape-sequences$' {
@@ -62,13 +82,15 @@ function Fake-Gh {
         '^issue list ' {
             $found = @()
             if ($s.foreign) { $found += @{ number = 5; body = ''; author = @{ login = 'stranger' } } }
-            if ($s.open) { $found += @{ number = 9; body = $s.body; author = @{ login = 'app/github-actions' } } }
+            if ($s.open -or ($args -contains 'all' -and $s.created)) {
+                $found += @{ number = 9; body = $s.body; author = @{ login = 'app/github-actions' }; state = $(if ($s.open) { 'OPEN' } else { 'CLOSED' }) }
+            }
             ConvertTo-Json -InputObject $found -Depth 5; return
         }
         '^issue view 9 ' { @{ comments = $s.comments } | ConvertTo-Json -Depth 5; return }
         '^label create main-red ' { $s.writes += 'label'; return }
         '^issue create ' {
-            $s.writes += 'create'; $s.open = $true; $s.body = $args[([array]::IndexOf($args, '--body') + 1)]
+            $s.writes += 'create'; $s.open = $true; $s.created = $true; $s.body = $args[([array]::IndexOf($args, '--body') + 1)]
             $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; return
         }
         '^issue comment 9 ' {
@@ -76,7 +98,11 @@ function Fake-Gh {
             $s.comments += @{ body = $args[([array]::IndexOf($args, '--body') + 1)]; author = @{ login = 'github-actions' } }
             return
         }
-        '^issue close 9 ' { $s.writes += 'close'; $s.open = $false; return }
+        '^issue close 9 ' {
+            $s.closeAttempts++
+            if ($s.closeFails -gt 0) { $s.closeFails--; $global:LASTEXITCODE = 1; return }
+            $s.writes += 'close'; $s.open = $false; return
+        }
         default { throw "Unexpected fake gh request: $a" }
     }
 }
@@ -105,6 +131,13 @@ Detect
 Assert (($s.writes -join ',') -eq 'comment') 'duplicate comment event makes no changes'
 Reset-Scenario; $s.open = $true; $s.conclusion = 'success'; $s.attempt = 2; Detect
 Assert (($s.writes -join ',') -eq 'comment,close' -and $s.comments[0].body -eq 'main-red: green again, run=100 attempt=2, sha=abcdef01') 'green attempt two comments before closing'
+Reset-Scenario; $s.open = $true; $s.body = 'main-red: run=100 attempt=1 sha=abcdef01'; $s.conclusion = 'success'; $s.attempt = 2
+$s.closeFails = 1; $closeFailed = $false
+try { Detect } catch { $closeFailed = $_.Exception.Message -like 'gh issue close *' }
+Detect
+Assert ($closeFailed -and -not $s.open -and $s.closeAttempts -eq 2 -and $s.comments.Count -eq 1) "a redelivered recovery retries a failed close without repeating its comment (open=$($s.open); closeAttempts=$($s.closeAttempts); comments=$($s.comments.Count))"
+$s.open = $true; $s.comments += @{ body = 'main-red: run=100 attempt=3 sha=abcdef01'; author = @{ login = 'github-actions' } }; Detect
+Assert ($s.open -and $s.closeAttempts -eq 2) 'its own recorded recovery cannot close over a newer recorded failure'
 Reset-Scenario; $s.conclusion = 'success'; Detect
 Assert ($s.writes.Count -eq 0) 'green without an issue does nothing'
 foreach ($c in 'cancelled', 'skipped') {
@@ -116,9 +149,100 @@ foreach ($c in 'startup_failure', 'timed_out') {
     Assert ($s.writes -contains 'create' -and $s.body -match 'product') "$c is red"
 }
 foreach ($c in 'failure', 'success') {
-    Reset-Scenario; $s.open = $true; $s.newest = 101; $s.conclusion = $c; Detect
-    Assert ($s.writes.Count -eq 0) "stale $c event does nothing"
+    Reset-Scenario; $s.open = $c -eq 'success'; $s.newest = 101; $s.conclusion = $c
+    $s.triggerConclusion = if ($c -eq 'failure') { 'success' } else { 'failure' }; Detect
+    $evidence = (@($s.body) + @($s.comments | ForEach-Object { $_.body })) -join "`n"
+    Assert ($evidence -match 'run=101' -and
+        (($c -eq 'failure' -and $s.open) -or ($c -eq 'success' -and -not $s.open))) "a replacement stale event reconciles the newest $c verdict"
 }
+$eventPath = [IO.Path]::GetTempFileName()
+$savedEventName = $env:GITHUB_EVENT_NAME; $savedEventPath = $env:GITHUB_EVENT_PATH
+try {
+    Reset-Scenario
+    $completed = Fake-Gh api repos/o/r/actions/runs/100 | ConvertFrom-Json
+    $env:GITHUB_EVENT_NAME = 'workflow_run'; $env:GITHUB_EVENT_PATH = $eventPath
+    @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+    $s.status = 'in_progress'; $s.attempt = 2
+    Detect
+    Assert ($s.body -match 'attempt=1' -and $s.body -match 'A.B.C.Method' -and
+        @($s.calls | Where-Object { ($_ -join ' ') -match '/runs/100/attempts/1/jobs' }).Count -eq 1) 'a retry started before detection still records the completed red attempt with its own jobs'
+    $completed.run_attempt = 2; $completed.conclusion = 'success'
+    @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+    $s.latest = @($completed); Detect
+    Assert (($s.writes -join ',') -eq 'label,create,comment,close' -and $s.body -match 'attempt=1' -and $s.comments.Count -eq 1 -and
+        $s.comments[0].body -match 'green again, run=100 attempt=2') 'the successful retry closes the incident without losing attempt-one failure evidence'
+    Reset-Scenario; $completed.run_attempt = 1; $completed.conclusion = 'failure'
+    @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+    $s.conclusion = 'success'; $s.attempt = 2; Detect
+    Assert (($s.writes -join ',') -eq 'label,create,comment,close') 'a retry already green when detection starts records red before reconciling green'
+    Detect
+    Assert (($s.writes -join ',') -eq 'label,create,comment,close') 'redelivery after recovery cannot reopen the recorded incident'
+    $s.conclusion = 'failure'; $s.attempt = 3; Detect
+    Assert (@($s.writes | Where-Object { $_ -eq 'create' }).Count -eq 2 -and $s.open -and
+        $s.body -match 'attempt=3') 'a new failure after recovery opens a new incident instead of extending the closed one'
+    Detect
+    Assert (($s.writes -join ',') -eq 'label,create,comment,close,label,create') 'a late earlier attempt cannot add out-of-order evidence to the newer incident'
+    $completed.run_attempt = 2; $completed.conclusion = 'success'
+    @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+    foreach ($newer in 'body', 'comment', 'running') {
+        Reset-Scenario; $s.open = $true; $s.created = $true
+        $s.body = 'main-red: run=100 attempt=1 sha=abcdef01'
+        $s.attempt = 3
+        if ($newer -eq 'body') { $s.body = 'main-red: run=100 attempt=3 sha=abcdef01' }
+        elseif ($newer -eq 'comment') {
+            $s.comments = @(@{ body = 'main-red: run=100 attempt=3 sha=abcdef01'; author = @{ login = 'github-actions' } })
+        } else { $s.attempt = 4; $s.status = 'in_progress' }
+        Detect
+        Assert ($s.writes -notcontains 'close' -and $s.open) "a delayed successful attempt two never closes over newer $newer evidence (writes=$($s.writes -join ','); open=$($s.open))"
+    }
+    foreach ($neutral in 'cancelled', 'skipped') {
+        Reset-Scenario; $s.attempt = 2; $s.conclusion = 'success'
+        $s.attempts = @{ 1 = 'failure'; 2 = 'success'; 3 = $neutral }
+        $completed.run_attempt = 2; $completed.conclusion = 'success'
+        @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+        Detect
+        $quietRecovery = -not $s.open -and $s.writes.Count -eq 0
+        $s.attempt = 3; $s.conclusion = $neutral
+        $completed.run_attempt = 1; $completed.conclusion = 'failure'
+        @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+        Detect
+        # Neutral attempts are ignored, so the late attempt-one failure is recorded exactly as it is without them.
+        Assert ($quietRecovery -and -not $s.open -and ($s.writes -join ',') -eq 'label,create,comment,close') "a retained failure is recorded but cannot stay open after a quiet successful retry and a $neutral third attempt (writes=$($s.writes -join ','); open=$($s.open))"
+    }
+    function Send-Event([int]$Id, [int]$N) {
+        @{ workflow_run = New-FakeAttempt $Id $N } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+        Invoke-MainRed -RunId $Id -Repository 'o/r' | Out-Null
+    }
+    Reset-Scenario; $s.runs = @{ 100 = @('failure', 'success', 'running') }; $s.open = $true; $s.created = $true
+    $s.body = 'main-red: run=100 attempt=1 sha=abcdef01'; Send-Event 100 2
+    Assert (-not $s.open -and ($s.writes -join ',') -eq 'comment,close') 'a running third attempt cannot keep an incident open after attempt two recovered'
+    foreach ($neutral in 'cancelled', 'skipped') {
+        foreach ($c in 'failure', 'success') {
+            Reset-Scenario; $s.runs = @{ 100 = @('failure'); 101 = @($c); 102 = @($neutral) }
+            if ($c -eq 'success') { $s.open = $true; $s.created = $true; $s.body = 'main-red: run=100 attempt=1 sha=abcdef01' }
+            Send-Event 100 1
+            $evidence = (@($s.body) + @($s.comments | ForEach-Object { $_.body })) -join "`n"
+            Assert ($(if ($c -eq 'failure') { $s.open -and $evidence -match '(?m)^main-red: run=101 attempt=1 ' }
+                    else { -not $s.open -and $evidence -match 'green again, run=101 attempt=1' })) "a stale event behind a newer $neutral push still applies the $c verdict before it"
+        }
+    }
+    # Every delivery order of the same finished attempts must leave the same incident state.
+    $events = @(@(100, 1), @(101, 1), @(101, 3), @(101, 4))
+    $states = @(foreach ($k in 0..23) {
+            Reset-Scenario; $s.runs = @{ 100 = @('failure'); 101 = @('failure', 'failure', 'success', 'cancelled'); 102 = @('skipped') }
+            $rest = [Collections.Generic.List[object]]::new($events); $j = $k
+            foreach ($n in $events.Count..1) { $e = $rest[$j % $n]; $rest.RemoveAt($j % $n); $j = [math]::Floor($j / $n); Send-Event $e[0] $e[1] }
+            $marks = [regex]::Matches((@($s.body) + @($s.comments | ForEach-Object { $_.body })) -join "`n", '(?m)^main-red: (green again, )?run=\d+ attempt=\d+')
+            "open=$($s.open) creates=$(@($s.writes | Where-Object { $_ -eq 'create' }).Count) newest=$(@($marks | Select-Object -Last 1 | ForEach-Object Value) -join '')"
+        })
+    Assert (@($states | Sort-Object -Unique).Count -eq 1 -and $states[0] -eq 'open=False creates=1 newest=main-red: green again, run=101 attempt=3') "every delivery order converges on one closed incident ($(@($states | Sort-Object -Unique) -join ' / '))"
+} finally {
+    $env:GITHUB_EVENT_NAME = $savedEventName; $env:GITHUB_EVENT_PATH = $savedEventPath
+    Remove-Item -LiteralPath $eventPath
+}
+Reset-Scenario; $s.newest = 101; $s.status = 'in_progress'; $s.attempt = 2; $s.triggerConclusion = 'success'; Detect
+Assert ($s.open -and $s.body -match 'run=101 attempt=1' -and
+    @($s.calls | Where-Object { ($_ -join ' ') -match '/runs/101/attempts/1/jobs' }).Count -eq 1) 'an older replacement event recovers the latest red verdict even while its retry is running'
 Reset-Scenario; $s.log = 'Build FAILED: error CS1002'; Detect
 Assert ($s.body -match 'product' -and $s.body -match 'no test name was found') 'build failure still lists its job'
 Reset-Scenario; $s.jobName = "@someone `````n# injected"
