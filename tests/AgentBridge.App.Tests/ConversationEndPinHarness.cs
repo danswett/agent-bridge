@@ -191,6 +191,8 @@ namespace AgentBridge.App
         public bool HistoryDrawing => historyDraw?.IsRunning == true;
         public void FirstFrameForProbe() => historyFirstFrame?.Invoke(this, new());
         public void DrawEarlierForProbe() => DrawEarlier();
+        public void ProgrammaticBringForProbe(Microsoft.UI.Xaml.UIElement target, double alignment) => ScrollProgrammatically(() => Scroller.Bring(target, alignment));
+        public void AnchorForProbe(double to) => Anchoring(Scroller, to);
         public void DrainForProbe() => DispatcherQueue.Drain();
         public void DetachForProbe() => UnwatchHistory();
         public void SwitchForProbe()
