@@ -164,6 +164,7 @@ public sealed partial class ReplyService : ISessionReplier
     {
         if (change.Kind == SessionChangeKind.Removed)
         {
+            injected.TryRemove(change.Id, out _);
             if (Guid.TryParseExact(change.Id, "D", out _)) { inputs.TryRemove(CopilotTranscript(change.Id), out _); }
             return;
         }
@@ -411,7 +412,8 @@ public sealed partial class ReplyService : ISessionReplier
         // refused here: a screen without one may be asking something (a permission prompt, or
         // the folder-trust question before a transcript exists), which the checks in the turn
         // name better, and still refuse before any key.
-        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early } && request.ClearConfirmation is null) { return Done(Unverified(early)); }
+        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early, State: var drawn } && request.ClearConfirmation is null
+            && Residue(session.Id, pid, drawn) is null) { return Done(Unverified(early)); }
         // Caught up before the typing turn is taken, so the first reply to a session with a
         // long transcript reads it without holding up every other delivery; the read in the
         // turn only covers what has been written since.
@@ -484,9 +486,18 @@ public sealed partial class ReplyService : ISessionReplier
             Func<string?>? clearFence = null;
             if (box is null)
             {
-                if (request.ClearConfirmation is null) { return Done(Unverified(problem!)); }
-                (box, problem, clearFence) = await ClearComposerAsync(session, pid, process, input, request, state, rememberClear, Freshness);
-                if (box is null) { return Done(retryChanged ? Stale(retryChangedReason) : Unverified(problem!)); }
+                if (request.ClearConfirmation is null)
+                {
+                    if (Residue(session.Id, pid, state) is not { } residue) { return Done(Unverified(problem!)); }
+                    var (cleared, why) = await ClearResidueAsync(session, pid, input, state!, residue);
+                    if (cleared is null) { return Done(Unverified(why ?? problem!)); }
+                    box = cleared;
+                }
+                else
+                {
+                    (box, problem, clearFence) = await ClearComposerAsync(session, pid, process, input, request, state, rememberClear, Freshness);
+                    if (box is null) { return Done(retryChanged ? Stale(retryChangedReason) : Unverified(problem!)); }
+                }
             }
             // Both are held to the footer's mode too, in the same read: the box's rows read the same
             // empty, in vim's normal mode, or in shell mode holding only a space ('!' then a space),
@@ -553,6 +564,9 @@ public sealed partial class ReplyService : ISessionReplier
 
         // Before the log line, which writes a file: the client hears it as soon as it can.
         if (result.Status == InjectionStatus.Typed) { timeline.Typed(working); }
+        // Kept before the session is free for another reply, which may find these words unsent.
+        var typed = result.Status is InjectionStatus.Typed or InjectionStatus.Interrupted
+            ? Remember(session.Id, pid, words, confirming: result.Status == InjectionStatus.Typed) : null;
         log($"typed a reply into {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {keys.Describe()} -> {result.Status} {result.Detail}");
         return result.Status switch
         {
@@ -564,7 +578,7 @@ public sealed partial class ReplyService : ISessionReplier
                 new Attempt(Unconfirmed("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent and its words are still in the box"), null, KeysWent: true),
             InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{DeliveryReasons.Of(result.Detail)}; part of the reply may have reached the session"), null, KeysWent: true),
             _ => Typing(AgentKind.Copilot, () => FirstOf(CopilotPrompts.Since(transcript, from).Prompts, p => CopilotReply.Matches(words, p.Content), p => p.At),
-                seen => ConfirmAsync(transcript, from, words, staged, timeline, seen)),
+                seen => SettleAsync(session.Id, typed!, () => ConfirmAsync(transcript, from, words, staged, timeline, seen))),
         };
 
         static Attempt Done(ReplyResult r) => new(r, null);
