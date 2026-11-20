@@ -11,7 +11,14 @@ public enum InjectionStatus
     Interrupted,
 }
 
-public sealed record InjectionResult(InjectionStatus Status, string Detail);
+public sealed record InjectionResult(InjectionStatus Status, string Detail)
+{
+    public int? TextWritten { get; init; }
+    public string? TextFingerprint { get; init; }
+    public bool? EnterWritten { get; init; }
+
+    internal static string Fingerprint(string text) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)));
+}
 
 // What an injector throws when it failed after its worker may have started: Exited completes
 // once that worker is proven gone, and faults when nobody can tell. Any other exception from an

@@ -90,6 +90,7 @@ public sealed partial class SessionsPage : UserControl
             viewModel = value;
             Layout = new PaneLayoutViewModel(value);
             Session.Layout = Layout;
+            Session.Recovery = value.Recovery;
             InspectorDelegate.Layout = Layout;
             Layout.Moved += OnMoved;
             Layout.PropertyChanged += OnLaneShown;

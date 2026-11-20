@@ -120,6 +120,21 @@ public sealed class ConversationEndPinTests
         Assert.Equal(still ? 2 : 1, view.ShownCount);
     }
 
+    [Fact]
+    public void A_programmatic_scroll_into_view_anchored_elsewhere_keeps_the_pin_and_lets_earlier_history_draw()
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.ProgrammaticBringForProbe(new Microsoft.UI.Xaml.UIElement { Top = -50, Height = 200 }, 0);
+        view.AnchorForProbe(50);
+        view.Moved(50);
+        view.StopScrolling();
+        Assert.True(view.Pinned);
+        Assert.Equal(0, view.Releases);
+        view.DrawEarlierForProbe();
+        Assert.Equal(2, view.ShownCount);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

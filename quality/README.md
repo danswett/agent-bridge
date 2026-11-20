@@ -968,7 +968,9 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   Tiered gating B3 ([issue 3210](https://github.com/danswett/agent-bridge/issues/3210)): a failed job named
   in a `tier: post-merge` suite's `tier_jobs` in `catalog.yml` is listed as `Job (post-merge-tier)`. When
   only such jobs failed (the `quality-gate` aggregate aside), the entry says so: an alert that never feeds
-  a pull request's merge verdict. The issue stays open until main's CI is green. Missing tier data means blocking.
+  a pull request's merge verdict. The issue stays open until main's CI is green. Missing or unreadable tier data
+  means blocking (an unreadable catalog warns; it never loses the alert). If a later entry has a blocking
+  failure, a post-merge-only issue title is promoted to the ordinary main-red title before that entry is posted.
   B3b: when two entries in a row (no green between) name the same single test, and every failed job in
   each but `quality-gate` is post-merge tier, the second entry adds one `quarantine-request: test=<name>`
   line, once per unrecovered streak, with the [S3b generator](https://github.com/danswett/agent-bridge/pull/3078)
@@ -976,6 +978,18 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   only while `MAIN_RED_QUARANTINE` is exactly `on` in its environment and the script exists (until PR 3078
   lands, the request is only recorded). The generator keeps its own fences: the repository variable rechecked
   before each write, and only attempt 2 of one failed run; a refusal is a warning, never a failed detection.
+  The first request reserves the one opportunity for that test across the unrecovered streak, not one
+  per distinct test. The intent line is written to the alert before the generator runs, so a failed write
+  runs nothing. A successful generator invocation then adds `quarantine-completed: test=<name> run=<id>
+  attempt=<n>` in its own comment, naming the attempt that requested it; a refusal, nonzero exit, missing
+  script, disabled switch or failed completion write leaves the intent pending. Later eligible entries for
+  the requested test may try again until completion; duplicate events still do nothing. A completion is
+  bound to its streak: it suppresses that unrecovered streak only (a change of the latest failing test alone
+  is not a new streak), never a fresh streak after a recovery. A legacy completion without `run=` applies
+  only to the streak open when GitHub recorded the comment (`createdAt`), which ends at the next recovery. If
+  a completion comment is malformed, lacks a timestamp, or shares its second with entries on both sides of a
+  recovery, that entry's evaluation fails before its own write or any generator call rather than guess (a
+  retained earlier entry published by the same detection is independent evidence and may already be recorded).
   Nothing here posts a status, check or label, so no merge verdict reads it.
   Offline test: `quality/test-main-red.ps1` (catalog suite `main-red`).
 - **Culprit auto-revert** ([issue 3211](https://github.com/danswett/agent-bridge/issues/3211)):

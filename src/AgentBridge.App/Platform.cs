@@ -22,6 +22,10 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     // Shared with every profile's app and host through the app's folder (#530).
     readonly ReleaseDiscovery discovery = new(Paths.AppData, log: log);
     readonly PackageDownloader downloader = new();
+    UpdaterHaltPolicy? halts;
+    UpdaterHaltPolicy Halts => halts ??= new(discovery, log);
+    // Renewed at each check, before anything it finds can be downloaded or installed (#3307).
+    public HaltPolicySnapshot? HaltPolicy => Halts.Snapshot;
     UpdateManager? manager;
     UpdateInfo? pending;
     string? source;
@@ -114,6 +118,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     public async Task<string?> CheckAsync()
     {
         var from = Manager();
+        await Halts.RefreshAsync();
         // GitHub's limit (#800) comes as ReleaseDiscovery's Limited, with the reset GitHub sent:
         // AutoUpdater holds its checks off until then.
         var found = await from.CheckForUpdatesAsync();
@@ -219,6 +224,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         try { handedOverTo?.Invoke(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { log?.Invoke($"update: the hand-over could not be recorded: {e.Message}"); }
         // As ApplyUpdatesAndRestart ends: Update.exe waits for this process to exit (--wait).
+        Program.CompleteRun();
         locator.Process.Exit(0);
     }
 }

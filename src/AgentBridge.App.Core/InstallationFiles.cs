@@ -36,9 +36,9 @@ public static class InstallationFiles
         public TimeSpan Remaining => ReleaseWait - Elapsed;
         public void ExcludeSince(long timestamp) => excluded += Time.GetElapsedTime(timestamp);
         internal Func<IReadOnlyList<string>>? LockedFiles { get; set; }
-        Func<string?>? clearProbe;
+        Func<CancellationToken, string?>? clearProbe;
         HashSet<string>? clearFiles;
-        public async Task<string?> ProbeOnceAsync(Func<string?>? probe, CancellationToken cancellation, bool fresh = false)
+        public async Task<string?> ProbeOnceAsync(Func<CancellationToken, string?>? probe, CancellationToken cancellation, bool fresh = false)
         {
             if (probe is null) { return null; }
             // A clear scan serves the duplicate check right after the wait, not a deadline; a changed
@@ -54,18 +54,18 @@ public static class InstallationFiles
                     var files = LockedFiles?.Invoke();
                     // Without a footprint (no LockedFiles) nothing could invalidate a clear scan: none is reused.
                     if (!fresh && clearProbe == probe && files is not null && clearFiles?.SetEquals(files) == true) { return null; }
-                    var held = probe();
+                    var held = probe(token);
                     token.ThrowIfCancellationRequested();
                     clearProbe = held is null ? probe : null;
                     clearFiles = held is null && files is not null ? new(files, StringComparer.OrdinalIgnoreCase) : null;
                     return held;
-                }, token).WaitAsync(token);
+                }, token).WaitAsync(token).ConfigureAwait(false);   // startup waits on this from the UI thread
             }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellation.IsCancellationRequested) { return TimedOut; }
         }
     }
 
-    public static async Task<string?> AwaitReleaseAsync(Func<string?>? probe, TimeProvider time,
+    public static async Task<string?> AwaitReleaseAsync(Func<CancellationToken, string?>? probe, TimeProvider time,
         CancellationToken cancellation, Action<string>? waiting = null, Action<string>? log = null, Budget? budget = null)
     {
         if (probe is null) { return null; }

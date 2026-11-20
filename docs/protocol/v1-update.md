@@ -303,6 +303,12 @@ the exact signed body bytes, so adding, removing or changing either invalidates 
 Older hosts may refuse these new args; parsing support is not evidence that policy enforcement
 exists. So the PWA and the Windows app send `unchecked` only after that machine has refused the same press
 `policy-unreadable`, which only an enforcing host answers, and send no `batch` yet (#3307).
+Only a verified person's press can carry `unchecked` (the signed-command gate), so no other
+caller gets Update now past a stale or unreadable policy. One that goes ahead on it is audited in
+`host.log` twice: when accepted ("Bad-release protection could not be checked on this machine
+(*stale* or *unreadable*); *device* pressed Update now through the warning"), and on the restart
+line below, which ends ", bad-release protection *stale* or *unreadable*: the person pressed
+through the warning".
 
 **Replay, durably** (security review, Medium 3). The host records each `request` it verifies in
 its profile folder (`update-now.json`, as `manage.json` keeps `manage.*`'s), written
@@ -499,6 +505,10 @@ host's own text (#826). "Bridge", never "host".
   line: "Bad-release protection could not be checked on this machine." Cancel sends nothing and
   leaves no note; Update now there sends the press again signed `unchecked`. A second
   `policy-unreadable`, or `halted`, is not asked again: it reads "Not updated: *reason*" (below).
+  The app's own updater renews the same machine copy at each check, through the same reader and
+  hourly budget. While that protection is unknown, unreadable or stale, an install nobody asked
+  for holds with the bad-release-protection waiting line. Restart to update, a device-asked
+  Install and Update now still install.
 * **Forgetting the machine, or clearing the account, withdraws a press** (#3324): an open
   confirmation closes as Cancel, a press still waiting for its channel is never signed, and a
   late answer changes nothing: no confirmation, note, state or further press.
