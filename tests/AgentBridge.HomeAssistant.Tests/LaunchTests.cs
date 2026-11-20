@@ -110,6 +110,200 @@ public sealed class LaunchTests : IDisposable
         await Pass(c, 0.01);
     }
 
+    async Task Submit(HaConnector c, string id, JsonObject? settings = null)
+    {
+        Payload(new JsonObject { ["request"] = id, ["text"] = id, ["settings"] = settings });
+        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        await Pass(c);
+    }
+
+    sealed class PendingStarts(params string[] ids)
+    {
+        readonly Dictionary<string, TaskCompletionSource<LaunchResult>> results = ids.ToDictionary(id => id, _ => new TaskCompletionSource<LaunchResult>());
+        readonly Dictionary<string, TaskCompletionSource> entered = ids.ToDictionary(id => id, _ => new TaskCompletionSource());
+
+        public Task<LaunchResult> Launch(LaunchRequest request)
+        {
+            entered[request.Prompt!].SetResult();
+            return results[request.Prompt!].Task;
+        }
+
+        public Task Entered(string id) => entered[id].Task.WaitAsync(TimeSpan.FromSeconds(5));
+        public void Complete(string id) => results[id].SetResult(new LaunchResult(LaunchOutcome.Started) { Session = "session-" + id });
+        public void Release()
+        {
+            foreach (var result in results.Values) { result.TrySetResult(new LaunchResult(LaunchOutcome.Unconfirmed, "fixture released")); }
+        }
+    }
+
+    async Task Complete(HaConnector c, PendingStarts pending, string id)
+    {
+        pending.Complete(id);
+        for (var i = 0; i < 500; i++)
+        {
+            await Pass(c, 0.01);
+            if (Outcome()["request"]!.GetValue<string>() == id && Outcome()["outcome"]!.GetValue<string>() == "started") { return; }
+            await Task.Delay(10);
+        }
+        Assert.Fail("The fake launch completion was not published.");
+    }
+
+    [Fact]
+    public async Task Three_explicit_requests_dispatch_before_any_registration_completes()
+    {
+        string[] ids = ["req-cutf-0001", "req-cutf-0002", "req-cutf-0003"];
+        var pending = new PendingStarts(ids);
+        answer = pending.Launch;
+        await using var c = await Ready();
+        try
+        {
+            foreach (var id in ids)
+            {
+                await Submit(c, id, new JsonObject { ["workspace"] = id == ids[2] ? "scratch" : "agent-bridge", ["permissions"] = HaContract.PermissionAllowAll });
+                await pending.Entered(id);
+            }
+            Assert.Equal(3, launched.Count);
+            Assert.All(launched, r => Assert.Equal((r.Prompt == ids[2] ? "scratch" : "agent-bridge", LaunchProtocol.AllowAll), (r.Workspace, r.Permissions)));
+            Assert.Equal(3, JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Count);
+            foreach (var id in ids.Reverse()) { await Complete(c, pending, id); }
+            foreach (var id in ids)
+            {
+                var result = JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Single(o => o!["request"]!.GetValue<string>() == id)!;
+                Assert.Equal("session-" + id, result["session"]!.GetValue<string>());
+                Assert.Equal("started", result["outcome"]!.GetValue<string>());
+            }
+        }
+        finally { pending.Release(); await c.DeliveredAsync(); }
+    }
+
+    [Fact]
+    public async Task Completing_B_does_not_clear_As_inflight_state()
+    {
+        var pending = new PendingStarts("req-cutf-0011", "req-cutf-0012");
+        answer = pending.Launch;
+        await using var c = await Ready();
+        try
+        {
+            await Submit(c, "req-cutf-0011"); await pending.Entered("req-cutf-0011");
+            await Submit(c, "req-cutf-0012"); await pending.Entered("req-cutf-0012");
+            await Complete(c, pending, "req-cutf-0012");
+            Assert.Equal("started", Outcome()["outcome"]!.GetValue<string>());
+            Assert.StartsWith("Starting", Note, StringComparison.Ordinal);
+            c.Observe(ha.Press(Entity("button", "new_session")));
+            await Pass(c);
+            Assert.Equal(2, launched.Count);
+            daemon = "agent-ha-bridge is running";
+            await Pass(c);
+            ha.Seed(HaContract.LaunchOutcomeTopic(Slug), HaContract.Serialize(new JsonObject { ["recent"] = new JsonArray(Outcome().DeepClone()) }));
+            daemon = null;
+            await Pass(c); await Pass(c, 2); await Pass(c, 6);
+            var a = JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Single(o => o!["request"]!.GetValue<string>() == "req-cutf-0011")!;
+            Assert.Equal("starting", a["outcome"]!.GetValue<string>());
+            await Complete(c, pending, "req-cutf-0011");
+            Assert.Equal(("req-cutf-0011", "started"), (Outcome()["request"]!.GetValue<string>(), Outcome()["outcome"]!.GetValue<string>()));
+        }
+        finally { pending.Release(); await c.DeliveredAsync(); }
+    }
+
+    [Fact]
+    public async Task Restart_marks_each_unfinished_request_unknown_without_relaunch()
+    {
+        var ids = Enumerable.Range(0, HaContract.LaunchOutcomesKept + 2).Select(i => $"req-cutf-01{i:00}").ToArray();
+        ha.Seed(HaContract.LaunchOutcomeTopic(Slug), HaContract.Serialize(new JsonObject
+        {
+            ["recent"] = new JsonArray([.. ids.Select(id => (JsonNode)new JsonObject
+            {
+                ["request"] = id, ["outcome"] = "starting", ["session"] = "", ["note"] = "",
+                ["pressed"] = FakeSessions.T0.ToString("o"), ["at"] = FakeSessions.T0.ToString("o"), ["launched"] = null,
+            })]),
+        }));
+        await using var c = await Ready();
+        var recent = JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray();
+        Assert.Equal(ids, recent.Select(o => o!["request"]!.GetValue<string>()));
+        Assert.All(recent, o => Assert.Equal("unconfirmed", o!["outcome"]!.GetValue<string>()));
+        foreach (var id in ids)
+        {
+            Payload(new JsonObject { ["request"] = id });
+            ha.Now = ha.Now.AddSeconds(61);
+            await Launch(c, AgentUser);
+        }
+        Assert.Empty(launched);
+    }
+
+    [Fact]
+    public async Task An_active_request_keeps_its_identity_when_terminal_history_is_evicted()
+    {
+        const string id = "req-cutf-0200";
+        var pending = new PendingStarts(id);
+        answer = pending.Launch;
+        await using var c = await Ready();
+        try
+        {
+            await Submit(c, id); await pending.Entered(id);
+            var pressed = Outcome()["pressed"]!.GetValue<string>();
+            for (var i = 0; i <= HaContract.LaunchOutcomesKept; i++)
+            {
+                await Submit(c, $"req-cutf-02{i + 1:00}", new JsonObject { ["workspace"] = "not offered" });
+            }
+            var recent = JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray();
+            Assert.Equal(HaContract.LaunchOutcomesKept + 1, recent.Count);
+            Assert.Contains(recent, o => o is JsonObject result && result["request"]!.GetValue<string>() == id && result["outcome"]!.GetValue<string>() == "starting");
+            await Complete(c, pending, id);
+            Assert.Equal((id, pressed, "session-" + id), (Outcome()["request"]!.GetValue<string>(), Outcome()["pressed"]!.GetValue<string>(), Outcome()["session"]!.GetValue<string>()));
+        }
+        finally { pending.Release(); await c.DeliveredAsync(); }
+    }
+
+    [Fact]
+    public async Task A_retained_completed_request_is_not_relaunched_after_the_handled_window_rolls_over()
+    {
+        const string id = "req-cutf-0300";
+        var pending = new PendingStarts(id);
+        answer = pending.Launch;
+        await using var c = await Ready();
+        try
+        {
+            await Submit(c, id); await pending.Entered(id);
+            for (var i = 0; i < 55; i++)
+            {
+                await Submit(c, $"req-cutf-03{i + 1:00}", new JsonObject { ["workspace"] = "not offered" });
+            }
+            await Complete(c, pending, id);
+            var completed = Outcome().ToJsonString();
+            await Submit(c, id);
+            await c.DeliveredAsync();
+            await Pass(c, 0.01);
+            Assert.Single(launched);
+            Assert.Equal(completed, Outcome().ToJsonString());
+        }
+        finally { pending.Release(); await c.DeliveredAsync(); }
+    }
+
+    [Theory]
+    [InlineData("person", 0)]
+    [InlineData("person", 61)]
+    [InlineData(AgentUser, 0)]
+    [InlineData(AgentUser, 61)]
+    public async Task A_handled_payload_that_cannot_be_cleared_explains_each_ignored_press(string user, int age)
+    {
+        const string id = "req-cutf-0400";
+        await using var c = await Ready();
+        Payload(new JsonObject { ["request"] = id });
+        await Launch(c, AgentUser);
+        ha.PublishFailsFor = (topic, payload) => topic == HaContract.PromptPayloadTopic(Slug) && payload == "{}";
+        Payload(new JsonObject { ["request"] = id });
+        ha.Now = ha.Now.AddSeconds(age);
+        for (var i = 0; i < 2; i++)
+        {
+            await ha.PublishAsync(HaContract.LaunchResultTopic(Slug), "", true);
+            await Launch(c, user);
+            Assert.Single(launched);
+            Assert.Contains("already handled", Note, StringComparison.Ordinal);
+            Assert.Contains("clear the prompt payload", Note, StringComparison.Ordinal);
+            Assert.Contains(id, ha.Retained[HaContract.PromptPayloadTopic(Slug)], StringComparison.Ordinal);
+        }
+    }
+
     static IReadOnlyList<Published> Recorded(string name, bool withTransfer = false) =>
         [.. Loaded.Value[name]!.AsArray().Select(p => Published.FromFixture(p!.AsObject())).Where(p => withTransfer || !p.Topic.Contains("/transfer_request/", StringComparison.Ordinal))];
 
@@ -406,11 +600,8 @@ public sealed class LaunchTests : IDisposable
         ha.Now = ha.Now.AddSeconds(11);
         Payload(new JsonObject { ["text"] = "again", ["request"] = "req-0003-abcd", ["at"] = ha.Now.ToString("o", System.Globalization.CultureInfo.InvariantCulture) + "x" });
         await Launch(c, AgentUser);
-        Assert.Equal(2, launched.Count);
-        // From the card: neither the request's words nor a second answer to it.
+        Assert.Single(launched);
         Assert.Single(JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray());
-        Assert.Null(launched[1].Prompt);
-        Assert.Equal("copilot", launched[1].Agent);
     }
 
     [Fact]
@@ -521,7 +712,7 @@ public sealed class LaunchTests : IDisposable
     }
 
     [Fact]
-    public async Task A_press_made_while_a_launch_started_is_busy_even_when_that_launch_finished_before_it_was_read()
+    public async Task A_card_press_made_while_a_launch_started_is_busy_even_when_that_launch_finished_before_it_was_read()
     {
         var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         answer = _ => release.Task;
@@ -529,13 +720,11 @@ public sealed class LaunchTests : IDisposable
         c.Observe(ha.Press(Entity("button", "new_session")));
         await Pass(c);
         for (var i = 0; i < 500 && Volatile.Read(ref launchedCount) == 0; i++) { await Task.Delay(10); }
-        Payload(new JsonObject { ["request"] = "req-0013-abcd" });
-        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        c.Observe(ha.Press(Entity("button", "new_session")));
         release.SetResult(new LaunchResult(LaunchOutcome.Started) { Session = "6f000000-0000-4000-8000-0000000000ee" });
         await c.DeliveredAsync();
         await Pass(c);
         lock (launched) { Assert.Single(launched); }
-        Assert.Equal(("req-0013-abcd", "busy"), (Outcome()["request"]!.GetValue<string>(), Outcome()["outcome"]!.GetValue<string>()));
     }
 
     [Fact]
@@ -603,8 +792,7 @@ public sealed class LaunchTests : IDisposable
         // The payload a lost clear left behind: not served a second time.
         Payload(new JsonObject { ["text"] = "the request's words", ["request"] = "req-0018-abcd" });
         await Launch(c, AgentUser);
-        var r = Assert.Single(launched);
-        Assert.Null(r.Prompt);
+        Assert.Empty(launched);
         Assert.Equal(2, JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Count);
     }
 
@@ -632,8 +820,7 @@ public sealed class LaunchTests : IDisposable
         ha.Now = ha.Now.AddSeconds(11);
         Payload(new JsonObject { ["text"] = "the daemon's request", ["request"] = "req-0020-abcd" });
         await Launch(c, AgentUser);
-        Assert.Equal(2, launched.Count);
-        Assert.Null(launched[1].Prompt);
+        Assert.Single(launched);
         Assert.Equal(["req-0020-abcd"], JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Select(o => o!["request"]!.GetValue<string>()));
     }
 
@@ -690,7 +877,7 @@ public sealed class LaunchTests : IDisposable
     }
 
     [Fact]
-    public async Task A_press_while_a_launch_is_still_starting_launches_nothing_more_and_a_request_hears_it_is_busy()
+    public async Task A_card_press_while_a_launch_is_still_starting_launches_nothing_more()
     {
         var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         answer = _ => release.Task;
@@ -699,11 +886,9 @@ public sealed class LaunchTests : IDisposable
         await Pass(c);
         // The launch is dispatched off the pass, so wait for it to reach the launcher.
         for (var i = 0; i < 500 && Volatile.Read(ref launchedCount) == 0; i++) { await Task.Delay(10); }
-        Payload(new JsonObject { ["request"] = "req-0009-abcd" });
-        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        c.Observe(ha.Press(Entity("button", "new_session")));
         await Pass(c);
         lock (launched) { Assert.Single(launched); }
-        Assert.Equal("busy", Outcome()["outcome"]!.GetValue<string>());
         // A person's press, from the card, is not a second launch either.
         c.Observe(ha.Press(Entity("button", "new_session")));
         await Pass(c);

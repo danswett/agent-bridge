@@ -830,13 +830,14 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   PowerShell compares them, and the host is given the offered spelling; permissions alone must
   be exact. Its outcome (`starting`, then `started`,
   `refused`, `busy`, `failed` or `unconfirmed`, with the session id and what was launched) is
-  kept with the four before it, newest first, on `new_session_result`'s `recent`, which is what
-  the bridge's MCP `launch_agent_session` reads. A request published after the press waits for
+  kept with the latest five completed requests, newest first, on `new_session_result`'s `recent`,
+  which the bridge's MCP `launch_agent_session` reads. A request published after the press waits for
   its own; one more than 60 s older than the press is skipped, words and all, and the press
   launches from the card; an id not matching `^[A-Za-z0-9-]{8,64}$` is refused; one already
-  served is never served again; and one that reached the machine more than five minutes after
-  its press is refused rather than started late. An agent's second press within 10 s of the one
-  that took a request launches nothing (the daemon's guard against two presses for one request).
+  tracked as active, handled or a retained outcome is not served again; and one that reached the
+  machine more than five minutes after its press is refused rather than started late. An agent's
+  second press within 10 s of the one that took a request launches nothing (the daemon's guard
+  against two presses for one request).
   A press whose prompt payload cannot be read waits for the next pass rather than launching from
   the card, since it may carry a request with settings of its own.
 - **Launch options (beyond agent-ha-bridge, #1142).** `sensor.agent_bridge_<machine>_launch_options`
@@ -854,9 +855,19 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
 * **The purple edge**: a session an agent's press launched is `agent`-driven from the moment it
   appears, for the turn it was launched with (already under way or still to come); the turn
   after that is whoever's it is.
-* **One at a time.** The launch runs beside the passes (the host follows it to registration); a
-  press meanwhile launches nothing, and a request hears `busy`, even when the launch finished
-  before the press was read: the card still said `Starting...` when it was made.
+* **Explicit requests overlap.** Distinct valid request ids dispatch beside the passes without
+  waiting for another request's registration. Each completion updates only its own request.
+  All unfinished outcomes remain in `recent` in addition to the five completed outcomes.
+  Active and retained outcome ids stay deduplicated even after the bounded handled-id history
+  moves on.
+  A repeated handled request never falls through to a new card launch: a warning and card note
+  explain that a new request id or a cleared payload is needed, even if clearing keeps failing.
+  Card-only presses remain debounced while any launch is pending, including one finished but
+  not yet drained.
+  Host load/capacity admission and startup-question guards remain the host launcher's
+  responsibility; this connector change supplies neither those gates nor a safe payload
+  consumption acknowledgment, and is not end-to-end parallel-launch clearance. There is no
+  connector-local in-flight limit; Cut E's host admission remains a release dependency.
 * **A restart**, or taking the machine back after agent-ha-bridge had it, reads the outcomes back
   before taking any press: what Home Assistant holds is the newest account, the requests it
   names are not served again, the history agents read carries on, and one left at `starting`
