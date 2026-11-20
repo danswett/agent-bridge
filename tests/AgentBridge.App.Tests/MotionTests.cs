@@ -61,6 +61,45 @@ public sealed class MotionTests
     }
 
     [Fact]
+    public void The_selection_bar_slides_between_visible_rows_in_either_direction()
+    {
+        var viewport = new LookBox(0, 0, 320, 600);
+        var old = new LookBox(0, 80, 320, 72);
+        var next = new LookBox(0, 240, 320, 96);
+        Assert.Equal(new SelectionMove(SelectionMotionKind.Slide, 0, -160),
+            SelectionMotion.Between(old, next, viewport, animations: true));
+        Assert.Equal(new SelectionMove(SelectionMotionKind.Slide, 0, 160),
+            SelectionMotion.Between(next, old, viewport, animations: true));
+    }
+
+    [Fact]
+    public void The_selection_bar_fades_in_if_the_old_row_is_unrealized_or_outside_the_viewport()
+    {
+        var viewport = new LookBox(0, 0, 320, 600);
+        var next = new LookBox(0, 80, 320, 72);
+        foreach (var old in new LookBox?[] { null, new(0, -72, 320, 72), new(0, 600, 320, 72), new(320, 80, 320, 72) })
+        {
+            Assert.Equal(new SelectionMove(SelectionMotionKind.Fade),
+                SelectionMotion.Between(old, next, viewport, animations: true));
+        }
+        Assert.Equal(SelectionMotionKind.Slide,
+            SelectionMotion.Between(new(0, -71, 320, 72), next, viewport, animations: true).Kind);
+    }
+
+    [Fact]
+    public void The_selection_bar_never_animates_with_reduced_motion_or_an_invisible_destination()
+    {
+        var viewport = new LookBox(0, 0, 320, 600);
+        var old = new LookBox(0, 80, 320, 72);
+        Assert.Equal(SelectionMotionKind.None, SelectionMotion.Between(old, new(0, 240, 320, 72), viewport, animations: false).Kind);
+        Assert.Equal(SelectionMotionKind.None, SelectionMotion.Between(null, old, viewport, animations: false).Kind);
+        foreach (var next in new LookBox?[] { null, new(0, 600, 320, 72), new(0, 80, 0, 72), new(0, double.NaN, 320, 72) })
+        {
+            Assert.Equal(SelectionMotionKind.None, SelectionMotion.Between(old, next, viewport, animations: true).Kind);
+        }
+    }
+
+    [Fact]
     public void The_glyphs_turn_at_the_generated_periods()
     {
         Assert.Equal(TimeSpan.FromSeconds(1.2), Catalogue.WorkingPeriod);
