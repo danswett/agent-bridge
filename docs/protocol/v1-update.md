@@ -303,6 +303,12 @@ the exact signed body bytes, so adding, removing or changing either invalidates 
 Older hosts may refuse these new args; parsing support is not evidence that policy enforcement
 exists. So the PWA and the Windows app send `unchecked` only after that machine has refused the same press
 `policy-unreadable`, which only an enforcing host answers, and send no `batch` yet (#3307).
+Only a verified person's press can carry `unchecked` (the signed-command gate), so no other
+caller gets Update now past a stale or unreadable policy. One that goes ahead on it is audited in
+`host.log` twice: when accepted ("Bad-release protection could not be checked on this machine
+(*stale* or *unreadable*); *device* pressed Update now through the warning"), and on the restart
+line below, which ends ", bad-release protection *stale* or *unreadable*: the person pressed
+through the warning".
 
 **Replay, durably** (security review, Medium 3). The host records each `request` it verifies in
 its profile folder (`update-now.json`, as `manage.json` keeps `manage.*`'s), written
