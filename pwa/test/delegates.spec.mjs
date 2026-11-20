@@ -165,6 +165,7 @@ test('a hidden delegate stops polling and returns with its last words and curren
   await openRow(page, 'demo-agent-suite');
   const latest = pane(page).locator('.delegate-latest .md');
   await expect(latest).toContainText('The suite fails on HEAD');
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
   const age = await fact(page, 'status').textContent();
   await latest.locator(':scope > *').first().evaluate((el) => { el.dataset.kept = 'true'; });
   const before = await fetches(page, 'demo-agent-suite');
@@ -175,17 +176,27 @@ test('a hidden delegate stops polling and returns with its last words and curren
   });
   await page.clock.runFor(600000);
   expect(await fetches(page, 'demo-agent-suite')).toBe(before);
+  await say(page, 'demo-agent-suite', 'The refreshed words arrived after returning.');
   await page.evaluate(() => {
     window.agentBridgeDemo.host.holdResponses();
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
     document.dispatchEvent(new Event('visibilitychange'));
   });
-  await expect.poll(() => fetches(page, 'demo-agent-suite')).toBe(before + 1);
+  // The demo transport also uses timers; keep driving it while the app clock is paused.
+  await expect.poll(async () => {
+    await page.clock.runFor(1);
+    return fetches(page, 'demo-agent-suite');
+  }).toBe(before + 1);
   await expect(latest.locator(':scope > [data-kept="true"]')).toHaveCount(1);
   await expect(fact(page, 'status')).not.toHaveText(age);
   await expect(pane(page).locator('[role="status"]')).toBeHidden();
   await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+  await page.clock.runFor(await page.evaluate(() => window.agentBridgeDemo.host.answerDelayMs));
+  await expect.poll(async () => {
+    await page.clock.runFor(1);
+    return latest.textContent();
+  }).toBe('The refreshed words arrived after returning.');
 });
 
 test('a delegate\'s task and line the budget left out of the list are kept, not taken for silence', async ({ page }) => {

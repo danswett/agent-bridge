@@ -636,7 +636,7 @@ suites:
     select: affected
     platforms: [win-x64, linux-x64]
     runner: local
-    triggers: [quality/revert-culprit.ps1, quality/test-revert-culprit.ps1, quality/main-red.ps1, quality/red-minutes.ps1, .github/workflows/revert-culprit.yml]
+    triggers: [quality/revert-culprit.ps1, quality/test-revert-culprit.ps1, quality/main-red.ps1, quality/red-minutes.ps1, quality/rerun-known-flakes.ps1, .github/workflows/revert-culprit.yml]
     command: pwsh -NoProfile -File quality/test-revert-culprit.ps1
     where: ci.yml light; revert-culprit.yml
     status: exists
