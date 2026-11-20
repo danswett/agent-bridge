@@ -872,6 +872,39 @@ public sealed class LaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task An_agents_pipe_launches_never_reach_the_sensor_and_are_left_to_the_host()
+    {
+        var before = Store();
+        before.Enqueue("pipe-0001", "{}");
+        before.Begin("pipe-0001");
+        before.Launched("pipe-0001", "6f000000-0000-4000-8000-00000000pipe");
+        before.Enqueue("pipe-0002", "{}");
+        ha.Seed(HaContract.LaunchOutcomeTopic(Slug), $$"""{"recent":[{"request":"pipe-0003","outcome":"started","session":"6f000000-0000-4000-8000-0000000old00","at":"{{time.GetUtcNow():o}}"}]}""");
+
+        await using var c = await Ready(Store());
+        await Request(c, "req-0150-abcd");
+        await Request(c, "pipe-0001");
+
+        Assert.Single(launched);
+        Assert.Equal(["req-0150-abcd"], Recent().Select(o => o!["request"]!.GetValue<string>()));
+        Assert.DoesNotContain("pipe", ha.Retained[HaContract.LaunchOutcomeTopic(Slug)], StringComparison.Ordinal);
+        Assert.DoesNotContain("old00", ha.Retained[HaContract.LaunchOutcomeTopic(Slug)], StringComparison.Ordinal);
+        Assert.Equal(LaunchRequestState.Queued, Store().Get("pipe-0002")!.State);
+    }
+
+    [Fact]
+    public async Task Without_the_hosts_record_a_pipe_launch_home_assistant_still_shows_is_taken_down_at_start()
+    {
+        var held = string.Join(",", Enumerable.Range(0, 5).Select(i => $$"""{"request":"req-015{{i}}-abcd","outcome":"started","session":"t"}"""));
+        ha.Seed(HaContract.LaunchOutcomeTopic(Slug), $$"""{"recent":[{{held}},{"request":"pipe-0003","outcome":"started","session":"s"}]}""");
+
+        await using var c = await Ready();
+
+        Assert.Equal(Enumerable.Range(0, 5).Select(i => $"req-015{i}-abcd"), Recent().Select(o => o!["request"]!.GetValue<string>()));
+        Assert.DoesNotContain("pipe", ha.Retained[HaContract.LaunchOutcomeTopic(Slug)], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_damaged_record_refuses_request_launches_and_says_why_while_a_persons_press_still_launches()
     {
         Directory.CreateDirectory(folder);

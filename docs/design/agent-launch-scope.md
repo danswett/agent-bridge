@@ -477,7 +477,8 @@ to retry; a positively observed startup question becomes `needsPerson`.
 
 **Reading a result back:** a repeat of the same `session.launch` with the same `request` returns
 the remembered outcome and starts nothing (v1-launch.md, `session.launch`'s `request` field).
-That is the readback; no new op.
+That is the readback; on the pipe, `launch.status` also reads a caller's own request by id
+(#3237 S3, [local-pipe.md](../protocol/local-pipe.md)).
 Today `LaunchService.LaunchAsync` remembers by request key, and the MCP server
 keeps its own ledger (`mcp/src/tools.mjs`). #1413 keys it by (principal, `request`) for
 agents, so another caller repeating an agent's request id gets `refused`, never that agent's

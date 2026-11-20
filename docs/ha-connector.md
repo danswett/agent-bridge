@@ -837,7 +837,8 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   stays under Home Assistant's 16 KiB recorder limit. Without a store (tests, other callers) it
   keeps the newest five, as before. A request published after the press waits for
   its own; one more than 60 s older than the press is skipped, words and all, and the press
-  launches from the card; an id not matching `^[A-Za-z0-9-]{8,64}$` is refused; one the store
+  launches from the card; an id not matching `^[A-Za-z0-9-]{8,64}$`, or starting `pipe-` (kept
+  for an agent's own pipe launches, which never appear on this sensor, #3237), is refused; one the store
   already holds is never launched again, whatever its state, and a second press reports its
   stored outcome; the same id with different text or settings is refused as a conflict, the
   first request standing; when the store cannot be read or written, request launches are refused

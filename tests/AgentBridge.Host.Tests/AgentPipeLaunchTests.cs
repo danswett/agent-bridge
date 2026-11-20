@@ -5,6 +5,7 @@ using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // #3237 S3: session.launch from a person-started read+reply+launch agent over the pipe, by request id.
@@ -94,6 +95,45 @@ public sealed class AgentPipeLaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task A_repeated_request_returns_the_same_outcome_and_launches_once_but_a_reused_id_is_refused()
+    {
+        var pipe = Open();
+
+        var first = await Launch(pipe, Body());
+        var again = await Launch(pipe, Body());
+        Assert.Equal(first.Session, (await Launch(pipe, Body(request.ToUpperInvariant()))).Session);
+
+        Assert.Equal(LaunchOutcome.Started, first.Outcome);
+        Assert.Equal(first.Outcome, again.Outcome);
+        Assert.Equal(first.Session, again.Session);
+        Assert.Equal(1, launcher.Launches);
+        Assert.Equal("agent:machine/parent", Assert.Single(launcher.Peers));
+        Assert.Contains("requestReused", await Refusal(pipe, LaunchProtocol.Launch, Body(prompt: "changed")));
+        Assert.Equal(1, launcher.Launches);
+        Assert.Contains(AuditRows(), r => r.Contains("requestReused"));
+    }
+
+    [Fact]
+    public async Task A_request_launches_once_across_a_host_restart_and_its_outcome_is_read_by_id()
+    {
+        var first = await Launch(Open(), Body());
+
+        var restarted = Open();
+        var again = await Launch(restarted, Body());
+        var status = Assert.IsType<AgentLaunchStatus>(await restarted.Handle(restarted.Channel, AgentPipeLaunch.StatusOp,
+            JsonSerializer.SerializeToElement(new { request })));
+
+        Assert.Equal(first.Session, again.Session);
+        Assert.Equal(1, launcher.Launches);
+        Assert.Equal("launched", status.State);
+        Assert.Equal(first.Session, status.Session);
+        Assert.Equal(status.ChangedAt + LaunchRequestStore.Retention, status.KeptUntil);
+        var later = Open(store: LaunchRequestStore.Open(folder, new FakeTimeProvider(DateTimeOffset.UtcNow.AddMinutes(16))));
+        Assert.Contains("requestUsed", await Refusal(later, LaunchProtocol.Launch, Body()));
+        Assert.Equal(1, launcher.Launches);
+    }
+
+    [Fact]
     public async Task Extra_arguments_in_the_running_launch_settings_refuse_although_config_json_has_none()
     {
         launcher.FleetConfig = Running("--allow-all-tools");
@@ -117,6 +157,18 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Contains("can't be used", await Refusal(pipe, LaunchProtocol.Launch, Body()));
         Assert.Equal(0, launcher.Launches);
         Assert.Equal("{ damaged", File.ReadAllText(Path.Combine(folder, LaunchRequestStore.FileName)));
+    }
+
+    [Fact]
+    public async Task Another_principal_cannot_read_or_take_over_a_request_id()
+    {
+        var credentials = new AgentCredentials(folder, "machine");
+        var store = LaunchRequestStore.Open(folder, TimeProvider.System);
+        await Launch(Open(credentials: credentials, store: store), Body());
+        var other = Open("other", credentials: credentials, store: store);
+
+        Assert.Contains("no launch request", await Refusal(other, AgentPipeLaunch.StatusOp, JsonSerializer.SerializeToElement(new { request })));
+        Assert.Equal(1, launcher.Launches);
     }
 
     sealed class FakeLauncher : ISessionLauncher
