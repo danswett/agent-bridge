@@ -43,10 +43,11 @@ public static class Transfers
     // machine alone, no session, its request only inside, and args binding now, the release shown
     // and what the confirmation showed (accept, absent for one press on a quiet machine). It lives
     // ManageProtocol.MaxLifetime, as every press that manages a machine.
-    public static SignedCommand SignUpdateNow(P256KeyPair key, byte[] machinePublic, string release, UpdateBusy? accept, DateTimeOffset now, string request)
+    public static SignedCommand SignUpdateNow(P256KeyPair key, byte[] machinePublic, string release, UpdateBusy? accept, DateTimeOffset now, string request,
+        bool uncheckedPolicy = false)
     {
         var machine = Wire.DeviceId(machinePublic);
-        var args = JsonSerializer.SerializeToElement(new UpdateNowArgs { Now = true, Release = release, Accept = accept }, ProtocolJson.Options);
+        var args = JsonSerializer.SerializeToElement(new UpdateNowArgs { Now = true, Release = release, Accept = accept, Unchecked = uncheckedPolicy ? true : null }, ProtocolJson.Options);
         return SignBody(key, machinePublic, UpdateProtocol.NowAction, null, machine, now, request, ManageProtocol.MaxLifetime, args: args);
     }
 

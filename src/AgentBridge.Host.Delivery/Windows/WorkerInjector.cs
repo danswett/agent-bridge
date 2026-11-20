@@ -40,7 +40,7 @@ public sealed class WorkerInjector : IConsoleInjector
         try
         {
             if (plan.Proceed?.Invoke() is { } stop) { return Nothing($"stopped before typing: {stop}"); }
-            return await RunAsync(processId, plan);
+            return await RunAsync(processId, plan, cancellationToken);
         }
         catch (Exception e) when (e is not InjectorWorkerException) { throw new InjectorWorkerException(e, Task.CompletedTask); }
         finally { One.Release(); }
@@ -175,8 +175,11 @@ public sealed class WorkerInjector : IConsoleInjector
         }
     }
 
-    async Task<InjectionResult> RunAsync(int processId, KeyPlan plan)
+    async Task<InjectionResult> RunAsync(int processId, KeyPlan plan, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var patience = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        patience.CancelAfter(plan.Duration + TimeSpan.FromSeconds(15));
         var start = new ProcessStartInfo(path)
         {
             UseShellExecute = false,
@@ -198,10 +201,12 @@ public sealed class WorkerInjector : IConsoleInjector
         {
             var wrote = false;
             string? final = null;
-            var errors = process.StandardError.ReadToEndAsync();
+            var errors = process.StandardError.ReadToEndAsync(patience.Token);
+            _ = errors.ContinueWith(t => log($"injector stderr read failed: {t.Exception!.GetBaseException().Message}"),
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             try
             {
-                await process.StandardInput.WriteAsync(plan.ToWorkerScript());
+                await process.StandardInput.WriteAsync(plan.ToWorkerScript().AsMemory(), patience.Token);
                 process.StandardInput.Close();
             }
             // A worker that has already gone is reported by its output below.
@@ -213,19 +218,16 @@ public sealed class WorkerInjector : IConsoleInjector
                 else if (line == "ok" || line.StartsWith("fail ", StringComparison.Ordinal)) { final = line; }
             }
 
-            using var patience = new CancellationTokenSource(plan.Duration + TimeSpan.FromSeconds(15));
             try
             {
                 while (await process.StandardOutput.ReadLineAsync(patience.Token) is { } line) { Read(line); }
                 await process.WaitForExitAsync(patience.Token);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException e)
             {
-                try { process.Kill(); } catch (InvalidOperationException) { }
-                await process.WaitForExitAsync();
-                // Whatever it announced before it was stopped still counts.
-                foreach (var line in (await process.StandardOutput.ReadToEndAsync()).Split('\n')) { Read(line.TrimEnd('\r')); }
-                return wrote ? Interrupted("the injector stopped responding while typing") : Nothing("the injector stopped responding before typing");
+                ended = true;
+                var exited = await EndAsync(process);
+                return Cancelled(e, exited);
             }
             await errors;
 
@@ -250,7 +252,7 @@ public sealed class WorkerInjector : IConsoleInjector
             }
             return Nothing(closed ? "the session's console closed before anything was typed" : $"the injector stopped before typing (exit 0x{exit:X8})");
         }
-        catch (Exception e)
+        catch (Exception e) when (e is not InjectorWorkerException)
         {
             // Anything unforeseen leaves the worker perhaps still typing: it is ended, and the
             // exception carries the proof of its end for the host's stop fence (DeliveryGate).
@@ -261,6 +263,13 @@ public sealed class WorkerInjector : IConsoleInjector
         {
             if (!ended) { process.Dispose(); }
         }
+    }
+
+    internal static InjectionResult Cancelled(Exception error, Task exited)
+    {
+        if (!exited.IsCompletedSuccessfully) { throw new InjectorWorkerException(error, exited); }
+        // A cancelled read can leave a flushed writing announcement buffered and unread.
+        return Interrupted("the injector was cancelled and its worker has exited");
     }
 
     // The worker may still be sending keys: end it, and wait a moment for proof. The proof is its
