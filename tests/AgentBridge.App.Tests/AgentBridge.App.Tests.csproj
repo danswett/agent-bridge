@@ -23,6 +23,7 @@
     <Compile Include="..\..\src\AgentBridge.App\UpdaterHaltPolicy.cs" Link="UpdaterHaltPolicy.cs" />
     <Compile Include="..\..\src\AgentBridge.Host\ReleaseEligibility.cs" Link="ReleaseEligibility.cs" />
     <Compile Include="..\..\src\AgentBridge.App\SessionView.History.cs" Link="SessionView.History.cs" />
+    <Compile Include="..\..\src\AgentBridge.App\SessionView.Recovery.cs" Link="SessionView.Recovery.cs" />
     <Compile Include="..\..\src\AgentBridge.App\SelfTest.NativeInputSetup.cs" Link="SelfTest.NativeInputSetup.cs" />
     <Compile Include="..\TestTimeoutDiagnostics.cs" Link="TestTimeoutDiagnostics.cs" />
     <!-- The generated motion resources the app loads, read by MotionTests as the app reads them. -->
