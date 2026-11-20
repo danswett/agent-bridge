@@ -19,6 +19,7 @@ public sealed class RunMarker : IDisposable
     bool completed, disposed;
 
     public PreviousRun Previous { get; }
+    public IReadOnlyList<string> RecoveryWarnings { get; } = [];
 
     RunMarker(string dir, string version, TimeProvider clock)
     {
@@ -28,26 +29,44 @@ public sealed class RunMarker : IDisposable
         Directory.CreateDirectory(dir);
         ownership = UserLock.TryTake(path + ".lock", deleteOnClose: true) ?? throw new IOException("The new run record is already owned.");
         var saved = false;
+        List<(string Path, FileStream Owner)> recoveredLeases = [];
         try
         {
-            Previous = ReadPrevious(dir, out var recovered);
+            Previous = ReadPrevious(dir, recoveredLeases, out var recovered);
             Save();
             if (recovered is not null)
             {
-                using var owner = UserLock.TryTake(recovered + ".lock", deleteOnClose: true);
-                if (owner is not null) { File.Delete(recovered); }
+                List<string> warnings = [];
+                foreach (var lease in recoveredLeases)
+                {
+                    try { File.Delete(lease.Path); }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                    {
+                        warnings.Add($"Recovered run marker not removed: {error.GetType().Name}");
+                    }
+                }
+                RecoveryWarnings = warnings.AsReadOnly();
             }
             saved = true;
         }
-        finally { if (!saved) { ownership.Dispose(); } }
+        finally
+        {
+            foreach (var lease in recoveredLeases) { lease.Owner.Dispose(); }
+            if (!saved) { ownership.Dispose(); }
+        }
     }
 
     public static RunMarker Start(string dir, string version, TimeProvider? clock = null) =>
         new(dir, version, clock ?? TimeProvider.System);
 
-    public static PreviousRun ReadPrevious(string dir) => ReadPrevious(dir, out _);
+    public static PreviousRun ReadPrevious(string dir)
+    {
+        List<(string Path, FileStream Owner)> leases = [];
+        try { return ReadPrevious(dir, leases, out _); }
+        finally { foreach (var lease in leases) { lease.Owner.Dispose(); } }
+    }
 
-    static PreviousRun ReadPrevious(string dir, out string? record)
+    static PreviousRun ReadPrevious(string dir, List<(string Path, FileStream Owner)> leases, out string? record)
     {
         record = null;
         try
@@ -55,9 +74,10 @@ public sealed class RunMarker : IDisposable
             PreviousRun previous = new(false);
             foreach (var file in Directory.EnumerateFiles(dir, "run-marker*.json"))
             {
-                // A lifetime lease, not a PID or a session-local mutex, proves this run is gone.
-                using var owner = UserLock.TryTake(file + ".lock", deleteOnClose: true);
+                // Keep abandoned records owned until the replacement is durable and consumed.
+                var owner = UserLock.TryTake(file + ".lock", deleteOnClose: true);
                 if (owner is null) { continue; }
+                leases.Add((file, owner));
                 PreviousRun candidate;
                 try { candidate = (JsonSerializer.Deserialize<PreviousRun>(File.ReadAllText(file)) ?? new(true)) with { Unclean = true }; }
                 catch (FileNotFoundException) { continue; }
@@ -98,9 +118,24 @@ public sealed class RunMarker : IDisposable
         }
     }
 
-    public static string DescribeCrash(Exception? error) => error is null ? "Unknown exception" :
-        Limit(FeedbackRedactor.Redact(error.GetType().FullName ?? "Exception") + "\n" +
-            FeedbackRedactor.Redact(new System.Diagnostics.StackTrace(error, fNeedFileInfo: false).ToString()), 8192);
+    public static string DescribeCrash(Exception? error)
+    {
+        if (error is null) { return "Unknown exception"; }
+        List<Exception> errors = [error];
+        for (var index = 0; index < errors.Count; index++)
+        {
+            if (errors[index] is AggregateException aggregate)
+            {
+                errors.AddRange(aggregate.InnerExceptions.Take(16 - errors.Count));
+            }
+            else if (errors[index].InnerException is { } inner && errors.Count < 16) { errors.Add(inner); }
+        }
+        // Share the bound so a long outer stack cannot hide every inner exception.
+        var entryLimit = (8192 - errors.Count + 1) / errors.Count;
+        return string.Join("\n", errors.Select(item => Limit(
+            FeedbackRedactor.Redact(item.GetType().FullName ?? "Exception") + "\n" +
+            FeedbackRedactor.Redact(new System.Diagnostics.StackTrace(item, fNeedFileInfo: false).ToString()), entryLimit)));
+    }
 
     public void Complete()
     {

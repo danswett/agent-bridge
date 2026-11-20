@@ -34,10 +34,14 @@ The existing `AppLog` always writes redacted diagnostics to `Paths.AppData`'s `a
 rolling to `app.log.1` after 1 MB. Transcript text is not diagnostic input. `CrashLog`
 keeps exception types and frames, not messages or source paths, in `crash.log` and the
 existing diagnostics journal. Neither submits anything.
+The marker and `crash.log` include nested/aggregate exception types and frames,
+bounded to 16 exceptions and 8192 characters total; no exception messages are retained.
 Each profile keeps owned `runs/<profile>/run-marker.<id>.json` records under `Paths.AppData`
 (the demo uses `runs/demo`). A per-record lifetime file lease spans Windows sessions;
 startup captures only the latest abandoned run in `RunMarker.Previous`, never a running
-copy's evidence. Its recovered record is removed only after the new marker is durable.
+copy's evidence. All abandoned records are reclaimed only after the new marker is durable.
+Recovery leases span selection, replacement and cleanup. Cleanup failures are returned
+as `RecoveryWarnings` and written to `app.log`; the new marker stays owned and usable.
 Empty/corrupt records count as unclean. Marker writes flush a
 same-directory temporary file before atomically replacing the old marker; failed writes
 preserve the old marker and remove the temporary file. Only an actual exit,
