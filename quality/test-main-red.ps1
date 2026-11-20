@@ -31,6 +31,13 @@ function Reset-Scenario {
         log = '  Failed A.B.C.Method [1 s]'; unreadable = $false; jobName = 'product'; jobConclusion = 'failure'
         body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = ''; created = $false }
 }
+# $s.runs maps run number to its attempts' conclusions, oldest first; 'running' is an unfinished attempt.
+function New-FakeAttempt([int]$Id, [int]$N) {
+    $c = $s.runs[$Id][$N - 1]
+    @{ id = $Id; run_number = $Id; run_attempt = $N; status = $(if ($c -eq 'running') { 'in_progress' } else { 'completed' })
+        conclusion = $(if ($c -ne 'running') { $c }); head_sha = 'abcdef0123456789'; head_branch = 'main'; event = 'push'
+        path = '.github/workflows/ci.yml'; head_repository = @{ full_name = 'o/r' } }
+}
 function Fake-Gh {
     $a = $args -join ' '
     $s.calls += ,@($args)
@@ -53,16 +60,18 @@ function Fake-Gh {
         '^api repos/o/r/actions/workflows/ci.yml/runs\?' {
             if ($a -notmatch 'per_page=100' -or $a -match 'status=completed') { throw 'Require one bounded page including in-flight retries' }
             $run.id = $s.newest; $run.run_number = $s.newest
-            $runs = if ($s.ContainsKey('latest')) { @($s.latest) } else { @($run) }
+            $runs = if ($s.ContainsKey('runs')) { @(foreach ($k in $s.runs.Keys) { New-FakeAttempt $k $s.runs[$k].Count }) }
+            elseif ($s.ContainsKey('latest')) { @($s.latest) } else { @($run) }
             @{ workflow_runs = @($runs) } | ConvertTo-Json -Depth 5; return
         }
-        '^api repos/o/r/actions/runs/(100|101)/attempts/(\d+)$' {
+        '^api repos/o/r/actions/runs/(\d+)/attempts/(\d+)$' {
+            if ($s.ContainsKey('runs')) { New-FakeAttempt $Matches[1] $Matches[2] | ConvertTo-Json -Depth 5; return }
             $run.id = [long]$Matches[1]; $run.run_number = $run.id; $run.run_attempt = [int]$Matches[2]
             $run.status = 'completed'
             $run.conclusion = if ($s.ContainsKey('attempts')) { $s.attempts[$run.run_attempt] } else { 'failure' }
             $run | ConvertTo-Json; return
         }
-        '^api repos/o/r/actions/runs/(100|101)/(attempts/\d+/)?jobs' {
+        '^api repos/o/r/actions/runs/\d+/(attempts/\d+/)?jobs' {
             @{ jobs = @(@{ id = 7; name = $s.jobName; conclusion = $s.jobConclusion }) + $s.extraJobs } | ConvertTo-Json; return
         }
         '^api repos/o/r/actions/jobs/\d+/logs --allow-escape-sequences$' {
@@ -185,8 +194,36 @@ try {
         $completed.run_attempt = 1; $completed.conclusion = 'failure'
         @{ workflow_run = $completed } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
         Detect
-        Assert ($quietRecovery -and -not $s.open -and $s.writes.Count -eq 0) "a retained failure cannot reopen after a quiet successful retry and a $neutral third attempt (writes=$($s.writes -join ','); open=$($s.open))"
+        # Neutral attempts are ignored, so the late attempt-one failure is recorded exactly as it is without them.
+        Assert ($quietRecovery -and -not $s.open -and ($s.writes -join ',') -eq 'label,create,comment,close') "a retained failure is recorded but cannot stay open after a quiet successful retry and a $neutral third attempt (writes=$($s.writes -join ','); open=$($s.open))"
     }
+    function Send-Event([int]$Id, [int]$N) {
+        @{ workflow_run = New-FakeAttempt $Id $N } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath
+        Invoke-MainRed -RunId $Id -Repository 'o/r' | Out-Null
+    }
+    Reset-Scenario; $s.runs = @{ 100 = @('failure', 'success', 'running') }; $s.open = $true; $s.created = $true
+    $s.body = 'main-red: run=100 attempt=1 sha=abcdef01'; Send-Event 100 2
+    Assert (-not $s.open -and ($s.writes -join ',') -eq 'comment,close') 'a running third attempt cannot keep an incident open after attempt two recovered'
+    foreach ($neutral in 'cancelled', 'skipped') {
+        foreach ($c in 'failure', 'success') {
+            Reset-Scenario; $s.runs = @{ 100 = @('failure'); 101 = @($c); 102 = @($neutral) }
+            if ($c -eq 'success') { $s.open = $true; $s.created = $true; $s.body = 'main-red: run=100 attempt=1 sha=abcdef01' }
+            Send-Event 100 1
+            $evidence = (@($s.body) + @($s.comments | ForEach-Object { $_.body })) -join "`n"
+            Assert ($(if ($c -eq 'failure') { $s.open -and $evidence -match '(?m)^main-red: run=101 attempt=1 ' }
+                    else { -not $s.open -and $evidence -match 'green again, run=101 attempt=1' })) "a stale event behind a newer $neutral push still applies the $c verdict before it"
+        }
+    }
+    # Every delivery order of the same finished attempts must leave the same incident state.
+    $events = @(@(100, 1), @(101, 1), @(101, 3), @(101, 4))
+    $states = @(foreach ($k in 0..23) {
+            Reset-Scenario; $s.runs = @{ 100 = @('failure'); 101 = @('failure', 'failure', 'success', 'cancelled'); 102 = @('skipped') }
+            $rest = [Collections.Generic.List[object]]::new($events); $j = $k
+            foreach ($n in $events.Count..1) { $e = $rest[$j % $n]; $rest.RemoveAt($j % $n); $j = [math]::Floor($j / $n); Send-Event $e[0] $e[1] }
+            $marks = [regex]::Matches((@($s.body) + @($s.comments | ForEach-Object { $_.body })) -join "`n", '(?m)^main-red: (green again, )?run=\d+ attempt=\d+')
+            "open=$($s.open) creates=$(@($s.writes | Where-Object { $_ -eq 'create' }).Count) newest=$(@($marks | Select-Object -Last 1 | ForEach-Object Value) -join '')"
+        })
+    Assert (@($states | Sort-Object -Unique).Count -eq 1 -and $states[0] -eq 'open=False creates=1 newest=main-red: green again, run=101 attempt=3') "every delivery order converges on one closed incident ($(@($states | Sort-Object -Unique) -join ' / '))"
 } finally {
     $env:GITHUB_EVENT_NAME = $savedEventName; $env:GITHUB_EVENT_PATH = $savedEventPath
     Remove-Item -LiteralPath $eventPath

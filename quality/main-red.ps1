@@ -130,33 +130,42 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
         (Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json).workflow_run
     } else { Invoke-Gh api "repos/$Repository/actions/runs/$RunId" | ConvertFrom-Json }
     if ($run.id -ne $RunId) { throw 'The completed event does not match RunId.' }
-    if ($run.path -ne '.github/workflows/ci.yml' -or $run.event -ne 'push' -or $run.head_branch -ne 'main' -or
-        $run.head_repository.full_name -ne $Repository) { return }
-    # Reconcile the newest completed verdict even if an older event replaced its pending detector.
-    $recent = (Invoke-Gh api "repos/$Repository/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=100" | ConvertFrom-Json).workflow_runs
-    $latest = $recent | Where-Object { $_.status -eq 'completed' -or $_.run_attempt -gt 1 } |
-        Sort-Object run_number -Descending | Select-Object -First 1
-    $attemptFloor = 0
-    # Neutral attempts cannot erase a decisive verdict or let older events replay over it.
-    while ($latest -and $latest.run_attempt -gt 1 -and
-        ($latest.status -ne 'completed' -or (Get-RedVerdict $latest.conclusion) -eq 'none')) {
-        $previousId = $latest.id; $previousAttempt = $latest.run_attempt - 1
-        $latest = Invoke-Gh api "repos/$Repository/actions/runs/$previousId/attempts/$previousAttempt" | ConvertFrom-Json
-        if ($latest.id -ne $previousId -or $latest.run_attempt -ne $previousAttempt) { throw 'Previous CI attempt does not match the requested run and attempt.' }
-        $attemptFloor = $previousAttempt
+    if (-not (Test-MainPush $run $Repository)) { return }
+    # Pending detectors replace each other, so every detector applies the newest decisive verdict, whichever
+    # event (stale, delayed or redelivered) started it, and every order converges on the same incident state.
+    $recent = @((Invoke-Gh api "repos/$Repository/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=100" |
+            ConvertFrom-Json).workflow_runs | Where-Object { Test-MainPush $_ $Repository })
+    $known = @{}
+    foreach ($r in $recent + @($run)) { $known["$($r.id)/$($r.run_attempt)"] = $r }
+    function Get-Attempt($Id, [int]$N) {
+        if (-not $known.ContainsKey("$Id/$N")) {
+            $a = Invoke-Gh api "repos/$Repository/actions/runs/$Id/attempts/$N" | ConvertFrom-Json
+            if ($a.id -ne $Id -or $a.run_attempt -ne $N) { throw 'CI attempt does not match the requested run and attempt.' }
+            $known["$Id/$N"] = $a
+        }
+        $known["$Id/$N"]
     }
-    $completed = @(@($run) + @($latest) | Where-Object { $null -ne $_ -and $_.status -eq 'completed' } | Sort-Object run_number -Descending)
-    if ($completed.Count -eq 0) { return }
-    foreach ($candidate in $completed | Where-Object { $_.run_number -eq $completed[0].run_number } | Sort-Object run_attempt -Unique) {
-        if ($candidate.path -ne '.github/workflows/ci.yml' -or $candidate.event -ne 'push' -or $candidate.head_branch -ne 'main' -or
-            $candidate.head_repository.full_name -ne $Repository -or $candidate.run_attempt -lt 1) { throw 'Invalid completed main CI run.' }
-        if ($attemptFloor -gt 0 -and $candidate.id -eq $latest.id -and $candidate.run_attempt -lt $attemptFloor) { continue }
-        # A delayed recovery cannot close over a newer attempt that is still running.
-        if ($candidate.conclusion -eq 'success' -and @($recent | Where-Object {
-                    $_.id -eq $candidate.id -and $_.status -ne 'completed' -and $_.run_attempt -gt $candidate.run_attempt
-                }).Count -gt 0) { continue }
-        Publish-MainRed $candidate $Repository
+    # Newest run, then newest attempt, first. Cancelled, skipped and running attempts are not verdicts. A running
+    # attempt never holds back a finished one: its own completed event reconciles again when it ends.
+    $verdict = $null
+    :search foreach ($r in @($recent + @($run) | Group-Object id | ForEach-Object { $_.Group | Sort-Object run_attempt | Select-Object -Last 1 } |
+            Sort-Object run_number -Descending)) {
+        for ($n = $r.run_attempt; $n -ge 1; $n--) {
+            $a = Get-Attempt $r.id $n
+            if ($a.status -eq 'completed' -and (Get-RedVerdict $a.conclusion) -ne 'none') { $verdict = $a; break search }
+        }
     }
+    if (-not $verdict) { return }
+    # The completed event's own failure stays evidence when a retry of the same run already decided main's state.
+    if ($run.id -eq $verdict.id -and $run.run_attempt -lt $verdict.run_attempt -and (Get-RedVerdict $run.conclusion) -eq 'red') {
+        Publish-MainRed $run $Repository
+    }
+    Publish-MainRed $verdict $Repository
+}
+
+function Test-MainPush($Run, [string]$Repository) {
+    $Run.path -eq '.github/workflows/ci.yml' -and $Run.event -eq 'push' -and $Run.head_branch -eq 'main' -and
+    $Run.head_repository.full_name -eq $Repository -and $Run.run_attempt -ge 1
 }
 
 function Publish-MainRed($run, [string]$Repository) {
@@ -165,16 +174,17 @@ function Publish-MainRed($run, [string]$Repository) {
     if ($verdict -eq 'none') { return }
     $issue = Get-MainRedIssue $Repository -IncludeClosed:($verdict -eq 'red')
     $sha = $run.head_sha.Substring(0, 8)
-    $marker = "main-red: run=$RunId attempt=$($run.run_attempt) sha=$sha"
     $comments = @()
     if ($issue) {
-        if ($verdict -eq 'red' -and ($issue.body -split '\r?\n') -ccontains $marker) { return }
         $comments = @((Invoke-Gh issue view $issue.number --repo $Repository --json comments | ConvertFrom-Json).comments |
                 Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') })
-        if ($verdict -eq 'red' -and @($comments | Where-Object { ($_.body -split '\r?\n') -ccontains $marker }).Count -gt 0) { return }
-        $entries = @($issue.body) + @($comments | ForEach-Object { $_.body })
-        if (@($entries | Where-Object { $_ -cmatch "(?m)^main-red: run=$RunId attempt=(\d+) sha=" -and
-                    [long]$Matches[1] -gt $run.run_attempt }).Count -gt 0) { return }
+        # Writes only move forward: nothing at or before the newest recorded red or green attempt is written again.
+        # Run ids grow with run numbers, so they order runs the same way.
+        $recorded = (@($issue.body) + @($comments | ForEach-Object { $_.body })) -join "`n"
+        foreach ($m in [regex]::Matches($recorded, '(?m)^main-red: (?:green again, )?run=(\d+) attempt=(\d+),? sha=')) {
+            $id = [long]$m.Groups[1].Value
+            if ($id -gt $RunId -or ($id -eq $RunId -and [long]$m.Groups[2].Value -ge $run.run_attempt)) { return }
+        }
     }
     if ($verdict -eq 'green') {
         if ($issue) {
