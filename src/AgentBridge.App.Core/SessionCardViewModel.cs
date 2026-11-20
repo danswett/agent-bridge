@@ -47,6 +47,12 @@ public sealed record ToolRow(StatusGlyph Glyph, string Status, string Name, stri
 public sealed partial class SessionCardViewModel : Observable
 {
     static readonly Dictionary<AgentKind, string> AgentNames = new() { [AgentKind.Copilot] = "Copilot", [AgentKind.Claude] = "Claude", [AgentKind.Codex] = "Codex", [AgentKind.Unknown] = "Agent" };
+    // Keep the original card's list and per-session selection in step with the PWA.
+    static readonly string[] SpinnerVerbs = [
+        "Thinking", "Pondering", "Slithering", "Brewing", "Conjuring", "Noodling", "Percolating",
+        "Mulling", "Cogitating", "Simmering", "Ruminating", "Tinkering", "Churning", "Musing",
+        "Crafting", "Forging", "Marinating", "Synthesizing", "Deliberating", "Puttering",
+    ];
 
     readonly CardContext ctx;
     Session session;
@@ -126,6 +132,25 @@ public sealed partial class SessionCardViewModel : Observable
 
     public string View => Line.View;
     public string StatusText => Line.Text;
+    public string HeaderStatusText
+    {
+        get
+        {
+            var line = Line;
+            var facts = line.Facts.ToList();
+            if (line.Rule == 3)
+            {
+                var index = 0;
+                foreach (var c in session.Id) { index = (index + c) % SpinnerVerbs.Length; }
+                facts[0] = SpinnerVerbs[index];
+            }
+            if (session.Activity.Compactions is > 0 and var n)
+            {
+                facts.Add(n == 1 ? "compacted once" : $"compacted {n} times");
+            }
+            return string.Join(StatusLine.Separator, facts);
+        }
+    }
     public StatusGlyph Glyph => Line.Glyph;
     public StatusTone StatusTone => Line.Tone;
     // The glyph's accessible name, as a row reads (ui.md §9).
@@ -249,7 +274,6 @@ public sealed partial class SessionCardViewModel : Observable
             if (b?.Agents > 0) { facts.Add(Words.Plural(b.Agents, "background agent", "background agents")); }
             if (b?.Shells > 0) { facts.Add(Words.Plural(b.Shells, "background command", "background commands")); }
             if (session.Activity.TurnCount is { } t) { facts.Add($"{t} turns"); }
-            if (session.Activity.Compactions is > 0 and var c) { facts.Add($"{c} compaction{(c == 1 ? "" : "s")}"); }
             if (session.ProcessId is { } pid) { facts.Add($"pid {pid}"); }
             if (session.Cwd is { Length: > 0 } cwd) { facts.Add(cwd); }
             return string.Join(" · ", facts);
@@ -574,7 +598,7 @@ public sealed partial class SessionCardViewModel : Observable
         Delegates.RefreshTimes(now);
     }
 
-    static readonly string[] StatusProperties = [nameof(Line), nameof(State), nameof(View), nameof(StatusText), nameof(Glyph), nameof(StatusTone), nameof(GlyphLabel), nameof(RowStatus), nameof(RowFacts), nameof(RowLabel)];
+    static readonly string[] StatusProperties = [nameof(Line), nameof(State), nameof(View), nameof(StatusText), nameof(HeaderStatusText), nameof(Glyph), nameof(StatusTone), nameof(GlyphLabel), nameof(RowStatus), nameof(RowFacts), nameof(RowLabel)];
 
     void RaiseStatus()
     {

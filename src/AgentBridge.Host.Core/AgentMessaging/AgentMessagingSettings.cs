@@ -2,18 +2,22 @@ using System.Text.Json;
 
 namespace AgentBridge.Host.Core.AgentMessaging;
 
-// config.json's agentMessaging section (docs/host-config.md): the temporary, off-by-default
-// "AP5-lite" mode (#728), in which the owner's own agents message each other host to host
-// over the relay before the signed roster (#55) exists. This holds only the settings; nothing
-// here sends, receives or signs.
+// config.json's agentMessaging section (docs/host-config.md): the temporary "AP5-lite" mode (#728),
+// in which the owner's own agents message each other host to host over the relay before the signed
+// roster (#55) exists. On by default since the owner's decision of Nov 19, 2026, 22:07 PT, but only
+// as far as LiteChannel.Untrusted lets it: a host with no signed-in account, or no present
+// same-account peer, still sends and receives nothing. This holds only the settings; nothing here
+// sends, receives or signs.
 //
-//   remote           "off" (the default) or "own-account"
+//   remote           "own-account" (the default when the key is absent or null) or "off"
 //   allowAllTargets  false (the default) or true: whether own-agent text may enter an allow-all
-//                    session. Matters only while remote is "own-account"; otherwise such a
-//                    target falls back to Home Assistant.
+//                    session. Counts only while remote is explicitly "own-account", so the default
+//                    never opens one; otherwise such a target falls back to Home Assistant.
 //   allowAllTargetSessions [] (default): exact session ids allowed with allowAllTargets on; names and wildcards grant nothing.
 //
-// Invalid switches, non-list targets, sections or files deny all; invalid list entries are ignored. Installs/upgrades never write these keys.
+// Only a clean absent key is on. An explicit "off" (which the kill writes), an unknown value, a
+// section that is not an object, any problem in a section without remote, or a file that cannot
+// be read (Closed) is off. Invalid list entries are ignored. Installs/upgrades never write these keys.
 //
 // A change needs no restart: HostSettings.CurrentAgentMessaging(folder) is called per message, which reads
 // the file afresh, so switching to off holds from the next message and loses none (a message
@@ -23,9 +27,14 @@ public sealed record AgentMessagingSettings
     public const string Off = "off";
     public const string OwnAccount = "own-account";
 
-    public static readonly AgentMessagingSettings Default = new();
+    public static readonly AgentMessagingSettings Default = new() { Remote = OwnAccount };
+
+    // What a section or a config.json that cannot be read means.
+    public static readonly AgentMessagingSettings Closed = new();
 
     public string Remote { get; init; } = Off;
+    // Whether config.json names remote itself. After a kill, the default alone never turns the mode back on.
+    public bool RemoteSet { get; init; }
     public bool AllowAllTargets { get; init; }
     public IReadOnlyList<string> AllowAllTargetSessions { get; init; } = [];
 
@@ -38,14 +47,14 @@ public sealed record AgentMessagingSettings
         if (s.ValueKind != JsonValueKind.Object)
         {
             problems.Add("agentMessaging is not an object, so remote agent messaging is off");
-            return (Default, problems);
+            return (Closed, problems);
         }
         var settings = Default;
         if (s.TryGetProperty("remote", out var remote) && remote.ValueKind != JsonValueKind.Null)
         {
             var value = remote.ValueKind == JsonValueKind.String ? remote.GetString() : null;
-            if (value == OwnAccount) { settings = settings with { Remote = OwnAccount }; }
-            else if (value != Off) { problems.Add($"agentMessaging.remote is not \"{Off}\" or \"{OwnAccount}\", so remote agent messaging is off"); }
+            settings = settings with { Remote = value == OwnAccount ? OwnAccount : Off, RemoteSet = true };
+            if (value is not (OwnAccount or Off)) { problems.Add($"agentMessaging.remote is not \"{Off}\" or \"{OwnAccount}\", so remote agent messaging is off"); }
         }
         if (s.TryGetProperty("allowAllTargets", out var all) && all.ValueKind != JsonValueKind.Null)
         {
@@ -71,8 +80,10 @@ public sealed record AgentMessagingSettings
                 settings = settings with { AllowAllTargetSessions = sessions };
             }
         }
-        // allowAllTargets counts only in own-account mode, so it reads false otherwise.
-        if (!settings.RemoteEnabled) { settings = settings with { AllowAllTargets = false }; }
+        // A section with a problem may have been meant as off, so the default does not turn it on; an
+        // explicit own-account keeps its list problems as before. allow-all counts only with remote set to own-account.
+        if (!settings.RemoteSet && problems.Count > 0) { settings = settings with { Remote = Off }; }
+        if (!settings.RemoteEnabled || !settings.RemoteSet) { settings = settings with { AllowAllTargets = false }; }
         return (settings, problems);
     }
 }

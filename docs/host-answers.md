@@ -366,8 +366,9 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     and nothing typed stays in it. A checkbox list's ticks are not read (see "What no plan
     can see"). Spaces typed at the machine into an empty box are the one thing this check
     cannot see: a screen read trims each row, so a box holding only spaces reads as its
-    "❯ " alone. No key is known to clear a box (none has been proven against the CLI, so none
-    is guessed at, Ctrl+U included), so instead, once the answer's words show in the box, a
+    "❯ " alone. Answers do not clear a form's input. The separate failed-reply path
+    attempts a guarded Ctrl+E, Ctrl+U cleanup ([host-replies.md](host-replies.md#the-keys-copilot));
+    that sequence has fake-injector tests, but no live-CLI proof yet. Once the answer's words show in the box, a
     first pass presses their Enter only if they start the input at the column right after
     the "❯ " (`CopilotFormScreen.Begins`): spaces before them show then, and the words are
     left unsubmitted (`unconfirmed`; a resume's whole-contents check refuses them too, so the

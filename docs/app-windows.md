@@ -28,6 +28,28 @@ has its hooks connected (`AppPreferences.GuidePending`, `SettingsViewModel.Guide
 only to a first install (no settings file existed, so upgraders never see it) and only to a launch that
 shows the window: a start at sign-in or a toast launch leaves it pending for the next one.
 
+## Local crash evidence
+
+The existing `AppLog` always writes redacted diagnostics to `Paths.AppData`'s `app.log`,
+rolling to `app.log.1` after 1 MB. Transcript text is not diagnostic input. `CrashLog`
+keeps exception types and frames, not messages or source paths, in `crash.log` and the
+existing diagnostics journal. Neither submits anything.
+The marker and `crash.log` include nested/aggregate exception types and frames,
+bounded to 16 exceptions and 8192 characters total; no exception messages are retained.
+Each profile keeps owned `runs/<profile>/run-marker.<id>.json` records under `Paths.AppData`
+(the demo uses `runs/demo`). A per-record lifetime file lease spans Windows sessions;
+startup captures only the latest abandoned run in `RunMarker.Previous`, never a running
+copy's evidence. All abandoned records are reclaimed only after the new marker is durable.
+Recovery leases span selection, replacement and cleanup. Cleanup failures are returned
+as `RecoveryWarnings` and written to `app.log`; the new marker stays owned and usable.
+Empty/corrupt records count as unclean. Marker writes flush a
+same-directory temporary file before atomically replacing the old marker; failed writes
+preserve the old marker and remove the temporary file. Only an actual exit,
+not hiding to the tray, calls `Complete()`, including tray Quit and a successful update
+handoff immediately before exit. Crash evidence survives closing; a teardown
+crash restores the marker. Self-tests leave markers alone. `RecordHang` is the seam for
+the separate watchdog slice; recovery UI and the existing feedback submission remain separate work.
+
 ## Decisions
 
 Settings' **Reply box** group offers **Return key in replies**: **New line** (the
@@ -35,6 +57,12 @@ unchanged default, Ctrl+Enter sends) or **Send** (Enter sends, Shift+Enter makes
 new line, Ctrl+Enter still sends). The choice is local to this device/profile and
 applies immediately, including the Send tooltip and accessible description.
 Enter during IME composition is left to the text control and never sends a reply.
+
+The last selected session and conversation scroll anchor are saved on change in the
+profile's `*-reading.json` beside the other app stores. Startup restores that selection
+and reading position; a missing or stale session falls back to the first available session.
+The record contains only opaque session/turn keys and scroll geometry, not transcript text.
+This recovery is independent of crash reporting and sends nothing.
 
 Sent person-message bubbles recognise host-staged attachment references, including earlier
 turns. Images available on a local disk show thumbnails that open a named image viewer;
@@ -372,6 +400,26 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
 
 ### Updates: Velopack, one version for app and host
 
+**Completion evidence** ([updater follow-up](https://github.com/danswett/agent-bridge/issues/2869)):
+`UpdateApplyCompletion` is a platform-neutral observer seam, not yet wired to apply or
+respawn. Its adapter must track the actual apply operation, including delegated workers,
+and freshly read the active installation's normalized version. A launcher exit, target
+files appearing, or a cached locator version does not establish worker completion.
+Each run supplies a new operation generation; evidence with another (or no) generation
+is `Unknown`. Adapters must bind it to that operation's actual process, never re-tag a
+cached snapshot, and sample the active manifest after completion. Release identity
+uses the shared `UpdateVersions` normalizer (whitespace, one optional `v`, metadata
+ignored; case-insensitive comparison; `0.0.0` unknown).
+Only authoritative worker completion, a known zero apply exit code, and the matching
+active version produce `Completed`. A known nonzero worker exit produces `Failed`.
+Missing evidence, unreadable state, a timeout or a version mismatch stays `Unknown`;
+none authorizes a retry or claims app/host convergence. Any result arriving at or after
+the observation window is `Unknown`, even success. Cancellation stops observation,
+not the updater. The asynchronous probe must return promptly and cancel only its wait.
+Results retain the operation step, target/observed versions, actual exit/native error
+code when available, offset-bearing observation time and monotonic elapsed time,
+without copying exception messages or inventing holder PID/path evidence.
+
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
 into one folder with one version. An app update is a host update, so they never skew.
@@ -595,10 +643,11 @@ controls consume that same contract; this extraction does not disable or remove 
     of their words said once (ready, restarting, failed; a release that became ready while
     Settings was busy, once it is idle), and Settings' own download at most every quarter
     (ui.md §9.1 A6). Errors name the next step in one sentence: "The update didn't download.
-    *Product* will try again at *time*.", or "The update didn't install because another bridge
-    profile is running from this installation.", its reason a kind (another profile running, the
-    installer's error, a newer update downloaded meanwhile, the host not answering), never a
-    process id, a path or an error's own words, which go to the log. A failed install is a
+    *Product* will try again at *time*.", or "The update didn't install because bridge
+    profile 'work' host (pid 4242) runs from this installation." Profile blockers name the
+    profile and PID (or explicitly say the profile is unknown); other reasons stay a kind
+    (the installer's error, a newer download, the host not answering), never a path or an error's
+    own words. A failed install is a
     warning bar whose button reads **Try again**; while restarting, the button shows its progress
     ring, ignores presses, keeps focus and says "Restarting…" to a screen reader, never drawn at
     rest in accent (Creative on #719, 6675195544). There is one restart with one state, whichever
@@ -698,10 +747,33 @@ controls consume that same contract; this extraction does not disable or remove 
     which refuses while another profile's app or host runs from this installation (below), asking
     the host for its own pid first. The banner offers only a release the updater has ready: while a
     newer one found since is still downloading, or held after a failed download, it offers nothing.
-  * **Files held by Windows** (#2345, #2353): before stopping the host, wait at most two minutes
-    for Restart Manager's holders to release, with checks backing off to ten seconds.
+  * **Files held by Windows** (#2345, #2353, [timeout fix](https://github.com/danswett/agent-bridge/issues/2866)):
+    before stopping the host, check only locked installation files (any type, including `.pri`)
+    with Restart Manager. A completed clear scan serves only the duplicate checks right after the
+    wait and as the stop begins (cheap
+    file checks invalidate it if the locked-file set changes); the last check before the host stops,
+    after any confirmation or departure, always scans again, since an outside process can take an
+    image the app already holds without changing which files are locked. A last scan runs after the
+    stop's probe and other-profile waits, right before the handoff; a holder found then is named,
+    the host is started again and the install refused.
+    The cheap check opens each file exclusively for an instant, so a lazy assembly load in that
+    instant could see a sharing violation; a shared open would miss holders that allow writes.
+    Each scan has its own two-minute deadline, independent of the two-minute release wait
+    (checks back off to ten seconds). A scan started within that wait may finish afterwards.
     An unreadable/changing holder list is unknown, never permission to install. A SYSTEM service
-    is named even when its image is unreadable. Waiting carries no Installing credit; timeout
+    is named even when its image is unreadable; refusals include process/service name and PID,
+    never the absolute image path. Verify a confirmed external holder's association with one installation file
+    before naming that relative path ([holder diagnostics](https://github.com/danswett/agent-bridge/issues/2858));
+    the aggregate registered-file list is not proof of which file a process holds. A holder that
+    releases between queries or changes creation time is unknown, never a guessed filename; holders
+    already confirmed in the same check stay named beside it.
+    Match PID plus creation time throughout. Include non-executable resources such as `.pri`
+    files, not only DLLs and executables. A scan timeout names Restart Manager and 120 s, never
+    claiming a confirmed holder. Quit and the two-minute deadline stop a scan between Restart Manager
+    calls, so it neither bisects further nor names a file (unknown); a call already in flight
+    finishes on its own thread holding the scan, so scans never overlap. The first start after an
+    update that did not take names holders within the same two-minute budget.
+    Waiting carries no Installing credit; timeout
     keeps the old install intact with recovery text and the existing 10/20/40/60-minute backoff.
     This path never stops a service or self-elevates; it does not replace the later slot design.
   * **Usage probes hold the host's stop** (#238): before the host is stopped, for an install or
@@ -718,7 +790,13 @@ controls consume that same contract; this extraction does not disable or remove 
     waited for the same way, since Velopack ends them too, each held again every round and once
     more just before the hand-over, with the package looked at again once they are done (a host
     started meanwhile is held too); one that cannot confirm, or a host of the package no pipe
-    reaches, stops the update before anything is stopped. Quitting gives up those waits, never a
+    reaches, stops the update before anything is stopped. A host of the package that starts during
+    the last file scan, after those holds, or one not confirmed as held by its start time, refuses
+    the update and this host is started again. Each held host's start time is read when it is
+    first held, through its own pipe, and checked once the holds are done: a host that took the pid
+    of one that ended while another was waited for is held in turn (another profile's) or refuses
+    the update (this profile's, already stopped) rather than being taken for the held one.
+    Quitting gives up those waits, never a
     probe, so a host already stopped for the update is started again within Quit's 25 s.
   * **Never at startup:** Velopack applies a downloaded release by itself whenever the exe starts,
     by default, a second start that only shows the window included, stopping every process in the
@@ -733,7 +811,13 @@ controls consume that same contract; this extraction does not disable or remove 
     button below), and replacing the app and host touches neither the agents' consoles nor
     agent-ha-bridge. That is how a shadow beside agent-ha-bridge keeps itself current.
   * It never installs while another profile's app or host runs from this installation (Velopack
-    stops every process in the package and restarts only this profile). An Install pressed on
+    stops every process in the package and restarts only this profile). Running apps, hosts and
+    host launchers are identified by a held process handle, creation time, executable folder and
+    command-line profile, never a cached host PID alone: this
+    profile's host/launcher pair is not another profile, even without a connected host PID.
+    Leftover profile markers alone never block; unreadable process identity still refuses.
+    A demo app is a separate blocking instance, even when it names the updating profile.
+    An Install pressed on
     another device also waits while the host is not running or its sessions are not yet read in
     full (`sessions.synced`), so that it cannot say whether they are busy. Just before stopping the
     host it asks again: `host.status` from the host itself, and the processes running from the
@@ -1160,6 +1244,15 @@ closure wiring are a separate slice; this model alone does not replace the old r
 | Launch | Start or resume a session on any machine on the account that offers it (`sessions.launch`): machine, resume, agent, workspace (a new worktree where the folder is isolated), profile, model, effort, context and permissions as that machine offers them, and a first prompt sent whole. Each press is one launch with its own request id, sent again with the same id after a lost connection, so it starts once; the outcome (started, busy with the reason, refused, failed, unconfirmed) is shown and announced to screen readers, and the new session's card opens when it arrives. Try again sends a launch that could not be sent with the same request, but only to the same host process, never to one that restarted since, and only while the host still remembers the request (9 minutes from the first send). An error from the host says the launch may still have started, and a failure says what Try again would send, since the form may have changed since. A launch the machine reports failed is sent again as a new request. A host that names no run in its hello counts each connection as a new run, so a lost launch to it is reported unconfirmed rather than sent again. What was picked on a machine is kept while it drops out and when another machine is picked. A machine's choices are fetched only while the page is open, since that is costly at the host. A machine waiting on a folder-trust question says it is busy when the page opens or its choices are reloaded. Codex is not launched without a first prompt (nor needs one for a session brought over). Where the machine takes sessions from the account's others (`sessions.transfer`), Resume also lists the ended sessions they hand on (`sessions.transfer.serve`), by machine: picking one copies it over and resumes it as a new session in the workspace picked, with a command the app signs with its own device key, as a person's device (kind `app`), for the machine the session is on ([v1-transfer.md](protocol/v1-transfer.md)); the original stays. A transfer to this machine goes to its host through the relay, as the protocol requires, not the pipe; a transfer waits up to 12 minutes for its outcome and is resent for up to 20; why the form cannot go is said beside the Launch button, apart from the last launch's outcome. A launched agent asking whether to trust its folder ([v1-launch.md](protocol/v1-launch.md#folder-trust)), listed by the machine or named in a launch's outcome (which counts only until the machine's next listing, asked for at once), is shown in full (agent, the whole folder path wrapped and selectable, the repository root it applies to, the agent's own words); where the machine allows it and has approved this app, Trust and Quit answer it with `launch.trust.answer` and a command the app signs as a person's device for that machine, question and choice, through the relay only (this machine's own host through its loopback, never the pipe). Otherwise it says to answer at the machine and why; for this machine, "Allow answering from this app" turns the setting on with this app approved. An answer that may have typed is never offered again; an error offers only that same request again. A machine that takes no launches now (agent-ha-bridge runs there) is still listed, to show such a question read-only | PWA launch view (`pwa/js/ui/launch-view.js`), agent-ha-bridge's launch card |
 | Usage | Each agent's windows: percent, amber at 75 %, red at 90 %, pace against the window, "resets in" | PWA usage panel |
 | Settings | Host: running, version, profile, pid, start/stop/restart, start at sign-in, log tail; relay: sign in with GitHub (device code shown in the app), machine name, connection state; this machine: approving Copilot permission prompts from other devices (`permissions.remoteApproval`), answering folder-trust questions from devices (`launch.remoteFolderTrust`, applied at once; turned on with this app approved) and which devices may (`launch.remoteFolderTrustDevices`: this app, the account's phones, browsers and apps the relay lists, and any approved that are not connected; changes from here and from the Launch page go one at a time, each made from the list the host has just then, since the host replaces the whole list; a list changed meanwhile by another app or at a terminal is refused by the host and the change made again from it, so a device revoked there stays revoked), signing Copilot in again from a device the account's device roster (#55) pins as a person's here ("Let my devices sign Copilot in on this machine", `permissions.phoneSignIn`, off by default, applied when the host restarts; it says that the machine opens a browser and copies the code while it runs; under it, only while it is on, the read-only list "Devices that can sign Copilot in" from the host's status, `signInDevices`, with no Add or Remove (ui.md §6.9, #972); [host-config.md](host-config.md#phone-sign-in)), agent-ha-bridge state; on a Microsoft Dev Box only, keeping it awake while the host runs (`devBox.keepAwake`, applied at once; [host-config.md](host-config.md#dev-box-keep-awake)), with the last pass and the next, and a failed or blocked pass (no `az login`, say), Dev Box agent settings the host cannot use, or a stand-back with Task Scheduler unreadable in red since the Dev Box may then hibernate; app: show reasoning and tools (the old Detail toggle, kept in the app since every client now gets the full activity), toasts, start the app at sign-in, version and updates | status card, `install.ps1`, `agent-ha-bridge configure` |
+
+The Windows delegate strip reserves 20 DIPs below each item and its overflow footer:
+16 for the expanded horizontal scrollbar and 4 for focus clearance
+([#398](https://github.com/danswett/agent-bridge/issues/398)). The footer stays
+unwrapped and untrimmed, with a trailing inset inside the scroll extent, so its
+last words can be scrolled fully into view. `DelegateStripLayoutTests` guards
+these XAML layout constraints without running WinUI; rendered scrollbar modes,
+themes and input still need the hosted Windows app checks. The PWA is unchanged;
+this is not evidence that its chip strip has the same defect.
 
 **Toasts** (§7.2): a question raises a toast with its options as buttons and a text box
 for Other or a free-text answer; anything larger (several fields, multi-select) gets Open.
