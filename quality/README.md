@@ -958,6 +958,11 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   attempt, so every delivery order converges. The completed event preserves its attempt and verdict
   if a retry has already started; job evidence comes from that exact attempt. Duplicate evidence,
   including a recovered incident, is not reposted; a recovery whose close failed is closed on redelivery.
+  An intervening successful attempt resets consecutive failures and quarantine-request state even when its
+  event is delayed; retained evidence from a recovered attempt cannot generate a quarantine request.
+  Historical entries remain, and a newer red verdict keeps the incident open.
+  Older-run red evidence is not backfilled across a newer decisive run; output explains this explicitly.
+  A missing old-run entry still leaves automatic revert fail-safe, with no change to its evidence requirements.
   Evidence contains capped, mention-neutralised job/test names, never raw logs; unreadable logs are noted.
   GitHub issues and the label are the only alert channel: no assignee, owner mention or phone notification.
   Tiered gating B3 ([issue 3210](https://github.com/danswett/agent-bridge/issues/3210)): a failed job named
@@ -966,11 +971,15 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   a pull request's merge verdict. The issue stays open until main's CI is green. Missing tier data means blocking.
   B3b: when two entries in a row (no green between) name the same single test, and every failed job in
   each but `quality-gate` is post-merge tier, the second entry adds one `quarantine-request: test=<name>`
-  line, once per open issue, with the [S3b generator](https://github.com/danswett/agent-bridge/pull/3078)
+  line, once per unrecovered streak, with the [S3b generator](https://github.com/danswett/agent-bridge/pull/3078)
   command. `main-red.ps1` then calls `quarantine-pr.ps1` by path (24 h expiry, draft `fixes-main` PR), but
   only while `MAIN_RED_QUARANTINE` is exactly `on` in its environment and the script exists (until PR 3078
   lands, the request is only recorded). The generator keeps its own fences: the repository variable rechecked
   before each write, and only attempt 2 of one failed run; a refusal is a warning, never a failed detection.
+  The first request reserves the one opportunity for that test across the unrecovered streak, not one
+  per distinct test. A successful generator invocation adds `quarantine-completed: test=<name>` to the
+  alert; a refusal, nonzero exit, missing script or disabled switch leaves the intent pending. Later
+  eligible entries for the requested test may try again until completion; duplicate events still do nothing.
   Nothing here posts a status, check or label, so no merge verdict reads it.
   Offline test: `quality/test-main-red.ps1` (catalog suite `main-red`).
 - **Culprit auto-revert** ([issue 3211](https://github.com/danswett/agent-bridge/issues/3211)):
@@ -993,7 +1002,8 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
-- **The win-arm64 waiver** (#2564, owner decision 2026-11-13, until **2026-11-20 00:00 PT**, 08:00 UTC):
+- **The win-arm64 waiver** (#2564, owner decision 2026-11-13, renewed by the owner
+  2026-11-19 22:50 PT until **2026-11-27 00:00 PT**, exactly `2026-11-27T08:00:00Z`):
   while the repository variable `ARM64_WAIVER` is exactly `on` (off or unset waives nothing; the owner
   sets it), `quality-gate` counts a failed needed job as success when its only failures are
   `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly,
@@ -1005,7 +1015,10 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   skipped leg waive nothing. The Arm64 jobs still run and stay red, and `publish-gate` still reads
   `app`'s raw result, so main doesn't publish while app legs fail. Remove it (script, test, catalog suite,
   the gate's two steps) once #2563 and the self-test fix are on main and three main push runs in a
-  row show all three jobs green; extending it needs a new owner decision.
+  row show all three jobs green. The Nov 19 renewal supersedes the earlier Nov 20 hard expiry;
+  it changes neither the three-job scope nor the switch or safeguards. The waiver applies only
+  strictly before the new cutoff and waives nothing at or after it; any further extension needs
+  a new owner decision. This is not proof of Arm64 runtime correctness or landing authorization.
   **Should win-arm64 gate publishing? Yes** (B3b, #3210): a release ships and signs both architectures
   whole, and the Arm64 package is uploaded only after its own self-test passes, so publishing without
   it would ship nothing, or an untested build, to Arm64 copies. But one self-test flake (#2026) should not

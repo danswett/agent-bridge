@@ -116,10 +116,15 @@ function Get-QuarantineTest([string]$Entry) {
 function Request-Quarantine([long]$RunId, [string]$Test, [string]$Repository) {
     # Default off: the generator writes a branch and a draft PR, so it runs only while Quality has
     # turned MAIN_RED_QUARANTINE on (it rechecks the repository variable before each write).
-    if (-not [string]::Equals($env:MAIN_RED_QUARANTINE, 'on', [StringComparison]::Ordinal)) { Write-Warning "Quarantine of $Test recorded only: MAIN_RED_QUARANTINE is not on."; return }
-    if (-not (Test-Path -LiteralPath $script:QuarantineScript -PathType Leaf)) { Write-Warning "Quarantine of $Test recorded only: no generator."; return }
-    try { & $script:QuarantineScript -RunId $RunId -TestName $Test -Repository $Repository -Hours 24 | ForEach-Object { Write-Host "quarantine-pr: $_" } }
-    catch { Write-Warning "Quarantine generator refused $($Test): $($_.Exception.Message)" }
+    if (-not [string]::Equals($env:MAIN_RED_QUARANTINE, 'on', [StringComparison]::Ordinal)) { Write-Warning "Quarantine of $Test recorded only: MAIN_RED_QUARANTINE is not on."; return $false }
+    if (-not (Test-Path -LiteralPath $script:QuarantineScript -PathType Leaf)) { Write-Warning "Quarantine of $Test recorded only: no generator."; return $false }
+    try {
+        $global:LASTEXITCODE = 0
+        & $script:QuarantineScript -RunId $RunId -TestName $Test -Repository $Repository -Hours 24 | ForEach-Object { Write-Host "quarantine-pr: $_" }
+        if ($LASTEXITCODE -ne 0) { throw "generator exited $LASTEXITCODE" }
+        return $true
+    }
+    catch { Write-Warning "Quarantine generator refused $($Test): $($_.Exception.Message)"; return $false }
     finally { $global:LASTEXITCODE = 0 }
 }
 
@@ -148,19 +153,34 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
     # Newest run, then newest attempt, first. Cancelled, skipped and running attempts are not verdicts. A running
     # attempt never holds back a finished one: its own completed event reconciles again when it ends.
     $verdict = $null
-    :search foreach ($r in @($recent + @($run) | Group-Object id | ForEach-Object { $_.Group | Sort-Object run_attempt | Select-Object -Last 1 } |
-            Sort-Object run_number -Descending)) {
+    $ordered = @($recent + @($run) | Group-Object id | ForEach-Object { $_.Group | Sort-Object run_attempt | Select-Object -Last 1 } |
+            Sort-Object run_number -Descending)
+    :search foreach ($r in $ordered) {
         for ($n = $r.run_attempt; $n -ge 1; $n--) {
             $a = Get-Attempt $r.id $n
             if ($a.status -eq 'completed' -and (Get-RedVerdict $a.conclusion) -ne 'none') { $verdict = $a; break search }
         }
     }
     if (-not $verdict) { return }
+    # A success event may arrive after the next failure. Recover its boundary for quarantine counting,
+    # without closing the incident over a newer red verdict.
+    $recovery = if ($verdict.conclusion -eq 'success') { $verdict } else { $null }
+    if (-not $recovery) {
+        :recovery foreach ($r in @($ordered | Where-Object { $_.run_number -le $verdict.run_number })) {
+            $start = if ($r.id -eq $verdict.id) { $verdict.run_attempt - 1 } else { $r.run_attempt }
+            for ($n = $start; $n -ge 1; $n--) {
+                $a = Get-Attempt $r.id $n
+                if ($a.status -eq 'completed' -and $a.conclusion -eq 'success') { $recovery = $a; break recovery }
+            }
+        }
+    }
     # The completed event's own failure stays evidence when a retry of the same run already decided main's state.
     if ($run.id -eq $verdict.id -and $run.run_attempt -lt $verdict.run_attempt -and (Get-RedVerdict $run.conclusion) -eq 'red') {
-        Publish-MainRed $run $Repository
+        Publish-MainRed $run $Repository -Recovery $recovery
+    } elseif ($run.id -ne $verdict.id -and (Get-RedVerdict $run.conclusion) -eq 'red') {
+        Write-Host "Red evidence for run=$($run.id) attempt=$($run.run_attempt) is not backfilled: newer decisive run=$($verdict.id) attempt=$($verdict.run_attempt) determines main. A missing old-run entry keeps auto-revert fail-safe."
     }
-    Publish-MainRed $verdict $Repository
+    Publish-MainRed $verdict $Repository -Recovery $recovery
 }
 
 function Test-MainPush($Run, [string]$Repository) {
@@ -168,7 +188,7 @@ function Test-MainPush($Run, [string]$Repository) {
     $Run.head_repository.full_name -eq $Repository -and $Run.run_attempt -ge 1
 }
 
-function Publish-MainRed($run, [string]$Repository) {
+function Publish-MainRed($run, [string]$Repository, $Recovery) {
     $RunId = $run.id
     $verdict = Get-RedVerdict $run.conclusion
     if ($verdict -eq 'none') { return }
@@ -206,16 +226,30 @@ function Publish-MainRed($run, [string]$Repository) {
     $postMergeOnly = $own.Count -gt 0 -and @($own | Where-Object { -not $_.PostMerge }).Count -eq 0
     $body = Format-MainRedBody $run $Repository $jobs $postMergeOnly
     # B3b: the same single post-merge test failing in two entries in a row proposes one quarantine, once
-    # per open issue. It is a line in this alert and a generator call, never a status, check or label.
-    $test = Get-QuarantineTest $body; $request = $false
+    # per unrecovered streak. It is a line in this alert and a generator call, never a status, check or label.
+    $test = Get-QuarantineTest $body
     if ($test -and $issue) {
         $entries = @(@($issue.body) + @($comments | ForEach-Object { $_.body }) | Where-Object { $_ -clike 'main-red: *' })
-        $flag = "quarantine-request: test=$test"
-        $request = $entries.Count -gt 0 -and [string]::Equals((Get-QuarantineTest $entries[-1]), $test, [StringComparison]::Ordinal) -and
-            @($entries | Where-Object { [Array]::IndexOf([string[]]($_ -split '\r?\n'), $flag) -ge 0 }).Count -eq 0
-        if ($request) {
+        if ($Recovery) {
+            $entries = @($entries | Where-Object {
+                    $_ -cmatch '^main-red: run=(\d+) attempt=(\d+) sha=' -and
+                    ([long]$Matches[1] -gt $Recovery.id -or
+                        ([long]$Matches[1] -eq $Recovery.id -and [long]$Matches[2] -gt $Recovery.run_attempt))
+                })
+        }
+        $lines = @($entries -split '\r?\n')
+        $intent = @($lines | Where-Object { $_ -clike 'quarantine-request: test=*' } | Select-Object -First 1)
+        $eligible = $entries.Count -gt 0 -and [string]::Equals((Get-QuarantineTest $entries[-1]), $test, [StringComparison]::Ordinal)
+        $flag = if ($intent.Count) { $intent[0] } else { "quarantine-request: test=$test" }
+        if ($eligible -and -not $intent.Count) {
             $body += "`n$flag`nSecond failure in a row: one draft fixes-main quarantine, 24 h expiry, refused unless " +
                 "MAIN_RED_QUARANTINE is on: ``pwsh -NoProfile -File quality/quarantine-pr.ps1 -RunId $RunId -TestName $test -Repository $Repository -Hours 24``"
+        }
+        $completed = "quarantine-completed: test=$test"
+        # A refusal leaves the streak's one intent pending for a later eligible attempt.
+        if ($eligible -and [string]::Equals($flag, "quarantine-request: test=$test", [StringComparison]::Ordinal) -and
+            [Array]::IndexOf([string[]]$lines, $completed) -lt 0 -and (Request-Quarantine $RunId $test $Repository)) {
+            $body += "`n$completed"
         }
     }
     if ($issue) { Invoke-Gh issue comment $issue.number --repo $Repository --body $body | Out-Null }
@@ -224,7 +258,6 @@ function Publish-MainRed($run, [string]$Repository) {
         Invoke-Gh label create main-red --repo $Repository --color B60205 --description 'CI is red on main' --force | Out-Null
         Invoke-Gh issue create --repo $Repository --title $title --label main-red --body $body | Out-Null
     }
-    if ($request) { Request-Quarantine $RunId $test $Repository }
 }
 
 if ($MyInvocation.InvocationName -eq '.') { return }

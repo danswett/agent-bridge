@@ -1864,10 +1864,28 @@ public class MergeRuleTests
     const string WaiverYaml = """
         arm64_waiver:
           switch: ARM64_WAIVER
-          until: 2026-11-20T08:00:00Z
+          until: 2026-11-27T08:00:00Z
           jobs: [app (win-arm64), app-installer (win-arm64), product (windows-11-arm)]
         """;
-    static readonly DateTimeOffset WaiverExpiry = new(2026, 11, 20, 8, 0, 0, TimeSpan.Zero);
+    static readonly DateTimeOffset WaiverExpiry = new(2026, 11, 27, 8, 0, 0, TimeSpan.Zero);
+
+    [Theory]
+    [InlineData("2026-11-27T07:59:59Z", "on", "app (win-arm64)", true)]
+    [InlineData("2026-11-27T08:00:00Z", "on", "app (win-arm64)", false)]
+    [InlineData("2026-11-27T08:00:01Z", "on", "app (win-arm64)", false)]
+    [InlineData("2026-11-20T08:00:01Z", "on", "app (win-arm64)", true)]
+    [InlineData("2026-11-20T08:00:01Z", null, "app (win-arm64)", false)]
+    [InlineData("2026-11-20T08:00:01Z", "off", "app (win-arm64)", false)]
+    [InlineData("2026-11-20T08:00:01Z", "on", "light", false)]
+    public void The_repository_arm64_waiver_obeys_the_renewed_window_and_exact_job_scope(
+        string now, string? setting, string job, bool allowed)
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+        var waiver = Assert.IsType<Arm64WaiverConfig>(config.Arm64Waiver);
+
+        Assert.Equal(allowed, waiver.Active(DateTimeOffset.Parse(now, System.Globalization.CultureInfo.InvariantCulture), setting)
+            && waiver.Allows(job, "failure"));
+    }
 
     [Fact]
     public void The_three_job_waiver_config_loads_and_allows_only_its_exact_failures()
@@ -1890,7 +1908,7 @@ public class MergeRuleTests
 
     [Theory]
     [InlineData("ARM64_WAIVER", "ARM64_WAIVER_TYPO")]
-    [InlineData("2026-11-20T08:00:00Z", "0001-01-01T00:00:00Z")]
+    [InlineData("2026-11-27T08:00:00Z", "0001-01-01T00:00:00Z")]
     [InlineData("app-installer (win-arm64)", "app-installer (win-x64)")]
     public void An_incomplete_or_broadened_waiver_config_is_rejected(string before, string after)
     {

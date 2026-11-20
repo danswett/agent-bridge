@@ -26,7 +26,7 @@ function Assert([bool]$Ok, [string]$Name) {
     if ($Ok) { "ok   $Name" } else { "FAIL $Name"; $script:failures++ }
 }
 function Reset-Scenario {
-    $script:s = @{ conclusion = 'failure'; attempt = 1; newest = 100; status = 'completed'; event = 'push'
+    $script:s = @{ conclusion = 'failure'; run = 100; attempt = 1; newest = 100; status = 'completed'; event = 'push'
         branch = 'main'; repo = 'o/r'; path = '.github/workflows/ci.yml'; open = $false
         log = '  Failed A.B.C.Method [1 s]'; unreadable = $false; jobName = 'product'; jobConclusion = 'failure'
         body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = ''; created = $false
@@ -42,7 +42,7 @@ function New-FakeAttempt([int]$Id, [int]$N) {
 function Fake-Gh {
     $a = $args -join ' '
     $s.calls += ,@($args)
-    $run = @{ id = 100; run_number = 100; conclusion = $s.conclusion; status = $s.status; run_attempt = $s.attempt
+    $run = @{ id = $s.run; run_number = $s.run; conclusion = $s.conclusion; status = $s.status; run_attempt = $s.attempt
         head_sha = 'abcdef0123456789'; head_branch = $s.branch; event = $s.event; path = $s.path
         head_repository = @{ full_name = $s.repo } }
     if ($args[0] -eq 'issue' -and $args[1] -in @('list', 'view')) {
@@ -54,7 +54,7 @@ function Fake-Gh {
         }
     }
     switch -Regex ($a) {
-        '^api repos/o/r/actions/runs/100$' {
+        '^api repos/o/r/actions/runs/\d+$' {
             if ($s.ContainsKey('triggerConclusion')) { $run.conclusion = $s.triggerConclusion }
             $run | ConvertTo-Json; return
         }
@@ -91,7 +91,7 @@ function Fake-Gh {
         '^label create main-red ' { $s.writes += 'label'; return }
         '^issue create ' {
             $s.writes += 'create'; $s.open = $true; $s.created = $true; $s.body = $args[([array]::IndexOf($args, '--body') + 1)]
-            $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; return
+            $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; $s.comments = @(); return
         }
         '^issue comment 9 ' {
             $s.writes += 'comment'
@@ -106,7 +106,7 @@ function Fake-Gh {
         default { throw "Unexpected fake gh request: $a" }
     }
 }
-function Detect { Invoke-MainRed -RunId 100 -Repository 'o/r' | Out-Null }
+function Detect { Invoke-MainRed -RunId $s.run -Repository 'o/r' | Out-Null }
 foreach ($fields in @(@('number', 'body', 'author'), @('number body author'))) {
     Reset-Scenario; $rejected = $false
     try { Fake-Gh issue list --repo o/r --state open --label main-red --limit 100 --json @fields | Out-Null }
@@ -154,6 +154,12 @@ foreach ($c in 'failure', 'success') {
     $evidence = (@($s.body) + @($s.comments | ForEach-Object { $_.body })) -join "`n"
     Assert ($evidence -match 'run=101' -and
         (($c -eq 'failure' -and $s.open) -or ($c -eq 'success' -and -not $s.open))) "a replacement stale event reconciles the newest $c verdict"
+}
+foreach ($c in 'failure', 'success') {
+    Reset-Scenario; $s.runs = @{ 100 = @('failure'); 101 = @($c) }
+    $output = (Invoke-MainRed -RunId 100 -Repository 'o/r' 6>&1) -join "`n"
+    Assert ($output -match 'run=100 attempt=1.*not backfilled.*newer decisive run=101 attempt=1' -and
+        $output -match 'missing old-run entry.*auto-revert.*fail-safe') "missing old-run red evidence is explained while reconciling newer $c"
 }
 $eventPath = [IO.Path]::GetTempFileName()
 $savedEventName = $env:GITHUB_EVENT_NAME; $savedEventPath = $env:GITHUB_EVENT_PATH
@@ -306,6 +312,19 @@ Assert ((@(Get-GeneratorCalls) -join '|') -ceq '100|A.B.C.Method|o/r|24') 'that 
 Assert (-not (($s.calls | ForEach-Object { $_ -join ' ' }) -match 'statuses|check-runs|--add-label|pr create')) 'the request writes no status, check, label or pull request itself, so no merge verdict reads it'
 Detect; $s.attempt = 3; Detect
 Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1 -and $s.comments.Count -eq 2) 'a second tick and a third failure make no duplicate request'
+Reset-Quarantine; $s.runs = @{ 100 = @('failure') }; Detect
+$s.runs[100] = @('failure', 'failure', 'success', 'failure'); $s.attempt = 2; Detect
+Assert ($s.open -and $s.comments[-1].body -match 'attempt=4' -and $s.writes -notcontains 'close' -and
+    @(Get-Requests).Count -eq 0 -and @(Get-GeneratorCalls).Count -eq 0) 'a delayed failure cannot count across an intervening successful retry'
+$s.runs[100] += 'failure'; $s.attempt = 5; Detect
+Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1) 'only the second failure after recovery reaches the unchanged threshold'
+Reset-Quarantine; $s.runs = @{ 100 = @('failure') }; Detect
+$s.runs[100] += 'failure'; $s.attempt = 2; Detect
+$s.runs[100] += @('success', 'failure'); $s.attempt = 1; Detect
+Assert ($s.comments[-1].body -match 'attempt=4' -and @(Get-Requests).Count -eq 1 -and
+    @(Get-GeneratorCalls).Count -eq 1) 'the first failure after recovery makes no request even when an earlier streak already requested one'
+$s.runs[100] += 'failure'; $s.attempt = 5; Detect
+Assert (@(Get-Requests).Count -eq 2 -and @(Get-GeneratorCalls).Count -eq 2) 'a fresh pair after recovery can request quarantine again'
 Reset-Quarantine -Switch ''; Detect; $s.attempt = 2; Detect
 Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 0) 'with MAIN_RED_QUARANTINE unset the request is recorded but the generator never runs'
 Reset-Quarantine -Switch "o$([char]0x200b)n"; Detect; $s.attempt = 2; Detect
@@ -324,6 +343,29 @@ Assert (@(Get-Requests).Count -eq 0) 'an entry naming more than one test propose
 Reset-Quarantine; $s.log = "  1) [webkit] $([char]0x203a) login$([char]0x200b).spec.mjs:43:1 $([char]0x203a) t"; Detect
 $s.attempt = 2; $s.log = "  1) [webkit] $([char]0x203a) login.spec.mjs:43:1 $([char]0x203a) t"; Detect
 Assert (@(Get-Requests).Count -eq 0 -and $s.body.Contains('[sanitized]')) 'a name sanitized into another test name proposes no quarantine'
+Reset-Quarantine; Detect; $s.attempt = 2; Detect
+$s.log = '  Failed A.B.C.Other [1 s]'; $s.attempt = 3; Detect; $s.attempt = 4; Detect
+Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1) 'A/A then B/B under one open issue makes only one request and generator call'
+Set-Content -LiteralPath (Join-Path $genDir 'attempt-two.ps1') -Value @'
+param([long]$RunId, [string]$TestName, [string]$Repository, [double]$Hours)
+Add-Content -LiteralPath (Join-Path $PSScriptRoot 'calls.txt') -Value "$RunId|$TestName|$Repository|$Hours"
+if ($env:MAIN_RED_FAKE_ATTEMPT -ne '2') { throw 'Only attempt 2 is eligible' }
+'created draft'
+'@
+function Get-Completions { @((@($s.body) + @($s.comments | ForEach-Object { $_.body })) -split '\r?\n' | Where-Object { $_ -clike 'quarantine-completed: *' }) }
+Reset-Quarantine -Script 'attempt-two.ps1'; $s.run = 99; $s.newest = 99; Detect
+$s.run = 100; $s.newest = 100; $env:MAIN_RED_FAKE_ATTEMPT = '1'; Detect
+Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1 -and @(Get-Completions).Count -eq 0) 'a refused attempt records intent but not generator completion'
+$s.attempt = 2; $env:MAIN_RED_FAKE_ATTEMPT = '2'; Detect
+Assert (@(Get-Requests).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 2 -and @(Get-Completions).Count -eq 1) 'attempt 2 retries the refused generator without another request'
+Detect; $s.attempt = 3; Detect
+Assert (@(Get-GeneratorCalls).Count -eq 2) 'confirmed generator completion suppresses later calls'
+Set-Content -LiteralPath (Join-Path $genDir 'nonzero.ps1') -Value 'exit 4'
+Reset-Quarantine -Script 'nonzero.ps1'; Detect; $s.attempt = 2; Detect
+Assert (@(Get-Completions).Count -eq 0 -and $LASTEXITCODE -eq 0) 'a nonzero generator exit is not confirmed completion and never fails detection'
+$script:QuarantineScript = Join-Path $genDir 'quarantine-pr.ps1'; $s.attempt = 3; Detect
+Assert (@(Get-Requests).Count -eq 1 -and @(Get-Completions).Count -eq 1 -and @(Get-GeneratorCalls).Count -eq 1) 'a generator refusal by exit code leaves the existing request available'
+Remove-Item Env:MAIN_RED_FAKE_ATTEMPT
 Remove-Item -LiteralPath $genDir -Recurse; $env:MAIN_RED_QUARANTINE = $null
 Remove-Item -LiteralPath $tierPath
 if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }

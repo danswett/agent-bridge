@@ -78,12 +78,9 @@ internal sealed class LaunchProvenance
     {
         lock (gate)
         {
-            Check();
-            if (origins.Values.Any(o => o.Grant == "fleet" && o.Process is null
-                && (o.Session.Length == 0 || string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase))))
-            { throw new InvalidOperationException("refused: a fleet launch has no durable process binding"); }
-            return process is not null && origins.Values.Any(o => o.Grant == "fleet"
-                && string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase) && o.Process == process);
+            return Contains(session, process) && origins.Values
+                .Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase))
+                .All(o => o.Grant == "fleet" && o.Process == process);
         }
     }
 

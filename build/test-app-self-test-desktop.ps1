@@ -28,7 +28,9 @@ function Invoke-Retry {
     catch { Write-Host $_.Exception.Message; $false }
 }
 $failed = @()
+$checks = 0
 function Test-Case([bool]$Ok, [string]$Name) {
+    $script:checks++
     Write-Host "$(if ($Ok) { 'PASS' } else { 'FAIL' }) $Name"
     if (-not $Ok) { $script:failed += $Name }
 }
@@ -60,4 +62,37 @@ try {
     Test-Case ($enter -ge 0 -and $enter -lt $source.IndexOf('Start-Process $Exe', [StringComparison]::Ordinal)) 'app-self-test.ps1 checks the desktop before it starts the app'
 }
 finally { Remove-Item -LiteralPath $state -ErrorAction SilentlyContinue }
+$fixture = Join-Path ([IO.Path]::GetTempPath()) "selftest-text-$([guid]::NewGuid().ToString('N'))"
+try {
+    foreach ($attempt in 'selftest', 'selftest-retry') {
+        $folder = Join-Path $fixture $attempt
+        New-Item -ItemType Directory -Path $folder -Force | Out-Null
+        foreach ($name in 'result.json', 'app-exit-cause.json', 'app.stderr.log', 'app.log', 'app-crash-analysis.txt') {
+            $text = if ($name.EndsWith('.json')) { "{`"attempt`":`"$attempt`"}" } else { "$attempt diagnostic" }
+            Set-Content -LiteralPath (Join-Path $folder $name) -Value $text -NoNewline
+        }
+        Set-Content -LiteralPath (Join-Path $folder 'private.dmp') -Value 'MDMP private'
+        Set-Content -LiteralPath (Join-Path $folder 'private.zip') -Value 'private archive'
+    }
+    $stage = Join-Path $PSScriptRoot 'stage-app-self-test.ps1'
+    $stageError = $null
+    try { & $stage -Root $fixture } catch { $stageError = $_.Exception.Message }
+    foreach ($attempt in 'selftest', 'selftest-retry') {
+        $out = Join-Path $fixture 'public-selftest'
+        if ($attempt -eq 'selftest-retry') { $out = Join-Path $out 'retry' }
+        $files = @(Get-ChildItem -LiteralPath $out -File -ErrorAction SilentlyContinue)
+        $matching = @($files | Where-Object {
+            $expected = if ($_.Name.EndsWith('.json')) { "{`"attempt`":`"$attempt`"}" } else { "$attempt diagnostic" }
+            [string]::Equals((Get-Content -LiteralPath $_.FullName -Raw), $expected, [StringComparison]::Ordinal)
+        })
+        Test-Case ($null -eq $stageError -and $files.Count -eq 5 -and $matching.Count -eq 5) "$attempt stages its own five named text files, never dumps or archives ($stageError)"
+    }
+    Remove-Item -LiteralPath (Join-Path $fixture 'public-selftest') -Recurse -ErrorAction SilentlyContinue
+    Set-Content -LiteralPath (Join-Path (Join-Path $fixture 'selftest-retry') 'app.log') -Value "bad$([char]0)binary"
+    $refused = $false
+    try { & $stage -Root $fixture } catch { $refused = $_.Exception.Message -like '*Binary diagnostic input refused*' }
+    Test-Case $refused 'binary text in the retry fails staging closed'
+}
+finally { Remove-Item -LiteralPath $fixture -Recurse }
 if ($failed.Count) { throw "$($failed.Count) desktop check(s) failed" }
+Write-Host "selftest desktop/text: $checks checks passed"
