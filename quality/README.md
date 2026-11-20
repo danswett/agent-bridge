@@ -998,7 +998,8 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
-- **The win-arm64 waiver** (#2564, owner decision 2026-11-13, until **2026-11-20 00:00 PT**, 08:00 UTC):
+- **The win-arm64 waiver** (#2564, owner decision 2026-11-13, renewed by the owner
+  2026-11-19 22:50 PT until **2026-11-27 00:00 PT**, exactly `2026-11-27T08:00:00Z`):
   while the repository variable `ARM64_WAIVER` is exactly `on` (off or unset waives nothing; the owner
   sets it), `quality-gate` counts a failed needed job as success when its only failures are
   `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly,
@@ -1010,7 +1011,10 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   skipped leg waive nothing. The Arm64 jobs still run and stay red, and `publish-gate` still reads
   `app`'s raw result, so main doesn't publish while app legs fail. Remove it (script, test, catalog suite,
   the gate's two steps) once #2563 and the self-test fix are on main and three main push runs in a
-  row show all three jobs green; extending it needs a new owner decision.
+  row show all three jobs green. The Nov 19 renewal supersedes the earlier Nov 20 hard expiry;
+  it changes neither the three-job scope nor the switch or safeguards. The waiver applies only
+  strictly before the new cutoff and waives nothing at or after it; any further extension needs
+  a new owner decision. This is not proof of Arm64 runtime correctness or landing authorization.
   **Should win-arm64 gate publishing? Yes** (B3b, #3210): a release ships and signs both architectures
   whole, and the Arm64 package is uploaded only after its own self-test passes, so publishing without
   it would ship nothing, or an untested build, to Arm64 copies. But one self-test flake (#2026) should not
