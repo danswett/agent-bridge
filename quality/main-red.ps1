@@ -188,6 +188,60 @@ function Test-MainPush($Run, [string]$Repository) {
     $Run.head_repository.full_name -eq $Repository -and $Run.run_attempt -ge 1
 }
 
+# The unrecovered streak is every attempt after the newest successful one (#3347); none means the whole issue.
+function Test-AfterRecovery([long]$Id, [long]$N, $Recovery) {
+    -not $Recovery -or $Id -gt $Recovery.id -or ($Id -eq $Recovery.id -and $N -gt $Recovery.run_attempt)
+}
+
+function Get-CommentTime($Comment) {
+    $at = if ($Comment.PSObject.Properties['createdAt']) { $Comment.createdAt }
+    if ($at -is [datetime] -and $at.Kind -eq 'Utc') { return $at }
+    $t = [datetime]::MinValue
+    if ($at -is [string] -and [datetime]::TryParseExact($at, "yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]'AssumeUniversal,AdjustToUniversal', [ref]$t)) { return $t }
+    throw 'Refusing quarantine: a main-red comment has no valid createdAt to place a run-less quarantine-completed line.'
+}
+
+# A legacy completion names no run, so it applies to the streak open when GitHub recorded it, ending at the next
+# recovery: the entry (or green-again record) just before it decides. Entries only move forward, and the issue
+# body is older than every comment. A tie across a recovery is ambiguous, so it refuses rather than guess.
+function Test-LegacyInStreak($Issue, $Comments, [datetime]$At, $Recovery) {
+    $marks = @(foreach ($c in $Comments) {
+            if ($c.body -cmatch '^main-red: (green again, )?run=(\d+) attempt=(\d+),? sha=') {
+                $open = -not $Matches[1] -and (Test-AfterRecovery $Matches[2] $Matches[3] $Recovery)
+                [pscustomobject]@{ At = Get-CommentTime $c; Open = $open }
+            }
+        })
+    $earlier = @($marks | Where-Object { $_.At -lt $At })
+    $last = if ($earlier.Count) { ($earlier | Measure-Object -Property At -Maximum).Maximum }
+    $open = @(@($marks | Where-Object { $_.At -eq $At -or ($earlier.Count -and $_.At -eq $last) }) | ForEach-Object Open)
+    if (-not $earlier.Count) {
+        if ($Issue.body -cnotmatch '^main-red: run=(\d+) attempt=(\d+) sha=') { throw 'Refusing quarantine: the main-red issue body cannot place a run-less quarantine-completed line.' }
+        $open += Test-AfterRecovery $Matches[1] $Matches[2] $Recovery
+    }
+    if (@($open | Sort-Object -Unique).Count -ne 1) { throw "Refusing quarantine: a run-less quarantine-completed line recorded at $($At.ToString('o')) shares its time with another streak." }
+    $open[0]
+}
+
+# Standalone completion comments for $Test in the current streak. New ones name the requesting run and attempt;
+# anything else unplaceable refuses this entry before its write or any generator call, never a global answer.
+function Test-QuarantineCompleted($Issue, $Comments, [string]$Test, $Recovery) {
+    $done = $false
+    foreach ($c in @($Comments | Where-Object { $_.body -cnotlike 'main-red: *' })) {
+        foreach ($line in @($c.body -split '\r?\n' | Where-Object { $_ -clike 'quarantine-completed:*' })) {
+            if ($line -cmatch '^quarantine-completed: test=(\S+) run=(\d+) attempt=(\d+)$') {
+                $name = $Matches[1]; $inStreak = Test-AfterRecovery $Matches[2] $Matches[3] $Recovery
+            } elseif ($line -cmatch '^quarantine-completed: test=(\S+)$') {
+                $name = $Matches[1]
+                $inStreak = [string]::Equals($name, $Test, [StringComparison]::Ordinal) -and
+                    (Test-LegacyInStreak $Issue $Comments (Get-CommentTime $c) $Recovery)
+            } else { throw "Refusing quarantine: malformed quarantine-completed line '$line'." }
+            if ($inStreak -and [string]::Equals($name, $Test, [StringComparison]::Ordinal)) { $done = $true }
+        }
+    }
+    $done
+}
+
 function Publish-MainRed($run, [string]$Repository, $Recovery) {
     $RunId = $run.id
     $verdict = Get-RedVerdict $run.conclusion
@@ -228,13 +282,12 @@ function Publish-MainRed($run, [string]$Repository, $Recovery) {
     # B3b: the same single post-merge test failing in two entries in a row proposes one quarantine, once
     # per unrecovered streak. It is a line in this alert and a generator call, never a status, check or label.
     $test = Get-QuarantineTest $body
+    $generate = $false
     if ($test -and $issue) {
         $entries = @(@($issue.body) + @($comments | ForEach-Object { $_.body }) | Where-Object { $_ -clike 'main-red: *' })
         if ($Recovery) {
             $entries = @($entries | Where-Object {
-                    $_ -cmatch '^main-red: run=(\d+) attempt=(\d+) sha=' -and
-                    ([long]$Matches[1] -gt $Recovery.id -or
-                        ([long]$Matches[1] -eq $Recovery.id -and [long]$Matches[2] -gt $Recovery.run_attempt))
+                    $_ -cmatch '^main-red: run=(\d+) attempt=(\d+) sha=' -and (Test-AfterRecovery $Matches[1] $Matches[2] $Recovery)
                 })
         }
         $lines = @($entries -split '\r?\n')
@@ -246,17 +299,22 @@ function Publish-MainRed($run, [string]$Repository, $Recovery) {
                 "MAIN_RED_QUARANTINE is on: ``pwsh -NoProfile -File quality/quarantine-pr.ps1 -RunId $RunId -TestName $test -Repository $Repository -Hours 24``"
         }
         $completed = "quarantine-completed: test=$test"
-        # A refusal leaves the streak's one intent pending for a later eligible attempt.
-        if ($eligible -and [string]::Equals($flag, "quarantine-request: test=$test", [StringComparison]::Ordinal) -and
-            [Array]::IndexOf([string[]]$lines, $completed) -lt 0 -and (Request-Quarantine $RunId $test $Repository)) {
-            $body += "`n$completed"
-        }
+        # A refusal leaves the streak's one intent pending for a later eligible attempt. A completion line inside
+        # an entry belongs to that entry's streak; a standalone completion comment is placed by its own metadata.
+        $generate = $eligible -and [string]::Equals($flag, "quarantine-request: test=$test", [StringComparison]::Ordinal) -and
+            [Array]::IndexOf([string[]]$lines, $completed) -lt 0 -and -not (Test-QuarantineCompleted $issue $comments $test $Recovery)
     }
     if ($issue) { Invoke-Gh issue comment $issue.number --repo $Repository --body $body | Out-Null }
     else {
         $title = if ($postMergeOnly) { "Main red, post-merge tier only ($sha)" } else { "Main red: CI failing on main ($sha)" }
         Invoke-Gh label create main-red --repo $Repository --color B60205 --description 'CI is red on main' --force | Out-Null
         Invoke-Gh issue create --repo $Repository --title $title --label main-red --body $body | Out-Null
+    }
+    # The intent is stored first: a failed write must not leave a generator run that no later tick can see.
+    # Completion is its own write, so a failure there only retries the generator on a later attempt. It names
+    # the requesting run and attempt so it never suppresses a later streak after a recovery (#3268).
+    if ($generate -and (Request-Quarantine $RunId $test $Repository)) {
+        Invoke-Gh issue comment $issue.number --repo $Repository --body "$completed run=$RunId attempt=$($run.run_attempt)" | Out-Null
     }
 }
 
