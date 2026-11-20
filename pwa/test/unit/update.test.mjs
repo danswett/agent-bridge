@@ -406,6 +406,55 @@ test('Cancel on the bad-release warning sends nothing more, and a refusal after 
   assert.equal(halted.stateOf('a').note, 'Not updated: this release has been halted.');
 });
 
+test('a machine forgotten while its Update now is on its way ignores the late answer: no warning, signature, send, note or state', async () => {
+  for (const late of [
+    { outcome: 'refused', code: 'policy-unreadable', state: { ...ready, phase: 'checking' } },
+    { outcome: 'confirm', state: { ...ready, busy: busyTwo } },
+    { outcome: 'accepted', state: { ...ready, phase: 'downloading' } },
+    { outcome: 'refused', code: 'halted' },
+  ]) {
+    signs.length = 0;
+    const fleet = nowFleet(ready, []);
+    let sent; let answer; let watched = 0; let asked = 0;
+    const on = new Promise((r) => { sent = r; });
+    fleet.call = async (id, op, data) => {
+      fleet.calls.push({ id, op, data: await data(new Uint8Array([4])) });
+      if (fleet.calls.length > 1) { return { outcome: 'accepted' }; }
+      sent();
+      return new Promise((r) => { answer = r; });
+    };
+    fleet.watch = () => { watched += 1; };
+    const control = new UpdateControl({ fleet, newRequest: () => 'r1', sign: fakeSign });
+    const pressing = control.pressNow('a', { machine: 'Laptop', confirm: async () => { asked += 1; return true; } });
+    await on;
+    control.forget('a');
+    answer(late);
+    await pressing;
+    assert.deepEqual([asked, signs.length, fleet.calls.length, watched], [0, 1, 1, 0], late.outcome);
+    assert.equal(control.stateOf('a').note, null);
+    assert.equal(fleet.states.get('a'), ready);
+    assert.ok(!control.isUpdateNow('r1'));
+  }
+});
+
+test('a machine forgotten before the channel to it opens is never signed or sent an Update now', async () => {
+  signs.length = 0;
+  const fleet = nowFleet(ready, []);
+  let open;
+  const opening = new Promise((r) => { open = r; });
+  const call = fleet.call;
+  fleet.call = async (...a) => { await opening; return call(...a); };
+  const control = new UpdateControl({ fleet, newRequest: () => 'r1', sign: fakeSign });
+  const pressing = control.pressNow('a', { machine: 'Laptop', confirm: async () => true });
+  control.forget('a');
+  open();
+  const logged = console.error;
+  console.error = () => {};
+  try { await pressing; } finally { console.error = logged; }
+  assert.deepEqual([signs.length, fleet.calls.length], [0, 0]);
+  assert.equal(control.stateOf('a').note, null);
+});
+
 test('a press that gets no answer says so and never says it was not sent', async () => {
   const fleet = nowFleet(ready, []);
   fleet.call = async () => { throw new Error('timed out'); };

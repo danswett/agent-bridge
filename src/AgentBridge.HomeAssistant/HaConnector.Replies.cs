@@ -79,6 +79,11 @@ public sealed partial class HaConnector
         // their own Send press, the ones counted; and each Send press read with whether it was the agent's.
         public readonly List<HaState> Queued = [];
         public readonly List<string> AgentSends = [];
+        // #2780: whether the durable inbox was read back (Restore), when, and the queued rids taken but not yet
+        // marked delivered there, oldest first.
+        public bool Restored;
+        public DateTimeOffset Since;
+        public readonly List<string> Marks = [];
         // Updated: when Home Assistant last wrote the split snapshot, so a complete one written later ends it (#3224).
         public (string State, string? At, string? Before, DateTimeOffset? Updated)? UncertainPayload;
         public readonly List<string> PayloadStamps = [];
@@ -232,7 +237,9 @@ public sealed partial class HaConnector
                 // so what is sent after that is still new once the delivery is done.
                 if (!p.Reply.Baselined) { touched.TryAdd(p.Node, []); continue; }
                 if (underWay.ContainsKey(id)) { continue; }
-                if (sweep || p.Reply.ReadAgain || p.Reply.PendingPress is not null || p.Reply.Log.Queued.Count > 0) { touched.TryAdd(p.Node, []); }
+                // #3359: so is one whose delivery mark failed, until the inbox takes it.
+                if (sweep || p.Reply.ReadAgain || p.Reply.PendingPress is not null || p.Reply.Log.Queued.Count > 0
+                    || (p.Reply.Log.Since != default && !p.Reply.Log.Restored)) { touched.TryAdd(p.Node, []); }
             }
         }
     }
@@ -482,6 +489,13 @@ public sealed partial class HaConnector
                 p.Reply.Ack = MakeAck(rid, sender, prior, duplicate: true);
                 await TransientAsync(p, "Duplicate reply dropped", [], ct);
             }
+            p.Reply.Handle(stamp);
+            return CardRead.Taken;
+        }
+        if (!queued && rid is not null && DeliveredBefore(p, rid))
+        {
+            p.Reply.Ack = MakeAck(rid, sender, "unconfirmed", duplicate: true);
+            await TransientAsync(p, "Duplicate reply dropped", [], ct);
             p.Reply.Handle(stamp);
             return CardRead.Taken;
         }

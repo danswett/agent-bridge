@@ -372,6 +372,26 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
 
 ### Updates: Velopack, one version for app and host
 
+**Completion evidence** ([updater follow-up](https://github.com/danswett/agent-bridge/issues/2869)):
+`UpdateApplyCompletion` is a platform-neutral observer seam, not yet wired to apply or
+respawn. Its adapter must track the actual apply operation, including delegated workers,
+and freshly read the active installation's normalized version. A launcher exit, target
+files appearing, or a cached locator version does not establish worker completion.
+Each run supplies a new operation generation; evidence with another (or no) generation
+is `Unknown`. Adapters must bind it to that operation's actual process, never re-tag a
+cached snapshot, and sample the active manifest after completion. Release identity
+uses the shared `UpdateVersions` normalizer (whitespace, one optional `v`, metadata
+ignored; case-insensitive comparison; `0.0.0` unknown).
+Only authoritative worker completion, a known zero apply exit code, and the matching
+active version produce `Completed`. A known nonzero worker exit produces `Failed`.
+Missing evidence, unreadable state, a timeout or a version mismatch stays `Unknown`;
+none authorizes a retry or claims app/host convergence. Any result arriving at or after
+the observation window is `Unknown`, even success. Cancellation stops observation,
+not the updater. The asynchronous probe must return promptly and cancel only its wait.
+Results retain the operation step, target/observed versions, actual exit/native error
+code when available, offset-bearing observation time and monotonic elapsed time,
+without copying exception messages or inventing holder PID/path evidence.
+
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
 into one folder with one version. An app update is a host update, so they never skew.
@@ -595,10 +615,11 @@ controls consume that same contract; this extraction does not disable or remove 
     of their words said once (ready, restarting, failed; a release that became ready while
     Settings was busy, once it is idle), and Settings' own download at most every quarter
     (ui.md §9.1 A6). Errors name the next step in one sentence: "The update didn't download.
-    *Product* will try again at *time*.", or "The update didn't install because another bridge
-    profile is running from this installation.", its reason a kind (another profile running, the
-    installer's error, a newer update downloaded meanwhile, the host not answering), never a
-    process id, a path or an error's own words, which go to the log. A failed install is a
+    *Product* will try again at *time*.", or "The update didn't install because bridge
+    profile 'work' host (pid 4242) runs from this installation." Profile blockers name the
+    profile and PID (or explicitly say the profile is unknown); other reasons stay a kind
+    (the installer's error, a newer download, the host not answering), never a path or an error's
+    own words. A failed install is a
     warning bar whose button reads **Try again**; while restarting, the button shows its progress
     ring, ignores presses, keeps focus and says "Restarting…" to a screen reader, never drawn at
     rest in accent (Creative on #719, 6675195544). There is one restart with one state, whichever
@@ -759,7 +780,13 @@ controls consume that same contract; this extraction does not disable or remove 
     button below), and replacing the app and host touches neither the agents' consoles nor
     agent-ha-bridge. That is how a shadow beside agent-ha-bridge keeps itself current.
   * It never installs while another profile's app or host runs from this installation (Velopack
-    stops every process in the package and restarts only this profile). An Install pressed on
+    stops every process in the package and restarts only this profile). Running apps, hosts and
+    host launchers are identified by a held process handle, creation time, executable folder and
+    command-line profile, never a cached host PID alone: this
+    profile's host/launcher pair is not another profile, even without a connected host PID.
+    Leftover profile markers alone never block; unreadable process identity still refuses.
+    A demo app is a separate blocking instance, even when it names the updating profile.
+    An Install pressed on
     another device also waits while the host is not running or its sessions are not yet read in
     full (`sessions.synced`), so that it cannot say whether they are busy. Just before stopping the
     host it asks again: `host.status` from the host itself, and the processes running from the

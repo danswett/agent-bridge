@@ -423,6 +423,8 @@ public sealed class AutoUpdater
     // The update line while the backstop skips for a question waiting: Creative's words on #719
     // (6674096426), which the devices show as they are. The log says "Needs you" (Refused).
     public const string QuestionLine = "Update ready \u00b7 waiting for a question to be answered";
+    // Unasked, an install holds while bad-release protection here is stale or unreadable (#3307).
+    public const string PolicyHold = "bad-release protection could not be checked on this machine; it installs once it can be";
 
     string? Skipping(DateTimeOffset now) =>
         BetweenTurns && Asked(UpdateAskKind.Install) is null && Ready is not null && lastWhyNot is null && foundAt is not null
@@ -438,6 +440,7 @@ public sealed class AutoUpdater
         // Install between turns: the gap settling, or the backstop's time.
         var now = time.GetUtcNow();
         if (FailedRetryAt(now) is not null) { return "update failed; trying again soon, or at Restart to update"; }
+        if (PolicyUnchecked) { return PolicyHold; }
         var at = ForcedAt(now);
         var until = at > now ? $"; it installs anyway at {at.ToLocalTime():g} unless a question is waiting then" : "";
         return Idle ? "it installs between turns, as soon as this machine's sessions are read and still idle"
@@ -698,7 +701,7 @@ public sealed class AutoUpdater
         // so the host idle for IdleFor, never a settled gap or the backstop (Copilot, r4488279902).
         // Install between turns governs only what installs unasked.
         if (asked) { return Due(now) ? $"another device asked for it and no session has been busy for {IdleFor.TotalMinutes:0} minutes" : null; }
-        if (!BetweenTurns || InstallFailedLately(now)) { return null; }
+        if (!BetweenTurns || InstallFailedLately(now) || PolicyUnchecked) { return null; }
         if (IdleSince(now, SettleFor)) { return "it installs between turns and no session here has a turn running or a question waiting"; }
         if (now >= ForcedAt(now) && BackstopHeld() is null) { return $"it installs between turns and has waited {WaitAtMost.TotalHours:0} hours with a turn always running"; }
         if (idleSince is not null) { Arm(now); }
@@ -706,6 +709,9 @@ public sealed class AutoUpdater
     }
 
     bool InstallFailedLately(DateTimeOffset now) => FailedRetryAt(now) is not null;
+
+    // Bad-release protection here is stale or unreadable (#3307); unknown (null) holds nothing.
+    bool PolicyUnchecked => updater.HaltPolicy is { Fresh: false };
 
     // A kept retry time beyond Cap (the clock moved back) is written back as Cap from now the first
     // time it is seen, so the deadline stays fixed and elapses instead of moving on every check.

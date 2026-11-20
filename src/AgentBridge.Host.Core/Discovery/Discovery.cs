@@ -741,7 +741,7 @@ internal static class RegistrationDiscovery
         var name = agent.ToString().ToLowerInvariant();
         var running = processes.ToDictionary(p => p.Id);
         var unread = (unidentified ?? []).ToDictionary(p => p.Id);
-        var best = new Dictionary<string, Registration>(StringComparer.OrdinalIgnoreCase);
+        var best = new Dictionary<string, Registration>(StringComparer.Ordinal);
         foreach (var root in roots)
         {
             foreach (var registration in Read(agent, root, problem => holds?.Add($"a {name} {problem}"), afterRead))

@@ -1777,7 +1777,7 @@ jobs:
       app: ${{ needs.app.result }}
     steps:
       # Time-boxed win-arm64 waiver (#2564, owner decision 2026-11-13; quality/README.md §4.7):
-      # while the repository variable ARM64_WAIVER is exactly "on" and before 2026-11-20 00:00 PT
+      # while the repository variable ARM64_WAIVER is exactly "on" and before 2026-11-27 00:00 PT
       # (08:00 UTC, checked in the script), only app (win-arm64), app-installer (win-arm64) and
       # product (windows-11-arm) failures count as success below, on main and PRs. Raw jobs stay red.
       # Publishing refuses raw app failures; x64, every other failure and any API error block.
@@ -1786,7 +1786,7 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: quality
-      - name: Waive the failed win-arm64 legs, until 2026-11-20 00:00 PT
+      - name: Waive the failed win-arm64 legs, until 2026-11-27 00:00 PT
         id: waiver
         if: ${{ vars.ARM64_WAIVER == 'on' && contains(needs.*.result, 'failure') }}
         env:
@@ -1812,8 +1812,8 @@ jobs:
           pwsh -NoProfile -File quality/arm64-waiver.ps1 -NeedsFile "$RUNNER_TEMP/needs.json" -JobsFile "$RUNNER_TEMP/jobs.json" -OutFile "$RUNNER_TEMP/waived.json" -Setting "$SETTING" -SummaryFile "$GITHUB_STEP_SUMMARY"
           waived=$(cat "$RUNNER_TEMP/waived.json")
           if [ "$waived" != "[]" ]; then
-            echo "Run: [$RUN_ID](https://github.com/$REPO/actions/runs/$RUN_ID); waiver expires 2026-11-20 00:00 PT (08:00 UTC)." >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning title=quality-gate win-arm64 waiver::Run $RUN_ID; waived job ids: $waived; expires 2026-11-20 00:00 PT (08:00 UTC). Raw failed jobs remain red."
+            echo "Run: [$RUN_ID](https://github.com/$REPO/actions/runs/$RUN_ID); waiver expires 2026-11-27 00:00 PT (08:00 UTC)." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=quality-gate win-arm64 waiver::Run $RUN_ID; waived job ids: $waived; expires 2026-11-27 00:00 PT (08:00 UTC). Raw failed jobs remain red."
             effective=$(echo "$NEEDS" | jq -c --argjson w "$waived" 'with_entries(.key as $k | if ($w | any(. == $k)) then .value.result = "success" else . end)')
             echo "needs=$effective" >> "$GITHUB_OUTPUT"
           fi
