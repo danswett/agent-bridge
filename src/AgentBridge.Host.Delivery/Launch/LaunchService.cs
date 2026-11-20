@@ -263,6 +263,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // is decided; a handler that throws costs only itself.
     public event Action<string, LaunchedWith>? SessionStarted;
 
+    // The same moment, only for a session a session.launch request started (HA, a device, or an
+    // agent under a grant): never a restore or a verification launch. The lite fleet-target gate's
+    // registry; raised by this host alone. A handler that throws costs only itself.
+    public event Action<string>? FleetTargetStarted;
+
     // A launch already answered Unconfirmed (its window not seen ready in time) whose window is seen
     // ready later, while it is still followed: the restore record counts and shows it restored then
     // (#780). Raised once per launch; a handler that throws costs only itself.
@@ -717,7 +722,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         {
             return Task.FromResult(Refused($"Verification cannot guarantee standard permissions with configured launch.agents.{agent.Id}.extraArgs. Remove those extra arguments at the machine before testing; nothing was started."));
         }
-        return LaunchAsync(request with { Permissions = LaunchProtocol.Ask }, peer, cancellationToken);
+        return LaunchOnceAsync(request with { Permissions = LaunchProtocol.Ask }, peer, null, fleetTarget: false);
     }
 
     public Func<LaunchRequest, string, Func<Task<LaunchResult>>, Task<LaunchResult>>? NamedLaunch { get; set; }
@@ -774,11 +779,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return LaunchOnceAsync(request, peer, prepare);
     }
 
-    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false)
+    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false, bool fleetTarget = true)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet)
-            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, fleet: fleet))
+        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet, fleetTarget: fleetTarget)
+            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, fleet: fleet, fleetTarget: fleetTarget))
             : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
             Settled(request, result, $"launch {Short(key)}"),
             owner: prepare is null ? Owner(request, peer) : new LaunchOwner(peer, RequestBinding(request)),
@@ -850,7 +855,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
     async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false, bool fleetTarget = false)
     {
         try
         {
@@ -925,7 +930,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     }
                 }
                 return await StartAsync(plan, claim, key, handed, fetched, ct, restoring,
-                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet);
+                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet, fleetTarget: fleetTarget && !restoring);
             }
             finally
             {
@@ -1105,7 +1110,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     }
 
     async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false, bool fleetTarget = false)
     {
         Pending follow;
         LaunchedWith launched;
@@ -1327,7 +1332,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
             // The reservation is the follow's now, released when the session registers.
             follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched)
-                { Transcript = transcriptFrom, AuditRegistered = auditRegistered };
+                { Transcript = transcriptFrom, AuditRegistered = auditRegistered, FleetTarget = fleetTarget };
             reservation = null;
             lock (pendingGate) { pending.Add(follow); }
             resumable.Forget();
@@ -1687,10 +1692,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
             { log($"launch {Short(p.Key)}: process provenance could not be bound: {e.Message}"); }
         }
-        if (p.NotedId == id || SessionStarted is not { } started) { return; }
+        if (p.NotedId == id || (SessionStarted is null && FleetTargetStarted is null)) { return; }
         p.NotedId = id;
-        try { started(id, p.Launched); }
+        try { SessionStarted?.Invoke(id, p.Launched); }
         catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the restore record could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
+        try { if (p.FleetTarget) { FleetTargetStarted?.Invoke(id); } }
+        catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the fleet-target registry could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
     }
 
     // agent-ha-bridge's Test-DaemonTrustAwaitingPress: a launched agent asking whether to trust
@@ -2008,6 +2015,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         public string? Reservation { get; } = reservation;
         public LaunchedWith Launched { get; } = launched;
         public Action<string>? AuditRegistered;
+        public bool FleetTarget { get; init; }
         public TaskCompletionSource<LaunchResult> Decided { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public volatile StartupQuestion Question;
         // Seen to close after a person's Quit: it asks nothing from then on, whatever Question

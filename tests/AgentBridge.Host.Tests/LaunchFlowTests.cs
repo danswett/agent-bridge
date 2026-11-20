@@ -569,6 +569,25 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal((o.Session, "copilot", "API", "ask"), (id, launched.Agent, launched.Workspace, launched.Permissions));
     }
 
+    // Relay A: only a session.launch request (HA, a device, or an agent under a grant) marks its
+    // session a fleet target; a restore and a verification launch never do.
+    [Fact]
+    public async Task A_launch_request_marks_its_session_a_fleet_target_but_a_restore_or_verification_launch_never_does()
+    {
+        const string Restored = "79797979-7979-4979-8979-797979797979";
+        Resumable(Restored, app, "Restored");
+        var launcher = Launcher(Config());
+        var fleet = new List<string>();
+        launcher.FleetTargetStarted += id => { lock (fleet) { fleet.Add(id); } };
+
+        var launched = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-1");
+        var restored = await launcher.ResumeAsync(new ResumeAsk(Restored, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+        var verified = await launcher.LaunchVerificationAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-1");
+
+        Assert.All([launched, restored, verified], r => Assert.Equal(LaunchOutcome.Started, r.Outcome));
+        lock (fleet) { Assert.Equal([launched.Session!], fleet); }
+    }
+
     // #780 Host B: a restore is a resume through the same path as one from Launch, with nothing typed
     // (so the session opens idle), found past the resume list's length, with what the machine no
     // longer offers left to its defaults, and never Allow all for a session started by hand, whatever

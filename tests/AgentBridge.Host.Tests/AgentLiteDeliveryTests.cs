@@ -37,7 +37,10 @@ public sealed class AgentLiteDeliveryTests
         int reads;
         public readonly List<ReplyRequest> Typed = []; public readonly List<string> Log = [];
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches = new();
+        public Func<AgentBridge.Roster.RosterVerifier?> Roster = () => null;
+        public Question? Asking;
         public LiteDeliver Build() => new([
+            new FleetTargetGate(Launches, Roster),
             new ForcedAskGate(Launches),
             new AllowlistedAllTargetsGate(Launches, () => new AgentMessagingSettings
             {
@@ -61,7 +64,7 @@ public sealed class AgentLiteDeliveryTests
             OnSnapshot?.Invoke();
             return listed;
         }
-        Session Live(string id, int pid) => new() { Id = id, Agent = AgentKind.Copilot, Status = Status, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, ProcessId = pid, Activity = new Activity() };
+        Session Live(string id, int pid) => new() { Id = id, Agent = AgentKind.Copilot, Status = Status, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, ProcessId = pid, Activity = new Activity(), Question = Asking };
         public SessionSubscription Subscribe() => throw new NotSupportedException();
         public Task RefreshAsync(CancellationToken ct = default) => Task.CompletedTask; public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask; public bool Available => true;
@@ -85,10 +88,10 @@ public sealed class AgentLiteDeliveryTests
             return Task.FromResult(new ConsoleScreen(Rows, null));
         }
     }
-    static VerifiedEnvelope Envelope(string text, string request = Req, string target = Target)
+    static VerifiedEnvelope Envelope(string text, string request = Req, string target = Target, string machine = "SENDER")
     {
         var sha = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(text))).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        var body = new EnvelopeBody(request, "acct", "g", [], new AgentPrincipal("SENDER", "add", "sess-9", "inst", "cred", "copilot", "launcher"),
+        var body = new EnvelopeBody(request, "acct", "g", [], new AgentPrincipal(machine,  "add", "sess-9", "inst", "cred", "copilot", "launcher"),
             new AgentChain("root", 0, null, 0, 1, []), new AgentProvenance(null, default, null), "message",             new AgentTarget("acct", "HOST", target, null), sha, 0, 0);
         return new VerifiedEnvelope(body, []);
     }
@@ -417,5 +420,48 @@ public sealed class AgentLiteDeliveryTests
         Assert.False((await deliver.DeliverAsync(Envelope("hi"), "hi", default)).Typed);
         f.Clock.Advance(TimeSpan.FromSeconds(61));
         Assert.True((await deliver.DeliverAsync(Envelope("hi"), "hi", default)).Typed);
+    }
+
+    static (Func<AgentBridge.Roster.RosterVerifier?> Roster, string Host) VerifiedHost()
+    {
+        var world = new World();
+        world.Genesis("P");
+        world.Add("H", "P", "H", "G", kind: "host");
+        var signed = new AgentBridge.Roster.RosterVerifier(world.AccountId, world.GenerationId, () => world.Now);
+        world.Feed(signed, "G", "H");
+        return (() => signed, world.Id("H"));
+    }
+
+    // Relay A: an allow-all fleet session is typed into only from a roster-verified host; with no
+    // verified roster it is refused as before, and an ask-mode session is unchanged either way.
+    [Fact]
+    public async Task An_allow_all_fleet_target_is_typed_only_for_a_roster_verified_sender_and_ask_mode_is_unchanged()
+    {
+        var (roster, host) = VerifiedHost();
+        var f = new Fixture(); f.Launch(LaunchProtocol.AllowAll); f.Launches.FleetLaunched(Target);
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await f.Build().DeliverAsync(Envelope("hi", machine: host), "hi", default));
+        f.Roster = roster;
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await f.Build().DeliverAsync(Envelope("hi"), "hi", default));
+        Assert.Empty(f.Typed);
+        Assert.Equal(new LiteDelivery(true, null), await f.Build().DeliverAsync(Envelope("hi", machine: host), "hi", default));
+        Assert.Contains(f.Log, l => l.Contains($"request {Req} gate FleetTargetGate: allowed", StringComparison.Ordinal));
+
+        var ask = new Fixture(); ask.Launch(LaunchProtocol.Ask);
+        Assert.True((await Send(ask)).Typed);
+    }
+
+    // Permission and trust prompts stay person-only: a relayed message to a fleet target that is
+    // asking types nothing, so it can never be taken as the prompt's answer.
+    [Fact]
+    public async Task A_relayed_message_never_answers_a_fleet_targets_pending_permission_prompt()
+    {
+        var (roster, host) = VerifiedHost();
+        var f = new Fixture { Roster = roster, Status = SessionStatus.Waiting, Asking = new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "Allow **Bash**?", AskedAt = DateTimeOffset.UnixEpoch } };
+        f.Launch(LaunchProtocol.AllowAll); f.Launches.FleetLaunched(Target);
+        Assert.Equal(new LiteDelivery(false, "busy"), await f.Build().DeliverAsync(Envelope("approve", machine: host), "approve", default));
+        f.Status = SessionStatus.Idle;
+        Assert.Equal(new LiteDelivery(false, "busy"), await f.Build().DeliverAsync(Envelope("1", machine: host), "1", default));
+        Assert.Empty(f.Typed);
+        Assert.Empty(f.Plans);
     }
 }
