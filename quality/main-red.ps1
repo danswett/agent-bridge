@@ -13,8 +13,13 @@ $script:QuarantineScript = Join-Path $PSScriptRoot 'quarantine-pr.ps1'
 function Get-PostMergeJobs([string]$Path) {
     $jobs = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return , $jobs }
+    try { $lines = @(Get-Content -LiteralPath $Path -ErrorAction Stop) }
+    catch [IO.IOException], [UnauthorizedAccessException] {
+        Write-Warning 'Cannot read the tier catalog; every failed job stays blocking.'
+        return , $jobs
+    }
     $tier = $null; $names = @()
-    foreach ($line in @(Get-Content -LiteralPath $Path) + 'end:') {
+    foreach ($line in $lines + 'end:') {
         if ($line -match '^(\S|  - )') {
             if ($tier -eq 'post-merge') { foreach ($name in $names) { [void]$jobs.Add($name) } }
             $tier = $null; $names = @()
@@ -57,7 +62,7 @@ function Get-FailedJobs([long]$RunId, [string]$Repository, [Collections.Generic.
 
 function Get-MainRedIssue([string]$Repository, [switch]$IncludeClosed) {
     $state = if ($IncludeClosed) { 'all' } else { 'open' }
-    $fields = if ($IncludeClosed) { 'number,body,author,state' } else { 'number,body,author' }
+    $fields = if ($IncludeClosed) { 'number,body,author,state,title' } else { 'number,body,author,title' }
     Invoke-Gh issue list --repo $Repository --state $state --label main-red --limit 100 --json $fields |
         ConvertFrom-Json | Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') } |
         Sort-Object -Stable { if ($IncludeClosed) { $_.state -eq 'CLOSED' } else { $false } } |
@@ -304,9 +309,14 @@ function Publish-MainRed($run, [string]$Repository, $Recovery) {
         $generate = $eligible -and [string]::Equals($flag, "quarantine-request: test=$test", [StringComparison]::Ordinal) -and
             [Array]::IndexOf([string[]]$lines, $completed) -lt 0 -and -not (Test-QuarantineCompleted $issue $comments $test $Recovery)
     }
-    if ($issue) { Invoke-Gh issue comment $issue.number --repo $Repository --body $body | Out-Null }
-    else {
-        $title = if ($postMergeOnly) { "Main red, post-merge tier only ($sha)" } else { "Main red: CI failing on main ($sha)" }
+    $title = if ($postMergeOnly) { "Main red, post-merge tier only ($sha)" } else { "Main red: CI failing on main ($sha)" }
+    if ($issue) {
+        # A blocking failure must not stay filed under a title that says it never blocks.
+        if (-not $postMergeOnly -and $issue.title -clike 'Main red, post-merge tier only (*)') {
+            Invoke-Gh issue edit $issue.number --repo $Repository --title $title | Out-Null
+        }
+        Invoke-Gh issue comment $issue.number --repo $Repository --body $body | Out-Null
+    } else {
         Invoke-Gh label create main-red --repo $Repository --color B60205 --description 'CI is red on main' --force | Out-Null
         Invoke-Gh issue create --repo $Repository --title $title --label main-red --body $body | Out-Null
     }

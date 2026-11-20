@@ -1522,6 +1522,50 @@ public sealed class CardTests : IAsyncLifetime
         Assert.DoesNotContain("Not responding since", card.Details.Select(d => d.Label));
     }
 
+    [Theory]
+    [InlineData("a", "Synthesizing")]
+    [InlineData("b", "Deliberating")]
+    [InlineData("6f1c2b7e-claude-example", "Cogitating")]
+    public void A_working_card_shows_the_original_verb_stably_per_session_id(string id, string verb)
+    {
+        var session = Make.Session(id, status: SessionStatus.Working);
+        var card = new SessionCardViewModel(session, Context());
+        try
+        {
+            Assert.Equal(verb, card.HeaderStatusText);
+            Assert.Equal("Working", card.StatusText);
+            Assert.Equal("Working", card.Details.Single(d => d.Label == "Status").Value);
+            Assert.Equal(StatusGlyph.Working, card.Glyph);
+            card.Update(session with { Title = "Renamed" });
+            card.RefreshTimes();
+            Assert.Equal(verb, card.HeaderStatusText);
+            card.Update(Make.Session(id));
+            Assert.Equal("Idle", card.HeaderStatusText);
+            card.Update(session);
+            Assert.Equal(verb, card.HeaderStatusText);
+        }
+        finally { card.Detach(); }
+    }
+
+    [Theory]
+    [InlineData(0, "Waiting on you")]
+    [InlineData(1, "Waiting on you · compacted once")]
+    [InlineData(3, "Waiting on you · compacted 3 times")]
+    public void Compactions_say_compacted_once_or_N_times_beside_status_and_are_absent_at_zero(int count, string expected)
+    {
+        var session = Make.Session(question: Make.Choice());
+        var card = new SessionCardViewModel(session, Context());
+        try
+        {
+            card.Update(session with { Activity = session.Activity with { Compactions = count } });
+            Assert.Equal(expected, card.HeaderStatusText);
+            Assert.Equal("Waiting on you", card.StatusText);
+            Assert.Equal(count > 0, card.Details.Any(d => d.Label == "Compactions"));
+            Assert.DoesNotContain("compaction", card.Facts, StringComparison.Ordinal);
+        }
+        finally { card.Detach(); }
+    }
+
     [Fact]
     public void A_card_says_what_the_session_is_doing_in_the_words_and_glyph_of_the_status_rules()
     {
