@@ -156,6 +156,16 @@ verified pre-start `busy`/`refused` refunds it; `failed`/interrupted stays charg
 pre-start failure; readiness converts live without double count. An outcome alone is
 not closure proof. Refusals at every step are audited (§6).
 
+**As built on the pipe (#3427).** A new request id passes the attempt, hourly and live limits
+(spending nothing) before the host writes its request record, so a limited agent makes no
+record; a kept id is answered from its record. Agent requests together hold at most a quarter of
+the launch request store's records, used ids and pending slots (each agent at most 32 records),
+so a person's or Home Assistant's launch keeps room; past that a new agent id hears `busy`. A
+launch still pending when the launcher answers `busy` or `refused` gets its hourly charge back.
+An agent never hears the store's problem text or the launcher's own reason: a fixed sentence
+(the store's detail goes to the host log, never the audit, which holds no paths), and the launch
+service's agent projection on the first answer as on later reads.
+
 **Fail closed.** An unreadable or malformed `agents` policy, an unreadable credential store
 (already enforced by `AgentCredentials`), caps not yet rebuilt from the audit (§5) or an audit log
 that cannot be written each refuse the launch. Unreadable is never read as allowed, the same

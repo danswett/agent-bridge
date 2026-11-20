@@ -26,10 +26,11 @@ public sealed class AgentPipeLaunchTests : IDisposable
     LaunchConfig Running(params string[] extraArgs) => LaunchConfig.Default with { Workspaces = [new("App", folder, true)],
         Agents = new Dictionary<string, AgentConfig> { ["claude"] = AgentConfig.Default with { ExtraArgs = extraArgs } } };
 
-    sealed record Pipe(Func<IProtocolChannel, string, JsonElement, Task<object?>> Handle, Chan Channel, AgentCredentials Credentials);
+    sealed record Pipe(Func<IProtocolChannel, string, JsonElement, Task<object?>> Handle, Chan Channel, AgentCredentials Credentials,
+        AgentPipeLaunch Launch, LaunchRequestStore? Store);
 
     Pipe Open(string session = "parent", string scope = AgentProtocol.ScopeReadReplyLaunch, int depth = 0,
-        string launch = "person-launch", AgentCredentials? credentials = null, (LaunchRequestStore?, string?)? store = null)
+        string launch = "person-launch", AgentCredentials? credentials = null, (LaunchRequestStore?, string?)? store = null, Action<string>? log = null)
     {
         credentials ??= new AgentCredentials(folder, "machine");
         launcher.FleetConfig ??= Running();
@@ -40,9 +41,9 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var (requests, problem) = store ?? LaunchRequestStore.Open(folder, TimeProvider.System);
         var audit = new AgentAuditLog(folder);
         var service = new SessionService(new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
-        var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem);
+        var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem, log: log);
         return new(LocalApi.Handler(service, null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")),
-            credentials: credentials, audit: audit, agentLaunch: agentLaunch), channel, credentials);
+            credentials: credentials, audit: audit, agentLaunch: agentLaunch), channel, credentials, agentLaunch, requests);
     }
 
     JsonElement Body(string? id = null, string prompt = "hello", string workspace = "App", string? permissions = LaunchProtocol.Ask) =>
@@ -119,9 +120,117 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal("{ damaged", File.ReadAllText(Path.Combine(folder, LaunchRequestStore.FileName)));
     }
 
+    [Fact]
+    public async Task A_damaged_request_record_tells_the_agent_and_the_audit_a_fixed_sentence_and_the_host_log_the_detail()
+    {
+        File.WriteAllText(Path.Combine(folder, LaunchRequestStore.FileName), "{ damaged");
+        var logged = new List<string>();
+        var pipe = Open(store: LaunchRequestStore.Open(folder, TimeProvider.System), log: logged.Add);
+
+        var refusal = await Refusal(pipe, LaunchProtocol.Launch, Body());
+        await Refusal(pipe, LaunchProtocol.Launch, Body());
+
+        Assert.DoesNotContain(LaunchRequestStore.FileName, refusal);
+        Assert.DoesNotContain(AuditRows(), r => r.Contains(LaunchRequestStore.FileName));
+        Assert.Contains(LaunchRequestStore.FileName, Assert.Single(logged));
+    }
+
+    [Fact]
+    public async Task A_started_launch_is_recorded_launched_and_keeps_its_slot_until_the_session_ends()
+    {
+        var pipe = Open();
+        launcher.Registered = pipe.Launch.Registered;
+
+        var started = await Launch(pipe, Body());
+
+        Assert.Equal((LaunchOutcome.Started, "session-1"), (started.Outcome, started.Session));
+        Assert.Equal((LaunchRequestState.Launched, "session-1"), (pipe.Store!.All().Single().State, pipe.Store.All().Single().Session));
+        Assert.True(pipe.Credentials.LaunchGate.SessionEnded("session-1"));
+    }
+
+    [Fact]
+    public async Task The_same_request_again_returns_the_same_answer_and_launches_once()
+    {
+        var pipe = Open();
+
+        var first = await Launch(pipe, Body());
+        var again = await Launch(pipe, Body());
+
+        Assert.Equal((first.Outcome, first.Session), (again.Outcome, again.Session));
+        Assert.Equal(1, launcher.Launches);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_unconfirmed_launch_is_settled_by_its_registration_or_its_failure(bool registers)
+    {
+        var pipe = Open();
+        Guid? id = null;
+        launcher.Answer = r => { id = Guid.Parse(r.Request); return new(LaunchOutcome.Unconfirmed, "not yet"); };
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await Launch(pipe, Body())).Outcome);
+        Assert.Equal(LaunchRequestState.Launching, pipe.Store!.All().Single().State);
+
+        if (registers) { pipe.Launch.Registered(id!.Value, "session-9"); } else { pipe.Launch.Failed(id!.Value); }
+
+        Assert.Equal(registers ? LaunchRequestState.Launched : LaunchRequestState.Failed, pipe.Store.All().Single().State);
+        Assert.Equal(registers, pipe.Credentials.LaunchGate.SessionEnded("session-9"));
+        Assert.Equal(registers ? LaunchOutcome.Started : LaunchOutcome.Failed, (await Launch(pipe, Body())).Outcome);
+    }
+
+    [Fact]
+    public async Task A_reused_used_or_crowded_out_request_id_is_refused_without_a_launch()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        var pipe = Open(store: LaunchRequestStore.Open(folder, time, maxPending: 1));
+        await Launch(pipe, Body());
+
+        Assert.Contains("requestReused", await Refusal(pipe, LaunchProtocol.Launch, Body(prompt: "other")));
+        time.Advance(LaunchRequestStore.Retention);
+        Assert.Contains("requestUsed", await Refusal(pipe, LaunchProtocol.Launch, Body()));
+        pipe.Store!.Enqueue("ha-1", "card");
+        Assert.Contains("busy", await Refusal(pipe, LaunchProtocol.Launch, Body(Guid.NewGuid().ToString("D"))));
+        Assert.Equal(1, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task A_rate_limited_agent_is_refused_before_it_makes_a_request_record()
+    {
+        var pipe = Open();
+        for (var i = 0; i < 3; i++) { await Launch(pipe, Body(Guid.NewGuid().ToString("D"))); }
+
+        Assert.Contains("rate-limited", await Refusal(pipe, LaunchProtocol.Launch, Body(Guid.NewGuid().ToString("D"))));
+        Assert.Equal(3, pipe.Store!.All().Count);
+    }
+
+    [Fact]
+    public async Task Busy_or_refused_launches_that_never_started_give_back_the_hourly_launch_budget()
+    {
+        var pipe = Open();
+        var answers = new Queue<LaunchResult>([new(LaunchOutcome.Busy, "busy"), new(LaunchOutcome.Refused, "no"), new(LaunchOutcome.Busy, "busy")]);
+        launcher.Answer = _ => answers.TryDequeue(out var a) ? a : null;
+        for (var i = 0; i < 3; i++) { Assert.NotEqual(LaunchOutcome.Started, (await Launch(pipe, Body(Guid.NewGuid().ToString("D")))).Outcome); }
+
+        Assert.Equal(LaunchOutcome.Started, (await Launch(pipe, Body())).Outcome);
+    }
+
+    [Fact]
+    public async Task The_first_launch_answer_hides_the_launcher_s_own_reason_from_the_agent()
+    {
+        var pipe = Open();
+        launcher.Answer = _ => new(LaunchOutcome.Refused, @"C:\Users\someone\other-launch is waiting: trust this folder?");
+
+        var refused = await Launch(pipe, Body());
+
+        Assert.Equal(LaunchOutcome.Refused, refused.Outcome);
+        Assert.DoesNotContain("someone", refused.Reason);
+    }
+
     sealed class FakeLauncher : ISessionLauncher
     {
         public int Launches;
+        public Func<LaunchRequest, LaunchResult?>? Answer;
+        public Action<Guid, string>? Registered;
         public List<string> Peers { get; } = [];
         public LaunchConfig? FleetConfig { get; set; }
         public bool Available => true;
@@ -133,9 +242,11 @@ public sealed class AgentPipeLaunchTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             if (prepare(Guid.Parse(request.Request)) is not { } registered) { return Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "audit")); }
+            if (Answer?.Invoke(request) is { } answered) { return Task.FromResult(answered); }
             var session = $"session-{Interlocked.Increment(ref Launches)}";
             Peers.Add(peer);
             registered(session);
+            Registered?.Invoke(Guid.Parse(request.Request), session);
             return Task.FromResult(new LaunchResult(LaunchOutcome.Started) { Session = session });
         }
     }

@@ -739,10 +739,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         Guid.TryParseExact(request.Request, "D", out var key)
             ? requests.Read(key, new LaunchOwner(peer, RequestBinding(request))) : null;
 
-    static async Task<LaunchResult> AgentResultAsync(Task<LaunchResult> remembered)
-    {
-        var result = await remembered;
-        return result with
+    static async Task<LaunchResult> AgentResultAsync(Task<LaunchResult> remembered) => ForAgent(await remembered);
+
+    // What an agent may hear of a launch: never the launcher's own words, which can name host paths,
+    // another launch's workspace or a startup question. Also the first answer, not only reads (#3427).
+    public static LaunchResult ForAgent(LaunchResult result) =>
+        result with
         {
             Trust = null,
             Reason = result.Outcome == LaunchOutcome.Busy
@@ -758,7 +760,6 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Launched = result.Launched is { } launched ? launched with
                 { Cwd = null, Resume = null, Transfer = null, Profile = null } : null,
         };
-    }
 
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
         LaunchOnceAsync(request, peer, null);

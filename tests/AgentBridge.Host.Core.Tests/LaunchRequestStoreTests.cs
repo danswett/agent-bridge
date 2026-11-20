@@ -282,6 +282,42 @@ public sealed class LaunchRequestStoreTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(FilePath));
     }
 
+    [Fact]
+    public void Agent_requests_take_at_most_their_share_of_records_and_pending_slots_and_a_person_launch_still_has_room()
+    {
+        var store = Open(maxPending: 8);
+        Assert.Equal(EnqueueStatus.Added, store.Enqueue("p-1", "one", new LaunchQuota("agent-a", 1000)).Status);
+        Assert.Equal(EnqueueStatus.Added, store.Enqueue("p-2", "two", new LaunchQuota("agent-b", 1000)).Status);
+        Assert.Equal(EnqueueStatus.Full, store.Enqueue("p-3", "three", new LaunchQuota("agent-c", 1000)).Status);
+        Assert.Equal(EnqueueStatus.Added, store.Enqueue("ha-1", "card").Status);
+        store.Refuse("p-1", "refused");
+        store.Refuse("p-2", "refused");
+        for (var i = 3; i <= LaunchRequestStore.MaxRecords / 4; i++)
+        {
+            Assert.Equal(EnqueueStatus.Added, store.Enqueue($"p-{i}", "x", new LaunchQuota("agent-a", 1000)).Status);
+            store.Refuse($"p-{i}", "refused");
+        }
+
+        Assert.Equal(EnqueueStatus.Full, store.Enqueue("p-last", "x", new LaunchQuota("agent-d", 1000)).Status);
+        Assert.Equal(EnqueueStatus.Added, store.Enqueue("ha-2", "card").Status);
+    }
+
+    [Fact]
+    public void One_agent_is_held_to_its_own_record_cap_across_a_restart()
+    {
+        var store = Open();
+        foreach (var id in new[] { "p-1", "p-2" })
+        {
+            Assert.Equal(EnqueueStatus.Added, store.Enqueue(id, "x", new LaunchQuota("agent-a", 2)).Status);
+            store.Refuse(id, "refused");
+        }
+        Assert.Equal(EnqueueStatus.Full, store.Enqueue("p-3", "x", new LaunchQuota("agent-a", 2)).Status);
+        Assert.Equal(EnqueueStatus.Added, store.Enqueue("p-4", "x", new LaunchQuota("agent-b", 2)).Status);
+
+        Assert.Equal(EnqueueStatus.Full, Open().Enqueue("p-3", "x", new LaunchQuota("agent-a", 2)).Status);
+        Assert.Equal(EnqueueStatus.Existing, Open().Enqueue("p-1", "x", new LaunchQuota("agent-a", 2)).Status);
+    }
+
     static string Hash(string text) =>
         Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Runtime.InteropServices.MemoryMarshal.AsBytes(text.AsSpan())));
 

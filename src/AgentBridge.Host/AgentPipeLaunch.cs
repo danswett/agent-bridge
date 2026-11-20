@@ -12,16 +12,23 @@ namespace AgentBridge.Host;
 // The record keeps no principal, so an id is kept under a hash of the principal and the id:
 // another caller's id never matches, and reading it finds nothing.
 public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials, SessionService sessions,
-    AgentAuditLog audit, LaunchRequestStore? store, string? storeProblem, TimeProvider? time = null)
+    AgentAuditLog audit, LaunchRequestStore? store, string? storeProblem, TimeProvider? time = null, Action<string>? log = null)
 {
     readonly AgentLaunchCallerCheck callers = new(audit, time);
     readonly LocalApi.RefusalAudits refusals = new(time ?? TimeProvider.System);
     readonly Dictionary<Guid, (string Principal, string Request, string Key)> unconfirmed = [];
+    int storeLogged;
 
     const string Prefix = "pipe-";
 
+    // An agent's share of the shared request record (#3427): its refused ids stay kept for 15 minutes.
+    const int RecordsPerPrincipal = 32;
+
     static string Key(string principal, string request) =>
         Prefix + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(principal + "\n" + request)))[..59];
+
+    static LaunchQuota Quota(string principal) =>
+        new("agent-" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("quota\n" + principal)))[..32], RecordsPerPrincipal);
 
     // Again at dispatch, after the launch service's own waits: the credential, grant and policy as they are now.
     string? Still(AgentCredential caller, LaunchRequest r)
@@ -38,7 +45,13 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
     public async Task<LaunchResult> LaunchAsync(AgentCredential caller, JsonElement data)
     {
         var principal = credentials.PrincipalOf(caller);
-        if (store is null) { throw Refused(caller, data, $"the launch request record can't be used ({storeProblem ?? "not open"}); no request with an id is launched"); }
+        // The store's own words name the profile path and raw IO text: the host log has them, once;
+        // the agent and the audit (which holds no path) a fixed sentence (#3427).
+        if (store is null)
+        {
+            if (Interlocked.Exchange(ref storeLogged, 1) == 0) { log?.Invoke($"agent launch requests are refused: {storeProblem ?? "the launch request record is not open"}"); }
+            throw Refused(caller, data, "the launch request record can't be used; no request with an id is launched");
+        }
         LaunchRequest? request = null;
         try { request = data.ValueKind == JsonValueKind.Object ? data.Deserialize<LaunchRequest>(ProtocolJson.Options) : null; }
         catch (JsonException) { }
@@ -63,8 +76,11 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         var gate = credentials.LaunchGate;
         if (gate.CheckPolicy() is { Allowed: false } off) { throw Refused(caller, data, off.Reason ?? "agent launch is off on this machine"); }
         var binding = LaunchService.RequestBinding(request);
+        // A new id is admitted by the limits before it is recorded, so a limited caller makes no record
+        // (#3427); a kept one is answered from its record whatever the limits are now.
+        if (store.Get(key) is null && gate.AdmitLaunch(principal, request.Request) is { Allowed: false } early) { throw Denied(early); }
         EnqueueResult held;
-        try { held = store.Enqueue(key, binding); }
+        try { held = store.Enqueue(key, binding, Quota(principal)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         { throw Refused(caller, data, "the launch request record could not be written; nothing was launched"); }
         if (held.Status == EnqueueStatus.Existing) { return Told(held.Record!); }
@@ -81,11 +97,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         if (!verdict.Allowed)
         {
             Save(() => store.Refuse(key, "refused"));
-            var why = verdict.Reason + (verdict.RetryAfterSeconds > 0 ? $"; retry after {verdict.RetryAfterSeconds}s" : "");
-            // The gate audits its own rate and live-limit refusals.
-            if (verdict.Reason is AgentLimitVerdict.RateLimited || verdict.Reason?.StartsWith(AgentLimitVerdict.LiveLimited, StringComparison.Ordinal) == true)
-            { throw new InvalidOperationException($"refused: {why}"); }
-            throw Refused(caller, data, why ?? "agent launch is refused");
+            throw Denied(verdict);
         }
         // The launcher hears an id of this caller's own, so no other launch (HA's or another caller's)
         // shares its events or audit rows. Pending first: a registration may come before the launch returns.
@@ -95,7 +107,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         try { store.Begin(key); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            if (Take(id) is not null) { gate.LaunchFinished(principal, request.Request); }
+            if (Take(id) is not null) { gate.LaunchNotStarted(principal, request.Request); }
             throw Refused(caller, data, "the launch request record could not be written; nothing was launched");
         }
         // An exception from here leaves the record launching and the slot held: something may have started.
@@ -109,7 +121,8 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         }
         else if (result.Outcome is LaunchOutcome.Busy or LaunchOutcome.Refused)
         {
-            if (Take(id) is not null) { gate.LaunchFinished(principal, request.Request); }
+            // Still pending, so never registered: verified not started, and its hourly budget given back.
+            if (Take(id) is not null) { gate.LaunchNotStarted(principal, request.Request); }
             Save(() => store.Refuse(key, result.Outcome == LaunchOutcome.Busy ? "busy" : "refused"));
             try { LocalApi.AuditRefusal(principal, caller.Chain, LaunchProtocol.Launch, data, audit, result.Reason ?? "the launch service refused", refusals); }
             catch (InvalidOperationException) { }
@@ -118,6 +131,15 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         // Unconfirmed stays launching and holds its live slot: the launcher's registration or failure settles
         // both, and one it stops following without either keeps them until the host restarts (closed, not open).
         return result;
+
+        Exception Denied(AgentLaunchPolicyVerdict verdict)
+        {
+            var why = verdict.Reason + (verdict.RetryAfterSeconds > 0 ? $"; retry after {verdict.RetryAfterSeconds}s" : "");
+            // The gate audits its own rate and live-limit refusals.
+            if (verdict.Reason is AgentLimitVerdict.RateLimited || verdict.Reason?.StartsWith(AgentLimitVerdict.LiveLimited, StringComparison.Ordinal) == true)
+            { return new InvalidOperationException($"refused: {why}"); }
+            return Refused(caller, data, why ?? "agent launch is refused");
+        }
     }
 
     // The launcher's word on a launch (ISessionLauncher's events), also after it answered unconfirmed.
