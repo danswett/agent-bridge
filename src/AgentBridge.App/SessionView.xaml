@@ -138,7 +138,7 @@
                         TextWrapping="NoWrap"
                         ToolTipService.ToolTip="{x:Bind Card.DriverPrincipal, Mode=OneWay}"
                         AutomationProperties.AutomationId="HeaderMeta">
-                        <Run x:Name="StatusWords" Text="{x:Bind Card.StatusText, Mode=OneWay}" /><Run Text="{x:Bind local:SessionRow.Separator(Card.HeaderPlace), Mode=OneWay}" /><Run Text="{x:Bind Card.HeaderPlace, Mode=OneWay}" />
+                        <Run x:Name="StatusWords" Text="{x:Bind Card.HeaderStatusText, Mode=OneWay}" /><Run Text="{x:Bind local:SessionRow.Separator(Card.HeaderPlace), Mode=OneWay}" /><Run Text="{x:Bind Card.HeaderPlace, Mode=OneWay}" />
                     </TextBlock>
                 </Grid>
             </StackPanel>
