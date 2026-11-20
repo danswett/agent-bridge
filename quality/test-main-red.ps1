@@ -47,7 +47,7 @@ function Fake-Gh {
         head_sha = 'abcdef0123456789'; head_branch = $s.branch; event = $s.event; path = $s.path
         head_repository = @{ full_name = $s.repo } }
     if ($args[0] -eq 'issue' -and $args[1] -in @('list', 'view')) {
-        $fields = if ($args[1] -eq 'view') { 'comments' } elseif ($args -contains 'all') { 'number,body,author,state' } else { 'number,body,author' }
+        $fields = if ($args[1] -eq 'view') { 'comments' } elseif ($args -contains 'all') { 'number,body,author,state,title' } else { 'number,body,author,title' }
         $json = [array]::IndexOf($args, '--json')
         if ($json -lt 0 -or $args.Count -ne $json + 2 -or $args[$json + 1] -isnot [string] -or
             $args[$json + 1] -cne $fields) {
@@ -82,9 +82,9 @@ function Fake-Gh {
         }
         '^issue list ' {
             $found = @()
-            if ($s.foreign) { $found += @{ number = 5; body = ''; author = @{ login = 'stranger' } } }
+            if ($s.foreign) { $found += @{ number = 5; body = ''; title = ''; author = @{ login = 'stranger' } } }
             if ($s.open -or ($args -contains 'all' -and $s.created)) {
-                $found += @{ number = 9; body = $s.body; author = @{ login = 'app/github-actions' }; state = $(if ($s.open) { 'OPEN' } else { 'CLOSED' }) }
+                $found += @{ number = 9; body = $s.body; title = $s.title; author = @{ login = 'app/github-actions' }; state = $(if ($s.open) { 'OPEN' } else { 'CLOSED' }) }
             }
             ConvertTo-Json -InputObject $found -Depth 5; return
         }
@@ -102,6 +102,7 @@ function Fake-Gh {
             $s.comments += @{ body = $text; author = @{ login = 'github-actions' }; createdAt = Get-FakeTime (++$s.clock) }
             return
         }
+        '^issue edit 9 ' { $s.writes += 'edit'; $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; return }
         '^issue close 9 ' {
             $s.closeAttempts++
             if ($s.closeFails -gt 0) { $s.closeFails--; $global:LASTEXITCODE = 1; return }
@@ -281,6 +282,12 @@ Assert ($s.body -match 'post-merge tier only' -and $s.body -match 'merge verdict
 $s.attempt = 2; Detect
 Assert (($s.writes -join ',') -eq 'label,create,comment' -and $s.open -and
     $s.comments[0].body -match '(?m)^Job \(post-merge-tier\): pwa-ui') 'a second post-merge tier flake adds another labelled entry and leaves the issue open'
+Assert ($s.writes -notcontains 'edit' -and $s.title -match 'post-merge tier only') 'a repeated post-merge-only entry keeps its title'
+$s.attempt = 3; $s.jobName = 'product'; Detect
+Assert (($s.writes -join ',') -eq 'label,create,comment,edit,comment' -and $s.title -match '^Main red: CI failing' -and
+    $s.comments[-1].body -match '(?m)^Job: product$') 'a later blocking failure promotes an existing post-merge-only issue title before commenting'
+Detect
+Assert (($s.writes -join ',') -eq 'label,create,comment,edit,comment') 'a duplicate blocking event neither re-edits the title nor repeats evidence'
 Reset-Scenario; $s.extraJobs = @(@{ id = 8; name = 'pwa-e2e'; conclusion = 'failure' }); Detect
 Assert ($s.title -match '^Main red: CI failing' -and $s.body -match '(?m)^Job: product$' -and
     $s.body -match '(?m)^Job \(post-merge-tier\): pwa-e2e$' -and $s.body -notmatch 'post-merge tier only') 'a blocking failure beside a post-merge one stays an ordinary main-red entry'
@@ -290,6 +297,11 @@ Reset-Scenario; $s.jobName = 'light'; Detect
 Assert ($s.body -match '(?m)^Job: light$' -and $s.body -notmatch 'post-merge tier only') 'a comma inside a quoted tier job name invents no post-merge job'
 Reset-Scenario; $s.jobName = 'pwa-ui (webkit 1/3)'; $script:CatalogPath = "$tierPath.missing"; Detect; $script:CatalogPath = $tierPath
 Assert ($s.title -match '^Main red: CI failing' -and $s.body -match '(?m)^Job: pwa-ui') 'without catalog tier data every failed job stays blocking'
+Reset-Scenario; $s.jobName = 'pwa-ui (webkit 1/3)'; $catalogError = $null
+$lock = [IO.File]::Open($tierPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+try { Detect } catch { $catalogError = $_.Exception } finally { $lock.Dispose() }
+Assert ($null -eq $catalogError -and $s.writes -contains 'create' -and
+    $s.title -match '^Main red: CI failing' -and $s.body -match '(?m)^Job: pwa-ui') 'a locked catalog still writes an issue with every failure blocking'
 $names = @((Get-PostMergeJobs $tierPath) | Sort-Object)
 $expected = @('pwa-ui (webkit 1/3)', 'pwa-e2e', 'probe, light') | Sort-Object
 Assert (($names -join '|') -eq ($expected -join '|')) "only post-merge suites' tier_jobs are post-merge ($($names -join '|'))"
