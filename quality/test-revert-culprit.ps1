@@ -96,9 +96,10 @@ Assert (($s.writes -join ',') -eq 'label,push,pr' -and $s.git -match "revert --n
 Reset-Scenario; $s.newest = 'failure2'; $s.comments = @(@{ author = @{ login = 'github-actions' }; body = $s.entry.Replace('run=101', 'run=102') })
 $s.entry = $s.entry.Replace('A.B.C.Method', 'no test name was found'); Tick
 Assert (($s.writes -join ',') -eq 'label,issue' -and $s.git.Count -eq 0) 'a test that began failing after an infra-only first red run opens an issue, not a revert'
-Reset-Scenario; $s.parent = ''; $threw = $false
-try { Tick } catch { $threw = $_.Exception.Message -like '*parent is not in the local history*' }
-Assert ($threw -and $s.writes.Count -eq 0 -and -not ($s.git -match 'revert')) 'a shallow checkout refuses to revert'
+Reset-Scenario; $s.parent = ''; try { Tick } catch { $s.result = "threw: $_" }
+Assert (($s.writes -join ',') -eq 'label,issue' -and $s.body.Contains('parent is not in the local history') -and -not ($s.git -match 'revert')) "a shallow checkout opens an issue instead of reverting or failing every tick ($($s.result))"
+try { Tick } catch { $s.result = "threw: $_" }
+Assert (($s.writes -join ',') -eq 'label,issue') 'a second tick after a shallow checkout opens no duplicate issue'
 foreach ($case in @(@{ commits = 2 }, @{ prs = 0 }, @{ prs = 2 }, @{ noGreen = $true }, @{ branchExists = $true }, @{ conflict = $true })) {
     Reset-Scenario; foreach ($k in @($case.Keys)) { $s[$k] = $case[$k] }; $name = "$($case.Keys) = $($case.Values)"; Tick
     Assert (($s.writes -join ',') -eq 'label,issue' -and $s.body.Contains('https://github.com/o/r/issues/9') -and
@@ -139,6 +140,12 @@ $header = 'http.https://github.com/.extraheader'
 Assert ($s.pushAuth -ceq "3|core.keep|$header=True|$header=AUTHORIZATION: basic $script:Basic|" -and ($s.writes -join ',') -eq 'label,push,pr' -and
     "$env:GIT_CONFIG_COUNT|$env:GIT_CONFIG_VALUE_0|$env:GIT_CONFIG_KEY_1$env:GIT_CONFIG_VALUE_2|$env:GIT_TRACE2_CONFIG_PARAMS" -eq '1|kept||http.*') 'the push alone carries GH_TOKEN as its only auth header, untraced, keeping existing git config'
 $seen = $log + (Seen)
+# Variables that were unset before the push are unset again, not left empty.
+$names = 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_CONFIG_KEY_1', 'GIT_CONFIG_VALUE_1', 'GIT_TRACE2_CONFIG_PARAMS', 'GIT_TRACE2_ENV_VARS'
+foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, [NullString]::Value) }
+Reset-Scenario; Tick
+Assert (@($names | Where-Object { $null -ne [Environment]::GetEnvironmentVariable($_) }).Count -eq 0 -and ($s.writes -join ',') -eq 'label,push,pr') 'the push leaves git variables that were unset unset, not empty'
+$env:GIT_CONFIG_COUNT = '1'; $env:GIT_CONFIG_KEY_0 = 'core.keep'; $env:GIT_CONFIG_VALUE_0 = 'kept'; $env:GIT_TRACE2_CONFIG_PARAMS = 'http.*'
 Reset-Scenario; $s.pushFails = $true; $log = & { try { Tick } catch { "threw: $_" } } *>&1 | Out-String
 Assert (($s.writes -join ',') -eq 'label,push,issue' -and $s.body.Contains('could not be pushed') -and $s.body.Contains('***')) "a failed push opens the fallback issue ($($s.result))"
 $seen += $log + (Seen)
