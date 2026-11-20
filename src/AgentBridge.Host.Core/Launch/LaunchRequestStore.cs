@@ -59,7 +59,7 @@ public sealed class LaunchRequestStore
             // tried again unasked.
             foreach (var r in records.Values.Where(r => r.State == LaunchRequestState.Launching).ToList())
             {
-                records[r.Id] = r with { State = LaunchRequestState.Failed, Code = "restarted", ChangedAt = now };
+                records[r.Id] = r with { State = LaunchRequestState.Failed, Code = "restarted", ChangedAt = now > r.ChangedAt ? now : r.ChangedAt };
             }
             var store = new LaunchRequestStore(path, time, maxPending, records);
             store.Prune(now);
@@ -118,7 +118,8 @@ public sealed class LaunchRequestStore
     public bool Fail(string id, string code) => Move(id, LaunchRequestState.Failed, null, Checked(code, nameof(code)));
 
     // Forward only: queued to launching or straight to a refusal or failure; launching to an
-    // outcome. False, changing nothing, for anything else.
+    // outcome. False, changing nothing, for anything else. Times never go back with a clock set
+    // back, since changedAt before queuedAt reads as damage at the next start.
     bool Move(string id, LaunchRequestState to, string? session, string? code)
     {
         lock (_gate)
@@ -126,14 +127,10 @@ public sealed class LaunchRequestStore
             var now = _time.GetUtcNow();
             Prune(now);
             if (!_records.TryGetValue(id, out var r)) { return false; }
-            var allowed = (r.State, to) switch
-            {
-                (LaunchRequestState.Queued, LaunchRequestState.Launching or LaunchRequestState.Refused or LaunchRequestState.Failed) => true,
-                (LaunchRequestState.Launching, LaunchRequestState.Launched or LaunchRequestState.Refused or LaunchRequestState.Failed) => true,
-                _ => false,
-            };
+            var allowed = r.State == LaunchRequestState.Queued ? to is LaunchRequestState.Launching or LaunchRequestState.Refused or LaunchRequestState.Failed
+                : r.State == LaunchRequestState.Launching && to >= LaunchRequestState.Launched;
             if (!allowed) { return false; }
-            Commit(() => _records[r.Id] = r with { State = to, Session = session, Code = code, ChangedAt = now });
+            Commit(() => _records[r.Id] = r with { State = to, Session = session, Code = code, ChangedAt = now > r.ChangedAt ? now : r.ChangedAt });
             return true;
         }
     }

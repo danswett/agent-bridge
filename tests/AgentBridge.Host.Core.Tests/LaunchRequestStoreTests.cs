@@ -10,6 +10,7 @@ public sealed class LaunchRequestStoreTests : IDisposable
     readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 11, 20, 16, 0, 0, TimeSpan.Zero));
 
     public void Dispose() => Directory.Delete(_folder, recursive: true);
+
     string FilePath => Path.Combine(_folder, LaunchRequestStore.FileName);
 
     LaunchRequestStore Open(int maxPending = 8)
