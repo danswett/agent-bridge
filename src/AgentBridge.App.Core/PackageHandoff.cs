@@ -43,8 +43,8 @@ public sealed class PackageHandoff(DownloadMark mark, string folder)
 
     // Just before the installer starts: the copy checked again, from the handle that keeps it
     // unchanged until this process ends (the caller keeps it), then start(Update.exe's arguments).
-    // Nothing starts when the copy is not those bytes. The starter must launch Update.exe directly
-    // from this app: --wait waits for its parent, not an intermediate shell or helper.
+    // Nothing starts when the copy is not those bytes. The starter launches the in-place helper
+    // (InPlaceHandoff), which runs Update.exe itself and waits for this app first.
     public FileStream Launch(Copy copy, string rootDir, string packagesDir, IReadOnlyList<string> restartArgs, Action<IReadOnlyList<string>> start)
     {
         var held = DownloadMark.Hold(copy.Package, copy.Digest)
@@ -70,9 +70,11 @@ public sealed class PackageHandoff(DownloadMark mark, string folder)
     // UpdateExe.Apply puts it. Parent wait (#1173): 1.2.161's --waitPid opens SYNCHRONIZE only,
     // then queries the exit code after waiting, which fails with access denied. --wait also requests
     // QUERY_LIMITED_INFORMATION and checks creation times against parent PID reuse (process_win.rs).
-    public static IReadOnlyList<string> Arguments(string package, string rootDir, string packagesDir, IReadOnlyList<string> restartArgs)
+    // Not waiting (#3343): the in-place helper (InPlaceHandoff) waits for the app, and --norestart
+    // restarts nothing that would hold current's files when apply is refused.
+    public static IReadOnlyList<string> Arguments(string package, string rootDir, string packagesDir, IReadOnlyList<string> restartArgs, bool wait = true)
     {
-        List<string> args = ["--silent", "apply", "--package", package, "--wait",
+        List<string> args = ["--silent", "apply", "--package", package, wait ? "--wait" : "--norestart",
             "--rootDir", rootDir, "--packageDir", packagesDir];
         if (restartArgs.Count > 0) { args.Add("--"); args.AddRange(restartArgs); }
         return args;

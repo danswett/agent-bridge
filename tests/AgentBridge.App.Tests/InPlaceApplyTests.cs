@@ -183,9 +183,9 @@ public sealed class InPlaceApplyTests : IDisposable
     }
 
     [Fact]
-    public void A_leftover_backup_whose_files_are_all_in_current_is_cleared_and_said()
+    public void A_leftover_backup_whose_files_are_all_the_same_in_current_is_cleared_and_said()
     {
-        Write(Backup, "AgentBridge.dll", "app 0");
+        Write(Backup, "AgentBridge.dll", "app 1");
         File.SetAttributes(Path.Combine(Backup, "AgentBridge.dll"), FileAttributes.ReadOnly);
         var log = new List<string>();
 
@@ -194,6 +194,19 @@ public sealed class InPlaceApplyTests : IDisposable
         Assert.Equal(Snapshot(Staged), Snapshot(Current));
         Assert.False(Directory.Exists(Backup));
         Assert.Contains(log, l => l.Contains("removed") && l.Contains(Backup));
+    }
+
+    [Fact]
+    public void A_leftover_backup_whose_file_differs_in_current_is_kept_when_the_retry_fails_too()
+    {
+        Write(Backup, "AgentBridge.dll", "app 1");
+        Write(Current, "AgentBridge.dll", "app");
+        FailLast();
+        var e = Assert.Throws<InPlaceApplyException>(() => Install(() => false, "x"));
+
+        var kept = Assert.Single(Directory.GetDirectories(root, "current-inplace-*"));
+        Assert.Equal("app 1", File.ReadAllText(Path.Combine(kept, "AgentBridge.dll")));
+        Assert.Contains(kept, e.Message);
     }
 
     [Fact]
