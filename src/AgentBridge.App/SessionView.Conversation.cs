@@ -86,23 +86,19 @@ public sealed partial class SessionView
             // A question still moving into view is held from the pointer until it has stopped.
             guard.Scrolled(DateTimeOffset.UtcNow);
             if (anchoring is not { } asked || Math.Abs(scroll.VerticalOffset - asked) >= 0.5) { TakeAnchor(); }
+            PinViewChanged(scroll);
             scrolling = e.IsIntermediate;
-            if (!e.IsIntermediate) { anchoring = null; keyTarget = null; }
+            if (!e.IsIntermediate)
+            {
+                anchoring = null; keyTarget = null; CompleteNavigation();
+                if (pinEnd) { DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FollowPinnedEnd); }
+            }
             HistoryScrolled(e.IsIntermediate);
             if (!e.IsIntermediate) { SaveReading(); }
         };
         scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); ReleasePin(); };
         scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
-        scroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, _) => ReleasePin()), true);
-        // Take the view only when focus actually asks to scroll out of it, not on every Tab.
-        ConversationHeader.BringIntoViewRequested += FocusScroll;
-        ConversationFooter.BringIntoViewRequested += FocusScroll;
-        void FocusScroll(UIElement sender, BringIntoViewRequestedEventArgs e)
-        {
-            if (!Under(FocusManager.GetFocusedElement(ConversationList.XamlRoot) as DependencyObject, e.TargetElement)) { return; }
-            var top = e.TargetElement.TransformToVisual(scroll).TransformPoint(new Point(e.TargetRect.X, e.TargetRect.Y)).Y;
-            if (!ConversationKeyboard.WhollyInView(top, e.TargetRect.Height, scroll.ViewportHeight)) { ReleasePin(); }
-        }
+        HookConversationInput(scroll);
         ConversationList.LayoutUpdated += OnConversationLaidOut;
         // Tunnelling, so the keys reach this before anything inside the list can take them: the list
         // would move between its items, a child might handle a key first (ui.md §6.4). What has focus
@@ -425,17 +421,10 @@ public sealed partial class SessionView
     void OnConversationLaidOut(object? sender, object e)
     {
         if (RestoreReading()) { return; }
-        if (pinEnd) { return; }
+        if (pinEnd) { FollowPinnedEnd(); return; }
         if (panning || scrolling || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
             || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
         if (a.Correction(anchorAt, scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight) is { } to) { Anchoring(scroll, to); }
-    }
-
-    void Anchoring(ScrollViewer scroll, double to)
-    {
-        anchoring = to;
-        anchorAt = to;
-        scroll.ChangeView(null, to, null, disableAnimation: true);
     }
 
     static double Top(UIElement element, UIElement viewport) => element.TransformToVisual(viewport).TransformPoint(default).Y;

@@ -54,7 +54,7 @@ public sealed partial class SessionView
             else if (!saved.AtEnd && saved.Block is { Index: >= 0 } block)
             {
                 if (block.Index >= blocks.Count) { return true; }
-                ConversationList.ScrollIntoView(blocks[block.Index]);
+                ScrollProgrammatically(() => ConversationList.ScrollIntoView(blocks[block.Index]));
                 ConversationList.UpdateLayout();
                 if (ConversationList.ContainerFromIndex(block.Index) is not FrameworkElement container) { return true; }
                 target = block.OffsetFor(scroll.VerticalOffset, Top(container, scroll), scroll.ScrollableHeight);

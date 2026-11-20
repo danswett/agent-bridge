@@ -162,7 +162,7 @@ public sealed class AutoUpdater
     readonly IUiDispatcher ui;
     // Names what holds files in the installation, or null: asked before the host is stopped
     // (HostManager.StopAndApplyAsync), so an update that cannot replace them stops nothing.
-    readonly Func<string?>? preflight;
+    readonly Func<CancellationToken, string?>? preflight;
     DateTimeOffset? checkedAt;
     // The last check's end, and its failure if it failed, which a press soon after is answered with.
     DateTimeOffset? lastCheckAt;
@@ -255,7 +255,7 @@ public sealed class AutoUpdater
     // for what waits on the person, and an update can wait (Creative, #231 for a found agent).
     public AutoUpdater(IUpdater updater, HostConnection host, HostManager manager, Func<AppPreferences> prefs, Action<AppPreferences> save, Action<string> log,
         Func<int?, string?> othersInPackage,         TimeProvider? time = null, IUiDispatcher? ui = null,
-                Func<string?>? preflight = null)
+                Func<CancellationToken, string?>? preflight = null)
     {
                 this.preflight = preflight;
         this.updater = updater as ObservedUpdater ?? new ObservedUpdater(updater, time);
@@ -423,6 +423,8 @@ public sealed class AutoUpdater
     // The update line while the backstop skips for a question waiting: Creative's words on #719
     // (6674096426), which the devices show as they are. The log says "Needs you" (Refused).
     public const string QuestionLine = "Update ready \u00b7 waiting for a question to be answered";
+    // Unasked, an install holds while bad-release protection here is stale or unreadable (#3307).
+    public const string PolicyHold = "bad-release protection could not be checked on this machine; it installs once it can be";
 
     string? Skipping(DateTimeOffset now) =>
         BetweenTurns && Asked(UpdateAskKind.Install) is null && Ready is not null && lastWhyNot is null && foundAt is not null
@@ -438,6 +440,7 @@ public sealed class AutoUpdater
         // Install between turns: the gap settling, or the backstop's time.
         var now = time.GetUtcNow();
         if (FailedRetryAt(now) is not null) { return "update failed; trying again soon, or at Restart to update"; }
+        if (PolicyUnchecked) { return PolicyHold; }
         var at = ForcedAt(now);
         var until = at > now ? $"; it installs anyway at {at.ToLocalTime():g} unless a question is waiting then" : "";
         return Idle ? "it installs between turns, as soon as this machine's sessions are read and still idle"
@@ -698,7 +701,7 @@ public sealed class AutoUpdater
         // so the host idle for IdleFor, never a settled gap or the backstop (Copilot, r4488279902).
         // Install between turns governs only what installs unasked.
         if (asked) { return Due(now) ? $"another device asked for it and no session has been busy for {IdleFor.TotalMinutes:0} minutes" : null; }
-        if (!BetweenTurns || InstallFailedLately(now)) { return null; }
+        if (!BetweenTurns || InstallFailedLately(now) || PolicyUnchecked) { return null; }
         if (IdleSince(now, SettleFor)) { return "it installs between turns and no session here has a turn running or a question waiting"; }
         if (now >= ForcedAt(now) && BackstopHeld() is null) { return $"it installs between turns and has waited {WaitAtMost.TotalHours:0} hours with a turn always running"; }
         if (idleSince is not null) { Arm(now); }
@@ -706,6 +709,9 @@ public sealed class AutoUpdater
     }
 
     bool InstallFailedLately(DateTimeOffset now) => FailedRetryAt(now) is not null;
+
+    // Bad-release protection here is stale or unreadable (#3307); unknown (null) holds nothing.
+    bool PolicyUnchecked => updater.HaltPolicy is { Fresh: false };
 
     // A kept retry time beyond Cap (the clock moved back) is written back as Cap from now the first
     // time it is seen, so the deadline stays fixed and elapses instead of moving on every check.
@@ -1343,7 +1349,8 @@ public sealed class AutoUpdater
                 code: UpdateCode.ReleaseChanged);
             return;
         }
-        try { await WaitForFilesAsync(); }
+        InstallationFiles.Budget fileBudget;
+        try { fileBudget = await WaitForFilesAsync(); }
         catch (UpdateBlockedException e)
         {
             if (DropExpired()) { return; }
@@ -1381,7 +1388,7 @@ public sealed class AutoUpdater
                 log($"update now: pressed on {by ?? "another device"}, going over {(accept is null ? "nothing busy" : $"{accept.Working} with a turn running and {accept.Waiting} with a question or approval waiting{(accept.Unknown == true ? ", with sessions not yet reported" : "")}")}");
                 // The host left for this press: it is the one installed and answered, even should
                 // another have replaced it while the host was asked.
-                await InstallAsync(because, (request, true));
+                await InstallAsync(because, (request, true), fileBudget: fileBudget);
                 return;
             case UpdateDepartOutcome.Waiting:
                 var code = UpdateProtocol.IsCode(left.Code) ? left.Code : UpdateWaitingCode.Unknown;
@@ -1421,7 +1428,7 @@ public sealed class AutoUpdater
         try
         {
             await manager.WaitForInstallationFilesAsync(preflight,
-                why => { fileWait = $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time, fileBudget);
+                why => { fileWait = why == InstallationFiles.Unknown ? why : $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time, fileBudget);
             await manager.CheckInstallationFilesAsync(preflight, fileBudget);
             return fileBudget;
         }
@@ -1438,7 +1445,7 @@ public sealed class AutoUpdater
     // not, still on this version with the host back. answers: the press this install answers, as
     // the tick decided it, and whether the host departed for it (an Update now), which it then
     // answers whatever press has come since; else the one being carried out now.
-    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null, Func<string, Task<bool>>? confirm = null)
+    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null, Func<string, Task<bool>>? confirm = null, InstallationFiles.Budget? fileBudget = null)
     {
         var to = Pending!;
         var source = updater.Source;
@@ -1455,7 +1462,7 @@ public sealed class AutoUpdater
         {
             if (departed is null)
             {
-                var fileBudget = await WaitForFilesAsync();
+                fileBudget ??= await WaitForFilesAsync();
                 var nonFileWork = time.GetTimestamp();
                 if (local && host.State == LinkState.Connected) { await manager.WaitForUsageProbesAsync(); }
                 if (!local && await ProbeBusyAsync() is { } probe) { lastProbe = probe; Changed(); return NotNow; }
@@ -1471,15 +1478,17 @@ public sealed class AutoUpdater
                     if (vetted.Why is { } since) { throw new InstallRefusedException(since, vetted.Code); }
                 }
                 fileBudget.ExcludeSince(nonFileWork);
-                await manager.CheckInstallationFilesAsync(preflight, fileBudget);
+                await manager.CheckInstallationFilesAsync(preflight, fileBudget, fresh: true);
             }
-            else { await manager.CheckInstallationFilesAsync(preflight, new InstallationFiles.Budget(time)); }
+            else { await manager.CheckInstallationFilesAsync(preflight, fileBudget ??= new InstallationFiles.Budget(time), fresh: true); }
             Validate();
             updatingIn = open ? to : null;
             installingAt = null;
             installing = true;
             Changed();
             log($"auto-update: installing {to}, as {because}");
+            // The same budget, so the entry check reuses the clear scan just made; the last scan
+            // runs after the stop's waits, right before the handoff (#2884 review).
             await manager.StopAndApplyAsync(() =>
             {
                 Validate();
@@ -1493,7 +1502,7 @@ public sealed class AutoUpdater
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
                 if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
                 updater.ApplyAndRestart(to, HandedOver(prefs, save));
-            }, waitForFiles: false);
+            }, preflight, waitForFiles: false, fileBudget: fileBudget);
             return null;
         }
         // Replaced while the host stopped: nothing failed, and the host is back (HostManager). What
@@ -1618,7 +1627,7 @@ public sealed class AutoUpdater
     // or why it couldn't install, with Try again); otherwise a toast does (#1167). A failed install
     // is never silent: Update.exe, silent, says nothing itself, and restarts this old version.
     public static UpdateAnnouncement? Announce(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, IToastSink sink, Action<string> log,
-        TimeProvider? time = null, Func<string?>? blockers = null)
+        TimeProvider? time = null, Func<CancellationToken, string?>? blockers = null)
     {
         if (prefs().UpdatedFrom is not { } from) { return null; }
         var notes = prefs().UpdateNotes;
@@ -1664,7 +1673,8 @@ public sealed class AutoUpdater
             // holds the files is named, best effort.
             save(UpdateBackoff.Failed(prefs(), at, prefs().UpdateFailedRelease, out var retryAt));
             string? held = null;
-            try { held = blockers?.Invoke(); }
+            // Bounded like the update's own wait (#2858): a stuck scan must not hold up startup.
+            try { held = new InstallationFiles.Budget(time ?? TimeProvider.System).ProbeOnceAsync(blockers, default).GetAwaiter().GetResult(); }
             catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { }
             log($"the update from {from} did not take: still {now ?? "not installed"}{(held is null ? "" : $"; {UpdateBlockedException.Prefix}{held}")}; update failed, retrying at {retryAt.ToLocalTime():t}");
             var failed = new UpdateAnnouncement(false, from, now ?? from, attempted, open);

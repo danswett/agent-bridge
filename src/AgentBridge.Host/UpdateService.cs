@@ -265,6 +265,25 @@ public sealed class UpdateService
                 _ = channel.Closed.ContinueWith(_ => Gone(channel), TaskScheduler.Default);
             }
             reported = UpdateProtocol.Fit(report.State);
+            // An app's successful restart/check alone does not establish a converged installation.
+            var appRelease = UpdateVersions.Identity(reported.Current);
+            var hostRelease = UpdateVersions.Identity(HostVersion);
+            if (reported.Installer && reported.Current is { Length: > 0 } appVersion
+                && appRelease is not null && hostRelease is not null
+                && !string.Equals(appRelease, hostRelease, StringComparison.OrdinalIgnoreCase)
+                && reported.Last is { Outcome: UpdateOutcome.Updated or UpdateOutcome.Current } last)
+            {
+                reported = reported with
+                {
+                    Last = last with
+                    {
+                        Outcome = UpdateOutcome.Failed,
+                        Code = "version-skew",
+                        Step = "host-version",
+                        Reason = $"the app is on {appVersion} but the host is on {HostVersion}; the update has not converged",
+                    },
+                };
+            }
             if (reported.Back is { } back && (back.To != HostVersion || back.To != reported.Current))
             {
                 reported = reported with { Back = null };
@@ -514,7 +533,10 @@ public sealed class UpdateService
             }
         }
         if (refused is not null) { return RefusedNow(peer, ManageReason.Busy, refused); }
-        if (!Fresh(protection)) { log("update now: Bad-release protection could not be checked on this machine"); }
+        if (NotChecked(protection) is { } notChecked)
+        {
+            log($"update now: Bad-release protection could not be checked on this machine ({notChecked}); {press.By} pressed Update now through the warning");
+        }
         log($"update {(whenIdle ? "when idle" : "now")} asked for by {press.By}{(press.Name.Length > 0 ? $" \"{press.Name}\"" : "")} for {args.Release}");
         AsksChanged?.Invoke();
         return new UpdateCommandResult(UpdateAck.Accepted) { State = State() };
@@ -673,7 +695,8 @@ public sealed class UpdateService
             // Legacy sends no planned state, so nothing outside traces this restart to an update:
             // the host's own log does (SRE, settled decision 2).
             log($"restart for update: {state.Current ?? HostVersion} to {press.Release}, asked from {press.Signed.By}{(receipt.Value.Legacy ? "" : " (announced)")}" +
-                $"{(own ? "" : ", a slot of the shared restart cap")}");
+                $"{(own ? "" : ", a slot of the shared restart cap")}" +
+                $"{(NotChecked(protection) is { } notChecked ? $", bad-release protection {notChecked}: the person pressed through the warning" : "")}");
             _ = parts.Manage.NotifyUpdate(press.Signed, $"was updated now to {press.Release}");
             return UpdateDeparture.Committed(guard.Transition.ToString());
         }
@@ -703,6 +726,11 @@ public sealed class UpdateService
     bool Fresh(HaltPolicySnapshot snapshot) =>
         snapshot.Fresh && snapshot.Policy is { Body.Length: > 0 } && snapshot.At is { } at
         && at <= time.GetUtcNow() && time.GetUtcNow() - at < ReleaseDiscovery.GithubRevalidateEvery;
+
+    // host.log's audit of a press that went ahead unchecked (#3307): a verified policy not renewed
+    // in time is stale; none, or none with a known time, is unreadable. Null while fresh.
+    string? NotChecked(HaltPolicySnapshot snapshot) =>
+        Fresh(snapshot) ? null : snapshot.Policy is { Body.Length: > 0 } && snapshot.At is not null ? "stale" : "unreadable";
 
     string? PolicyCode(HaltPolicySnapshot snapshot, string release, bool batch, bool uncheckedPolicy) =>
         snapshot.Policy?.Halted?.Contains(release, StringComparer.Ordinal) == true ? "halted"
