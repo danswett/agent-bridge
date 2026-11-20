@@ -51,16 +51,20 @@ public sealed class AgentLiteSender(
             : caller.Kind != "session" || string.IsNullOrEmpty(caller.Session) || caller.Principal is not null)
             || !credentialLive(caller)) { return Out(LiteKind.Refused, NoCredential); }
 
-        // Presence comes from the relay, never from the caller: a device id, or a host name that names exactly one present host.
+        // Presence comes from the relay, never from the caller: a device id names only the host with that id (never one
+        // whose name looks like it), and any other input is a host name that must name exactly one present host.
         // One account is read here and held through signing and the opened channel, so a sign-in meanwhile sends nothing.
         var account = link.Account;
-        var ids = link.Presence.Where(p => p.Kind == "host" && p.Id != link.Self && (p.Id == input.Machine
-            || string.Equals(p.Name, input.Machine, StringComparison.OrdinalIgnoreCase))).Select(p => p.Id).Distinct().ToList();
+        var byId = Wire.IsDeviceId(input.Machine);
+        var ids = link.Presence.Where(p => p.Kind == "host" && p.Id != link.Self && (byId ? p.Id == input.Machine
+            : string.Equals(p.Name, input.Machine, StringComparison.OrdinalIgnoreCase))).Select(p => p.Id).Distinct().ToList();
         if (ids.Count > 1) { return Out(LiteKind.Refused, Ambiguous); }
         if (ids.Count == 0 || string.IsNullOrEmpty(account)) { return Out(LiteKind.Undeliverable, OfflineText); }
         var peerId = ids[0];
-        if (signer() is not { } key) { return Out(LiteKind.Refused, NoSigner); }
-        // Making the key can wait on its file lock; a caller that lapsed meanwhile signs nothing.
+        var signed = signer();
+        // Making the key can wait up to 30 s on its file lock; messaging turned off or a caller that lapsed meanwhile signs nothing.
+        if (!mode.On) { return new LiteOutcome(LiteKind.Off, "off", ""); }
+        if (signed is not { } key) { return Out(LiteKind.Refused, NoSigner); }
         if (!credentialLive(caller)) { return Out(LiteKind.Refused, NoCredential); }
 
         var from = new LiteSender(account, link.Self, Codec.Base64Url(SHA256.HashData(staticPublic)), caller.Session, script ? "" : instance,

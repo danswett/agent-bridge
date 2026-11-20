@@ -135,6 +135,41 @@ public class AgentLiteSenderTests
     }
 
     [Fact]
+    public async Task Messaging_turned_off_while_the_key_is_made_sends_nothing_and_reports_off()
+    {
+        using var r = new Rig();
+        Receiving(r);
+        var sender = new AgentLiteSender(r.Mode, r.Link, _ => true, () => { r.Mode.On = false; return r.Signer; }, OwnStatic);
+        var o = await sender.SendAsync(Caller, new LiteSendInput("node-b", "agent-b2", "hello"), default);
+        Assert.Equal((LiteKind.Off, "off"), (o.Kind, o.Code));
+        Assert.Equal(0, r.Link.Opened);
+        Assert.Null(r.Deliver.Text);
+        // A key that could not be made because the mode went off reports off, not a missing key.
+        r.Mode.On = true;
+        o = await new AgentLiteSender(r.Mode, r.Link, _ => true, () => { r.Mode.On = false; return null; }, OwnStatic)
+            .SendAsync(Caller, new LiteSendInput("node-b", "agent-b2", "hello"), default);
+        Assert.Equal((LiteKind.Off, "off"), (o.Kind, o.Code));
+        Assert.Equal(0, r.Link.Opened);
+    }
+
+    [Fact]
+    public async Task A_device_id_names_only_that_host_never_another_host_whose_name_looks_like_it()
+    {
+        using var r = new Rig();
+        var wrongHost = new string('4', 32);
+        Assert.True(Wire.IsDeviceId(Other));
+        r.Link.Hosts = [new PresenceEntry(wrongHost, Other, "host", DateTimeOffset.UnixEpoch)];
+        // The wrong host would accept: the envelope names it, so only the sender's choice keeps the text away.
+        var receiver = new LiteReceiver(new Mode(), r.Deliver);
+        var channel = new LiteChannel(Self, "host", OwnStatic, wrongHost, Account, true);
+        r.Link.Reply = (req, ct) => receiver.ReceiveAsync(channel, System.Text.Json.JsonSerializer.SerializeToElement(req), ct);
+        var o = await r.Send(machine: Other);
+        Assert.Equal((LiteKind.Undeliverable, AgentLiteSender.OfflineText), (o.Kind, o.Code));
+        Assert.Equal((0, 0), (r.Link.Opened, r.Signed));
+        Assert.Null(r.Deliver.Text);
+    }
+
+    [Fact]
     public async Task A_sign_in_while_the_key_is_made_keeps_the_send_on_the_account_that_chose_the_target()
     {
         using var r = new Rig();
