@@ -1,4 +1,4 @@
-#Requires -Version 7.4
+#Requires -Version 5.1
 # Offline: dotnet is a stand-in; no product tests, network or live services run.
 $ErrorActionPreference = 'Stop'
 $script:failures = 0
@@ -13,7 +13,7 @@ $scratch = Join-Path ([IO.Path]::GetTempPath()) "ab-product-retry-$([guid]::NewG
 New-Item -ItemType Directory $scratch | Out-Null
 $originalSummary = $env:GITHUB_STEP_SUMMARY
 $script:cases = @(
-    @{ Id = 'one'; Class = 'Example.Tests'; Method = 'Theory'; Name = 'Example.Tests.Theory(value: "a|b&(c)")' }
+    @{ Id = 'one'; Class = 'Example.Tests'; Method = 'Theory'; Name = 'Example.Tests.Theory(value: "  unfinished (draft)|a&b  ")' }
     @{ Id = 'two'; Class = 'Example.Tests'; Method = 'Theory'; Name = 'Example.Tests.Theory(value: "passed")' }
 )
 function Write-Trx([string]$Directory, [string]$Assembly, [string[]]$Outcomes, [string]$State = 'Failed') {
@@ -24,7 +24,8 @@ function Write-Trx([string]$Directory, [string]$Assembly, [string[]]$Outcomes, [
         "<UnitTestResult testId='$($c.Id)' testName='$name' outcome='$($Outcomes[$i])' />"
     }
     $definitions = foreach ($c in $script:cases) {
-        "<UnitTest id='$($c.Id)' storage='$Assembly.dll'><TestMethod className='$($c.Class)' name='$($c.Method)' /></UnitTest>"
+        $method = [Security.SecurityElement]::Escape($c.Method)
+        "<UnitTest id='$($c.Id)' storage='$Assembly.dll'><TestMethod className='$($c.Class)' name='$method' /></UnitTest>"
     }
     $failed = @($Outcomes | Where-Object { $_ -eq 'Failed' }).Count
     $passed = @($Outcomes | Where-Object { $_ -eq 'Passed' }).Count
@@ -40,7 +41,8 @@ function dotnet {
     $global:LASTEXITCODE = 0
     if ($args[0] -eq 'tool') {
         if ($script:scenario -ne 'no-trx') {
-            Write-Trx $script:first 'Example.Tests' @('Failed', 'Passed')
+            $outcomes = if ($script:scenario -eq 'theory-method') { @('Failed', 'Failed') } else { @('Failed', 'Passed') }
+            Write-Trx $script:first 'Example.Tests' $outcomes
             if ($script:scenario -ne 'missing-project') {
                 $otherOutcome = if ($script:scenario -eq 'multiple') { 'Failed' } else { 'Passed' }
                 Write-Trx $script:first 'Other.Tests' @($otherOutcome) 'Completed'
@@ -80,7 +82,16 @@ function dotnet {
     $outcome = if ($script:scenario -in 'twice-red', 'adapter-twice-red') { 'Failed' } elseif ($script:scenario -eq 'retry-skipped') { 'NotExecuted' } else { 'Passed' }
     $assembly = [IO.Path]::GetFileNameWithoutExtension($args[1])
     Write-Trx $directory $assembly @($outcome) 'Completed'
-    if ($script:scenario -eq 'broadened-retry') { Write-Trx $directory $assembly @('Passed', 'Passed') 'Completed' }
+    if ($script:scenario -in 'broadened-retry', 'theory-rows', 'theory-method', 'theory-sibling-fails') {
+        $siblingOutcome = if ($script:scenario -eq 'theory-sibling-fails') { 'Failed' } else { 'Passed' }
+        Write-Trx $directory $assembly @('Passed', $siblingOutcome) 'Completed'
+        if ($script:scenario -eq 'broadened-retry') {
+            $path = Join-Path $directory "$assembly.trx"
+            $xml = [xml](Get-Content $path -Raw)
+            $xml.TestRun.TestDefinitions.UnitTest[1].TestMethod.name = 'Unrelated'
+            $xml.Save($path)
+        }
+    }
     if ($script:scenario -eq 'wrong-case') {
         $path = Join-Path $directory 'Example.Tests.trx'
         $old = [Security.SecurityElement]::Escape($script:cases[0].Name)
@@ -118,10 +129,23 @@ try {
     $retry = $r.Calls[1]
     $filter = $retry[[array]::IndexOf($retry, '--filter') + 1]
     Assert ([IO.Path]::GetFileName($retry[1]) -eq 'Example.Tests.csproj' -and '--no-build' -in $retry) 'only the failed project runs again without a build'
-    Assert ($filter.Contains('FullyQualifiedName=Example.Tests.Theory&DisplayName=Example.Tests.Theory\(value: "a\|b\&\(c\)"\)')) 'the filter selects the failed theory case and escapes filter metacharacters'
-    Assert (-not $filter.Contains('passed')) 'a passed case of the same theory is not selected'
+    Assert ($filter -ceq 'FullyQualifiedName=Example.Tests.Theory') 'spaces, quotes and parentheses in theory arguments never enter the retry filter'
     Assert ($r.Summary.Contains([Net.WebUtility]::HtmlEncode($script:cases[0].Name)) -and $r.Summary.Contains('https://github.com/danswett/agent-bridge/issues/3191')) 'the summary names every retry and links its flake ledger'
     Assert (Test-Path (Join-Path $script:first 'Example.Tests.trx')) 'original failure evidence is retained'
+    $script:cases[0].Method = 'Theory(value: "  unfinished (draft)|a&b  ")'
+    $r = Run-Case 'theory-rows'
+    $retry = $r.Calls[1]
+    Assert ($r.Code -eq 0 -and $r.Calls.Count -eq 2 -and $retry[[array]::IndexOf($retry, '--filter') + 1] -ceq 'FullyQualifiedName=Example.Tests.Theory') 'theory suffixes in TRX methods are stripped and passing sibling rows are accepted'
+    $script:cases[0].Method = 'Theory'
+    $r = Run-Case 'theory-method'
+    $retry = $r.Calls[1]
+    Assert ($r.Code -eq 0 -and $r.Calls.Count -eq 2 -and $retry[[array]::IndexOf($retry, '--filter') + 1] -ceq 'FullyQualifiedName=Example.Tests.Theory') 'two failed rows of one theory produce one method clause and one retry'
+    $theoryCase = $script:cases[0]
+    $script:cases[0] = @{ Id = 'one'; Class = 'Example.Tests'; Method = 'Plain'; Name = 'Example.Tests.Plain' }
+    $r = Run-Case 'plain'
+    $retry = $r.Calls[1]
+    Assert ($r.Code -eq 0 -and $r.Calls.Count -eq 2 -and $retry[[array]::IndexOf($retry, '--filter') + 1] -ceq 'FullyQualifiedName=Example.Tests.Plain') 'a plain failed case still retries once by its fully qualified method'
+    $script:cases[0] = $theoryCase
     $r = Run-Case 'solution' 'all.slnx'
     Assert ($r.Code -eq 0 -and $r.Calls.Count -eq 2) 'whole-solution and selected-solution targets both retry'
     $runnerTemp = New-Item -ItemType Directory (Join-Path $scratch 'runner-temp')
@@ -137,7 +161,7 @@ try {
         $r = Run-Case $name
         Assert ($r.Code -ne 0 -and $r.Calls.Count -eq 1) "$name fails closed without a retry"
     }
-    foreach ($name in 'twice-red', 'retry-no-trx', 'retry-crash', 'retry-skipped', 'wrong-case', 'broadened-retry') {
+    foreach ($name in 'twice-red', 'retry-no-trx', 'retry-crash', 'retry-skipped', 'wrong-case', 'broadened-retry', 'theory-sibling-fails') {
         $r = Run-Case $name
         Assert ($r.Code -ne 0 -and $r.Calls.Count -eq 2) "$name remains red without a third attempt"
     }
@@ -187,7 +211,7 @@ try {
             Assert ([bool]$message) "real-shaped $mutation evidence is refused"
         }
     }
-    $workflow = Get-Content -Raw (Join-Path $PSScriptRoot '..' '.github' 'workflows' 'ci.yml')
+    $workflow = Get-Content -Raw (Join-Path $PSScriptRoot '..\.github\workflows\ci.yml')
     Assert ($workflow.Contains("if: env.DOTNET_TARGET != '' && matrix.os == 'windows-latest'")) 'only windows-latest enters the retry step'
     Assert ($workflow.Contains("if: env.DOTNET_TARGET != '' && matrix.os != 'windows-latest'")) 'other product matrix legs retain the original coverage step'
     Assert ($workflow.Contains('exit (Invoke-ProductTestRetry -Target $env:DOTNET_TARGET -Filter $env:TEST_FILTER)')) 'the Windows step propagates the final retry exit'

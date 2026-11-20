@@ -545,9 +545,12 @@ public sealed class HostManager
     // before its begin (what the new version announces) is recorded over the first's.
     // preflight: names what already keeps the update from replacing the installation, or null; asked
     // before anything is recorded or stopped, so an update that cannot finish costs no host stop
-    // (#1092: a service holding a file made a retry loop that dropped the relay every 3 minutes).
+    // (#1092: a service holding a file made a retry loop that dropped the relay every 3 minutes),
+    // and asked again after the stop, before apply, for what took a file during the stop's waits.
     public async Task WaitForInstallationFilesAsync(Func<CancellationToken, string?>? preflight, Action<string>? waiting = null, TimeProvider? time = null, InstallationFiles.Budget? fileBudget = null)
     {
+        fileBudget ??= new InstallationFiles.Budget(time ?? Time);
+        fileBudget.LockedFiles ??= () => InstallationFiles.LockedImages(layout.AppFolder);
         if (await InstallationFiles.AwaitReleaseAsync(preflight, time ?? Time, quit.Token, waiting, Log, fileBudget) is { } blockers)
         {
             throw new UpdateBlockedException(blockers);
@@ -559,7 +562,7 @@ public sealed class HostManager
         fileBudget ??= new InstallationFiles.Budget(Time);
         if (waitForFiles) { await WaitForInstallationFilesAsync(preflight, fileBudget: fileBudget); }
         await CheckInstallationFilesAsync(preflight, fileBudget);
-        Task stop;
+        Task<Dictionary<int, DateTimeOffset?>> stop;
         lock (updating)
         {
             if (quitting) { throw new OperationCanceledException("the app is quitting"); }
@@ -569,20 +572,31 @@ public sealed class HostManager
             // On the thread pool, so Quit can wait for it from the UI thread.
             // The other profiles' hosts first, which the update ends without a stop of their own.
             var giveUp = quit.Token;
-            stop = updateStop = Task.Run(async () =>
+            updateStop = stop = Task.Run(async () =>
             {
-                var own = await OwnPidAsync();
-                var ownStarted = own is { } o ? processes.StartedAt(o) : null;
+                (int Pid, DateTimeOffset? Started)? own = await OwnPidAsync() is { } o ? (o, processes.StartedAt(o)) : null;
                 await OthersDoneAsync(own, giveUp);
-                await StopAsync(ProbeWait, CancellationToken.None, giveUp, own is { } h ? (h, ownStarted) : null);
+                await StopAsync(ProbeWait, CancellationToken.None, giveUp, own);
                 // Again just before the hand-over: every other host's hold is fresh, and one that
                 // let a probe start while this host was waited for is waited for too.
-                await OthersDoneAsync(own, giveUp);
+                return await OthersDoneAsync(own, giveUp);
             });
         }
         try
         {
-            await stop;
+            var settled = await stop;
+            // The stop waits for probes and other profiles, minutes at most, after the last scan;
+            // a process taking an image meanwhile refuses here and the host comes back (#2884 review).
+            await CheckInstallationFilesAsync(preflight, fileBudget, fresh: true);
+            // A host started from the package during that scan (up to 120 s) was never held, and the
+            // scan passes the package's own processes: the update would end it mid-probe. One not
+            // held with a known start time, or since restarted under its pid, refuses (#2884 review);
+            // settled carries each start time as held, not as read once the holds were done (#3241).
+            if (PackageHosts().Where(p => settled.GetValueOrDefault(p) is not { } began || processes.StartedAt(p) != began)
+                .Select(p => (int?)p).FirstOrDefault() is { } arrived)
+            {
+                throw new HostBusyException($"a host running from this installation (pid {arrived}) was not one held before the last file check, so nothing was installed; try again");
+            }
             // Held while applying, so a Quit on another thread waits for it rather than finding the
             // host stopped and starting it under the update.
             lock (updating)
@@ -611,9 +625,17 @@ public sealed class HostManager
         finally { lock (updating) { installing = false; } }
     }
 
-    public async Task CheckInstallationFilesAsync(Func<CancellationToken, string?>? preflight, InstallationFiles.Budget budget)
+    public async Task CheckInstallationFilesAsync(Func<CancellationToken, string?>? preflight, InstallationFiles.Budget budget, bool fresh = false)
     {
-        if (await budget.ProbeOnceAsync(preflight, quit.Token) is { } blockers) { throw new UpdateBlockedException(blockers); }
+        budget.LockedFiles ??= () => InstallationFiles.LockedImages(layout.AppFolder);
+        string? blockers;
+        try { blockers = await budget.ProbeOnceAsync(preflight, quit.Token, fresh); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            Log($"installation file holders could not be checked: {e.Message}");
+            blockers = InstallationFiles.Unknown;
+        }
+        if (blockers is not null) { throw new UpdateBlockedException(blockers); }
     }
 
     // The app quitting: an update that had stopped the host, or was stopping it, and not applied,
@@ -959,23 +981,37 @@ public sealed class HostManager
     // cannot confirm stops the update. They are left running: the update ends them once this host
     // has stopped. Every one is held again each round, so no hold lapses while another is waited
     // for, and the package is looked at again once they are done: a host started during the wait
-    // was never held. own: this profile's host, which its own stop holds.
-    async Task OthersDoneAsync(int? own, CancellationToken ct)
+    // was never held. own: this profile's host and its start time, which its own stop holds. The
+    // package as settled, each host with the start time it was held under (this profile's as read
+    // before its stop, none if unread, so one under its pid refuses).
+    async Task<Dictionary<int, DateTimeOffset?>> OthersDoneAsync((int Pid, DateTimeOffset? Started)? own, CancellationToken ct)
     {
         var deadline = Time.GetUtcNow() + ProbeWait;
         while (true)
         {
-            var seen = await OthersHeldAsync(own, deadline, ct);
-            if (PackageHosts().All(p => p == own || seen.Contains(p))) { return; }
+            var seen = await OthersHeldAsync(own?.Pid, deadline, ct);
+            var package = PackageHosts();
+            // A held host can end while another is held and its pid go to a host never held, which
+            // the pid alone took for it (#3241): the start time it was held under tells them apart.
+            // Another profile's is held again; this profile's, which nothing here can hold, refuses.
+            if (own is { Started: { } began } h && package.Contains(h.Pid) && processes.StartedAt(h.Pid) != began)
+            {
+                throw new HostBusyException($"a host running from this installation (pid {h.Pid}) was not this profile's host held for the update, so nothing was installed; try again");
+            }
+            if (package.All(p => p == own?.Pid || seen.TryGetValue(p, out var at) && processes.StartedAt(p) == at))
+            {
+                return package.Distinct().ToDictionary(p => p, p => p == own?.Pid ? own.Value.Started : seen[p]);
+            }
             if (Time.GetUtcNow() >= deadline) { throw new HostBusyException($"nothing was stopped: hosts kept starting from this installation for {FormatWait(ProbeWait)}; try again later"); }
         }
     }
 
-    // One look at the package: every other host of it held until none is busy. The hosts held.
-    async Task<HashSet<int>> OthersHeldAsync(int? own, DateTimeOffset deadline, CancellationToken ct)
+    // One look at the package: every other host of it held until none is busy. The hosts held, each
+    // with its start time.
+    async Task<Dictionary<int, DateTimeOffset?>> OthersHeldAsync(int? own, DateTimeOffset deadline, CancellationToken ct)
     {
         var package = PackageHosts();
-        var seen = new HashSet<int>();
+        var seen = new Dictionary<int, DateTimeOffset?>();
         var reached = new List<(string Who, LocalChannel Channel)>();
         try
         {
@@ -998,12 +1034,14 @@ public sealed class HostManager
                     throw new HostBusyException($"{who} could not say whether a usage probe it started is still finishing, so nothing was stopped: {e.Message}");
                 }
                 if (!package.Contains(pid)) { await ch.DisposeAsync(); continue; }
-                seen.Add(pid);
+                // Read between its status and its holds through this same pipe, which answer only
+                // while it runs: the start time is that host's, not a later one's under its pid.
+                seen[pid] = processes.StartedAt(pid);
                 reached.Add((who, ch));
             }
             // A host of the package no pipe reached (one at another elevation refuses this app's
             // connection, say) cannot be held, and the update would end it all the same.
-            if (package.Where(p => p != own && !seen.Contains(p)).Select(p => (int?)p).FirstOrDefault() is { } missed)
+            if (package.Where(p => p != own && !seen.ContainsKey(p)).Select(p => (int?)p).FirstOrDefault() is { } missed)
             {
                 throw new HostBusyException($"a host running from this installation (pid {missed}) could not be reached to hold its usage probes, so nothing was stopped");
             }

@@ -846,9 +846,9 @@ function begin(account) {
   // goes on, whose key that channel's handshake proved.
   const updates = new UpdateControl({
     fleet,
-    sign: ({ machineKey, release, accept, request }) => {
+    sign: ({ machineKey, release, accept, request, unchecked }) => {
       if (!machineKey) { return Promise.reject(new Error('not connected to that machine')); }
-      return signUpdateNow({ key: identity.key, deviceId: identity.deviceId, machinePublic: machineKey, release, accept, request });
+      return signUpdateNow({ key: identity.key, deviceId: identity.deviceId, machinePublic: machineKey, release, accept, request, unchecked });
     },
     session: (hostId, sessionId) => hosts.sessions.get(hostId, sessionId),
     nameOf: (id) => hosts.nameOf(id),
