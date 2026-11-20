@@ -585,6 +585,11 @@ easing in, its duration out, and how far it travels.
 | Reorder | The session list (#164, #592) | A touch hold then drag; a mouse or pen drag; Alt+↑/↓; Move up or Move down; a screen reader's move action; an order change during a return's grace (§6.1, #950) | The whole card lifts, then follows the pointer 1:1 with no easing. Its neighbours ease one slot aside, leaving a card-sized gap where it will land: no insertion line. The order commits at release; the card settles into the gap and lowers. A key, menu or screen-reader move trades the moved card and its neighbours together, without a lift. Automatic return updates use the move, never the lift; return-grace order changes retarget changed rows from their drawn places. Only rows whose places changed move | `reorder`: standard, standard | Windows: pointer-driven in-list drag, Composition `Translation`, not OLE drag, its ghost or caption, nor `ReorderThemeTransition`. PWA: Pointer Events and transforms with frame-coalesced FLIP, not HTML5 drag-and-drop. Apple and Android: system list drag mapped to this contract | Instant gap, neighbours, drop and cancel. Only the held card follows the pointer |
 | Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
 
+Windows' reply-box exception line fades in place with `acknowledge`, including its
+reduced-motion cross-fade. On clearing, a drawn-only copy fades out with the same
+entry's exit token; it has no hit testing or automation presence. The live line's
+words and announcements change immediately, without waiting for that copy.
+
 Windows animates the list's existing selection bar using `selection`: it slides
 between realized rows intersecting the viewport, or fades in when the previous row
 is off screen. First draw and reduced motion are instant; recycling and unloading

@@ -100,6 +100,25 @@ public sealed class MotionCatalogue
     public static bool Loops(bool animations) => animations;
 }
 
+public enum ExceptionLineMotion { None, Enter, Leave }
+public readonly record struct ExceptionLineChange(ExceptionLineMotion Motion, string Text, Tone Tone);
+
+// Only changed exception words move; a cleared line leaves a drawn-only copy of its last words.
+public sealed class ExceptionLineFade
+{
+    string text = "";
+    Tone tone;
+
+    public ExceptionLineChange Read(string next, Tone nextTone, bool reset = false)
+    {
+        var old = new ExceptionLineChange(ExceptionLineMotion.Leave, text, tone);
+        var changed = text != next;
+        (text, tone) = (next, nextTone);
+        if (reset || !changed) { return new(ExceptionLineMotion.None, next, nextTone); }
+        return next.Length > 0 ? new(ExceptionLineMotion.Enter, next, nextTone) : old;
+    }
+}
+
 public enum SelectionMotionKind { None, Slide, Fade }
 public readonly record struct SelectionMove(SelectionMotionKind Kind, double X = 0, double Y = 0);
 
