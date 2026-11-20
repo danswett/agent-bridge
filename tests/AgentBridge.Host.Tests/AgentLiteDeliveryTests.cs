@@ -37,10 +37,11 @@ public sealed class AgentLiteDeliveryTests
         int reads;
         public readonly List<ReplyRequest> Typed = []; public readonly List<string> Log = [];
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches;
-        public Fixture() => Launches = new(ProcessOf);
+        public Fixture() => Launches = new(ProcessOf, (started, pid) => Process?.Id == pid ? Process.StartedAt == started.StartedAt : null);
         public SessionProcess? Process = new(42, DateTimeOffset.UnixEpoch); public SessionProcess? ProcessOf(string id) => id == Target ? Process : null;
+        public void FleetLaunch() => Launches.FleetLaunched(Target, new(42, DateTimeOffset.UnixEpoch));
         public Func<AgentBridge.Roster.RosterVerifier?> Roster = () => null;
-        public Question? Asking;
+        public Question? Asking; public ISessionReplier? Replier;
         public LiteDeliver Build() => new([
             new FleetTargetGate(Launches, () => Roster()),
             new ForcedAskGate(Launches),
@@ -50,7 +51,7 @@ public sealed class AgentLiteDeliveryTests
                 AllowAllTargets = AllowAllTargets,
                 AllowAllTargetSessions = AllowAllTargetSessions
             })
-        ], this, this, this, Log.Add, Clock);
+        ], this, Replier ?? this, this, Log.Add, Clock);
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -189,7 +190,7 @@ public sealed class AgentLiteDeliveryTests
     {
         var f = new Fixture { Held = Hold }; f.Launch(LaunchProtocol.Ask);
         Assert.True((await SendTo(f, Target)).Typed);
-        Assert.True(Assert.Single(f.Typed).StillCurrent!());
+        Assert.Null(Assert.Single(f.Typed).StillCurrent);
         Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
         f.Held = null;
         Assert.True((await SendTo(f, Node)).Typed);
@@ -269,6 +270,7 @@ public sealed class AgentLiteDeliveryTests
         f.AllowAllTargetSessions = [Target];
         Assert.Equal(allowed ? new LiteDelivery(true, null) : new LiteDelivery(false, "notReplyTarget"), await Send(f));
         Assert.Equal(allowed ? 1 : 0, f.Typed.Count);
+        Assert.All(f.Typed, typed => Assert.Null(typed.StillCurrent)); // no injection-time fence, as on main
     }
     [Theory]
     [InlineData("*")]
@@ -352,7 +354,7 @@ public sealed class AgentLiteDeliveryTests
         using var home = new global::Fixture();
         var events = home.CopilotSession(Target, 42);
         global::Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
-        home.Processes.Run(AgentKind.Copilot, 42, startedAt: DateTimeOffset.UnixEpoch); // the process f.ProcessOf names
+        home.Processes.Run(AgentKind.Copilot, 42);
         var f = new Fixture();
         f.Launch(LaunchProtocol.Ask);
         f.OnInject = plan => global::Fixture.Append(events, Copilot.User(plan.Sends[0].Text, 4));
@@ -385,6 +387,23 @@ public sealed class AgentLiteDeliveryTests
         }
         else { Assert.Equal(AnswerOutcome.Delivered, (await reply!.WaitAsync(TimeSpan.FromSeconds(10))).Outcome); }
         Assert.Equal(typed ? 1 : 0, f.Plans.Count);
+    }
+
+    // Relay test 3 (owner, Nov 20 12:33 PT): a forced-ask or listed allow-all session launched moments ago has no
+    // transcript before its first prompt and still gets its first relay message through the real replier: only a
+    // fleet-target delivery is authorized again at injection, behind ReplyService's transcript fence.
+    [Theory, InlineData(LaunchProtocol.Ask), InlineData(LaunchProtocol.AllowAll)]
+    public async Task A_forced_ask_or_listed_session_with_no_transcript_yet_gets_its_first_relay_message(string permissions)
+    {
+        using var home = new global::Fixture();
+        var events = home.CopilotSession(Target, 42);
+        home.Processes.Run(AgentKind.Copilot, 42, startedAt: DateTimeOffset.UnixEpoch);
+        var f = new Fixture { AllowAllTargets = true, AllowAllTargetSessions = [Target] }; f.Launch(permissions);
+        f.OnInject = plan => global::Fixture.Append(events, Copilot.User(plan.Sends[0].Text, 1));
+        f.Replier = new ReplyService(new DeliveryGate(), f, home.Processes, new NoBridge(), new NoGuard(), f, new ReplyOptions { CopilotHome = home.CopilotHome,
+            PlatformSupported = true, PreRead = false, ConfirmTimeout = TimeSpan.FromSeconds(1), PollInterval = TimeSpan.FromMilliseconds(10) });
+        Assert.Equal(new LiteDelivery(true, null), await Send(f));
+        Assert.Single(f.Plans);
     }
 
     sealed class NoBridge : IAgentHaBridgeProbe { public string? Active() => null; }
@@ -440,7 +459,7 @@ public sealed class AgentLiteDeliveryTests
     public async Task An_allow_all_fleet_target_is_typed_only_for_a_serving_host_sender_and_ask_mode_is_unchanged()
     {
         var (roster, host) = VerifiedHost();
-        var f = new Fixture(); f.Launch(LaunchProtocol.AllowAll); f.Launches.FleetLaunched(Target);
+        var f = new Fixture(); f.Launch(LaunchProtocol.AllowAll); f.FleetLaunch();
         Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await f.Build().DeliverAsync(Envelope("hi", machine: host), "hi", default));
         f.Roster = roster;
         Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await f.Build().DeliverAsync(Envelope("hi"), "hi", default));
@@ -459,7 +478,7 @@ public sealed class AgentLiteDeliveryTests
     {
         var (roster, host) = VerifiedHost();
         var f = new Fixture { Roster = roster, Status = SessionStatus.Waiting, Asking = new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "Allow **Bash**?", AskedAt = DateTimeOffset.UnixEpoch } };
-        f.Launch(LaunchProtocol.AllowAll); f.Launches.FleetLaunched(Target);
+        f.Launch(LaunchProtocol.AllowAll); f.FleetLaunch();
         Assert.Equal(new LiteDelivery(false, "busy"), await f.Build().DeliverAsync(Envelope("approve", machine: host), "approve", default));
         f.Status = SessionStatus.Idle;
         Assert.Equal(new LiteDelivery(false, "busy"), await f.Build().DeliverAsync(Envelope("1", machine: host), "1", default));
@@ -473,7 +492,7 @@ public sealed class AgentLiteDeliveryTests
     public async Task A_waiting_fleet_message_is_authorized_again_at_injection(string change)
     {
         var (roster, host) = VerifiedHost();
-        var f = new Fixture { Roster = roster }; f.Launch(LaunchProtocol.AllowAll); f.Launches.FleetLaunched(Target);
+        var f = new Fixture { Roster = roster }; f.Launch(LaunchProtocol.AllowAll); f.FleetLaunch();
         f.OnReply = change switch { "revoked" => () => f.Roster = () => null, "replaced" => () => f.Process = new(42, DateTimeOffset.UnixEpoch.AddMinutes(1)), _ => null };
         var delivered = change == "unchanged";
         Assert.Equal(new LiteDelivery(delivered, delivered ? null : "notReplyTarget"), await f.Build().DeliverAsync(Envelope("hi", machine: host), "hi", default));

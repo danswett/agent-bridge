@@ -51,7 +51,7 @@ public sealed class LiteDeliver(
         var byNode = false;
         if (session is null && FromNodeId(target) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
         if (session is null) { return Refused(LiteCodes.NoSuchSession); }
-        if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
+        if (await AllowedAsync(envelope, id) is not { } allowedBy) { return Refused(LiteCodes.NotReplyTarget); }
         if (session.Agent != AgentKind.Copilot || session.ProcessId is not { } pid) { return Refused(LiteCodes.NotReplyTarget); }
         if (!Idle(session)) { return Refused(LiteCodes.Busy); }
         if (!await ComposerEmptyAsync(pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
@@ -62,10 +62,12 @@ public sealed class LiteDeliver(
         if (!Idle(now)) { return Refused(LiteCodes.Busy); }
         if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
-        // just before the injector starts (Stale, refused below); every gate (all synchronous) is asked again there, so a sender or target that stopped qualifying meanwhile gets nothing typed.
+        // just before the injector starts (Stale, refused below). Only a fleet target's delivery asks every gate again there, so a
+        // sender or target that stopped qualifying meanwhile gets nothing typed; a forced-ask or listed allow-all one keeps main's
+        // path, since StillCurrent also turns on the transcript fence a session with no first prompt yet fails (relay test 3).
         var revoked = false;
-        bool StillCurrent() => (!byNode || FromNodeId(target) == id) && !(revoked = AllowedAsync(envelope, id) is not { IsCompletedSuccessfully: true, Result: true });
-        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true, StillCurrent = StillCurrent };
+        bool Authorized() => (!byNode || FromNodeId(target) == id) && !(revoked = AllowedAsync(envelope, id) is not { IsCompletedSuccessfully: true, Result: not null });
+        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true, StillCurrent = allowedBy is FleetTargetGate ? Authorized : byNode ? () => FromNodeId(target) == id : null };
         var result = await replier.ReplyAsync(reply, null, ct);
         return result.Outcome switch
         {
@@ -77,7 +79,7 @@ public sealed class LiteDeliver(
     }
 
     // Any gate allowing is enough (forced-ask OR allowlisted); one that throws allows nothing.
-    async Task<bool> AllowedAsync(VerifiedEnvelope envelope, string target)
+    async Task<IReplyTargetGate?> AllowedAsync(VerifiedEnvelope envelope, string target)
     {
         foreach (var gate in gates)
         {
@@ -85,11 +87,11 @@ public sealed class LiteDeliver(
             {
                 var decision = await gate.CheckAsync(envelope, target);
                 log($"lite deliver: to {Clean(target)} request {Clean(envelope.Body.Request)} gate {gate.GetType().Name}: {(decision.Allowed ? "allowed" : "refused")}{(decision.Reason is { } reason ? ": " + Clean(reason) : "")}");
-                if (decision.Allowed) { return true; }
+                if (decision.Allowed) { return gate; }
             }
             catch (Exception e) when (e is not OperationCanceledException) { log($"lite deliver: to {Clean(target)} request {Clean(envelope.Body.Request)} gate {gate.GetType().Name}: failed: {e.GetType().Name}"); }
         }
-        return false;
+        return null;
     }
 
     // The roster and fleet.find publish only the lossy HA node id, so a fleet sender can name no

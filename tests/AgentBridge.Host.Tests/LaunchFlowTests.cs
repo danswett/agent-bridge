@@ -578,7 +578,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Resumable(Restored, app, "Restored");
         var launcher = Launcher(Config());
         var fleet = new List<string>();
-        launcher.FleetTargetStarted += id => { lock (fleet) { fleet.Add(id); } };
+        launcher.FleetTargetStarted += (id, _) => { lock (fleet) { fleet.Add(id); } };
 
         var launched = await launcher.LaunchFleetTargetAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "home-assistant", null);
         var restored = await launcher.ResumeAsync(new ResumeAsk(Restored, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
@@ -594,13 +594,36 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     {
         var launcher = Launcher(Config());
         var fleet = new List<string>();
-        launcher.FleetTargetStarted += id => { lock (fleet) { fleet.Add(id); } };
+        launcher.FleetTargetStarted += (id, _) => { lock (fleet) { fleet.Add(id); } };
 
         var plain = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-1");
         var audited = await launcher.LaunchAuditedAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-2", _ => _ => { });
 
         Assert.All([plain, audited], r => Assert.Equal(LaunchOutcome.Started, r.Outcome));
         lock (fleet) { Assert.Empty(fleet); }
+    }
+
+    // The registry keeps the process the launch started, as it started it: one that takes the session id
+    // before the note (here in a SessionStarted handler, which runs first) inherits nothing; it leaves on exit.
+    [Theory, InlineData(false), InlineData(true)]
+    public async Task A_fleet_target_is_the_process_its_launch_started_never_one_that_replaced_it_before_the_note(bool replaced)
+    {
+        var launcher = Launcher(Config());
+        var log = new AgentBridge.Host.Lite.LiteLaunchLog(source.ProcessOf, launcher.Owns);
+        launcher.SessionStarted += (id, _) =>
+        {
+            if (!replaced) { return; }
+            starter.Exit(starter.Pids[0]);
+            f.CopilotSession(id, 7777, lockWrite: DateTimeOffset.UtcNow.AddSeconds(1));
+            f.Processes.Run(AgentKind.Copilot, 7777, $"copilot --session-id {id}", DateTimeOffset.UtcNow);
+            source.RefreshAsync().GetAwaiter().GetResult();
+        };
+        launcher.FleetTargetStarted += log.FleetLaunched;
+        var launched = await launcher.LaunchFleetTargetAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "home-assistant", null);
+        Assert.Equal((LaunchOutcome.Started, !replaced), (launched.Outcome, log.IsFleetTarget(launched.Session!)));
+        starter.Exit(starter.Pids[0]);
+        await source.RefreshAsync();
+        Assert.False(log.IsFleetTarget(launched.Session!));
     }
 
     // #780 Host B: a restore is a resume through the same path as one from Launch, with nothing typed

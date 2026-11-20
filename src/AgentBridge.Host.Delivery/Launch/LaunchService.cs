@@ -270,8 +270,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // The same moment, only for a session Home Assistant's launch path or an agent under a grant
     // started: never a person's app or PWA launch, a restore or a verification launch. The lite
-    // fleet-target gate's registry; raised by this host alone. A handler that throws costs only itself.
-    public event Action<string>? FleetTargetStarted;
+    // fleet-target gate's registry; raised by this host alone, with the process the launch started as it
+    // started it (pid and start time), never one read later. A handler that throws costs only itself.
+    public event Action<string, Started>? FleetTargetStarted;
+    public bool? Owns(Started started, int processId) => starter.Owns(started, processId);
 
     // A launch already answered Unconfirmed (its window not seen ready in time) whose window is seen
     // ready later, while it is still followed: the restore record counts and shows it restored then
@@ -1703,7 +1705,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         p.NotedId = id;
         try { SessionStarted?.Invoke(id, p.Launched); }
         catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the restore record could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
-        try { if (p.FleetTarget) { FleetTargetStarted?.Invoke(id); } }
+        try { if (p.FleetTarget) { FleetTargetStarted?.Invoke(id, p.Started); } }
         catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the fleet-target registry could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
     }
 

@@ -40,21 +40,23 @@ public interface ILiteLaunches
 }
 
 // unknown and refused: the safe direction. In memory only, so a restart forgets every fleet target
-// (relay A has no persistence). A fleet entry holds the exact id and the process this host launched (pid
-// and start time): a later process taking that id is not it, and the entry leaves once seen gone or replaced.
-public sealed class LiteLaunchLog(Func<string, SessionProcess?>? current = null) : ILiteLaunches
+// (relay A has no persistence). A fleet entry holds the exact id and the process LaunchService started for it
+// (pid and start time, captured as it started it): a session whose live process is not that one or under it
+// (an npm shim's cmd.exe starts the agent) is not it, and the entry leaves once seen gone or replaced.
+public sealed class LiteLaunchLog(Func<string, SessionProcess?>? current = null, Func<Started, int, bool?>? owns = null) : ILiteLaunches
 {
     readonly ConcurrentDictionary<string, string> modes = new(StringComparer.Ordinal);
-    readonly ConcurrentDictionary<string, SessionProcess> fleet = new(StringComparer.Ordinal);
+    readonly ConcurrentDictionary<string, Started> fleet = new(StringComparer.Ordinal);
     public void Launched(string session, LaunchedWith with) => modes[session] = with.Permissions;
     public string? PermissionsOf(string session) => modes.GetValueOrDefault(session);
-    // An unknown start time cannot be told from a successor's, so it is never recorded.
-    public void FleetLaunched(string session) { if (current?.Invoke(session) is { StartedAt: not null } p) { fleet[session] = p; } else { fleet.TryRemove(session, out _); } }
+    public void FleetLaunched(string session, Started started) => fleet[session] = started;
     public bool IsFleetTarget(string session)
     {
-        if (!fleet.TryGetValue(session, out var launched) || current?.Invoke(session) == launched) { return launched is not null; }
-        fleet.TryRemove(new(session, launched)); // only this entry, never a newer launch's
-        return false;
+        if (!fleet.TryGetValue(session, out var launched)) { return false; }
+        // Unknown (the started process gone or its tree unreadable) refuses and keeps the entry; a known other process removes it.
+        var own = current?.Invoke(session) is { StartedAt: not null } live ? owns?.Invoke(launched, live.Id) : false;
+        if (own == false) { fleet.TryRemove(new(session, launched)); } // only this entry, never a newer launch's
+        return own == true;
     }
 }
 
@@ -65,7 +67,7 @@ public static class LiteComposition
     public static LiteDeliver Create(ISessionSource source, ISessionReplier replier, IConsoleInjector injector, Func<AgentMessagingSettings> currentSettings, LaunchService launcher,
         Func<RosterVerifier?> roster, Action<string> log)
     {
-        var launches = new LiteLaunchLog(source.ProcessOf);
+        var launches = new LiteLaunchLog(source.ProcessOf, launcher.Owns);
         launcher.SessionStarted += launches.Launched;
         // Only the host raises this, from its own launch path; nothing a caller or session sends sets it.
         launcher.FleetTargetStarted += launches.FleetLaunched;

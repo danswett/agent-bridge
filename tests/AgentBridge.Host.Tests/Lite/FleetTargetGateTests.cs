@@ -16,10 +16,12 @@ public sealed class FleetTargetGateTests
     readonly RosterVerifier signed;
     readonly LiteLaunchLog launches;
     SessionProcess? current = new(42, DateTimeOffset.UnixEpoch);
+    bool unreadable;
 
     public FleetTargetGateTests()
     {
-        launches = new(id => id == Target ? current : null);
+        // As AgentStarter.Owns: whether the live process is the one started (same pid and start time); null when it cannot be told.
+        launches = new(id => id == Target ? current : null, (started, pid) => unreadable ? null : current?.Id == pid && current.StartedAt == started.StartedAt);
         world.Genesis("P");
         world.Add("H", "P", "H", "G", kind: "host");
         world.Add("Q", "P", "Q", "H");
@@ -30,7 +32,7 @@ public sealed class FleetTargetGateTests
     void Launch(string permissions = LaunchProtocol.AllowAll, bool fleet = true)
     {
         launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
-        if (fleet) { launches.FleetLaunched(Target); }
+        if (fleet) { launches.FleetLaunched(Target, new(42, DateTimeOffset.UnixEpoch)); }
     }
 
     static VerifiedEnvelope From(string machine) => new(new EnvelopeBody("22222222-2222-2222-2222-222222222222", "acct", "g", [],
@@ -121,10 +123,12 @@ public sealed class FleetTargetGateTests
     [Fact]
     public async Task A_launch_whose_process_identity_cannot_be_verified_is_never_a_fleet_target()
     {
-        current = new(42, null);
         Launch();
+        unreadable = true; // the started process gone, or its tree unreadable
         Assert.False(await Allowed(() => signed));
-        current = new(42, DateTimeOffset.UnixEpoch);
+        unreadable = false;
+        Assert.True(await Allowed(() => signed));
+        current = new(42, null);
         Assert.False(await Allowed(() => signed));
     }
 }
