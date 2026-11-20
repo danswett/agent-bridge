@@ -39,7 +39,7 @@ public sealed record InPlaceHandoff(string Package, PackageDigest Digest, string
             if (!WaitForApp(TimeSpan.FromMinutes(1))) { throw new InvalidOperationException("the app that handed the update over did not exit; nothing was installed"); }
             log(Install(staged, updateExe, held, log) ? "update: installed in place; the held files were left as they were" : "update: installed");
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException or Win32Exception)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException or Win32Exception or ArgumentException)
         { log($"update: {e.Message}"); code = 1; }
         try { restart(Restart); }
         catch (Exception e) when (e is IOException or Win32Exception) { log($"update: the app could not be started again: {e.Message}"); code = 1; }

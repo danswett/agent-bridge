@@ -114,5 +114,7 @@ public sealed class InPlaceHandoffTests : IDisposable
         Assert.Single(runs);
         Assert.Equal("app 2", App);
         Assert.Equal(["--profile", "p"], Assert.Single(restarts));
+        Assert.Equal(1, Package("lib/app/bad\0.dll=x").Run(() => null, Staged, _ => 1, () => [Path.Combine(Current, "mscordaccore.dll")], restarts.Add, _ => { }));
+        Assert.Equal(2, restarts.Count);
     }
 }
