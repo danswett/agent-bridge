@@ -1,25 +1,123 @@
+using System.Collections.Concurrent;
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace AgentBridge.HomeAssistant;
 
-// #3204: agent messages sent while a question is open wait in memory, in order, for it to close.
-// A restart or the session's end drops them; reply_queue_count says how many wait. The Send press
-// that follows each one is the agent's own, never the owner's confirmation of the form.
+// #3204: agent messages sent while a question is open wait, in order, for it to close; the session's
+// end drops them; reply_queue_count says how many wait. The Send press that follows each one is the
+// agent's own, never the owner's confirmation of the form. #2780: each is also kept in the durable inbox
+// beside the state file, so a restart no longer drops them.
 public sealed partial class HaConnector
 {
     int QueueCount(string sessionId) => ridLogs.TryGetValue(sessionId, out var log) ? log.Queued.Count : 0;
 
+    DurableInbox? inbox;
+    DurableInbox? Inbox => ServesReplies && options.StateFile is { } file
+        ? inbox ??= new DurableInbox(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(file))!, "ha-reply-inbox.json")) : null;
+
+    bool Durably(string what, Action act)
+    {
+        try { act(); return true; }
+        catch (Exception e) { log($"Home Assistant connector could not {what} in the reply inbox: {Describe(e)}"); return false; }
+    }
+
+    // The inbox shows only its oldest undelivered entry, so what a restart left there comes back one at
+    // a time: the oldest first, and each next one once the one before is marked delivered, all ahead of
+    // anything queued since (which the inbox holds after them). Marks owed go first, in the order taken.
+    // #3359: an ended session whose entries could not be dropped is dropped before its id restores anything.
+    // A mark that failed is retried here, but Since stays the lifetime's first restore.
+    bool Restore(Published p)
+    {
+        var log = p.Reply.Log;
+        if (Inbox is null) { return true; }
+        if (undiscarded.ContainsKey(p.Node) && !Discard(p.Node)) { return false; }
+        if (log.Restored) { return true; }
+        if (!Mark(p)) { return false; }
+        if (log.Since == default) { log.Since = time.GetUtcNow(); }
+        return log.Restored = true;
+    }
+
+    bool Mark(Published p)
+    {
+        var log = p.Reply.Log;
+        InboxMessage? head = null;
+        while (true)
+        {
+            if (!Durably("read", () => head = Inbox!.Peek(p.Node))) { return false; }
+            if (log.Marks.Count == 0) { break; }
+            // Not the head: already marked (a session's end marks all), since the inbox keeps the queue's order.
+            if (head?.Rid == log.Marks[0] && !Durably("mark a reply delivered", () => Inbox!.Deliver(p.Node, head.Rid, time.GetUtcNow()))) { return false; }
+            log.Marks.RemoveAt(0);
+        }
+        if (head is null || log.Queued.Any(q => CleanRid(Str(q.Attributes, "rid")) == head.Rid)) { return true; }
+        HaState? state = null;
+        if (!Durably("read back a reply", () => state = JsonSerializer.Deserialize<HaState>(head.Payload)) || state is not { State: not null, Attributes.ValueKind: JsonValueKind.Object }) { return false; }
+        log.Queued.Insert(0, state);
+        return true;
+    }
+
+    // Kept before it is acked queued: one the inbox cannot keep is refused, never held in memory alone.
+    // A rid already there is a duplicate: queued while it waits; once marked delivered, unconfirmed if
+    // that was before this lifetime, else refused (its delivery was refused and the rid forgotten, and
+    // the inbox can take it again only after the card closes).
+    (string? Known, string? Error) Store(Published p, string rid, HaState state)
+    {
+        if (Inbox is not { } box) { return (null, null); }
+        var at = time.GetUtcNow();
+        InboxMessage? kept = null;
+        if (!Restore(p) || !Durably("keep a reply", () => kept = box.Enqueue(p.Node, rid, CleanSender(Str(state.Attributes, "sender")), JsonSerializer.Serialize(state), at)))
+        {
+            return (null, "reply inbox unavailable");
+        }
+        if (kept!.DeliveredAt is null) { return (kept.QueuedAt == at ? null : "queued", null); }
+        return kept.DeliveredAt < p.Reply.Log.Since ? ("unconfirmed", null) : (null, "reply inbox unavailable");
+    }
+
+    // #3359: with no question open, a rid the inbox marked delivered before this lifetime is a duplicate too.
+    // An unreadable inbox leaves the reply to the rids remembered in memory, as before the inbox.
+    bool DeliveredBefore(Published p, string rid)
+    {
+        if (Inbox is not { } box || !Restore(p)) { return false; }
+        InboxMessage? kept = null;
+        return Durably("look up a reply", () => kept = box.Find(p.Node, rid)) && kept?.DeliveredAt < p.Reply.Log.Since;
+    }
+
+    // A session's end drops its queue, and a session back under the same id starts empty: its entries are
+    // marked delivered, the only way the inbox lets them go. One that fails is tried again (#3359).
+    readonly ConcurrentDictionary<string, byte> undiscarded = new(StringComparer.Ordinal);
+
+    void Ended(string sessionId) => undiscarded.TryAdd(HaContract.NodeId(sessionId), 0);
+
+    void Discard()
+    {
+        foreach (var node in undiscarded.Keys) { Discard(node); }
+    }
+
+    bool Discard(string node)
+    {
+        if (Inbox is { } box && !Durably("drop an ended session's replies", () => { while (box.Peek(node) is { } m) { box.Deliver(node, m.Rid, time.GetUtcNow()); } }))
+        {
+            return false;
+        }
+        undiscarded.TryRemove(node, out _);
+        return true;
+    }
+
     // The Send presses remembered for a session. For tests.
     internal int PressesKept(string sessionId) => ridLogs.TryGetValue(sessionId, out var log) ? log.Presses.Count : 0;
+
+    // The owed agent Sends remembered by stamp for a session. For tests.
+    internal int OwedSendsKept(string sessionId) => ridLogs.TryGetValue(sessionId, out var log) ? log.AgentSends.Count : 0;
 
     static bool OwnerPress(RidLog log, string? press) => press is not null && log.Presses.TryGetValue(press, out var agent) && !agent;
 
     static void ClassifyPress(RidLog log, string press, bool uncertain)
     {
-        var owed = log.AgentSends.Count > 0;
+        var owed = log.OwesSend;
         if (!log.TakePress(press, owed || uncertain)) { return; }
-        if (owed) { log.AgentSends.RemoveAt(0); }
+        if (owed) { log.PaySend(); }
         else if (uncertain)
         {
             log.Unmatched.Add(press);
@@ -55,6 +153,7 @@ public sealed partial class HaConnector
         var payloadId = SessionEntities.ReplyPayload(p.Node);
         var submitId = SessionEntities.Submit(p.Node);
         var log = p.Reply.Log;
+        Restore(p);
         bool Known(string? stamp) => stamp is not null && (stamp == armed.PayloadBaseline.Value || p.Reply.IsHandled(stamp) || log.PayloadStamps.Contains(stamp));
         // Send first: an agent presses only after its message, so the payload read next shows it.
         submit ??= await ObserveAsync(submitId, ct);
@@ -104,29 +203,33 @@ public sealed partial class HaConnector
             // already came (#3224), including when a split recorded the debt before this complete read. Each half of a
             // split settles only a press at or after it was written: its stamp's last_changed, its attributes' last_updated.
             if (agent && (fresh || (!mixed && log.AgentSends.Contains(stamp))) && SettledByEarlierPress(log, stamp == state.State ? state.LastChanged : state.LastUpdated)) { log.AgentSends.Remove(stamp); }
-            else if (fresh && agent) { log.AgentSends.Add(stamp); }
-            if (unseen is not null && !SettledByEarlierPress(log, state.LastUpdated)) { log.AgentSends.Add(unseen); }
+            else if (fresh && agent) { log.OweSend(stamp); }
+            if (unseen is not null && !SettledByEarlierPress(log, state.LastUpdated)) { log.OweSend(unseen); }
             if (mixed || Str(a, "driver") != "agent" || !string.IsNullOrEmpty(Str(a, "decision_id")) || !ServesReplies || CleanRid(Str(a, "rid")) is not { } rid
                 || HasAttachments(state) || string.IsNullOrWhiteSpace(Str(a, "text"))) { continue; }
             var queue = log.Queued;
             var known = queue.Any(q => CleanRid(Str(q.Attributes, "rid")) == rid) ? "queued"
                 : p.Reply.Rids.TryGetValue(rid, out var prior) ? prior ?? "unconfirmed" : null;
-            var full = known is null && queue.Count >= MaxWaiting;
-            if (known is null && !full) { queue.Add(state); }
-            p.Reply.Ack = MakeAck(rid, CleanSender(Str(a, "sender")), full ? "refused" : known ?? "queued", duplicate: known is not null);
-            await TransientAsync(p, full ? "Reply NOT sent" : "Reply " + (known ?? "queued"), full ? new JsonObject { ["error"] = "queue full" } : [], ct);
+            var error = known is null && queue.Count >= MaxWaiting ? "queue full" : null;
+            if (known is null && error is null && ((known, error) = Store(p, rid, state)) is (null, null)) { queue.Add(state); }
+            p.Reply.Ack = MakeAck(rid, CleanSender(Str(a, "sender")), error is not null ? "refused" : known ?? "queued", duplicate: known is not null);
+            await TransientAsync(p, error is not null ? "Reply NOT sent" : "Reply " + (known ?? "queued"), error is not null ? new JsonObject { ["error"] = error } : [], ct);
             p.Reply.Handle(state.State);
         }
     }
 
-    // Queued messages go first once the question has closed, one delivery at a time.
+    // Queued messages go first once the question has closed, one delivery at a time; each taken is marked
+    // delivered in the inbox.
     async Task<bool> DrainQueueAsync(string sessionId, Published p, CancellationToken ct)
     {
+        Restore(p);
         while (p.Reply.Log.Queued.Count > 0)
         {
             var next = p.Reply.Log.Queued[0];
             var read = await CardReplyAsync(sessionId, p, next, ct, queued: true);
             p.Reply.Log.Queued.RemoveAt(0);
+            if (Inbox is not null && CleanRid(Str(next.Attributes, "rid")) is { } rid) { p.Reply.Log.Marks.Add(rid); }
+            if (!Mark(p)) { p.Reply.Log.Restored = false; }
             if (read == CardRead.Delivering) { return true; }
         }
         return false;

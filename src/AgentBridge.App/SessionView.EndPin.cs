@@ -12,6 +12,16 @@ public sealed partial class SessionView
 {
     readonly HashSet<uint> scrollbarPointers = [];
     Func<bool>? navigationPending;
+    bool programmaticScroll;
+
+    // Our own ScrollIntoView (a restore) raises the same bring request as question navigation;
+    // it must not take the person's navigation custody, or nothing clears it after our anchor.
+    void ScrollProgrammatically(Action scroll)
+    {
+        programmaticScroll = true;
+        try { scroll(); }
+        finally { programmaticScroll = false; }
+    }
 
     void HookConversationInput(ScrollViewer scroll)
     {
@@ -23,6 +33,7 @@ public sealed partial class SessionView
         // Question navigation and UIA ScrollIntoView own their destination, even without focus.
         scroll.BringIntoViewRequested += (_, e) =>
         {
+            if (programmaticScroll) { return; }
             var (target, rect) = (e.TargetElement, e.TargetRect);
             double Top() => target.TransformToVisual(scroll).TransformPoint(new Point(rect.X, rect.Y)).Y;
             var gap = scroll.ViewportHeight - rect.Height;
@@ -83,7 +94,7 @@ public sealed partial class SessionView
     void CompleteNavigation() { if (navigationPending?.Invoke() == false) { navigationPending = null; } }
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
-    internal void ReleasePin() { pinEnd = false; navigationPending = null; anchoring = null; pinReleases++; }
+    internal void ReleasePin() { restoreReading = null; pinEnd = false; navigationPending = null; anchoring = null; pinReleases++; }
 
     bool HistoryAtEnd() => navigationPending is null && scrollbarPointers.Count == 0 && (pinEnd || !panning && !scrolling && keyTarget is null
         && ConversationScroll is { ScrollableHeight: > 0 } scroll && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack);

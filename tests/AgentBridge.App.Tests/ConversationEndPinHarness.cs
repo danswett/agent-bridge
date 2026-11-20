@@ -153,14 +153,16 @@ namespace AgentBridge.App
     public sealed partial class SessionView
     {
         readonly Core.ConversationFollow follow = new();
-        readonly Microsoft.UI.Xaml.UIElement ConversationList = new();
+        readonly ProbeList ConversationList = new();
+        readonly bool attached = true;
+        readonly List<object> blocks = [];
         Microsoft.UI.Xaml.Controls.ScrollViewer? ConversationScroll { get; } = new();
         bool panning = false;
         bool scrolling;
         double? anchoring;
         double? keyTarget = null;
         double anchorAt;
-        object? anchor;
+        Core.ScrollAnchor? anchor;
         readonly Microsoft.UI.Dispatching.DispatcherQueue DispatcherQueue = new();
         readonly Microsoft.UI.Xaml.FrameworkElement HistoryLine = new(), HistoryRetry = new(), HistoryEarlier = new();
         readonly ProbeRows HistoryRows = new();
@@ -191,6 +193,8 @@ namespace AgentBridge.App
         public bool HistoryDrawing => historyDraw?.IsRunning == true;
         public void FirstFrameForProbe() => historyFirstFrame?.Invoke(this, new());
         public void DrawEarlierForProbe() => DrawEarlier();
+        public void ProgrammaticBringForProbe(Microsoft.UI.Xaml.UIElement target, double alignment) => ScrollProgrammatically(() => Scroller.Bring(target, alignment));
+        public void AnchorForProbe(double to) => Anchoring(Scroller, to);
         public void DrainForProbe() => DispatcherQueue.Drain();
         public void DetachForProbe() => UnwatchHistory();
         public void SwitchForProbe()
@@ -215,7 +219,21 @@ namespace AgentBridge.App
             Scroller.Targets.Clear();
         }
         static double Top(Microsoft.UI.Xaml.UIElement element, Microsoft.UI.Xaml.UIElement viewport) => element.Top;
-        sealed record ProbeCard(string Id, Core.SessionHistory Stored, string? LiveTurn = null, string? UserMessage = null);
+        sealed record ProbeCard(string Id, Core.SessionHistory? Stored, string? UserMessage = null)
+        {
+            public ProbeRow? Row { get; init; }
+            public Protocol.Session Session { get; set; } = Make.Session(Id);
+            public string? LiveTurn => Session.Activity.Turn;
+            public bool ResponseTruncated => Session.Activity.ResponseTruncated == true;
+        }
+        sealed record ProbeRow(string Key);
+        sealed class ProbeList : Microsoft.UI.Xaml.FrameworkElement
+        {
+            public bool Available = true;
+            public object? ContainerFromIndex(int index) => Available ? new Microsoft.UI.Xaml.FrameworkElement { Top = 40 } : null;
+            public void ScrollIntoView(object item) => Scrolled?.Invoke();
+            public Action? Scrolled { get; set; }
+        }
         sealed class ProbeRows
         {
             public Microsoft.UI.Xaml.UIElement? TryGetElement(int index) => null;

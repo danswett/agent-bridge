@@ -365,26 +365,131 @@ public sealed partial class ReplyTests
         Assert.Empty(answered);
     }
 
+    // #2780: the queue is kept in the durable inbox beside the state file, so a restart no longer drops it.
     [Fact]
-    public async Task A_restart_drops_queued_messages_and_shows_an_empty_queue()
+    public async Task Queued_messages_survive_a_restart_in_order_ahead_of_newer_ones_and_a_resend_is_a_duplicate()
     {
-        HaTrigger? last = null;
         await using (var c = await Asking())
         {
-            for (var n = 1; n <= 2; n++)
-            {
-                await Do(c, last = ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
-            }
-            Assert.Equal(2, Detail.GetProperty("reply_queue_count").GetInt32());
+            for (var n = 1; n <= 2; n++) { await Do(c, ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n)); }
         }
 
         await using var restarted = Connector();
         await Pass(restarted);
-        await Do(restarted, last!);
-        Assert.Equal(0, Detail.GetProperty("reply_queue_count").GetInt32());
+        await Do(restarted, ha.SendFromCard(Node, "message 2", driver: "agent", rid: "r-2"));
+        Assert.Equal(("queued", true), (Ack.GetProperty("outcome").GetString(), Ack.GetProperty("duplicate").GetBoolean()));
+        await Do(restarted, ha.SendFromCard(Node, "message 3", driver: "agent", rid: "r-3"));
+        Assert.Equal("queued", Ack.GetProperty("outcome").GetString());
+        await CardCloses(restarted);
+        for (var n = 0; n < 3; n++) { await restarted.DeliveredAsync(); await Pass(restarted); }
+        Assert.Equal(["message 1", "message 2", "message 3"], replied.Select(r => r.Text));
+    }
+
+    [Fact]
+    public async Task A_queued_message_delivered_before_a_restart_is_not_delivered_again_and_its_resend_is_a_duplicate()
+    {
+        await using (var c = await Asking())
+        {
+            await Do(c, ha.SendFromCard(Node, "once", driver: "agent", rid: "r-1"));
+            await CardCloses(c);
+        }
+        Assert.Equal("once", Assert.Single(replied).Text);
+
+        await using var restarted = Connector();
+        Idle(turn: 2, question: Pick() with { Id = "q2" });
+        await Pass(restarted);
+        await Do(restarted, ha.SendFromCard(Node, "once", driver: "agent", rid: "r-1"));
+        Assert.Equal(("unconfirmed", true), (Ack.GetProperty("outcome").GetString(), Ack.GetProperty("duplicate").GetBoolean()));
         await CardCloses(restarted);
         await Pass(restarted, 20);
+        Assert.Single(replied);
+    }
+
+    void InboxUnreadable(bool unreadable)
+    {
+        var path = Path.Combine(folder, "ha-reply-inbox.json");
+        if (unreadable) { File.Move(path, path + "-aside"); Directory.CreateDirectory(path); }
+        else { Directory.Delete(path); File.Move(path + "-aside", path); }
+    }
+
+    // #3359: the inbox, not only an open question, knows a rid delivered before this lifetime.
+    [Fact]
+    public async Task A_queued_message_delivered_before_a_restart_is_not_typed_again_when_resent_with_no_question_open()
+    {
+        await using (var c = await Asking())
+        {
+            await Do(c, ha.SendFromCard(Node, "once", driver: "agent", rid: "r-1"));
+            await CardCloses(c);
+        }
+
+        await using var restarted = Connector();
+        await Pass(restarted);
+        await Do(restarted, ha.SendFromCard(Node, "once", driver: "agent", rid: "r-1"));
+        Assert.Equal(("unconfirmed", true), (Ack.GetProperty("outcome").GetString(), Ack.GetProperty("duplicate").GetBoolean()));
+        await Pass(restarted, 20);
+        Assert.Single(replied);
+    }
+
+    [Fact]
+    public async Task A_delivery_mark_the_inbox_could_not_read_is_retried_and_the_next_restored_message_still_goes_in()
+    {
+        await using (var c = await Asking())
+        {
+            for (var n = 1; n <= 2; n++) { await Do(c, ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n)); }
+        }
+
+        await using var restarted = Connector();
+        await Pass(restarted);
+        await Do(restarted, ha.SendFromCard(Node, "message 1", driver: "agent", rid: "r-1"));
+        InboxUnreadable(true);
+        await CardCloses(restarted);
+        InboxUnreadable(false);
+        for (var n = 0; n < 3; n++) { await restarted.DeliveredAsync(); await Pass(restarted); }
+        Assert.Equal(["message 1", "message 2"], replied.Select(r => r.Text));
+    }
+
+    [Fact]
+    public async Task A_session_whose_end_could_not_drop_its_waiting_message_never_receives_it_when_its_id_returns()
+    {
+        await using var c = await Asking();
+        await Do(c, ha.SendFromCard(Node, "too late", driver: "agent", rid: "r-end"));
+        InboxUnreadable(true);
+        sessions.End(A);
+        await Pass(c, 20);
+        await c.DeliveredAsync();
+        InboxUnreadable(false);
+        Idle();
+        await Pass(c);
+        await Pass(c, 20);
+        await c.DeliveredAsync();
+        await Pass(c);
         Assert.Empty(replied);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_message_the_inbox_cannot_keep_is_refused_and_never_typed(bool full)
+    {
+        var path = Path.Combine(folder, "ha-reply-inbox.json");
+        Directory.CreateDirectory(folder);
+        var inbox = new DurableInbox(path);
+        var old = JsonSerializer.Serialize(new HaState(SessionEntities.ReplyPayload(Node), "2026-01-01T00:00:00+00:00",
+            JsonDocument.Parse("""{"at":"2026-01-01T00:00:00+00:00","driver":"agent","rid":"r-old","text":"old"}""").RootElement));
+        for (var n = 0; full && n < 100; n++) { inbox.Enqueue(Node, "r-old-" + n, "SG", old, FakeSessions.T0); }
+        await using var c = await Asking();
+        if (!full) { Directory.CreateDirectory(path); }
+
+        await Do(c, ha.SendFromCard(Node, "lost", driver: "agent", rid: "r-1"));
+
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        Assert.Equal("reply inbox unavailable", Detail.GetProperty("error").GetString());
+        lock (log) { Assert.Contains(log, l => l.Contains(full ? "node inbox is full" : "reply inbox", StringComparison.Ordinal)); }
+        if (!full)
+        {
+            await CardCloses(c);
+            Assert.Empty(replied);
+        }
     }
 
     [Fact]
@@ -514,6 +619,7 @@ public sealed partial class ReplyTests
         await Do(c, ha.Press(SessionEntities.Submit(Node)));
         Assert.Single(answered);
         await CardCloses(c);
+        await c.DeliveredAsync(); await Pass(c);
         Assert.Equal(["first", "second"], replied.Select(r => r.Text));
     }
 
@@ -557,6 +663,7 @@ public sealed partial class ReplyTests
         await Do(c, ha.Press(SessionEntities.Submit(Node)));
         Assert.Single(answered);
         await CardCloses(c);
+        await c.DeliveredAsync(); await Pass(c);
         Assert.Equal(["first", "second"], replied.Select(r => r.Text));
     }
 
@@ -581,6 +688,26 @@ public sealed partial class ReplyTests
         await Pass(c);
         await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
         Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+    }
+
+    // #3356: agent messages whose Sends never come are remembered by stamp only up to a bound, but every one
+    // still owes its Send: each later agent press stays the agent's, and only the owner's press after them answers.
+    [Fact]
+    public async Task Owed_agent_sends_are_kept_bounded_and_every_one_still_makes_its_press_the_agents()
+    {
+        await using var c = await Asking();
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut now"));
+        for (var n = 1; n <= 70; n++)
+        {
+            c.Observe(ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n));
+            await Pass(c);
+        }
+        Assert.InRange(c.OwedSendsKept(A), 1, 64);
+        for (var n = 1; n <= 70; n++) { await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user")); }
+        Assert.Empty(answered);
+        Assert.Equal(0, c.OwedSendsKept(A));
         await Do(c, ha.Press(SessionEntities.Submit(Node)));
         Assert.Single(answered);
     }
