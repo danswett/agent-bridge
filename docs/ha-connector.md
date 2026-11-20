@@ -592,8 +592,12 @@ inbox once its delivery is taken, so a host restart no longer drops waiting mess
 oldest undelivered one is read back ahead of anything new, then the next once that one is taken, oldest first.
 `reply_queue_count` and the 16-message cap count only messages read back so far. A rid still waiting after a
 restart is a duplicate acked `queued`; one delivered before the restart is a duplicate acked `unconfirmed`, and
-one already delivered since this start is refused. The session ending still discards its queue (each entry is
-marked delivered); a session that ended while the host was down leaves its entries in the file (counting toward
+one already delivered since this start is refused. With no question open, a rid the inbox marked delivered before this
+start is also a duplicate acked `unconfirmed` and never typed again (an unreadable inbox leaves that check to the rids
+remembered in memory). A delivery mark the inbox could not take is retried on later passes, ahead of the next message
+read back ([#3359](https://github.com/danswett/agent-bridge/issues/3359)). The session ending still discards its queue (each entry is
+marked delivered); a discard the inbox could not take is retried on later passes and before the same id reads anything
+back, so a session returning under that id never receives the ended one's messages. A session that ended while the host was down leaves its entries in the file (counting toward
 the 1000), and they are delivered if a session returns under that id. A crash after a message was typed but before it was marked types it again after the
 restart. The `reply_ack` protocol (slice b) and the end-to-end restart proof across roster and relay (slice c)
 are separate. Senders that see `queued` and then a count that drops without their rid being acked `delivered` send again.

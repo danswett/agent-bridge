@@ -405,6 +405,67 @@ public sealed partial class ReplyTests
         Assert.Single(replied);
     }
 
+    void InboxUnreadable(bool unreadable)
+    {
+        var path = Path.Combine(folder, "ha-reply-inbox.json");
+        if (unreadable) { File.Move(path, path + "-aside"); Directory.CreateDirectory(path); }
+        else { Directory.Delete(path); File.Move(path + "-aside", path); }
+    }
+
+    // #3359: the inbox, not only an open question, knows a rid delivered before this lifetime.
+    [Fact]
+    public async Task A_queued_message_delivered_before_a_restart_is_not_typed_again_when_resent_with_no_question_open()
+    {
+        await using (var c = await Asking())
+        {
+            await Do(c, ha.SendFromCard(Node, "once", driver: "agent", rid: "r-1"));
+            await CardCloses(c);
+        }
+
+        await using var restarted = Connector();
+        await Pass(restarted);
+        await Do(restarted, ha.SendFromCard(Node, "once", driver: "agent", rid: "r-1"));
+        Assert.Equal(("unconfirmed", true), (Ack.GetProperty("outcome").GetString(), Ack.GetProperty("duplicate").GetBoolean()));
+        await Pass(restarted, 20);
+        Assert.Single(replied);
+    }
+
+    [Fact]
+    public async Task A_delivery_mark_the_inbox_could_not_read_is_retried_and_the_next_restored_message_still_goes_in()
+    {
+        await using (var c = await Asking())
+        {
+            for (var n = 1; n <= 2; n++) { await Do(c, ha.SendFromCard(Node, "message " + n, driver: "agent", rid: "r-" + n)); }
+        }
+
+        await using var restarted = Connector();
+        await Pass(restarted);
+        await Do(restarted, ha.SendFromCard(Node, "message 1", driver: "agent", rid: "r-1"));
+        InboxUnreadable(true);
+        await CardCloses(restarted);
+        InboxUnreadable(false);
+        for (var n = 0; n < 3; n++) { await restarted.DeliveredAsync(); await Pass(restarted); }
+        Assert.Equal(["message 1", "message 2"], replied.Select(r => r.Text));
+    }
+
+    [Fact]
+    public async Task A_session_whose_end_could_not_drop_its_waiting_message_never_receives_it_when_its_id_returns()
+    {
+        await using var c = await Asking();
+        await Do(c, ha.SendFromCard(Node, "too late", driver: "agent", rid: "r-end"));
+        InboxUnreadable(true);
+        sessions.End(A);
+        await Pass(c, 20);
+        await c.DeliveredAsync();
+        InboxUnreadable(false);
+        Idle();
+        await Pass(c);
+        await Pass(c, 20);
+        await c.DeliveredAsync();
+        await Pass(c);
+        Assert.Empty(replied);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
