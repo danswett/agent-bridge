@@ -8,13 +8,15 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-// Live observe integration is a separate slice. The disk pin is read once, created only by
-// HostRosterPinWriter from a person's genesis, and never created or advanced by a relay snapshot.
+// Live observe integration is a separate slice. The disk pin is created only by HostRosterPinWriter
+// from a person's genesis and never created or advanced by a relay snapshot. While none is held the
+// reader looks for it again (a stat) on each verify, so a pin written while serving takes effect
+// without a restart; once held it is never re-read or replaced.
 public sealed partial class HostRosterReader
 {
     sealed record Pin(string Account, string Generation, byte[] Genesis, byte[][] Heads);
-    readonly Pin? pin;
-    readonly string? problem;
+    Pin? pin;
+    string? problem;
     readonly Func<TimeSpan> clock;
     readonly object sync = new();
 
@@ -33,8 +35,15 @@ public sealed partial class HostRosterReader
         lock (sync)
         lock (Verified ?? sync)
         {
+            RefreshPin();
             return UpdateCore(relay, account);
         }
+    }
+
+    // Call under sync. Only an absent pin is looked for again; an unreadable one stays refused.
+    void RefreshPin()
+    {
+        if (pin is null && problem is null) { (pin, problem) = ReadPin(pinPath); }
     }
 
     // The pinned, verified roster, whatever the host-sign switch says: fleet membership (#2643).
@@ -44,6 +53,7 @@ public sealed partial class HostRosterReader
     {
         lock (sync)
         {
+            RefreshPin();
             if (pin is null && problem is null) { return null; }
             return problem is null && account is not null && pin?.Account == account && Verified?.Account == account ? Verified
                 : throw new InvalidOperationException("refused: this host's pinned device roster is unreadable, another account's or not yet verified");

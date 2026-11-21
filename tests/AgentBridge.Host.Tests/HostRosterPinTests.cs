@@ -46,6 +46,25 @@ public sealed class HostRosterPinTests : IDisposable
     }
 
     [Fact]
+    public void A_pin_written_while_serving_is_used_by_the_next_verify_without_a_restart()
+    {
+        var path = HostRosterPinWriter.PinPath(folder);
+        try
+        {
+            var reader = new HostRosterReader(path, () => w.Now);
+            Assert.Contains("unpinned", reader.Update(null, RosterFixture.Account).Reasons);
+            Assert.Null(reader.Pinned(RosterFixture.Account));
+            var typed = PersonGenesis.FromFingerprint(HostRosterPinWriter.Fingerprint(w.Entry("G").Hash));
+            // The fixture genesis is v1; stand in K1's v3 (capSign) predicate as the writer's own tests do.
+            Assert.Equal("pinned", HostRosterPinWriter.Write(path, typed, Relay("G", "B"), RosterFixture.Account, () => w.Now, _ => true));
+            Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
+            Assert.NotNull(reader.Verified);
+            Assert.Same(reader.Verified, reader.Pinned(RosterFixture.Account));
+        }
+        finally { Directory.Delete(Path.GetDirectoryName(path)!, recursive: true); }
+    }
+
+    [Fact]
     public async Task A_pinned_roster_with_the_switch_off_neither_signs_nor_supplies_registry_authority()
     {
         if (!OperatingSystem.IsWindows()) { return; }
