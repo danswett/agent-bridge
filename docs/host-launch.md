@@ -70,8 +70,14 @@ attempts per agent; they may be lowered, never made unlimited. The gate reads ch
 on its next check and records `rate-limited` refusals with the retry delay and caps in
 force. Watch refusal counts and retry delays in the launch audit before and after a
 change. Refusal audit records share the pipe's per-principal windowing: 60 per hour,
-then counted summaries at most once a minute. Live limits, idle ending, restart durability
-and temporary raises are C2 work, not guarantees of this staged readback.
+then counted summaries at most once a minute. The staged gate now flushes request bindings
+and counted attempts to the launch audit before admitting them. After restart it rebuilds
+hourly caps and request ids, counting a reservation once even without a started outcome.
+Future timestamps count as now. Unreadable, damaged or unbound reservation evidence refuses
+launches with `capRebuilding`, also shown in `host.status`; the next launch check retries
+after 30 seconds. Status reads use the cached result, not an audit scan.
+This does not enable new agent launch authority. Live limits, idle ending and temporary
+raises remain C2 work. Matching held issue: #2174; this restart slice is #2767.
 
 ## Dispatch facts seam (#2788, not wired)
 

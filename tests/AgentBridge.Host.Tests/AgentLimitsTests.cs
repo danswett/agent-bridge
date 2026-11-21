@@ -1,4 +1,6 @@
 using System.Text.Json;
+using AgentBridge.Host;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace AgentBridge.Host.Tests;
@@ -8,6 +10,116 @@ public sealed class AgentLimitsTests
     DateTimeOffset now = new(2026, 11, 8, 12, 0, 0, TimeSpan.Zero);
 
     AgentLimits Make() => new(() => now);
+
+    static AgentLaunchGate RestartGate(Fixture fixture) => new(fixture.Root, () => fixture.Time.GetUtcNow(), fixture.Time);
+
+    static void EnableLaunch(Fixture fixture) => File.WriteAllText(Path.Combine(fixture.Root, HostSettings.FileName),
+        """{"agents":{"enabled":true,"launch":{"enabled":true},"limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":10,"liveAgentLaunched":6,"agentLaunchedIdleHours":2}}}""");
+
+    [Fact]
+    public void Caps_and_request_ids_are_rebuilt_from_the_audit_after_a_restart()
+    {
+        using var fixture = new Fixture();
+        EnableLaunch(fixture);
+        var first = RestartGate(fixture);
+        var hash = new string('a', 64);
+        var request = Guid.NewGuid().ToString();
+        Assert.True(first.CheckLaunch("agent:machine/origin", request, hash).Allowed);
+        for (var i = 0; i < 2; i++)
+        { Assert.True(first.CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), hash).Allowed); }
+
+        var restarted = RestartGate(fixture);
+        Assert.True(restarted.CheckLaunch("agent:machine/origin", request, hash).Duplicate);
+        Assert.Equal("requestReused", restarted.CheckLaunch("agent:machine/origin", request, new string('b', 64)).Reason);
+        Assert.Equal("rate-limited", restarted.CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), hash).Reason);
+        for (var i = 0; i < 7; i++)
+        {
+            var origin = $"agent:machine/other{i}";
+            var next = Guid.NewGuid().ToString();
+            Assert.True(restarted.CheckLaunch(origin, next, hash).Allowed);
+            Assert.True(restarted.LaunchFinished(origin, next));
+        }
+        Assert.Equal("rate-limited", RestartGate(fixture).CheckLaunch("agent:machine/last", Guid.NewGuid().ToString(), hash).Reason);
+    }
+
+    [Fact]
+    public void A_reserved_then_crash_launch_still_counts_once_even_with_a_started_outcome()
+    {
+        using var fixture = new Fixture();
+        EnableLaunch(fixture);
+        var audit = new AgentAuditLog(fixture.Root, fixture.Time);
+        var hash = new string('a', 64);
+        var request = Guid.NewGuid().ToString();
+        var operation = Guid.NewGuid();
+        var metadata = new GateAuditMetadata(1, operation, Guid.Empty, 0, "intent", "local", "agent", operation, "none", LaunchBinding: hash);
+        var reservation = new AgentAuditEntry("local", request, "agent:machine/origin", [], "session.launch", request, "reserved", Gate: metadata);
+        Assert.True(audit.Append(reservation));
+        var restarted = new AgentLaunchGate(fixture.Root, () => fixture.Time.GetUtcNow().AddMinutes(-5), fixture.Time);
+        Assert.True(restarted.CheckLaunch("agent:machine/origin", request, hash).Duplicate);
+        Assert.True(audit.Append(reservation with { Outcome = "started", Gate = metadata with { Phase = "terminal" } }));
+        restarted = RestartGate(fixture);
+        for (var i = 0; i < 2; i++)
+        { Assert.True(restarted.CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), hash).Allowed); }
+        Assert.Equal("rate-limited", restarted.CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), hash).Reason);
+        fixture.Time.Advance(TimeSpan.FromHours(20));
+        Assert.True(RestartGate(fixture).CheckLaunch("agent:machine/origin", request, hash).Duplicate);
+        Assert.True(RestartGate(fixture).CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), hash).Allowed);
+    }
+
+    [Fact]
+    public void A_bad_audit_sets_capRebuilding_and_refuses_launches_until_a_successful_retry()
+    {
+        using var fixture = new Fixture();
+        EnableLaunch(fixture);
+        var directory = Directory.CreateDirectory(Path.Combine(fixture.Root, AgentAuditLog.FolderName));
+        var file = Path.Combine(directory.FullName, $"launches-{fixture.Time.GetUtcNow():yyyy-MM-dd}.jsonl");
+        File.WriteAllText(file, "{broken\n");
+        var gate = RestartGate(fixture);
+        Assert.Equal("capRebuilding", gate.CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), new string('a', 64)).Reason);
+        var control = new HostControl(new HostControlOptions
+        {
+            Profile = "test", Folder = fixture.Root, Version = "0.1.0", Running = new(false),
+            Machine = new("machine", "Fixture", "windows", "0.1.0"), CapRebuilding = () => gate.CapRebuilding,
+            SignIn = (_, _, _) => throw new NotSupportedException(), SignedIn = (_, _) => { },
+            Stop = () => { }, Restart = () => { },
+        });
+        Assert.True(JsonSerializer.SerializeToElement(control.Status(), new JsonSerializerOptions(JsonSerializerDefaults.Web))
+            .GetProperty("capRebuilding").GetBoolean());
+        File.Delete(file);
+        fixture.Time.Advance(TimeSpan.FromSeconds(30));
+        Assert.True(gate.CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), new string('a', 64)).Allowed);
+        Assert.False(control.Status().CapRebuilding);
+    }
+
+    [Fact]
+    public void Counted_mismatches_survive_restart_and_midnight_without_charging_more_launches()
+    {
+        using var fixture = new Fixture();
+        fixture.Time.SetUtcNow(new DateTimeOffset(2026, 11, 8, 23, 50, 0, TimeSpan.Zero));
+        EnableLaunch(fixture);
+        var gate = RestartGate(fixture);
+        var request = Guid.NewGuid().ToString();
+        var hash = new string('a', 64);
+        Assert.True(gate.CheckLaunch("agent:machine/origin", request, hash).Allowed);
+        for (var i = 0; i < 19; i++)
+        { Assert.Equal("requestReused", gate.CheckLaunch("agent:machine/origin", request, new string('b', 64)).Reason); }
+        fixture.Time.Advance(TimeSpan.FromMinutes(20));
+        gate = RestartGate(fixture);
+        Assert.True(gate.CheckLaunch("agent:machine/origin", request, hash).Duplicate);
+        Assert.Equal("rate-limited", gate.CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), hash).Reason);
+        fixture.Time.Advance(TimeSpan.FromMinutes(40));
+        Assert.True(RestartGate(fixture).CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), hash).Allowed);
+    }
+
+    [Fact]
+    public void A_reservation_without_a_binding_never_opens_the_cap()
+    {
+        using var fixture = new Fixture();
+        EnableLaunch(fixture);
+        var audit = new AgentAuditLog(fixture.Root, fixture.Time);
+        Assert.True(audit.Append(new("local", Guid.NewGuid().ToString(), "agent:machine/origin", [], "session.launch", "", "reserved")));
+        Assert.Equal("capRebuilding", RestartGate(fixture).CheckLaunch("agent:machine/origin", Guid.NewGuid().ToString(), new string('a', 64)).Reason);
+    }
 
     [Fact]
     public void The_seventh_live_agent_started_session_is_refused()
@@ -111,6 +223,7 @@ public sealed class AgentLimitsTests
             Assert.Empty(gate.IdleSessions());
             WritePolicy(folder, live: 1, idle: 1);
             Assert.Equal(["session"], gate.IdleSessions());
+            Directory.Move(Path.Combine(folder, AgentAuditLog.FolderName), Path.Combine(folder, "saved-audit"));
             File.WriteAllText(Path.Combine(folder, AgentAuditLog.FolderName), "not a directory");
             var refused = gate.CheckLaunch("b", "blocked", "hash");
             Assert.False(refused.Allowed);

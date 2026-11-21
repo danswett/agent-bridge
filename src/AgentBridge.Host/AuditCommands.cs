@@ -14,6 +14,7 @@ public static class AuditCommands
         [property: JsonRequired] string Action, [property: JsonRequired] string Outcome, string? Direction = null,
         string? Request = null, string[]? Chain = null, string? Target = null, string? Reason = null,
         string? DataSha256 = null, int? TextLength = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RequestSha256 = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GateAuditMetadata? Gate = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool PreviousTailIncomplete = false);
 

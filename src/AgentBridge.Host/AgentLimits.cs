@@ -9,7 +9,7 @@ public readonly record struct AgentLimitVerdict(bool Allowed, string? Reason, in
     public static AgentLimitVerdict Admit { get; } = new(true, null, 0);
 }
 
-// Sliding in-memory windows; a restart resets them. Message/read limits are constructor
+// Sliding windows; launch windows can rebuild from the audit. Message/read limits are constructor
 // arguments; the launch gate supplies freshly read policy. Refusals spend no launch slot,
 // but distinct requests and mismatched retries spend the separate attempt budget.
 public sealed class AgentLimits
@@ -25,9 +25,13 @@ public sealed class AgentLimits
     readonly Dictionary<string, Window> targets = [], originLaunches = [], reads = [];
     readonly Dictionary<string, Window> launchAttempts = [];
     readonly Dictionary<(string Origin, string Request), (string Hash, DateTimeOffset At)> launchRequests = [];
+    readonly HashSet<(string Origin, string Request)> unresolvedRequests = [];
     readonly Dictionary<(string Origin, string Request), LiveLaunch> liveLaunches = [];
     readonly Window machineLaunches = new(Hour);
     DateTimeOffset? lastLaunchCheck;
+    readonly AgentAuditLog? launchAudit;
+    DateTimeOffset? rebuildAt;
+    public bool CapRebuilding { get; private set; }
 
     sealed record LiveLaunch(string? Session = null, DateTimeOffset? IdleSince = null, bool PersonTyped = false);
 
@@ -37,7 +41,8 @@ public sealed class AgentLimits
         int messagesPerTargetPerMinute = 12,
         int launchesPerOriginPerHour = 3,
         int launchesPerMachinePerHour = 10,
-        int readsPerOriginPerMinute = 60)
+        int readsPerOriginPerMinute = 60,
+        AgentAuditLog? launchAudit = null)
     {
         this.clock = clock ?? (() => DateTimeOffset.UtcNow);
         perPair = Positive(messagesPerPairPerMinute);
@@ -45,6 +50,67 @@ public sealed class AgentLimits
         launchesPerOrigin = Positive(launchesPerOriginPerHour);
         launchesPerMachine = Positive(launchesPerMachinePerHour);
         readsPerOrigin = Positive(readsPerOriginPerMinute);
+        this.launchAudit = launchAudit;
+        if (launchAudit is not null) { RebuildLaunches(); }
+    }
+
+    void RebuildLaunches()
+    {
+        CapRebuilding = true;
+        var now = clock();
+        rebuildAt = now.AddSeconds(30);
+        var (rows, complete) = GateAuditProjection.Load(launchAudit!.Profile);
+        if (!complete || (rows.Count > 0 || Directory.Exists(Path.Combine(launchAudit.Profile, AgentAuditLog.FolderName)))
+            && !launchAudit.VerifyExistingLaunch()) { return; }
+        var launches = rows.Where(r => r.Action == "session.launch"
+            && (r.RequestSha256 is not null || r.Gate?.ActorKind == "agent" || r.Principal.StartsWith("agent:", StringComparison.Ordinal))).ToArray();
+        var restored = new List<(string Origin, string Request, string Hash, DateTimeOffset At, bool Charged, bool Pending)>();
+        foreach (var group in launches.GroupBy(r => (r.Principal, r.Request)))
+        {
+            var reservations = group.Where(r => r.Outcome == "reserved").OrderBy(r => r.At).ToArray();
+            var bound = group.OrderBy(r => r.At).FirstOrDefault(r => r.RequestSha256 is not null || r.Gate?.LaunchBinding is not null);
+            if (bound is null)
+            {
+                if (group.Any(r => r.Outcome is "reserved" or "started" or "failed" or "unconfirmed" or "interrupted" or "attempted")) { return; }
+                continue;
+            }
+            if (string.IsNullOrEmpty(group.Key.Request)) { return; }
+            var hash = bound.RequestSha256 ?? bound.Gate!.LaunchBinding!;
+            if (hash.Length != 64 || !hash.All(char.IsAsciiHexDigit)
+                || reservations.Any(r => (r.RequestSha256 ?? r.Gate?.LaunchBinding) != hash)) { return; }
+            var pending = reservations.Any(r => !group.Any(t => t.Outcome is "started" or "refused" or "failed" or "busy"
+                && (r.Gate is { } reserved ? t.Gate is { Phase: "terminal" } terminal && terminal.Operation == reserved.Operation
+                    && terminal.LaunchBinding == hash : t.RequestSha256 == hash)));
+            var at = reservations.FirstOrDefault()?.At ?? bound.At;
+            if (at > now) { at = now; }
+            if (pending || now - at < TimeSpan.FromDays(2))
+            { restored.Add((group.Key.Principal, group.Key.Request, hash, at, reservations.Length > 0 && now - at < Hour, pending)); }
+        }
+        if (restored.Count > MaxKeys) { return; }
+        originLaunches.Clear();
+        launchAttempts.Clear();
+        launchRequests.Clear();
+        unresolvedRequests.Clear();
+        machineLaunches.Clear();
+        foreach (var row in restored.OrderBy(r => r.At))
+        {
+            launchRequests.Add((row.Origin, row.Request), (row.Hash, row.At));
+            if (row.Pending) { unresolvedRequests.Add((row.Origin, row.Request)); }
+            if (!row.Charged) { continue; }
+            Get(originLaunches, row.Origin, Hour, now)!.Hit(row.At);
+            machineLaunches.Hit(row.At);
+        }
+        foreach (var row in launches.Where(r => (r.RequestSha256 is not null && r.Outcome is "reserved" or "attempted")
+            || r.RequestSha256 is null && r.Gate?.Phase == "intent").OrderBy(r => r.At))
+        {
+            var at = row.At > now ? now : row.At;
+            if (now - at >= Hour) { continue; }
+            var window = Get(launchAttempts, row.Principal, Hour, now);
+            if (window is null) { return; }
+            window.Hit(at);
+        }
+        CapRebuilding = false;
+        lastLaunchCheck = now;
     }
 
     static int Positive(int value) => value > 0 ? value : throw new ArgumentOutOfRangeException(nameof(value), "A limit must be at least 1.");
@@ -69,6 +135,7 @@ public sealed class AgentLimits
     {
         lock (gate)
         {
+            if (launchAudit is not null) { throw new InvalidOperationException("Durable launch checks require a request binding."); }
             return CheckLaunch(origin, LaunchTime(), launchesPerOrigin, launchesPerMachine);
         }
     }
@@ -87,6 +154,11 @@ public sealed class AgentLimits
         var liveLimit = Positive(limits.LiveAgentLaunched);
         lock (gate)
         {
+            if (CapRebuilding)
+            {
+                if (clock() >= rebuildAt) { RebuildLaunches(); }
+                if (CapRebuilding) { return new(false, "capRebuilding", 30); }
+            }
             var now = LaunchTime();
             var key = (origin, request);
             var known = launchRequests.TryGetValue(key, out var remembered);
@@ -101,10 +173,23 @@ public sealed class AgentLimits
             var wait = attempts.WaitFor(now, attemptLimit);
             if (wait > 0) { return Refuse(wait); }
             attempts.Hit(now);
-            if (known) { return new(false, "requestReused", 0); }
-            launchRequests.Add(key, (requestSha256, now));
-            if (reserveLive && liveLaunches.Count >= liveLimit) { return new(false, AgentLimitVerdict.LiveLimited, 0); }
-            var result = CheckLaunch(origin, now, originLimit, machineLimit);
+            AgentLimitVerdict result;
+            if (known) { result = new(false, "requestReused", 0); }
+            else
+            {
+                launchRequests.Add(key, (requestSha256, now));
+                result = reserveLive && liveLaunches.Count >= liveLimit
+                    ? new(false, AgentLimitVerdict.LiveLimited, 0)
+                    : CheckLaunch(origin, now, originLimit, machineLimit);
+            }
+            if (launchAudit is not null && !launchAudit.Append(new("local", request, origin, [], "session.launch", request,
+                result.Allowed ? "reserved" : "attempted", RequestSha256: requestSha256)))
+            {
+                CapRebuilding = true;
+                rebuildAt = now.AddSeconds(30);
+                return new(false, "auditUnwritable", 30);
+            }
+            if (launchAudit is not null && result.Allowed) { unresolvedRequests.Add(key); }
             if (reserveLive && result.Allowed) { liveLaunches.Add(key, new()); }
             return result;
         }
@@ -191,7 +276,8 @@ public sealed class AgentLimits
         foreach (var entry in launchRequests.ToArray())
         {
             var at = entry.Value.At > now ? now : entry.Value.At;
-            if (now - at >= Hour && !liveLaunches.ContainsKey(entry.Key)) { launchRequests.Remove(entry.Key); }
+            if (!unresolvedRequests.Contains(entry.Key) && !liveLaunches.ContainsKey(entry.Key)
+                && now - at >= (launchAudit is null ? Hour : TimeSpan.FromDays(2))) { launchRequests.Remove(entry.Key); }
             else if (at != entry.Value.At) { launchRequests[entry.Key] = (entry.Value.Hash, at); }
         }
         return now;
@@ -248,5 +334,6 @@ public sealed class AgentLimits
         public bool IsIdle(DateTimeOffset now) => WaitFor(now, int.MaxValue) == 0 && hits.Count == 0;
 
         public void Hit(DateTimeOffset now) => hits.Enqueue(now);
+        public void Clear() => hits.Clear();
     }
 }
