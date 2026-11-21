@@ -156,5 +156,5 @@ test('PC runner seeds a fresh request, verifies real ES256 and writes only after
     fetch: async (_, o) => { if (o.method === 'POST') { raw = o.body; v = vector(JSON.parse(raw).request); return new Response(null, { status: 201 }); } return Response.json({ blobs: [raw, JSON.stringify(v.evidence)] }); },
     confirm: async code => { assert.equal(code, await authenticationString(v.spki, challenge(v.bundle.get))); return true; } };
   const result = await runPC(options); assert.equal(result.outcome, 'PASS'); assert.equal(result.invalidBlobs, 0); assert.equal(writes.length, 1);
-  assert.match(prints[0], /Genesis UNSOLVED/); assert.match(prints[0], /https:\/\/proof.slipgates.com\/\?pc=/);
+  assert.match(prints[0], /Genesis UNSOLVED/); assert.match(prints[0], /https:\/\/proof\.slipgates\.com\/\?pc=/);
 });
