@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
+using System.Text.Json;
 using AgentBridge.App.Core;
+using AgentBridge.Protocol;
 using Xunit;
 
 // The conversation's response as a list (#765): its top-level blocks are the items, kept as they
@@ -8,6 +10,38 @@ using Xunit;
 public sealed class ConversationBlocksTests
 {
     static ObservableCollection<ConversationBlock> Shown(string markdown) => [.. MarkdownModel.Parse(markdown).Select(b => new ConversationBlock(b))];
+
+    [Fact]
+    public async Task Successive_assistant_messages_keep_both_replies_in_order_and_a_third_appends_without_duplicating_updates()
+    {
+        await using var connection = HostConnection.ForProfile("not-connected", new LockedDispatcher());
+        var card = new SessionCardViewModel(Make.Session(), new CardContext
+        {
+            Host = connection, Deliveries = new Deliveries(connection, new LockedDispatcher()), Folds = new FoldStore(null),
+        });
+        void Say(string id, string response)
+        {
+            var activity = JsonSerializer.Deserialize<Activity>(JsonSerializer.Serialize(new
+            {
+                turn = "owner", responseTurn = "owner", responseId = id, userMessage = "Question", response,
+            }), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+            card.Update(card.Session with { Activity = activity });
+        }
+        try
+        {
+            Say("answer", "Original answer.");
+            Say("pulse", "Scheduled pulse.");
+            Assert.Equal(["Original answer.", "Scheduled pulse."], Shown(card.Response).Select(b => b.Text));
+            Say("pulse", "Scheduled pulse, complete.");
+            Say("completion", "Background task completed.");
+            Say("completion", "Background task completed.");
+            Assert.Equal(["Original answer.", "Scheduled pulse, complete.", "Background task completed."],
+                Shown(card.Response).Select(b => b.Text));
+            Assert.Equal(["Original answer.", "Scheduled pulse, complete.", "Background task completed."],
+                card.Stored!.Turns.Single().Parts.Select(p => p.Text));
+        }
+        finally { card.Detach(); }
+    }
 
     [Fact]
     public void A_code_block_is_named_by_the_text_it_draws_with_hidden_characters_as_their_escapes_nested_or_not()

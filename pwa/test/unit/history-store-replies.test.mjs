@@ -6,11 +6,28 @@ import { DemoHost } from '../../js/demo.js';
 import { HostClient } from '../../js/host-client.js';
 import { HistoryStore } from '../../js/history-store.js';
 import { readSession } from '../../js/protocol.js';
+import { shownParts } from '../../js/ui/history-view.js';
 
 const ID = 's1';
 const turn = (n) => `${ID}-turn-${n}`;
 const nums = (snapshot) => snapshot.turns.map((t) => Number(t.id.split('-').at(-1)));
 const prompts = (snapshot) => snapshot.turns.map((t) => t.prompt?.text);
+
+test('successive assistant messages keep both replies in order and a third appends without duplicating updates', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  const say = (responseId, response) => store.live('h', readSession({
+    id: ID, agent: 'copilot', activity: { turn: turn(6), responseTurn: turn(6), responseId, response, userMessage: 'Question' },
+  }));
+  const replies = () => shownParts(store.get('h', ID).turns.at(-1)).filter((p) => p.kind === 'response').map((p) => p.text);
+  say('answer', 'Original answer.');
+  say('pulse', 'Scheduled pulse.');
+  assert.deepEqual(replies(), ['Original answer.', 'Scheduled pulse.']);
+  say('pulse', 'Scheduled pulse, complete.');
+  say('completion', 'Background task completed.');
+  say('completion', 'Background task completed.');
+  assert.deepEqual(replies(), ['Original answer.', 'Scheduled pulse, complete.', 'Background task completed.']);
+});
 
 async function setup(t, { count = 5, ...options } = {}) {
   const host = new DemoHost({ sessions: [{ id: ID, agent: 'copilot', status: 'idle', updatedAt: new Date().toISOString(), activity: { turnCount: count } }] }, { answerDelayMs: 0, history: true });
