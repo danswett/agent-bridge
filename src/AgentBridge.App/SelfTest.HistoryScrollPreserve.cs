@@ -155,7 +155,7 @@ static partial class SelfTest
                         if (bottom)
                         {
                             check(scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5,
-                                $"scroll-preserve behavior: follows replacement reply {update} at the bottom ({scroll.VerticalOffset:R} of {scroll.ScrollableHeight:R})");
+                                $"scroll-preserve behavior: follows replacement reply {update} at the bottom ({scroll.VerticalOffset:R} of {scroll.ScrollableHeight:R}; {view.PinState()})");
                         }
                         else
                         {

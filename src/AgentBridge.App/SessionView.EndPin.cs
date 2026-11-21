@@ -121,6 +121,9 @@ public sealed partial class SessionView
         if (ConversationEndPin.Correction(pinEnd, scroll.VerticalOffset, scroll.ScrollableHeight, anchoring) is { } to) { Anchoring(scroll, to); }
     }
 
+    // Every gate FollowPinnedEnd and KeepPlace consult, for a hosted failure to name the one that held.
+    internal string PinState() => $"pinEnd={pinEnd} anchoring={anchoring} scrolling={scrolling} panning={panning} held={follow.Held} keyTarget={keyTarget} bars={scrollbarPointers.Count} loaded={ConversationList.IsLoaded} navigating={navigationPending is not null} restoring={restoreReading is not null} releases={pinReleases} seen={seen}";
+
     void Anchoring(ScrollViewer scroll, double to)
     {
         anchoring = to;
