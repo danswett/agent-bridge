@@ -11,6 +11,7 @@ public sealed record GrantStoreResult(GrantStoreProblem Problem, GrantDocument? 
 {
     public bool Usable => Problem == GrantStoreProblem.None;
 }
+public sealed record GrantListResult(GrantStoreProblem Problem, GrantDocument[] Grants);
 
 // Inputs are already person-authenticated by the receiver. No ingress or acting authority is enabled here.
 public sealed class GrantStore
@@ -67,6 +68,14 @@ public sealed class GrantStore
     public GrantStoreResult TryGetUsable(Guid id, long generation) =>
         Transaction(state => (null, Find(state, id, generation, checkTime: true)), allowNew: false);
 
+    public GrantListResult List()
+    {
+        GrantDocument[] grants = [];
+        var result = Transaction(state => { grants = state.Grants; return (null, new(GrantStoreProblem.None)); },
+            allowNew: false, readOnly: true);
+        return new(result.Problem, grants);
+    }
+
     internal static State Next(State state, Guid id, string action) => state with { Generation = state.Generation + 1,
         Intents = [.. state.Intents, new(Guid.NewGuid(), id, state.Generation + 1, action)] };
     internal GrantStoreResult Find(State state, Guid id, long generation, bool checkTime)
@@ -80,15 +89,16 @@ public sealed class GrantStore
             : checkTime && now >= GrantValidator.Expiry(grant) ? new(GrantStoreProblem.Expired) : new(GrantStoreProblem.None, grant);
     }
 
-    internal GrantStoreResult Transaction(Func<State, (State? Next, GrantStoreResult Result)> change, bool allowNew = true)
+    internal GrantStoreResult Transaction(Func<State, (State? Next, GrantStoreResult Result)> change, bool allowNew = true, bool readOnly = false)
     {
         if (failure != GrantStoreProblem.None) { return new(failure); }
         try
         {
-            PrivateFolder.Ensure(folder);
-            using var held = AgentAuditLog.Lock(path);
+            if (!readOnly) { PrivateFolder.Ensure(folder); }
+            using var held = AgentAuditLog.Lock(path, read: readOnly);
+            using var auditHeld = readOnly ? AgentAuditLog.Lock(Path.Combine(folder, "audit"), read: true) : null;
             if (failure != GrantStoreProblem.None) { return new(failure); }
-            var state = Load(allowNew);
+            var state = Load(allowNew, readOnly);
             var (next, result) = change(state);
             if (next is null) { return result; }
             var body = JsonSerializer.SerializeToUtf8Bytes(next, Json);
@@ -112,7 +122,7 @@ public sealed class GrantStore
         catch (JsonException) { return new(failure = GrantStoreProblem.Malformed); }
     }
 
-    State Load(bool allowNew)
+    State Load(bool allowNew, bool readOnly = false)
     {
         byte[]? body = null;
         State state;
@@ -138,9 +148,9 @@ public sealed class GrantStore
         catch (FileNotFoundException) { state = new(1, 0, [], [], []); }
         long retained = 0;
         var adopted = false;
-        var (rows, complete) = GateAuditProjection.Load(folder, boundary: (floor, unproven) => { retained = floor; adopted = unproven; });
+        var (rows, complete) = GateAuditProjection.Load(folder, alreadyLocked: readOnly, boundary: (floor, unproven) => { retained = floor; adopted = unproven; });
         // Adopted history is unproven, and per-stream chains cannot see a rollback of one stream: require one global gated sequence.
-        if (!complete || adopted || retained > 0 || !audit.Verify().Intact || !audit.Verify(launch: true).Intact
+        if (!complete || adopted || retained > 0 || !audit.Verify(readOnly: readOnly).Intact || !audit.Verify(launch: true, readOnly: readOnly).Intact
             || rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().Where((s, i) => s != i + 1L).Any())
         { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
         var history = rows.Where(r => r.Action is "grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update").ToArray();
