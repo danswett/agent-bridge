@@ -59,9 +59,10 @@ const textProblem = (text, what) =>
 
 const label = (field) => field.title ?? field.name;
 
-function choiceProblem(field, value) {
+function choiceProblem(field, value, optionValues = null) {
   if (typeof value === 'string') {
-    return field.options?.some((o) => o.value === value) ? null : 'not one of the choices';
+    const known = optionValues !== null ? optionValues.has(value) : field.options?.some((o) => o.value === value);
+    return known ? null : 'not one of the choices';
   }
   if (isObject(value) && has(value, 'other')) {
     if (field.allowOther !== true) { return 'this choice takes no other answer'; }
@@ -73,10 +74,11 @@ function choiceProblem(field, value) {
 }
 
 function multiProblem(field, value) {
+  const optionValues = new Set(field.options?.map((o) => o.value));
   let others = 0;
   for (const item of value) {
     if (isObject(item)) { others++; }
-    const problem = choiceProblem(field, item);
+    const problem = choiceProblem(field, item, optionValues);
     if (problem) { return problem; }
   }
   return others > 1 ? 'at most one other answer' : null;

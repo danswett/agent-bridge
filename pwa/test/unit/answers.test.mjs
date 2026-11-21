@@ -48,6 +48,60 @@ test('a multi choice takes a list with at most one other', () => {
   assert.match(checkAnswer(q, fields({ pick: ['z'] })), /not one of the choices/);
 });
 
+test('multi choice validation keeps its verdicts for values, duplicates and wrong types', () => {
+  const q = form({ ...choice('pick', { other: true }), type: 'multi' });
+  for (const [value, problem] of [
+    [['a', 'b'], null],
+    [['a', 'a'], null],
+    [[], null],
+    [['a', 'missing'], 'not one of the choices'],
+    [['A'], 'not one of the choices'],
+    [['a', 1], 'expected a choice'],
+    [[null], 'expected a choice'],
+    [[['a']], 'expected a choice'],
+    ['a', 'expected a list of choices'],
+    [['a', { other: 'c' }], null],
+    [[{ other: ' ' }], 'the other answer is empty'],
+    [[{ other: 'c', extra: true }], 'unexpected properties beside other'],
+    [[{ other: 'c' }, { other: 'd' }], 'at most one other answer'],
+  ]) {
+    assert.equal(checkAnswer(q, fields({ pick: value })), problem === null ? null : `"pick": ${problem}`, JSON.stringify(value));
+  }
+  q.fields[0].allowOther = false;
+  assert.equal(checkAnswer(q, fields({ pick: [{ other: 'c' }] })), '"pick": this choice takes no other answer');
+});
+
+test('multi choices use only their own current options on each answer check', () => {
+  const q = form(
+    { name: 'first', type: 'multi', options: [{ value: 'a' }] },
+    { name: 'second', type: 'multi', options: [{ value: 'b' }] },
+    { name: 'empty', type: 'multi' },
+  );
+  assert.equal(checkAnswer(q, fields({ first: ['a'], second: ['b'], empty: [] })), null);
+  assert.equal(checkAnswer(q, fields({ second: ['a'] })), '"second": not one of the choices');
+  assert.equal(checkAnswer(q, fields({ empty: ['a'] })), '"empty": not one of the choices');
+  q.fields[0].options[0].value = 'c';
+  assert.equal(checkAnswer(q, fields({ first: ['c'] })), null);
+  assert.equal(checkAnswer(q, fields({ first: ['a'] })), '"first": not one of the choices');
+});
+
+test('multi choice option reads grow with options plus selected items, not their product', () => {
+  const optionReads = (optionCount, itemCount) => {
+    const q = form({ name: 'pick', type: 'multi', options: Array.from({ length: optionCount }, (_, i) => ({ value: `v${i}` })) });
+    let reads = 0;
+    q.fields[0].options.forEach((option, i, options) => {
+      Object.defineProperty(options, i, { get() { reads++; return option; } });
+    });
+    const selected = Array.from({ length: itemCount }, (_, i) => `v${optionCount - itemCount + i}`);
+    assert.equal(checkAnswer(q, fields({ pick: selected })), null);
+    return reads;
+  };
+  const small = optionReads(256, 32);
+  const large = optionReads(1024, 128);
+  assert.ok(large <= 5 * small, `4x options and items grew option reads from ${small} to ${large}`);
+  assert.ok(large <= 1024 + 128, `option reads ${large} exceed options plus items`);
+});
+
 test('booleans, numbers and text must have their own JSON type', () => {
   const q = form({ name: 'ok', type: 'boolean' }, { name: 'n', type: 'number' }, { name: 't', type: 'text' });
   assert.equal(checkAnswer(q, fields({ ok: true, n: 3, t: 'hi' })), null);
