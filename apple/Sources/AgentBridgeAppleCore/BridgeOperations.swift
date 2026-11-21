@@ -120,13 +120,13 @@ enum BridgeOperationValidation {
     }
 
     static func blank(_ text: String) -> Bool {
-        text.unicodeScalars.allSatisfy { CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0) }
+        Invisible.blank(text)
     }
 
     static func prompt(_ text: String, allowEmpty: Bool) throws {
         guard allowEmpty || !blank(text) else { throw BridgeOperationError("Enter a message or attach a file.") }
         guard text.utf8.count <= 16 * 1024 else { throw BridgeOperationError("The message is longer than 16 KiB.") }
-        let first = text.unicodeScalars.first { !CharacterSet.whitespacesAndNewlines.contains($0) && !CharacterSet.controlCharacters.contains($0) }
+        let first = Invisible.first(text)
         guard first != "/", first != "!" else { throw BridgeOperationError("Messages cannot begin with / or !. Type commands at the machine.") }
     }
 

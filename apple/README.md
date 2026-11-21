@@ -44,6 +44,9 @@ the connected host offers them, such as a capable remote Windows host.
   Question answers and notification replies have separate draft state. Replies
   check the complete encoded 48 KiB request budget before delivery; answers also
   check the host's 16 KiB budget using its pinned .NET 10 JSON escaping rules.
+  Replies, launch prompts and answers share the host's invisible-character rules:
+  invisible-only text is blank, and a hidden prefix cannot conceal `/` or `!`
+  at the start of a reply or launch prompt. Accepted text is preserved unchanged.
 - Files, PhotosPicker and Mac image paste, resizing when needed, removable staged
   attachments, bounded chunk uploads and encrypted blob uploads up to host limits.
 - Host-provided launch/resume choices, signed full-disclosure folder-trust answers,
@@ -73,6 +76,9 @@ frames, response ordering, cancellation, final socket data, reconnect races,
 mutation identity, attachments, cache isolation and delayed account transitions.
 Fixtures use disposable sockets, files and in-memory peers, never installed
 profiles or live agents.
+Invisible-character regression tests replay the shared reply/launch vectors.
+On Windows workers, Swift validation runs only in `apple.yml` on `macos-15`,
+not locally.
 
 Validated locally with Xcode 27.2 / Swift 6.4.2. The Mac UI was exercised through
 accessibility against the isolated fixture; iPhone/iPad layouts are checked in
