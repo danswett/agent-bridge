@@ -122,10 +122,31 @@ public sealed class LatestReturnTests
         Assert.Contains("wheelReceipt ??= away.StampLatestNativeInput(input, scroll);", source, StringComparison.Ordinal);
         AssertOrdered(source,
             "wheelInput = away.BeginLatestNativeInput();",
-            "Wheel(window, list);",
+            "await wheel.Post();",
+            "wheel.RecordReceipt(wheelReceivedCount is not null);",
             "var quarantined = wheelReceivedCount is null",
             "if (!quarantined)",
             "CheckLatestNativeReceipt(away, wheelReceipt, check);");
+    }
+
+    [Fact]
+    public void The_native_wheel_holds_list_or_stop_focus_until_the_view_settles()
+    {
+        var source = HistoryBudgetSource();
+        var focus = source[source.IndexOf("sealed class WheelInputPort", StringComparison.Ordinal)..];
+        AssertOrdered(focus,
+            "NativeWheelInput.FocusWithFallback(",
+            "() => Focus(false,",
+            "() => Focus(true, \"list fallback\")",
+            "fallback ? list : scroll.Content is DependencyObject content",
+            "FocusManager.FindLastFocusableElement(content)",
+            "NativeInputSetup.RestoreFocus(restoreAt,",
+            "element.BringIntoViewRequested += held;",
+            "element.BringIntoViewRequested -= held;",
+            "await FocusManager.TryFocusAsync(focused, FocusState.Programmatic)",
+            "await CaptureFrame(window.RootElement);",
+            "await Still(scroll);");
+        Assert.DoesNotContain("window.RootElement.BringIntoViewRequested", focus, StringComparison.Ordinal);
     }
 
     static string HistoryBudgetSource()
