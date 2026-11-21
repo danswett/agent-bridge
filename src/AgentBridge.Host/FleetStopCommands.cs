@@ -104,11 +104,18 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 if (!authorized.Usable) { denial = FleetGrantLaunch.StoreReason(authorized.Problem); }
                 return authorized.Usable && denial is null;
             }
+            var replayed = false;
             var result = await stops.StopAuditedAsync(new() { Id = target!.Session, Request = input.Request.ToString() },
-                Dispatch, principal: principal, personConfirmation: false);
+                Dispatch, principal: principal, onReplay: () => replayed = true, personConfirmation: false);
             var reason = denial ?? (result.Outcome == StopOutcome.Confirm ? "person-required"
                 : result.Outcome == StopOutcome.Ended ? "none" : result.Reason == "still-running" ? "still-running" : "policy");
-            var outcome = result.Outcome == StopOutcome.Ended ? "ended" : intent is not null && result.Outcome == StopOutcome.Failed ? "unconfirmed" : "refused";
+            var outcome = result.Outcome == StopOutcome.Ended ? "ended" : result.Outcome == StopOutcome.Failed ? "unconfirmed" : "refused";
+            if (replayed)
+            {
+                return audit.Append(new("local", input.Request.ToString(), principal, caller.Chain, "fleet.end.replay",
+                    target.Session, outcome, reason) { Grant = input.Grant.ToString() })
+                    ? Receipt(outcome, reason == "none" ? null : reason) : Receipt("unconfirmed", "audit-unavailable");
+            }
             if (intent is null) { return Refused(reason); }
             if (!audit.Append(intent with { Outcome = outcome, Gate = intent.Gate! with
                 { Phase = "terminal", ReasonCode = reason == "none" ? "none" : outcome == "unconfirmed" ? "unconfirmed" : "refused" } }))

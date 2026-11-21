@@ -113,9 +113,22 @@ public sealed class FleetStopTests : IDisposable
         var confirmed = await stops.StopAuditedAsync(new() { Id = id, Request = Guid.NewGuid().ToString(), Confirm = "fake" }, null, personConfirmation: false);
         Assert.Equal(StopOutcome.Refused, confirmed.Outcome);
         control.ExitOnTyping = false;
-        Assert.Equal("still-running", (await End()).Reason);
+        var request = Guid.NewGuid();
+        var first = await End(request: request);
+        Assert.Equal("still-running", first.Reason);
+        Assert.Equal(first.Outcome, (await End(request: request)).Outcome);
+        Assert.Equal(1, injector.Calls);
         Assert.Equal(new GrantUsage(1, 1, 1), counters.Read(grant.Id, 1).Usage);
         Assert.Equal(0, control.Terminations);
+    }
+    [Fact]
+    public async Task A_process_that_exits_before_dispatch_is_reported_ended_without_typing()
+    {
+        Own();
+        control.GoneOnSecond = true;
+        Assert.Equal("ended", (await End()).Outcome);
+        Assert.Equal(0, injector.Calls);
+        Assert.Equal(new GrantUsage(1, 1, 0), counters.Read(grant.Id, 1).Usage);
     }
     [Fact]
     public async Task Revocation_at_dispatch_is_refused_without_typing()
@@ -140,10 +153,15 @@ public sealed class FleetStopTests : IDisposable
     sealed class Probe : IAgentHaBridgeProbe { public string? Active() => null; }
     sealed class Control : IProcessControl
     {
-        public bool Exited, ExitOnTyping = true;
+        public bool Exited, GoneOnSecond, ExitOnTyping = true;
         public int Terminations, Opens;
         public Action? Before;
-        public HeldOpen Open(int pid, DateTimeOffset at) { Opens++; Before?.Invoke(); return HeldOpen.Of(new Held(this, pid)); }
+        public HeldOpen Open(int pid, DateTimeOffset at)
+        {
+            Opens++; Before?.Invoke();
+            if (GoneOnSecond && Opens == 2) { Exited = true; return HeldOpen.Exited(); }
+            return HeldOpen.Of(new Held(this, pid));
+        }
         sealed class Held(Control owner, int pid) : IHeldProcess
         {
             public int Id => pid;

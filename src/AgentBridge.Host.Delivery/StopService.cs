@@ -251,7 +251,11 @@ public sealed class StopService : ISessionStopper
         var opened = control.Open(pid, startedAt);
         if (opened.Refusal is { } refusal) { return Refused(refusal); }
         // Gone between the press and now: what the press asked for has happened.
-        if (opened.Process is not { } held) { return Ended(false); }
+        if (opened.Process is not { } held)
+        {
+            if (!personConfirmation && beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
+            return Ended(false);
+        }
         Task? pendingWorker = null;
         // Whether the handle outlives this stop, until every failed worker is proven gone.
         var hold = false;
