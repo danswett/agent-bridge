@@ -182,7 +182,9 @@ expiry; it supplies no cap/lifetime defaults. The existing signed-in Windows
 identity is required; no key is provisioned. Issuer account/device and proof/digest
 are replaced by the verified local person path. The document's issued time must
 not be in the future or leave an expired grant. Its complete normalized summary
-is displayed; the person types the exact SHA-256 digest in an unredirected terminal.
+is displayed; the person types the exact SHA-256 digest in an unredirected console.
+HostCli requires a direct desktop (`explorer.exe`) parent; shell-parent mutations,
+including revoke, deliberately refuse with exit 4. No script or bypass flag qualifies.
 The digest excludes only issuer proof/digest and includes `allowAllLaunch`, an
 explicit boolean defaulting false. The receipt repeats that digest and boolean.
 This field conveys no Allow-all authority until G5 validator/policy wiring lands.

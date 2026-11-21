@@ -59,8 +59,7 @@ public static class GrantCommands
                     && inbound.Agents.Contains(a.Id, StringComparer.Ordinal)).ToArray();
                 var device = Wire.DeviceId(key.Public);
                 var scope = new GrantScope([device],
-                    [.. offered.Workspaces.Where(w => w.Isolate == true && !settings.Agents.ExcludedWorkspaces.Contains(w.Label)
-                        && (inbound.Workspaces.Contains("approved") || inbound.Workspaces.Contains(w.Label))).Select(w => w.Label)],
+                    ApprovedWorkspaces(settings, offered.Workspaces),
                     [.. agents.Select(a => a.Id)], Common(agents.Select(a => a.Models)),
                     Common(agents.Select(a => a.Id == "agency" ? (IReadOnlyList<string>)[.. (a.Profiles ?? []).Where(p => inbound.Profiles.Contains(p))] : ["default"])),
                     Common(agents.Select(a => a.Efforts)), Common(agents.Select(a => a.Contexts)), ["ask"]);
@@ -71,12 +70,8 @@ public static class GrantCommands
                     new(Math.Min(limits.LaunchesPerOriginPerHour, limits.LaunchesPerMachinePerHour), 5000, limits.LiveAgentLaunched), true, true);
             }
             return Run(args, Refused, audit, () => new(folder, key, audit, policy?.Scope!),
-                () =>
-                {
-                    var (latest, problem) = HostSettings.Load(folder);
-                    return policy is null ? throw new InvalidOperationException("policy unavailable")
-                        : policy with { LaunchAllowed = problem is null && JsonSerializer.Serialize(latest) == JsonSerializer.Serialize(acceptedSettings) };
-                }, _ => document ?? throw new JsonException("document unavailable"),
+                () => RecheckPolicy(folder, acceptedSettings, policy ?? throw new InvalidOperationException("policy unavailable")),
+                _ => document ?? throw new JsonException("document unavailable"),
                 digest =>
                 {
                     output.WriteLine($"Confirm this exact grant digest: {digest}");
@@ -87,6 +82,24 @@ public static class GrantCommands
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or CryptographicException
             or HostErrorException or TimeoutException or InvalidOperationException)
         { error.WriteLine($"refused: grant operation unavailable ({e.GetType().Name})"); return 4; }
+    }
+
+    internal static ImmutableArray<string> ApprovedWorkspaces(HostSettings settings, IReadOnlyList<LaunchWorkspace> offered) =>
+        [.. offered.Where(w => w.Isolate == true && !settings.Agents.ExcludedWorkspaces.Contains(w.Label)
+            && settings.Launch.Workspaces.SingleOrDefault(a => a.Label == w.Label) is { Isolate: true } approved
+            && AgentBridge.Host.Delivery.Launch.Folders.Same(approved.Path, w.Path)
+            && settings.Agents.InboundLocal.Launch is { } inbound
+            && (inbound.Workspaces.Contains("approved") || inbound.Workspaces.Contains(w.Label))).Select(w => w.Label)];
+
+    internal static HostPolicySnapshot RecheckPolicy(string folder, HostSettings? accepted, HostPolicySnapshot policy)
+    {
+        var (latest, problem) = HostSettings.Load(folder);
+        SignInResult? account;
+        try { account = JsonSerializer.Deserialize<SignInResult>(File.ReadAllText(Path.Combine(folder, "account.json"))); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        { return policy with { LaunchAllowed = false }; }
+        return policy with { LaunchAllowed = account?.AccountId == policy.Account && problem is null
+            && JsonSerializer.Serialize(latest) == JsonSerializer.Serialize(accepted) };
     }
 
     static ImmutableArray<string> Common(IEnumerable<IReadOnlyList<string>> lists)
@@ -146,8 +159,7 @@ public static class GrantCommands
         var body = JsonSerializer.SerializeToUtf8Bytes(grant with
         { Issuer = grant.Issuer with { PersonProof = "", Digest = "" } }, ProtocolJson.Options);
         var digest = Convert.ToHexStringLower(SHA256.HashData(body));
-        output.WriteLine(JsonSerializer.Serialize(new
-        { grant.Id, grant.Generation, grant.Subjects, grant.Actions, grant.Scope, grant.Caps, grant.ExpiresAt, grant.AllowAllLaunch }, ProtocolJson.Options));
+        output.WriteLine(System.Text.Encoding.UTF8.GetString(body));
         if (confirm(digest) != digest) { return Fail("exact person digest was not confirmed"); }
         if (refused()) { return Deny(args, audit, error); }
         var latest = policy();

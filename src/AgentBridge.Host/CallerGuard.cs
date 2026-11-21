@@ -88,6 +88,9 @@ public sealed class CallerGuard(Func<IReadOnlyList<KnownProcess>> known, string?
         }
         if (hostImage is not null && self.Image is { } program && string.Equals(Path.GetFullPath(program), Path.GetFullPath(hostImage), StringComparison.OrdinalIgnoreCase))
         {
+            // Shell image/console inheritance cannot distinguish a person from a script.
+            if (chain.Count < 2 || !string.Equals(AgentAncestry.FileName(chain[1].Image), "explorer.exe", StringComparison.OrdinalIgnoreCase))
+            { return new Caller(CallerKind.Other, "host command line was not started directly from the desktop"); }
             return new Caller(CallerKind.HostCli, $"agent-bridge-host's command line (pid {self.Id})");
         }
         return new Caller(CallerKind.Other, $"{(AgentAncestry.FileName(self.Image) is { Length: > 0 } file ? file : "a process")} (pid {self.Id}), which is not the {Product.App} beside this host");
