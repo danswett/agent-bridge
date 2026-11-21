@@ -1734,8 +1734,18 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   The accepted #2144/#2146 rules also require no automatic view movement or collapse of an
   unread answer, "N new · Jump to first unread", an owner's "Waiting" or "Queued" with
   "Starts after the current run" until its own reply, and "Reply not shown. Retry" with a
-  44 px Retry button instead of a gap. Remaining unread/queue/missing-reply UX is C2, not
-  implemented or declared complete by C1; these rules supersede the older H3 wording for C2.
+  44 px Retry button instead of a gap. C2 now marks the first deferred reply turn while the
+  person is scrolled back and offers "N new · Jump to first unread". It counts reply turns
+  once, not streaming updates or prompts without replies, and jumps to the first in transcript
+  order without rejoining the latest. Reaching the bottom clears the marker and count.
+  Deferred replies announce politely once per turn: "New reply" for the person's answer,
+  "Scheduled run replied" for scheduled and notification replies, with the unread count.
+  The installed-phone WebKit fixture replays four replies (an 800-character answer,
+  scheduled at +3 seconds, notification at +8); the host-to-client test checks every
+  synthetic `events.jsonl` assistant message through paged history, including text hashes.
+  This does not complete turn-specific unread persistence, queued-owner states, missing-reply
+  UX, delivery receipts or physical installed-device verification; C1 did not declare those complete.
+  These rules supersede the older H3 wording for C2.
   It opens at the end, on the latest reply, and stays there as replies arrive until the person
   scrolls; once they scroll, a new reply never moves the view (#1635, #1646).
   A question brought into view, a block requested by a screen reader or any other move back from

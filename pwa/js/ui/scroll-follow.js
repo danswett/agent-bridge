@@ -1,5 +1,5 @@
 import { h } from './dom.js';
-import { HistoryView } from './history-view.js';
+import { HistoryView, shownParts } from './history-view.js';
 
 export const BOTTOM_TOLERANCE_PX = 4;
 const streamedTurns = new WeakMap();
@@ -40,6 +40,12 @@ export class ScrollFollow {
   #pending = new Set();
   #tail = null;
   #rendered = null;
+  #unreadButton = null;
+  #unreadMarker = null;
+  #unreadTurns = [];
+  #knownTurns = new Set();
+  #unreadAnnounce = null;
+  #announcedTurns = new Set();
 
   constructor(element, { input = element, content = () => element.children, scroll = (fn) => fn(), visible = () => element.getClientRects().length > 0, canFollow = () => true, canDefer = () => true, onFollow = () => {} } = {}) {
     Object.assign(this, { element, content, scroll, visible, canFollow, canDefer, onFollow });
@@ -110,6 +116,7 @@ export class ScrollFollow {
 
   #rejoin() {
     this.#pending.clear();
+    this.#clearUnread();
     this.shown = this.#latest;
     this.onFollow();
     if (this.#tail) {
@@ -136,6 +143,14 @@ export class ScrollFollow {
   // Keep the already visible exchange in its live DOM; append subsequent turns below it.
   snapshot(snapshot, inline) {
     const id = this.shown?.activity.turn;
+    const held = snapshot.turns.findIndex((t) => t.id === id);
+    if (!this.following && held >= 0 && this.#knownTurns.size) {
+      // Carried notices have their own id without advancing activity.turn.
+      for (const t of snapshot.turns.slice(held + 1)) {
+        if (!this.#knownTurns.has(t.id)) { this.#pending.add(t.id); }
+      }
+    }
+    this.#knownTurns = new Set(snapshot.turns.map((t) => t.id));
     if (!this.#pending.size || this.#rendered?.id !== id) {
       this.#rendered = { id, turn: snapshot.turns.find((t) => t.id === id) };
     }
@@ -143,13 +158,55 @@ export class ScrollFollow {
     if (!this.#pending.size) { return { ...snapshot, turns: head }; }
     if (!this.#tail) {
       const view = new HistoryView();
-      this.#tail = { view, root: h('div', { class: 'stream' }, view.element) };
+      this.#unreadAnnounce = h('span', { class: 'sr-only conversation-unread-announce', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' });
+      this.#tail = { view, root: h('div', { class: 'stream' }, this.#unreadAnnounce, view.element) };
       this.#tail.root.style.marginBlockStart = 'var(--ab-space-6)';
       this.element.append(this.#tail.root);
     }
     const turns = snapshot.turns.filter((t) => this.#pending.has(t.id)).map(streamedTurn);
     this.#tail.view.render({ ...snapshot, turns }, null, inline);
+    this.#unreadTurns = turns.filter((t) => shownParts(t).some((p) => p.kind === 'response' && p.text));
+    this.#tail.view.onSettled = () => this.#drawUnread();
+    this.#drawUnread();
     return { ...snapshot, turns: head.filter((t) => !this.#pending.has(t.id)) };
+  }
+
+  #drawUnread() {
+    this.#unreadMarker?.removeAttribute('data-first-unread');
+    this.#unreadMarker = null;
+    if (!this.#unreadTurns.length) { this.#clearUnread(); return; }
+    const id = this.#unreadTurns[0].id;
+    this.#unreadMarker = [...this.#tail.view.element.querySelectorAll('.history-turn')].find((el) => el.dataset.turn === id) ?? null;
+    this.#unreadMarker?.setAttribute('data-first-unread', '');
+    if (!this.#unreadButton) {
+      this.#unreadButton = h('button', { type: 'button', class: 'history-load conversation-unread', onclick: () => {
+        const target = this.#unreadMarker;
+        if (!target) { return; }
+        // Keep the held live exchange: rejoining here would jump past the first unread answer.
+        this.appScroll(() => this.scroll(() => target.scrollIntoView({ block: 'start', behavior: 'instant' })))();
+      } });
+      this.element.before(this.#unreadButton);
+    }
+    this.#unreadButton.textContent = `${this.#unreadTurns.length} new \u00b7 Jump to first unread`;
+    this.#unreadButton.disabled = !this.#unreadMarker;
+    const fresh = this.#unreadTurns.filter((t) => !this.#announcedTurns.has(t.id));
+    if (fresh.length) {
+      for (const t of fresh) { this.#announcedTurns.add(t.id); }
+      const turn = fresh.at(-1);
+      const automatic = ['scheduled', 'notification'].includes(turn.kind) || ['schedule', 'notification'].includes(turn.prompt?.from);
+      const count = this.#unreadTurns.length;
+      this.#unreadAnnounce.textContent = `${automatic ? 'Scheduled run replied' : 'New reply'}. ${count} new ${count === 1 ? 'reply' : 'replies'}.`;
+    }
+  }
+
+  #clearUnread() {
+    this.#unreadMarker?.removeAttribute('data-first-unread');
+    this.#unreadMarker = null;
+    this.#unreadButton?.remove();
+    this.#unreadButton = null;
+    this.#unreadTurns = [];
+    this.#announcedTurns.clear();
+    if (this.#unreadAnnounce) { this.#unreadAnnounce.textContent = ''; }
   }
 
   get questionHost() { return this.#pending.size ? this.#tail?.root : null; }
@@ -210,6 +267,7 @@ export class ScrollFollow {
   resume() { this.#app = null; this.remember(); }
 
   dispose() {
+    this.#clearUnread();
     this.#listeners.abort();
     this.#observer?.disconnect();
     this.#tail?.view.dispose();

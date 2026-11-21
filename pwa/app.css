@@ -1311,7 +1311,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 }
 
 /* ---- the conversation (ui.md §6.4) ---- */
-.conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.conversation { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .stream-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--ab-space-6) var(--conversation-gutter); }
 /* The reading measure: about 68 characters, a step larger than the UI around it. */
 .stream {
@@ -1350,6 +1350,12 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .history-top [hidden] { display: none; }
 .history-load { min-height: 44px; padding: 0 var(--ab-space-4); font: inherit; color: inherit; background: none; border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); cursor: pointer; }
 .history-load:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.conversation-unread {
+  position: absolute; z-index: 2; inset-inline-start: 50%; transform: translateX(-50%);
+  bottom: calc(var(--foot-h, 0px) + var(--ab-space-4)); max-width: calc(100% - var(--ab-space-4));
+  background: var(--ab-card); box-shadow: 0 8px 24px var(--ab-shadow);
+}
+.history-turn[data-first-unread] { border-block-start: 2px solid var(--ab-bridge); padding-block-start: var(--ab-space-3); }
 /* A message's time (#1619, ui.md §6.4). The owner's row always exists, so a time arriving later moves nothing. */
 .msg-time-row { display: flex; min-height: var(--type-meta-line); }
 .msg-time-owner { justify-content: flex-end; }
