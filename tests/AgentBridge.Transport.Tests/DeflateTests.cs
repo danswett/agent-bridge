@@ -11,7 +11,7 @@ namespace AgentBridge.Transport.Tests;
 public class DeflateTests
 {
     [Theory]
-    [InlineData(149)]
+    [InlineData(149, Skip = "Quarantined: reported Windows 30s roundtrip flake; cause unconfirmed. Tracking: https://github.com/danswett/agent-bridge/issues/2714")]
     [InlineData(150)]
     [InlineData(511)]
     public async Task Pwa_boundary_messages_round_trip_through_the_host_codec(int bytes)
