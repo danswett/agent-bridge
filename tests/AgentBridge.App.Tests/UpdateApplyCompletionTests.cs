@@ -78,6 +78,22 @@ public sealed class UpdateApplyCompletionTests
     }
 
     [Theory]
+    [InlineData("0.0.0")]
+    [InlineData(" v0.0.0+build123 ")]
+    public async Task An_unknown_target_version_is_never_reported_as_version_skew(string target)
+    {
+        evidence = new(true, 0, Target);
+
+        var result = await Watch().RunAsync(target);
+
+        Assert.Equal(UpdateApplyEnd.Unknown, result.End);
+        Assert.Equal("target-unknown", result.Code);
+        Assert.Equal("target-version", result.Step);
+        Assert.Equal(target, result.TargetVersion);
+        Assert.Equal(Target, result.ActiveVersion);
+    }
+
+    [Theory]
     [InlineData(null, UpdateApplyEnd.Unknown, "exit-unknown")]
     [InlineData(7, UpdateApplyEnd.Failed, "exit-failed")]
     [InlineData(-1, UpdateApplyEnd.Failed, "exit-failed")]
@@ -208,6 +224,7 @@ public sealed class UpdateApplyCompletionTests
     [InlineData("0.1.200", "v0.1.200")]
     [InlineData("0.1.200", " 0.1.200")]
     [InlineData("0.1.200", "0.1.200+build123")]
+    [InlineData("0.1.200-RC.1", "0.1.200-rc.1")]
     [InlineData("0.1.200-RC.1", " V0.1.200-rc.1+build123 ")]
     public async Task Completion_compares_normalized_release_identities(string target, string active)
     {
