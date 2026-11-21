@@ -1,11 +1,11 @@
 import { origin, plan } from './phone.mjs';
 import { qrSvg } from './qr.mjs';
 import { mountPhone } from './screen.mjs';
-export function renderSession(doc, bundle, fragment, actualOrigin, nav, returnEvidence, now = Date.now) {
+export function renderSession(doc, bundle, fragment, actualOrigin, nav, returnEvidence, now = Date.now, requestFingerprint) {
   const u = new URL(origin + '/');
-  const fingerprint = bundle.get.genesisHash.slice(0, 16).match(/.{4}/g)?.join(' ');
+  const fingerprint = requestFingerprint ?? bundle.get.genesisHash.slice(0, 16).match(/.{4}/g)?.join(' ');
   u.hash = new URLSearchParams({ session: bundle.get.sessionId, fingerprint }).toString();
-  const p = plan(bundle, fragment || u.hash, now(), actualOrigin), find = id => doc.getElementById(id);
+  const p = plan(bundle, fragment || u.hash, now(), actualOrigin, requestFingerprint), find = id => doc.getElementById(id);
   find('account').textContent = 'Account: spike (test only)'; find('fingerprint').textContent = p.fingerprint;
   if (fragment) {
     find('qr').innerHTML = ''; find('approve').hidden = false;
