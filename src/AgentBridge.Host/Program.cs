@@ -875,7 +875,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var enrollmentGate = new object();
     HostEnrollment? enrollment = null;
     // The serving connection's roster read, for Finish: never a second connection as this device.
-    Func<Task<RelayRoster?>>? liveRoster = null;
+    var liveRoster = new LiveRosterSource();
     HostEnrollment? Enrollment()
     {
         lock (enrollmentGate)
@@ -930,7 +930,7 @@ async Task<int> ServeAsync(HostHandover handover)
         EnrollStatus = () => Enrollment()?.Status() ?? "not-enrolled",
         EnrollShown = () => Enrollment()?.Shown ?? default,
         EnrollCode = typed => Enrollment()?.EnterCode2(typed) ?? "signed-out",
-        EnrollFinish = () => HostEnrollment.FinishAsync(Enrollment(), liveRoster, HostRosterPinWriter.PinPath(identity.Folder), HostRoster.Now,
+        EnrollFinish = () => HostEnrollment.FinishAsync(Enrollment(), liveRoster.Reader, HostRosterPinWriter.PinPath(identity.Folder), HostRoster.Now,
             () => identity.Account?.AccountId),
         SignIn = async (relay, show, ct) =>
         {
@@ -944,6 +944,7 @@ async Task<int> ServeAsync(HostHandover handover)
             peerUsage?.Bind(result.AccountId);
             // An enrollment attempt for the account before ends first; a Finish already writing completes before it.
             lock (enrollmentGate) { enrollment?.Dispose(); enrollment = null; }
+            liveRoster.Clear();
             identity.Save(result);
             File.WriteAllText(Path.Combine(identity.Folder, "relay.txt"), relay.ToString());
             signedInRelay = relay;
@@ -1074,7 +1075,7 @@ async Task<int> ServeAsync(HostHandover handover)
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff.Reset();
-            liveRoster = () => relay.GetRosterAsync(current.Token);
+            liveRoster.Set(() => relay.GetRosterAsync(current.Token));
             // security.roster: off reads, verifies and logs once; observe keeps the pinned reader fed, read-only.
             _ = Task.Run(() => rosterObserve.ConnectedAsync(relay.GetRosterAsync, relay.AccountId, relay.Completion, current.Token));
             since.Restart();
@@ -1119,6 +1120,7 @@ async Task<int> ServeAsync(HostHandover handover)
         }
         finally
         {
+            liveRoster.Clear();
             connection = null;
             trustedPeers.Attach(null);
             relayBlobs.Attach(null);
