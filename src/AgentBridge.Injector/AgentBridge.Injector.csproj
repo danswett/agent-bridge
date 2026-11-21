@@ -22,4 +22,8 @@
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Compile Include="..\AgentBridge.Host.Delivery\Windows\ConsoleLaunchSize.cs" Link="ConsoleLaunchSize.cs" />
+  </ItemGroup>
+
 </Project>

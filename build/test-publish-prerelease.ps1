@@ -600,12 +600,15 @@ Check "An ancestor whose run publishes first stands aside when main has changed 
     # B's lower version would be refused and B's app changes never released (#938's review).
     Reset 3
     $global:PpSelect = $appTail
-    $plan = Invoke-Publish '0.1.601' -Head $descendant -Plan
+    $env:GITHUB_ACTIONS = 'true'
+    try { $plan = Invoke-Publish '0.1.601' -Head $descendant -Plan }
+    finally { Remove-Item Env:GITHUB_ACTIONS }
     Assert ($global:PpCalls -contains "gh api repos/$repo/compare/$commit...$descendant --jq .status") "calls: $($global:PpCalls -join '; ')"
     Assert ($global:PpCalls -contains "selector select --repo $scratch --ring 1 --base $commit --head $descendant") "calls: $($global:PpCalls -join '; ')"
     Assert (@(Uploads).Count -eq 0 -and @(Deletes).Count -eq 0) "uploads: $(Uploads); deletes: $(Deletes)"
     Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "writes: $($global:PpCalls -join '; ')"
     Assert ($plan -like "*main has moved on to $descendant, which changes the app since $commit*") "plan: $plan"
+    Assert ($plan -like "*::warning::*main has moved on to $descendant, which changes the app since $commit; commit $descendant must publish both, not v0.1.601*") 'the green stale-app skip did not annotate the reason, skipped commit and required publish commit'
     # Then B's run, main's head, publishes its lower version over S's release.
     Remove-Item (Get-PpDir 'win'), (Get-PpDir 'win-arm64') -Recurse -Force
     $dirs = @(New-Folder '0.1.600'; New-Folder '0.1.600' -Channel 'win-arm64')

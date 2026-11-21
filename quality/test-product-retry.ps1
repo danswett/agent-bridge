@@ -212,8 +212,8 @@ try {
         }
     }
     $workflow = Get-Content -Raw (Join-Path $PSScriptRoot '..\.github\workflows\ci.yml')
-    Assert ($workflow.Contains("if: env.DOTNET_TARGET != '' && matrix.os == 'windows-latest'")) 'only windows-latest enters the retry step'
-    Assert ($workflow.Contains("if: env.DOTNET_TARGET != '' && matrix.os != 'windows-latest'")) 'other product matrix legs retain the original coverage step'
+    Assert ($workflow.Contains("if: env.DOTNET_TARGET != '' && (matrix.os == 'windows-latest' || matrix.os == 'windows-11-arm')")) 'both Windows product legs enter the same retry step'
+    Assert ($workflow.Contains("if: env.DOTNET_TARGET != '' && matrix.os == 'ubuntu-latest'")) 'Linux retains the original coverage step'
     Assert ($workflow.Contains('exit (Invoke-ProductTestRetry -Target $env:DOTNET_TARGET -Filter $env:TEST_FILTER)')) 'the Windows step propagates the final retry exit'
 }
 finally {

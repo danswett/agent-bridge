@@ -296,6 +296,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    or went red, are tested with this one. A base older than needed only tests more; none found,
    or the runs unreadable, runs the whole ring, never "no change". A docs-only push to `main`
    runs what docs select (`light`'s link check, say), not the app or the product's builds.
+   Main also reads the highest-version **published** release (never drafts or orphaned tags).
+   Its base is the common ancestor of that release's commit and the passed CI commit.
+   Thus green CI that skipped publishing cannot erase unpaid app changes: the next main
+   head builds, tests and publishes them through the existing serialized, ordered publish path.
+   Missing, unreadable or non-ancestor release evidence runs the whole ring with packaging.
    Pull requests keep cancelling a superseded run, and a run by hand its own group.
    Known docs/ordinary-test-only main changes also skip `product` through its plan output.
    The selector proves test-source ownership through the project graph: files linked into or
@@ -308,8 +313,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    `-Narrow app,app-installer`: a whole-ring-only workflow or quality change does not build
    packages or installers. App source and dependencies, packaging inputs, shared build roots,
    ci.yml's packaging/SBOM steps and `install-trivy` still select both jobs. Selection covers
-   the entire range since the last green main commit when that base is known, so an earlier
-   untested app change still builds. If no passed ancestor is found or the run list is
+   the entire range since the CI/released common ancestor when that base is known, so earlier
+   untested or unpaid app changes still build. If no proven ancestor is found or the evidence is
    unreadable, main runs the whole ring without narrowing: the HEAD^1 fallback cannot prove
    that earlier app changes were packaged. Main keeps the `windows-11-arm` product leg;
    manual whole-ring runs remain un-narrowed. A proven docs-only range skips packaging
