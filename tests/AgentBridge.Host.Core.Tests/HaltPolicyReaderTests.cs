@@ -165,7 +165,9 @@ public class HaltPolicyReaderTests
         await Assert.ThrowsAsync<HaltPolicyUnavailableException>(() => HaltPolicyReader.ReadAsync(new Fixed(Good), Pin, missing));
         var served = new Anchor((_, _) => Ok(Encoding.UTF8.GetBytes(Valid)));
         await Assert.ThrowsAsync<HaltPolicyUnavailableException>(() => HaltPolicyReader.ReadAsync(new Fixed(Good with { CoversBody = false }), Pin, served));
+        await Assert.ThrowsAsync<HaltPolicyUnavailableException>(() => HaltPolicyReader.ReadAsync(new Cancels(), Pin, served));
     }
+    sealed class Cancels : IHaltCatalogVerifier { public HaltCatalogEvidence Inspect(byte[] catalog, byte[] body) => throw new OperationCanceledException(); }
 
     // Never ends and never says how long it is: only the streamed cap stops it.
     sealed class Endless : HttpContent

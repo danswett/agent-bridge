@@ -50,7 +50,7 @@ public static partial class HaltPolicyReader
         var catalog = await FetchAsync(http, CatalogUrl, CatalogLargest, time ?? TimeProvider.System, cancellationToken).ConfigureAwait(false);
         HaltCatalogEvidence evidence;
         try { evidence = verifier.Inspect(catalog, body); }
-        catch (Exception e) when (e is not OperationCanceledException) { throw new HaltPolicyUnavailableException("halt policy catalog unverifiable", e); }
+        catch (Exception e) when (e is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { throw new HaltPolicyUnavailableException("halt policy catalog unverifiable", e); }
         RequirePin(evidence, identityEku);
         return Parse(body);
     }
