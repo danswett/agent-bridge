@@ -1,0 +1,249 @@
+# Fleet grants: CLI contract
+
+**Status: proposed contract only, brief 263, November 21, 2026 (Pacific Time).**
+Docs only. It enables no code, grant or rollout. It fixes one
+surface so the fleet wrappers and slices G5, G6, G9 and G10 of
+[fleet-grants.md](fleet-grants.md) can be built in parallel. fleet-grants.md owns
+authority, caps and storage; this file owns names, shapes, exit codes and refusal
+codes. Tracking: https://github.com/danswett/agent-bridge/issues/3237.
+
+## Owner decisions recorded here
+
+- **Nov 21, 2026, 12:47 PT:** grants may launch Allow-all sessions, policy-bounded (`allowAllLaunch`, default false).
+- **Nov 21, 2026, 12:50 PT:** own-account remote launch/stop use the messaging
+  envelope and pinned own peers; the receiver-side grant is the authority; no
+  separate roster requirement; the account-wide kill switch stays.
+
+## Verbs
+
+All verbs are `agent-bridge-host` subcommands, take `[--profile <name>]`, and read
+JSON (`--json`) or write one JSON document to stdout. Human text goes to stderr.
+
+| Verb | Caller | Purpose |
+|---|---|---|
+| `grants issue --file <path>` / `--stdin` | Person only | Issue the grant document (fleet-grants.md, "Grant shape"); returns the receiver receipt |
+| `grants revoke <id>` | Person only | Revoke with a durable tombstone |
+| `grants list [--json] [--machine <node id>]` | Person, or the agent for its own subject | Receiver-side counters and state; read only, never acts |
+| `fleet launch --grant <id> [--target <node id>] --request <uuid> ...` | Agent subject | Launch under a grant, local or remote |
+| `fleet end --grant <id> --session <full-id> [--target <node id>] --request <uuid>` | Agent subject | Stop under a grant, local or remote |
+| `launches status --request <uuid> [--json]` | Same user | Existing read of an outcome ([host-launch.md](../host-launch.md), #3533) |
+
+`grants issue` and `grants revoke` keep guard 67 and the person confirmation path:
+an agent or script credential, or untraceable ancestry, exits 4 before any signing
+or mutation. A grant cannot call either. Phone issuance is a later slice.
+
+`fleet launch` and `fleet end` omit `--target` for the local host. `--target` is an
+exact node (device) id, never a machine name; the local node id counts as local.
+They do not replace the person `stop <session> [--confirm <token>]` verb, which is
+unchanged. They supersede the `launch --grant` and `stop --grant` forms in
+fleet-grants.md for agent use.
+
+## Request ids
+
+- `--request` is a UUID the **caller generates fresh for each new operation**.
+  Required; a missing or non-UUID value exits 2.
+- Never reuse an id for a different payload; the receiver binds id to caller, grant,
+  generation, action and normalized payload. A changed binding refuses `duplicate-id`.
+- The only reason to resend an id is to ask again about the **same** operation
+  (see [Uncertain outcomes](#uncertain-outcomes-never-auto-retry)). The same id with
+  the same binding returns the recorded outcome and acts at most once.
+- Dedupe memory is bounded per owner: **30 days and 4096 ids** (owner decision,
+  Nov 20, 2026; https://github.com/danswett/agent-bridge/issues/2743). A full store
+  refuses new admissions `duplicate-store-full`; it never evicts an unexpired binding.
+- Remote envelopes differ: each carries a fresh nonce and short expiry, and a replay
+  is refused even if the request id is remembered. A retry uses a new envelope with
+  the same request id. Stop bindings last through grant expiry plus the envelope window.
+
+## Input shapes
+
+`fleet launch` takes flags, or `--json <path|->` with the same fields. Unknown
+fields, enum values and versions exit 2.
+
+```json
+{
+  "version": 1,
+  "request": "3f1c0a52-8d0e-4b8a-9a63-0c1e5f7a2b10",
+  "grant": "b7e5a0de-4f3c-4a52-8e1f-2d9c6a1b7c33",
+  "target": "<node id, optional>",
+  "name": "SG Builder 263 CLI Contract",
+  "workspace": "<approved workspace identity or label>",
+  "agent": "<agent id>",
+  "model": "<launch-tuning id, e.g. opus[1m]>",
+  "profile": "<launch profile>",
+  "effort": "<optional>",
+  "context": "<optional>",
+  "permissions": "ask",
+  "isolated": false,
+  "prompt": "<text, sent whole, never truncated>"
+}
+```
+
+- Omitted `model`, `profile`, `effort`, `context` resolve only to the grant's
+  recorded snapshot. Omitted `permissions` prefers `ask`, never `allowAll` unless
+  [allowAllLaunch](#allowalllaunch) permits it.
+- `name` passes the existing fixed name gate (`FleetLaunchNames`), a format and
+  collision rule, not identity proof. Resume, restore and transfer are out of version 1.
+
+`fleet end`:
+
+```json
+{ "version": 1, "request": "<uuid>", "grant": "<uuid>",
+  "target": "<node id, optional>", "session": "<full session id>" }
+```
+
+## Output shapes
+
+One JSON object on stdout for every exit, including refusals.
+
+```json
+{
+  "version": 1,
+  "request": "<uuid>",
+  "action": "launch",
+  "grant": "<uuid>",
+  "generation": 1,
+  "target": "<node id or local>",
+  "outcome": "started",
+  "session": "<16 lowercase hex or null>",
+  "permissions": "ask",
+  "reason": null,
+  "uncertain": false,
+  "remaining": { "hour": 7, "day": 40, "live": 3 },
+  "time": "2026-11-21T20:55:00Z"
+}
+```
+
+- `outcome`: `started`, `accepted` (queued, unconfirmed), `ended`, `refused`, `failed`
+  or `unconfirmed`.
+- `reason` is null on success, else one refusal code below.
+- `uncertain` is true exactly when `outcome` is `accepted` or `unconfirmed`.
+- `remaining` comes from the receiver's durable counters, never the caller's. It is
+  absent when the grant was not resolved.
+- Prompt text, tokens, secrets and raw command lines never appear in output or audit.
+
+`grants list --json` returns `{ "version": 1, "grants": [ { "id", "generation",
+"state", "expiresAt", "actions", "subject", "caps", "spent": { "hour", "day" },
+"live", "pending", "lastOutcome", "stale" } ] }`. `state` is `active`, `expired`,
+`revoked` or `revocation-pending`; an offline receiver's counters set `stale: true`.
+
+## Exit codes
+
+They extend the host CLI's existing launch-status exits so one wrapper can map both.
+
+| Exit | Meaning |
+|---|---|
+| 0 | `started` or `ended`; list/read succeeded |
+| 2 | Bad arguments, missing or non-UUID `--request`, unknown field |
+| 3 | Unknown: no record for this request (status read only) |
+| 4 | Guard 67 / caller classification: person-only verb or untraceable ancestry |
+| 5 | Refused or failed, with a refusal `reason`; no side effect |
+| 6 | Unavailable or invalid: pipe, host, audit or state not usable (stderr stage/reason) |
+| 7 | **Uncertain**: accepted or unconfirmed; a side effect may have begun |
+
+## Refusal codes
+
+Refusals exit 5 unless noted. Each is a stable lowercase kebab-case string.
+
+| `reason` | When |
+|---|---|
+| `grant-missing` | No grant with that id for this subject, audience and generation |
+| `grant-expired` | Past `expiresAt`, before `notBefore`, or the clock moved backwards |
+| `grant-revoked` | A tombstone exists |
+| `grant-exhausted` | Hourly, daily or live cap (including reservations) would be exceeded |
+| `scope` | Workspace, agent, model, profile, effort, context, permission, stop target or action outside the grant or narrowed by host policy |
+| `name-gate` | The fixed name gate refused: invalid or colliding name |
+| `duplicate-id` | Same request id with a different binding |
+| `duplicate-store-full` | The 4096-id store is full of unexpired bindings |
+| `target-offline` | The target node is unreachable; nothing was sent that could have acted |
+| `kill-switch` | Account-wide kill switch, `launch.enabled` off or equivalent off state |
+| `peer-not-pinned` | The target is not one of this account's pinned own peers |
+| `person-required` | The existing stopper needs person confirmation; the agent never obtains `--confirm` |
+| `audit-unavailable` | Audit intent could not be written; no action taken |
+| `policy` | Another receiving-host launch safety gate refused |
+`target-offline` is returned only when delivery provably did not happen; if the
+envelope may have arrived, the result is exit 7. `kill-switch` and `peer-not-pinned`
+never fall back to another route.
+
+## Uncertain outcomes: never auto-retry
+
+Exit 7 (`accepted`, `unconfirmed`, or a lost response on a remote call) means the
+launch or stop may have happened. The reservation stays held and consumes hour and
+day capacity. Rules:
+
+1. **Never retry automatically** and never retry with a fresh request id: a fresh id
+   is a new operation and can start a second session.
+2. Resolve with `launches status --request <uuid>` (on the target host for remote);
+   a launch is confirmed only when it reports `started` or `registered`.
+3. `unknown` (exit 3) never authorizes a relaunch. Only a person or a lead issues a
+   new operation with a new id.
+4. Resending the **same** id only learns the recorded outcome; it never acts twice.
+
+## Status read
+
+Launch outcomes are read through the existing, read-only
+`agent-bridge-host launches status --request <guid> [--json]` and `launches list`
+([host-launch.md](../host-launch.md), #3533): fields `request`, `outcome`, `session`,
+`permissions`, `registered`, `time`; exits 0, 3, 5, 6, 7 unchanged. The fleet verbs add
+no second status path. That store keeps outcomes 15 minutes; the 30-day grant dedupe
+record still returns the recorded outcome for a resend. Stop has no status read in
+version 1: resend the same id.
+
+## allowAllLaunch
+
+Owner decision, Nov 21, 2026, 12:47 PT: grants may launch Allow-all sessions.
+
+- The grant document has `allowAllLaunch`, a boolean, **default false**. Absent means
+  false. It is part of the person-confirmed digest and shown in the app summary.
+- A request may use `permissions: "allowAll"` only if the grant has
+  `allowAllLaunch: true` **and** the receiving host's current policy permits Allow-all
+  for that origin. Either one false refuses `scope`.
+- Policy bounds the grant, never the reverse: a grant cannot reinterpret `ask` limits
+  or exceed agent launch ceilings. Until the separately reviewed Allow-all policy
+  extension lands, policy refuses even with the flag set.
+- With the flag false or policy off, omitted permissions resolve to `ask`; the result
+  reports the `permissions` actually used.
+
+## Remote authority
+
+Owner decision, Nov 21, 2026, 12:50 PT.
+
+- Remote `fleet launch` / `fleet end` with `--target <node id>` wrap the request in
+  the **same signed own-account envelope and pinned own peers** that agent messaging
+  uses. The envelope binds account, source device, subject instance, receiver
+  audience, action, grant id and generation, request id, nonce, expiry and canonical
+  payload hash.
+- The **receiver-side grant is the authority.** The receiver runs its own grant gate
+  in the order of fleet-grants.md, "Receiver order"; the sender never decides
+  caps, scope or stop targets.
+- **No separate roster requirement** applies to own-account grant-authorized remote
+  launch or stop. This supersedes the earlier prerequisite in fleet-grants.md ("remote
+  agent/roster authentication") for these two actions only. Issuing grants remotely
+  keeps its person-device and roster gates; lite presence alone still authorizes
+  nothing.
+- The **account-wide kill switch is kept** and refuses `kill-switch` at the sender
+  and again at the receiver.
+- Own account only: no cross-account federation, no HA fallback or HA press. An
+  unpinned or unknown peer refuses `peer-not-pinned`. Envelope replay is refused; a
+  retry carries a new envelope and the same request id.
+
+## Wrapper mapping
+
+Fleet wrappers become thin, policy-only callers of these verbs.
+
+| Fleet wrapper | Becomes |
+|---|---|
+| `launch-remote.ps1` | `fleet launch --target <node id>` (omit `--target` for local) |
+| `end-one.ps1` | `fleet end --session <id>` |
+| `end-many.ps1` | One `fleet end` per session, each with its own fresh `--request`; never one request id for many sessions |
+
+Wrapper rules, all mandatory:
+
+- Policy only: the wrapper chooses grant, target and name; the receiver enforces caps, counters and duplicates.
+- **Never an HA fallback** on any refusal, offline, unavailable or exit 7.
+- **Never synthesize a grant**, forge a subject or reuse a person's grant; a missing
+  grant goes to the lead.
+- **Never click, replay or fabricate a person confirmation**, including `--confirm`.
+  `person-required` is surfaced, not bypassed.
+- Never retry exit 7 automatically or with a fresh id; surface the request id.
+- `end-many` reports each session's result; one refusal neither stops nor retries the others.
+- Pass the exit code and JSON through unchanged.
