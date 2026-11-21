@@ -643,6 +643,50 @@ public sealed class HostEnrollmentTests : IDisposable
     }
 
     [WindowsFact("host enrollment runs on the Windows host")]
+    public async Task The_live_roster_is_set_while_a_connection_is_served_and_cleared_when_it_ends_before_any_sign_in_wait()
+    {
+        var source = new LiveRosterSource();
+        w.Genesis();
+        var roster = Relay();
+        var served = new TaskCompletionSource();
+        var serving = source.ServeAsync(() => Task.FromResult<RelayRoster?>(roster), () => served.Task);
+        Assert.Same(roster, await source.Reader());
+        // A Replaced close ends the serve normally; Program then waits for a sign-in, so nothing after this may be needed to clear it.
+        served.SetResult();
+        await serving;
+        Assert.Null(await source.Reader());
+
+        var faulted = source.ServeAsync(() => Task.FromResult<RelayRoster?>(roster), () => Task.FromException(new IOException("closed")));
+        await Assert.ThrowsAsync<IOException>(() => faulted);
+        Assert.Null(await source.Reader());
+    }
+
+    [HostSignKeyTests.WindowsHostSignTheory]
+    [InlineData(true, "approver-probation")]
+    [InlineData(false, "pinned")]
+    public void Finish_refuses_an_approver_that_is_held_though_its_own_add_is_off_probation(bool signerOnProbation, string expected)
+    {
+        var reader = Reader(switched: false);
+        w.Add("+P", "G", "P", "G"); w.Add("+Q", "P", "Q", "+P");
+        // The host's earlier verified chain accepted Q long ago; P's acceptance is as old, or fresh (then Q is held through P).
+        var earlier = new RosterVerifier(Account, w.GenerationId, () => w.Now);
+        earlier.Offer(Relay("+P", "+Q").Entries.Select(e => Entry.Parse(Encoding.UTF8.GetBytes(e))));
+        earlier.AdoptFirstAccepted(w.Entry("+Q").Hash, w.Now - TimeSpan.FromHours(100));
+        if (!signerOnProbation) { earlier.AdoptFirstAccepted(w.Entry("+P").Hash, w.Now - TimeSpan.FromHours(100)); }
+        typeof(HostRosterReader).GetProperty(nameof(HostRosterReader.Verified))!.SetValue(reader, earlier);
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var (host, a, h) = Exchanged(time, "Q", reader);
+        using (host)
+        {
+            var key = World.Keys("Q").Dh.Public;
+            Assert.Equal("match", host.EnterCode2(a.Code2Shown!));
+            Assert.Null(host.Exchange(h, key, Asserted(key, "phone", "Q"), "genesis", w.Entry("G").Hash).Refusal);
+            w.Add("+H", "Q", "H", "+Q", kind: "host", transcript: a.TranscriptToSign);
+            Assert.Equal(expected, host.Finish(Relay("+P", "+Q", "+H"), PinPath, () => w.Now, _ => true));
+        }
+    }
+
+    [WindowsFact("host enrollment runs on the Windows host")]
     public async Task Enrollment_ops_are_answered_only_by_the_local_app_surface()
     {
         using var enrollment = new HostEnrollment(Unpinned(), Account, null, name: "Desk");
