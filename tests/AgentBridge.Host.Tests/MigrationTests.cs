@@ -1944,6 +1944,51 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         Assert.Equal(mine, Text(hostConfig));
     }
 
+    static async Task AwaitReady(string name, Task<string?> line, Task bound, Func<string> state)
+    {
+        // The line read ends on the ready line or at end of output when the child exits; the bound only fails.
+        await Task.WhenAny(line, bound);
+        var signal = line.IsCompletedSuccessfully ? line.Result : null;
+        if (signal != "ready")
+        {
+            Assert.Fail($"{name} ({state()}) wrote {signal ?? "nothing"} instead of ready");
+        }
+    }
+
+    [Fact]
+    public async Task Readiness_waits_for_every_child_however_late_a_sibling_signals()
+    {
+        var never = new TaskCompletionSource().Task;
+        var early = new TaskCompletionSource<string?>();
+        var late = new TaskCompletionSource<string?>();
+        var all = Task.WhenAll(AwaitReady("early", early.Task, never, () => "running"), AwaitReady("late", late.Task, never, () => "running"));
+        early.SetResult("ready");
+        Assert.False(all.IsCompleted);
+        late.SetResult("ready");
+        await all;
+    }
+
+    [Fact]
+    public async Task Readiness_is_not_lost_when_a_child_exits_right_after_writing_ready()
+    {
+        var line = new TaskCompletionSource<string?>();
+        var pending = AwaitReady("child", line.Task, new TaskCompletionSource().Task, () => "exited with code 0");
+        line.SetResult("ready");
+        await pending;
+    }
+
+    [Fact]
+    public async Task Readiness_fails_loudly_when_a_child_exits_without_ready_or_the_bound_passes()
+    {
+        var never = new TaskCompletionSource().Task;
+        var eof = new TaskCompletionSource<string?>();
+        eof.SetResult(null);
+        var exitedFailure = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => AwaitReady("early", eof.Task, never, () => "exited with code 3"));
+        Assert.Contains("early (exited with code 3) wrote nothing instead of ready", exitedFailure.Message);
+        var boundFailure = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => AwaitReady("slow", new TaskCompletionSource<string?>().Task, Task.CompletedTask, () => "was still running"));
+        Assert.Contains("slow (was still running)", boundFailure.Message);
+    }
+
     [Fact]
     [Trait("Category", "Process")]
     public async Task Stopping_takes_only_this_installations_own_processes_and_honours_their_receipts()
@@ -1952,14 +1997,17 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         var pwsh = Environment.GetEnvironmentVariable("PATH")!.Split(Path.PathSeparator).Select(d => Path.Combine(d, "pwsh.exe")).FirstOrDefault(File.Exists);
         if (pwsh is null) { return; }
         var install = AgentHaBridgeInstall.Read(_f.BridgeHome).Install!;
+        // The children must outlive the 120 s readiness bound below, or an early child can exit while a
+        // slow sibling is still starting; the test kills all three itself.
+        const string ChildScript = "Write-Output ready\r\nStart-Sleep -Seconds 600\r\n";
         foreach (var script in new[] { "agent-bridge-daemon.ps1", "agent-bridge-supervisor.ps1" })
         {
-            File.WriteAllText(Path.Combine(_f.HooksDir, script), "Write-Output ready\r\nStart-Sleep -Seconds 120\r\n");
+            File.WriteAllText(Path.Combine(_f.HooksDir, script), ChildScript);
         }
         // Another installation's daemon, under another home: never this migration's to stop.
         var other = Path.Combine(_f.Home, "other", "hooks", "agent-bridge-daemon.ps1");
         Directory.CreateDirectory(Path.GetDirectoryName(other)!);
-        File.WriteAllText(other, "Write-Output ready\r\nStart-Sleep -Seconds 120\r\n");
+        File.WriteAllText(other, ChildScript);
         System.Diagnostics.Process Start(string script)
         {
             var start = new System.Diagnostics.ProcessStartInfo(pwsh) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
@@ -1987,11 +2035,14 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         }
         try
         {
-            // Readiness, not elapsed startup time: a loaded runner may still be starting pwsh.
-            using var readyTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var ready = await Task.WhenAll(new[] { supervisor, daemon, stranger }
-                .Select(p => p.StandardOutput.ReadLineAsync(readyTimeout.Token).AsTask()));
-            Assert.All(ready, signal => Assert.Equal("ready", signal));
+            // Readiness, not elapsed startup time: three concurrent pwsh children can take longer than
+            // a 30 s read on a loaded runner (cancelled on main before Stop ran, #1930). Wait for the
+            // line the script writes, or its exit. The 120 s is only a failure bound so a child that
+            // does neither fails with a diagnosis instead of hanging the job; it never passes a test.
+            var bound = Task.Delay(TimeSpan.FromSeconds(120));
+            Task Ready(System.Diagnostics.Process p, string name) =>
+                AwaitReady(name, p.StandardOutput.ReadLineAsync(), bound, () => $"process {p.Id} {(p.HasExited ? $"exited with code {p.ExitCode}" : "was still running")}");
+            await Task.WhenAll(Ready(supervisor, "supervisor"), Ready(daemon, "daemon"), Ready(stranger, "stranger"));
             // A receipt naming the daemon's process id with another start time: a reused id.
             File.WriteAllText(Path.Combine(_f.Runtime, "daemon.process.json"), $"{{\"pid\":{daemon.Id},\"installationId\":\"{FakeAgentHaBridge.Id}\",\"executable\":\"{pwsh.Replace("\\", "\\\\")}\",\"startedUtcTicks\":1}}");
 
