@@ -320,6 +320,17 @@ public sealed class HostEnrollmentTests : IDisposable
         if (mischief == "second-channel") { Assert.Equal("attempt-bound", host.Exchange(other, key, peer, "genesis", w.Entry("G").Hash).Refusal); }
         else { host.Exchange(h, key, peer, "genesis", mischief == "other-genesis" ? other : w.Entry("G").Hash); }
         w.Add("+H", by, "H", by == "G" ? "+Q" : "+" + by, kind: "host", transcript: a.TranscriptToSign);
+        if (mischief == "held")
+        {
+            // The fixture must tell Held from OnProbation apart: with Q accepted long ago (as an authenticated earlier acceptance would
+            // record) it is off probation, yet still held because its signer P is on probation.
+            var fresh = new RosterVerifier(Account, w.GenerationId, () => w.Now);
+            fresh.Offer(Relay("+P", "+Q", "+H").Entries.Select(e => Entry.Parse(Encoding.UTF8.GetBytes(e))));
+            fresh.AdoptFirstAccepted(w.Entry("+Q").Hash, w.Now - TimeSpan.FromHours(100));
+            Assert.False(fresh.OnProbation(fresh.State.ActiveAdd(w.Id("Q"))!.Value));
+            Assert.True(fresh.OnProbation(fresh.State.ActiveAdd(w.Id("P"))!.Value));
+            Assert.Contains(w.Id("Q"), fresh.Held);
+        }
         if (mischief == "expired") { time.Advance(EnrollmentLockout.AttemptLifetime); }
         var (roster, current) = (new TaskCompletionSource<RelayRoster?>(), Account);
         var finishing = HostEnrollment.FinishAsync(host, () => roster.Task, PinPath, () => w.Now, () => current, _ => true);
@@ -428,6 +439,73 @@ public sealed class HostEnrollmentTests : IDisposable
         Assert.Equal("attempt-bound", host.Exchange(hy, other, Asserted(other, "app", "Laptop"), "commit", []).Refusal);
         Assert.Equal("attempt-bound", host.Exchange(hy, other, Asserted(other, "app", "Laptop"), "abandon", []).Refusal);
         Assert.Equal("Dan's phone", host.Shown.Peer);
+    }
+
+    static JsonElement Value(string value) => JsonDocument.Parse(JsonSerializer.Serialize(new { value })).RootElement;
+    static string? Refusal(object reply) => (string?)reply.GetType().GetProperty("refusal")!.GetValue(reply);
+
+    [WindowsFact("host enrollment runs on the Windows host")]
+    public void Malformed_remote_commits_count_against_the_throttle_before_their_value_is_decoded()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        using var host = new HostEnrollment(Unpinned(), Account, null, name: "H", time: time);
+        Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        var h = RandomNumberGenerator.GetBytes(32);
+        var refusals = Enumerable.Range(0, 3).Select(_ => Refusal(HostEnrollment.Remote(host, h, G, Person, "enroll.commit", Value("!!not base64!!")))).ToList();
+        Assert.Equal(["invalid-value", "throttled", "throttled"], refusals);
+        Assert.Equal("throttled", Refusal(HostEnrollment.Remote(host, h, G, Person, "enroll.commit", Value(""))));
+        Assert.Null(host.Shown.Peer);
+    }
+
+    [WindowsFact("host enrollment runs on the Windows host")]
+    public void An_oversized_remote_value_is_refused_without_decoding_it_and_still_counts_against_the_throttle()
+    {
+        using var host = new HostEnrollment(Unpinned(), Account, null, name: "H", time: new FakeTimeProvider(DateTimeOffset.UnixEpoch));
+        Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        var h = RandomNumberGenerator.GetBytes(32);
+        var big = Value(new string('A', 4_000_000));
+        var (peer, asserted) = (G, Person); // built outside the measurement: first use of a test key allocates
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var first = HostEnrollment.Remote(host, h, peer, asserted, "enroll.commit", big);
+        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 1_000_000);
+        Assert.Equal("invalid-value", Refusal(first));
+        Assert.Equal("throttled", Refusal(HostEnrollment.Remote(host, h, peer, asserted, "enroll.commit", big)));
+    }
+
+    // Acknowledged marks are the lockout: they must be on disk, not only in the cache, before the rename publishes them.
+    sealed class RecordingLog(string path, List<string> events) : FileStream(path, FileMode.CreateNew, FileAccess.Write)
+    {
+        public override void Flush(bool flushToDisk) { events.Add($"flush:{flushToDisk}"); base.Flush(flushToDisk); }
+    }
+
+    [WindowsFact("host enrollment runs on the Windows host")]
+    public void A_charged_mark_is_flushed_to_disk_before_the_attempt_log_is_renamed_into_place()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var events = new List<string>();
+        using var host = new HostEnrollment(Unpinned(), Account, null, name: "H", time: time,
+            createLog: path => new RecordingLog(path, events), moveLog: (from, to) => { events.Add("move"); File.Move(from, to, overwrite: true); });
+        Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        var (a, _) = Join(host, time);
+        var wrong = a.Code2Shown!.Replace(" ", "") == "000000" ? "111111" : "000000";
+        Assert.Equal("wrong", host.EnterCode2(wrong));
+        var (flushed, moved) = (events.IndexOf("flush:True"), events.IndexOf("move"));
+        Assert.True(flushed >= 0 && moved > flushed, string.Join(",", events));
+    }
+
+    [WindowsFact("host enrollment runs on the Windows host")]
+    public async Task The_live_roster_source_is_empty_until_a_connection_sets_it_and_again_once_it_is_cleared()
+    {
+        var source = new LiveRosterSource();
+        Assert.Null(await source.Reader());
+        w.Genesis();
+        var roster = Relay();
+        source.Set(() => Task.FromResult<RelayRoster?>(roster));
+        Assert.Same(roster, await source.Reader());
+        source.Clear();
+        Assert.Null(await source.Reader());
+        using var host = new HostEnrollment(Unpinned(), Account, null);
+        Assert.Equal("no-roster", await HostEnrollment.FinishAsync(host, source.Reader, PinPath, () => w.Now, () => Account));
     }
 
     [WindowsFact("host enrollment runs on the Windows host")]

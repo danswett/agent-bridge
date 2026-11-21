@@ -19,7 +19,8 @@ internal interface IHostEnrollmentKey : IDisposable
 // and processes until the exchange's lifetime ends. Opened only through the app's local pipe; the
 // approver's exchange steps then reach it over the approver's Noise channel (brief 184b).
 internal sealed class HostEnrollment(HostRosterReader reader, string account, string? generation,
-    Func<string, IHostEnrollmentKey>? openKey = null, string name = "host", TimeProvider? time = null) : IDisposable
+    Func<string, IHostEnrollmentKey>? openKey = null, string name = "host", TimeProvider? time = null,
+    Func<string, FileStream>? createLog = null, Action<string, string>? moveLog = null) : IDisposable
 {
     sealed record Attempt(DeviceDescriptor Own, IDisposable Held, ITimer Expiry, EnrollmentLockout Lockout, DateTimeOffset Expires, string Log)
     {
@@ -135,17 +136,37 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
     // bound it. A peer can end its attempt but never charge the lockout. The full 32-byte genesis is taken only after code 2 matched.
     public (byte[]? Value, string? Refusal) Exchange(byte[] h, byte[] peerStatic, PresenceEntry? asserted, string step, byte[] value)
     {
+        lock (sync) { return Admit(peerStatic, asserted, step) is { } refusal ? (null, refusal) : Step(h, peerStatic, asserted, step, value); }
+    }
+
+    // Admission, before any wire value is decoded: a commit from a peer inside its window is throttled, and every commit that
+    // gets this far (malformed or oversized included) starts that window, so a peer cannot probe the decoder at will.
+    internal string? Admit(byte[] peerStatic, PresenceEntry? asserted, string step)
+    {
         lock (sync)
         {
             var approver = Ids.Device(peerStatic);
-            if (asserted is null || asserted.Id != approver || !PersonKinds.Contains(asserted.Kind)) { return (null, "not-person"); }
+            if (asserted is null || asserted.Id != approver || !PersonKinds.Contains(asserted.Kind)) { return "not-person"; }
+            if (open is null) { return "no-attempt"; }
+            if (step != "commit") { return null; }
+            var now = Clock.GetUtcNow();
+            if (commits.TryGetValue(approver, out var last) && now - last < CommitEvery) { return "throttled"; }
+            foreach (var stale in commits.Where(c => now - c.Value >= CommitEvery).Select(c => c.Key).ToList()) { commits.Remove(stale); }
+            commits[approver] = now;
+            return null;
+        }
+    }
+
+    // The step itself, for a peer Admit let through; the attempt may have ended since, so it is read again here.
+    internal (byte[]? Value, string? Refusal) Step(byte[] h, byte[] peerStatic, PresenceEntry? asserted, string step, byte[] value)
+    {
+        lock (sync)
+        {
+            var approver = Ids.Device(peerStatic);
+            if (asserted is null) { return (null, "not-person"); }
             if (open is not { } attempt) { return (null, "no-attempt"); }
             if (step == "commit")
             {
-                var now = Clock.GetUtcNow();
-                if (commits.TryGetValue(approver, out var last) && now - last < CommitEvery) { return (null, "throttled"); }
-                foreach (var stale in commits.Where(c => now - c.Value >= CommitEvery).Select(c => c.Key).ToList()) { commits.Remove(stale); }
-                commits[approver] = now;
                 if (attempt.Joiner is not null) { return (null, "attempt-bound"); }
                 if (value.Length != 0) { return (null, "invalid-value"); }
                 (attempt.H, attempt.Approver, attempt.PeerName) = (h.ToArray(), approver, HostConfigFile.CleanName(asserted.Name));
@@ -187,8 +208,13 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
         var temporary = log + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            using (var stream = PrivateFolder.CreateNew(temporary)) { JsonSerializer.Serialize(stream, charged); }
-            File.Move(temporary, log, overwrite: true);
+            using (var stream = (createLog ?? PrivateFolder.CreateNew)(temporary))
+            {
+                JsonSerializer.Serialize(stream, charged);
+                // Acknowledged marks are the lockout: on disk before the rename publishes them, as the repo's other durable writers do.
+                stream.Flush(flushToDisk: true);
+            }
+            (moveLog ?? ((from, to) => File.Move(from, to, overwrite: true)))(temporary, log);
             return null;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -246,12 +272,23 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
     // The remote steps' wire form (ops enroll.commit, enroll.offer, enroll.genesis, enroll.abandon; value
     // base64url); asserted is the relay's presence entry for the channel's peer.
     public const string StepPrefix = "enroll.";
+    // A legitimate value is a 32-byte nonce or genesis, at most 43 base64url characters; anything above this is refused unread.
+    internal const int MaxValueChars = 256;
     public static object Remote(HostEnrollment? enrollment, byte[] h, byte[]? peerStatic, PresenceEntry? asserted, string op, JsonElement data)
     {
-        byte[] value;
-        try { value = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("value", out var v) ? Codec.FromBase64Url(v.GetString() ?? "", "value") : []; }
-        catch (RosterFormatException) { return new { value = (string?)null, refusal = "invalid-value" }; }
-        var (reply, refusal) = enrollment is null || peerStatic is null ? (null, "no-attempt") : enrollment.Exchange(h, peerStatic, asserted, op[StepPrefix.Length..], value);
+        if (enrollment is null || peerStatic is null) { return new { value = (string?)null, refusal = "no-attempt" }; }
+        var step = op[StepPrefix.Length..];
+        if (enrollment.Admit(peerStatic, asserted, step) is { } refused) { return new { value = (string?)null, refusal = refused }; }
+        byte[] value = [];
+        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("value", out var v) && v.ValueKind != JsonValueKind.Null)
+        {
+            // The raw token (quotes included) is measured first, so an oversized value is neither copied nor decoded.
+            if (v.ValueKind != JsonValueKind.String || System.Runtime.InteropServices.JsonMarshal.GetRawUtf8Value(v).Length > MaxValueChars + 2)
+            { return new { value = (string?)null, refusal = "invalid-value" }; }
+            try { value = Codec.FromBase64Url(v.GetString() ?? "", "value"); }
+            catch (RosterFormatException) { return new { value = (string?)null, refusal = "invalid-value" }; }
+        }
+        var (reply, refusal) = enrollment.Step(h, peerStatic, asserted, step, value);
         return new { value = reply is null ? null : Codec.Base64Url(reply), refusal };
     }
 

@@ -208,7 +208,7 @@ leg do not match the other.
 
 `EnrollmentLockout` holds its counts in memory only. The host joiner (brief 184b, brief 198) charges
 only what a person does at the host: each wrong code 2 typed on the local control surface is logged
-in `enrollment-attempts.json` in the pin's private roster folder before it is answered, and replayed
+in `enrollment-attempts.json` in the pin's private roster folder (flushed to disk before the rename) before it is answered, and replayed
 into the joiner's lockout (counting wrong entries), so a restart cannot reset §4.4. Opening an
 attempt, a peer binding or abandoning it, expiry and any peer message charge nothing, so a relay
 peer cannot spend the person's lockout. An unreadable log refuses (`attempt-store`); three wrong
@@ -252,7 +252,8 @@ approver sends `enroll.commit`, `enroll.offer`, `enroll.genesis` and `enroll.aba
 the relay's presence asserts is a person device (`app`, `pwa`, `phone`; a host or agent principal
 gets `not-person`) and, while device pins are on, holding the trusted-person role. The first valid
 commit binds one peer, shown by name in `host.enroll.status`; another cannot rebind
-(`attempt-bound`), and each peer may commit once per 10 seconds (`throttled`). They reach only an attempt the person
+(`attempt-bound`), and each peer may commit once per 10 seconds (`throttled`), counted before the value is read: a
+malformed commit value (`invalid-value`) starts the window too, and a value over 256 characters is refused unread. They reach only an attempt the person
 opened here (`no-attempt` otherwise), and only from the channel, by handshake hash `h` and
 authenticated static key, that sent the commit (`attempt-bound`). The bound peer can only end its
 attempt (`enroll.abandon`, or an offer that fails), never charge the lockout. The person types code 2 at the
@@ -559,8 +560,8 @@ The reader has no write or creation API. `HostRosterPinWriter` (#3450) alone cre
 record, from a person's genesis (an 8-byte fingerprint compared out of band, or a 32-byte hash
 from a later app or enrollment caller): one v3 (capSign) genesis, for this account and the relay's generation,
 matching in fixed time, a chain with no refused entry, written atomically and never over a pin,
-then read back as above. Every other case is a closed refusal and writes nothing. Its only caller
-today is the local `roster-pin set` command ([runbook](../runbooks/roster-pin.md)).
+then read back as above. Every other case is a closed refusal and writes nothing. It has two callers: the local `roster-pin set` command ([runbook](../runbooks/roster-pin.md)) and, after a matched
+enrollment exchange, `HostEnrollment.Finish` (`host.enroll.finish`, below).
 
 A matching snapshot retains one verifier, including its probation clock. A different
 account, generation or genesis is `pin-mismatch`; heads not including or descending from
