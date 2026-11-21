@@ -245,7 +245,7 @@ const launchHere = async (page) => {
 
 test.describe('live load wiring', () => {
   const sample = { state: 'fresh', ageMs: 2000, staleAfterMs: 15000,
-    cpu: { percent: 37.5 }, memory: { totalBytes: 16000, availableBytes: 10000 } };
+    cpu: { percent: 37.5 }, memory: { totalBytes: 16000, availableBytes: 10000, usedPercent: 37.5 } };
   const tile = (page, id = LAPTOP) => page.locator(`#machine-list [data-device-id="${id}"]`);
   const ops = (page) => page.evaluate(() => window.loadOps);
   const attach = (page, refuse = null) => page.evaluate(async ({ sample, refuse, id }) => {
@@ -272,14 +272,14 @@ test.describe('live load wiring', () => {
     await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe']);
     await expect(tile(page).getByRole('meter', { name: 'CPU' })).toHaveAttribute('aria-valuenow', '37.5');
     await expect(tile(page).getByRole('meter', { name: 'Memory' })).toHaveAttribute('aria-valuenow', '37.5');
-    await expect(tile(page, SHADOW).locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+    await expect(tile(page, SHADOW).locator('.machine-load-value')).toHaveText(['No figure', 'Not measured']);
     await page.evaluate(({ sample, id }) => {
       for (const t of window.agentBridgeDemo.machines[id].transports) {
-        if (t.loadSubscribed) { t.deliver({ ev: 'load.update', seq: ++t.seq, data: { ...sample, ageMs: 15001 } }); }
+        if (t.loadSubscribed) { t.deliver({ ev: 'load.update', seq: ++t.seq, data: { ...sample, state: 'stale', ageMs: 15001 } }); }
       }
     }, { sample, id: LAPTOP });
     await expect(tile(page).getByRole('meter')).toHaveCount(0);
-    await expect(tile(page).locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+    await expect(tile(page).locator('.machine-load-value')).toHaveText(['No figure', 'Not measured']);
     await page.evaluate(() => window.agentBridgeDemo.page.refresh());
     expect(await ops(page)).toEqual(['load.get', 'load.subscribe']);
   });
@@ -361,7 +361,7 @@ test.describe('live load wiring', () => {
   }
 
   for (const refuse of ['load.get', 'load.subscribe']) {
-    test(`a host answering unknown op to ${refuse} keeps No figure without retrying or breaking sessions`, async ({ page }) => {
+    test(`a host answering unknown op to ${refuse} keeps missing figures without retrying or breaking sessions`, async ({ page }) => {
       const errors = [];
       page.on('console', (m) => { if (m.type() === 'error') { errors.push(m.text()); } });
       await openDemo(page);
@@ -369,7 +369,7 @@ test.describe('live load wiring', () => {
       await attach(page, refuse);
       await expect.poll(() => errors.some((e) => e.includes('unknown op'))).toBe(true);
       await expect(tile(page).getByRole('meter')).toHaveCount(0);
-      await expect(tile(page).locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+      await expect(tile(page).locator('.machine-load-value')).toHaveText(['No figure', 'Not measured']);
       await page.evaluate(() => window.agentBridgeDemo.page.refresh());
       expect(await ops(page)).toEqual(refuse === 'load.get' ? ['load.get'] : ['load.get', 'load.subscribe']);
       await go(page, 'sessions');
@@ -379,7 +379,7 @@ test.describe('live load wiring', () => {
 });
 
 test.describe('load bars', () => {
-  const full = { state: 'fresh', ageMs: 2000, staleAfterMs: 15000, cpu: { percent: 37.543 }, memory: { totalBytes: 16000, availableBytes: 10000, committedPercent: 91 } };
+  const full = { state: 'fresh', ageMs: 2000, staleAfterMs: 15000, cpu: { percent: 37.543 }, memory: { totalBytes: 16000, availableBytes: 10000, committedPercent: 91, usedPercent: 37.5 } };
   const draw = (page, load, online = true, available = null) => page.evaluate(async ({ load, online, available }) => {
     const { renderMachines } = await import('/js/ui/views.js');
     let list = document.getElementById('load-fixture-list');
@@ -399,6 +399,55 @@ test.describe('load bars', () => {
       } : null,
     });
   }, { load, online, available });
+
+  test('host memory wins on screen while CPU and memory round only their displayed labels', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    const load = { ...full, memory: { totalBytes: 32e9, availableBytes: 20e9, usedPercent: 61.2345, committedPercent: 91 } };
+    await draw(page, load);
+    const tile = page.locator('#load-fixture-list .machine-tile');
+    const cpu = tile.getByRole('meter', { name: 'CPU', exact: true });
+    const memory = tile.getByRole('meter', { name: 'Memory', exact: true });
+    await expect(memory).toHaveAttribute('aria-valuenow', '61.2345');
+    await expect(cpu).toHaveAttribute('aria-valuenow', '37.543');
+    await expect(tile.locator('.machine-load-value')).toHaveText(['38%', '61%']);
+    expect(await cpu.locator('.machine-load-fill').evaluate((e) => e.style.width)).toBe('37.543%');
+    expect(await memory.locator('.machine-load-fill').evaluate((e) => e.style.width)).toBe('61.2345%');
+    await expect(tile.getByText('20 GB free of 32 GB', { exact: true })).toBeVisible();
+    await draw(page, { ...load, ageMs: 20000 });
+    await expect(tile.locator('.machine-load-state')).toHaveText(['\u25cc Stale', '\u25cc Stale']);
+    await expect(tile.locator('.tile-measured')).toHaveText('Last measured 20 s ago');
+    await expect(tile.getByRole('meter')).toHaveCount(0);
+    await expect(tile.getByText(/GB free/)).toHaveCount(0);
+    await expect(tile.locator('.tile-health-word')).toHaveText('Not measured yet');
+    for (const [usedPercent, availableBytes, text] of [[0, 32e9, '0%'], [62.5, 20e9, '63%'], [100, 0, '100%']]) {
+      await draw(page, { ...load, memory: { totalBytes: 32e9, availableBytes, usedPercent } });
+      await expect(memory).toHaveAttribute('aria-valuenow', String(usedPercent));
+      await expect(tile.locator('.machine-load-value')).toHaveText(['38%', text]);
+    }
+  });
+
+  test('old or invalid host figures show Not measured but valid free and total bytes remain visible', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    const tile = page.locator('#load-fixture-list .machine-tile');
+    for (const usedPercent of [undefined, null, NaN, Infinity, -0.1, 100.1]) {
+      const memory = { totalBytes: 32.06e9, availableBytes: 20.04e9, committedPercent: 91,
+        ...(usedPercent === undefined ? {} : { usedPercent }) };
+      await draw(page, { ...full, memory });
+      await expect(tile.getByRole('meter', { name: 'Memory', exact: true })).toHaveCount(0);
+      await expect(tile.locator('.machine-load-value')).toHaveText(['38%', 'Not measured']);
+      await expect(tile.getByText('20 GB free of 32.1 GB', { exact: true })).toBeVisible();
+      await expect(tile.locator('.machine-load-state')).toHaveText(['\u25d0 Partial', '\u25d0 Partial']);
+      await expect(tile.locator('.tile-health-word')).toHaveText('Not measured yet');
+    }
+    for (const memory of [{ totalBytes: 0, availableBytes: 0 }, { totalBytes: 32e9, availableBytes: 33e9 },
+      { totalBytes: 32e9, availableBytes: -1 }, { totalBytes: Infinity, availableBytes: 20e9 }]) {
+      await draw(page, { ...full, memory });
+      await expect(tile.getByText(/GB free/)).toHaveCount(0);
+      await expect(tile.getByRole('meter', { name: 'Memory', exact: true })).toHaveCount(0);
+    }
+  });
 
   for (const [word, load, online, glyph] of [
     ['Fresh', full, true, '\u25cf'],
@@ -456,7 +505,7 @@ test.describe('load bars', () => {
     await go(page, 'machines');
     const tile = page.locator(`#machine-list [data-device-id="${LAPTOP}"] .machine-tile`);
     await expect(tile.getByRole('meter')).toHaveCount(0);
-    await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+    await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', 'Not measured']);
   });
 
   for (const width of [390, 1024, 1440]) {
@@ -485,7 +534,7 @@ test.describe('load bars', () => {
           expect(await meter.evaluate((e) => getComputedStyle(e.firstElementChild).backgroundColor))
             .not.toBe(await meter.evaluate((e) => getComputedStyle(e).backgroundColor));
         }
-        await draw(page, { ...full, cpu: { percent: 0 }, memory: { totalBytes: 16000, availableBytes: 16000 } });
+        await draw(page, { ...full, cpu: { percent: 0 }, memory: { totalBytes: 16000, availableBytes: 16000, usedPercent: 0 } });
         await expect(cpu).toHaveAttribute('aria-valuenow', '0');
         await expect(memory).toHaveAttribute('aria-valuenow', '0');
         await expect(tile.locator('.machine-load-value')).toHaveText(['0%', '0%']);
@@ -500,7 +549,7 @@ test.describe('load bars', () => {
           await expect(tile.locator('.tile-health-word')).toHaveText('Not measured yet');
           await expect(tile.locator('.machine-load-state').first()).toContainText(word === 'Not measured' ? 'Unavailable' : word);
           await expect(tile.getByRole('meter')).toHaveCount(0);
-          await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+          await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', 'Not measured']);
         }
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await draw(page, full, false);
@@ -593,7 +642,7 @@ test.describe('approved Fleet card structure', () => {
           facts: () => ({ sessions: '2 sessions', version }),
           load: (id) => ({ state, ageMs: state === 'fresh' ? 12000 : 240000, staleAfterMs: 15000,
             cpu: { percent: id === hosts[0].id ? 7.2 : 97.6 },
-            memory: { totalBytes: 32e9, availableBytes: id === hosts[0].id ? 20e9 : 1e9 } }),
+            memory: { totalBytes: 32e9, availableBytes: id === hosts[0].id ? 20e9 : 1e9, usedPercent: id === hosts[0].id ? 37.5 : 96.875 } }),
           onSelect: (id) => window.structureCalls.push(id), onLaunch() {},
         });
         window.drawStructure();
@@ -623,8 +672,8 @@ test.describe('approved Fleet card structure', () => {
       }
       await expect(cards.first().locator('.machine-load-value')).toHaveText(['7%', '38%']);
       await expect(cards.last().locator('.machine-load-value')).toHaveText(['98%', '97%']);
-      await expect(cards.first().getByText('20 GB free', { exact: true })).toBeVisible();
-      await expect(cards.last().getByText('1 GB free', { exact: true })).toBeVisible();
+      await expect(cards.first().getByText('20 GB free of 32 GB', { exact: true })).toBeVisible();
+      await expect(cards.last().getByText('1 GB free of 32 GB', { exact: true })).toBeVisible();
       const bars = await page.locator('#structure-fixture .machine-load-track').evaluateAll((els) => els.map((el) => {
         const r = el.getBoundingClientRect(), card = el.closest('.machine').getBoundingClientRect();
         return { left: r.left - card.left, right: card.right - r.right };
@@ -664,7 +713,7 @@ test.describe('approved Fleet card structure', () => {
         await expect(card.getByText('Last measured 4 min ago', { exact: true })).toBeVisible();
         await expect(card.getByRole('meter')).toHaveCount(0);
         await expect(card.getByText(/GB free/)).toHaveCount(0);
-        await expect(card.locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+        await expect(card.locator('.machine-load-value')).toHaveText(['No figure', 'Not measured']);
         expect(await card.evaluate((el) => [...el.querySelectorAll('*')].some((e) => e.clientWidth && e.scrollWidth > e.clientWidth + 1))).toBe(false);
       }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -1065,7 +1114,7 @@ test.describe('expanded Fleet grid', () => {
         await expect(card.locator('.machine-name')).toHaveText(`Machine ${i + 1}`);
         if (i < 6) {
           await expect(card.getByRole('region', { name: `Machine ${i + 1}`, exact: true })).toBeVisible();
-          await expect(card.locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+          await expect(card.locator('.machine-load-value')).toHaveText(['No figure', 'Not measured']);
           await expect(card.getByRole('button', { name: 'Running, 2 sessions' })).toHaveAttribute('aria-expanded', 'false');
           await expect(card.locator('.machine-status')).toContainText('0.1.1');
         } else {
