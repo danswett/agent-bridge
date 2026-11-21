@@ -20,7 +20,8 @@ public sealed class LiteDeliver(
     ISessionReplier replier,
     IConsoleInjector injector,
     Action<string> log,
-    TimeProvider? clock = null) : ILiteDeliver
+    TimeProvider? clock = null,
+    Func<string, bool>? launchedStillCurrent = null) : ILiteDeliver
 {
     public const int MaxChars = 4096;
     public const int MaxPerMinute = 6;
@@ -62,8 +63,9 @@ public sealed class LiteDeliver(
         if (!Idle(now)) { return Refused(LiteCodes.Busy); }
         if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
-        // just before the injector starts (Stale, refused below as noSuchSession); a full id gets no fence, as on main.
-        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true, StillCurrent = byNode ? () => FromNodeId(target) == id : null };
+        // just before the injector starts. The host's launch proof also fences full ids against pid reuse.
+        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true,
+            StillCurrent = byNode || launchedStillCurrent is not null ? () => (!byNode || FromNodeId(target) == id) && (launchedStillCurrent?.Invoke(id) ?? true) : null };
         var result = await replier.ReplyAsync(reply, null, ct);
         return result.Outcome switch
         {
