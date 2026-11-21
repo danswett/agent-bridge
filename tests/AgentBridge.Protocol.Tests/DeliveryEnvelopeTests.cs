@@ -6,6 +6,20 @@ public sealed class DeliveryEnvelopeTests
     static readonly DeliveryHeader Header = new("owner:user-1", "r-1", "q1",
         new DateTimeOffset(2026, 11, 21, 22, 0, 0, TimeSpan.Zero), "normal", 8);
 
+    [Theory]
+    [InlineData("th-TH")]
+    [InlineData("fi-FI")]
+    public void Receipt_clock_is_invariant_and_HA_dotted_ids_are_preserved(string culture)
+    {
+        var before = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new(culture);
+            Assert.Contains("|id=r.1|seq=q1|at=2026-11-21T14:00:00-08:00|", DeliveryEnvelope.Format(Header with { Id = "r.1" }, "hello"));
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = before; }
+    }
+
     [Fact]
     public void Envelope_counts_UTF16_and_uses_Pacific_receipt_time_not_body_time()
     {

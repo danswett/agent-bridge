@@ -17,7 +17,7 @@ public sealed record DeliveryEntry(string Text, DeliveryHeader? Header = null, b
 public static class DeliveryEnvelope
 {
     static readonly TimeZoneInfo Pacific = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
-    static readonly Regex Header = new(@"\[ab:from=(system|(?:owner|agent):[A-Za-z0-9%._~-]+(?: \([A-Za-z0-9 ._-]{1,48}\))?)\|id=([A-Za-z0-9_-]+)\|seq=([uq][1-9][0-9]*)\|at=([^|\]\r\n]+)\|pri=(urgent|normal|fyi)\|n=([0-9]+)\] ",
+    static readonly Regex Header = new(@"\[ab:from=(system|(?:owner|agent):[A-Za-z0-9%._~-]+(?: \([A-Za-z0-9 ._-]{1,48}\))?)\|id=([A-Za-z0-9_.-]+)\|seq=([uq][1-9][0-9]*)\|at=([^|\]\r\n]+)\|pri=(urgent|normal|fyi)\|n=([0-9]+)\] ",
         RegexOptions.CultureInvariant);
     static readonly Regex Boundary = new(@"(?:\A|(?<=\n\n))(?=\[ab:)", RegexOptions.CultureInvariant);
     static readonly Regex Marker = new(@"\[ab:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -43,7 +43,7 @@ public static class DeliveryEnvelope
     public static string Format(DeliveryHeader header, string text)
     {
         var (h, body) = Prepare(header, text);
-        var prefix = $"[ab:from={h.From}|id={h.Id}|seq={h.Seq}|at={h.At:yyyy-MM-ddTHH:mm:sszzz}|pri={h.Priority}|n={h.N}] ";
+        var prefix = string.Create(CultureInfo.InvariantCulture, $"[ab:from={h.From}|id={h.Id}|seq={h.Seq}|at={h.At:yyyy-MM-ddTHH:mm:sszzz}|pri={h.Priority}|n={h.N}] ");
         if (!TryHeader(prefix, 0, out _, out var end) || end != prefix.Length)
         {
             throw new ArgumentException("Invalid delivery envelope metadata.", nameof(header));
