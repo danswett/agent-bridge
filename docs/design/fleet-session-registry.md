@@ -254,9 +254,9 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
 ## Freshness and replay (5 s and 60 s)
 
 The relay's own received-time/sequence checks are not independent reader verification
-(`RosterFields.cs:110-141`). `RelayFleetRoster.Read` now implements the order rule, the 60 s `at`
-rule, the in-memory cache, the purge of unlisted machines, and pinned-roster membership (#2643).
-`registry-subscribe` and signature checks are still to come.
+(`RosterFields.cs:110-141`). `RelayFleetRoster.Read` now implements the order rule, the
+in-memory cache, the purge of unlisted machines, and pinned-roster membership (#2643). The 60 s
+`at` rule, `registry-subscribe` and signature checks are still to come.
 
 * A host sends a new snapshot when any listed field changes, debounced to at most one per 2 s
   (a session that ends is sent at once, never held for the debounce),
@@ -272,8 +272,11 @@ rule, the in-memory cache, the purge of unlisted machines, and pinned-roster mem
   within 60 s of the reader's own clock (earlier or later) **and** the relay says the machine is
   online. Anything else is stale: its sessions are shown as "last seen at …" and never returned as
   live by `fleet.find`. There is no separate 5-minute window.
-* **Order.** Within one `epoch` a reader rejects a record whose `seq` is not greater than the
-  last one it accepted from that machine. A new `epoch` is accepted when its `at` is later than the
+* **Order.** Within one `epoch` a reader rejects a record whose `seq` is lower than the
+  last one it accepted from that machine. Equal is accepted: the relay serves the same snapshot on
+  every read until the host's next heartbeat, and `seq` rises only with a new snapshot. Once a reader
+  holds an order for a machine, a record whose `epoch`, `seq` or `at` is missing or malformed is
+  rejected too (#3262). A new `epoch` is accepted when its `at` is later than the
   `at` of the last record accepted from that machine. So a restarted host (new epoch, `seq` back at
   1) is accepted without any state kept on disk, and an old epoch's records are refused after a
   newer one was seen.
@@ -301,7 +304,7 @@ host goes offline. A reconnecting host can appear online before its full snapsho
 no sessions are invented in that interval.
 
 A reader may keep its last copy of a machine's record as a **cache**, with a maximum age of 24 h
-(then deleted). Cached records are always marked `stale: true` and `online: false` in `fleet.list`
+measured on a monotonic clock (then deleted; a wall-clock correction does not change it, #3262). Cached records are always marked `stale: true` and `online: false` in `fleet.list`
 and are never returned as live by `fleet.find`. The cache exists for two reasons only: showing
 "this session was on machine X, last seen at …", and the `ambiguous` and `offline` results in "Names and lookup".
 

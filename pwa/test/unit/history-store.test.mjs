@@ -16,13 +16,46 @@ const range = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from
 
 async function setup(t, { count = 45, history = true, ...options } = {}) {
   const host = new DemoHost({ sessions: [{ id: ID, agent: 'copilot', status: 'idle', updatedAt: new Date().toISOString(), activity: { turnCount: count } }] }, { answerDelayMs: 0, history });
-  const client = new HostClient(host.connect(), { timeoutMs: 2000 });
+  // These tests exercise history ordering, not the client's real-time request deadline.
+  const client = new HostClient(host.connect(), { timeoutMs: 120000 });
   t.after(() => client.close());
   await client.hello();
   // first: null asks the host's default page, which the older tests were written for.
   const store = new HistoryStore({ current: () => ({ client }), first: null, ...options });
   return { host, client, store };
 }
+
+function holdHistory(t, client) {
+  let release, begin, fail;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const started = new Promise((resolve, reject) => { begin = resolve; fail = reject; });
+  const ask = client.history.bind(client);
+  client.history = async (...args) => {
+    const response = ask(...args);
+    response.then(begin, fail);
+    const page = await response;
+    await gate;
+    return page;
+  };
+  t.after(() => release());
+  return { started, release };
+}
+
+test('the history fixture tolerates a two-second scheduling pause at each transport hop', async (t) => {
+  const realTimeout = globalThis.setTimeout;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const clockTimeout = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (fn, ms, ...args) => {
+    if (ms === 0) {
+      t.mock.timers.tick(2000);
+      return realTimeout(fn, ms, ...args);
+    }
+    return clockTimeout(fn, ms, ...args);
+  });
+  const { store } = await setup(t);
+  assert.deepEqual(nums(await store.open('h', ID)), range(26, 45));
+  assert.deepEqual(nums(await store.loadEarlier('h', ID)), range(6, 45));
+});
 
 test('opening a session asks for a small newest page, and earlier pages are the full size (#1622)', async (t) => {
   const { store } = await setup(t, { count: 100, first: HISTORY.firstTurns });
@@ -113,9 +146,12 @@ test('the turn that was latest keeps its words but not the tool it was running',
 });
 
 test('live activity before the first page is replaced by the page, which puts its turns above it', async (t) => {
-  const { host, store } = await setup(t, { count: 4 });
-  host.historyDelayMs = 20;
-  await store.open('h', ID, { session: session({ turn: `${ID}-turn-4`, responseTurn: `${ID}-turn-4`, userMessage: 'live prompt', response: 'live reply' }) });
+  const { client, store } = await setup(t, { count: 4 });
+  const gate = holdHistory(t, client);
+  const pending = store.open('h', ID, { session: session({ turn: `${ID}-turn-4`, responseTurn: `${ID}-turn-4`, userMessage: 'live prompt', response: 'live reply' }) });
+  await gate.started;
+  gate.release();
+  await pending;
   const snap = store.get('h', ID);
   assert.deepEqual(nums(snap), [1, 2, 3, 4]);
   assert.equal(snap.turns[3].provisional, undefined);
@@ -397,19 +433,14 @@ for (const arrivals of [36, 55, 56]) test(`an earlier page preserves the newest 
   for (let page = 0; page < 22; page++) { await store.loadEarlier('h', ID); }
   assert.equal(store.get('h', ID).turns.length, 445);
   const requests = host.historyLog.length;
-  let release, begin;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const started = new Promise((resolve) => { begin = resolve; });
-  const ask = client.history.bind(client);
-  client.history = async (...args) => { const page = await ask(...args); begin(); await gate; return page; };
-  t.after(() => release());
+  const gate = holdHistory(t, client);
   const pending = store.loadEarlier('h', ID, { keepLatest: true });
-  await Promise.race([started, pending]);
+  await gate.started;
   assert.equal(store.get('h', ID).loading, 'earlier');
   for (const n of range(701, 700 + arrivals)) {
     store.live('h', session({ turn: `${ID}-turn-${n}`, responseTurn: `${ID}-turn-${n}`, response: `Live ${n}` }));
   }
-  release();
+  gate.release();
   const landed = await pending;
   assert.equal(host.historyLog.length, requests + 1);
   assert.equal(landed.loading, null);
@@ -487,20 +518,20 @@ test('turns stay in the order the host gave them, whatever order the pages are a
 });
 
 test('what is on its way or queued when the session is forgotten is neither sent nor applied, and tells no one', async (t) => {
-  const { host, store } = await setup(t, { count: 45 });
+  const { host, client, store } = await setup(t, { count: 45 });
   await store.open('h', ID);
-  host.historyDelayMs = 30;
+  const gate = holdHistory(t, client);
   const events = [];
   store.watch('h', ID, (snapshot, change) => events.push(change.kind));
   store.onAny(({ change }) => events.push(`any ${change.kind}`));
   const running = store.loadEarlier('h', ID);
   const queued = store.open('h', ID);
-  await new Promise((resolve) => { setTimeout(resolve, 10); });
+  await gate.started;
   const asked = host.historyLog.length;
   events.length = 0;
   store.forget('h', ID);
+  gate.release();
   await Promise.all([running, queued]);
-  await new Promise((resolve) => { setTimeout(resolve, 50); });
   assert.equal(asked, 2);
   assert.equal(host.historyLog.length, 2);
   assert.deepEqual(events, []);
@@ -515,11 +546,12 @@ test('asking for the same page before the one ahead has started sends one reques
 });
 
 test('a refresh asked for while the newest page is on its way is asked again, so a turn that ended meanwhile comes whole', async (t) => {
-  const { host, store } = await setup(t, { count: 3 });
-  host.historyDelayMs = 20;
+  const { host, client, store } = await setup(t, { count: 3 });
+  const gate = holdHistory(t, client);
   const first = store.open('h', ID);
-  await new Promise((resolve) => { setTimeout(resolve, 5); });
+  await gate.started;
   const second = store.open('h', ID);
+  gate.release();
   const one = await first;
   host.historyTurns.set(ID, one.turns.map((turn) => (turn.id === `${ID}-turn-3` ? { ...turn, parts: [...turn.parts, { id: 'late', kind: 'response', at: turn.at, text: 'Finished.' }] } : turn)));
   const two = await second;
@@ -528,12 +560,13 @@ test('a refresh asked for while the newest page is on its way is asked again, so
 });
 
 test('an earlier page asked for while one is on its way is that page, not another', async (t) => {
-  const { host, store } = await setup(t, { count: 100 });
+  const { host, client, store } = await setup(t, { count: 100 });
   await store.open('h', ID);
-  host.historyDelayMs = 20;
+  const gate = holdHistory(t, client);
   const a = store.loadEarlier('h', ID);
-  await new Promise((resolve) => { setTimeout(resolve, 5); });
+  await gate.started;
   const b = store.loadEarlier('h', ID);
+  gate.release();
   const [x, y] = await Promise.all([a, b]);
   assert.equal(host.historyLog.length, 2);
   assert.equal(x.turns.length, 40);

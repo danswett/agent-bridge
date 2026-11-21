@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using AgentBridge.Host.Core.Launch;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.HomeAssistant;
@@ -12,7 +13,16 @@ namespace AgentBridge.HomeAssistant;
 public sealed record HaLauncher(
     Func<bool> Available,
     Func<CancellationToken, Task<LaunchOptions>> Options,
-    Func<LaunchRequest, CancellationToken, Task<LaunchResult>> Launch);
+    Func<LaunchRequest, CancellationToken, Task<LaunchResult>> Launch)
+{
+    // The host's record of agents' requests by id (#2743): with it, an id launches once across
+    // restarts and its outcome is readable for the record's retention. Without it (and without a
+    // problem), the in-memory dedupe of the daemon's design.
+    public LaunchRequestStore? Requests { get; init; }
+    // Why the record could not be opened: requests with an id are refused rather than launched
+    // without it.
+    public string? RequestsProblem { get; init; }
+}
 
 // Stage 5: the launch card (docs/ha-connector.md, "Stage 5"). agent-ha-bridge's
 // Sync-DaemonNewSession: the card's controls from what the host's launcher offers, its selectors
@@ -313,10 +323,14 @@ public sealed partial class HaConnector
         // An agent's request: answered before the slot is cleared, so it is always in one place or
         // the other, then taken (Use-DaemonLaunchRequest).
         var id = read.Id!;
+        if (Durable && await HeldAsync(read, pressedAt, ct)) { return; }
         await OutcomeAsync(id, "starting", "Received; checking its settings before launching.", pressed: pressed, ct: ct);
         await ClearPromptPayloadAsync(ct);
-        launchRequestsHandled.Insert(0, id);
-        if (launchRequestsHandled.Count > 50) { launchRequestsHandled.RemoveAt(50); }
+        if (!Durable)
+        {
+            launchRequestsHandled.Insert(0, id);
+            if (launchRequestsHandled.Count > 50) { launchRequestsHandled.RemoveAt(50); }
+        }
         launchConsumedPress = pressedAt;
         log($"Home Assistant connector: launch request {id} received ({(read.Settings!.Count > 0 ? string.Join(", ", read.Settings.OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => $"{k.Key}={k.Value}")) : "machine defaults")}; prompt of {read.Text.Length} chars)");
         var refusal = read.Problem;
@@ -344,7 +358,114 @@ public sealed partial class HaConnector
             return;
         }
         await LaunchNoteAsync(StartingNote(launched!), ct);
+        // Launching on the record before the launch starts: a restart from here on reads it as
+        // unconfirmed, never as one to start.
+        try { launcher!.Requests?.Begin(id); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log($"Home Assistant connector: launch request {id} refused, the launch request record could not be written: {e.Message}");
+            await LaunchNoteAsync(RecordUnusable, ct);
+            await OutcomeAsync(id, "refused", RecordUnusable, ct: ct);
+            return;
+        }
         Dispatch(request, id, pressed, driver, principal, launched, null);
+    }
+
+    const string RecordUnusable = "Launch refused: this machine's record of launch requests (launch-requests.json) can't be used, so no request with an id is launched; see the host's log.";
+
+    bool Durable => launcher is { Requests: not null } or { RequestsProblem: not null };
+
+    // The host's record decides first (#2743): an id it holds is never launched again, whatever
+    // its state, and what the record says is what the request hears. True when the press is
+    // answered without a launch.
+    async Task<bool> HeldAsync(PayloadRequest read, DateTimeOffset pressedAt, CancellationToken ct)
+    {
+        var id = read.Id!;
+        var problem = launcher!.RequestsProblem;
+        EnqueueResult held = default;
+        // The request as a whole, settings too: the same id for another launch is not a repeat.
+        var text = HaContract.Serialize(new JsonObject
+        {
+            ["text"] = read.Text,
+            ["settings"] = new JsonObject(read.Settings!.OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => KeyValuePair.Create(k.Key, (JsonNode?)k.Value))),
+            ["problem"] = read.Problem,
+        });
+        try { if (problem is null) { held = launcher.Requests!.Enqueue(id, text); } }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { problem = e.Message; }
+        if (problem is null && held.Status == EnqueueStatus.Added) { return false; }
+        await ClearPromptPayloadAsync(ct);
+        launchConsumedPress = pressedAt;
+        if (problem is not null)
+        {
+            log($"Home Assistant connector: launch request {id} refused: {problem}");
+            await OutcomeAsync(id, "refused", RecordUnusable, record: false, ct: ct);
+        }
+        else if (held.Status == EnqueueStatus.Existing)
+        {
+            log($"Home Assistant connector: launch request {id} was received already ({held.Record!.State.ToString().ToLowerInvariant()}); not launched again");
+            var told = Told(held.Record!, OutcomeShown(id));
+            await OutcomeAsync(id, told["outcome"]!.ToString(), told["note"]!.ToString(), session: told["session"]!.ToString(), record: false, ct: ct);
+        }
+        else if (held.Status == EnqueueStatus.Conflict)
+        {
+            log($"Home Assistant connector: launch request {id} refused, its id was used already for a different launch");
+            await OutcomeAsync(id, "refused", $"Launch refused: the id {id} was used already for a different launch, so this one was not started.", record: false, ct: ct);
+        }
+        else
+        {
+            await OutcomeAsync(id, "busy", "Busy: too many launch requests are waiting on this machine, so nothing was launched. Try again in a moment.", record: false, ct: ct);
+        }
+        return true;
+    }
+
+    JsonObject? OutcomeShown(string id) => launchOutcomes.FirstOrDefault(o => o["request"]?.ToString() == id);
+
+    // What a request on the record is told: the record's outcome, with what Home Assistant last
+    // showed of it (its note when the outcome is the same, what was launched, when pressed).
+    static JsonObject Told(LaunchRequestRecord r, JsonObject? shown)
+    {
+        var (outcome, note, session) = r.State switch
+        {
+            LaunchRequestState.Launched => ("started", "", r.Session!),
+            LaunchRequestState.Refused when r.Code == "busy" => ("busy", "Busy: another launch on this machine is still starting, so nothing was launched. Try again in a moment.", ""),
+            LaunchRequestState.Refused => ("refused", "Launch refused.", ""),
+            LaunchRequestState.Failed when r.Code == "failed" => ("failed", "Launch failed.", ""),
+            LaunchRequestState.Failed => ("unconfirmed", RestartedNote, ""),
+            _ => ("starting", "Received; checking its settings before launching.", ""),
+        };
+        return new JsonObject
+        {
+            ["request"] = r.Id,
+            ["outcome"] = outcome,
+            ["session"] = session,
+            ["note"] = shown?["outcome"]?.ToString() == outcome ? shown["note"]?.DeepClone() : (JsonNode)note,
+            ["pressed"] = shown?["pressed"]?.DeepClone() ?? "",
+            ["at"] = r.ChangedAt.ToString("o", CultureInfo.InvariantCulture),
+            ["launched"] = shown?["launched"]?.DeepClone(),
+        };
+    }
+
+    const string RestartedNote = "This machine's bridge restarted while the launch was starting, so whether it started is not known; check the machine.";
+
+    // Every outcome a request hears goes on the record too, which a restart reads back. Moves the
+    // record does not allow (a later word on a finished request) change nothing.
+    void Record(string id, string outcome, string session)
+    {
+        if (launcher?.Requests is not { } store) { return; }
+        try
+        {
+            _ = outcome switch
+            {
+                "started" => store.Launched(id, session.Length > 0 ? session : "unreported"),
+                "busy" or "refused" => store.Refuse(id, outcome),
+                "failed" or "unconfirmed" => store.Fail(id, outcome),
+                _ => false,
+            };
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            log($"Home Assistant connector: the launch request record could not keep {id} {outcome}: {e.Message}");
+        }
     }
 
     // A person's press, or an agent's without a request: everything from the card.
@@ -746,10 +867,11 @@ public sealed partial class HaConnector
         }
     }
 
-    // Set-DaemonLaunchOutcome: the latest few, newest first; never throws, since the launch it
-    // describes has happened either way.
-    async Task OutcomeAsync(string request, string outcome, string note, string session = "", JsonObject? launched = null, string pressed = "", CancellationToken ct = default)
+    // Set-DaemonLaunchOutcome: newest first; never throws, since the launch it describes has
+    // happened either way.
+    async Task OutcomeAsync(string request, string outcome, string note, string session = "", JsonObject? launched = null, string pressed = "", bool record = true, CancellationToken ct = default)
     {
+        if (record) { Record(request, outcome, session); }
         var previous = launchOutcomes.FirstOrDefault(o => o["request"]!.GetValue<string>() == request);
         if (previous is not null)
         {
@@ -767,14 +889,41 @@ public sealed partial class HaConnector
             ["at"] = time.GetUtcNow().ToString("o", CultureInfo.InvariantCulture),
             ["launched"] = launched?.DeepClone(),
         });
-        while (launchOutcomes.Count > HaContract.LaunchOutcomesKept) { launchOutcomes.RemoveAt(launchOutcomes.Count - 1); }
+        TrimOutcomes();
+        await PublishOutcomesAsync($"the launch outcome for {request}", ct);
+    }
+
+    async Task PublishOutcomesAsync(string what, CancellationToken ct)
+    {
         try
         {
             await PublishAsync(HaContract.LaunchOutcomeTopic(Slug), new JsonObject { ["recent"] = new JsonArray([.. launchOutcomes.Select(o => (JsonNode)o.DeepClone())]) }, true, ct);
         }
         catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
         {
-            log($"Home Assistant connector: the launch outcome for {request} could not be published: {Describe(e)}");
+            log($"Home Assistant connector: {what} could not be published: {Describe(e)}");
+        }
+    }
+
+    // Without the host's record, the latest five, as the daemon keeps. With it, every outcome of
+    // the last 15 minutes (the record's retention) and of any request not finished, newest first,
+    // up to what the sensor's attributes can carry (HaContract.LaunchOutcomesPublished).
+    void TrimOutcomes()
+    {
+        if (launcher?.Requests is not { } store)
+        {
+            while (launchOutcomes.Count > HaContract.LaunchOutcomesKept) { launchOutcomes.RemoveAt(launchOutcomes.Count - 1); }
+            return;
+        }
+        var now = time.GetUtcNow();
+        launchOutcomes.RemoveAll(o => store.Get(o["request"]!.ToString()) is null
+            && !(DateTimeOffset.TryParse(o["at"]?.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var at) && now - at < LaunchRequestStore.Retention));
+        var bytes = 0;
+        for (var i = 0; i < launchOutcomes.Count; i++)
+        {
+            bytes += System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(launchOutcomes[i])) + 1;
+            if (i < HaContract.LaunchOutcomesPublished && bytes <= HaContract.LaunchOutcomesBytes) { continue; }
+            launchOutcomes.RemoveRange(i, launchOutcomes.Count - i);
         }
     }
 
@@ -792,37 +941,40 @@ public sealed partial class HaConnector
         try { state = await ha.GetStateAsync(LaunchEntity("sensor", "new_session_result"), ct); }
         catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { return false; }
         launchOutcomesRestored = true;
-        if (state?.Attributes is not { ValueKind: JsonValueKind.Object } a
-            || !a.TryGetProperty("recent", out var recent) || recent.ValueKind != JsonValueKind.Array)
-        {
-            return true;
-        }
-        // What Home Assistant holds is the newest account, whoever wrote it.
+        var store = launcher?.Requests;
+        var recent = state?.Attributes is { ValueKind: JsonValueKind.Object } a && a.TryGetProperty("recent", out var r) && r.ValueKind == JsonValueKind.Array ? r : (JsonElement?)null;
+        if (recent is null && store is null) { return true; }
+        // What Home Assistant holds is the newest account, whoever wrote it; with the host's
+        // record, the record's own requests are told as it says.
         launchOutcomes.Clear();
-        var cut = false;
-        foreach (var item in recent.EnumerateArray().Take(HaContract.LaunchOutcomesKept))
+        var cut = store is not null;
+        var shown = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        foreach (var item in recent?.EnumerateArray().Take(store is null ? HaContract.LaunchOutcomesKept : HaContract.LaunchOutcomesPublished) ?? [])
         {
-            if (JsonNode.Parse(item.GetRawText()) is not JsonObject o || o["request"] is not JsonValue r || !r.TryGetValue<string>(out var id)) { continue; }
+            if (JsonNode.Parse(item.GetRawText()) is not JsonObject o || o["request"] is not JsonValue v0 || !v0.TryGetValue<string>(out var id)) { continue; }
+            if (store?.Get(id) is not null) { shown.TryAdd(id, o); continue; }
             if (o["outcome"] is JsonValue v && v.TryGetValue<string>(out var outcome) && outcome == "starting" && id != launchInFlight)
             {
                 o["outcome"] = "unconfirmed";
-                o["note"] = "This machine's bridge restarted while the launch was starting, so whether it started is not known; check the machine.";
+                o["note"] = RestartedNote;
                 cut = true;
             }
             launchOutcomes.Add(o);
             if (!launchRequestsHandled.Contains(id, StringComparer.Ordinal)) { launchRequestsHandled.Add(id); }
         }
-        if (cut)
+        foreach (var held in store?.All() ?? [])
         {
-            try
-            {
-                await PublishAsync(HaContract.LaunchOutcomeTopic(Slug), new JsonObject { ["recent"] = new JsonArray([.. launchOutcomes.Select(o => (JsonNode)o.DeepClone())]) }, true, ct);
-            }
-            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
-            {
-                log($"Home Assistant connector: the launch outcomes could not be published: {Describe(e)}");
-            }
+            // Queued or launching, and not this connector's launch under way: cut off, so said to
+            // be unconfirmed rather than started (again).
+            if (!held.Finished && held.Id != launchInFlight) { Record(held.Id, "unconfirmed", ""); }
+            launchOutcomes.Add(Told(store!.Get(held.Id) ?? held, shown.GetValueOrDefault(held.Id)));
         }
+        if (store is not null)
+        {
+            launchOutcomes.Sort((x, y) => string.CompareOrdinal(y["at"]?.ToString(), x["at"]?.ToString()));
+            TrimOutcomes();
+        }
+        if (cut) { await PublishOutcomesAsync("the launch outcomes", ct); }
         return true;
     }
 

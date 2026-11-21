@@ -148,7 +148,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
     // installed: the version installed here, channel: this machine's Velopack channel (`win`,
     // `win-arm64`) and prereleases: whether they are offered, which a relay's list is judged by;
     // without a channel the relay isn't asked.
-    public async Task<T> ReleasesAsync<T>(string url, Func<string, T> read, CancellationToken cancellationToken, string? installed = null, string? channel = null, bool prereleases = true)
+    public async Task<T> ReleasesAsync<T>(string url, Func<string, T> read, CancellationToken cancellationToken, string? installed = null, string? channel = null, bool prereleases = true, bool pressed = false)
     {
         await turn.WaitAsync(cancellationToken);
         try
@@ -172,7 +172,11 @@ public sealed partial class ReleaseDiscovery : IDisposable
             var askCdn = cdn && url == GitHubList && channel is not null;
             // Only GitHub's own answer moves this, so a relay can't renew its own list's welcome.
             var revalidate = state.RelayExpired || state.GitHubAnsweredAt is not { } answered || answered > now || now - answered >= GithubRevalidateEvery;
-            if (cached && now < state.FreshUntil && (!holding || state.Source == Sources.Cdn))
+            // A person's press (#3441) is not answered from what was kept for background checks:
+            // the relay's copy may predate the latest publish by most of CdnOldest (37 minutes, on
+            // a dev VM), so GitHub is asked, conditionally on a list it gave. Its backoff still holds.
+            var press = pressed && !holding;
+            if (cached && now < state.FreshUntil && (!holding || state.Source == Sources.Cdn) && !press)
             {
                 if (state.Source != Sources.Cdn) { return releases; }
                 // A relay's list kept here is judged for every caller as a fresh one would be: it
@@ -190,9 +194,11 @@ public sealed partial class ReleaseDiscovery : IDisposable
                 askCdn = false;
             }
             Answer? rechecked = null;
-            if (cdn && url == GitHubList && channel is not null && revalidate)
+            if (cdn && url == GitHubList && channel is not null && (revalidate || press))
             {
-                log?.Invoke($"update check: the CDN was not asked, as GitHub has not answered here in the last {Span(GithubRevalidateEvery)}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
+                log?.Invoke(revalidate
+                    ? $"update check: the CDN was not asked, as GitHub has not answered here in the last {Span(GithubRevalidateEvery)}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}"
+                    : "update check: the CDN was not asked, as a person asked for this check; asking GitHub");
                 if (!holding)
                 {
                     rechecked = await AskAsync(url, cached && state.Source != Sources.Cdn ? state.ETag : null, cancellationToken);

@@ -11,7 +11,7 @@ export const MAX_DEPTH = 16;
 const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const NUMBER = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y;
 
-// Nodes: { t: 'object', members: [[name, node]], get(name) }, { t: 'array', items },
+// Nodes: { t: 'object', members: [[name, node]], get(name), text }, { t: 'array', items },
 // { t: 'string', v }, { t: 'number', raw }, { t: 'true' | 'false' | 'null' }.
 export function parseStrict(bytes, what) {
   if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) throw new RosterFormatError(REFUSAL.json, what);
@@ -84,7 +84,11 @@ class Reader {
     const c = this.s[this.i];
     if (c === '{' || c === '[') {
       if (depth + 1 > MAX_DEPTH) throw new SyntaxError('too deep');
-      return c === '{' ? this.object(depth + 1) : this.array(depth + 1);
+      if (c === '[') return this.array(depth + 1);
+      const start = this.i;
+      const node = this.object(depth + 1);
+      node.text = this.s.slice(start, this.i);
+      return node;
     }
     if (c === '"') return { t: 'string', v: this.string() };
     if (c === '-' || (c >= '0' && c <= '9')) return { t: 'number', raw: this.number() };

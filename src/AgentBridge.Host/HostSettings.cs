@@ -45,9 +45,9 @@ namespace AgentBridge.Host;
 // devBox: keeping a Microsoft Dev Box from hibernating on disconnect (DevBoxSettings,
 // KeepAwakeService). Off unless turned on; a file that cannot be read leaves it off.
 //
-// agentMessaging (#728): the temporary AP5-lite mode (AgentMessagingSettings). remote "off" (the
-// default) or "own-account"; allowAllTargets false (the default) or true, with allow-all sessions
-// also requiring an exact id in allowAllTargetSessions. Invalid values fail closed. Read afresh by
+// agentMessaging (#728): the temporary AP5-lite mode (AgentMessagingSettings). remote "own-account"
+// (the default for an absent key, owner decision Nov 19, 2026) or "off"; allowAllTargets false (the default) or true, with allow-all sessions
+// also requiring an exact id in allowAllTargetSessions. Invalid values and unreadable files fail closed. Read afresh by
 // CurrentAgentMessaging: no restart needed.
 //
 // agents (#1295): the agents policy (AgentPolicy, docs/host-config.md). Absent means agents are off;
@@ -70,8 +70,8 @@ namespace AgentBridge.Host;
 // absent. A value that is not true or false turns everything off, as remoteApproval's does.
 //
 // security.roster: what is done with the account's signed device roster (SecuritySettings,
-// HostRoster). Only "off" so far: verify and log, enforce nothing; anything else is said and read
-// as off.
+// HostRoster, HostRosterObserve). "off" (default) verifies and logs; "observe" also feeds the pinned
+// reader, read-only; enforce nothing either way; anything else is said and read as off.
 //
 // version: the schema's. A file from a newer schema is not guessed at: both are off.
 public sealed record HostSettings(bool RemoteApproval)
@@ -105,8 +105,8 @@ public sealed record HostSettings(bool RemoteApproval)
     public SecuritySettings Security { get; init; } = SecuritySettings.Default;
     public IReadOnlyList<string> SecurityProblems { get; init; } = [];
 
-    // The temporary AP5-lite messaging mode (#728): off unless turned on here, and off whenever
-    // the file cannot be read (Off keeps the default).
+    // The temporary AP5-lite messaging mode (#728): on for an absent key, and off whenever the
+    // file cannot be read (Off sets Closed).
     public AgentMessagingSettings AgentMessaging { get; init; } = AgentMessagingSettings.Default;
 
     public IReadOnlyList<string> AgentMessagingProblems { get; init; } = [];
@@ -172,6 +172,7 @@ public sealed record HostSettings(bool RemoteApproval)
         RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, FleetShare = false, FleetLaunchRule = "off", LoadEnabled = false, ReadOnly = true,
         Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RemoteManage = false, RestoreOnStart = false, RestoreKept = true,
         EscapedApproval = AgentBridge.Protocol.EscapedApproval.Machine, EscapedApprovalDevices = [],
+        AgentMessaging = AgentMessagingSettings.Closed,
     };
 
     public static (HostSettings Settings, string? Problem) Load(string folder)

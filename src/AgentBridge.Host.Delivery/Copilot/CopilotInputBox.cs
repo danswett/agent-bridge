@@ -44,7 +44,7 @@ public sealed record CopilotInputBox(IReadOnlyList<ScreenRow> Rows, string Conte
 //   * Vim: the vim mode the main box's footer shows ("-- INSERT --", "-- NORMAL --"); None
 //     when it shows neither, or the box is not the main one. A running turn's row in a window
 //     under 80 columns leaves the label out, so it reads None there too.
-public sealed record CopilotInputBoxState(IReadOnlyList<ScreenRow> Rows, string Content, int Lines, bool Shell, bool Main, bool Complete, CopilotVimMode Vim);
+public sealed record CopilotInputBoxState(IReadOnlyList<ScreenRow> Rows, string Content, int Lines, bool Shell, bool Main, bool Complete, CopilotVimMode Vim, bool Working = false);
 
 public enum CopilotVimMode { None, Insert, Normal }
 
@@ -88,7 +88,7 @@ public static partial class CopilotInputBoxReader
         var main = below < rows.Count && (working || IsFooter(rows[below])) && !rows.Skip(below + 1).Any(r => r.Trim(' ').Length > 0);
         var shell = glyph == ShellGlyph || box.Content == ShellPlaceholder || (main && Shell(rows[below]));
         var vim = !main ? CopilotVimMode.None : Has(rows[below], VimNormal) ? CopilotVimMode.Normal : Has(rows[below], VimInsert) ? CopilotVimMode.Insert : CopilotVimMode.None;
-        var state = new CopilotInputBoxState(box.Rows, box.Content, box.Rows.Count - (complete ? 2 : 1), shell, main, complete, vim);
+        var state = new CopilotInputBoxState(box.Rows, box.Content, box.Rows.Count - (complete ? 2 : 1), shell, main, complete, vim, working);
         // A box cut off at the top was never one the host could find.
         if (!complete) { return (null, NotFound, false, state); }
         if (!main)

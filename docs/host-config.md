@@ -110,7 +110,7 @@ stack cuts; this policy cut installs no timer, task or live action.
     "copilotAccounts": ["dswett_microsoft"]
   },
   "devBox": { "keepAwake": false, "intervalMinutes": 15 },
-  "agentMessaging": { "remote": "off", "allowAllTargets": false, "allowAllTargetSessions": [] }
+  "agentMessaging": { "remote": "own-account", "allowAllTargets": false, "allowAllTargetSessions": [] }
 }
 ```
 
@@ -173,15 +173,15 @@ and `fleetNames` or `fleetNames.launchRule` set to `null` disables named launche
 | `homeAssistant.answerButtons.icon`, `iconColor`, `color`, `interruptionLevel` | `mdi:chat-question`, `#FFFFFF`, `#FF9F0A`, `time-sensitive` | The notification's styling; an empty `icon` or `interruptionLevel` leaves it out |
 | `homeAssistant.updates.checkForUpdates` | `true` | Whether the machine's update entity looks for this host's own releases and serves its Install and Check buttons (stage 6), as agent-ha-bridge's `updates.checkForUpdates`. Only on a copy its updater installed |
 | `homeAssistant.updates.checkHours` | `0.5` | How often, in hours (0.1 to 168), as agent-ha-bridge's `updates.checkHours`; a press of Check looks at once |
-| `security.roster` | `"off"` | What this host does with the account's signed device roster ([protocol/devices.md](protocol/devices.md)). `"off"` is the only value so far: the host reads the roster from the relay, verifies it, explicitly reports `unpinned`, and enforces nothing. The read-only pin-reader foundation is not yet wired into this running path. Any other value is reported in the log and read as `"off"` |
+| `security.roster` | `"off"` | What this host does with the account's signed device roster ([protocol/devices.md](protocol/devices.md)). `"off"`: the host reads the roster from the relay once per connection, verifies it, explicitly reports `unpinned`, and enforces nothing; it never feeds the pin reader. `"observe"`: the host also feeds the relay's roster to its read-only pin reader on connect and about every five minutes while connected, so a host with a `roster-pin.json` can supply the fleet gate its verified roster ([observe mode](protocol/devices.md#observe-mode)); it never creates, writes or advances the pin and enforces nothing else. Any other value is reported in the log and read as `"off"` |
 | `usage.publish` | `true` | Reading the agents' allowances at all ([v1-usage.md](protocol/v1-usage.md)). `false` asks no vendor anything: `hello` leaves `usage` out, the host neither asks the account's other hosts for their readings nor keeps them (#172), and the Home Assistant connector withdraws this machine's usage sensors rather than leave their last readings with nothing to refresh them (agent-ha-bridge leaves them) |
 | `usage.intervalSeconds` | `120` | How often an agent's allowance is read while a session of that agent is open here, from 30 to 86400. While agent-ha-bridge runs for this user the host reads only at `idleIntervalSeconds`, since that bridge is already asking |
 | `usage.idleIntervalSeconds` | `900` | How often it is read while none is, from 30 to 86400, and never more often than `intervalSeconds` |
 | `usage.copilotAccounts` | `[]` | Further GitHub logins whose Copilot allowance this machine reports beside the account Copilot is signed in as, as agent-ha-bridge's own setting: up to three, each its own row on the phone and the app, under its login, and on the Home Assistant connector's `usage_copilot_2`, `_3` or `_4` by its place in the list. Each is read with the token `gh` holds for exactly that login (`gh auth token --user <login>`) and nothing else, at the idle pace, one at a time; a reading that answers for another login is refused. So `gh auth login` as that account is all the setup there is. Logins only, never tokens |
 | `devBox.keepAwake` | `false` | On a Microsoft Dev Box, keep the machine from hibernating on disconnect while the host runs ([below](#dev-box-keep-awake)), as agent-ha-bridge's own setting. Set it in the Windows app's Settings (shown on a Dev Box only; applies at once) or here (applies when the host restarts). `migrate` carries agent-ha-bridge's. Nothing happens on a machine that is not a Dev Box |
 | `devBox.intervalMinutes` | `15` | How often a pass runs, from 1 to 30. More than 30 is read as 30 and said, and `config set` refuses it: a pass less often than the pool's grace period (never under 60 minutes) can miss the pending stop entirely |
-| `agentMessaging.remote` | `"off"` | The temporary AP5-lite mode (#728): `"off"` or `"own-account"`, for the owner's own agents on the owner's own account, ahead of the signed roster (#55), which still gates everything beyond it. The runbook is [protocol/agent-lite.md](protocol/agent-lite.md). Off means nothing of it is active, and an install or upgrade never writes it. Read afresh for each message, so changing it needs no restart and switching it to `"off"` holds from the next message; a message not sent this way goes over Home Assistant |
-| `agentMessaging.allowAllTargets` | `false` | Counts only while `agentMessaging.remote` is `"own-account"`. `false`: own agents may not type into allow-all sessions. `true` is only a master switch; a target also needs its exact session id in `agentMessaging.allowAllTargetSessions` |
+| `agentMessaging.remote` | `"own-account"` | The temporary AP5-lite mode (#728): `"own-account"` or `"off"`, for the owner's own agents on the owner's own account, ahead of the signed roster (#55), which still gates everything beyond it. The runbook is [protocol/agent-lite.md](protocol/agent-lite.md). On by default (owner decision, Nov 19, 2026, 22:07 PT), but it acts only for a host signed in to the account, with a present same-account peer whose channel key matches its device id ([trust rule](https://github.com/danswett/agent-bridge/pull/3384)); a host with no signed-in account sends and receives nothing. An explicit `"off"`, which `agents lite kill` writes, always stays off, and after a kill recorded in `lite-kill-epoch.json` only an explicit `"own-account"` turns it on again. Read afresh for each message, so changing it needs no restart and switching it to `"off"` holds from the next message; a message not sent this way goes over Home Assistant. An install or upgrade never writes it |
+| `agentMessaging.allowAllTargets` | `false` | Counts only while `agentMessaging.remote` is set to `"own-account"` in this file; the default never opens allow-all. `false`: own agents may not type into allow-all sessions. `true` is only a master switch; a target also needs its exact session id in `agentMessaging.allowAllTargetSessions` |
 | `agentMessaging.allowAllTargetSessions` | `[]` | Exact session ids allowed to receive own-agent text while `allowAllTargets` is true, only if this host launched the session in allow-all mode since its last restart (the launch record is in memory). Even listed sessions started by hand or before a host restart are refused as `notReplyTarget`. Missing or empty denies all allow-all sessions; names and wildcards never grant access. Read afresh for each message |
 | `agents.enabled` | `false` | The agents policy (#720, [design](design/agent-principals.md), "The per-machine policy"): master switch for agent-to-agent commands on this machine, both directions. **Changed only at the machine**, in this file or with `agent-bridge-host config` (refused inside agent sessions); no request from another device or an agent reads or changes it. Absent section: agents are off, every grant below is off, and the limits are the defaults. This slice only parses and validates it; nothing consumes it yet |
 | `agents.credentialDays` | `7` | How long an agent's credential lives, from 1 to 7 |
@@ -219,8 +219,9 @@ that is not `true` or `false`) is left out and said in the log, and any other va
 wrong turns launching off. In `homeAssistant`, any value that is wrong turns the connector off
 and is said in the log. In `devBox`, a `keepAwake` that is not `true` or `false`, or a `devBox` that
 is not an object, leaves keep-awake off; an interval that is not a whole number from 1 is 15. In
-`agentMessaging`, a `remote` that is not exactly `"off"` or `"own-account"`, or an `agentMessaging`
-that is not an object, is off, and an `allowAllTargets` that is not `true` or `false` is `false`.
+`agentMessaging`, a `remote` that is not exactly `"off"` or `"own-account"`, an `agentMessaging`
+that is not an object, or a section without `remote` that has any problem, is off (never the default
+on), and an `allowAllTargets` that is not `true` or `false` is `false`.
 An `allowAllTargetSessions` that is not a list enables no allow-all sessions; invalid entries are
 ignored and said. `config set` refuses to write any of these values. A setting
 someone may have meant as off is never read as on.
@@ -546,6 +547,17 @@ the next event. An unwritable log (a read-only folder, a full disk) refuses the 
 audited, as the #1401 row in design/agent-launch-scope.md requires: the log says so once in the
 host log and again when writing resumes, and the caller must refuse and release any slot when the
 write returns false.
+
+At the machine, a person can run `agent-bridge-host audit archive [--profile <name>]`.
+It holds the audit folder's exclusive lock, verifies both streams and their durable heads,
+and refuses incomplete or broken evidence before moving anything. It moves only expired,
+closed `agents-*.jsonl` days unchanged into the owner-only `<profile>\audit\archive\`,
+using automatic retention's 30-day cutoff, clock-jump safeguard and durable head advancement.
+It never changes today's file or overwrites an archive; it prints the number moved.
+Unlike automatic size pruning, it does not retire recent days just to meet the byte quota.
+Launch files remain untouched: launch-evidence pruning is still deferred as described below.
+An archive is not an evidence repair; later retained-tail truncation still reports a coverage break.
+Agent sessions are refused by the host CLI.
 
 `session.launch` records use a separate owner-only file,
 `<profile>\audit\launches-YYYY-MM-DD.jsonl` (#1998, #1401 A2), with the same record shape
