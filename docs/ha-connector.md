@@ -1051,7 +1051,13 @@ device.
   `update check pressed:` and the newer release, `no newer release`, `failed: <why>`, or why
   an update under way answers instead.
 * **Install.** A press shows `checking` at once (`in_progress`, the spinner), then looks for the
-  newest release again, downloads it (`downloading` with `update_percentage`), records the
+  newest release again. After a Check request in this connector's lifetime, Install's own
+  check uses the same revalidating path, so it does not return to the stale CDN list the
+  person's Check bypassed (#3483). Background checks still use the cache; an Install with
+  no prior Check keeps its existing cached path. The same rate-limit/backoff, signature,
+  hash and version rules apply. An accepted Install reports its result in a `self-update` log
+  line: no newer release, why it did not start, or the release being handed over.
+  It downloads the release (`downloading` with `update_percentage`), records the
   attempt in the connector's state file (an attempt that cannot be recorded is not handed
   over: the host that came back could not say how it ended), shows `restarting` and hands the
   release to Velopack. Before that, still showing `downloading`, it makes sure nothing the update
