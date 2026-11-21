@@ -5,6 +5,16 @@ using Xunit;
 
 public sealed class HostRosterTests
 {
+    [Fact]
+    public void Unsupported_security_roster_reports_both_available_modes()
+    {
+        using var document = JsonDocument.Parse("{\"roster\":\"enforce\"}");
+        var (_, problems) = SecuritySettings.Read(document.RootElement);
+        var problem = Assert.Single(problems);
+        Assert.Contains("\"off\" or \"observe\"", problem);
+        Assert.DoesNotContain("the only mode", problem);
+    }
+
     static RelayRoster Held(World w, params string[] labels) =>
         new("observe", RosterFixture.Generation, [.. labels.Select(l => w.Entry(l).Canonical())]);
 
@@ -74,9 +84,11 @@ public sealed class HostRosterTests
     [Theory]
     [InlineData(null, "off", 0)]
     [InlineData("{ \"roster\": \"off\" }", "off", 0)]
+    [InlineData("{ \"roster\": \"observe\" }", "observe", 0)]
     [InlineData("{ \"roster\": \"enforce\" }", "off", 1)]
+    [InlineData("{ \"roster\": \"Observe\" }", "off", 1)]
     [InlineData("[]", "off", 1)]
-    public void Only_off_is_a_value_this_host_acts_on_and_anything_else_is_reported_and_read_as_off(string? json, string roster, int problems)
+    public void Only_off_and_observe_are_values_this_host_acts_on_and_anything_else_is_reported_and_read_as_off(string? json, string roster, int problems)
     {
         JsonElement? section = json is null ? null : JsonDocument.Parse(json).RootElement;
 

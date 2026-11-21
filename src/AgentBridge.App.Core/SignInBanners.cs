@@ -126,7 +126,7 @@ public static class SignInBanners
     }
 
     // What a banner says, and what is read aloud when it comes or changes (ui.md §6.13): "Copilot on
-    // DEV-VM1 needs sign-in · @octocat" over "2 sessions affected: Fix the relay, Draft the notes".
+    // Laptop needs sign-in · @octocat" over "2 sessions affected: Fix the relay, Draft the notes".
     public static (string Head, string Line, string Said) Words(Banner b)
     {
         var who = b.Subject;

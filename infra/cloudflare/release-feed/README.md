@@ -35,7 +35,7 @@ still reject lists older than one hour using `Age`.
 
 Test: `node infra/cloudflare/release-feed/worker.test.mjs`.
 
-Deploy (owner-approved on #927, done by the Cloudflare session on DSWETT-HOME): create the Worker from
+Deploy (owner-approved on #927, done by the Cloudflare session on the owner's machine): create the Worker from
 `worker.js` and the route `releases.slipgates.com/*` on the `slipgates.com` zone, with a proxied (orange
 cloud) DNS record for `releases` so the Worker receives traffic. This is the one proxied record on the zone.
 `wrangler.toml` records the intended settings.
