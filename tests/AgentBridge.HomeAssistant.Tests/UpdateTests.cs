@@ -385,6 +385,73 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task Check_then_Install_installs_the_release_only_revalidation_can_see()
+    {
+        var fresh = updates.NewerOnPress = Release();
+        await using var c = await Ready();
+        await Press(c, "check_updates");
+        await PassUntil(c, () => State["latest_version"]?.GetValue<string>() == fresh.Version);
+
+        await Press(c, "install_update");
+        await Settle(c, () => updates.Applied.Count == 1 || Stage == "current");
+
+        Assert.Same(fresh, Assert.Single(updates.Downloaded));
+        Assert.Same(fresh, Assert.Single(updates.Applied));
+        Assert.Equal(2, updates.Pressed);
+        Assert.Contains("Home Assistant connector: self-update: restarting into 0.2.0", LogSnapshot());
+        Assert.DoesNotContain(LogSnapshot(), m => m.Contains("is already installed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_background_recheck_after_Check_keeps_the_cache_but_Install_still_revalidates()
+    {
+        var fresh = updates.NewerOnPress = Release();
+        await using var c = await Ready();
+        await Press(c, "check_updates");
+        await PassUntil(c, () => State["latest_version"]?.GetValue<string>() == fresh.Version);
+        var checks = updates.Checks;
+
+        await Pass(c, TimeSpan.FromHours(1).TotalSeconds);
+        await PassUntil(c, () => State["latest_version"]?.GetValue<string>() == updates.Installed);
+
+        Assert.Equal(checks + 1, updates.Checks);
+        Assert.Equal(1, updates.Pressed);
+        await Press(c, "install_update");
+        await Settle(c, () => updates.Applied.Count == 1 || Stage == "current");
+        Assert.Same(fresh, Assert.Single(updates.Applied));
+        Assert.Equal(2, updates.Pressed);
+        Assert.Contains("Home Assistant connector: self-update: restarting into 0.2.0", LogSnapshot());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Install_without_a_prior_Check_keeps_the_cached_path_and_reports_its_result(bool cachedNewer)
+    {
+        updates.NewerOnPress = Release("0.3.0");
+        updates.Newer = cachedNewer ? Release() : null;
+        await using var c = await Ready();
+
+        await Press(c, "install_update");
+        await Settle(c, () => cachedNewer ? updates.Applied.Count == 1 : ha.NotifiedNow().Count == 1);
+
+        Assert.Equal(0, updates.Pressed);
+        Assert.Equal(2, updates.Checks);
+        if (cachedNewer)
+        {
+            Assert.Same(updates.Newer, Assert.Single(updates.Applied));
+            Assert.Contains("Home Assistant connector: self-update: restarting into 0.2.0", LogSnapshot());
+        }
+        else
+        {
+            Assert.Empty(updates.Downloaded);
+            Assert.Empty(updates.Applied);
+            Assert.Contains("Home Assistant connector: self-update: 0.1.0 is already installed, and it is the latest release", LogSnapshot());
+            Assert.Contains(ha.NotifiedNow(), n => n.Data["title"]!.GetValue<string>() == $"No newer bridge release on {Machine}");
+        }
+    }
+
+    [Fact]
     public async Task A_press_of_Check_that_finds_nothing_newer_says_so_in_the_log()
     {
         await using var c = await Ready();
