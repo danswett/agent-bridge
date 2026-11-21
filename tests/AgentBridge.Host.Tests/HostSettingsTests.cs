@@ -1,3 +1,4 @@
+using AgentBridge.HomeAssistant;
 using AgentBridge.Host;
 using AgentBridge.Host.Core.AgentMessaging;
 using AgentBridge.Protocol;
@@ -360,13 +361,14 @@ public sealed class HostSettingsTests : IDisposable
         Assert.False(settings.HomeAssistant.Enabled);
         Assert.Contains(settings.HomeAssistantProblems, p => p.Contains("baseUrl", StringComparison.Ordinal));
 
-        // Set at the machine, checked as serve would read it: on without an address is not written.
+        // The generic setter cannot bypass the audited connection control.
         File.Delete(Path.Combine(folder, HostSettings.FileName));
-        Assert.Equal(1, Run("config", "set", "homeAssistant.enabled", "true"));
-        Assert.Contains("Not written", Said);
+        Assert.Equal(2, Run("config", "set", "homeAssistant.enabled", "true"));
+        Assert.Contains("ha on", Said);
         Assert.Equal(0, Run("config", "set", "homeAssistant.baseUrl", "http://ha.test:8123"));
-        Assert.Equal(0, Run("config", "set", "homeAssistant.enabled", "true"));
         Assert.Equal(0, Run("config", "set", "homeAssistant.disposable", "true"));
+        HaTokenStore.Save(folder, "fixture-ha-token");
+        Assert.Equal(0, HaCommands.Run(["ha", "on"], folder, () => null, new StringWriter(), new StringWriter(), true, () => null));
         var ha = HostSettings.Load(folder).Settings.HomeAssistant;
         Assert.True(ha is { Enabled: true, Disposable: true });
         Assert.Equal(new Uri("http://ha.test:8123"), ha.BaseUrl);
