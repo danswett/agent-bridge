@@ -65,8 +65,8 @@ public static class Invalid
 // quarantined, what has been adopted, and the state it applies. It decides each offered entry by
 // the acceptance rule, in the order offered; nothing accepted is ever dropped.
 //
-// `clock` is the verifier's persisted monotonic running time (§3.4): it moves only while the
-// verifier runs, never with the wall clock, and survives restarts. Probation is measured with it.
+// `clock` must be monotonic running time (§3.4), never wall time. The caller owns its lifetime
+// and persistence together with acceptance history; this class persists neither.
 public sealed class RosterVerifier(string account, string generation, Func<TimeSpan> clock)
 {
     public const int Window = 8;
@@ -566,15 +566,14 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
 
     // ---- probation (§3.4) ----
 
-    // When this verifier first accepted an add, by its own monotonic clock; an earlier time an
-    // approver reported at enrollment or the machine's app reported over the pipe is adopted.
+    // Adopt only authenticated local acceptance history on the same running clock, never peer times.
     public void AdoptFirstAccepted(byte[] add, TimeSpan at)
     {
         if (_g.Find(add) is { } i && _g[i].IsAdd && (!_firstAccepted.TryGetValue(i, out var t) || at < t)) { _firstAccepted[i] = at; }
     }
 
     // Only an accepted add, never a refused candidate. The caller must authenticate this verifier
-    // and use the same persisted running clock before adopting its time into another verifier.
+    // and use the same running clock before adopting its time into another verifier.
     public TimeSpan? FirstAccepted(byte[] add) =>
         Holds(add) && _g.Find(add) is { } i && _firstAccepted.TryGetValue(i, out var at) ? at : null;
 

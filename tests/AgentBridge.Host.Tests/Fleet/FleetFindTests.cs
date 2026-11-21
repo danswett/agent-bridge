@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Fleet;
+using AgentBridge.Host.Lite;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Relay;
@@ -70,6 +71,249 @@ public sealed class FleetFindTests : IDisposable
 
     async Task<JsonElement> Find(FleetList op, object data) =>
         JsonSerializer.SerializeToElement(await op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(data)), Web);
+
+    sealed class FrameRoster(RelayFleetRoster reader, JsonElement frame, string account = "account-a") : IScopedFleetRoster
+    {
+        public Action? Reading;
+        public Func<Task>? BeforeRead;
+        public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => Task.FromResult(reader.Read([frame]));
+        public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct)
+        {
+            if (BeforeRead is not null) { await BeforeRead(); }
+            Reading?.Invoke();
+            return new FleetRosterSnapshot(account, reader.Read([frame]));
+        }
+    }
+
+    sealed class LiteLink : ILiteLink
+    {
+        public string Self => "self";
+        public string Account { get; set; } = "account-a";
+        IReadOnlyList<PresenceEntry> presence = [new("a", "host-a", "host", Started)];
+        public Action? ReadingPresence;
+        public IReadOnlyList<PresenceEntry> Presence { get { ReadingPresence?.Invoke(); return presence; } set => presence = value; }
+        public object Connection = new();
+        public Action? CheckingConnection;
+        public LiteFleetConnection Capture(FrameRoster frames)
+        {
+            var account = Account;
+            var captured = Connection;
+            return new(account, Presence.ToArray(), frames.ReadScopedAsync, () => { CheckingConnection?.Invoke(); return Account == account && ReferenceEquals(captured, Connection); });
+        }
+        public Task<LiteAck> SendAsync(string peerId, string account, object request, CancellationToken ct) => throw new NotSupportedException();
+    }
+
+    static LiteFleetRoster LiteRoster(FrameRoster frames, LiteKill mode, LiteLink link, Func<string?>? identityAccount = null, object? accountGate = null) =>
+        new(() => link.Capture(frames), mode, identityAccount ?? (() => "account-a"), accountGate ?? new());
+
+    static JsonElement LiteFrame() => Body(new { machine = "a", online = true,
+        record = new { sessions = new[] { new { node = "n-a", name = "SG Quality", state = "idle", since = Started } } } });
+
+    sealed class AfterReadRoster(IScopedFleetRoster inner, Action after) : IScopedFleetRoster
+    {
+        public async Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => (await ReadScopedAsync(ct)).Machines;
+        public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) { var result = await inner.ReadScopedAsync(ct); after(); return result; }
+    }
+
+    [Theory, InlineData(true), InlineData(false)]
+    public async Task Switching_identity_after_trust_projection_but_before_the_fleet_result_refuses_find_and_list(bool find)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        string? identityAccount = "account-a";
+        var gate = new object();
+        var inner = LiteRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), new LiteLink(), () => identityAccount, gate);
+        var own = new AfterReadRoster(inner, () => { lock (gate) { identityAccount = "account-b"; } });
+        var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+            : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
+        Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
+        Assert.Equal("account-b", identityAccount);
+    }
+
+    [Theory, InlineData(true), InlineData(false)]
+    public async Task A_same_account_connection_switch_after_the_final_lease_sample_refuses_find_and_list(bool find)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var checks = 0;
+        var gate = new object();
+        var link = new LiteLink();
+        string? IdentityAccount()
+        {
+            if (++checks == 3) { Assert.True(Monitor.IsEntered(gate)); link.Connection = new(); }
+            return "account-a";
+        }
+        var own = LiteRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), link, IdentityAccount, gate);
+        var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+            : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
+        Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
+        Assert.Equal(3, checks);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_identity_switch_on_the_final_lease_check_refuses_find_and_list(bool find)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        string? identityAccount = "account-a";
+        var checks = 0;
+        var gate = new object();
+        var link = new LiteLink { CheckingConnection = () => { if (++checks == 3) { Assert.True(Monitor.IsEntered(gate)); identityAccount = "account-b"; } } };
+        var frames = new FrameRoster(new RelayFleetRoster(), LiteFrame()) { BeforeRead = () => { Assert.False(Monitor.IsEntered(gate)); return Task.CompletedTask; } };
+        var own = LiteRoster(frames, new LiteKill(root), link, () => identityAccount, gate);
+        var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+            : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
+        Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
+        Assert.Equal(3, checks);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Switching_host_identity_before_the_old_relay_detaches_refuses_find_and_list(bool find)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        string? identityAccount = "account-a";
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var frames = new FrameRoster(new RelayFleetRoster(), LiteFrame()) { BeforeRead = async () => { entered.SetResult(); await release.Task; } };
+        var own = LiteRoster(frames, new LiteKill(root), new LiteLink(), () => identityAccount);
+        var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+            : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
+        try { await entered.Task.WaitAsync(TimeSpan.FromSeconds(5)); identityAccount = "account-b"; }
+        finally { release.TrySetResult(); }
+        Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_connection_switch_on_the_presence_read_cannot_mix_accounts_in_find_or_list(bool find)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var link = new LiteLink();
+        link.ReadingPresence = () => { link.Account = "account-b"; link.Presence = [new("a", "host-b", "host", Started)]; };
+        var own = LiteRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), link);
+        var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+            : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
+        Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Replacing_the_connection_with_the_same_account_during_the_registry_read_refuses_find_and_list(bool find)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var link = new LiteLink();
+        var frames = new FrameRoster(new RelayFleetRoster(), LiteFrame()) { Reading = () => link.Connection = new() };
+        var own = LiteRoster(frames, new LiteKill(root), link);
+        var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+            : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
+        Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Own_account_find_and_list_bypass_missing_or_unreadable_roster_pins_without_claiming_verification(bool unreadable, bool find)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var pin = Path.Combine(root, "roster-pin.json");
+        if (unreadable) { File.WriteAllText(pin, "{broken"); }
+        var trust = new FleetTrust(new HostRosterReader(pin, HostRoster.Now), root, () => "account-a");
+        var signed = new FrameRoster(new RelayFleetRoster(trust.Membership), LiteFrame());
+        if (unreadable) { Assert.Throws<InvalidOperationException>(() => trust.Membership()); }
+        var own = LiteRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), new LiteLink());
+        var op = new FleetList(store, signed, audit: new AgentAuditLog(root), messagingRoster: own);
+        if (find)
+        {
+            var found = await Find(op, new { name = "SG Quality" });
+            Assert.Equal("found", found.GetProperty("result").GetString());
+            Assert.Equal("own-account", found.GetProperty("session").GetProperty("trust").GetString());
+        }
+        else
+        {
+            var list = JsonSerializer.SerializeToElement(await op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { include = "content" })), Web);
+            Assert.Equal("own-account", Assert.Single(list.GetProperty("sessions").EnumerateArray()).GetProperty("trust").GetString());
+        }
+        Assert.False(Assert.Single((await own.ReadScopedAsync(default)).Machines).Verified);
+        Assert.Null(trust.VerifiedRoster());
+        Assert.Equal(unreadable, File.Exists(pin));
+    }
+
+    [Fact]
+    public async Task Own_account_lookup_does_not_use_signed_roster_membership_to_hide_a_present_host()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var world = new World();
+        world.Genesis("P");
+        var verified = new AgentBridge.Roster.RosterVerifier(world.AccountId, world.GenerationId, () => world.Now);
+        world.Feed(verified, "G");
+        var signed = new FrameRoster(new RelayFleetRoster(() => verified), LiteFrame());
+        Assert.Empty(await signed.ReadAsync(default));
+        var own = LiteRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), new LiteLink());
+        var result = await Find(new FleetList(store, signed, audit: new AgentAuditLog(root), messagingRoster: own), new { name = "SG Quality" });
+        Assert.Equal("found", result.GetProperty("result").GetString());
+        Assert.Equal("own-account", result.GetProperty("session").GetProperty("trust").GetString());
+        Assert.Empty(await signed.ReadAsync(default));
+    }
+
+    [Theory]
+    [InlineData("off")]
+    [InlineData("kill")]
+    [InlineData("during-read")]
+    public async Task Off_or_killed_own_account_find_and_list_refuse_with_off(string state)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var mode = new LiteKill(root);
+        var frames = new FrameRoster(new RelayFleetRoster(), LiteFrame());
+        if (state == "kill") { mode.Kill(); }
+        else if (state == "off") { Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.remote", "off"], root, TextWriter.Null, TextWriter.Null)); }
+        else { frames.Reading = () => mode.Kill(); }
+        var own = LiteRoster(frames, mode, new LiteLink());
+        var op = new FleetList(store, new Roster(M("a", true, "SG Quality", verified: true)), audit: new AgentAuditLog(root), messagingRoster: own);
+        Assert.Contains("refused: off:", (await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { name = "SG Quality" }))).Message);
+        Assert.Contains("refused: off:", (await Assert.ThrowsAsync<InvalidOperationException>(() => op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { })))).Message);
+    }
+
+    [Theory]
+    [InlineData("other-account")]
+    [InlineData("signed-out")]
+    [InlineData("changed-account")]
+    [InlineData("absent-host")]
+    [InlineData("non-host")]
+    public async Task Own_account_routing_rejects_other_accounts_and_never_finds_an_absent_or_non_host_peer(string state)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var link = new LiteLink();
+        var frames = new FrameRoster(new RelayFleetRoster(), LiteFrame(), state == "other-account" ? "account-b" : "account-a");
+        if (state == "signed-out") { link.Account = ""; }
+        if (state == "changed-account") { frames.Reading = () => link.Account = "account-b"; }
+        if (state == "absent-host") { link.Presence = []; }
+        if (state == "non-host") { link.Presence = [new("a", "host-a", "phone", Started)]; }
+        var own = LiteRoster(frames, new LiteKill(root), link);
+        var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
+        if (state is "absent-host" or "non-host")
+        {
+            var found = await Find(op, new { name = "SG Quality" });
+            Assert.Equal("offline", found.GetProperty("result").GetString());
+            Assert.False(found.TryGetProperty("session", out _));
+            Assert.Null(Assert.Single((await own.ReadScopedAsync(default)).Machines).MessagingTrust);
+        }
+        else
+        {
+            Assert.Contains("refused: notSameAccount:", (await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { name = "SG Quality" }))).Message);
+            Assert.Contains("refused: notSameAccount:", (await Assert.ThrowsAsync<InvalidOperationException>(() => op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { })))).Message);
+        }
+    }
 
     [Fact]
     public async Task Host_wiring_without_a_pin_or_switch_never_returns_a_routing_node()

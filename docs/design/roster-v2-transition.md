@@ -87,7 +87,7 @@ without agent or script credentials. Its device must be active, a person's and p
 in its verified roster. Account replacement invalidates pending handoffs; the final account
 check and pin commit share the replacement gate. In observe mode, success populates the serving
 reader immediately, without a restart; in off mode, it writes the pin without feeding the reader
-or activating fleet membership. Existing pins are never replaced, re-read or advanced; the capSign gate still applies.
+or activating roster-based fleet membership. Existing pins are never replaced, re-read or advanced; the capSign gate still applies.
 
 ## Proposed command and capability precondition
 

@@ -14,7 +14,10 @@ namespace AgentBridge.Host.Fleet;
 public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSession> Sessions, bool Truncated = false, bool Verified = false, string? Name = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? LastSeen = null,
     [property: JsonIgnore] bool HasRegistryRecord = false,
-    [property: JsonIgnore] (string Epoch, long Seq, DateTimeOffset At)? Order = null);
+    [property: JsonIgnore] (string Epoch, long Seq, DateTimeOffset At)? Order = null)
+{
+    [JsonIgnore] internal string? MessagingTrust { get; init; }
+}
 
 public sealed record FleetSession(string Node, string? Name, string State, DateTimeOffset Since, string? Id = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model = null,
@@ -26,7 +29,11 @@ public interface IFleetRoster
     Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct);
 }
 
-public sealed record FleetRosterSnapshot(string FleetScope, IReadOnlyList<FleetMachine> Machines);
+public sealed record FleetRosterSnapshot(string FleetScope, IReadOnlyList<FleetMachine> Machines)
+{
+    [JsonIgnore] internal Func<Func<object>, object>? Completion { get; init; }
+    internal object CompleteRead(Func<object> build) => Completion is { } complete ? complete(build) : build();
+}
 
 public interface IScopedFleetRoster : IFleetRoster
 {
@@ -42,12 +49,15 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     RelayClient? relay;
     readonly Func<RosterVerifier?>? signedRoster;
     readonly TimeProvider clock;
+    readonly object accountGate;
+    long connectionEpoch;
     readonly Dictionary<string, (FleetMachine Machine, long Seen)> cache = new(StringComparer.Ordinal);
 
-    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null)
+    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null, object? accountGate = null)
     {
         signedRoster = verifiedRoster;
         clock = time ?? TimeProvider.System;
+        this.accountGate = accountGate ?? new();
     }
 
     // design/fleet-session-registry.md "Offline machines and the cache": a machine's last accepted
@@ -94,7 +104,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     // A new connection may be another account's, so nothing cached carries over.
     public void Attach(RelayClient? connection)
     {
-        lock (cache) { cache.Clear(); Volatile.Write(ref relay, connection); }
+        lock (accountGate) { lock (cache) { cache.Clear(); connectionEpoch++; Volatile.Write(ref relay, connection); } }
     }
 
     public async Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => (await ReadScopedAsync(ct)).Machines;
@@ -102,6 +112,22 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct)
     {
         var current = Volatile.Read(ref relay) ?? throw new InvalidOperationException("refused: this host isn't connected to the relay");
+        return await ReadConnectionAsync(current, ct);
+    }
+
+    internal LiteFleetConnection? CaptureMessagingConnection()
+    {
+        lock (accountGate)
+        {
+            var current = Volatile.Read(ref relay);
+            var epoch = connectionEpoch;
+            return current is null ? null : new(current.AccountId, current.Presence.ToArray(),
+                ct => ReadConnectionAsync(current, ct), () => epoch == Volatile.Read(ref connectionEpoch) && ReferenceEquals(current, Volatile.Read(ref relay)));
+        }
+    }
+
+    async Task<FleetRosterSnapshot> ReadConnectionAsync(RelayClient current, CancellationToken ct)
+    {
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
         var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
         lock (cache)
@@ -200,7 +226,8 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
 public sealed record FleetListSession(string Machine, string Node, string State, DateTimeOffset Since, long SecondsInState, bool MachineOnline,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName = null,
-    [property: JsonIgnore] SessionEvidence? Evidence = null)
+    [property: JsonIgnore] SessionEvidence? Evidence = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Trust = null)
 {
     static readonly JsonElement True = JsonSerializer.SerializeToElement(true);
 
@@ -223,10 +250,12 @@ public sealed record FleetListMachine(string Machine, string State,
 // The fleet.list pipe op (#1412, design/fleet-session-registry.md slice 4): an agent that passed
 // agent.hello lists its own account's sessions. The reply is built field by field from
 // FleetListSession, so nothing else the registry or a session holds can reach the agent.
-public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roster, TimeProvider? time = null, AgentAuditLog? audit = null)
+public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roster, TimeProvider? time = null, AgentAuditLog? audit = null,
+    IScopedFleetRoster? messagingRoster = null)
 {
     public const string Op = "fleet.list";
     public const string FindOp = "fleet.find";
+    IFleetRoster? RoutingRoster => messagingRoster ?? roster;
     internal IScopedFleetRoster? WarningRoster => roster as IScopedFleetRoster;
 
     // Notification only: the required audit append succeeds before this hook or any roster read.
@@ -240,15 +269,12 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var withNames = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("include", out var inc) && inc.ValueKind == JsonValueKind.String && inc.GetString() == "content";
         LocalApi.AuditAgentAction(credentials!, caller, Op, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
-        var result = await ListAsync(withNames, ct);
-        credentials!.CompleteFleetRead(caller, result);
-        return result;
+        return await ListAsync(withNames, caller, ct);
     }
 
     // fleet.find (#1399, design "Names and lookup"): a filter over the same roster. The name is
-    // trimmed, exact and case-sensitive, and never echoed back. Records are unsigned until
-    // hostSign exists, so a real live match still answers `unverified`. A unique verified live
-    // match needs no machine pin; its scope and optional model come only from the scoped roster.
+    // trimmed, exact and case-sensitive, and never echoed back. An own-account lite match is
+    // routing metadata, never roster verification; its distinct trust is for messaging only.
     public async Task<object?> FindAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default, AgentAuditLog? auditLog = null)
     {
         var caller = Authorize(channel, FindOp);
@@ -265,13 +291,11 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         }
         LocalApi.AuditAgentAction(credentials!, caller, FindOp, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
-        if (roster is not IScopedFleetRoster scoped) { throw new InvalidOperationException("refused: fleet.find needs an authenticated account-scoped registry"); }
+        if (RoutingRoster is not IScopedFleetRoster scoped) { throw new InvalidOperationException("refused: fleet.find needs an authenticated account-scoped registry"); }
         var snapshot = await scoped.ReadScopedAsync(ct);
         var fleetScope = snapshot.FleetScope;
         if (string.IsNullOrWhiteSpace(fleetScope)) { throw new InvalidOperationException("refused: fleet.find has no authenticated account scope"); }
-        var result = Find(snapshot, name, machine);
-        credentials!.CompleteFleetRead(caller, result);
-        return result;
+        return snapshot.CompleteRead(() => Complete(caller, Find(snapshot, name, machine)));
     }
 
     static object Find(FleetRosterSnapshot snapshot, string name, string? machine)
@@ -283,15 +307,15 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var hits = scope.Select(x => (Machine: x, Sessions: x.Sessions.Where(s => string.Equals(s.Name, name, StringComparison.Ordinal)).ToList())).Where(h => h.Sessions.Count > 0).ToList();
         var live = hits.Where(h => h.Machine.Online).ToList();
         var stale = hits.Where(h => !h.Machine.Online).ToList();
-        if (live.Any(h => !h.Machine.Verified)) { return new { result = "unverified", fleetScope, machines = live.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name, Online: true)) }; }
-        var cands = live.SelectMany(h => h.Sessions.Select(s => new FindSession(s.Id ?? s.Node, s.Node, h.Machine.Id, s.State, s.Since, true, h.Machine.Name, s.Model))).ToList();
+        if (live.Any(h => !h.Machine.Verified && h.Machine.MessagingTrust != LiteFleetRoster.Trust)) { return new { result = "unverified", fleetScope, machines = live.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name, Online: true)) }; }
+        var cands = live.SelectMany(h => h.Sessions.Select(s => new FindSession(s.Id ?? s.Node, s.Node, h.Machine.Id, s.State, s.Since, true, h.Machine.Name, s.Model, Trust: h.Machine.MessagingTrust))).ToList();
         if (cands.Count >= 2) { return new { result = "ambiguous", fleetScope, candidates = cands }; }
         if (cands.Count == 0)
         {
             if (stale.Count > 0) { return new { result = "offline", fleetScope, machines = stale.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name)).ToList() }; }
             return new { result = "notFound", fleetScope };
         }
-        // Only reachable once records can be verified (hostSign): one verified live match.
+        // One live routing match; messaging trust never authorizes another operation.
         return new { result = "found", fleetScope, session = cands[0] with { SessionId = FleetSessionId.ForNode(live[0].Sessions[0].SessionId, cands[0].Node) } };
     }
 
@@ -302,7 +326,8 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
     sealed record FindSession(string Id, string? Node, string Machine, string State, DateTimeOffset Since, bool Online,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SessionId = null);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SessionId = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Trust = null);
 
     AgentCredential Authorize(IProtocolChannel channel, string op)
     {
@@ -316,18 +341,25 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         {
             throw new InvalidOperationException($"refused: this agent's credential has scope '{caller.Scope}'; {op} needs at least '{AgentProtocol.ScopeRead}'");
         }
-        if (roster is null) { throw new InvalidOperationException($"refused: {op} has no session registry on this host"); }
+        if (RoutingRoster is null) { throw new InvalidOperationException($"refused: {op} has no session registry on this host"); }
         return caller;
     }
 
-    async Task<object> ListAsync(bool withNames, CancellationToken ct)
+    object Complete(AgentCredential caller, object result) { credentials!.CompleteFleetRead(caller, result); return result; }
+
+    async Task<object> ListAsync(bool withNames, AgentCredential caller, CancellationToken ct)
     {
-        var now = (time ?? TimeProvider.System).GetUtcNow();
-        var machines = await roster!.ReadAsync(ct);
+        var snapshot = RoutingRoster is IScopedFleetRoster scoped ? await scoped.ReadScopedAsync(ct)
+            : new FleetRosterSnapshot("", await RoutingRoster!.ReadAsync(ct));
+        return snapshot.CompleteRead(() => Complete(caller, List(snapshot.Machines, withNames, (time ?? TimeProvider.System).GetUtcNow())));
+    }
+
+    static object List(IReadOnlyList<FleetMachine> machines, bool withNames, DateTimeOffset now)
+    {
         return new
         {
             sessions = machines.SelectMany(m => m.Sessions.Select(s => new FleetListSession(
-                m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name, s.Evidence))).ToList(),
+                m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name, s.Evidence, m.MessagingTrust))).ToList(),
             machines = machines.OrderBy(m => m.Id, StringComparer.Ordinal).Select(m => new FleetListMachine(
                 m.Id, m.Online ? "online" : "offline", m.Name, m.LastSeen, m.Online && m.HasRegistryRecord && !m.Truncated)).ToList(),
         };

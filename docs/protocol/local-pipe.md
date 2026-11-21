@@ -111,7 +111,7 @@ App on a LocalChannel without agent or script credentials; everything else is re
 An existing pin refuses before the relay is asked. Account replacement invalidates pending handoffs
 and shares a gate with the final account check and pin commit. In observe mode, success immediately
 populates the serving reader from the fetched, verified roster without a restart; in off mode,
-it writes the pin without feeding the reader or activating fleet membership. A failed observe-mode
+it writes the pin without feeding the reader or activating roster-based fleet membership. A failed observe-mode
 readback returns `pin-readback`, including later handoffs while the reader's latest pin verification
 remains failed. The writer's capSign gate still applies.
 

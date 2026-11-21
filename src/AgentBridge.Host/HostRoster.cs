@@ -28,6 +28,7 @@ public sealed record RosterCheck(
 
 public static class HostRoster
 {
+    static readonly long Started = System.Diagnostics.Stopwatch.GetTimestamp();
     // The relay is an untrusted store, so nothing it says is taken: the generation is learned from
     // the first genesis it holds for this account, and every entry is verified against the signed
     // log on this host's own clock. In off mode the generation is not pinned, so this protects
@@ -87,5 +88,5 @@ public static class HostRoster
         }
     }
 
-    public static TimeSpan Now() => DateTimeOffset.UtcNow - DateTimeOffset.UnixEpoch;
+    public static TimeSpan Now() => System.Diagnostics.Stopwatch.GetElapsedTime(Started);
 }
