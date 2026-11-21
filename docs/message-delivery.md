@@ -64,6 +64,12 @@ and only the agent's clock. Fix without CLI changes: self-describing deliveries,
 - **Hygiene:** `-Topic` replaces an unsent item from the same principal and topic, in its queue place.
   TTL: fyi 30 min, normal 4 h, urgent none. Each delivery carries a summary line (`q=3 Quality 2, SRE 1`).
 ## Guarantees, each with its hosted-CI test (fakes for console, clock and transcript)
+Slice 1 is split at the owner-approved 14:49 PT Nov 21 cap: envelope/HA identity, then the
+`DeliveryJournal` writer. It is not yet wired to delivery or acknowledgement paths (slice 2).
+The writer leaves `seq` null until supplied by the later reservation; it never reserves one.
+Its in-memory handoffs provide the parser verifier; restart classification/replay is slice 2.
+The file is `delivery.jsonl`, with a CurrentUser DPAPI-protected `delivery.key` in the same folder.
+A key that cannot be read is never replaced; a post-handoff write failure retains uncertainty.
 1. **Identity and journal.** Every delivery has `from`, `id`, `at`, and a `seq` once reserved. The journal is
    JSON lines beside the host diagnostics journal: metadata, length and an HMAC-SHA256 under a
    DPAPI-protected host key, never text. `enqueued` (flushed before any ack), `handoff` (pre-key
