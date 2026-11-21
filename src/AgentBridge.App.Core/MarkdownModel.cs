@@ -167,7 +167,15 @@ public static class MarkdownModel
                 continue;
             }
             lineLength++;
-            if (InlineMarks.Contains(c) || (c == ':' && text[i..].StartsWith("://")) || (c == 'w' && text[i..].StartsWith("www."))) { marks++; lineMarks++; }
+            if (InlineMarks.Contains(c)
+                || (c == ':' && text[i..].StartsWith("://"))
+                || (c == 'w' && text[i..].StartsWith("www."))
+                || (c == 'm' && text[i..].StartsWith("mailto:"))
+                || (c == 't' && text[i..].StartsWith("tel:")))
+            {
+                marks++;
+                lineMarks++;
+            }
         }
         return marks * marks + lines + lineMarks * lineLength;
     }
