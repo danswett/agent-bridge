@@ -96,6 +96,7 @@ authenticated caller credential and current receiving-host policy:
 inbound launch policy, excludes, applicable outbound/depth rules, read-only,
 kill/off and all existing launch safety gates. Host settings cannot be widened
 by a grant, CLI flag, request payload or remote device.
+Admission persists min(document caps, receiver-policy snapshot); dispatch rechecks the narrowed snapshot and current policy, and a missing snapshot after restart refuses.
 
 Current inbound launch supports explicit `ask`, and agent launch ceilings are
 3/origin/hour, 10/machine/hour and 6 live. Keep those narrower limits; a grant
