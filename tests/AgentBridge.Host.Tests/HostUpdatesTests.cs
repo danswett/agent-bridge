@@ -407,6 +407,29 @@ public sealed class HostUpdatesTests : IDisposable
     }
 
     [Fact]
+    public async Task A_check_pressed_from_Home_Assistant_bypasses_a_fresh_CDN_list_with_the_CDN_switch_on()
+    {
+        GitHubAnsweredAt(AMinuteAgo());
+        var web = new FakeWeb
+        {
+            Cdn = () => Relayed($"[{Listed("0.1.601")}]"),
+            GitHub = () => Listing("[]"),
+        };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, cdn: true);
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+        Assert.Equal(ReleaseDiscovery.Sources.Cdn, discovery.Source);
+        var packages = Path.Combine(root, "packages");
+        var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
+        IHostUpdates updates = new VelopackHostUpdates(root, "default", () => { }, _ => { }, copy, discovery);
+
+        Assert.Null(await updates.CheckAsync(CancellationToken.None, pressed: true));
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+        Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
+        Assert.Null(await updates.CheckAsync(CancellationToken.None));
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    [Fact]
     public async Task The_switch_is_on_by_default_so_a_discovery_made_without_saying_asks_the_cdn_first()
     {
         GitHubAnsweredAt(AMinuteAgo());

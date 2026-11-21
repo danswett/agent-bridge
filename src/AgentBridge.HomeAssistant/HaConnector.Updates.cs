@@ -163,6 +163,7 @@ public sealed partial class HaConnector
         {
             updateCheckQueued = false;
             if (!UpdateBusy) { StartCheck(now, pressed: true); }
+            else { log(PressedDuringUpdate); }
         }
         var touched = Interlocked.Exchange(ref updateTouched, 0) == 1;
         if (options.ConsumeAnswers && (touched || now >= nextUpdateSweep))
