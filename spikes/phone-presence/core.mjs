@@ -1,8 +1,15 @@
 import { createHash, createPublicKey, randomBytes, timingSafeEqual, verify } from 'node:crypto';
+import { frame, utf8 } from '../../pwa/js/roster/framing.js';
+import { checkRosterSignature } from '../../pwa/js/roster/p256.js';
+import { parseStrict } from '../../pwa/js/roster/strict-json.js';
 
 const hash = b => createHash('sha256').update(b).digest();
 const requireThat = (ok, reason) => { if (!ok) throw new Error(`Refused: ${reason}.`); };
 const equal = (a, b) => a.length === b.length && timingSafeEqual(a, b);
+export function enrollmentChallenge(id) {
+  requireThat(typeof id === 'string' && /^[a-f0-9]{32}$/.test(id), 'enrollment nonce');
+  return hash(frame(utf8('agent-bridge phone enrollment spike v1'), Buffer.from(id, 'hex')));
+}
 function decode(value) {
   requireThat(typeof value === 'string' && value.length <= 131072 && /^[A-Za-z0-9_-]+$/.test(value), 'invalid base64url');
   const b = Buffer.from(value, 'base64url');
@@ -11,9 +18,12 @@ function decode(value) {
 }
 export function challenge(c) {
   requireThat(typeof c.account === 'string' && c.account.length > 0 && c.account.length <= 128, 'account');
-  requireThat(Number.isSafeInteger(c.generation) && c.generation >= 1 && Number.isSafeInteger(c.expiry) && c.expiry > 0, 'generation or expiry');
-  requireThat(/^[a-f0-9]{64}$/.test(c.genesisHash) && /^[a-f0-9]{32}$/.test(c.sessionId), 'hash or session id');
-  return hash(JSON.stringify(['Slipgates/WebAuthn/v1', 'roster-genesis-presence', c.account, c.generation, c.genesisHash, c.sessionId, c.expiry]));
+  requireThat(typeof c.generation === 'string' && /^[a-f0-9]{32}$/.test(c.generation), 'hex generation');
+  requireThat(typeof c.genesisHash === 'string' && typeof c.sessionId === 'string' && /^[a-f0-9]{64}$/.test(c.genesisHash) && /^[a-f0-9]{32}$/.test(c.sessionId), 'hash or session id');
+  const bytes = decode(c.body); requireThat(bytes.length <= 8192, 'body length'); parseStrict(bytes, 'body');
+  const body = JSON.parse(bytes.toString('utf8'));
+  requireThat(body.account === c.account && body.generation === c.generation && hash(bytes).toString('hex') === c.genesisHash, 'body binding');
+  return hash(frame(utf8('agent-bridge presence v1'), utf8('by'), bytes));
 }
 export function qrPayload(base, c) {
   challenge(c);
@@ -70,20 +80,22 @@ function authData(b, rpId, registration) {
 export class Sessions {
   #sessions = new Map();
   #credentials = new Map();
-  constructor({ origin, rpId, now = Date.now }) {
+  constructor({ origin, rpId, now = Date.now, monotonic = () => performance.now() }) {
     const u = new URL(origin);
     requireThat(u.protocol === 'https:' && u.origin === origin && u.hostname === rpId, 'origin and exact rpId');
-    this.origin = origin; this.rpId = rpId; this.now = now;
+    this.origin = origin; this.rpId = rpId; this.now = now; this.monotonic = monotonic;
   }
-  create(generation, genesisHash) {
-    const c = { account: 'spike', generation, genesisHash, sessionId: randomBytes(16).toString('hex'), expiry: this.now() + 300000 };
+  create(generation, body) {
+    const bytes = Buffer.from(body), c = { account: 'spike', generation, body: bytes.toString('base64url'), genesisHash: hash(bytes).toString('hex'), sessionId: randomBytes(16).toString('hex'), expiry: this.now() + 300000 };
     this.open(c); return c;
   }
+  createEnrollment() { const c = { account: 'spike', enrollment: true, sessionId: randomBytes(16).toString('hex'), expiry: this.now() + 300000 }; this.open(c); return c; }
   open(c) {
-    challenge(c);
-    requireThat(c.account === 'spike' && c.expiry > this.now() && c.expiry <= this.now() + 300000, 'account or five-minute expiry');
+    if (c.enrollment === true) enrollmentChallenge(c.sessionId); else challenge(c);
+    requireThat(c.account === 'spike' && Number.isSafeInteger(c.expiry) && c.expiry > this.now() && c.expiry <= this.now() + 300000, 'account or five-minute expiry');
     requireThat(!this.#sessions.has(c.sessionId), 'session already exists');
-    this.#sessions.set(c.sessionId, { ...c, ended: false });
+    requireThat(c.enrollment === true || ![...this.#sessions.values()].some(s => !s.enrollment && s.genesisHash === c.genesisHash), 'body already has a session');
+    this.#sessions.set(c.sessionId, { ...c, ended: false, expired: false, monotonicDeadline: this.monotonic() + c.expiry - this.now() });
   }
   close(id) { const s = this.#sessions.get(id); requireThat(s && !s.ended, 'session ended'); s.ended = true; }
   snapshot() {
@@ -92,11 +104,14 @@ export class Sessions {
   #client(id, account, response, type) {
     const s = this.#sessions.get(id);
     requireThat(s && !s.ended, 'session ended or unknown');
-    requireThat(this.now() < s.expiry, 'session expired');
+    if (this.now() >= s.expiry || this.monotonic() >= s.monotonicDeadline) s.expired = true;
+    requireThat(!s.expired, 'session expired');
     requireThat(account === s.account, 'different account');
+    requireThat((type === 'webauthn.create') === (s.enrollment === true), 'wrong session kind');
     const bytes = decode(response.clientDataJSON), c = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    parseStrict(bytes, 'clientDataJSON');
     requireThat(c.type === type && c.origin === this.origin && (c.crossOrigin === undefined || c.crossOrigin === false) && c.topOrigin === undefined, 'client origin or type');
-    requireThat(equal(decode(c.challenge), challenge(s)), 'wrong challenge');
+    requireThat(equal(decode(c.challenge), s.enrollment ? enrollmentChallenge(s.sessionId) : challenge(s)), 'wrong challenge');
     return { s, bytes };
   }
   register(id, account, response) {
@@ -121,8 +136,8 @@ export class Sessions {
     requireThat(credential, 'unregistered credential');
     const data = decode(response.authenticatorData), { facts } = authData(data, this.rpId, false);
     requireThat(facts.BE === credential.facts.BE, 'backup eligibility changed');
-    requireThat(verify('sha256', Buffer.concat([data, hash(bytes)]), credential.publicKey, decode(response.signature)), 'bad signature');
-    requireThat(facts.BE || (facts.signCount === 0 && credential.facts.signCount === 0) || facts.signCount > credential.facts.signCount, 'signCount did not increase');
+    const signature = decode(response.signature); checkRosterSignature(signature, 'signature');
+    requireThat(verify('sha256', Buffer.concat([data, hash(bytes)]), credential.publicKey, signature), 'bad signature');
     credential.facts = { ...credential.facts, ...facts }; s.ended = true;
     return structuredClone(credential.facts);
   }

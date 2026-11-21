@@ -1,37 +1,28 @@
-# Offline phone-presence spike (brief 220, PR 1)
+# Offline credential-possession SPIKE (brief 220 PR 1)
 
-Scope: challenge, QR **payload only**, registration/assertion verifier and synthetic tests.
-No browser, network, hosting, relay, roster, signing custody or live bridge is used.
-Phone page, QR rendering, owner instructions and automated RESULTS-PHONE.md are PR 2,
-after the Chief supplies the Pages repository for https://proof.slipgates.com.
-No real phone assertion or credential facts have been observed here.
+No trust root, separate-device proof, confused-deputy mitigation or real phone
+result is claimed. `none`/self attestation also accepts software keys on the PC.
+A malware-controlled QR plus matching PC fingerprint defeats that comparison.
+Engineering owns F1 (trusted attestation/second channel for device provenance) and
+F2 (PC-independent request display); both remain unsolved, not code in this PR.
+No network, hosting, roster wiring, custody or live processes are used.
 
-Run `node --test --test-concurrency=1 spikes\phone-presence\core.test.mjs` on VM7,
-with the Node process BelowNormal and affinity 1 (one CPU); no installs are needed.
-The named replay/post-close/second-pending tests are the PC-side attack script.
-Any unexpected acceptance fails the suite: REFUSE, not a phone-presence verdict.
+Run `node --test --test-concurrency=1 spikes\phone-presence\core.test.mjs` on the
+approved VM, BelowNormal, one CPU. Existing PWA roster helpers are reused unchanged.
+First `createEnrollment` produces a random 128-bit nonce session; registration has
+no genesis challenge. Construct the body after enrollment; `create(generation,
+bodyBytes)` then makes its assertion session. Generation is 32 lowercase hex.
+The body/account/generation/hash are checked; challenge is the exact roster
+SHA-256(F("agent-bridge presence v1","by",bodyBytes)), not a custom JSON challenge.
+Only the synthetic interop test builds/signs a v3 genesis, with the device sign key.
+Session expiry uses Unix **and monotonic** deadlines; expiry is terminal. Close on
+cancellation. State is memory-only; no body can acquire a second session in it.
+Assertions require strict minimal low-S DER. `none` and ES256 packed self-attestation
+are supported; certificates/extensions refuse, and neither supported fmt proves provenance.
+SignCount is recorded, never used to refuse: devices.md/device-approval.md are silent.
+BE/BS/UV/AAGUID/fmt/counter/id length/transports are recorded without policy approval.
+QR is HTTPS URL plus id/fingerprint only. Full request delivery remains a later cut.
 
-`Sessions.create` makes a random 128-bit id and five-minute expiry; `open` also
-accepts a supplied context for deterministic tests. Close on cancel/window close.
-State is memory-only, with ended ids retained to prevent reuse until process exit.
-Registration and assertion each consume a distinct session; only a verified
-assertion demonstrates credential possession. Registration `fmt=none` is NOT attested.
-ES256 `none` and `packed` self-attestation are supported; certificate attestation
-and authenticator extensions refuse explicitly, rather than claiming trust.
-BE/BS/UV, AAGUID, fmt, signCount, id length and reported transports are returned;
-transport reports and AAGUID are not independently trusted device/OS provenance.
-Synced counters need not increase; device-bound nonzero counters must increase.
-The vectors use ephemeral synthetic private keys, never saved or exported.
-Refusals throw a plain sentence and commit no credential, evidence or consumed state.
-
-Challenge bytes are SHA-256 of UTF-8 `JSON.stringify` of the ordered array:
-`["Slipgates/WebAuthn/v1","roster-genesis-presence",account,generation,genesisHash,sessionId,expiry]`.
-Hashes/ids are lowercase hex; generation is a positive integer, expiry Unix milliseconds.
-QR payload is an HTTPS URL with fragment fields `session` and `fingerprint` only;
-fingerprint is the first 16 genesis-hash hex characters in four groups of four.
-No challenge, account, expiry, key or credential id is carried in the QR.
-
-No real credential is created by PR 1. After PR 2's phone run:
-Open the phone's password/passkey manager and find the proof.slipgates.com spike entry.
-Delete only that test passkey, not any Slipgates production or unrelated credential.
-Stop the spike (Ctrl+C) to discard its in-memory session and public-key state.
+No real credential is created here. After any later phone run:
+Find the proof.slipgates.com spike entry in the phone's passkey manager.
+Delete only that test entry; stop the spike to discard its in-memory public-key/session state.
