@@ -93,6 +93,27 @@ public sealed class GrantStoreTests : IDisposable
         Assert.Equal(expected, store.Issue(Grant()).Problem);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Restoring_the_pre_revocation_store_and_agents_audit_refuses_when_adopted_or_gapped(bool adopted)
+    {
+        var grant = Grant();
+        Assert.True(Open().Issue(grant).Usable);
+        var auditFolder = Path.Combine(Folder, "audit");
+        var head = Path.Combine(auditFolder, "agents.head");
+        var old = new[] { PathName, head, Directory.GetFiles(auditFolder, "agents-*.jsonl").Single() }.ToDictionary(f => f, File.ReadAllBytes);
+        Assert.True(Open().Revoke(grant.Id, 1).Usable);
+        var op = Guid.NewGuid();
+        var gate = new GateAuditMetadata(1, op, Guid.Empty, 0, "intent", "local", "person-client", op, "none", LaunchBinding: new('a', 64));
+        var launch = new AgentAuditEntry("local", op.ToString(), "person:local", [], "session.launch", op.ToString(), "reserved", Gate: gate);
+        Assert.True(adopted || Audit.Append(launch) && Audit.Append(launch with { Outcome = "started", Gate = gate with { Phase = "terminal" } }));
+        foreach (var (file, bytes) in old) { File.WriteAllBytes(file, bytes); }
+        if (adopted) { File.Delete(head); Assert.True(Audit.Bootstrap() && AgentAuditLog.Adopted(auditFolder)); }
+        Assert.True(Audit.Verify().Intact && Audit.Verify(launch: true).Intact);
+        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
+    }
+
     [Fact]
     public void Replaying_an_old_valid_mac_file_cannot_resurrect_revocation_in_a_running_or_restarted_receiver()
     {
