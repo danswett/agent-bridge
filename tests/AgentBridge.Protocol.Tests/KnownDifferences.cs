@@ -46,6 +46,13 @@ public static class KnownDifferences
         "text-that-is-not-an-email-address", "text-that-is-not-a-date", "too-few-ticked", "too-many-ticked",
     ];
 
+    // #2752 is protocol-only; the PWA composer follows in the remaining #918 slice.
+    static readonly string[] AnswerLimits =
+    [
+        "a-text-answer-at-its-16-KiB-limit", "over-18-KiB-in-all", "a-text-answer-over-16-KiB",
+        "an-other-answer-over-16-KiB", "a-text-field-over-16-KiB",
+    ];
+
     public static readonly IReadOnlyList<KnownDifference> All =
     [
         .. StrictFields.Select(v => new KnownDifference(v, 446, "pwa", "read",
@@ -63,5 +70,8 @@ public static class KnownDifferences
         .. Constraints.Select(v => new KnownDifference($"AnswerRequest/{v}", 766, "pwa", "check",
             "Answers.Check refuses it: outside the field's constraints",
             "checkAnswer takes it: it does not check constraints yet")),
+        .. AnswerLimits.Select(v => new KnownDifference($"AnswerRequest/{v}", 918, "pwa", "check",
+            "Answers.Check allows 16 KiB of text in an 18 KiB request and names the reply path on overflow",
+            "checkAnswer still enforces 4 KiB of text in a 16 KiB request with the old refusal")),
     ];
 }

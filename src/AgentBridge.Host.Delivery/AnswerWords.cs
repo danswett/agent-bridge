@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery;
 
@@ -30,10 +31,15 @@ internal sealed class AnswerWords
     public const string KeyName = "answer-key";
     const int KeyBytes = 32;
     public const int MaxEntries = 32;
-    public const int MaxEntryBytes = 16 * 1024;
+    public const int MaxEntryBytes = Limits.AnswerRequest;
     public const int MaxTotalBytes = 256 * 1024;
     const int Version = 1;
-    static readonly JsonSerializerOptions StrictJson = new() { RespectRequiredConstructorParameters = true };
+    // Keep the file's existing property names, but count and write words with the wire's escaping.
+    static readonly JsonSerializerOptions StrictJson = new()
+    {
+        RespectRequiredConstructorParameters = true,
+        Encoder = ProtocolJson.Options.Encoder,
+    };
 
     // What was sent, as sent: an answer's text, or each field's value for a form.
     public sealed record Words(string? Text, IReadOnlyDictionary<string, JsonElement>? Fields);
@@ -204,7 +210,7 @@ internal sealed class AnswerWords
 
     int Total => held.Values.Sum(h => h.Size) + doomed.Values.Sum();
 
-    static int Size(Words words) => JsonSerializer.SerializeToUtf8Bytes(words).Length;
+    static int Size(Words words) => JsonSerializer.SerializeToUtf8Bytes(words, StrictJson).Length;
 
     // The file made to hold exactly what is held now; nothing held, no file. False when that did
     // not reach the disk, the words to delete then still counted.
@@ -278,7 +284,7 @@ internal sealed class AnswerWords
             if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
             using (var stream = new FileStream(temp, options))
             {
-                JsonSerializer.Serialize(stream, new FileData(Version, held.ToDictionary(h => h.Key, h => h.Value.Words, StringComparer.Ordinal)));
+                JsonSerializer.Serialize(stream, new FileData(Version, held.ToDictionary(h => h.Key, h => h.Value.Words, StringComparer.Ordinal)), StrictJson);
                 stream.Flush(flushToDisk: true);
             }
             // Renamed over the old file with no backup of it.
