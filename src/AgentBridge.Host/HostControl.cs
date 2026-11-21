@@ -72,6 +72,10 @@ public sealed class HostControlOptions
     // Approve-gesture enrollment's descriptor and attempt state (HostEnrollment), app-only on the pipe.
     public Func<(string? Descriptor, string? Refusal)>? EnrollDescribe { get; init; }
     public Func<string>? EnrollStatus { get; init; }
+    // Code 1 to show, code 2 as typed, and the pin once the approver's add is in the relay's chain (brief 184b).
+    public Func<(string? Code, DateTimeOffset? Expires, string? Peer)>? EnrollShown { get; init; }
+    public Func<string, string>? EnrollCode { get; init; }
+    public Func<Task<string>>? EnrollFinish { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -276,7 +280,12 @@ public sealed class HostControl
                 var (descriptor, refusal) = options.EnrollDescribe();
                 return new { device = descriptor is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(descriptor), refusal };
             case HostOps.EnrollStatus when options.EnrollStatus is not null:
-                return new { state = options.EnrollStatus() };
+                var shown = options.EnrollShown?.Invoke() ?? default;
+                return new { state = options.EnrollStatus(), code = shown.Code, expires = shown.Expires, peer = shown.Peer };
+            case HostOps.EnrollCode when options.EnrollCode is not null:
+                return new { result = options.EnrollCode(data.ValueKind == JsonValueKind.Object && data.TryGetProperty("code", out var code) ? code.GetString() ?? "" : "") };
+            case HostOps.EnrollFinish when options.EnrollFinish is not null:
+                return new { state = await options.EnrollFinish() };
             default:
                 return null;
         }
