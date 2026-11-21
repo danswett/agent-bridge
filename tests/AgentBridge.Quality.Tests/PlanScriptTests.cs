@@ -42,6 +42,31 @@ public class PlanScriptTests
         CheckPlan("push", "tests/Example.Tests/Test.cs", true, false, anotherFile: "src/AgentBridge.App/View.cs");
 
     [Theory]
+    [InlineData("docs/guide.md")]
+    [InlineData("tests/Example.Tests/Test.cs")]
+    public Task A_green_but_unpublished_app_change_is_carried_by_the_next_main_head(string changed) =>
+        CheckPlan("push", changed, true, false, unpaidApp: true);
+
+    [Theory]
+    [InlineData("windows-latest", true)]
+    [InlineData("windows-11-arm", true)]
+    [InlineData("ubuntu-latest", false)]
+    public void Both_Windows_product_legs_use_the_same_bounded_retry_without_waiving_failure(string os, bool retry)
+    {
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "ci.yml"))));
+        var jobs = (YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode)["jobs"];
+        var steps = ((YamlSequenceNode)((YamlMappingNode)jobs["product"])["steps"]).Children.Cast<YamlMappingNode>();
+        var windows = steps.Single(s => s.Children.TryGetValue("run", out var run) && run.ToString().Contains("Invoke-ProductTestRetry", StringComparison.Ordinal));
+        var coverage = steps.Single(s => s.Children.TryGetValue("name", out var name) && name.ToString() == "dotnet test, with coverage and per-test times");
+        var context = new Dictionary<string, string?> { ["env.DOTNET_TARGET"] = "selected.slnf", ["matrix.os"] = os };
+        Assert.Equal(retry, MergeRuleTests.IfExpression.Evaluate(windows["if"].ToString(), context));
+        Assert.Equal(!retry, MergeRuleTests.IfExpression.Evaluate(coverage["if"].ToString(), context));
+        Assert.Contains("exit (Invoke-ProductTestRetry", windows["run"].ToString(), StringComparison.Ordinal);
+        Assert.False(windows.Children.ContainsKey("continue-on-error"));
+    }
+
+    [Theory]
     [InlineData("docs/guide.md", false)]
     [InlineData("docs/guide.md", true)]
     [InlineData(".github/workflows/merge-rule.yml", false)]
@@ -50,7 +75,7 @@ public class PlanScriptTests
         string changed, bool runsUnreadable) => CheckPlan("push", changed, true, true, runsUnreadable);
 
     static async Task CheckPlan(
-        string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null, string? anotherFile = null)
+        string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null, string? anotherFile = null, bool unpaidApp = false)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var folder = Fixture.ScratchFolder();
@@ -140,7 +165,8 @@ public class PlanScriptTests
 
             ChangedFiles.Git(folder, "init", "-q", "-b", "main");
             Commit("base", "quality/plan.ps1", "quality/catalog.yml", "src/AgentBridge.App/App.csproj", "tests/Example.Tests/Tests.csproj");
-            if (runsUnreadable.HasValue)
+            ChangedFiles.Git(folder, "tag", "v0.1.1");
+            if (runsUnreadable.HasValue || unpaidApp)
             {
                 Write("src/AgentBridge.App/Earlier.cs", "earlier untested app change");
                 Commit("untested app", "src/AgentBridge.App/Earlier.cs");
@@ -158,7 +184,7 @@ public class PlanScriptTests
             };
             start.Environment["CI_PLAN_TEST_RUN"] = select["run"].ToString();
             start.Environment["CI_PLAN_TEST_WHOLE"] = whole["run"].ToString();
-            start.Environment["CI_PLAN_TEST_RUNS"] = runsUnreadable.HasValue ? (runsUnreadable.Value ? "unreadable" : "none") : "";
+            start.Environment["CI_PLAN_TEST_RUNS"] = unpaidApp ? "release-debt" : runsUnreadable.HasValue ? (runsUnreadable.Value ? "unreadable" : "none") : "";
             start.Environment["JOBS"] = ((YamlMappingNode)select["env"])["JOBS"].ToString();
             start.Environment["EVENT"] = eventName;
             start.Environment["DRAFT"] = "false";
@@ -171,13 +197,22 @@ public class PlanScriptTests
                          """
                          $ErrorActionPreference = 'Stop'
                          if ($env:CI_PLAN_TEST_RUNS) {
-                             function global:gh { $global:LASTEXITCODE = if ($env:CI_PLAN_TEST_RUNS -eq 'unreadable') { 1 } else { 0 } }
+                             function global:gh {
+                                 $global:LASTEXITCODE = if ($env:CI_PLAN_TEST_RUNS -eq 'unreadable') { 1 } else { 0 }
+                                 if ($env:CI_PLAN_TEST_RUNS -eq 'release-debt') {
+                                     if ($args[1] -like '*actions/workflows/*') { git rev-parse HEAD^1 }
+                                     elseif ($args[1] -like '*releases?*') { 'v0.1.1' }
+                                     else { throw "Unexpected offline gh call: $($args -join ' ')" }
+                                 }
+                             }
                              & ([scriptblock]::Create($env:CI_PLAN_TEST_WHOLE))
                              $whole = Get-Content $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
                              $env:BASE = $whole['base']
                              $env:WHOLE_RING = $whole['whole-ring']
                              $env:BASE_KNOWN = $whole['base-known']
-                             if ($env:BASE -ne 'HEAD^1' -or $env:WHOLE_RING -ne 'true') { throw 'Unknown base must run the whole ring over the tip fallback.' }
+                             if ($env:CI_PLAN_TEST_RUNS -eq 'release-debt') {
+                                 if ($env:BASE -ne (git rev-parse v0.1.1) -or $env:BASE_KNOWN -ne 'true') { throw 'A green CI must not erase unpublished app changes.' }
+                             } elseif ($env:BASE -ne 'HEAD^1' -or $env:WHOLE_RING -ne 'true') { throw 'Unknown base must run the whole ring over the tip fallback.' }
                              Clear-Content $env:GITHUB_OUTPUT
                          }
                          & ([scriptblock]::Create($env:CI_PLAN_TEST_RUN))
@@ -197,8 +232,8 @@ public class PlanScriptTests
                 $"app={outputs["app"]}\napp-installer={outputs["app-installer"]}");
             foreach (var job in new[] { "product", "ha-integration", "spikes", "spikes-linux", "pwa-ui", "pwa-e2e" })
                 Assert.Equal(job == "product" && eventName == "push" && changed.StartsWith("tests/", StringComparison.Ordinal)
-                    && !wholeRing && anotherFile is null && changed != "tests/Example.Tests/Shared.cs" ? "false"
-                    : wholeRing || changed != "docs/guide.md" ? "true" : "false", outputs[job]);
+                    && !wholeRing && anotherFile is null && !unpaidApp && changed != "tests/Example.Tests/Shared.cs" ? "false"
+                    : wholeRing || unpaidApp || changed != "docs/guide.md" ? "true" : "false", outputs[job]);
             Assert.Equal("true", outputs["light"]);
             // An unknown tier (app's post_merge) plans as blocking; only exact post-merge names are listed.
             Assert.Equal(new Dictionary<string, string> { ["app"] = "blocking", ["app-installer"] = "blocking", ["app-installer (win-arm64)"] = "post-merge" },
