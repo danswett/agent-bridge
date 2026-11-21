@@ -1,6 +1,6 @@
 # Person-issued fleet launch and stop grants
 
-**Status: proposed design only, brief 246, November 21, 2026 (Pacific Time).**
+**Status: design contract; implementation in progress, brief 246, updated November 21, 2026 (Pacific Time).**
 No code, grant issuance, policy change, rollout or tool retirement is authorized
 by this document. Implementation needs separately assigned briefs and review.
 Tracking: https://github.com/danswett/agent-bridge/issues/3237.
@@ -81,7 +81,8 @@ paths/arguments are excluded. Child sessions receive no grant automatically.
 All scope selections are explicit snapshots of receiving-host launch options.
 Missing model, profile, effort, context or permissions on an agent request resolve
 only to a value recorded in that snapshot; no newly widened host default is inherited.
-Omitted permission filters policy-disabled `allowAll`, prefers `ask`, then policy order.
+Omitted permissions use `ask` only when in the grant-policy intersection, otherwise refuse; never implicit `allowAll`.
+Other omitted choices resolve in recorded grant order within the policy intersection, not receiver-default order.
 Model, effort and context identifiers reuse the launch-tuning grammar, including `opus[1m]`.
 Times normalize to UTC; issuance must leave a representable 24-hour lifetime horizon.
 Stops check exact target authority before launch-only choices; narrowed launch options do not prevent stopping.
@@ -98,9 +99,11 @@ by a grant, CLI flag, request payload or remote device.
 
 Current inbound launch supports explicit `ask`, and agent launch ceilings are
 3/origin/hour, 10/machine/hour and 6 live. Keep those narrower limits; a grant
-cannot reinterpret them as `allowAll` or exceed them. Fleet Allow-all migration
-requires a separately reviewed person-configured policy extension before that
-mode can be selected. `launch.permissions` is a default today, not an invented
+cannot reinterpret them as `allowAll` or exceed them. Owner approval Nov 21,
+12:47 PT puts the Allow-all receiver-policy extension in G5, not a separate G11.
+Explicit `allowAll` requires both the person-confirmed `allowAllLaunch` flag
+(default false) and current receiver policy for that origin; before G5 lands, it refuses.
+`launch.permissions` is a default today, not an invented
 global ceiling. The effective allowed set must be computed from actual policy.
 
 Issuance requires all three cap values; 8 hours is the only lifetime default.
@@ -170,7 +173,7 @@ or agent-triggered UI automation may stand in for that person authorization.
 The receiving host checks issuer/account/device authorization and person context,
 validates scope, persists and audits issuance, then returns id/generation/digest.
 The UI shows **Active** only on that verified receipt, never on submission alone.
-Remote app issuance retains the established approved person-device/roster gates;
+Remote app issuance, unlike grant-authorized acting, retains its person-device/roster gates;
 same-account relay presence or a grant held by another agent is insufficient.
 
 Host CLI person path: proposed `agent-bridge-host grants issue` and
@@ -228,11 +231,13 @@ process instance. Environment session id alone is not proof. Invalid/missing
 agent authentication never falls back to the person stop path.
 The grant id selects host state; no grant secret travels or is exported.
 
-For remote targets the local host wraps the same request in the established
-authenticated agent envelope, binding account, source device, subject instance,
+For remote targets the local host uses a signed `FleetActionEnvelope v1`,
+binding account, source device, subject instance,
 receiver audience, action, grant id/generation, request id, nonce, expiry and
-canonical payload hash. Receiver validates channel identity and the existing
-remote agent/roster authorization; lite messaging markers cannot authorize it.
+canonical payload hash. Per owner Nov 21, 12:50 PT, receiver checks existing
+own-peer messaging trust (same-account relay presence bound to the device key)
+and the signed fleet-action envelope; the receiver-side grant is authority.
+No separate roster gate applies to launch/stop; the account-wide kill switch stays.
 Own-account only; no cross-account federation or HA launch/stop fallback.
 
 Receiver order:
@@ -295,13 +300,14 @@ Same-user malware/OS administrator compromise and stolen authorized person-devic
 custody are outside AP1's containment guarantee. File MACs cannot defend an
 attacker who controls the host key and all audit/custody files. Do not advertise
 these grants as a sandbox. A compromised relay/account is not cured by lite trust;
-remote acting remains behind the stronger existing person/roster gates.
+remote acting still requires existing own-peer trust, a signed fleet-action envelope
+and receiver-side grant checks, with the account-wide kill switch; no separate roster gate.
 
 ## Ordered implementation slices
 
 Each row is a separate PR, **at most 400 WHOLE changed lines including tests/docs**.
 Split a row further before implementation if measured scope cannot fit; no inherited
-exception. All remain unassigned proposals, not a go for code.
+exception. Assignments and rollout need separate briefs and review; this contract is not a go for code.
 
 | Order | Bounded deliverable and prerequisite | Focused acceptance |
 |---|---|---|
@@ -309,13 +315,13 @@ exception. All remain unassigned proposals, not a go for code.
 | G2 | Private MAC store and audit-backed issue/revoke recovery; after G1 and persisted-launch dependency | Corrupt/foreign-key/oversize/write failures and rollback refuse; restart retains expiry/tombstones |
 | G3 | Durable reservations, rolling counters and launch/process reconciliation; after G2 | Hour/day/live boundaries, competing requests, pending crash, pid reuse, backwards time; no refund on uncertain outcome |
 | G4 | Person-only local issue/revoke CLI and receiver receipts; after G2/G3 | Agent/script/unknown ancestry denied before mutation; exact person digest and revoke acknowledgment |
-| G5 | Local grant launch pipe/CLI adapter through existing queue, name gate and audit; after G3/G4 and AP1 launch authentication | Scope, exclusions, duplicate payload binding, execution-time revoke and failed audit; no newly enabled Allow-all |
+| G5 | Local grant launch pipe/CLI adapter through existing queue, name gate and audit; after G3/G4 and AP1 launch authentication; includes receiver Allow-all policy (Nov 21, 12:47 PT) | Scope, exclusions, duplicate payload binding, execution-time revoke and failed audit; explicit Allow-all requires grant flag AND receiver policy, default false |
 | G6 | Local grant stop adapter; after G5. G6a: receiver adapter and non-confirming, non-terminating agent stopper; G6b: durable stop replay, audit metadata and CLI contract reconciliation, stacked on G6a. CLI/queue/launch wiring stays with G5b2. | Own launches only, exact persisted exception, recycled process refused, held/confirmation-required stop never armed or bypassed; graceful timeout stays running and never calls Terminate |
 | G7 | Windows app issuance summary/person confirmation; after G4 | Explicit subjects/caps, effective policy, signed receiver receipt; no unattended issue |
 | G8 | Windows app list/counters/revoke and pending/offline state; after G7 | Receiver counters, tombstone receipt, in-flight visibility and stale-state labeling |
-| G9 | Remote grant launch envelope/receiver adapter; after G5 and approved remote agent/roster authentication | Wrong account/audience, envelope replay, stolen id, offline target; same receiver caps as local |
+| G9 | Remote grant launch via signed FleetActionEnvelope v1; after G5 and existing own-peer messaging trust, no separate roster gate (Nov 21, 12:50 PT) | Wrong account/audience, envelope replay, stolen id, offline target and kill switch; receiver-side grant and same caps as local |
 | G10 | Remote grant stop and multi-receiver issuance partitions; after G6/G8/G9 | Generation/target fence, quota sums, no borrowing, partial issue/revoke receipts |
-| G11 | Fleet thin wrappers and separately approved Allow-all policy extension, if needed; after app/local/remote acting proof | Policy-only wrappers call host verbs; never HA fallback or person-confirmation automation |
+| G11 | Fleet thin wrappers after app/local/remote acting proof; Allow-all policy belongs to G5, not a separate extension | Policy-only wrappers call host verbs with explicit permissions; never HA fallback or person-confirmation automation |
 | G12 | Retire wrappers/tools sync after approved cutover evidence; phone grant UI remains later | No surviving launch/end HA submissions; preserve separately authorized messaging and all person guards |
 
 Retirement targets are Fleet `launch-remote.ps1` launch-submit/MQTT/HA presses,
@@ -327,7 +333,8 @@ effect of this design; those have separate umbrella slices.
 No wrapper may synthesize a grant, click a person confirmation or auto-retry an
 unconfirmed request. Quality/SRE owns disposable-VM cutover evidence separately.
 
-No open decision is required to brief G1. Stronger remote person/roster
-authentication and any Allow-all inbound extension remain explicit prerequisites,
-not authority inferred from the messaging cutover. Questions or scope changes
+No open decision is required to brief G1. Remote acting requires existing own-peer
+messaging trust, a signed fleet-action envelope and the receiver-side grant, not a roster;
+remote issuance keeps its person-device/roster gates. G5 owns the Allow-all extension
+under Nov 21, 12:47 PT approval, never authority inferred from messaging cutover. Questions or scope changes
 route to the Chief, never directly to the owner from a builder.
