@@ -36,6 +36,8 @@ installed iPhone/iPad app keeps its old icon until you choose to reinstall it, w
 Agent Bridge under it. Apple gives a Home Screen app no way to change either, and reinstalling
 makes it a new device, signed in and approved again, so keeping it is fine.
 
+Reply keystrokes skip parent redraws unless Send availability changes, bound small drafts without UTF-8 encoding, and measure phone row changes on the next frame; `test/reply.spec.mjs` checks this work budget, not the separate end-to-end 100 ms latency target (#2736).
+
 | Light | Dark | Answering | A permission request | All machines | Needs you |
 |---|---|---|---|---|---|
 | ![Demo mode, light](docs/demo-light.png) | ![Demo mode, dark](docs/demo-dark.png) | ![Answering the worked example's question](docs/answer.png) | ![An approval, answered with a tap](docs/approval.png) | ![Every machine's sessions at once, each row naming its machine](docs/all-machines.png) | ![Needs you: every pending question above the list, an approval answered in place](docs/needs-you-light.png) |

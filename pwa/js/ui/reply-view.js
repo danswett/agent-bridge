@@ -141,9 +141,10 @@ export class ReplyBox {
   #resize = null;
   #width = 0;
   #fitFrame = 0;
+  #fitHeight = 0;
   // Takes the person to the question the reply waits on, and focuses its first choice.
   #onGoToQuestion = null;
-  // Told whenever the box's words or state are drawn again (a phone's compact copy of them).
+  // Programmatic edits and state changes; native input already updates the phone's compact copy.
   #onChange = null;
   #onReturn = () => {
     this.els.send.title = replyReturnHint();
@@ -152,7 +153,7 @@ export class ReplyBox {
 
   // replying: { service, hostId, sessionId }. attach: whether the machine takes files.
   // largeMax: the largest it takes through the blob store, 0 for none. onGoToQuestion: the
-  // phone notice's link, to the question the reply waits on. onChange: told when the words change.
+  // phone notice's link, to the question the reply waits on. onChange: edits not carried by input, or state.
   constructor({ machineName, replying, attach = false, largeMax = 0, onGoToQuestion = null, onChange = null, uuid = () => globalThis.crypto.randomUUID() }) {
     this.machineName = machineName;
     this.#onGoToQuestion = onGoToQuestion;
@@ -184,7 +185,7 @@ export class ReplyBox {
         if (w === this.#width) { return; }
         this.#width = w;
         cancelAnimationFrame(this.#fitFrame);
-        this.#fitFrame = requestAnimationFrame(() => this.fit());
+        this.#fitFrame = requestAnimationFrame(() => { this.#fitFrame = 0; this.fit(); });
       });
       this.#resize.observe(this.els.form);
     }
@@ -245,6 +246,7 @@ export class ReplyBox {
     // Its least height (the stylesheet's one line) first, so the words alone decide.
     t.style.height = '0px';
     const full = t.scrollHeight;
+    this.#fitHeight = full;
     const slot = t.closest('.reply-slot'), conversation = t.closest('.conversation');
     const max = iphone && slot && conversation
       ? Math.max(44, Math.min(GROW_MAX, conversation.clientHeight - (slot.offsetHeight - t.offsetHeight)))
@@ -252,6 +254,22 @@ export class ReplyBox {
     t.style.height = `${Math.min(full, max)}px`;
     t.style.overflowY = full > max ? 'auto' : 'hidden';
     t.scrollTop = top;
+  }
+
+  #queueInputFit() {
+    if (this.#fitFrame || (!this.#phone?.matches && !installedPhone(this.els.input.ownerDocument.documentElement))) { return; }
+    this.#fitFrame = requestAnimationFrame(() => {
+      this.#fitFrame = 0;
+      const t = this.els.input;
+      if (!t.getClientRects().length) { return; }
+      const height = t.style.height, top = t.scrollTop;
+      // Measure outside input, including shrinkage hidden by the current editor height.
+      t.style.height = '0px';
+      const full = t.scrollHeight;
+      t.style.height = height;
+      t.scrollTop = top;
+      if (full !== this.#fitHeight) { this.fit(); }
+    });
   }
 
   get text() { return this.els.input.value; }
@@ -305,7 +323,8 @@ export class ReplyBox {
       // The receipt's room is kept from Send until the box is typed in again (ui.md §6.5).
       this.#end('edit');
       if (!e.status.textContent) { e.status.classList.remove('room'); }
-      this.#sync();
+      if (this.#syncDraft()) { this.#onChange?.(); }
+      this.#queueInputFit();
     };
     e.input.onkeydown = (ev) => {
       if (this.#composing || ev.isComposing || ev.keyCode === 229) { return; }
@@ -398,15 +417,28 @@ export class ReplyBox {
 
   #pending(entry = this.entry) { return this.#claiming || (!!entry && (entry.state === 'sending' || entry.state === 'waiting')); }
 
-  #sync() {
+  #syncDraft() {
     const e = this.els;
     const text = e.input.value;
-    const n = utf8Bytes(text);
+    // At most three UTF-8 bytes per UTF-16 unit: no encoding until a notice is possible.
+    const n = text.length <= ReplyLimits.text / 4 ? 0 : utf8Bytes(text);
     const over = n > ReplyLimits.text;
-    e.bytes.textContent = n > ReplyLimits.text * 0.75 ? `${over ? 'Too long: ' : ''}${kib(n)} of ${ReplyLimits.text / 1024} KiB` : '';
+    const notice = n > ReplyLimits.text * 0.75 ? `${over ? 'Too long: ' : ''}${kib(n)} of ${ReplyLimits.text / 1024} KiB` : '';
+    if (e.bytes.textContent !== notice) { e.bytes.textContent = notice; }
     e.bytes.classList.toggle('over', over);
     if (over) { e.input.setAttribute('aria-invalid', 'true'); } else { e.input.removeAttribute('aria-invalid'); }
     e.hint.hidden = !/[\r\n\u2028\u2029]/.test(text);
+    // Preserve Send's focus while pending (#369), returning it only for an empty/held box.
+    const off = this.#held() || this.#preparing > 0 || (text.trim() === '' && this.#files.length === 0);
+    const changed = e.send.disabled !== off;
+    if (off && e.send === e.send.ownerDocument.activeElement && !e.input.disabled) { e.input.focus(); }
+    e.send.disabled = off;
+    if (!off && (this.#pending() || this.#busyTimer || this.#hold.updating)) { e.send.setAttribute('aria-disabled', 'true'); } else { e.send.removeAttribute('aria-disabled'); }
+    return changed;
+  }
+
+  #sync() {
+    const e = this.els;
     const held = this.#held();
     const pending = this.#pending();
     const linked = e.toQuestion === e.toQuestion.ownerDocument.activeElement;
@@ -446,10 +478,7 @@ export class ReplyBox {
     // blurs an editor emptied by delivery (#1840). On its way, or back after busy: not disabled, which
     // would drop focus to the top of the page (#369); #send does nothing meanwhile, and the
     // service sends one request per reply whatever is pressed.
-    const off = held || this.#preparing > 0 || (text.trim() === '' && this.#files.length === 0);
-    if (off && e.send === e.send.ownerDocument.activeElement && !e.input.disabled) { e.input.focus(); }
-    e.send.disabled = off;
-    if (!off && (pending || this.#busyTimer || this.#hold.updating)) { e.send.setAttribute('aria-disabled', 'true'); } else { e.send.removeAttribute('aria-disabled'); }
+    this.#syncDraft();
     if (!this.#hold.updating) { e.updating.hidden = true; e.updating.textContent = ''; }
     e.resend.disabled = !!this.#offline;
     this.fit();
