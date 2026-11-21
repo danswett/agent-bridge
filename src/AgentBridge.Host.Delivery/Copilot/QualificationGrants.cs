@@ -2,7 +2,7 @@ namespace AgentBridge.Host.Delivery.Copilot;
 
 internal enum QualificationAccess { Denied, SreCli, OwnerApproval }
 internal enum QualificationHostKind { Unknown, Disposable, Fleet }
-internal enum QualificationGrantState { Issued, Consumed, Revoked }
+internal enum QualificationGrantState { Issued, Consumed, Revoked, Expired }
 internal sealed record QualificationBinding(string Head, Guid Vm, Guid Run, Guid Host,
     QueueTarget Target, string Challenge);
 internal sealed record QualificationGrant(Guid Id, QualificationBinding Binding, DateTimeOffset Issued,

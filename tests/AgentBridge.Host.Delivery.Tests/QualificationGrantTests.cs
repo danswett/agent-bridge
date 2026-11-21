@@ -6,7 +6,8 @@ using Xunit;
 
 public sealed class QualificationGrantTests
 {
-    sealed class WallClock(DateTimeOffset now) : TimeProvider { public override DateTimeOffset GetUtcNow() => now; }
+    sealed class WallClock(DateTimeOffset now) : TimeProvider
+    { public DateTimeOffset Now = now; public override DateTimeOffset GetUtcNow() => Now; }
     internal sealed class Trust : IQualificationTrust
     {
         public QualificationAccess Access { get; set; } = QualificationAccess.SreCli;
@@ -23,6 +24,8 @@ public sealed class QualificationGrantTests
         public readonly List<QualificationGrant> Entries = [];
         public bool Available = true;
         public QualificationGrant? Find(Guid id) { lock (gate) { return Entries.LastOrDefault(x => x.Id == id); } }
+        public QualificationGrant? FindChallenge(string nonce)
+        { lock (gate) { return Entries.LastOrDefault(x => x.Binding.Challenge == nonce); } }
         public bool TryAppend(QualificationGrant? expected, QualificationGrant next)
         {
             lock (gate)
@@ -57,7 +60,7 @@ public sealed class QualificationGrantTests
     }
 
     [Theory]
-    [InlineData(0, 1)][InlineData(1, 2)][InlineData(1, 0)]
+    [InlineData(0, 1)][InlineData(1, 2)][InlineData(1, 0)][InlineData(7, 1)][InlineData(1, 9)]
     public void Untrusted_callers_and_non_disposable_hosts_cannot_issue_or_consume(int access, int kind)
     {
         var run = new Run(); run.Issue(); run.Trust.Access = (QualificationAccess)access; run.Trust.HostKind = (QualificationHostKind)kind;
@@ -217,5 +220,91 @@ public sealed class QualificationGrantTests
         var grant = Assert.IsType<QualificationGrant>(run.Consume().Grant);
         Assert.False(run.Grants().IsCurrent(grant, missingChallenge ? run.Trust.Binding.Target : null,
             missingChallenge ? null : run.Challenge));
+    }
+
+    [Theory]
+    [InlineData("issued")][InlineData("consumed")][InlineData("expired")][InlineData("revoked")][InlineData("restart")]
+    public void A_challenge_nonce_any_earlier_grant_holds_is_never_issued_again(string history)
+    {
+        var run = new Run(); run.Issue();
+        if (history is "consumed" or "restart") { Assert.Null(run.Consume().Refusal); }
+        if (history == "revoked") { Assert.Null(run.Grants().Revoke(run.Id).Refusal); }
+        if (history == "expired") { run.Clock.Advance(TimeSpan.FromMinutes(60)); Assert.NotNull(run.Consume().Refusal); }
+        var journal = run.Journal;
+        if (history == "restart")
+        {
+            journal = new Journal();
+            journal.Entries.AddRange(JsonSerializer.Deserialize<List<QualificationGrant>>(JsonSerializer.Serialize(run.Journal.Entries))!);
+        }
+        var count = journal.Entries.Count;
+        run.Trust.Binding = run.Trust.Binding with { Target = run.Trust.Binding.Target with { ProcessId = 43 } };
+        Assert.NotNull(new QualificationGrants(run.Trust, journal, run.Clock).Issue(Guid.NewGuid(), TimeSpan.FromMinutes(1)).Refusal);
+        Assert.Equal(count, journal.Entries.Count);
+    }
+
+    [Theory]
+    [InlineData("pid")][InlineData("started")][InlineData("console")][InlineData("consoleZero")][InlineData("mode")]
+    [InlineData("cliPath")][InlineData("cliVersion")][InlineData("cliHash")][InlineData("injectorPath")]
+    [InlineData("injectorVersion")][InlineData("injectorHash")][InlineData("protocol")][InlineData("allDefault")]
+    [InlineData("nullTarget")][InlineData("head")][InlineData("vm")][InlineData("run")][InlineData("host")]
+    [InlineData("nonce")][InlineData("shortNonce")][InlineData("approval")]
+    public void Every_empty_zero_or_default_binding_field_refuses_issue(string field)
+    {
+        var run = new Run(); var b = run.Trust.Binding; var t = b.Target; var approval = run.Id;
+        run.Trust.Binding = field switch
+        {
+            "pid" => b with { Target = t with { ProcessId = 0 } },
+            "started" => b with { Target = t with { StartedAt = 0 } },
+            "console" => b with { Target = t with { ConsoleId = "" } },
+            "consoleZero" => b with { Target = t with { ConsoleId = "0:0:0" } },
+            "mode" => b with { Target = t with { InputMode = 0 } },
+            "cliPath" => b with { Target = t with { CliPath = " " } },
+            "cliVersion" => b with { Target = t with { CliVersion = "" } },
+            "cliHash" => b with { Target = t with { CliHash = "" } },
+            "injectorPath" => b with { Target = t with { InjectorPath = "" } },
+            "injectorVersion" => b with { Target = t with { InjectorVersion = "" } },
+            "injectorHash" => b with { Target = t with { InjectorHash = new string('g', 64) } },
+            "protocol" => b with { Target = t with { Protocol = "" } },
+            "allDefault" => b with { Target = new(0, 0, "", 0, "", "", "", "", "", "", "") },
+            "nullTarget" => b with { Target = null! },
+            "head" => b with { Head = "" },
+            "vm" => b with { Vm = Guid.Empty },
+            "run" => b with { Run = Guid.Empty },
+            "host" => b with { Host = Guid.Empty },
+            "nonce" => b with { Challenge = "" },
+            "shortNonce" => b with { Challenge = "agent-bridge-qualify:" + new string('a', 8) },
+            _ => b,
+        };
+        if (field == "approval") { approval = Guid.Empty; }
+        Assert.NotNull(run.Grants().Issue(approval, TimeSpan.FromMinutes(1)).Refusal);
+        Assert.Empty(run.Journal.Entries);
+    }
+
+    [Fact]
+    public void Expiry_is_journaled_so_a_wall_clock_rollback_cannot_revive_a_grant()
+    {
+        var run = new Run(); run.Issue(); var consumed = new Run(); consumed.Issue();
+        var grant = Assert.IsType<QualificationGrant>(consumed.Consume().Grant);
+        var clock = new WallClock(grant.Issued.AddMinutes(61));
+        var issued = new QualificationGrants(run.Trust, run.Journal, clock);
+        var current = new QualificationGrants(consumed.Trust, consumed.Journal, clock);
+        Assert.NotNull(issued.Consume(run.Id, run.Trust.Binding.Target, run.Challenge).Refusal);
+        Assert.False(current.IsCurrent(grant, consumed.Trust.Binding.Target, consumed.Challenge));
+        clock.Now = grant.Issued.AddMinutes(30);
+        Assert.NotNull(run.Grants().Consume(run.Id, run.Trust.Binding.Target, run.Challenge).Refusal);
+        Assert.False(consumed.Current(grant));
+        Assert.Equal(QualificationGrantState.Expired, run.Journal.Entries.Last().State);
+        Assert.Equal(QualificationGrantState.Expired, consumed.Journal.Entries.Last().State);
+    }
+
+    [Theory]
+    [InlineData(false)][InlineData(true)]
+    public void Revocation_requires_the_SRE_callers_own_disposable_binding(bool fleetHost)
+    {
+        var run = new Run(); run.Issue();
+        if (fleetHost) { run.Trust.HostKind = QualificationHostKind.Fleet; }
+        else { run.Trust.Binding = run.Trust.Binding with { Run = Guid.NewGuid() }; }
+        Assert.NotNull(run.Grants().Revoke(run.Id).Refusal);
+        Assert.Single(run.Journal.Entries);
     }
 }
