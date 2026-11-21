@@ -182,9 +182,13 @@ function watchVisibility(doc) {
       }
     } else {
       for (const a of paused) {
-        if (a.playState === 'paused' && a.effect?.target?.isConnected) { a.play(); }
+        if (a.playState === 'paused') {
+          // Keep detached motion paused and tracked until a connected visible return.
+          if (!a.effect?.target?.isConnected) { continue; }
+          a.play();
+        }
+        paused.delete(a);
       }
-      paused.clear();
     }
   };
   watchPageVisibility(changed, doc);

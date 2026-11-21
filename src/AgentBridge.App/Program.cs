@@ -91,7 +91,7 @@ public static class Program
     static int InstallHandedOver(InPlaceHandoff handoff)
     {
         System.Diagnostics.Process Start(string exe, IReadOnlyList<string> a) =>
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, a) { WorkingDirectory = handoff.Root })!;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, a) { WorkingDirectory = handoff.Root, CreateNoWindow = true })!;
         return handoff.Run(LifecycleGuard.Refusal, AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar) + "-staged",
             a => { using var p = Start(Path.Combine(handoff.Root, "Update.exe"), a); p.WaitForExit(); return p.ExitCode; },
             () => InstallBlockers.HeldFiles(handoff.Root), a => Start(Path.Combine(handoff.Root, "current", "AgentBridge.exe"), a).Dispose(), AppLog.Write);

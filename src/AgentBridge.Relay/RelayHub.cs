@@ -190,7 +190,8 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         // Announce before "ready", so peers learn of a device before it can send them anything.
         await RosterChangedAsync(conn.Account.Id);
         // blobs: present only with a blob store, so a device knows whether files over 256 KiB can go.
-        await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login, blobs = blobs.Advertised, feedback = feedback.Advertised });
+        await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login, blobs = blobs.Advertised, feedback = feedback.Advertised,
+            capabilities = new[] { FleetSessionId.RelayCapability } });
         metrics.ConnectTime(conn.Kind, Stopwatch.GetElapsedTime(opened));
 
         string end = "closed";

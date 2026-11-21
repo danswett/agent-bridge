@@ -65,6 +65,45 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         Assert.Equal(("cdn", 0, time.GetUtcNow()), (grace.Source, grace.GitHubRemaining, grace.GitHubQuotaAt));
     }
 
+    // #3441: a person's press read the CDN's copy of 37 minutes ago, older than the latest publish.
+    [Fact]
+    public async Task A_pressed_check_asks_GitHub_past_a_fresh_CDN_copy_while_a_background_check_keeps_the_copy()
+    {
+        static string List(string version) => $$"""[{"tag_name":"v{{version}}","assets":[{"name":"releases.win.json","browser_download_url":"{{ReleaseDiscovery.DownloadPrefix}}v{{version}}/releases.win.json"}]}]""";
+        github.Answer = _ => Ok(List("0.1.2"), "\"v1\"");
+        using (var direct = new ReleaseDiscovery(folder, github, time, random: () => 0, cdn: false)) { await direct.ReleasesAsync(Url, CancellationToken.None); }
+        time.Advance(ReleaseDiscovery.Interval);
+        github.Answer = r => r.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList
+            ? new(HttpStatusCode.OK) { Content = new StringContent(List("0.1.2")), Headers = { Age = TimeSpan.FromMinutes(37) } }
+            : Ok(List("0.1.3"), "\"v2\"");
+        using var discovery = Discovery();
+
+        Assert.Equal(List("0.1.2"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        time.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(List("0.1.2"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        Assert.Equal(new[] { Url, ReleaseDiscovery.CdnList }, github.Requests.Select(r => r.Url));
+
+        Assert.Equal(List("0.1.3"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win", pressed: true));
+        Assert.Equal((Url, (string?)null), github.Requests[^1]);
+        Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
+    }
+
+    [Fact]
+    public async Task A_pressed_check_of_a_list_GitHub_gave_asks_again_conditional_on_its_ETag()
+    {
+        using var discovery = Discovery();
+        github.Answer = _ => Ok(Releases, "\"v1\"");
+        await discovery.ReleasesAsync(Url, CancellationToken.None);
+        time.Advance(TimeSpan.FromMinutes(1));
+        github.Answer = _ => new HttpResponseMessage(HttpStatusCode.NotModified) { Headers = { ETag = new("\"v1\"") } };
+
+        Assert.Equal(Releases, await discovery.ReleasesAsync(Url, CancellationToken.None));
+        Assert.Equal(Releases, await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, pressed: true));
+
+        Assert.Equal(2, github.Requests.Count);
+        Assert.Equal("\"v1\"", github.Requests[1].IfNoneMatch);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("-1")]
