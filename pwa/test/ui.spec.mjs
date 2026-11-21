@@ -55,7 +55,7 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(copilot.locator('.status-text')).toHaveText('Waiting on you · compacted once');
   await expect(copilot.locator('.fact-since dd')).toHaveText(/^for /);
   await expect(copilot.locator('.facts')).toContainText('412 turns');
-  await expect(copilot.locator('.facts')).toContainText('1 compaction');
+  await expect(copilot.locator('.facts')).toContainText('compacted once');
   await expect(copilot.locator('.facts')).toContainText('pid 39844');
   await expect(copilot.locator('details.reasoning')).toBeVisible();
   await expect(copilot.locator('.user-message')).toBeVisible();
