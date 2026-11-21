@@ -223,6 +223,20 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(0, launcher.Launches);
     }
 
+    [Fact]
+    public async Task A_missing_persisted_policy_snapshot_refuses_dispatch_and_duplicate_replay()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, store) = Granted(key);
+        launcher.BeforeDispatch = () => Assert.True(store.Transaction(state =>
+            (GrantStore.Next(state with { Counters = state.Counters! with
+                { Reservations = state.Counters.Reservations.Select(r => r with { Caps = null }).ToArray() } },
+                grant.Id, "grant.update"), new(GrantStoreProblem.None)), false).Usable);
+        Assert.Equal("policy", (await GrantedLaunch(pipe, GrantBody(grant))).Reason);
+        Assert.Equal("policy", (await GrantedLaunch(pipe, GrantBody(grant))).Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
     sealed class FakeLauncher : ISessionLauncher
     {
         public int Launches;

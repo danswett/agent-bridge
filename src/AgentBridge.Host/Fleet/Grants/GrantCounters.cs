@@ -33,12 +33,12 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
     readonly TimeProvider clock = time ?? TimeProvider.System;
     const int MaxRequests = 4096;
     static readonly TimeSpan Retention = TimeSpan.FromDays(30);
-    public GrantCounterResult Reserve(Guid grant, long generation, Guid request, GrantSubject subject, string binding) =>
-        Run(grant, generation, true, (state, document, now) => Admit(state, document, grant, generation, request, subject, binding, now),
+    public GrantCounterResult Reserve(Guid grant, long generation, Guid request, GrantSubject subject, string binding, GrantCaps? caps = null) =>
+        Run(grant, generation, true, (state, document, now) => Admit(state, document, grant, generation, request, subject, binding, now, caps),
             duplicateRequest: request);
 
     internal static (GrantCounterState State, GrantCounterResult Result) Admit(GrantCounterState state, GrantDocument? document,
-        Guid grant, long generation, Guid request, GrantSubject subject, string binding, DateTimeOffset now)
+        Guid grant, long generation, Guid request, GrantSubject subject, string binding, DateTimeOffset now, GrantCaps? caps = null)
     {
         if (request == Guid.Empty || !GrantValidator.Subject(subject) || binding is not { Length: 64 }
             || !binding.All(char.IsAsciiHexDigit)) { return (state, new(GrantCounterProblem.Malformed)); }
@@ -51,14 +51,16 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
         }
         if (!document!.Subjects.Contains(subject) || !document.Actions.Contains("launch"))
         { return (state, new(GrantCounterProblem.Binding)); }
+        if (caps is not null && !GrantValidator.Positive(caps)) { return (state, new(GrantCounterProblem.Malformed)); }
+        caps = caps is null ? document.Caps : document.Caps.Intersect(caps);
         if (state.Reservations.Length >= MaxRequests) { return (state, new(GrantCounterProblem.Full)); }
         var usage = Count(state, grant, now);
-        var problem = usage.Hourly >= document.Caps.Hourly ? GrantCounterProblem.Hourly
-            : usage.Daily >= document.Caps.Daily ? GrantCounterProblem.Daily
-            : usage.Live >= document.Caps.Live ? GrantCounterProblem.Live : GrantCounterProblem.None;
+        var problem = usage.Hourly >= caps.Hourly ? GrantCounterProblem.Hourly
+            : usage.Daily >= caps.Daily ? GrantCounterProblem.Daily
+            : usage.Live >= caps.Live ? GrantCounterProblem.Live : GrantCounterProblem.None;
         if (problem != GrantCounterProblem.None) { return (state, new(problem, Usage: usage)); }
         var reservation = new GrantReservation(request, grant, generation, subject, binding, now, GrantReservationState.Pending,
-            Caps: document.Caps);
+            Caps: caps);
         state = state with { Reservations = [.. state.Reservations, reservation] };
         return (state, new(GrantCounterProblem.None, Reservation: reservation, Usage: Count(state, grant, now)));
     }
