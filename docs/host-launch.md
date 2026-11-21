@@ -11,6 +11,9 @@ Status exits: 0 started/registered; 3 unknown; 5 refused/failed; 6 unavailable/i
 (stderr stage/reason); 7 accepted but not confirmed registered, including busy; bad args 2.
 List exits 0 on a valid list. The private, atomic `launch-status/results.json` retains
 128 content-free results and the HA caller UUID mapping through late registration.
+Unexpired outcomes are never evicted: capacity rejects the new row with a host-log warning;
+only rows at least 15 minutes old expire. Records are principal/request keyed; an ambiguous
+UUID query returns unknown. Invalid status records are logged, never abort launch completion.
 Corruption reads empty with a log warning. Deduplication, provenance and authorization
 are unchanged; unknown never authorizes a relaunch.
 

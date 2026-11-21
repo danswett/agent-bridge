@@ -29,7 +29,7 @@ public interface ISessionLauncher
     bool IsFleetWorker(string session, SessionProcess? process) => false;
     LaunchConfig? FleetConfig => null;
     IReadOnlyList<LaunchStatus> LaunchStatuses() => [];
-    void PublishAlias(string request, LaunchRequest source, LaunchResult result) { }
+    void PublishAlias(string principal, string request, LaunchRequest source, LaunchResult result) { }
     Task<LaunchResult>? ReplayAuditedAsync(LaunchRequest request, string peer) => null;
 
     Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
@@ -250,13 +250,13 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     LaunchConfig Config => options.Config;
     public IReadOnlyList<LaunchStatus> LaunchStatuses() => statusLedger.Read();
-    public void PublishAlias(string request, LaunchRequest source, LaunchResult result)
+    public void PublishAlias(string principal, string request, LaunchRequest source, LaunchResult result)
     {
         if (Guid.TryParseExact(request, "D", out var id))
-        { statusLedger.Publish(new(id.ToString("D"), result.Outcome.ToString().ToLowerInvariant(), result.Session, result.Launched?.Permissions, false, options.Time.GetUtcNow()) { SourceRequest = source.Request }); }
+        { statusLedger.Publish(new(id.ToString("D"), result.Outcome.ToString().ToLowerInvariant(), result.Session, result.Launched?.Permissions, false, options.Time.GetUtcNow()) { Principal = principal, SourceRequest = source.Request }); }
     }
-    void PublishStatus(Guid request, string outcome, LaunchResult? result = null) =>
-        statusLedger.Publish(new(request.ToString("D"), outcome, result?.Session, result?.Launched?.Permissions, false, options.Time.GetUtcNow()));
+    void PublishStatus(string principal, Guid request, string outcome, LaunchResult? result = null) =>
+        statusLedger.Publish(new(request.ToString("D"), outcome, result?.Session, result?.Launched?.Permissions, false, options.Time.GetUtcNow()) { Principal = principal });
 
     public IReadOnlyList<Started> LaunchedProcesses()
     {
@@ -793,16 +793,16 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet)
             : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, fleet: fleet))
             : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
-            Settled(request, result, $"launch {Short(key)}"),
+            Settled(request, result, $"launch {Short(key)}", peer),
             owner: prepare is null ? Owner(request, peer) : new LaunchOwner(peer, RequestBinding(request)),
             foreign: () => Task.FromResult(Refused("request is not a repeat owned by this caller")));
     }
 
     // Once per finished request, never for a repeat answered from the remembered outcome (that
     // is what requests.Once's settled callback guarantees).
-    void Settled(LaunchRequest request, LaunchResult result, string who)
+    void Settled(LaunchRequest request, LaunchResult result, string who, string principal)
     {
-        PublishStatus(Guid.Parse(request.Request), result.Outcome.ToString().ToLowerInvariant(), result);
+        PublishStatus(principal, Guid.Parse(request.Request), result.Outcome.ToString().ToLowerInvariant(), result);
         log($"{who}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Session is { } s ? $" session {Short(s)}" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}");
         var index = Launchers.All.ToList().FindIndex(l => l.Id == request.Agent);
         try { options.Journal?.Record(JournalEvents.LaunchRequested(result.Outcome, index < 0 ? null : index + 1)); }
@@ -835,7 +835,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Permissions = l?.Permissions == LaunchProtocol.AllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask,
         };
         return requests.Once(key, () => RunAsync(request, key, ask.By, restoring: true, cancellationToken), result =>
-            Settled(request, result, $"launch {Short(key)} ({ask.By})"));
+            Settled(request, result, $"launch {Short(key)} ({ask.By})", ask.By));
     }
 
     // A restore's settings, each kept only while this machine still offers it (else its default),
@@ -866,7 +866,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default,
         Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
     {
-        PublishStatus(key, "starting");
+        PublishStatus(peer, key, "starting");
         try
         {
             if (!options.PlatformSupported) { return Refused("launching sessions is not supported on this platform yet; start it at the machine"); }
@@ -939,7 +939,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                         return Refused($"'{fetched.About.Title}' is a {theirs} session, so it resumes in {theirs}, not {plan.Launcher.Label}");
                     }
                 }
-                return await StartAsync(plan, claim, key, handed, fetched, ct, restoring,
+                return await StartAsync(plan, claim, key, peer, handed, fetched, ct, restoring,
                     fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet);
             }
             finally
@@ -1119,7 +1119,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
     }
 
-    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
+    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, string principal, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
         Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
     {
         Pending follow;
@@ -1342,7 +1342,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
             // The reservation is the follow's now, released when the session registers.
             follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched)
-                { Transcript = transcriptFrom, AuditRegistered = auditRegistered };
+                { Transcript = transcriptFrom, AuditRegistered = auditRegistered, Principal = principal };
             reservation = null;
             lock (pendingGate) { pending.Add(follow); }
             resumable.Forget();
@@ -1671,7 +1671,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     void Decide(Pending p, LaunchResult result)
     {
-        PublishStatus(p.Key, result.Outcome.ToString().ToLowerInvariant(), result);
+        PublishStatus(p.Principal, p.Key, result.Outcome.ToString().ToLowerInvariant(), result);
         // Before the outcome is told, so the record has it by the time anyone hears of the session.
         if (result is { Outcome: LaunchOutcome.Started, Session: { } id })
         {
@@ -2014,6 +2014,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         string? worktree, string? reservation, LaunchedWith launched)
     {
         public Guid Key { get; } = key;
+        public required string Principal { get; init; }
         public Launcher Launcher { get; } = launcher;
         public string SessionId { get; } = sessionId;
         public Started Started { get; } = started;

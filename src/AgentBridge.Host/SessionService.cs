@@ -54,7 +54,7 @@ public sealed class SessionService
     // Shared by hello and the relay load handlers; only the composition reads host settings.
     public Func<bool> LoadEnabled { get; init; } = () => true;
     public LoadService? Load { get; init; }
-    internal void PublishLaunchAlias(string request, LaunchRequest source, LaunchResult result) => launcher?.PublishAlias(request, source, result);
+    internal void PublishLaunchAlias(string principal, string request, LaunchRequest source, LaunchResult result) => launcher?.PublishAlias(principal, request, source, result);
     internal object LaunchStatus(JsonElement data, bool list)
     {
         if (data.ValueKind != JsonValueKind.Object || data.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() != 1)
@@ -64,13 +64,13 @@ public sealed class SessionService
         if (!list && !Guid.TryParseExact(request, "D", out _)) { throw new ArgumentException("request must be a UUID"); }
         var since = list && data.TryGetProperty("since", out var minutes) ? minutes.GetInt32() : 15;
         if (since is < 0 or > 43200) { throw new ArgumentException("since must be 0 to 43200 minutes"); }
-        var live = source.Snapshot().Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        LaunchStatus Project(LaunchStatus r) => r with { SourceRequest = null, Registered = r.Session is not null && live.Contains(r.Session),
+        var live = source.Snapshot().Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+        LaunchStatus Project(LaunchStatus r) => r with { SourceRequest = null, Principal = null, Registered = r.Session is not null && live.Contains(r.Session),
             Session = r.Session is not null ? Guid.Parse(r.Session).ToString("N")[..16] : null };
         var rows = launcher?.LaunchStatuses() ?? [];
+        var matching = list ? [] : rows.Where(r => Guid.Parse(r.Request) == Guid.Parse(request!)).Take(2).ToArray();
         return list ? rows.Where(r => r.Time >= Time.GetUtcNow().AddMinutes(-since)).Select(Project).ToArray()
-            : Project(rows.FirstOrDefault(r => Guid.Parse(r.Request) == Guid.Parse(request!))
-                ?? new LaunchStatus(Guid.Parse(request!).ToString("D"), "unknown", null, null, false, Time.GetUtcNow()));
+            : Project(matching.Length == 1 ? matching[0] : new LaunchStatus(Guid.Parse(request!).ToString("D"), "unknown", null, null, false, Time.GetUtcNow()));
     }
 
     internal Task<object> RenameFleetSessionAsync(JsonElement data, Fleet.IScopedFleetRoster? roster, Task closed) =>

@@ -80,4 +80,45 @@ public sealed class LaunchStatusTests : IDisposable
         Assert.Equal(Request, Assert.Single(ledger.Read()).Request);
         Assert.Equal("started", Assert.Single(ledger.Read()).Outcome);
     }
+    [Fact]
+    public void Capacity_preserves_unexpired_outcomes_and_only_evicts_expired_rows()
+    {
+        var logs = new List<string>();
+        var ledger = new LaunchStatusLedger(root, logs.Add);
+        var first = Guid.NewGuid().ToString("D");
+        ledger.Publish(new(first, "refused", null, null, false, At));
+        for (var i = 1; i < LaunchStatusLedger.Capacity; i++)
+        { ledger.Publish(new(Guid.NewGuid().ToString("D"), "refused", null, null, false, At.AddSeconds(i))); }
+        var next = new LaunchStatus(Guid.NewGuid().ToString("D"), "starting", null, null, false, At.AddSeconds(128)) { Principal = "restore" };
+        Assert.False(ledger.Publish(next));
+        ledger = new LaunchStatusLedger(root, logs.Add);
+        Assert.Contains(ledger.Read(), r => r.Request == first);
+        Assert.DoesNotContain(ledger.Read(), r => r.Request == next.Request);
+        Assert.Contains(logs, line => line.Contains("capacity"));
+        ledger.Publish(next with { Time = At.AddMinutes(15).AddSeconds(1) });
+        Assert.DoesNotContain(ledger.Read(), r => r.Request == first);
+        Assert.Contains(new LaunchStatusLedger(root, logs.Add).Read(), r => r.Request == next.Request);
+    }
+    [Fact]
+    public void Reused_request_UUID_does_not_inherit_another_principals_outcome_or_session()
+    {
+        var ledger = new LaunchStatusLedger(root, _ => { });
+        ledger.Publish(new(Request, "started", Guid.NewGuid().ToString("D"), "allowAll", false, At) { Principal = "first" });
+        ledger.Publish(new(Request, "unconfirmed", null, null, false, At.AddSeconds(1)) { Principal = "second" });
+        var second = new LaunchStatusLedger(root, _ => { }).Read().Single(r => r.Principal == "second");
+        Assert.Equal("unconfirmed", second.Outcome);
+        Assert.Null(second.Session);
+        Assert.Null(second.Permissions);
+        ledger.Publish(new(Request, "unconfirmed", null, null, false, At.AddMinutes(16)) { Principal = "first" });
+        Assert.Null(Assert.Single(ledger.Read()).Session);
+    }
+    [Fact]
+    public void Non_GUID_session_status_is_logged_without_interrupting_launch_completion()
+    {
+        var logs = new List<string>();
+        var ledger = new LaunchStatusLedger(root, logs.Add);
+        Assert.False(ledger.Publish(new(Request, "started", "native-session", "allowAll", false, At)));
+        Assert.Empty(ledger.Read());
+        Assert.Contains(logs, line => line.Contains("invalid"));
+    }
 }

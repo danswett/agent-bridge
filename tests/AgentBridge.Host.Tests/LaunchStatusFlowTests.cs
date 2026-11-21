@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Local;
@@ -14,7 +15,7 @@ public sealed class LaunchStatusFlowTests : LaunchFlowFixture
         var launcher = Launcher(Config(), statusFolder: folder, rememberFor: TimeSpan.Zero);
         var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "App", Permissions = "allowAll" };
         var external = Guid.NewGuid().ToString("D");
-        launcher.PublishAlias(external, request, new LaunchResult(LaunchOutcome.Unconfirmed));
+        launcher.PublishAlias("fixture", external, request, new LaunchResult(LaunchOutcome.Unconfirmed));
         var result = await launcher.LaunchAuditedAsync(request, "fixture", _ => _ => { });
         Assert.True(result.Outcome == LaunchOutcome.Started, result.Reason);
         clock.Run();
@@ -46,5 +47,21 @@ public sealed class LaunchStatusFlowTests : LaunchFlowFixture
         var result = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "App" }, "fixture");
         Assert.Equal(LaunchOutcome.Unconfirmed, result.Outcome);
         Assert.Equal("unconfirmed", Assert.Single(launcher.LaunchStatuses()).Outcome);
+    }
+    [Fact]
+    public async Task Registration_does_not_match_a_case_distinct_session_ID()
+    {
+        const string id = "abcdef00-0000-4000-8000-000000000000";
+        f.CopilotSession(id, 900);
+        f.Processes.Run(AgentKind.Copilot, 900);
+        await source.RefreshAsync();
+        var folder = Path.Combine(f.Root, "status");
+        var request = Guid.NewGuid().ToString("D");
+        new LaunchStatusLedger(folder, _ => { }).Publish(new(request, "started", id.ToUpperInvariant(), "ask", false, clock.GetUtcNow()));
+        var service = new SessionService(source, new MachineInfo("host", "fixture", "windows", "test"), launcher: Launcher(Config(), statusFolder: folder));
+        Assert.False(Assert.IsType<LaunchStatus>(service.LaunchStatus(JsonSerializer.SerializeToElement(new { request }), false)).Registered);
+        new LaunchStatusLedger(folder, _ => { }).Publish(new(request, "unconfirmed", null, null, false, clock.GetUtcNow()) { Principal = "other" });
+        service = new SessionService(source, new MachineInfo("host", "fixture", "windows", "test"), launcher: Launcher(Config(), statusFolder: folder));
+        Assert.Equal("unknown", Assert.IsType<LaunchStatus>(service.LaunchStatus(JsonSerializer.SerializeToElement(new { request }), false)).Outcome);
     }
 }

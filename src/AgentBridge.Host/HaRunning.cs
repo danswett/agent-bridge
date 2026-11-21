@@ -75,7 +75,7 @@ public sealed class HaRunning : IAsyncDisposable
             (request, ct) => launchAudit is null ? launcher.LaunchAsync(request, "home-assistant", ct)
                 : GateLaunchAudit.LaunchAsync(launcher, request, "home-assistant", launchAudit,
                     new("legacy-ha", "ha-component", "ha-component:local", launchAudit.ControlWriterRun), ct))
-        { Requests = requests, RequestsProblem = requestsProblem, PublishStatus = launcher.PublishAlias };
+        { Requests = requests, RequestsProblem = requestsProblem, PublishStatus = (id, request, result) => launcher.PublishAlias("home-assistant", id, request, result) };
         var connector = new HaConnector(new HaConnectorOptions
         {
             MachineName = machine,

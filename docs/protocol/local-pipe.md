@@ -95,7 +95,8 @@ the connection closes:
 script-credential restrictions are unchanged. Result: one row or at most 128 rows with
 `request`, `outcome` (`started`, `starting`, `unconfirmed`, `failed`, `refused`, `busy`,
 `unknown`), `session` (16 lowercase hex or null), `permissions` (`ask`, `allowAll` or null),
-`registered` (live full-ID match only), `time` (UTC ISO). No launch, stop or approval.
+`registered` (ordinal live full-ID match only), `time` (UTC ISO). No launch, stop or approval.
+A UUID retained for multiple principals reads unknown, never another principal's first match.
 See [host CLI status](../host-launch.md#host-cli-read-launch-status).
 
 `host.workspace.fleetWorkers` reads or changes the stored fleet-worker tick for one
