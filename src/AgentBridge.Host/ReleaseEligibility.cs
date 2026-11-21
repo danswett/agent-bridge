@@ -75,8 +75,9 @@ public sealed class ReleaseEligibility(IHaltListSource source)
     static HaltCheck Unavailable() => new(null, ReleaseBlockedReason.HaltListUnavailable);
 }
 
-// Verification uses GitHub's HTTPS repository metadata and SHA-256 asset digest, not a new
-// signing key or trust in a caller-supplied feed/URL. No log or exception body is exported.
+// LEGACY path (#3307): verification uses GitHub's HTTPS repository metadata and SHA-256 asset digest,
+// not a signature. A signed policy (SignedHaltPolicy) supersedes it once held; a later slice removes it.
+// No trust in a caller-supplied feed/URL. No log or exception body is exported.
 public sealed class GitHubHaltListSource(HttpClient http, ReleaseDiscovery discovery) : IHaltListSource
 {
     const string Repository = "danswett/agent-bridge";

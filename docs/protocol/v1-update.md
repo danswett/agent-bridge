@@ -131,7 +131,7 @@ review, Low). A client sends it only to a machine whose state says `canUpdateNow
 | `back` | `UpdateBack`? | `{from, to, request?, at}`: observed return on `to`, correlated to the press when one exists. A client confirms only when `current` equals `to` and the request matches |
 | `mode` | `restartToUpdate` `installBetweenTurns` `asSoonAsReady`? | Read-only configured mode; unknown values read as `restartToUpdate`. Defining a value does not enable its installation behavior |
 | `checksHeldUntil` | time? | End of the updater's background-check hold, a UTC instant, never a local time-of-day string |
-| `policy` | `UpdatePolicy`? | `{state: ok \| stale \| unreadable, at?}`: availability of authoritative bad-release protection. `at` is the last authoritative check, not a relay hint. Unknown state reads as `unreadable`; absence never means `ok` |
+| `policy` | `UpdatePolicy`? | `{state: ok \| stale \| unreadable, at?}`: availability of authoritative bad-release protection. `at` is the last authoritative check or accepted signed policy, not a relay hint; a signed policy past its `expires` is `stale`. Unknown state reads as `unreadable`; absence never means `ok` |
 
 An unknown `phase` reads as `idle`. Text fields are cut to 64 bytes (versions), 512 (reasons)
 and 4 KiB (notes).
