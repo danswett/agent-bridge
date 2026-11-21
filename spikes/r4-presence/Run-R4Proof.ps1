@@ -1,7 +1,9 @@
 # Runs the R4 presence proof once, unelevated, on a machine with Windows Hello. See README.md.
 # Exit: 0 held, 1 failed, 2 inconclusive, 3 refused to run here.
 $ErrorActionPreference = 'Stop'
-$env:DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE = '1'
+# Process env only, before any dotnet call: no telemetry, banners, first-run or workload checks.
+$env:DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE = '1'; $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+$env:DOTNET_NOLOGO = '1'; $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
 if (-not $IsWindows) { Write-Host 'Windows only.'; exit 3 }
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if ($me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -14,6 +16,8 @@ $out = Join-Path $PSScriptRoot '.out'
 $results = Join-Path $PSScriptRoot "RESULTS-$env:COMPUTERNAME.md"
 # Offline: restore only from this machine's package cache, no nuget.org and no audit call.
 $cache = ((dotnet nuget locals global-packages -l) -replace '^global-packages:\s*', '').Trim()
+# The CLI's home moves into .out; NUGET_PACKAGES keeps the cache found above while DOTNET_CLI_HOME moves.
+$env:NUGET_PACKAGES = $cache; $env:DOTNET_CLI_HOME = Join-Path $out 'cli-home'
 $offline = @("--source", $cache, "-p:NuGetAudit=false", "--artifacts-path", $out, "--nologo", "-v", "q")
 $code = 3
 try {

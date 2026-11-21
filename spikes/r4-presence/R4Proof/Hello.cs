@@ -25,23 +25,26 @@ public sealed unsafe class Hello(string rpId, nint window, Action<Action> ui) : 
     public const int InvalidParameter = unchecked((int)0x80090027); // NTE_INVALID_PARAMETER
     readonly Action<Action> ui = ui;
 
-    public Created Create(byte[] challenge)
+    public Created Create(byte[] challenge) => Isolate((rk, att) => Make(challenge, rk, att));
+
+    // Every call names the harness's own window. Diagnosis only, after NTE_INVALID_PARAMETER: change
+    // one option at a time and stop at the first the API accepts. Whatever that makes is not used
+    // (the run stays inconclusive, no attack runs) and the runner's finally deletes it.
+    public static Created Isolate(Func<int, uint, Created> make)
     {
-        var made = Make(challenge, window, 1, AttestationDirect);
+        var made = make(1, AttestationDirect);
         if (made.Hr != InvalidParameter) { return made; }
-        // Diagnosis only: change one parameter at a time; stop at the first the API accepts. Whatever
-        // it makes is not used (the run stays inconclusive) and the runner's finally deletes it.
         var log = $"{made.Note}; isolation:";
-        foreach (var (name, hwnd, rk, att) in new[] { ("foreground hWnd", GetForegroundWindow(), 1, AttestationDirect), ("resident key off", window, 0, AttestationDirect), ("attestation none", window, 1, AttestationNone) })
+        foreach (var (name, rk, att) in new[] { ("resident key off", 0, AttestationDirect), ("attestation none", 1, AttestationNone) })
         {
-            var hr = Make(challenge, hwnd, rk, att).Hr;
-            log += $" {name}: {ErrorName(hr)};";
-            if (hr != InvalidParameter) { break; }
+            var next = make(rk, att);
+            log += $" {name}: {(next.Hr == 0 ? "accepted" : next.Note)};";
+            if (next.Hr != InvalidParameter) { break; }
         }
         return made with { Note = log };
     }
 
-    Created Make(byte[] challenge, nint hwnd, int residentKey, uint attestation)
+    Created Make(byte[] challenge, int residentKey, uint attestation)
     {
         int hr = 0; nint p = 0;
         ui(() =>
@@ -53,7 +56,7 @@ public sealed unsafe class Hello(string rpId, nint window, Action<Action> ui) : 
             var pars = new List { Count = 1, Items = (nint)(&param) };
             var client = Client(ClientData("webauthn.create", challenge, rpId));
             var opts = new MakeOptions { Version = 3, Timeout = 120_000, Attachment = Platform, RequireResidentKey = residentKey, Uv = UvRequired, Attestation = attestation };
-            hr = WebAuthNAuthenticatorMakeCredential(hwnd, &rp, &user, &pars, &client, &opts, out p);
+            hr = WebAuthNAuthenticatorMakeCredential(window, &rp, &user, &pars, &client, &opts, out p);
         });
         if (hr != 0) { return new(hr, [], [], false, false, "", ErrorName(hr)); }
         try
@@ -135,6 +138,5 @@ public sealed unsafe class Hello(string rpId, nint window, Action<Action> ui) : 
     [DllImport("webauthn.dll", CharSet = CharSet.Unicode)] static extern int WebAuthNAuthenticatorGetAssertion(nint hwnd, string rpId, ClientDataIn* client, GetOptions* opts, out nint assertion);
     [DllImport("webauthn.dll")] static extern void WebAuthNFreeCredentialAttestation(nint p);
     [DllImport("webauthn.dll")] static extern void WebAuthNFreeAssertion(nint p);
-    [DllImport("user32.dll")] static extern nint GetForegroundWindow();
     [DllImport("webauthn.dll")] static extern int WebAuthNDeletePlatformCredential(uint bytes, byte* id);
 }

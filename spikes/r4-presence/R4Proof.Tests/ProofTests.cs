@@ -172,4 +172,19 @@ public class ProofTests
         Assert.Contains(report.Setup, l => l.Contains("NTE_INVALID_PARAMETER; isolation: attestation none: Success"));
         Assert.Equal(2, report.ExitCode);
     }
+
+    [Fact]
+    public void Isolation_runs_only_after_invalid_parameter_changes_one_option_at_a_time_and_stops_at_the_first_accepted()
+    {
+        var calls = new List<(int, uint)>();
+        Created Make(int rk, uint att, int hr) { calls.Add((rk, att)); return new(hr, [], [], false, false, "", $"e{hr:x}"); }
+        Assert.Equal(0, Hello.Isolate((rk, att) => Make(rk, att, 0)).Hr);
+        Assert.Equal([(1, 3u)], calls);
+        calls.Clear();
+        var refused = Hello.Isolate((rk, att) => Make(rk, att, calls.Count == 2 ? 0 : Hello.InvalidParameter));
+        Assert.Equal([(1, 3u), (0, 3u), (1, 1u)], calls);
+        Assert.Equal(Hello.InvalidParameter, refused.Hr);
+        Assert.Contains("resident key off", refused.Note);
+        Assert.Contains("attestation none", refused.Note);
+    }
 }
