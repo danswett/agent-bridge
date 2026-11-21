@@ -182,13 +182,15 @@ public sealed class EnrollmentJoiner
     bool _codeMatched;
     bool _ended;
 
-    public EnrollmentJoiner(string account, byte[] h, EnrollmentLockout lockout, Func<DateTimeOffset> now, byte[]? nonce = null)
+    public EnrollmentJoiner(string account, byte[] h, EnrollmentLockout lockout, Func<DateTimeOffset> now, byte[]? nonce = null,
+        DateTimeOffset? expires = null)
     {
         _account = account;
         _h = h;
         _lockout = lockout;
         _now = now;
-        _expires = now() + EnrollmentLockout.AttemptLifetime;
+        var window = now() + EnrollmentLockout.AttemptLifetime;
+        _expires = expires is { } deadline && deadline < window ? deadline : window;
         _nN = nonce ?? RandomNumberGenerator.GetBytes(Enrollment.NonceBytes);
     }
 
@@ -213,8 +215,9 @@ public sealed class EnrollmentJoiner
     // What the person typed at N, from the approver's screen.
     public CodeResult EnterCode2(string input)
     {
+        if (Over()) { return CodeResult.Ended; }
         if (_codeMatched) { return CodeResult.Match; }
-        if (_transcript is null || Over()) { return CodeResult.Ended; }
+        if (_transcript is null) { return CodeResult.Ended; }
         if (_lockout.IsBlocked(Attempt)) { return CodeResult.Locked; }
         if (Enrollment.Matches(Enrollment.Code2(_transcript), input))
         {
