@@ -3,7 +3,8 @@ namespace AgentBridge.Host.Delivery.Copilot;
 internal enum QualificationAccess { Denied, SreCli, OwnerApproval }
 internal enum QualificationHostKind { Unknown, Disposable, Fleet }
 internal enum QualificationGrantState { Issued, Consumed, Revoked }
-internal sealed record QualificationBinding(string Head, Guid Vm, Guid Run, Guid Host);
+internal sealed record QualificationBinding(string Head, Guid Vm, Guid Run, Guid Host,
+    QueueTarget Target, string Challenge);
 internal sealed record QualificationGrant(Guid Id, QualificationBinding Binding, DateTimeOffset Issued,
     DateTimeOffset Expires, QualificationGrantState State);
 internal sealed record QualificationGrantDecision(QualificationGrant? Grant, string? Refusal)
@@ -46,22 +47,24 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
             : QualificationGrantDecision.Refuse("qualification approval already used");
     }
 
-    internal QualificationGrantDecision Consume(Guid id)
+    internal QualificationGrantDecision Consume(Guid id, QueueTarget? target, QueueQualification.Challenge? challenge)
     {
         if (!Authorized(start: true) || journal is null)
         { return QualificationGrantDecision.Refuse("qualification.start requires SRE CLI on the approved disposable run"); }
         var old = journal.Find(id);
-        if (id == Guid.Empty || old is null || old.Id != id || old.State != QualificationGrantState.Issued || !Matches(old))
+        if (id == Guid.Empty || old is null || old.Id != id || old.State != QualificationGrantState.Issued
+            || !Matches(old) || !MatchesAttempt(old, target, challenge))
         { return QualificationGrantDecision.Refuse("qualification grant missing, expired, used or mismatched"); }
         var next = old with { State = QualificationGrantState.Consumed };
         if (!journal.TryAppend(old, next))
         { return QualificationGrantDecision.Refuse("qualification grant concurrently changed"); }
-        return IsCurrent(next) ? new(next, null)
+        return IsCurrent(next, target, challenge) ? new(next, null)
             : QualificationGrantDecision.Refuse("qualification grant invalidated during consumption");
     }
 
-    internal bool IsCurrent(QualificationGrant grant) => Authorized(start: true) && journal is not null
-        && grant.State == QualificationGrantState.Consumed && Matches(grant) && journal.Find(grant.Id) == grant;
+    internal bool IsCurrent(QualificationGrant grant, QueueTarget? target, QueueQualification.Challenge? challenge) =>
+        Authorized(start: true) && journal is not null && grant.State == QualificationGrantState.Consumed
+        && Matches(grant) && MatchesAttempt(grant, target, challenge) && journal.Find(grant.Id) == grant;
 
     internal QualificationGrantDecision Revoke(Guid id)
     {
@@ -85,6 +88,16 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
             && grant.Expires - grant.Issued <= TimeSpan.FromMinutes(60);
     }
 
-    static bool Valid(QualificationBinding binding) => binding.Head is { Length: 40 } && binding.Head.All(char.IsAsciiHexDigit)
-        && binding.Vm != Guid.Empty && binding.Run != Guid.Empty && binding.Host != Guid.Empty;
+    static bool MatchesAttempt(QualificationGrant grant, QueueTarget? target, QueueQualification.Challenge? challenge) =>
+        target is not null && challenge is not null && grant.Binding.Target == target && grant.Binding.Challenge == challenge.Text;
+
+    static bool Valid(QualificationBinding binding)
+    {
+        const string prefix = "agent-bridge-qualify:";
+        return binding.Head is { Length: 40 } && binding.Head.All(char.IsAsciiHexDigit)
+            && binding.Vm != Guid.Empty && binding.Run != Guid.Empty && binding.Host != Guid.Empty
+            && binding.Target is not null && binding.Challenge is { } nonce
+            && nonce.Length == prefix.Length + 64 && nonce.StartsWith(prefix, StringComparison.Ordinal)
+            && nonce.Skip(prefix.Length).All(char.IsAsciiHexDigit);
+    }
 }

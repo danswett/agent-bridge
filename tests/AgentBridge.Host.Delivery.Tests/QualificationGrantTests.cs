@@ -1,4 +1,6 @@
 using AgentBridge.Host.Delivery.Copilot;
+using AgentBridge.Host.Delivery;
+using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -9,7 +11,10 @@ public sealed class QualificationGrantTests
     {
         public QualificationAccess Access { get; set; } = QualificationAccess.SreCli;
         public QualificationHostKind HostKind { get; set; } = QualificationHostKind.Disposable;
-        public QualificationBinding Binding { get; set; } = new(new string('a', 40), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        public QualificationBinding Binding { get; set; } = new(new string('a', 40), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+            new(42, 100, "200:44:101", 7, @"C:\agent\cli.exe", "1.2", new string('a', 64),
+                @"C:\agent\injector.exe", "2.3", new string('b', 64), KeyPlan.Header),
+            "agent-bridge-qualify:" + new string('a', 64));
     }
 
     internal sealed class Journal : IQualificationGrantJournal
@@ -37,6 +42,9 @@ public sealed class QualificationGrantTests
         public readonly Guid Id = Guid.NewGuid();
         public QualificationGrants Grants() => new(Trust, Journal, Clock);
         public QualificationGrant Issue() => Assert.IsType<QualificationGrant>(Grants().Issue(Id, TimeSpan.FromMinutes(60)).Grant);
+        public QueueQualification.Challenge Challenge => new(Trust.Binding.Challenge);
+        public QualificationGrantDecision Consume(Guid? id = null) => Grants().Consume(id ?? Id, Trust.Binding.Target, Challenge);
+        public bool Current(QualificationGrant grant) => Grants().IsCurrent(grant, Trust.Binding.Target, Challenge);
     }
 
     [Fact]
@@ -44,7 +52,8 @@ public sealed class QualificationGrantTests
     {
         var grants = new QualificationGrants();
         Assert.NotNull(grants.Issue(Guid.NewGuid(), TimeSpan.FromMinutes(1)).Refusal);
-        Assert.NotNull(grants.Consume(Guid.NewGuid()).Refusal);
+        var run = new Run();
+        Assert.NotNull(grants.Consume(Guid.NewGuid(), run.Trust.Binding.Target, run.Challenge).Refusal);
     }
 
     [Theory]
@@ -53,7 +62,7 @@ public sealed class QualificationGrantTests
     {
         var run = new Run(); run.Issue(); run.Trust.Access = (QualificationAccess)access; run.Trust.HostKind = (QualificationHostKind)kind;
         Assert.NotNull(run.Grants().Issue(Guid.NewGuid(), TimeSpan.FromMinutes(1)).Refusal);
-        Assert.NotNull(run.Grants().Consume(run.Id).Refusal);
+        Assert.NotNull(run.Consume().Refusal);
         Assert.Single(run.Journal.Entries);
     }
 
@@ -61,9 +70,9 @@ public sealed class QualificationGrantTests
     public void A_person_may_approve_but_only_SRE_CLI_can_start_the_run()
     {
         var run = new Run(); run.Trust.Access = QualificationAccess.OwnerApproval; run.Issue();
-        Assert.NotNull(run.Grants().Consume(run.Id).Refusal);
+        Assert.NotNull(run.Consume().Refusal);
         run.Trust.Access = QualificationAccess.SreCli;
-        Assert.Null(run.Grants().Consume(run.Id).Refusal);
+        Assert.Null(run.Consume().Refusal);
     }
 
     [Theory]
@@ -78,7 +87,7 @@ public sealed class QualificationGrantTests
     [Theory]
     [InlineData("missing")][InlineData("unknown")][InlineData("expired")]
     [InlineData("revoked")][InlineData("consumed")][InlineData("head")]
-    [InlineData("vm")][InlineData("run")][InlineData("host")]
+    [InlineData("vm")][InlineData("run")][InlineData("host")][InlineData("target")][InlineData("challenge")]
     public void Missing_unknown_expired_replayed_and_mismatched_grants_are_refused(string change)
     {
         var run = new Run(); run.Issue(); var id = run.Id;
@@ -88,13 +97,15 @@ public sealed class QualificationGrantTests
             case "unknown": id = Guid.NewGuid(); break;
             case "expired": run.Clock.Advance(TimeSpan.FromMinutes(60)); break;
             case "revoked": Assert.Null(run.Grants().Revoke(id).Refusal); break;
-            case "consumed": Assert.Null(run.Grants().Consume(id).Refusal); break;
+            case "consumed": Assert.Null(run.Consume(id).Refusal); break;
             case "head": run.Trust.Binding = run.Trust.Binding with { Head = new string('b', 40) }; break;
             case "vm": run.Trust.Binding = run.Trust.Binding with { Vm = Guid.NewGuid() }; break;
             case "run": run.Trust.Binding = run.Trust.Binding with { Run = Guid.NewGuid() }; break;
             case "host": run.Trust.Binding = run.Trust.Binding with { Host = Guid.NewGuid() }; break;
+            case "target": run.Trust.Binding = run.Trust.Binding with { Target = run.Trust.Binding.Target with { InputMode = 8 } }; break;
+            case "challenge": run.Trust.Binding = run.Trust.Binding with { Challenge = "agent-bridge-qualify:" + new string('b', 64) }; break;
         }
-        Assert.NotNull(run.Grants().Consume(id).Refusal);
+        Assert.NotNull(run.Consume(id).Refusal);
     }
 
     [Fact]
@@ -102,7 +113,7 @@ public sealed class QualificationGrantTests
     {
         var run = new Run(); run.Issue();
         Assert.NotNull(run.Grants().Issue(run.Id, TimeSpan.FromMinutes(1)).Refusal);
-        var attempts = await Task.WhenAll(Task.Run(() => run.Grants().Consume(run.Id)), Task.Run(() => run.Grants().Consume(run.Id)));
+        var attempts = await Task.WhenAll(Task.Run(() => run.Consume()), Task.Run(() => run.Consume()));
         Assert.Single(attempts, x => x.Refusal is null);
         Assert.Equal(new[] { QualificationGrantState.Issued, QualificationGrantState.Consumed }, run.Journal.Entries.Select(x => x.State));
     }
@@ -111,17 +122,18 @@ public sealed class QualificationGrantTests
     public void Revocation_expiry_and_clock_rollback_invalidate_a_consumed_grant()
     {
         var run = new Run(); run.Issue();
-        var grant = Assert.IsType<QualificationGrant>(run.Grants().Consume(run.Id).Grant);
-        Assert.True(run.Grants().IsCurrent(grant));
+        var grant = Assert.IsType<QualificationGrant>(run.Consume().Grant);
+        Assert.True(run.Current(grant));
         Assert.Null(run.Grants().Revoke(run.Id).Refusal);
-        Assert.False(run.Grants().IsCurrent(grant));
+        Assert.False(run.Current(grant));
         Assert.NotNull(run.Grants().Issue(run.Id, TimeSpan.FromMinutes(1)).Refusal);
         Assert.Equal(QualificationGrantState.Revoked, run.Journal.Entries.Last().State);
         var other = new Run(); other.Issue();
-        var current = Assert.IsType<QualificationGrant>(other.Grants().Consume(other.Id).Grant);
+        var current = Assert.IsType<QualificationGrant>(other.Consume().Grant);
         other.Clock.Advance(TimeSpan.FromMinutes(60));
-        Assert.False(other.Grants().IsCurrent(current));
-        Assert.False(new QualificationGrants(other.Trust, other.Journal, new WallClock(current.Issued.AddSeconds(-1))).IsCurrent(current));
+        Assert.False(other.Current(current));
+        Assert.False(new QualificationGrants(other.Trust, other.Journal, new WallClock(current.Issued.AddSeconds(-1)))
+            .IsCurrent(current, other.Trust.Binding.Target, other.Challenge));
     }
 
     [Fact]
@@ -145,7 +157,65 @@ public sealed class QualificationGrantTests
         var run = new Run(); run.Journal.Available = false;
         Assert.Throws<IOException>(() => run.Grants().Issue(run.Id, TimeSpan.FromMinutes(1)));
         run.Journal.Available = true; run.Issue(); run.Journal.Available = false;
-        Assert.Throws<IOException>(() => run.Grants().Consume(run.Id));
+        Assert.Throws<IOException>(() => run.Consume());
         Assert.Single(run.Journal.Entries);
+    }
+
+    [Theory]
+    [InlineData(false)][InlineData(true)]
+    public void A_grant_cannot_be_consumed_for_another_target_or_challenge(bool changeChallenge)
+    {
+        var run = new Run(); run.Issue();
+        var target = run.Trust.Binding.Target;
+        var challenge = run.Challenge;
+        if (changeChallenge) { challenge = new("agent-bridge-qualify:" + new string('b', 64)); }
+        else { target = target with { StartedAt = target.StartedAt + 1 }; }
+        Assert.NotNull(run.Grants().Consume(run.Id, target, challenge).Refusal);
+        Assert.Single(run.Journal.Entries);
+    }
+
+    [Theory]
+    [InlineData(false)][InlineData(true)]
+    public void A_consumed_grant_is_not_current_for_another_target_or_challenge(bool changeChallenge)
+    {
+        var run = new Run(); run.Issue();
+        var grant = Assert.IsType<QualificationGrant>(run.Consume().Grant);
+        var target = run.Trust.Binding.Target;
+        var challenge = run.Challenge;
+        if (changeChallenge) { challenge = new("agent-bridge-qualify:" + new string('b', 64)); }
+        else { target = target with { ProcessId = target.ProcessId + 1 }; }
+        Assert.False(run.Grants().IsCurrent(grant, target, challenge));
+        Assert.NotNull(run.Consume().Refusal);
+        Assert.NotNull(run.Grants().Consume(run.Id, target, challenge).Refusal);
+    }
+
+    [Fact]
+    public void Journal_restart_preserves_target_nonce_and_consumption_without_reference_identity()
+    {
+        var run = new Run(); var issued = run.Issue();
+        var grant = Assert.IsType<QualificationGrant>(run.Consume().Grant);
+        var restored = new Journal();
+        restored.Entries.AddRange(JsonSerializer.Deserialize<List<QualificationGrant>>(JsonSerializer.Serialize(run.Journal.Entries))!);
+        var controller = new QualificationGrants(run.Trust, restored, run.Clock);
+        Assert.Equal(issued.Binding, restored.Entries[0].Binding);
+        Assert.True(controller.IsCurrent(grant, run.Trust.Binding.Target with { }, new(run.Challenge.Text)));
+        Assert.NotNull(controller.Consume(run.Id, run.Trust.Binding.Target, run.Challenge).Refusal);
+        Assert.False(controller.IsCurrent(grant, run.Trust.Binding.Target, new("agent-bridge-qualify:" + new string('b', 64))));
+        Assert.False(controller.IsCurrent(grant, run.Trust.Binding.Target with { InputMode = 8 }, run.Challenge));
+        Assert.NotNull(controller.Consume(run.Id, run.Trust.Binding.Target with { InputMode = 8 }, run.Challenge).Refusal);
+        Assert.Equal(2, restored.Entries.Count);
+    }
+
+    [Theory]
+    [InlineData(false)][InlineData(true)]
+    public void Missing_target_or_challenge_refuses_without_consumption(bool missingChallenge)
+    {
+        var run = new Run(); run.Issue();
+        Assert.NotNull(run.Grants().Consume(run.Id, missingChallenge ? run.Trust.Binding.Target : null,
+            missingChallenge ? null : run.Challenge).Refusal);
+        Assert.Single(run.Journal.Entries);
+        var grant = Assert.IsType<QualificationGrant>(run.Consume().Grant);
+        Assert.False(run.Grants().IsCurrent(grant, missingChallenge ? run.Trust.Binding.Target : null,
+            missingChallenge ? null : run.Challenge));
     }
 }
