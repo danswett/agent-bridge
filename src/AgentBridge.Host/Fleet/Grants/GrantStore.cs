@@ -58,6 +58,7 @@ public sealed class GrantStore
 
     public GrantStoreResult Revoke(Guid id, long generation) => Transaction(state =>
     {
+        if (state.Tombstones.Contains(id)) { return (null, new(GrantStoreProblem.None)); }
         var result = Find(state, id, generation, checkTime: false);
         if (!result.Usable) { return (null, result); }
         return (Next(state with { Grants = state.Grants.Where(g => g.Id != id).ToArray(),
@@ -101,7 +102,8 @@ public sealed class GrantStore
             var (next, result) = change(state);
             if (next is null) { return result; }
             var body = JsonSerializer.SerializeToUtf8Bytes(next, Json);
-            if (body.Length > MaxBytes - 32 || next.Intents.Length > 256) { return new(GrantStoreProblem.Oversize); }
+            // Revoke must never be refused by the lifetime cap; each needs a live grant, so Load's 512 bounds them.
+            if (body.Length > MaxBytes - 32 || next.Intents.Length > 256 && next.Intents[^1].Action != "grant.revoke") { return new(GrantStoreProblem.Oversize); }
             var intent = next.Intents[^1];
             var metadata = new GateAuditMetadata(1, intent.Operation, Guid.Empty, 0, "intent", "local",
                 "person-client", intent.Grant, "none", GrantBinding: Convert.ToHexString(SHA256.HashData(body)));
@@ -137,7 +139,7 @@ public sealed class GrantStore
             state = JsonSerializer.Deserialize<State>(body, Json) ?? throw new StoreFault(GrantStoreProblem.Malformed);
             if (state.Version != 1) { throw new StoreFault(GrantStoreProblem.Version); }
             if (state.Generation <= 0 || state.Grants is null || state.Tombstones is null || state.Intents is null
-                || state.Intents.Length is 0 or > 256 || state.Generation != state.Intents.Length
+                || state.Intents.Length is 0 or > 512 || state.Generation != state.Intents.Length
                 || state.Grants.Any(g => !GrantValidator.ValidateShape(g).Valid)
                 || state.Grants.Select(g => g.Id).Distinct().Count() != state.Grants.Length
                 || state.Tombstones.Any(id => id == Guid.Empty || state.Grants.Any(g => g.Id == id))
