@@ -1176,6 +1176,8 @@ public static class ProtocolVectors
             .Valid("revoked", new AgentRevokeResult("session-1", true));
         f.Record<AgentCredentialResult>(Host)
             .Valid("a-credential", new AgentCredentialResult(AgentProtocol.TokenPrefix + Repeat('A', 43), "agent:machine1/session-1", AgentProtocol.ScopeRead, T0));
+        f.Record<SamePcPinRequest>(Client).Valid("roster-root", new SamePcPinRequest("owner@example", MachineId, Sha, [Sha], MachineId));
+        f.Record<SamePcPinResult>(Host).Valid("pinned", new SamePcPinResult(SamePcPinProtocol.Pinned));
     }
 
     // ---- diagnostics ----
