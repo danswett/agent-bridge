@@ -8,16 +8,20 @@ test.before(() => mock.method(globalThis, 'fetch', () => { throw new Error('Real
 test.after(() => mock.restoreAll());
 const id = 'ab'.repeat(16);
 function fixture() {
-  let state, clock = 0, queue = Promise.resolve(), alarms = [], alarm = null, clears = 0;
+  let state, clock = 0, queue = Promise.resolve(), alarms = [], alarm = null, clears = 0, failAlarm = false;
   const storage = {
     get: async () => structuredClone(state), put: async (_, v) => { state = structuredClone(v); },
     deleteAll: async () => { state = undefined; clears++; }, deleteAlarm: async () => { alarm = null; },
-    setAlarm: async v => { alarms.push(v); alarm = v; },
-    transaction(fn) { const work = queue.then(() => fn(storage)); queue = work.then(() => {}, () => {}); return work; },
+    getAlarm: async () => alarm,
+    setAlarm: async v => { if (failAlarm) { failAlarm = false; throw new Error('injected alarm-write failure'); } alarms.push(v); alarm = v; },
+    async transaction(fn) {
+      const before = structuredClone(state), previousAlarm = alarm, count = alarms.length;
+      try { return await fn(storage); } catch (error) { state = before; alarm = previousAlarm; alarms.length = count; throw error; }
+    },
   };
-  const actor = new SessionMailbox({ storage, blockConcurrencyWhile: fn => storage.transaction(fn) }, { now: () => clock });
+  const actor = new SessionMailbox({ storage, blockConcurrencyWhile(fn) { const work = queue.then(fn); queue = work.then(() => {}, () => {}); return work; } }, { now: () => clock });
   const actors = new Map([[id, actor]]);
-  return { env: { MAILBOX: { idFromName: name => name, get: name => { if (!actors.has(name)) actors.set(name, fixture().actor); return actors.get(name); } } }, actor, alarms, peek: () => structuredClone(state), alarm: () => alarm, clears: () => clears, setTime: v => { clock = v; } };
+  return { env: { MAILBOX: { idFromName: name => name, get: name => { if (!actors.has(name)) actors.set(name, fixture().actor); return actors.get(name); } } }, actor, alarms, peek: () => structuredClone(state), alarm: () => alarm, clears: () => clears, setTime: v => { clock = v; }, failAlarm: () => { failAlarm = true; }, dropAlarm: () => { alarm = null; } };
 }
 const request = (method = 'GET', body, headers = {}, suffix = id) => new Request(`${mailboxBase}/s/${suffix}`, { method, headers: { ...(method === 'POST' ? { Origin: phoneOrigin, 'Content-Type': 'application/json', 'Idempotency-Key': createHash('sha256').update(body ?? '').digest('hex').slice(0, 32) } : {}), ...headers }, ...(body === undefined ? {} : { body }) });
 test('mailbox validates id and rejects unknown routes or methods', async () => {
@@ -121,4 +125,42 @@ test('ambiguous TypeError, redirect failures and cancellation are never retried'
     let count = 0; await assert.rejects(postEvidence(id, {}, { fetch: async () => { count++; throw error; } }));
     assert.equal(count, 1);
   }
+});
+test('Sol R4mr first POST alarm-write failure rolls back; identical retry restores bounded state', async () => {
+  const f = fixture(); f.failAlarm();
+  await assert.rejects(handle(request('POST', '{}'), f.env), /injected alarm-write failure/);
+  assert.equal(f.peek(), undefined); assert.equal(f.alarm(), null);
+  assert.equal((await handle(request('POST', '{}'), f.env)).status, 201);
+  assert.equal(f.peek().posts.length, 1); assert.equal(f.alarm(), 300000);
+});
+test('Sol R4mr expiry-to-discard alarm-write failure rolls back then retry completes atomically', async () => {
+  const f = fixture(); await handle(request('POST', '{}'), f.env);
+  const before = f.peek(); f.setTime(300000); f.dropAlarm(); f.failAlarm();
+  await assert.rejects(f.actor.alarm(), /injected alarm-write failure/);
+  assert.deepEqual(f.peek(), before); assert.equal(f.alarm(), null);
+  assert.equal((await handle(request(), f.env)).status, 404); assert.equal(f.alarm(), 300000);
+  await f.actor.alarm(); assert.deepEqual(f.peek(), { expiry: 300000, discard: 3600000 });
+  assert.equal(f.alarm(), 3600000);
+});
+test('requests repair missing alarms on duplicate, conflict, full, GET and expired tombstone paths', async () => {
+  const f = fixture(); await handle(request('POST', '{}', { 'Idempotency-Key': id }), f.env);
+  await handle(request('POST', '{"n":1}'), f.env); await handle(request('POST', '{"n":2}'), f.env);
+  f.dropAlarm(); f.failAlarm();
+  await assert.rejects(handle(request('POST', '{}', { 'Idempotency-Key': id }), f.env), /injected alarm-write failure/);
+  assert.equal(f.alarm(), null); assert.equal(f.peek().posts.length, 3);
+  for (const [body, headers, status] of [[undefined, {}, 200], ['{}', { 'Idempotency-Key': id }, 201], ['{"changed":true}', { 'Idempotency-Key': id }, 409], ['{"n":3}', {}, 409]]) {
+    f.dropAlarm(); assert.equal((await handle(request(body === undefined ? 'GET' : 'POST', body, headers), f.env)).status, status);
+    assert.equal(f.alarm(), 300000); assert.equal(f.peek().posts.length, 3);
+  }
+  f.setTime(300000); f.dropAlarm(); assert.equal((await handle(request(), f.env)).status, 404);
+  assert.equal(f.alarm(), 300000); await f.actor.alarm();
+  f.dropAlarm(); assert.equal((await handle(request(), f.env)).status, 404); assert.equal(f.alarm(), 3600000);
+});
+test('Sol R4mr BOM-prefixed and plain original bytes under one key conflict without overwrite', async () => {
+  const f = fixture(), headers = { 'Idempotency-Key': id }, bom = new Uint8Array([239, 187, 191, 123, 125]);
+  assert.equal((await handle(request('POST', bom, headers), f.env)).status, 201);
+  assert.equal((await handle(request('POST', '{}', headers), f.env)).status, 409);
+  assert.equal((await handle(request('POST', bom, headers), f.env)).status, 201);
+  assert.deepEqual(new Uint8Array(f.peek().posts[0].body), bom);
+  assert.deepEqual((await (await handle(request(), f.env)).json()).blobs, ['\uFEFF{}']);
 });

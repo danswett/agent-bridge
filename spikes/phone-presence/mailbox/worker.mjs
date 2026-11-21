@@ -25,7 +25,7 @@ export async function handle(request, env) {
     }
     const bytes = new Uint8Array(length); let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-    try { body = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); }
+    try { new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); body = bytes.buffer; }
     catch (error) { if (!(error instanceof TypeError)) throw error; return reply({ error: 'invalid UTF-8' }, 400); }
   }
   const target = env.MAILBOX.get(env.MAILBOX.idFromName(match[1]));
@@ -34,18 +34,26 @@ export async function handle(request, env) {
 export class SessionMailbox {
   constructor(ctx, env) { this.ctx = ctx; this.storage = ctx.storage; this.now = env.now ?? Date.now; }
   async #clear() { await this.storage.deleteAll(); await this.storage.deleteAlarm(); }
+  async #save(state, alarm) {
+    // SQLite-backed storage includes top-level alarm writes in this transaction.
+    await this.storage.transaction(async () => { await this.storage.put('state', state); await this.storage.setAlarm(alarm); });
+  }
   async fetch(request) {
-    const body = request.method === 'POST' ? await request.text() : undefined;
+    const body = request.method === 'POST' ? await request.arrayBuffer() : undefined;
     const result = await this.ctx.blockConcurrencyWhile(async () => {
       const state = await this.storage.get('state');
       if (state && (!Number.isSafeInteger(state.discard) || this.now() >= state.discard)) { await this.#clear(); return { status: 404, value: { error: 'retired' } }; }
+      if (state && await this.storage.getAlarm() === null) await this.storage.setAlarm(state.posts ? state.expiry : state.discard);
       if (state && this.now() >= state.expiry) return { status: 404, value: { error: 'expired' } };
-      if (request.method === 'GET') return state ? { status: 200, value: { blobs: state.posts.map(p => p.body) } } : { status: 404, value: { error: 'empty' } };
+      if (request.method === 'GET') return state ? { status: 200, value: { blobs: state.posts.map(p => new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(p.body)) } } : { status: 404, value: { error: 'empty' } };
       const key = request.headers.get('Idempotency-Key'), previous = state?.posts.find(p => p.key === key);
-      if (previous) return previous.body === body ? { status: 201, value: { stored: true } } : { status: 409, value: { error: 'idempotency conflict' } };
+      if (previous) {
+        const stored = new Uint8Array(previous.body), incoming = new Uint8Array(body);
+        return stored.length === incoming.length && stored.every((byte, i) => byte === incoming[i]) ? { status: 201, value: { stored: true } } : { status: 409, value: { error: 'idempotency conflict' } };
+      }
       if (state?.posts.length >= 3) return { status: 409, value: { error: 'full' } };
       const started = this.now(), next = state ?? { expiry: started + 300000, discard: started + 3600000, posts: [] };
-      next.posts.push({ key, body }); await this.storage.put('state', next); await this.storage.setAlarm(next.expiry);
+      next.posts.push({ key, body }); await this.#save(next, next.expiry);
       return { status: 201, value: { stored: true } };
     });
     return reply(result.value, result.status);
@@ -55,8 +63,7 @@ export class SessionMailbox {
       const state = await this.storage.get('state');
       if (!state || !Number.isSafeInteger(state.discard) || this.now() >= state.discard) { await this.#clear(); return; }
       if (this.now() < state.expiry) { await this.storage.setAlarm(state.expiry); return; }
-      await this.storage.put('state', { expiry: state.expiry, discard: state.discard });
-      await this.storage.setAlarm(state.discard);
+      await this.#save({ expiry: state.expiry, discard: state.discard }, state.discard);
     });
   }
 }

@@ -18,6 +18,9 @@ retired state. Expired reads/posts return 404; PC expiry forbids old evidence.
 POST requires a 32-lowercase-hex `Idempotency-Key`: identical key/blob retries
 acknowledge 201 without a second stored copy; changed bytes under that key get
 409, even when three slots are already full. Keys are not secrets/authentication.
+Original UTF-8 bytes are stored/compared, including a leading BOM (not stripped).
+SQLite transactions atomically write state and its alarm, including payload expiry;
+requests repair a missing alarm before duplicate/full/expired early returns.
 
 `../return.mjs` is the shared fixed mailbox constant and phone POST helper.
 Neither QR nor session data carries a mailbox URL. The phone uses its session id
