@@ -11,5 +11,14 @@ internal sealed class LiveRosterSource
 
     public void Clear() => Volatile.Write(ref read, null);
 
+    // The source is cleared the moment serve ends, on every exit path: the caller may go on to wait for a sign-in
+    // (after CloseCodes.Replaced) and Finish must not keep reading an ended connection until then.
+    public async Task ServeAsync(Func<Task<RelayRoster?>> source, Func<Task> serve)
+    {
+        Set(source);
+        try { await serve(); }
+        finally { Clear(); }
+    }
+
     public Func<Task<RelayRoster?>> Reader => () => Volatile.Read(ref read) is { } source ? source() : Task.FromResult<RelayRoster?>(null);
 }

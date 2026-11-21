@@ -222,6 +222,7 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
                 stream.Flush(flushToDisk: true);
             }
             (moveLog ?? ((from, to) => File.Move(from, to, overwrite: true)))(temporary, log);
+            // The rename's directory entry is not flushed: Windows has no safe managed directory fsync, and none exists elsewhere in the repo.
             return null;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)

@@ -1088,12 +1088,11 @@ async Task<int> ServeAsync(HostHandover handover)
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff.Reset();
-            liveRoster.Set(() => relay.GetRosterAsync(current.Token));
             // security.roster: off reads, verifies and logs once; observe keeps the pinned reader fed, read-only.
             _ = Task.Run(() => rosterObserve.ConnectedAsync(relay.GetRosterAsync, relay.AccountId, relay.Completion, current.Token));
             since.Restart();
-            await fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token,
-                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability));
+            await liveRoster.ServeAsync(() => relay.GetRosterAsync(current.Token), () => fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token,
+                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability)));
             (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);
             diagnosticsJournal.Record(JournalEvents.RelayClosed(endedWith, since.Elapsed, HostVersion()));
             Log($"connection ended after {since.Elapsed.TotalMinutes:F1} min: {(int?)relay.CloseStatus} {relay.CloseReason}");
