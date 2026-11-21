@@ -311,6 +311,28 @@ function nowFleet(state, answers) {
 const signs = [];
 const fakeSign = async (a) => { signs.push(a); return { body: 'b', by: 'y', mac: 'm' }; };
 
+test('a capped Update queues one ordinary install without signing or confirming and says it waits for quiet', async () => {
+  const capped = { ...ready, canUpdateNow: false, updateNowWhy: 'restart-cap', busy: busyTwo };
+  const fleet = nowFleet(capped, []);
+  let signed = 0, confirmed = 0;
+  const control = new UpdateControl({
+    fleet, newRequest: () => 'r-idle',
+    sign: async () => { signed += 1; throw new Error('an idle install needs no signature'); },
+  });
+  await control.pressNow('a', { confirm: async () => { confirmed += 1; return true; } });
+
+  assert.deepEqual(fleet.calls, [{ id: 'a', op: 'update.install', data: { request: 'r-idle' } }]);
+  assert.equal(signed, 0);
+  assert.equal(confirmed, 0);
+  assert.match(control.stateOf('a').note, /updates when its sessions are quiet/i);
+});
+
+test('the restart cap is worded as an idle update, not an allowance or a retry deadline', () => {
+  assert.equal(updateNowReason({
+    ...ready, canUpdateNow: false, updateNowWhy: 'restart-cap', updateNowAt: '2026-11-02T20:30:00Z',
+  }), 'Updates when its sessions are quiet');
+});
+
 for (const kind of ['ordinary', 'signed']) {
   const press = async (answer) => {
     const fleet = kind === 'ordinary' ? fakeFleet(() => answer) : nowFleet(ready, [answer]);
