@@ -8,6 +8,7 @@ import { HostClient } from '../../js/host-client.js';
 
 const flush = async () => { for (let i = 0; i < 10; i++) { await new Promise((r) => setImmediate(r)); } };
 const usage = (percent) => ({ agents: [{ agent: 'copilot', label: 'GitHub Copilot', account: 'octo', source: 'api', measuredAt: '2026-10-28T20:00:00.000Z', windows: [{ key: 'plan', label: 'Plan', percent }] }] });
+const usageSubscription = (percent) => async ({ onSnapshot } = {}) => { const report = usage(percent); onSnapshot?.(report); return report; };
 
 function listeners() {
   const map = new Map();
@@ -171,7 +172,7 @@ test('a machine that does not answer is not asked again in a hot loop, and its c
 test('the machine being viewed is never probed; its usage comes on its own channel and its count is live', async () => {
   const { connection, hosts, book, fleet } = fleetWith({ v: { machine: {}, capabilities: [] } });
   let onUsage = null;
-  const client = { synced: true, on: (type, fn) => { if (type === 'usage') { onUsage = fn; } }, subscribeUsage: async () => usage(10) };
+  const client = { synced: true, on: (type, fn) => { if (type === 'usage') { onUsage = fn; } }, subscribeUsage: usageSubscription(10) };
   const { store } = hosts.view({ id: 'v', client, machine: { hostVersion: '0.1.0', dev: true, sessions: 0 }, capabilities: ['sessions.read', 'usage'] });
   await flush();
 
@@ -186,6 +187,24 @@ test('the machine being viewed is never probed; its usage comes on its own chann
   assert.equal(book.size, 0);
   assert.equal(fleet.status('v'), '');
 });
+
+for (const eventFirst of [false, true]) {
+  test(`viewed usage keeps the last wire frame, event ${eventFirst ? 'first' : 'last'}`, async () => {
+    const { hosts, book, fleet } = fleetWith({});
+    const sent = [];
+    const transport = { send: (message) => { sent.push(message); }, close() {} };
+    const client = new HostClient(transport);
+    try {
+      hosts.view({ id: 'v', client, machine: {}, capabilities: ['sessions.read', 'usage'] });
+      await flush();
+      const snapshot = { re: sent.find((m) => m.op === 'usage.subscribe').id, ok: true, result: usage(10) };
+      const event = { ev: 'usage.update', seq: 1, data: usage(80) };
+      for (const frame of eventFirst ? [event, snapshot] : [snapshot, event]) { transport.onmessage(frame); }
+      await flush();
+      assert.equal(book.entries()[0].windows[0].percent, eventFirst ? 10 : 80);
+    } finally { fleet.clear(); client.close(); }
+  });
+}
 
 test('a machine left alone is looked at again every minute while the app is in front, and not while it is hidden', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] });
@@ -225,7 +244,7 @@ test("a look still under way when its machine is chosen does not overwrite what 
   fleet.probe();
   await flush();
 
-  const client = { synced: true, on: () => {}, subscribeUsage: async () => usage(55) };
+  const client = { synced: true, on: () => {}, subscribeUsage: usageSubscription(55) };
   hosts.view({ id: 'a', client, machine: { hostVersion: '0.1.0' }, capabilities: ['sessions.read', 'usage'] });
   await flush();
   release();
@@ -238,7 +257,7 @@ test('the machine being viewed is asked again on its own channel every minute, a
   let now = 0;
   const { connection, hosts, fleet } = fleetWith({ v: { machine: {}, capabilities: [] } }, { now: () => now });
   let refreshed = 0;
-  const client = { synced: false, on() {}, subscribeUsage: async () => usage(10) };
+  const client = { synced: false, on() {}, subscribeUsage: usageSubscription(10) };
   hosts.refresh = async (id) => {
     refreshed++;
     hosts.link(id).machine = { hostVersion: '0.1.0', readOnly: 'agent-ha-bridge is running for this user' };
@@ -310,7 +329,7 @@ test('a forgotten machine whose look then fails is not remembered as looked at',
 
 test('with every machine shown none is probed: each one\'s usage and live count come on the channel already open to it', async () => {
   const { connection, hosts, book, fleet } = fleetWith({ a: { machine: {}, capabilities: [] }, b: { machine: {}, capabilities: [] } });
-  const client = (percent) => ({ synced: true, on() {}, subscribeUsage: async () => usage(percent) });
+  const client = (percent) => ({ synced: true, on() {}, subscribeUsage: usageSubscription(percent) });
   hosts.view({ id: 'a', client: client(10), machine: { hostVersion: '0.1.0' }, capabilities: ['sessions.read', 'usage'] });
   const b = hosts.view({ id: 'b', client: client(30), machine: { hostVersion: '0.2.0' }, capabilities: ['sessions.read', 'usage'] });
   fleet.probe();
@@ -540,7 +559,7 @@ test('a look that finds no updates, ending after its machine is shown, leaves wh
   fleet.probe();
   while (!asked) { await flush(); }
   // Chosen while the look waits on its usage; agent-ha-bridge stopped there meanwhile.
-  const client = { synced: true, on() {}, subscribeUsage: async () => usage(10), subscribeUpdate };
+  const client = { synced: true, on() {}, subscribeUsage: usageSubscription(10), subscribeUpdate };
   hosts.view({ id: 'a', client, machine: {}, capabilities: ['usage', 'update'] });
   await flush();
   assert.equal(fleet.update('a').available, '0.5.0');

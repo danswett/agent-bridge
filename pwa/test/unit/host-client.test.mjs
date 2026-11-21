@@ -20,6 +20,7 @@ function fakeTransport() {
 
 const flush = () => new Promise((r) => setImmediate(r));
 const session = (id, extra = {}) => ({ id, agent: 'copilot', status: 'idle', statusSince: '2026-10-28T04:00:00.000Z', updatedAt: '2026-10-28T04:00:00.000Z', activity: {}, ...extra });
+const usage = (percent) => ({ agents: [{ agent: 'copilot', label: 'GitHub Copilot', source: 'api', measuredAt: '2026-10-28T20:00:00.000Z', windows: [{ key: 'plan', label: 'Plan', percent }] }] });
 
 async function subscribed(t, store) {
   const client = new HostClient(t, { store, timeoutMs: 500 });
@@ -294,6 +295,49 @@ test('usage.subscribe returns the report and each usage.update is heard as usage
   assert.equal(heard.length, 1);
   assert.equal(heard[0].agents[0].windows[0].percent, 4);
 });
+
+for (const eventFirst of [false, true]) {
+  test(`usage snapshots and events are delivered in wire order, event ${eventFirst ? 'first' : 'last'}`, async () => {
+    const t = fakeTransport();
+    const client = new HostClient(t);
+    const heard = [];
+    const apply = (r) => heard.push(r.agents[0].windows[0].percent);
+    client.on('usage', apply);
+    try {
+      const result = client.subscribeUsage({ shared: true, onSnapshot: apply });
+      await flush();
+      assert.deepEqual(t.lastRequest('usage.subscribe').data, { shared: true });
+      const snapshot = { re: t.lastRequest('usage.subscribe').id, ok: true, result: usage(10) };
+      const event = { ev: 'usage.update', seq: 1, data: usage(80) };
+      for (const frame of eventFirst ? [event, snapshot] : [snapshot, event]) { t.host(frame); }
+      assert.deepEqual(heard, eventFirst ? [80, 10] : [10, 80]);
+      assert.equal((await result).agents[0].windows[0].percent, 10);
+      assert.deepEqual(heard, eventFirst ? [80, 10] : [10, 80]);
+    } finally { client.close(); }
+  });
+
+  test(`gap recovery applies usage in wire order, event ${eventFirst ? 'first' : 'last'}`, async () => {
+    const t = fakeTransport();
+    const client = await subscribed(t, new SessionsStore());
+    const heard = [];
+    client.on('usage', (r) => heard.push(r.agents[0].windows[0].percent));
+    try {
+      const initial = client.subscribeUsage({ shared: true });
+      await flush();
+      t.host({ re: t.lastRequest('usage.subscribe').id, ok: true, result: usage(5) });
+      await initial;
+      t.host({ ev: 'unknown', seq: 2, data: {} });
+      await flush();
+      assert.equal(t.sent.filter((m) => m.op === 'usage.subscribe').length, 2);
+      assert.deepEqual(t.lastRequest('usage.subscribe').data, { shared: true });
+      const snapshot = { re: t.lastRequest('usage.subscribe').id, ok: true, result: usage(10) };
+      const event = { ev: 'usage.update', seq: 3, data: usage(80) };
+      for (const frame of eventFirst ? [event, snapshot] : [snapshot, event]) { t.host(frame); }
+      await flush();
+      assert.deepEqual(heard, eventFirst ? [80, 10] : [10, 80]);
+    } finally { client.close(); }
+  });
+}
 
 test('a gap subscribes to usage again too, so a lost update is replaced by the current report', async () => {
   const t = fakeTransport();

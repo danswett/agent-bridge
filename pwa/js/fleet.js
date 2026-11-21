@@ -308,8 +308,9 @@ export class FleetStatus {
         // The account's other machines' readings too, where this one keeps them (#172).
         const shared = link.capabilities.includes(USAGE.shared);
         const name = () => link.machine?.name ?? this.hosts.nameOf?.(id) ?? null;
-        client.on('usage', (r) => { if (mine()) { this.book.set(id, r, name()); } });
-        client.subscribeUsage({ shared }).then((r) => { if (mine()) { this.book.set(id, r, name()); } }, () => {});
+        const apply = (r) => { if (mine()) { this.book.set(id, r, name()); } };
+        client.on('usage', apply);
+        client.subscribeUsage({ shared, onSnapshot: apply }).catch(() => {});
       } else { this.book.delete(id); }
     }
     // A machine no longer shown is looked at as the others are; its last report stays until then.
