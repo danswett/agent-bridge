@@ -274,7 +274,16 @@ The third wrong code's persisted mark and clearing of the attempt share the same
 Finish adopts earlier add-acceptance times only from this host's retained verified chain for
 the same account, generation and genesis, matching exact add hashes on the same running clock.
 Peer-supplied times are never adopted; unconfirmed non-genesis adds without prior acceptance
-start probation here. Retries retain authenticated earlier probation.
+start probation here. Before a pin exists, Finish retains history only after checking the
+matched genesis and this exchange's exact host add. This separate history is never exposed as
+a pinned verifier or fleet/command authority. Same-path retries, including new attempts, retain
+that authenticated probation while this reader lives.
+
+The host uses process-local monotonic elapsed time (`HostRoster.Now`), not UTC wall time.
+Finish uses the reader's clock even if its caller supplies a different clock. Neither the
+clock nor acceptance history is persisted yet: a host restart starts probation again from
+the next acceptance, and stopped time earns no credit. Persisting both together remains
+out of scope for this dormant enrollment slice; no restart-survival claim is made.
 
 ## Acceptance and state
 
@@ -359,8 +368,8 @@ confirmed, the conflicted (several adds of one id, none winning) and the names (
 non-void rename, the smallest hash among concurrent ones).
 
 **Probation** (§3.4): an add that is not the genesis and not confirmed is on probation for 72 hours
-of the verifier's running time from when it first accepted it (an earlier time reported at
-enrollment can be adopted). A device whose approval lineage passes through a device on probation,
+of the verifier's running time from when it first accepted it (authenticated local acceptance
+history on the same clock can be adopted, never a peer-reported time). A device whose approval lineage passes through a device on probation,
 or through a held device, is **held**: active, shown, and not **served**.
 
 **Names**: a rename signed by a device on probation, or by a held device, is **pending** until that

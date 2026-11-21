@@ -300,6 +300,66 @@ public sealed class HostEnrollmentTests : IDisposable
     }
 
     [HostSignKeyTests.WindowsHostSignTheory]
+    [InlineData("matched")]
+    [InlineData("wrong-genesis")]
+    [InlineData("missing-add")]
+    public void Same_pin_path_retries_adopt_only_matched_history_after_running_probation(string first)
+    {
+        w.Genesis();
+        w.Add("+P", "G", "P", "G");
+        var time = new StalledTimers();
+        var started = time.GetTimestamp();
+        TimeSpan Running() => time.GetElapsedTime(started);
+        var reader = new HostRosterReader(PinPath, Running);
+        void Attempt(string expected, string input = "matched")
+        {
+            var (host, a, h) = Exchanged(time, "P", reader);
+            using (host)
+            {
+                var key = World.Keys("P").Dh.Public;
+                Assert.Equal("match", host.EnterCode2(a.Code2Shown!));
+                Assert.Null(host.Exchange(h, key, Asserted(key, "phone", "P"), "genesis",
+                    input == "wrong-genesis" ? RandomNumberGenerator.GetBytes(32) : w.Entry("G").Hash).Refusal);
+                w.Add("+H", "P", "H", "+P", kind: "host", transcript: a.TranscriptToSign);
+                Assert.Equal(expected, host.Finish(input == "missing-add" ? Relay("+P") : Relay("+P", "+H"), PinPath, Running, _ => true));
+            }
+        }
+        Attempt(first switch { "wrong-genesis" => "genesis-mismatch", "missing-add" => "not-added", _ => "approver-probation" }, first);
+        Assert.Null(reader.Verified);
+        Assert.Null(reader.Pinned(Account));
+        if (first != "matched") { time.Advance(TimeSpan.FromHours(1)); }
+        time.WallShift = TimeSpan.FromHours(73);
+        Attempt("approver-probation");
+        Assert.False(File.Exists(PinPath));
+        time.Advance(RosterVerifier.Probation - TimeSpan.FromHours(1));
+        Attempt("approver-probation");
+        time.Advance(TimeSpan.FromHours(1));
+        Attempt("pinned");
+        Assert.NotNull(reader.Pinned(Account));
+    }
+
+    [WindowsFact("host enrollment runs on the Windows host")]
+    public void Finish_cannot_advance_probation_by_advancing_only_its_wall_clock()
+    {
+        var reader = Reader(switched: false);
+        w.Add("+P", "G", "P", "G");
+        reader.Update(Relay("+P"), Account);
+        var time = new StalledTimers();
+        var (host, a, h) = Exchanged(time, "P", reader);
+        using (host)
+        {
+            var key = World.Keys("P").Dh.Public;
+            Assert.Equal("match", host.EnterCode2(a.Code2Shown!));
+            Assert.Null(host.Exchange(h, key, Asserted(key, "phone", "P"), "genesis", w.Entry("G").Hash).Refusal);
+            w.Add("+H", "P", "H", "+P", kind: "host", transcript: a.TranscriptToSign);
+            time.WallShift = TimeSpan.FromHours(73);
+            Assert.Equal("approver-probation", host.Finish(Relay("+P", "+H"), PinPath,
+                () => w.Now + time.WallShift, _ => true));
+            Assert.False(File.Exists(PinPath));
+        }
+    }
+
+    [HostSignKeyTests.WindowsHostSignTheory]
     [InlineData("commit")]
     [InlineData("offer")]
     [InlineData("genesis")]

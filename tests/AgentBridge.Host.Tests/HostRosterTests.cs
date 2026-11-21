@@ -1,10 +1,23 @@
 using System.Text.Json;
 using AgentBridge.Host;
+using AgentBridge.Roster;
 using AgentBridge.Transport;
 using Xunit;
 
 public sealed class HostRosterTests
 {
+    [Fact]
+    public void The_process_clock_does_not_credit_epoch_time_as_running_probation()
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("addB", "G", "B", "G");
+        var verifier = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, HostRoster.Now);
+        verifier.Offer(w.Entry("G"), w.Entry("addB"));
+        verifier.AdoptFirstAccepted(w.Entry("addB").Hash, TimeSpan.Zero);
+        Assert.True(verifier.OnProbation(verifier.State.ActiveAdd(w.Id("B"))!.Value));
+    }
+
     [Fact]
     public void Unsupported_security_roster_reports_both_available_modes()
     {
