@@ -34,7 +34,7 @@ a restart forgets it. Envelope lifetime is at most 120 seconds ([receiver][relay
 The private owner-readable audit targets 30 days / 64 MiB, but `agent.send` records a local attempt UUID different from the relay request UUID
 ([audit][audit], [local send][local-send], lines 41-57). It is no rid lookup.
 `DurableInbox` stores node/rid and delivery timestamps, but has no production callers or receipt endpoint in this snapshot ([inbox][inbox]).
-Update (design audit, 2026-11-21): since this snapshot, [#3205](https://github.com/danswett/agent-bridge/pull/3205) wires `DurableInbox` into the HA connector's queued reply ingress (`HaConnector.Inbox.cs`); it is still not a receipt lookup.
+Update (design audit, 2026-11-21): since this snapshot, [#3344](https://github.com/danswett/agent-bridge/pull/3344) persists the HA connector's question-time reply queue through `DurableInbox` (`HaConnector.Inbox.cs`); it is still not a receipt lookup.
 
 ## 2. Does a read-only query exist?
 
