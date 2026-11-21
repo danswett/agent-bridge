@@ -17,6 +17,7 @@ public sealed class CardContext
     public Func<bool> ShowDetail { get; init; } = () => true;
     public Func<bool> ReturnSends { get; init; } = () => false;
     public HostConnection? Host { get; init; }
+    internal EnrollmentOrigin FleetEnrollmentOrigin { get; set; }
     public IImageShrinker? Shrinker { get; init; }
     // Another machine's: the relay's blob store, and that machine's relay device id, for files over
     // 256 KiB (sessions.attach.blob). Null for this machine, whose pipe takes them.

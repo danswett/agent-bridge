@@ -58,6 +58,20 @@
             </ItemsControl.ItemTemplate>
         </ItemsControl>
 
+        <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.ShowFleetEnrollment), Mode=OneWay, FallbackValue=Collapsed}">
+            <TextBlock Style="{StaticResource AbTypeMeta}" TextWrapping="Wrap"
+                       AutomationProperties.AutomationId="FleetNameDisclosure"
+                       Text="{x:Bind Card.FleetNameDisclosure, Mode=OneWay}" />
+            <TextBox Header="Fleet label" MaxLength="64" AutomationProperties.AutomationId="FleetNameInput"
+                     Text="{x:Bind Card.FleetNameDraft, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                     IsEnabled="{x:Bind Card.CanEnrollFleetName, Mode=OneWay, FallbackValue=False}" />
+            <Button Content="Save fleet label" AutomationProperties.AutomationId="SaveFleetName"
+                    IsEnabled="{x:Bind Card.CanEnrollFleetName, Mode=OneWay, FallbackValue=False}" Click="OnSaveFleetName" />
+            <TextBlock Style="{StaticResource AbTypeMeta}" TextWrapping="Wrap"
+                       AutomationProperties.AutomationId="FleetNameResult" AutomationProperties.LiveSetting="Polite"
+                       Text="{x:Bind Card.FleetNameResult, Mode=OneWay}" />
+        </StackPanel>
+
         <!-- End session: here on desktop (§6.2), with the host's two-press rule. -->
         <StackPanel Spacing="4" Visibility="{x:Bind local:Ui.Some(Card.End), Mode=OneWay, FallbackValue=Collapsed}">
             <StackPanel Orientation="Horizontal" Spacing="8">

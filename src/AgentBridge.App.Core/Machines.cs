@@ -15,6 +15,7 @@ public sealed class Machine : IAsyncDisposable
         Key = key;
         Host = host;
         Cards = cards;
+        cards.FleetEnrollmentOrigin = IsLocal ? EnrollmentOrigin.Local : EnrollmentOrigin.Remote;
         Toasts = toasts;
         // Nor are rows a gap in its events may have left out of date (#427): the recovery's snapshot
         // begins only once it has read hello, status and usage again, and until then the list looked
