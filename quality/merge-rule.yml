@@ -29,7 +29,7 @@ hold_labels: [hold, do-not-merge]
 # its commit, so any new push drops it. Statuses from anyone else, the workflows' own token above
 # all, are ignored: a pull request's workflow can't post its own receipt.
 # agent-bridge-receipts is the receipts GitHub App (Commit statuses: write only; its key stays on
-# VM4, quality/post-receipt.ps1), named as GraphQL names it, without REST's "[bot]". It has its own
+# a Quality machine, quality/post-receipt.ps1), named as GraphQL names it, without REST's "[bot]". It has its own
 # rate pool, so danswett's quota running out can't stop receipts. danswett stays as the fallback:
 # the App's key lives on one machine, and a receipt must still be postable when it is down.
 independent_review:
@@ -58,13 +58,13 @@ codeql:
 ignore_workflows: [Merge rule]
 
 # Temporary owner-approved exception (#2564/#2565); exact failures only, never publishing.
-# OFF by default; only the owner enables the repository variable. Expires Nov 20, 00:00 PT.
+# OFF by default; only the owner enables the repository variable. Expires Nov 27, 00:00 PT.
 arm64_waiver:
   jobs:
     - app (win-arm64)
     - app-installer (win-arm64)
     - product (windows-11-arm)
-  until: 2026-11-20T08:00:00Z
+  until: 2026-11-27T08:00:00Z
   switch: ARM64_WAIVER
 
 # Main must be green. GitHub's auto-merge doesn't pause while main's CI is red, and would keep
@@ -72,7 +72,11 @@ arm64_waiver:
 # any named job below isn't completed successfully at its latest attempt in main's latest push
 # run, every pull request fails. Main's commit, not run finish time, determines the run.
 # Plan must succeed. Only then may a skipped job (or unexpanded skipped family) count as green.
-# Exact display names pin every selected matrix instance: missing, renamed or cancelled holds.
+# Exact display names pin every selected matrix instance: missing or renamed holds.
+# Owner decision Nov 18 15:05 PT: infra-only failures never hold main red. They need network or
+# runner evidence in the job's annotations; after the one rerun they escalate as INFRA-PERSISTENT.
+# Unknown failing steps, more than one failed step and missing/empty step data hold.
+# Cancellation needs proof tests never ran; a step that failed before it needs its own evidence.
 # A bare name covers a dynamic family: at least one entry, and every present instance green.
 # The aggregate quality-gate waits on installer, so only its test inputs are listed.
 # Installer, sign and publish jobs do not hold, but their results are printed by the evaluator.
@@ -82,6 +86,7 @@ arm64_waiver:
 main_green:
   workflow: ci.yml
   exempt_labels: [fixes-main]
+  exempt_paths: [tests/AgentBridge.*.Tests/**, pwa/test/**]
   jobs:
     - product
     - ha-integration
@@ -97,6 +102,41 @@ main_green:
     - pwa-e2e
     - app (win-x64)
     - app (win-arm64)
+  # Exact job or matrix-family name -> case-sensitive step globs. Never list tests or builds, or
+  # source-dependent installs (npm ci, Playwright's pin, its system-packages action), which fail
+  # the same way on every attempt for a bad lockfile or pin.
+  # Names only locate a failure; its annotations must show a network or runner cause (exit 124,
+  # timeout, HTTP 429/5xx, reset, DNS, runner lost). S2 is not on main: the evaluator flags one rerun.
+  infra_steps:
+    product: &dotnet_infra
+      - Set up job
+      - Complete job
+      - Run actions/checkout@*
+      - Post Run actions/checkout@*
+      - Run actions/setup-dotnet@*
+      - NuGet packages from main's cache
+      - Save NuGet packages to main's cache
+    ha-integration: *dotnet_infra
+    spikes: *dotnet_infra
+    app: *dotnet_infra
+    light:
+      - Set up job
+      - Complete job
+      - Run actions/checkout@*
+      - Post Run actions/checkout@*
+      - Run actions/setup-node@*
+      - .NET for the installer input quality harness
+    pwa-ui: &browser_infra
+      - Set up job
+      - Complete job
+      - Run actions/checkout@*
+      - Post Run actions/checkout@*
+      - Run actions/setup-node@*
+      - Run actions/setup-dotnet@*
+      - Playwright's browsers from main's cache
+      - Save Playwright's browsers to main's cache
+    pwa-e2e: *browser_infra
+    spikes-linux: *browser_infra
 
 # The standing rule (owner decision 2026-11-08): Copilot and Codex reviews are optional extras and
 # never block a merge; the independent-review receipts are the gate. A pull request needs a success

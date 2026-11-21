@@ -311,6 +311,176 @@ public sealed class AgentCredentialsTests : IDisposable
         Assert.Null(store.Check(token, new([new PeerProcess(100, Started, "copilot.exe")], true)).Accepted);
     }
 
+    // A scheduled task as a user-level host sees it: svchost (Schedule, unreadable) > wscript > pwsh.
+    const string BoundTask = @"\Slipgates\pump-wake";
+    static readonly string Wscript = Native(@"C:\Windows\System32\wscript.exe");
+    static readonly string Vbs = Native(@"C:\ProgramData\Slipgates\pump-wake.vbs"), Ps1 = Native(@"C:\ProgramData\Slipgates\pump-wake.ps1");
+
+    // Pin refuses a path that isn't fully qualified on the host's own OS, and C:\ is relative on
+    // Linux, so the pinned files are written as that OS's absolute paths (unchanged on Windows).
+    static string Native(string windows) => OperatingSystem.IsWindows() ? windows : "/" + windows[3..].Replace('\\', '/');
+
+    public static TheoryData<string> ChangedParts => new() { BoundTask, Vbs, Ps1 };
+    public static TheoryData<string> WritableParts => new() { BoundTask, Wscript, Ps1 };
+
+    static ProcessAncestry FromTask(string? agent = null) =>
+        new([
+            new PeerProcess(50, Started.AddMinutes(2), @"C:\Program Files\PowerShell\7\pwsh.exe"),
+            .. agent is null ? Array.Empty<PeerProcess>() : [new PeerProcess(45, Started.AddMinutes(1), agent)],
+            new PeerProcess(40, Started.AddMinutes(1), Wscript),
+            new PeerProcess(30, null, "svchost.exe"),
+        ], true);
+
+    // The Scheduler and ACL reads for an admin-locked task whose action runs wscript on a .vbs that runs a .ps1.
+    sealed class FakeTasks : IScriptTaskReader
+    {
+        public Dictionary<string, string> Hashes { get; } = new() { [BoundTask] = Sha("<Task/>"), [Wscript] = Sha("w"), [Vbs] = Sha("v"), [Ps1] = Sha("p") };
+        public Dictionary<string, ScriptTaskEngine[]> Running { get; } = new() { [BoundTask] = [new(40, Started.AddMinutes(1))] };
+        public HashSet<string> Writable { get; } = [];
+        public string[] Actions { get; set; } = [Wscript, Vbs];
+        public string? Definition(string task) => Hashes.GetValueOrDefault(task);
+        public IReadOnlyList<string>? ActionFiles(string task) => task == BoundTask ? Actions : null;
+        public IReadOnlyList<ScriptTaskEngine> RunningEngines(string task) => Running.GetValueOrDefault(task) ?? [];
+        public bool TaskLocked(string task) => !Writable.Contains(task);
+        public bool FileLocked(string path) => !Writable.Contains(path);
+        public string? FileSha256(string path) => Hashes.GetValueOrDefault(path);
+        public static string Sha(string s) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)));
+    }
+
+    // What reading the caller's chain again at hello finds; the connect-time one unless a test says otherwise.
+    ProcessAncestry atHello = FromTask();
+
+    (string Token, AgentCredentials Store) BoundScript(FakeTasks tasks, Action<JsonObject>? edit = null)
+    {
+        var (token, credential) = ScriptRecord();
+        var binding = ScriptTaskBinding.Pin(BoundTask, [Ps1], tasks);
+        credential["scheduledTask"] = JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(binding, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+        edit?.Invoke(credential["scheduledTask"]!.AsObject());
+        WriteCredential(credential);
+        return (token, new AgentCredentials(root, "machine1", new Clock(Started), tasks: tasks,
+            reread: pid => atHello.Processes is [var self, ..] && self.Id == pid ? atHello : ProcessAncestry.Unknown));
+    }
+
+    [Fact]
+    public void A_bound_script_credential_is_accepted_only_from_a_running_instance_of_its_unchanged_admin_locked_task()
+    {
+        var tasks = new FakeTasks();
+        var (token, store) = BoundScript(tasks);
+        Assert.Equal("script:machine1/pump-wake", store.Check(token, FromTask()).Accepted?.Principal);
+        Assert.Equal([Wscript, Vbs, Ps1], store.MintScript("pump-two", task: BoundTask, files: [Ps1]).Credential.ScheduledTask!.Files.Select(f => f.Path));
+        tasks.Running[BoundTask] = [new(77, Started.AddMinutes(1))];
+        Assert.EndsWith("no running instance of the bound task started the caller", store.Check(token, FromTask()).Refusal);
+    }
+
+    [Fact]
+    public void An_agent_registered_task_running_the_same_command_under_another_path_is_refused()
+    {
+        var tasks = new FakeTasks();
+        var (token, store) = BoundScript(tasks);
+        tasks.Running.Remove(BoundTask);
+        tasks.Running[@"\agent-copy"] = [new(40, Started.AddMinutes(1))];
+        Assert.EndsWith("no running instance of the bound task started the caller", store.Check(token, FromTask()).Refusal);
+        Assert.Throws<InvalidOperationException>(() => store.MintScript("copy", task: @"\agent-copy"));
+    }
+
+    [Fact]
+    public void A_bound_chain_with_an_agent_or_an_unreadable_process_below_the_engine_is_refused()
+    {
+        var (token, store) = BoundScript(new FakeTasks());
+        Assert.EndsWith("inside an agent session", store.Check(token, FromTask(agent: "copilot.exe")).Refusal);
+        atHello = FromTask(agent: "copilot.exe");
+        Assert.EndsWith("inside an agent session", store.Check(token, FromTask()).Refusal);
+        var chain = FromTask().Processes.ToArray();
+        chain[0] = chain[0] with { StartedAt = null };
+        Assert.EndsWith("could not be read again at hello", store.Check(token, new(chain, true)).Refusal);
+        chain = FromTask().Processes.ToArray();
+        chain[1] = chain[1] with { Image = Native(@"C:\Users\me\wscript.exe") };
+        atHello = new(chain, true);
+        Assert.EndsWith("is not the program the bound task runs", store.Check(token, atHello).Refusal);
+    }
+
+    [Fact]
+    public void An_engine_with_the_chains_pid_but_another_start_is_refused()
+    {
+        var (token, store) = BoundScript(new FakeTasks());
+        var chain = FromTask().Processes.ToArray();
+        chain[1] = chain[1] with { StartedAt = Started.AddYears(-5) };
+        atHello = new(chain, true);
+        Assert.EndsWith("no running instance of the bound task started the caller", store.Check(token, atHello).Refusal);
+    }
+
+    [Fact]
+    public void A_bound_hello_judges_the_chain_read_again_not_the_one_from_connect()
+    {
+        var (token, store) = BoundScript(new FakeTasks());
+        // The caller's own wscript 40 has ended since connect; the task's engine now holds pid 40.
+        atHello = new([FromTask().Processes[0]], true);
+        Assert.EndsWith("no running instance of the bound task started the caller", store.Check(token, FromTask()).Refusal);
+        atHello = ProcessAncestry.Unknown;
+        Assert.EndsWith("could not be read again at hello", store.Check(token, FromTask()).Refusal);
+        atHello = new([FromTask().Processes[0] with { StartedAt = Started.AddMinutes(9) }, .. FromTask().Processes.Skip(1)], true);
+        Assert.EndsWith("could not be read again at hello", store.Check(token, FromTask()).Refusal);
+    }
+
+    [Fact]
+    public void A_mint_that_would_not_load_is_refused_and_the_store_stays_usable()
+    {
+        var tasks = new FakeTasks();
+        var (token, store) = BoundScript(tasks);
+        var many = Enumerable.Range(0, 15).Select(i => Native($@"C:\ProgramData\Slipgates\{i}.ps1")).ToArray();
+        Assert.Contains("at most 16 files", Assert.Throws<InvalidOperationException>(() => store.MintScript("many", task: BoundTask, files: many)).Message);
+        tasks.Hashes[BoundTask] = "not-a-hash";
+        Assert.Throws<InvalidOperationException>(() => store.MintScript("odd", task: BoundTask));
+        tasks.Hashes[BoundTask] = FakeTasks.Sha("<Task/>");
+        tasks.Actions = [];
+        Assert.Throws<InvalidOperationException>(() => store.MintScript("none", task: BoundTask, files: [Ps1]));
+        Assert.Null(new AgentCredentials(root, "machine1", new Clock(Started)).Problem);
+        Assert.NotNull(store.Check(token, FromTask()).Accepted);
+    }
+
+    [Theory]
+    [MemberData(nameof(ChangedParts))]
+    public void A_changed_task_definition_or_script_is_refused(string changed)
+    {
+        var tasks = new FakeTasks();
+        var (token, store) = BoundScript(tasks);
+        tasks.Hashes[changed] = FakeTasks.Sha("edited");
+        Assert.EndsWith("has changed since it was bound", store.Check(token, FromTask()).Refusal);
+    }
+
+    [Theory]
+    [MemberData(nameof(WritableParts))]
+    public void A_task_or_file_the_user_can_write_is_refused_at_mint_and_at_accept(string writable)
+    {
+        var tasks = new FakeTasks();
+        var (token, store) = BoundScript(tasks);
+        tasks.Writable.Add(writable);
+        Assert.EndsWith("can be changed without elevation", store.Check(token, FromTask()).Refusal);
+        Assert.EndsWith("can be changed without elevation", Assert.Throws<InvalidOperationException>(() => store.MintScript("other", task: BoundTask, files: [Ps1])).Message);
+        Assert.False(Directory.Exists(Path.Combine(root, "script-credentials")));
+    }
+
+    [Fact]
+    public void An_unbound_credential_refuses_the_scheduler_path_and_a_bound_one_needs_a_reader()
+    {
+        var (token, credential) = ScriptRecord();
+        WriteCredential(credential);
+        Assert.EndsWith("could not be traced in full", Store(new Clock(Started)).Check(token, FromTask()).Refusal);
+        File.Delete(Path.Combine(root, AgentCredentials.FileName));
+        var (bound, _) = BoundScript(new FakeTasks());
+        Assert.EndsWith("the bound task cannot be checked on this host", Store(new Clock(Started)).Check(bound, FromTask()).Refusal);
+        Assert.Throws<InvalidOperationException>(() => Store().MintScript("other", task: BoundTask));
+    }
+
+    [Theory]
+    [InlineData("task", @"Slipgates\pump-wake")]
+    [InlineData("definition", "not-a-hash")]
+    public void An_invalid_task_binding_fails_the_store_closed(string field, string value)
+    {
+        var (_, store) = BoundScript(new FakeTasks(), b => b[field] = value);
+        Assert.NotNull(store.Problem);
+    }
+
     [Theory]
     [InlineData("scope", "none")]
     [InlineData("scope", "read")]

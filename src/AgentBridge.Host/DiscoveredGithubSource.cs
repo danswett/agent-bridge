@@ -21,6 +21,9 @@ sealed class DiscoveredGithubSource(string repository, bool prereleases, Release
     // The channel of the check under way (the installed package's, `win` or `win-arm64`), which a
     // list from the CDN is judged by: Velopack names it to GetReleaseFeed, not to GetReleases.
     readonly AsyncLocal<string?> channel = new();
+    // Whether a person asked for the check under way (#3441), set by the caller around Velopack's
+    // check, which has no way to say so to GetReleases.
+    public static readonly AsyncLocal<bool> Pressed = new();
 
     public override Task<VelopackAssetFeed> GetReleaseFeed(IVelopackLogger logger, string? appId, string channel, Guid? stagingId = null, VelopackAsset? latestLocalRelease = null)
     {
@@ -32,7 +35,7 @@ sealed class DiscoveredGithubSource(string repository, bool prereleases, Release
     {
         // Read through discovery, so a list this can't read is its failure, backed off, never kept.
         var releases = await discovery.ReleasesAsync(ReleaseDiscovery.ReleasesUrl(RepoUri.ToString()),
-            json => JsonSerializer.Deserialize<GithubRelease?[]>(json) ?? [], CancellationToken.None, installed?.Invoke(), channel.Value, includePrereleases);
+            json => JsonSerializer.Deserialize<GithubRelease?[]>(json) ?? [], CancellationToken.None, installed?.Invoke(), channel.Value, includePrereleases, Pressed.Value);
         // As GithubSource orders and filters its own.
         return [.. releases.OfType<GithubRelease>().OrderByDescending(r => r.PublishedAt).Where(r => includePrereleases || !r.Prerelease)];
     }

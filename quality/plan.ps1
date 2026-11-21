@@ -14,6 +14,8 @@
                          whole ring runs), as a JSON array
     test-filter          the dotnet test --filter product adds: ring 0's in-process filter under
                          -FastRing, otherwise empty
+    tiers                each gated job's tier, blocking or post-merge, plus every post-merge
+                         matrix leg by its exact name, as a JSON object (quality/README.md §4.7)
   and a "what runs and why" table to GITHUB_STEP_SUMMARY. Locally, without those variables, it
   prints both, so `pwsh quality/plan.ps1 -Ring 1 -Base HEAD~1 -Head HEAD` shows what CI would plan.
 
@@ -127,6 +129,12 @@ $outputs['test-projects'] = ConvertTo-JsonArray $testProjects
 $outputs['whole-solution'] = if ($whole) { 'true' } else { 'false' }
 $outputs['product-os'] = ConvertTo-JsonArray $productOs
 $outputs['test-filter'] = "$($selection.testFilter)"
+# Only the catalog's exact post-merge names; anything else, an unknown tier too, blocks.
+$postMerge = @($selection.postMergeJobs)
+$tiers = [ordered]@{}
+foreach ($job in $Jobs) { $tiers[$job] = if ($job -cin $postMerge) { 'post-merge' } else { 'blocking' } }
+foreach ($name in $postMerge) { $tiers[$name] = 'post-merge' }
+$outputs['tiers'] = ConvertTo-Json -InputObject $tiers -Compress
 $lines = $outputs.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }
 if ($env:GITHUB_OUTPUT) { $lines | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8 } else { $lines | Write-Output }
 
@@ -160,11 +168,13 @@ if ($selection.mode -eq 'docs-only') {
     $md.Add("Every file is in ``no_test_paths``, so only suites whose triggers name them run, and no sentinels.")
 }
 $md.Add("")
-$md.Add("| ci.yml job | Runs | Suites |")
-$md.Add("|---|---|---|")
+$md.Add("| ci.yml job | Runs | Tier | Suites |")
+$md.Add("|---|---|---|---|")
 foreach ($job in $Jobs) {
     $runs = if ($outputs[$job] -eq 'true') { 'yes' } else { 'skipped' }
-    $md.Add("| $job | $runs | $((@($ci[$job] ?? @()) | ForEach-Object { Code $_ }) -join ', ') |")
+    $legs = @($postMerge | Where-Object { $_.StartsWith("$job (", [StringComparison]::Ordinal) })
+    $tier = if ($tiers[$job] -eq 'post-merge') { 'post-merge' } elseif ($legs) { "blocking; post-merge: $(($legs | ForEach-Object { Code $_ }) -join ', ')" } else { 'blocking' }
+    $md.Add("| $job | $runs | $tier | $((@($ci[$job] ?? @()) | ForEach-Object { Code $_ }) -join ', ') |")
 }
 $md.Add("")
 if ($outputs['product'] -eq 'true') {

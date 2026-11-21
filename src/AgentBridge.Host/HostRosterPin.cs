@@ -8,28 +8,70 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-// Dormant foundation: the enrollment writer and live observe integration are separate slices.
-// The disk pin is read once, never created or advanced by a relay snapshot.
+// Live observe integration is a separate slice. The disk pin is created only by HostRosterPinWriter
+// from a person's genesis and never created or advanced by a relay snapshot. While none is held the
+// reader looks for it again (a stat) on each verify, so a pin written while serving takes effect
+// without a restart; once held it is never re-read or replaced.
 public sealed partial class HostRosterReader
 {
     sealed record Pin(string Account, string Generation, byte[] Genesis, byte[][] Heads);
-    readonly Pin? pin;
-    readonly string? problem;
+    Pin? pin;
+    string? problem;
+    bool pinReadbackFailed;
     readonly Func<TimeSpan> clock;
     readonly object sync = new();
 
     public HostRosterReader(string pinPath, Func<TimeSpan> clock)
     {
         (pin, problem) = ReadPin(pinPath);
+        pinReadbackFailed = problem is not null;
         this.pinPath = pin is null ? pinPath : Path.GetFullPath(pinPath);
         this.clock = clock;
     }
 
     public RosterVerifier? Verified { get; private set; }
 
+    internal bool HasPin()
+    {
+        lock (sync) { return pin is not null; }
+    }
+
+    internal bool HasFailedPinReadback()
+    {
+        lock (sync) { return pinReadbackFailed; }
+    }
+
     public RosterCheck Update(RelayRoster? relay, string account)
     {
-        lock (sync) { return UpdateCore(relay, account); }
+        // Also the verifier's own lock, which the fleet reader takes to read its serving hosts.
+        lock (sync)
+        lock (Verified ?? sync)
+        {
+            RefreshPin();
+            var check = UpdateCore(relay, account);
+            pinReadbackFailed = (pin is not null || problem is not null) && check.Outcome != "verified";
+            return check;
+        }
+    }
+
+    // Call under sync. Only an absent pin is looked for again; an unreadable one stays refused.
+    void RefreshPin()
+    {
+        if (pin is null && problem is null) { (pin, problem) = ReadPin(pinPath); }
+    }
+
+    // The pinned, verified roster, whatever the host-sign switch says: fleet membership (#2643).
+    // null only when no pin exists. A pin that is unreadable, another account's or not yet verified
+    // refuses, so a startup race or a corrupt pin never passes every host's rows (#3262).
+    internal RosterVerifier? Pinned(string? account)
+    {
+        lock (sync)
+        {
+            RefreshPin();
+            if (pin is null && problem is null) { return null; }
+            return problem is null && account is not null && pin?.Account == account && Verified?.Account == account ? Verified
+                : throw new InvalidOperationException("refused: this host's pinned device roster is unreadable, another account's or not yet verified");
+        }
     }
 
     RosterCheck UpdateCore(RelayRoster? relay, string account)
@@ -101,6 +143,13 @@ public sealed partial class HostRosterReader
         {
             return (null, "pin-unreadable");
         }
+    }
+
+    // The pin command's read-back: what this host has pinned, or why not; never the relay's view.
+    internal static (string? Account, byte[]? Genesis, string? Problem) ReadPinned(string path)
+    {
+        var (pin, problem) = ReadPin(path);
+        return (pin?.Account, pin?.Genesis, problem);
     }
 
     static (Pin? Pin, string? Problem) ReadPin(string path) =>

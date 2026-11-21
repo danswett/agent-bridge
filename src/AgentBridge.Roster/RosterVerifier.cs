@@ -40,7 +40,7 @@ public static class Invalid
     public const string Evidence = "evidence";
     // A v2 host add on a roster whose verifier has not switched v2 on.
     public const string Version = "version";
-    // A hostSign key that is, or is made by this add the same as, another device's key of any kind.
+    // A hostSign or capSign key that is, or is made by this add the same as, another device's key of any kind.
     public const string HostKey = "host-key";
 
     // A veto (§5.6) naming another reset than the one held.
@@ -65,8 +65,8 @@ public static class Invalid
 // quarantined, what has been adopted, and the state it applies. It decides each offered entry by
 // the acceptance rule, in the order offered; nothing accepted is ever dropped.
 //
-// `clock` is the verifier's persisted monotonic running time (§3.4): it moves only while the
-// verifier runs, never with the wall clock, and survives restarts. Probation is measured with it.
+// `clock` must be monotonic running time (§3.4), never wall time. The caller owns its lifetime
+// and persistence together with acceptance history; this class persists neither.
 public sealed class RosterVerifier(string account, string generation, Func<TimeSpan> clock)
 {
     public const int Window = 8;
@@ -80,8 +80,8 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     // until then a v2 add is refused.
     public bool AcceptHostSign { get; init; }
 
-    // A hostSign is for nothing but its host's own statements: it equals no other device's dh,
-    // sign, webauthn key or hostSign, whichever add came first.
+    // A hostSign or capSign is for nothing but its own statements: it equals no other device's dh,
+    // sign, webauthn key, hostSign or capSign, whichever add came first (devices.md L589-594).
     static bool HostKeyCollides(DeviceDescriptor added, DeviceDescriptor other)
     {
         static IEnumerable<byte[]> Keys(DeviceDescriptor d)
@@ -89,10 +89,11 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             yield return d.Dh;
             if (d.Sign is not null) { yield return d.Sign; }
             if (d.WebAuthn is not null) { yield return d.WebAuthn.Key; }
+            if (d.CapSign is not null) { yield return d.CapSign; }
         }
         bool Hit(byte[]? hostSign, DeviceDescriptor d) =>
             hostSign is not null && (Keys(d).Any(k => k.AsSpan().SequenceEqual(hostSign)) || (d.HostSign is not null && d.HostSign.AsSpan().SequenceEqual(hostSign)));
-        return Hit(added.HostSign, other) || Hit(other.HostSign, added);
+        return Hit(added.HostSign, other) || Hit(other.HostSign, added) || Hit(added.CapSign, other) || Hit(other.CapSign, added);
     }
     internal int AddCap { get; init; } = MaxAdds;
     internal int EntryCap { get; init; } = MaxEntries;
@@ -565,12 +566,16 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
 
     // ---- probation (§3.4) ----
 
-    // When this verifier first accepted an add, by its own monotonic clock; an earlier time an
-    // approver reported at enrollment or the machine's app reported over the pipe is adopted.
+    // Adopt only authenticated local acceptance history on the same running clock, never peer times.
     public void AdoptFirstAccepted(byte[] add, TimeSpan at)
     {
         if (_g.Find(add) is { } i && _g[i].IsAdd && (!_firstAccepted.TryGetValue(i, out var t) || at < t)) { _firstAccepted[i] = at; }
     }
+
+    // Only an accepted add, never a refused candidate. The caller must authenticate this verifier
+    // and use the same running clock before adopting its time into another verifier.
+    public TimeSpan? FirstAccepted(byte[] add) =>
+        Holds(add) && _g.Find(add) is { } i && _firstAccepted.TryGetValue(i, out var at) ? at : null;
 
     public bool OnProbation(int add)
     {

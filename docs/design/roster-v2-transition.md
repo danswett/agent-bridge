@@ -26,8 +26,9 @@ Today `CommandAction` has no `accept-host-sign` action.
 the PWA verifier also defaults to false. `HostRosterReader` reads an existing
 four-field pin and retains a verifier in memory, but has no disk write API.
 `DeviceRoster.Apply` reconstructs the relay verifier without v2 enabled.
-`SecuritySettings` reads only `off`; live observe reporting is not implemented
-at this head. Only the pin-reader foundation (#1830) merged; observe remains the
+`SecuritySettings` reads `off` and `observe`; observe feeds the read-only pin reader
+(#3450) but reports no would-refuse reasons yet. The pin-reader foundation (#1830), the pin
+writer and that read-only feed merged; observe reporting remains the
 follow-up dependency described by devices.md, despite #1358's closed issue state.
 These are foundations, not proof that the transition or enrollment works.
 
@@ -75,7 +76,18 @@ Only then may the host verify and persist the person's transition command,
 and only after that commit may it evaluate its own v2 add. A prefix pin alone
 never means "enrolled": the host stays pending until its complete verified roster
 contains the matching, person's approved v2 add. Engineering must rule on this
-bootstrap sequencing before the enrollment cut; no automatic pin creation is granted.
+bootstrap sequencing before the enrollment cut; Engineering ruled (Nov 20, 13:30 PT,
+[relay trust](https://github.com/danswett/agent-bridge/issues/3450)) that only the signed-in app on
+the same machine or a person's approve gesture may supply that genesis.
+The fleet-operator explicit local action is `agent-bridge-host roster-pin set` (#3450, owner
+Nov 20, 13:21 PT; [runbook](../runbooks/roster-pin.md)); it pins only a v3 genesis whose person
+descriptor carries capSign (owner 13:36 PT; refuses until K1's parser is wired) and enables nothing.
+The same-PC path is `host.roster.pin` on the local pipe, from a freshly classified App caller
+without agent or script credentials. Its device must be active, a person's and past probation
+in its verified roster. Account replacement invalidates pending handoffs; the final account
+check and pin commit share the replacement gate. In observe mode, success populates the serving
+reader immediately, without a restart; in off mode, it writes the pin without feeding the reader
+or activating roster-based fleet membership. Existing pins are never replaced, re-read or advanced; the capSign gate still applies.
 
 ## Proposed command and capability precondition
 
@@ -245,8 +257,8 @@ the blocked transition. Never fork a replacement roster, change genesis or
 silently drop the entry. Bounded holding/retry and recovery behavior need the
 separate reviewed consumer cut below; no current implementation is claimed.
 
-`off` is today's only implemented mode and remains the default. Live `observe`
-mode is a dependency not yet built, not behavior delivered by this note or #1830.
+`off` remains the default. Live `observe` now only feeds the read-only pin reader
+(#3450); its reporting contract below is a dependency not yet built, not behavior delivered by this note or #1830.
 Its intended contract is to allow ordinary operations and report would-refuse
 reasons with bounded recent reports and an overflow counter; that integration
 remains separate work and must not be claimed as passing evidence here.

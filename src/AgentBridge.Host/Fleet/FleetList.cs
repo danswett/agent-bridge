@@ -13,18 +13,27 @@ namespace AgentBridge.Host.Fleet;
 // Verified stays false until hostSign exists (design "Signing"); Truncated is the record's own cap flag.
 public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSession> Sessions, bool Truncated = false, bool Verified = false, string? Name = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? LastSeen = null,
-    [property: JsonIgnore] bool HasRegistryRecord = false);
+    [property: JsonIgnore] bool HasRegistryRecord = false,
+    [property: JsonIgnore] (string Epoch, long Seq, DateTimeOffset At)? Order = null)
+{
+    [JsonIgnore] internal string? MessagingTrust { get; init; }
+}
 
 public sealed record FleetSession(string Node, string? Name, string State, DateTimeOffset Since, string? Id = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model = null,
-    [property: JsonIgnore] SessionEvidence? Evidence = null);
+    [property: JsonIgnore] SessionEvidence? Evidence = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SessionId = null);
 
 public interface IFleetRoster
 {
     Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct);
 }
 
-public sealed record FleetRosterSnapshot(string FleetScope, IReadOnlyList<FleetMachine> Machines);
+public sealed record FleetRosterSnapshot(string FleetScope, IReadOnlyList<FleetMachine> Machines)
+{
+    [JsonIgnore] internal Func<Func<object>, object>? Completion { get; init; }
+    internal object CompleteRead(Func<object> build) => Completion is { } complete ? complete(build) : build();
+}
 
 public interface IScopedFleetRoster : IFleetRoster
 {
@@ -32,31 +41,105 @@ public interface IScopedFleetRoster : IFleetRoster
 }
 
 // Reads the registry over the host's relay connection, which is the host's own account: the relay
-// never sends another account's machines, so nothing here has to filter them.
+// never sends another account's machines. Once this host holds a pinned, verified device roster,
+// only that roster's serving hosts are read (#2643); with no pin, rows pass unverified as before.
 public sealed class RelayFleetRoster : IScopedFleetRoster
 {
+    public static readonly TimeSpan CacheAge = TimeSpan.FromHours(24);
     RelayClient? relay;
+    readonly Func<RosterVerifier?>? signedRoster;
+    readonly TimeProvider clock;
+    readonly object accountGate;
+    long connectionEpoch;
+    readonly Dictionary<string, (FleetMachine Machine, long Seen)> cache = new(StringComparer.Ordinal);
 
-    // Carried inert #2371 interface; verification remains that slice's responsibility.
-    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null) { }
+    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null, object? accountGate = null)
+    {
+        signedRoster = verifiedRoster;
+        clock = time ?? TimeProvider.System;
+        this.accountGate = accountGate ?? new();
+    }
 
-    public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames) => Parse(frames);
+    // design/fleet-session-registry.md "Offline machines and the cache": a machine's last accepted
+    // rows stay, offline and stale, until it leaves the signed roster or the relay's lists, or for
+    // CacheAge, measured on the monotonic clock so a wall-clock correction cannot stretch or cut it
+    // (`at` is protocol ordering only). Within an epoch seq never falls (a jump is just a newer whole
+    // snapshot); a new epoch needs a later `at`. Once an order is cached, a record whose own order is
+    // missing or malformed is refused too, so the relay cannot erase it. A refused record leaves the
+    // last accepted rows stale.
+    public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames)
+    {
+        lock (cache)
+        {
+            var now = clock.GetTimestamp();
+            var machines = Parse(frames, signedRoster?.Invoke() is { } roster ? Hosts(roster) : null).ToList();
+            var listed = machines.Select(m => m.Id).ToHashSet(StringComparer.Ordinal);
+            foreach (var id in cache.Keys.Where(id => !listed.Contains(id) || clock.GetElapsedTime(cache[id].Seen, now) >= CacheAge).ToList()) { cache.Remove(id); }
+            for (var i = 0; i < machines.Count; i++)
+            {
+                var m = machines[i];
+                FleetMachine? held = cache.TryGetValue(m.Id, out var c) ? c.Machine : null;
+                if (m.Online && m.HasRegistryRecord && (held?.Order is not { } a || m.Order is { } b && (a.Epoch == b.Epoch ? b.Seq >= a.Seq : b.At > a.At)))
+                {
+                    cache[m.Id] = (m, now);
+                }
+                else if (held is not null)
+                {
+                    machines[i] = held with { Online = false, Verified = false, HasRegistryRecord = false, Name = m.Name ?? held.Name, LastSeen = m.LastSeen ?? held.LastSeen };
+                }
+            }
+            return machines;
+        }
+    }
 
-    public void Attach(RelayClient? connection) => Volatile.Write(ref relay, connection);
+    // Serving host devices; the roster reader holds the verifier's lock while it changes it.
+    static HashSet<string> Hosts(RosterVerifier roster)
+    {
+        lock (roster)
+        {
+            return roster.Serving.Where(p => roster.Graph[p.Value].Body.Device?.Kind == "host").Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
+        }
+    }
+
+    // A new connection may be another account's, so nothing cached carries over.
+    public void Attach(RelayClient? connection)
+    {
+        lock (accountGate) { lock (cache) { cache.Clear(); connectionEpoch++; Volatile.Write(ref relay, connection); } }
+    }
 
     public async Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => (await ReadScopedAsync(ct)).Machines;
 
     public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct)
     {
         var current = Volatile.Read(ref relay) ?? throw new InvalidOperationException("refused: this host isn't connected to the relay");
+        return await ReadConnectionAsync(current, ct);
+    }
+
+    internal LiteFleetConnection? CaptureMessagingConnection()
+    {
+        lock (accountGate)
+        {
+            var current = Volatile.Read(ref relay);
+            var epoch = connectionEpoch;
+            return current is null ? null : new(current.AccountId, current.Presence.ToArray(),
+                ct => ReadConnectionAsync(current, ct), () => epoch == Volatile.Read(ref connectionEpoch) && ReferenceEquals(current, Volatile.Read(ref relay)));
+        }
+    }
+
+    async Task<FleetRosterSnapshot> ReadConnectionAsync(RelayClient current, CancellationToken ct)
+    {
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
         var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
-        if (!ReferenceEquals(current, Volatile.Read(ref relay))) { throw new InvalidOperationException("refused: the fleet connection changed during lookup"); }
-        return new(current.AccountId, Read(frames));
+        lock (cache)
+        {
+            if (!ReferenceEquals(current, Volatile.Read(ref relay))) { throw new InvalidOperationException("refused: the fleet connection changed during lookup"); }
+            return new(current.AccountId, Read(frames));
+        }
     }
 
     // Known-only machines have no sessions; registry liveness and supplied metadata take precedence.
-    public static IReadOnlyList<FleetMachine> Parse(IEnumerable<JsonElement> frames)
+    // A machine outside `members` is skipped before its record is read.
+    public static IReadOnlyList<FleetMachine> Parse(IEnumerable<JsonElement> frames, IReadOnlySet<string>? members = null)
     {
         var machines = new List<FleetMachine>();
         var known = new List<FleetMachine>();
@@ -66,28 +149,37 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
             {
                 foreach (var entry in k.EnumerateArray())
                 {
-                    if (!entry.TryGetProperty("machine", out var km) || km.GetString() is not { } knownId) { continue; }
+                    if (!entry.TryGetProperty("machine", out var km) || km.GetString() is not { } knownId || members?.Contains(knownId) == false) { continue; }
                     known.Add(new FleetMachine(knownId, entry.TryGetProperty("online", out var knownOnline) && knownOnline.ValueKind == JsonValueKind.True, [],
                         Name: MachineName(entry), LastSeen: LastSeen(entry)));
                 }
             }
-            if (!f.TryGetProperty("machine", out var m) || m.GetString() is not { } id) { continue; }
+            if (!f.TryGetProperty("machine", out var m) || m.GetString() is not { } id || members?.Contains(id) == false) { continue; }
             var name = MachineName(f);
             var sessions = new List<FleetSession>();
             var truncated = false;
             var hasRegistryRecord = false;
+            (string, long, DateTimeOffset)? order = null;
             if (f.TryGetProperty("record", out var rec) && rec.ValueKind == JsonValueKind.Object && rec.TryGetProperty("sessions", out var list) && list.ValueKind == JsonValueKind.Array)
             {
                 hasRegistryRecord = true;
                 truncated = rec.TryGetProperty("truncated", out var tr) && tr.ValueKind == JsonValueKind.True;
+                // The relay's own format (RosterFields): a 16-digit lowercase hex epoch and seq from 1.
+                if (rec.TryGetProperty("epoch", out var ep) && ep.ValueKind == JsonValueKind.String && ep.GetString() is { Length: 16 } epoch && epoch.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'))
+                    && rec.TryGetProperty("seq", out var sq) && sq.ValueKind == JsonValueKind.Number
+                    && sq.TryGetInt64(out var seq) && seq >= 1 && rec.TryGetProperty("at", out var at) && at.ValueKind == JsonValueKind.String && at.TryGetDateTimeOffset(out var stamp))
+                {
+                    order = (epoch, seq, stamp);
+                }
                 foreach (var s in list.EnumerateArray())
                 {
                     sessions.Add(new FleetSession(s.GetProperty("node").GetString()!, s.TryGetProperty("name", out var n) ? n.GetString() : null,
                         s.GetProperty("state").GetString()!, s.GetProperty("since").GetDateTimeOffset(), s.TryGetProperty("id", out var sid) ? sid.GetString() : null,
-                        s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null, SessionEvidence.Read(s, futureAttention: true)));
+                        s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null, SessionEvidence.Read(s, futureAttention: true),
+                        s.TryGetProperty("sessionId", out var fullId) && fullId.ValueKind == JsonValueKind.String ? fullId.GetString() : null));
                 }
             }
-            machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name, LastSeen: LastSeen(f), HasRegistryRecord: hasRegistryRecord));
+            machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name, LastSeen: LastSeen(f), HasRegistryRecord: hasRegistryRecord, Order: order));
         }
         foreach (var entry in known)
         {
@@ -134,9 +226,21 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
 public sealed record FleetListSession(string Machine, string Node, string State, DateTimeOffset Since, long SecondsInState, bool MachineOnline,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName = null,
-    [property: JsonIgnore] SessionEvidence? Evidence = null)
+    [property: JsonIgnore] SessionEvidence? Evidence = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Trust = null)
 {
-    [JsonExtensionData] public Dictionary<string, JsonElement>? EvidenceFields => Evidence?.Copy();
+    static readonly JsonElement True = JsonSerializer.SerializeToElement(true);
+
+    // A row from an offline machine is only ever its cached last copy, so it is always stale.
+    [JsonExtensionData] public Dictionary<string, JsonElement>? EvidenceFields
+    {
+        get
+        {
+            var fields = Evidence?.Copy();
+            if (!MachineOnline) { (fields ??= new(StringComparer.Ordinal))["stale"] = True; }
+            return fields;
+        }
+    }
 }
 
 public sealed record FleetListMachine(string Machine, string State,
@@ -146,10 +250,12 @@ public sealed record FleetListMachine(string Machine, string State,
 // The fleet.list pipe op (#1412, design/fleet-session-registry.md slice 4): an agent that passed
 // agent.hello lists its own account's sessions. The reply is built field by field from
 // FleetListSession, so nothing else the registry or a session holds can reach the agent.
-public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roster, TimeProvider? time = null, AgentAuditLog? audit = null)
+public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roster, TimeProvider? time = null, AgentAuditLog? audit = null,
+    IScopedFleetRoster? messagingRoster = null)
 {
     public const string Op = "fleet.list";
     public const string FindOp = "fleet.find";
+    IFleetRoster? RoutingRoster => messagingRoster ?? roster;
     internal IScopedFleetRoster? WarningRoster => roster as IScopedFleetRoster;
 
     // Notification only: the required audit append succeeds before this hook or any roster read.
@@ -163,19 +269,16 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var withNames = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("include", out var inc) && inc.ValueKind == JsonValueKind.String && inc.GetString() == "content";
         LocalApi.AuditAgentAction(credentials!, caller, Op, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
-        var result = await ListAsync(withNames, ct);
-        credentials!.CompleteFleetRead(caller, result);
-        return result;
+        return await ListAsync(withNames, caller, ct);
     }
 
     // fleet.find (#1399, design "Names and lookup"): a filter over the same roster. The name is
-    // trimmed, exact and case-sensitive, and never echoed back. Records are unsigned until
-    // hostSign exists, so a real live match still answers `unverified`. A unique verified live
-    // match needs no machine pin; its scope and optional model come only from the scoped roster.
+    // normalized, exact and active-only, and never echoed back. An own-account lite match is
+    // routing metadata, never roster verification; its distinct trust is for messaging only.
     public async Task<object?> FindAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default, AgentAuditLog? auditLog = null)
     {
         var caller = Authorize(channel, FindOp);
-        var name = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString()!.Trim() : "";
+        var name = FleetSessionMatch.Normalize(data.ValueKind == JsonValueKind.Object && data.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null);
         if (name.Length is 0 or > 64) { throw new InvalidOperationException("refused: fleet.find needs a \"name\" of 1 to 64 characters"); }
         string? machine = null;
         if (data.TryGetProperty("machine", out var m) && m.ValueKind != JsonValueKind.Null)
@@ -186,36 +289,46 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
                 throw new InvalidOperationException("refused: fleet.find \"machine\" must be 1 to 64 of letters, digits, '.', '_', '-'");
             }
         }
+        string? machineName = null;
+        if (data.TryGetProperty("machineName", out var label) && label.ValueKind != JsonValueKind.Null)
+        {
+            machineName = label.ValueKind == JsonValueKind.String ? label.GetString() : null;
+            if (machineName is null || machineName.Length is 0 or > 64 || machineName.Any(char.IsControl))
+            { throw new InvalidOperationException("refused: fleet.find \"machineName\" needs an exact machine name or id of 1 to 64 characters"); }
+        }
         LocalApi.AuditAgentAction(credentials!, caller, FindOp, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
-        if (roster is not IScopedFleetRoster scoped) { throw new InvalidOperationException("refused: fleet.find needs an authenticated account-scoped registry"); }
-        var snapshot = await scoped.ReadScopedAsync(ct);
+        if (RoutingRoster is not IScopedFleetRoster scoped) { throw new InvalidOperationException("refused: fleet.find needs an authenticated account-scoped registry"); }
+        FleetRosterSnapshot snapshot;
+        try { snapshot = await scoped.ReadScopedAsync(ct); }
+        catch (Exception e) when (e is JsonException or FormatException or KeyNotFoundException or InvalidDataException or IOException or HttpRequestException or TimeoutException
+            || e is InvalidOperationException && !e.Message.StartsWith("refused:", StringComparison.Ordinal))
+        { throw new InvalidOperationException($"fleet.find registry-get: {e.Message}", e); }
         var fleetScope = snapshot.FleetScope;
         if (string.IsNullOrWhiteSpace(fleetScope)) { throw new InvalidOperationException("refused: fleet.find has no authenticated account scope"); }
-        var result = Find(snapshot, name, machine);
-        credentials!.CompleteFleetRead(caller, result);
-        return result;
+        return snapshot.CompleteRead(() => Complete(caller, Find(snapshot, name, machine, machineName)));
     }
 
-    static object Find(FleetRosterSnapshot snapshot, string name, string? machine)
+    static object Find(FleetRosterSnapshot snapshot, string name, string? machine, string? machineName)
     {
         var fleetScope = snapshot.FleetScope;
-        var scope = snapshot.Machines.Where(x => machine is null || x.Id == machine).ToList();
+        var scope = snapshot.Machines.Where(x => (machine is null || x.Id == machine)
+            && (machineName is null || x.Name == machineName || x.Id == machineName)).ToList();
         var incomplete = scope.Where(x => x.Online && x.Truncated).Select(x => x.Id).ToList();
         if (incomplete.Count > 0) { return new { result = "incomplete", fleetScope, machines = incomplete }; }
-        var hits = scope.Select(x => (Machine: x, Sessions: x.Sessions.Where(s => string.Equals(s.Name, name, StringComparison.Ordinal)).ToList())).Where(h => h.Sessions.Count > 0).ToList();
+        var hits = scope.Select(x => (Machine: x, Sessions: x.Sessions.Where(s => FleetSessionMatch.Matches(s, name)).ToList())).Where(h => h.Sessions.Count > 0).ToList();
         var live = hits.Where(h => h.Machine.Online).ToList();
         var stale = hits.Where(h => !h.Machine.Online).ToList();
-        if (live.Any(h => !h.Machine.Verified)) { return new { result = "unverified", fleetScope, machines = live.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name, Online: true)) }; }
-        var cands = live.SelectMany(h => h.Sessions.Select(s => new FindSession(s.Id ?? s.Node, s.Node, h.Machine.Id, s.State, s.Since, true, h.Machine.Name, s.Model))).ToList();
+        if (live.Any(h => !h.Machine.Verified && h.Machine.MessagingTrust != LiteFleetRoster.Trust)) { return new { result = "unverified", fleetScope, machines = live.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name, Online: true)) }; }
+        var cands = live.SelectMany(h => h.Sessions.Select(s => new FindSession(s.Id ?? s.Node, s.Node, h.Machine.Id, s.State, s.Since, true, h.Machine.Name, s.Model, Trust: h.Machine.MessagingTrust))).ToList();
         if (cands.Count >= 2) { return new { result = "ambiguous", fleetScope, candidates = cands }; }
         if (cands.Count == 0)
         {
             if (stale.Count > 0) { return new { result = "offline", fleetScope, machines = stale.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name)).ToList() }; }
             return new { result = "notFound", fleetScope };
         }
-        // Only reachable once records can be verified (hostSign): one verified live match.
-        return new { result = "found", fleetScope, session = cands[0] };
+        // One live routing match; messaging trust never authorizes another operation.
+        return new { result = "found", fleetScope, session = cands[0] with { SessionId = FleetSessionId.ForNode(live[0].Sessions[0].SessionId, cands[0].Node) } };
     }
 
     sealed record FindMachine(string Machine,
@@ -224,7 +337,9 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
 
     sealed record FindSession(string Id, string? Node, string Machine, string State, DateTimeOffset Since, bool Online,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SessionId = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Trust = null);
 
     AgentCredential Authorize(IProtocolChannel channel, string op)
     {
@@ -238,18 +353,25 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         {
             throw new InvalidOperationException($"refused: this agent's credential has scope '{caller.Scope}'; {op} needs at least '{AgentProtocol.ScopeRead}'");
         }
-        if (roster is null) { throw new InvalidOperationException($"refused: {op} has no session registry on this host"); }
+        if (RoutingRoster is null) { throw new InvalidOperationException($"refused: {op} has no session registry on this host"); }
         return caller;
     }
 
-    async Task<object> ListAsync(bool withNames, CancellationToken ct)
+    object Complete(AgentCredential caller, object result) { credentials!.CompleteFleetRead(caller, result); return result; }
+
+    async Task<object> ListAsync(bool withNames, AgentCredential caller, CancellationToken ct)
     {
-        var now = (time ?? TimeProvider.System).GetUtcNow();
-        var machines = await roster!.ReadAsync(ct);
+        var snapshot = RoutingRoster is IScopedFleetRoster scoped ? await scoped.ReadScopedAsync(ct)
+            : new FleetRosterSnapshot("", await RoutingRoster!.ReadAsync(ct));
+        return snapshot.CompleteRead(() => Complete(caller, List(snapshot.Machines, withNames, (time ?? TimeProvider.System).GetUtcNow())));
+    }
+
+    static object List(IReadOnlyList<FleetMachine> machines, bool withNames, DateTimeOffset now)
+    {
         return new
         {
             sessions = machines.SelectMany(m => m.Sessions.Select(s => new FleetListSession(
-                m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name, s.Evidence))).ToList(),
+                m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name, s.Evidence, m.MessagingTrust))).ToList(),
             machines = machines.OrderBy(m => m.Id, StringComparer.Ordinal).Select(m => new FleetListMachine(
                 m.Id, m.Online ? "online" : "offline", m.Name, m.LastSeen, m.Online && m.HasRegistryRecord && !m.Truncated)).ToList(),
         };

@@ -90,6 +90,15 @@ the connection closes:
 
 ## Who may manage the host
 
+`launches.status`: exactly `{ "request": "<guid>" }`; `launches.list`: optional
+`{ "since": <minutes> }` (default 15; integer 0-43200). Pipe-only reads, agents included;
+script-credential restrictions are unchanged. Result: one row or at most 128 rows with
+`request`, `outcome` (`started`, `starting`, `unconfirmed`, `failed`, `refused`, `busy`,
+`unknown`), `session` (16 lowercase hex or null), `permissions` (`ask`, `allowAll` or null),
+`registered` (ordinal live full-ID match only), `time` (UTC ISO). No launch, stop or approval.
+A UUID retained for multiple principals reads unknown, never another principal's first match.
+See [host CLI status](../host-launch.md#host-cli-read-launch-status).
+
 `host.workspace.fleetWorkers` reads or changes the stored fleet-worker tick for one
 approved workspace. Its data is `{ "workspace": "<approved absolute path>" }`, with
 optional `"fleetWorkers": true` or `false` to set it. No other keys are accepted.
@@ -101,6 +110,19 @@ audit line naming the workspace index, old and new values and local-app caller.
 Every call requires a freshly classified local app on the pipe, without an agent
 credential. Agents, other processes (including the host CLI) and remote channels
 are refused with a reason. This slice adds no app view or launch-policy enforcement.
+
+`host.roster.pin` (#3450, same-PC trust) takes exactly `{ "account", "generation",
+"genesis", "heads", "device" }` from the signed-in app's own verified roster and answers
+`{ "state": "pinned" }` or a closed refusal code (`pin-exists`, `account-mismatch`,
+`genesis-mismatch`, `heads-missing`, `not-person-device`, ...). Null values and malformed shapes
+return `invalid-request` before any fetch. The same caller rule applies: a freshly classified
+App on a LocalChannel without agent or script credentials; everything else is refused before any read.
+An existing pin refuses before the relay is asked. Account replacement invalidates pending handoffs
+and shares a gate with the final account check and pin commit. In observe mode, success immediately
+populates the serving reader from the fetched, verified roster without a restart; in off mode,
+it writes the pin without feeding the reader or activating roster-based fleet membership. A failed observe-mode
+readback returns `pin-readback`, including later handoffs while the reader's latest pin verification
+remains failed. The writer's capSign gate still applies.
 
 Design §6.3 invariant 13: no session the bridge launched, nor any agent process, may stop or
 restart its host. On 2026-10-15 an agent ran `agent-ha-bridge restart`. The new daemon took
@@ -233,6 +255,14 @@ caller's ancestry was read in full, and the credential's root process, with the 
 is among the caller's ancestors. Anything else is refused, and a token presented from outside its
 session is logged as `credential presented from outside its session`. `AGENT_BRIDGE_SESSION` is
 never proof. The reply is `{ "principal": "agent:<machine>/<session>", "scope": "read" }`.
+
+A script credential (`kind` `script`) refuses an agent in its caller's ancestry. Unbound, it needs
+that ancestry read in full, so a scheduled task (SYSTEM service host) is refused. Minted with
+`--task`, it needs the Scheduler-reported engine of a running instance of that task (same pid and
+start) among the ancestors, read in full up to it, and the task and files unchanged and writable
+only elevated; that chain is read again at `agent.hello`, not taken from connect
+([design/script-credentials.md §6](../design/script-credentials.md#6-limits-and-what-holds-them), rule 3).
+Until the Windows Scheduler reader and `--task` land, every bound credential is refused.
 
 This is a safety rail, not a boundary: a same-user process that spoofs its parent or joins the
 session's Job object gets through (design/agent-principals.md §3.4). A new credential for a
@@ -388,6 +418,10 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `manage.*` | any | Refused to every caller, the app included: `managing a machine from another device goes through the relay; on this machine, use the app's Settings`. Managing a machine from another device ([v1-sessions.md](v1-sessions.md#managing-a-machine)) is through the relay only, so the #67 guard on `host.restart` and `host.stop` gains no way around it |
 | `host.update.report` | `{ "state": UpdateState, "taken"?: [request], "carriesUpdateNow"?: bool }`: what the app's updater is doing, the presses in `updateAsks` it has taken on, and whether it can carry out an Update now (#1159; absent from an older app, whose machine then offers none, `updateNowWhy` `old-app`) ([v1-update.md](v1-update.md)) | `{ "ok": true }`. The host serves the state to the account's other devices (`update.*`) until the app's connection closes, then says the app is not running, and drops the presses taken from `updateAsks`. `canUpdateNow`, `updateNowWhy`, `updateNowAt` and `busy` are the host's own, and dropped from what the app reports. Refused to anything but the app: `only the Slipgates app beside this host reports its updates, and takes other devices' presses of Install` |
 | `host.update.depart` | `{ "request": UUID }`: an Update now's press (#1159) the app is carrying, its download checked and its probe hold over | `{ "outcome": "committed" \| "waiting" \| "refused", "code"?, "transition"? }` ([v1-update.md](v1-update.md#going-the-lease-and-the-departure), step 3). The host takes #805's quiet lease as purpose `Update`, compares what is busy with what the person confirmed, announces and commits: `committed` (the host refuses new deliveries until it exits; the app then stops it with `host.stop` and installs), `waiting` (`code` is `turn-running`, `question-waiting` or `unknown`; the app keeps the download for the next quiet moment) or `refused` (`code` says why; the host serves on). An unknown outcome reads as `refused`. A request that isn't a UUID is an error. This is #870's departure step, wired minimally until that lane lands it. Refused to anything but the app, as `host.update.report` is; an older host answers `unknown op`, and the press ends refused |
+| `host.enroll.describe` | none | `{ "device"?: object, "refusal"?: string }`: this host's enrollment descriptor for an approve gesture ([devices.md](devices.md#host-descriptor-foundation-2289)), a v1 host while host-sign v2 is off, opening the profile's one 5-minute attempt; or a closed refusal code (`attempt-already-open`, `account`, `signed-out`, ...). Writes no pin. Refused to anything but the app; never reached through the relay |
+| `host.enroll.status` | none | `{ "state": "not-enrolled" \| "pending" \| "enrolled", "code"?: string, "expires"?: string, "peer"?: string }` for the open attempt: code 1 to show once the approver's offer arrived (A4: the host is the joiner), the attempt's expiry (ISO 8601), and the bound peer's relay-asserted name. Refused to anything but the app |
+| `host.enroll.code` | `{ "code": string }` | `{ "result": "match" \| "wrong" \| "ended" \| "locked" \| "no-exchange" }`: code 2 as the person typed it here (`EnterCode2`); three wrong entries or the 5-minute expiry end the attempt. Each wrong entry is persisted before it is answered and is the only thing charged to the lockout (three in an hour lock joining for 15 minutes); `attempt-store` if it cannot be persisted. Refused to anything but the app |
+| `host.enroll.finish` | none | `{ "state": string }`: `pinned`, or a closed refusal (`no-attempt`, `account-changed`, `expired`, `not-matched`, `no-genesis`, `no-roster`, `chain-invalid`, `genesis-mismatch`, `not-added`, `approver-probation`, or the pin writer's own codes). Reads the roster over the serving relay connection and pins only through `HostRosterPinWriter` ([devices.md](devices.md#host-descriptor-foundation-2289)). Refused to anything but the app |
 
 `HostStatus`:
 

@@ -18,10 +18,14 @@ public static class LocalApi
     // What an agent's hello offers: reading only.
     static readonly HashSet<string> AgentCapabilities = [Capabilities.SessionsRead, UsageProtocol.Capability];
 
-    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null, AgentAuditLog? audit = null, TimeProvider? auditTime = null) =>
-        Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System));
+    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,
+        RemoteAuthorization? authorization = null, AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null,
+        AgentAuditLog? audit = null, TimeProvider? auditTime = null, AgentPipeLaunch? agentLaunch = null, SamePcPinHandoff? samePcPin = null) =>
+        Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin);
 
-    static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
+    static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log,
+        RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet,
+        AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin) => async (channel, op, data) =>
     {
         if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
         {
@@ -41,12 +45,21 @@ public static class LocalApi
                 actual => credentials.FleetGrant.CheckDispatch(actual, request));
         }
         credentials?.CheckScriptOperation(channel, op, log);
+        if (op is "launches.status" or "launches.list") { return sessions.LaunchStatus(data, op == "launches.list"); }
         if (op == FleetWorkerSettings.Op)
         {
             var caller = callers.Classify(channel, fresh: true);
             if (channel is not LocalChannel || caller.Kind != CallerKind.App || credentials?.Of(channel) is not null)
             { throw Refuse(op, caller, "only the local app may read or change workspace fleet workers", log); }
             return control.WorkspaceFleetWorkers(data);
+        }
+        if (op == SamePcPinProtocol.Op)
+        {
+            // Ruling item 3 (#3450): the person's signed-in app on this machine, never an agent, script, CLI or relay peer.
+            var caller = callers.Classify(channel, fresh: true);
+            if (samePcPin is null || channel is not LocalChannel || caller.Kind != CallerKind.App || credentials?.Of(channel) is not null)
+            { throw Refuse(op, caller, "only the signed-in app on this machine may hand this host its roster root", log); }
+            return await samePcPin.HandleAsync(data, CancellationToken.None);
         }
         if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet")
         { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
@@ -162,7 +175,8 @@ public static class LocalApi
             if (credentials is { } store && store.Of(channel) is { Kind: "session" } launchReader
                 && launchReader.Scope != AgentPolicy.ScopeNone)
             {
-                if (op == LaunchProtocol.Launch
+                // With the durable record, its outcome answers a repeat (AgentPipeLaunch), not the launcher's memory.
+                if (op == LaunchProtocol.Launch && agentLaunch is null
                     && sessions.ReplayAgentLaunch(data, store.PrincipalOf(launchReader)) is { } replay)
                 {
                     var result = await replay;
@@ -179,6 +193,12 @@ public static class LocalApi
             }
             if (op == LaunchProtocol.Options)
             { throw Refuse(op, callers.Classify(channel), "a live session read credential is required", log); }
+        }
+        if (agentLaunch is not null && op == LaunchProtocol.Launch && credentials is { } launchIssuer
+            && callers.Classify(channel, fresh: true) is { Kind: CallerKind.Agent } launching && launchIssuer.Of(channel) is { Kind: "session" } launcher)
+        {
+            if (!launchIssuer.IsLive(launcher)) { throw Refuse(op, launching, "the credential is no longer live", log); }
+            return await agentLaunch.LaunchAsync(launcher, data);
         }
         if (Acts.Contains(op) && callers.Classify(channel, fresh: op == Ops.SessionReply) is { Kind: CallerKind.Agent } agent)
         {

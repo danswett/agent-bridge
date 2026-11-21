@@ -54,6 +54,24 @@ public sealed class SessionService
     // Shared by hello and the relay load handlers; only the composition reads host settings.
     public Func<bool> LoadEnabled { get; init; } = () => true;
     public LoadService? Load { get; init; }
+    internal void PublishLaunchAlias(string principal, string request, LaunchRequest source, LaunchResult result) => launcher?.PublishAlias(principal, request, source, result);
+    internal object LaunchStatus(JsonElement data, bool list)
+    {
+        if (data.ValueKind != JsonValueKind.Object || data.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() != 1)
+            || data.EnumerateObject().Any(p => p.Name != (list ? "since" : "request")))
+        { throw new ArgumentException("invalid launch status request"); }
+        var request = list ? null : data.GetProperty("request").GetString();
+        if (!list && !Guid.TryParseExact(request, "D", out _)) { throw new ArgumentException("request must be a UUID"); }
+        var since = list && data.TryGetProperty("since", out var minutes) ? minutes.GetInt32() : 15;
+        if (since is < 0 or > 43200) { throw new ArgumentException("since must be 0 to 43200 minutes"); }
+        var live = source.Snapshot().Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+        LaunchStatus Project(LaunchStatus r) => r with { SourceRequest = null, Principal = null, Registered = r.Session is not null && live.Contains(r.Session),
+            Session = r.Session is not null ? Guid.Parse(r.Session).ToString("N")[..16] : null };
+        var rows = launcher?.LaunchStatuses() ?? [];
+        var matching = list ? [] : rows.Where(r => Guid.Parse(r.Request) == Guid.Parse(request!)).Take(2).ToArray();
+        return list ? rows.Where(r => r.Time >= Time.GetUtcNow().AddMinutes(-since)).Select(Project).ToArray()
+            : Project(matching.Length == 1 ? matching[0] : new LaunchStatus(Guid.Parse(request!).ToString("D"), "unknown", null, null, false, Time.GetUtcNow()));
+    }
 
     internal Task<object> RenameFleetSessionAsync(JsonElement data, Fleet.IScopedFleetRoster? roster, Task closed) =>
         new Fleet.FleetNameEnrollment(source,
@@ -93,6 +111,22 @@ public sealed class SessionService
         if (Check() is { } problem) { return new(LaunchOutcome.Refused, problem); }
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
             fleet: true, refusal: Check);
+        return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
+    }
+
+    // An agent's own session.launch (#3237 S3), after AgentPipeLaunch's checks: the card's launch
+    // service, with the attributed agent principal as provenance and peer.
+    internal async Task<LaunchResult> LaunchAgentAsync(LaunchRequest request, string principal, AgentAuditLog audit, Func<string?> authorized)
+    {
+        if (launcher is null) { return new(LaunchOutcome.Refused, "the launch service is unavailable"); }
+        if (ReadOnly?.Invoke() is { } readOnly) { return new(LaunchOutcome.Refused, readOnly); }
+        // Again at dispatch: the caller still authorized, and the running launcher's own settings, not
+        // config.json's: extra arguments could still bypass ask.
+        string? Dispatch() => authorized() ?? (launcher.FleetConfig is not { } running ? "the launch settings are unavailable"
+            : running.Agent(request.Agent ?? "").ExtraArgs.Count > 0 ? "extraArgs: this agent starts with extra arguments on this machine; agents may not launch it"
+            : running.Workspaces.Any(w => w.Isolate && w.Label == request.Workspace) ? null : "the workspace is not an isolated launch workspace on this machine");
+        if (Dispatch() is { } problem) { return new(LaunchOutcome.Refused, problem); }
+        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null), refusal: Dispatch);
         return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
     }
 
@@ -169,6 +203,7 @@ public sealed class SessionService
     // diagnostics.get, through the relay only, to a device pinned as a person's (RemoteDiagnostics).
     public RemoteDiagnostics? Diagnostics { get; init; }
     public Lite.LiteReceiver? LiteReceiver { get; init; }
+    public Lite.LiteKill? LiteKill { get; init; }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -266,6 +301,8 @@ public sealed class SessionService
                 return await transfers.ServeAsync(secure, data);
             case Lite.LiteReceiver.Op when LiteReceiver is not null && channel is SecureChannel secure:
                 return await LiteReceiver.ServeAsync(secure, data, CancellationToken.None);
+            case Lite.LiteKill.Op when LiteKill is not null && channel is SecureChannel secure:
+                return LiteKill.HandleKill(Lite.LiteChannel.Of(secure), data);
             // A person's device through the relay, with a command it signed. Never this machine's
             // pipe, which agents and the MCP server reach, nor the Home Assistant connector.
             case TrustProtocol.Answer when TrustAnswers is not null && channel is SecureChannel secure:
@@ -469,7 +506,9 @@ public sealed class SessionService
         Action<AnswerOutcome>? Prepare(Guid operation, Session session, Question question)
         {
             if (AnswerGate(session, question, operation, "person-client") is not { } gate) { return null; }
-            var intent = new AgentAuditEntry("local", gate.Operation.ToString(), "person:local", [], Ops.SessionAnswer,
+            gate = gate with { Path = channel is SecureChannel ? "relay" : "local" };
+            var principal = channel is SecureChannel relay ? $"person:{relay.PeerId}" : "person:local";
+            var intent = new AgentAuditEntry(gate.Path, gate.Operation.ToString(), principal, [], Ops.SessionAnswer,
                 gate.Incarnation.ToString(), "attempted", Gate: gate);
             if (audit is not { } writer || !writer.Append(intent)) { return null; }
             return outcome => writer.Append(intent with { Outcome = outcome == AnswerOutcome.Delivered ? "delivered" : "refused",

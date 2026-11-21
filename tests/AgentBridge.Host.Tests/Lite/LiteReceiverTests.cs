@@ -20,13 +20,9 @@ public class LiteReceiverTests
     {
         public bool On { get; set; } = true;
         public long KillEpoch => 7;
+        public long Raised;
         public void TurnOff(string why) { }
-        public void RaiseEpoch(long epoch) { }
-    }
-    sealed class Peers(LitePeer? peer) : ILitePeers
-    {
-        public bool TryFind(string deviceId, out LitePeer found) { found = peer!; return peer is not null && peer.DeviceId == deviceId; }
-        public IReadOnlyList<LitePeer> All() => peer is null ? [] : [peer];
+        public void RaiseEpoch(long epoch) { Raised = epoch; On = false; }
     }
     sealed class Deliver(LiteDelivery result) : ILiteDeliver
     {
@@ -42,22 +38,21 @@ public class LiteReceiverTests
         public readonly Deliver Deliver;
         public readonly LiteReceiver Receiver;
         public LiteChannel Channel = new(Peer, "host", PeerStatic, Self, Account, true);
-        public Rig(LiteDelivery? delivery = null, bool knownPeer = true, ILiteDeliver? custom = null)
+        public Rig(LiteDelivery? delivery = null, ILiteDeliver? custom = null)
         {
             Deliver = new(delivery ?? new LiteDelivery(true, null));
-            var q = Key.ExportParameters(false).Q;
-            var peer = knownPeer ? new LitePeer(Peer, [0x04, .. q.X!, .. q.Y!], "peer") : null;
-            Receiver = new(Mode, new Peers(peer), custom ?? Deliver, Time);
+            Receiver = new(Mode, custom ?? Deliver, Time);
         }
 
+        public byte[] Point { get { var q = Key.ExportParameters(false).Q; return [0x04, .. q.X!, .. q.Y!]; } }
         public void Dispose() => Key.Dispose();
-        public JsonElement Request(string text = "hello", string? id = null, string? machine = null, string? add = null, string? target = null, string? signedText = null)
+        public JsonElement Request(string text = "hello", string? id = null, string? machine = null, string? add = null, string? target = null, string? signedText = null, byte[]? point = null, long killEpoch = 0)
         {
             var sender = new LiteSender(Account, machine ?? Peer, add ?? Codec.Base64Url(SHA256.HashData(PeerStatic)), "agent-a1",
                 Codec.Base64Url(new byte[12]), Codec.Base64Url(new byte[16]), "copilot", "agent-bridge");
             var sealedBytes = LiteProfile.Seal(sender, new LiteTarget(target ?? Self, "agent-b2", Codec.Base64Url(new byte[12])), id ?? Id("1"),
                 Encoding.UTF8.GetBytes(signedText ?? text), Time.GetUtcNow().ToUnixTimeSeconds(), new EcdsaEnvelopeSigner(Key));
-            return JsonSerializer.SerializeToElement(new { envelope = Codec.Base64Url(sealedBytes), text, killEpoch = 0 });
+            return JsonSerializer.SerializeToElement(new { envelope = Codec.Base64Url(sealedBytes), text, killEpoch, signPoint = Codec.Base64Url(point ?? Point) });
         }
 
         public Task<LiteAck> Send(JsonElement data) => Receiver.ReceiveAsync(Channel, data, default);
@@ -85,6 +80,16 @@ public class LiteReceiverTests
     }
 
     [Fact]
+    public async Task A_signed_envelope_from_another_account_is_refused_even_with_a_matching_present_host_channel_key()
+    {
+        using var r = new Rig();
+        r.Channel = r.Channel with { Account = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" };
+        Assert.Null(r.Channel.Untrusted);
+        Refused(await r.Send(r.Request()), LiteRefusal.Account);
+        Assert.Equal(0, r.Deliver.Calls + r.Receiver.Replays.Count);
+    }
+
+    [Fact]
     public async Task Mode_off_answers_off_and_does_no_work()
     {
         using var r = new Rig();
@@ -97,6 +102,23 @@ public class LiteReceiverTests
     sealed class Cancelling(CancellationToken? caller = null) : ILiteDeliver
     {
         public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) => throw new OperationCanceledException(caller ?? default);
+    }
+
+    [Fact]
+    public async Task A_higher_kill_epoch_from_a_present_same_account_host_turns_the_mode_off_before_any_delivery()
+    {
+        using var stranger = new Rig();
+        stranger.Channel = stranger.Channel with { PeerStatic = [.. PeerStatic.Reverse()] };
+        Refused(await stranger.Send(stranger.Request(killEpoch: 9)), LiteReceiver.NotPeer);
+        stranger.Channel = stranger.Channel with { PeerStatic = PeerStatic, InPresence = false };
+        Refused(await stranger.Send(stranger.Request(killEpoch: 9)), LiteReceiver.NotSameAccount);
+        Assert.Equal(0, stranger.Mode.Raised);
+        using var r = new Rig();
+        Assert.Equal("delivered", (await r.Send(r.Request(killEpoch: 7))).Status);
+        Assert.Equal(0, r.Mode.Raised);
+        Refused(await r.Send(r.Request(id: Id("2"), killEpoch: 9)), LiteReceiver.Off);
+        Assert.Equal(9, r.Mode.Raised);
+        Assert.Equal(1, r.Deliver.Calls);
     }
 
     [Fact]
@@ -116,16 +138,18 @@ public class LiteReceiverTests
         Refused(await r.Send(r.Request()), LiteReceiver.NotSameAccount);
         r.Channel = r.Channel with { PeerKind = "host", InPresence = false };
         Refused(await r.Send(r.Request()), LiteReceiver.NotSameAccount);
+        r.Channel = r.Channel with { InPresence = true, Account = "" };
+        Refused(await r.Send(r.Request()), LiteReceiver.NotSameAccount);
         Assert.Equal(0, r.Deliver.Calls);
     }
 
     [Fact]
-    public async Task An_unpinned_peer_or_a_static_key_that_does_not_hash_to_the_id_is_not_a_peer()
+    public async Task A_static_key_that_does_not_hash_to_the_id_is_not_a_peer_and_no_pin_is_needed()
     {
-        using var unknown = new Rig(knownPeer: false);
-        Refused(await unknown.Send(unknown.Request()), LiteReceiver.NotPeer);
         using var r = new Rig();
         r.Channel = r.Channel with { PeerStatic = [.. PeerStatic.Reverse()] };
+        Refused(await r.Send(r.Request()), LiteReceiver.NotPeer);
+        r.Channel = r.Channel with { PeerStatic = null };
         Refused(await r.Send(r.Request()), LiteReceiver.NotPeer);
         Assert.Equal(0, r.Deliver.Calls);
     }
@@ -134,17 +158,19 @@ public class LiteReceiverTests
     public async Task Each_check_failure_has_its_own_code()
     {
         using var r = new Rig();
+        Refused(await r.Send(r.Request(point: [1, 2, 3])), Refusal.Point);
+        Refused(await r.Send(JsonSerializer.SerializeToElement(new { envelope = "AAAA", text = "x" })), LiteReceiver.Malformed);
         Refused(await r.Send(r.Request(text: "tampered", signedText: "hello")), Refusal.Data);
         Refused(await r.Send(r.Request(machine: new string('9', 32))), LiteReceiver.Sender);
         Refused(await r.Send(r.Request(add: Codec.Base64Url(new byte[32]))), LiteReceiver.AddMismatch);
         Refused(await r.Send(r.Request(target: new string('9', 32))), LiteReceiver.Target);
-        Refused(await r.Send(JsonSerializer.SerializeToElement(new { envelope = "AAAA", text = "x" })), Refusal.Json);
+        Refused(await r.Send(JsonSerializer.SerializeToElement(new { envelope = "AAAA", text = "x", signPoint = "AAAA" })), Refusal.Json);
         Refused(await r.Send(JsonSerializer.SerializeToElement(new { text = "x" })), LiteReceiver.Malformed);
         Refused(await r.Send(JsonSerializer.SerializeToElement(new[] { 1 })), LiteReceiver.Malformed);
         Refused(await r.Send(r.Request(text: new string('a', LiteReceiver.MaxText + 1))), LiteReceiver.Malformed);
 
         using var other = new Rig();
-        Refused(await r.Send(other.Request(id: Id("3"))), Refusal.Signature);
+        Refused(await r.Send(r.Request(id: Id("3"), point: other.Point)), Refusal.Signature);
         var good = r.Request(id: Id("2"));
         r.Time.Advance(TimeSpan.FromSeconds(121));
         Refused(await r.Send(good), Refusal.Lifetime);
