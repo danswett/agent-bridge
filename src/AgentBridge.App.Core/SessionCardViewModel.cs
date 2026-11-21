@@ -300,6 +300,8 @@ public sealed partial class SessionCardViewModel : Observable
     public bool HasOrphan => orphanText is not null;
     public void DismissOrphan() { OrphanText = null; OrphanNote = null; }
 
+    void KeepOrphan(string text) => OrphanText = OrphanText is null ? text : OrphanText + "\n\n" + text;
+
     // What became of an answer whose question has gone from the card.
     public string ReceiptText { get; private set; } = "";
     public Tone ReceiptTone { get; private set; }
@@ -443,7 +445,7 @@ public sealed partial class SessionCardViewModel : Observable
             {
                 if (draft.Length > 0)
                 {
-                    OrphanText = draft;
+                    KeepOrphan(draft);
                     OrphanNote = "The question changed before you sent your answer. It was answered at the machine, or the agent moved on. What you typed is kept here.";
                 }
                 if (ctx.Deliveries.Get(question.Key) is not null) { receiptKey = question.Key; }
@@ -464,7 +466,7 @@ public sealed partial class SessionCardViewModel : Observable
                 next.Reworded();
                 if (carried.Length > 0)
                 {
-                    OrphanText = carried;
+                    KeepOrphan(carried);
                     OrphanNote = "The question changed while you were answering it. What you typed is kept here.";
                 }
             }

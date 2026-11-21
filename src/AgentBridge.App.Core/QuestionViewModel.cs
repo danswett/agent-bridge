@@ -587,7 +587,13 @@ public sealed partial class QuestionViewModel : Observable
     static bool SameField(Field a, Field b) =>
         a.Name == b.Name && a.Type == b.Type && a.Title == b.Title && a.Description == b.Description
         && a.AllowOther == b.AllowOther && a.OtherUnavailable == b.OtherUnavailable && a.Required == b.Required && a.Default?.GetRawText() == b.Default?.GetRawText()
+        && SameConstraints(a.Constraints, b.Constraints)
         && (a.Options ?? []).SequenceEqual(b.Options ?? []);
+
+    // Numeric bounds compare exactly by value, independent of JSON spelling.
+    static bool SameConstraints(FieldConstraints? a, FieldConstraints? b) =>
+        ReferenceEquals(a, b) || JsonElement.DeepEquals(
+            JsonSerializer.SerializeToElement(a, ProtocolJson.Options), JsonSerializer.SerializeToElement(b, ProtocolJson.Options));
 
     // Whether this client may answer, and if not, why (pwa/js/answers.js, answerability).
     public static (bool Ok, string? Why) Answerability(Question q, IReadOnlyList<string> capabilities, AgentKind agent)
