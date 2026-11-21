@@ -64,7 +64,11 @@ public sealed unsafe class Hello(string rpId, nint window) : IHello
         finally { WebAuthNFreeAssertion(p); }
     }
 
-    public int Delete(byte[] id) { fixed (byte* b = id) { return WebAuthNDeletePlatformCredential((uint)id.Length, b); } }
+    public int? DeleteMade()
+    {
+        if (credentialId is not { } id) { return null; }
+        fixed (byte* b = id) { return WebAuthNDeletePlatformCredential((uint)id.Length, b); }
+    }
 
     // The COSE EC2 key in the attested credential data: x is -2 (0x21), y is -3 (0x22), each a 32-byte string.
     static byte[] CoseKey(byte[] data)

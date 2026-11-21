@@ -13,12 +13,16 @@ For the owner, on DSWETT-HOME, in a normal (not admin) terminal at the agent-bri
 4. When it says "hands off", do not touch the keyboard or mouse, and do not answer any prompt, until it says done (about 2 minutes).
 5. Send `spikes\r4-presence\RESULTS-DSWETT-HOME.md` back to Chief.
 
-Needs the .NET 10 SDK. Ctrl+C is safe: it stops, cancels the open prompt and deletes the test passkey.
+Needs the .NET 10 SDK and the packages already in this machine's NuGet cache: it restores offline,
+never from nuget.org, and stops with a clear message if one is missing. Build output goes to
+`spikes\r4-presence\.out` and is deleted at the end. Ctrl+C is safe: it stops, cancels the open prompt and deletes the test passkey.
 If cleanup reports a failure, remove `r4-presence-proof.invalid` in Settings, Accounts, Passkeys.
 
 ## What it tries
 
-Each attack opens a fresh Hello prompt and then, with nobody at the keyboard: asks for an assertion
+Every Hello call names a small "R4 presence proof" window of the harness as its parent. An attack acts
+only on a new window owned by that exact window, re-checked before each action; if none is, it sends
+nothing and records inconclusive. Each attack opens a fresh Hello prompt and then, with nobody at the keyboard: asks for an assertion
 with user verification required and with it discouraged (silent); sends Esc and Alt+F4 by SendInput;
 clicks Cancel by SendInput; lists and invokes the prompt's controls by UI Automation; writes keys with
 `agent-bridge-injector` (src/AgentBridge.Injector) to its own console and to the prompt's process;

@@ -12,7 +12,8 @@ public enum Conclusion { Held, Failed, Inconclusive }
 
 public sealed record Call(int Hr, Assertion? Result);
 public sealed record Created(int Hr, byte[] CredentialId, byte[] Key, bool BackupEligible, bool UserVerified, string Format);
-public sealed record Prompt(nint Hwnd, int Pid, string Describe);
+// Owner: the harness's own window, passed to webauthn.dll as hWnd; the prompt must be owned by it.
+public sealed record Prompt(nint Hwnd, int Pid, string Describe, nint Owner = 0);
 public sealed record Step(string Name, string How, Outcome Outcome, string Raw);
 
 // NeedsPrompt: the attack acts on the prompt's window, so it waits to find it and sends nothing if
@@ -27,7 +28,7 @@ public interface IHello
     Created Create(byte[] challenge);
     Call AssertWithPerson(byte[] challenge);
     (Task<Call> Done, Action Cancel) Begin(byte[] challenge, bool requireUv);
-    int Delete(byte[] credentialId);
+    int? DeleteMade(); // null when no credential was made
 }
 
 public sealed class Report
@@ -78,13 +79,15 @@ public static class Runner
         Func<bool> stop, Action<string> say, TimeSpan settle)
     {
         var report = new Report();
-        say("Step 1 of 3: Windows Hello asks you to make a test passkey. Enter your PIN.");
-        var seen = Task.Run(arm());
-        var made = hello.Create(RandomNumberGenerator.GetBytes(32));
-        report.Setup.Add($"Create: {Hr(made.Hr)}, attestation '{made.Format}', backup-eligible {made.BackupEligible}, user verified {made.UserVerified}; prompt {seen.Result?.Describe}");
-        if (made.Hr != 0) { report.Cleanup = "no test passkey was made"; return report; }
+        // One try from before the passkey exists: whatever throws (the prompt finder, parsing the
+        // attestation, an attack), the finally deletes what Create made.
         try
         {
+            say("Step 1 of 3: Windows Hello asks you to make a test passkey. Enter your PIN.");
+            var seen = Task.Run(arm());
+            var made = hello.Create(RandomNumberGenerator.GetBytes(32));
+            report.Setup.Add($"Create: {Hr(made.Hr)}, attestation '{made.Format}', backup-eligible {made.BackupEligible}, user verified {made.UserVerified}; prompt {seen.Result?.Describe}");
+            if (made.Hr != 0) { return report; }
             var credential = new WebAuthnCredential(rpId, made.CredentialId, made.Key, made.Format is "tpm" or "packed", made.BackupEligible);
             say("Step 2 of 3: Windows Hello asks again. Enter your PIN.");
             seen = Task.Run(arm());
@@ -105,12 +108,17 @@ public static class Runner
                 report.Steps.Add(Probe(hello, attack, arm, settle));
             }
         }
+        catch (Exception e)
+        {
+            var inner = e is AggregateException { InnerException: { } i } ? i : e;
+            report.Setup.Add($"Run stopped early: {inner.GetType().Name}: {inner.Message}");
+        }
         finally
         {
             string deleted;
-            try { deleted = Hr(hello.Delete(made.CredentialId)); }
+            try { deleted = hello.DeleteMade() is { } hr ? Hr(hr) : "none made"; }
             catch (Exception e) { deleted = e.GetType().Name; }
-            report.Cleanup += $"test passkey deleted: {deleted}" + (deleted == "ok" ? "" : $" (remove {rpId} in Settings, Accounts, Passkeys)");
+            report.Cleanup += $"test passkey deleted: {deleted}" + (deleted is "ok" or "none made" ? "" : $" (remove {rpId} in Settings, Accounts, Passkeys)");
         }
         return report;
     }

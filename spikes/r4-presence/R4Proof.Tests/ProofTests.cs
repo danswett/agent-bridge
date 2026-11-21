@@ -13,11 +13,16 @@ public class ProofTests
     static readonly ECDsa Key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
     static readonly BigInteger N = BigInteger.Parse("0FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", System.Globalization.NumberStyles.HexNumber);
 
-    sealed class FakeHello(Action<FakeHello>? onBegin = null, bool synced = false) : IHello
+    sealed class FakeHello(Action<FakeHello>? onBegin = null, bool synced = false, bool badAttestation = false) : IHello
     {
         public TaskCompletionSource<Call>? Pending;
         public int Cancels, Deletes;
-        public Created Create(byte[] challenge) => new(0, [1, 2, 3], Point(), synced, true, "tpm");
+        bool made;
+        public Created Create(byte[] challenge)
+        {
+            made = true;
+            return badAttestation ? throw new IndexOutOfRangeException("attestation parse") : new(0, [1, 2, 3], Point(), synced, true, "tpm");
+        }
         public Call AssertWithPerson(byte[] challenge) => new(0, Signed(challenge));
         public (Task<Call>, Action) Begin(byte[] challenge, bool requireUv)
         {
@@ -25,7 +30,7 @@ public class ProofTests
             onBegin?.Invoke(this);
             return (Pending.Task, () => { Cancels++; Pending.TrySetResult(new(Hello.Cancelled, null)); });
         }
-        public int Delete(byte[] credentialId) { Deletes++; return 0; }
+        public int? DeleteMade() { if (!made) { return null; } Deletes++; return 0; }
     }
 
     static byte[] Point() { var p = Key.ExportParameters(false).Q; return [0x04, .. p.X!, .. p.Y!]; }
@@ -125,5 +130,34 @@ public class ProofTests
     {
         var report = Run(new FakeHello(synced: true), null, Inject(_ => (true, "esc")));
         Assert.Equal(Conclusion.Inconclusive, report.Verdict);
+    }
+
+    [Fact]
+    public void The_test_credential_is_deleted_when_parsing_its_attestation_throws()
+    {
+        var hello = new FakeHello(badAttestation: true);
+        var report = Run(hello, null, Inject(_ => (true, "esc")));
+        Assert.Equal(1, hello.Deletes);
+        Assert.Contains(report.Setup, l => l.Contains("attestation parse"));
+        Assert.Equal(2, report.ExitCode);
+    }
+
+    [Fact]
+    public void The_test_credential_is_deleted_when_the_first_prompt_finder_throws()
+    {
+        FakeHello hello = new();
+        var report = Runner.Run(hello, Rp, [Inject(_ => (true, "esc"))], () => () => throw new InvalidOperationException("finder"), () => false, _ => { }, TimeSpan.FromMilliseconds(50));
+        Assert.Equal(1, hello.Deletes);
+        Assert.Empty(report.Steps);
+        Assert.Equal(2, report.ExitCode);
+    }
+
+    [Fact]
+    public void Only_a_new_window_owned_by_the_harness_s_own_window_is_bound_to_the_call()
+    {
+        const nint mine = 100;
+        Assert.Equal(7, Attacks.Pick([(5, []), (6, [200]), (7, [300, mine])], mine));
+        Assert.Equal(0, Attacks.Pick([(5, []), (6, [200])], mine));
+        Assert.Equal(0, Attacks.Pick([(7, [mine]), (8, [mine])], mine));
     }
 }

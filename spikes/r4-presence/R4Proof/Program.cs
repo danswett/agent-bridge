@@ -37,7 +37,8 @@ Console.CancelKeyPress += (_, e) =>
     Console.WriteLine("Ctrl+C: stopping after this step, then deleting the test passkey. Press Cancel on any Windows Security prompt.");
 };
 
-var report = Runner.Run(new Hello(RpId, Attacks.ForegroundWindow()), RpId, Attacks.All(args[0]), Attacks.Arm, () => stopping, Console.WriteLine, TimeSpan.FromSeconds(4));
+var owner = OwnWindow();
+var report = Runner.Run(new Hello(RpId, owner), RpId, Attacks.All(args[0]), () => Attacks.Arm(owner), () => stopping, Console.WriteLine, TimeSpan.FromSeconds(4));
 File.WriteAllText(args[1], report.Markdown(environment));
 Console.WriteLine();
 foreach (var s in report.Steps)
@@ -52,4 +53,21 @@ static string Integrity()
     using var p = Process.Start(new ProcessStartInfo("whoami", "/groups /fo csv /nh") { RedirectStandardOutput = true })!;
     var line = p.StandardOutput.ReadToEnd().Split('\n').FirstOrDefault(l => l.Contains(@"Mandatory Label\"));
     return line?.Split(',')[0].Trim('"').Replace(@"Mandatory Label\", "") ?? "unknown";
+}
+
+// A window of this process, on its own UI thread, that every Hello call names as its parent, so
+// the attacks can tell this run's prompt (owned by it) from any other window.
+static nint OwnWindow()
+{
+    var ready = new TaskCompletionSource<nint>();
+    var ui = new Thread(() =>
+    {
+        var w = new System.Windows.Window { Title = "R4 presence proof", Width = 420, Height = 90, Content = "R4 presence proof: follow the terminal." };
+        w.Show();
+        ready.SetResult(new System.Windows.Interop.WindowInteropHelper(w).Handle);
+        System.Windows.Threading.Dispatcher.Run();
+    }) { IsBackground = true };
+    ui.SetApartmentState(ApartmentState.STA);
+    ui.Start();
+    return ready.Task.Result;
 }
