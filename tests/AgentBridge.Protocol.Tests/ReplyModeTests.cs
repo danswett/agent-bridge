@@ -61,6 +61,72 @@ public class ReplyModeTests
     }
 
     [Theory]
+    [InlineData(AnswerOutcome.Delivered)]
+    [InlineData(AnswerOutcome.Stale)]
+    [InlineData(AnswerOutcome.Busy)]
+    [InlineData(AnswerOutcome.Refused)]
+    public void A_reply_stage_is_absent_unless_the_outcome_is_unconfirmed(AnswerOutcome outcome)
+    {
+        foreach (var stage in Enum.GetValues<ReplyStage>())
+        {
+            var result = new ReplyResult(outcome) { Mode = ReplyMode.Queue, Stage = stage };
+
+            Assert.Equal(outcome, result.Outcome);
+            Assert.Equal(ReplyMode.Queue, result.Mode);
+            Assert.Null(result.Stage);
+            Assert.False(Wire(result).TryGetProperty("stage", out _));
+        }
+    }
+
+    [Theory]
+    [InlineData("delivered", AnswerOutcome.Delivered)]
+    [InlineData("stale", AnswerOutcome.Stale)]
+    [InlineData("busy", AnswerOutcome.Busy)]
+    [InlineData("refused", AnswerOutcome.Refused)]
+    public void Reading_a_stage_on_another_outcome_ignores_it_in_either_property_order(
+        string wireOutcome, AnswerOutcome outcome)
+    {
+        foreach (var stage in new[] { "typed", "recorded", "queued" })
+        {
+            foreach (var json in new[]
+            {
+                $$"""{"outcome":"{{wireOutcome}}","stage":"{{stage}}"}""",
+                $$"""{"stage":"{{stage}}","outcome":"{{wireOutcome}}"}""",
+            })
+            {
+                var result = Received.Read<ReplyResult>(JsonSerializer.Deserialize<JsonElement>(json));
+
+                Assert.Equal(outcome, result.Outcome);
+                Assert.Null(result.Stage);
+                Assert.False(Wire(result).TryGetProperty("stage", out _));
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(AnswerOutcome.Delivered)]
+    [InlineData(AnswerOutcome.Stale)]
+    [InlineData(AnswerOutcome.Busy)]
+    [InlineData(AnswerOutcome.Refused)]
+    public void Changing_an_unconfirmed_reply_outcome_does_not_carry_its_stage(AnswerOutcome outcome)
+    {
+        foreach (var stage in Enum.GetValues<ReplyStage>())
+        {
+            var unconfirmed = new ReplyResult(AnswerOutcome.Unconfirmed) { Stage = stage };
+            var roundTrip = Received.Read<ReplyResult>(Wire(unconfirmed));
+            Assert.Equal(AnswerOutcome.Unconfirmed, roundTrip.Outcome);
+            Assert.Equal(stage, roundTrip.Stage);
+
+            var result = unconfirmed with { Outcome = outcome };
+
+            Assert.Equal(outcome, result.Outcome);
+            Assert.Equal(stage, unconfirmed.Stage);
+            Assert.Null(result.Stage);
+            Assert.False(Wire(result).TryGetProperty("stage", out _));
+        }
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData(",\"mode\":null")]
     [InlineData(",\"mode\":\"future\"")]

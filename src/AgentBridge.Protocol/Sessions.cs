@@ -885,9 +885,11 @@ public sealed record ClearedComposer(string Text, IReadOnlyList<IReadOnlyList<in
 // The same outcomes as an answer, read the same way.
 public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
 {
+    ReplyStage? stage;
+
     // The mode actually used; absent from an older host means Steer.
     public ReplyMode? Mode { get; init; }
-    public ReplyStage? Stage { get; init; }
+    public ReplyStage? Stage { get => Outcome == AnswerOutcome.Unconfirmed ? stage : null; init => stage = value; }
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }
     public IReadOnlyList<ReplyAttachmentBinding>? Attachments { get; init; }
