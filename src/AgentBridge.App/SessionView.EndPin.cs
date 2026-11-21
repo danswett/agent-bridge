@@ -82,12 +82,13 @@ public sealed partial class SessionView
 
     // UIA or a screen reader can move the view back from the end with no wheel or press: that is the
     // person's move too, or the final view change pulls it back. Growth or an anchored shrink above
-    // leaves the distance from the end as it was, and our own requests never release.
+    // can change both the offset and gap while the extent is remeasured or our end correction is pending.
     void PinViewChanged(ScrollViewer scroll)
     {
         var (offset, extent) = (scroll.VerticalOffset, scroll.ScrollableHeight);
         if (pinEnd && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5
-            && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5)) { ReleasePin(); }
+            && Math.Abs(extent - was.Extent) < 0.5
+            && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5 && Math.Abs(extent - asked) >= 0.5)) { ReleasePin(); }
         seen = (offset, extent);
     }
     // A final event can belong to a correction queued before this navigation request.

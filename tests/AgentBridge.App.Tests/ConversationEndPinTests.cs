@@ -98,6 +98,25 @@ public sealed class ConversationEndPinTests
         Assert.Equal([300.0, 200.0], view.Scroller.Targets);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_remeasured_extent_does_not_release_the_bottom_pin_when_the_list_adjusts_its_anchor(bool layoutFirst)
+    {
+        var view = new SessionView();
+        view.Scroller.ScrollableHeight = 52304;
+        view.Moved(52304);
+        view.Scroller.ScrollableHeight = 52149;
+        if (layoutFirst) { view.Follow(); }
+        view.Moved(51850);
+        Assert.True(view.Pinned);
+        view.Follow();
+        Assert.Equal(52149, view.Scroller.Targets.Last());
+        view.Moved(52149);
+        view.Moved(52049);
+        Assert.False(view.Pinned);
+    }
+
     [Fact]
     public void Rewatching_the_same_session_still_releases_the_pin_on_the_first_move_back_from_the_end()
     {
