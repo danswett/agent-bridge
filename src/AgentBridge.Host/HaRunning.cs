@@ -14,8 +14,6 @@ public sealed class HaRunning : IAsyncDisposable
     readonly HaConnector connector;
     readonly HttpClient http;
     readonly Mutex claim;
-    internal AgentBridge.Host.Core.Launch.LaunchRequestStore? LaunchRequests { get; private init; }
-    internal string? LaunchRequestsProblem { get; private init; }
 
     HaRunning(HaConnector connector, HttpClient http, Mutex claim) { this.connector = connector; this.http = http; this.claim = claim; }
 
@@ -105,7 +103,7 @@ public sealed class HaRunning : IAsyncDisposable
             (updates is null || !ha.CheckForUpdates ? "" : ", the update buttons when this copy was installed by its updater") +
             (ha.Notify.Enabled ? $", notifications via {ha.Notify.Service}" : "") +
             (answer is not null && ha.Notify.ButtonsOn ? $", answer buttons to {ha.Notify.AnswerButtonServices.Count} phone(s)" : ""));
-        return new HaRunning(connector, http, claim) { LaunchRequests = requests, LaunchRequestsProblem = requestsProblem };
+        return new HaRunning(connector, http, claim);
     }
 
     public async ValueTask DisposeAsync()

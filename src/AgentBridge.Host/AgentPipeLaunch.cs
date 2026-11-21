@@ -19,7 +19,6 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
     readonly Dictionary<Guid, (string Principal, string Request, string Key, FleetLaunchContext? Fleet)> unconfirmed = [];
 
     const string Prefix = "pipe-";
-    internal LaunchRequestStore? Requests => store;
 
     static string Key(string principal, string request) =>
         Prefix + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(principal + "\n" + request)))[..59];

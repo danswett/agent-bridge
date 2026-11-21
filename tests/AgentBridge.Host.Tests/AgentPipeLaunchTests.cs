@@ -31,7 +31,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
 
     Pipe Open(string session = "parent", string scope = AgentProtocol.ScopeReadReplyLaunch, int depth = 0,
         string launch = "person-launch", AgentCredentials? credentials = null, (LaunchRequestStore?, string?)? store = null,
-        P256KeyPair? grantKey = null)
+        P256KeyPair? grantKey = null, bool legacy = false)
     {
         credentials ??= new AgentCredentials(folder, "machine");
         launcher.FleetConfig ??= Running();
@@ -45,7 +45,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem, fleetGrants: grantKey is null ? null
             : new FleetGrantLaunch(folder, grantKey, () => "123", new('a', 32), credentials, service, launcher));
         return new(LocalApi.Handler(service, null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")),
-            credentials: credentials, audit: audit, agentLaunch: agentLaunch), channel, credentials);
+            credentials: credentials, audit: audit, agentLaunch: legacy ? null : agentLaunch), channel, credentials);
     }
 
     JsonElement Body(string? id = null, string prompt = "hello", string workspace = "App", string? permissions = LaunchProtocol.Ask) =>
@@ -60,6 +60,15 @@ public sealed class AgentPipeLaunchTests : IDisposable
 
     string[] AuditRows() => Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl")
         .SelectMany(File.ReadAllLines).Where(l => l.Contains("\"refused\"")).ToArray();
+
+    [Fact]
+    public async Task A_non_grant_launch_without_a_production_pipe_keeps_the_legacy_person_only_refusal()
+    {
+        var pipe = Open(legacy: true);
+        Assert.Contains("for the person", await Refusal(pipe, LaunchProtocol.Launch, Body()));
+        Assert.Equal(0, launcher.Launches);
+        Assert.NotEmpty(AuditRows());
+    }
 
     [Theory]
     [InlineData(AgentProtocol.ScopeRead, 0, "person-launch", "read+reply+launch")]
