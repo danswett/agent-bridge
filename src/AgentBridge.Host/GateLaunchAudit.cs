@@ -10,8 +10,7 @@ internal sealed record GateLaunchIngress(string Path, string ActorKind, string P
 internal static class GateLaunchAudit
 {
     internal static async Task<LaunchResult> LaunchAsync(ISessionLauncher launcher, LaunchRequest request, string peer,
-        AgentAuditLog audit, GateLaunchIngress ingress, CancellationToken ct = default, bool fleet = false, Func<string?>? refusal = null,
-        bool fleetTarget = false)
+        AgentAuditLog audit, GateLaunchIngress ingress, CancellationToken ct = default, bool fleet = false, Func<string?>? refusal = null, bool fleetTarget = false)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var id)) { return Refused("request must be a UUID"); }
         if (!audit.Bootstrap()) { return Refused("the launch audit could not establish its existing evidence"); }

@@ -15,15 +15,12 @@ public sealed class FleetTargetGateTests
     readonly World world = new();
     readonly RosterVerifier signed;
     readonly LiteLaunchLog launches;
-    SessionProcess? current = new(42, DateTimeOffset.UnixEpoch);
-    bool unreadable;
+    SessionProcess? current = new(42, DateTimeOffset.UnixEpoch); bool unreadable;
 
     public FleetTargetGateTests()
     {
         launches = new(id => id == Target ? current : null, (started, pid) => unreadable ? null : current?.Id == pid && current.StartedAt == started.StartedAt);
-        world.Genesis("P");
-        world.Add("H", "P", "H", "G", kind: "host");
-        world.Add("Q", "P", "Q", "H");
+        world.Genesis("P"); world.Add("H", "P", "H", "G", kind: "host"); world.Add("Q", "P", "Q", "H");
         signed = new RosterVerifier(world.AccountId, world.GenerationId, () => world.Now);
         Assert.All(world.Feed(signed, "G", "H", "Q"), r => Assert.Equal(Verdict.Accepted, r.Verdict));
     }
@@ -57,24 +54,15 @@ public sealed class FleetTargetGateTests
         Assert.False(await Allowed(() => throw new InvalidOperationException("refused: not yet verified")));
         Assert.False(await Allowed(() => signed, sender: world.Id("Q")));
         Assert.False(await Allowed(() => signed, sender: world.Id("X")));
-    }
-
-    [Fact]
-    public async Task A_fleet_session_is_refused_when_the_roster_is_present_but_has_not_verified_the_serving_host()
-    {
-        Launch();
-        Assert.False(await Allowed(() => new RosterVerifier(world.AccountId, world.GenerationId, () => world.Now)));
+        Assert.False(await Allowed(() => new RosterVerifier(world.AccountId, world.GenerationId, () => world.Now))); // present, the serving host not verified
         var genesisOnly = new RosterVerifier(world.AccountId, world.GenerationId, () => world.Now);
         Assert.All(world.Feed(genesisOnly, "G"), r => Assert.Equal(Verdict.Accepted, r.Verdict));
         Assert.False(await Allowed(() => genesisOnly));
     }
 
     [Fact]
-    public async Task A_session_launched_before_a_restart_is_refused_because_the_registry_starts_empty()
-    {
-        Launch();
+    public async Task A_session_launched_before_a_restart_is_refused_because_the_registry_starts_empty() =>
         Assert.False((await new FleetTargetGate(new LiteLaunchLog(), () => signed).CheckAsync(From(world.Id("H")), Target)).Allowed);
-    }
 
     [Theory, InlineData("aaaaaaaa"), InlineData("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa"), InlineData("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"), InlineData("agent_bridge_aaaaaaaaaaaaaaaa")]
     public async Task Only_the_exact_session_id_matches_never_a_prefix_case_change_or_node_id(string guess)
@@ -85,19 +73,15 @@ public sealed class FleetTargetGateTests
     }
 
     [Fact]
-    public async Task The_fleet_flag_dies_with_the_session_so_a_later_resume_of_the_same_id_is_refused()
+    public async Task The_fleet_flag_dies_with_the_session_and_a_later_process_on_the_same_id_inherits_nothing()
     {
         Launch();
+        Assert.True(await Allowed(() => signed));
         current = null;
         Assert.False(launches.IsFleetTarget(Target)); // as the session source's change notification does
         current = new(42, DateTimeOffset.UnixEpoch);
         Assert.False(await Allowed(() => signed));
         Assert.Equal(LaunchProtocol.AllowAll, launches.PermissionsOf(Target)); // what the forced-ask gate reads is untouched
-    }
-
-    [Fact]
-    public async Task A_later_process_taking_the_same_session_id_does_not_inherit_fleet_authority()
-    {
         Launch();
         Assert.True(await Allowed(() => signed));
         current = new(42, DateTimeOffset.UnixEpoch.AddMinutes(1)); // the same id and pid, another process

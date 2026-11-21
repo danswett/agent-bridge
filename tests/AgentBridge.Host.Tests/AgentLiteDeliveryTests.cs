@@ -40,8 +40,7 @@ public sealed class AgentLiteDeliveryTests
         public Fixture() => Launches = new(ProcessOf, (started, pid) => Process?.Id == pid ? Process.StartedAt == started.StartedAt : null);
         public SessionProcess? Process = new(42, DateTimeOffset.UnixEpoch); public SessionProcess? ProcessOf(string id) => id == Target ? Process : null;
         public void FleetLaunch() => Launches.FleetLaunched(Target, new(42, DateTimeOffset.UnixEpoch));
-        public Func<AgentBridge.Roster.RosterVerifier?> Roster = () => null;
-        public Question? Asking; public ISessionReplier? Replier;
+        public Func<AgentBridge.Roster.RosterVerifier?> Roster = () => null; public Question? Asking; public ISessionReplier? Replier;
         public LiteDeliver Build() => new([
             new FleetTargetGate(Launches, () => Roster()),
             new ForcedAskGate(Launches),
@@ -442,16 +441,12 @@ public sealed class AgentLiteDeliveryTests
 
     static (Func<AgentBridge.Roster.RosterVerifier?> Roster, string Host) VerifiedHost()
     {
-        var world = new World();
-        world.Genesis("P");
-        world.Add("H", "P", "H", "G", kind: "host");
-        var signed = new AgentBridge.Roster.RosterVerifier(world.AccountId, world.GenerationId, () => world.Now);
-        world.Feed(signed, "G", "H");
+        var world = new World(); world.Genesis("P"); world.Add("H", "P", "H", "G", kind: "host");
+        var signed = new AgentBridge.Roster.RosterVerifier(world.AccountId, world.GenerationId, () => world.Now); world.Feed(signed, "G", "H");
         return (() => signed, world.Id("H"));
     }
 
-    // Relay A: an allow-all fleet session is typed into only from a serving host; with no
-    // verified roster it is refused as before, and an ask-mode session is unchanged either way.
+    // Relay A: an allow-all fleet session is typed into only from a serving host (no verified roster refuses); ask mode is unchanged either way.
     [Fact]
     public async Task An_allow_all_fleet_target_is_typed_only_for_a_serving_host_sender_and_ask_mode_is_unchanged()
     {
@@ -463,13 +458,11 @@ public sealed class AgentLiteDeliveryTests
         Assert.Empty(f.Typed);
         Assert.Equal(new LiteDelivery(true, null), await f.Build().DeliverAsync(Envelope("hi", machine: host), "hi", default));
         Assert.Contains(f.Log, l => l.Contains($"request {Req} gate FleetTargetGate: allowed", StringComparison.Ordinal));
-
         var ask = new Fixture(); ask.Launch(LaunchProtocol.Ask);
         Assert.True((await Send(ask)).Typed);
     }
 
-    // Permission and trust prompts stay person-only: a relayed message to a fleet target that is
-    // asking types nothing, so it can never be taken as the prompt's answer.
+    // Permission and trust prompts stay person-only: a relayed message to an asking fleet target types nothing, so never answers it.
     [Fact]
     public async Task A_relayed_message_never_answers_a_fleet_targets_pending_permission_prompt()
     {
@@ -483,8 +476,7 @@ public sealed class AgentLiteDeliveryTests
         Assert.Empty(f.Plans);
     }
 
-    // A message that waited (composer read, the shared typing slot) is authorized again just
-    // before keys go: a sender dropped from the roster or a target replaced meanwhile gets nothing typed.
+    // A waiting message (composer read, the shared typing slot) is authorized again just before keys go: a dropped sender or replaced target gets nothing.
     [Theory, InlineData("revoked"), InlineData("replaced"), InlineData("unchanged")]
     public async Task A_waiting_fleet_message_is_authorized_again_at_injection(string change)
     {

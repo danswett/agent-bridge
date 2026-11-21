@@ -82,9 +82,7 @@ public sealed class HostRosterPinTests : IDisposable
     [Fact]
     public void A_pinned_roster_older_than_the_fleet_bound_refuses_until_it_verifies_again()
     {
-        Pin();
-        var reader = new HostRosterReader(PathName, () => w.Now);
-        var bound = AgentBridge.Host.Lite.FleetTargetGate.MaxRosterAge;
+        Pin(); var (reader, bound) = (new HostRosterReader(PathName, () => w.Now), AgentBridge.Host.Lite.FleetTargetGate.MaxRosterAge);
         Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
         Assert.Same(reader.Verified, reader.Fresh(RosterFixture.Account, bound));
         w.Now += bound + TimeSpan.FromSeconds(1);

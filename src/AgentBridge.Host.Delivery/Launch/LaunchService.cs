@@ -267,10 +267,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // is decided; a handler that throws costs only itself.
     public event Action<string, LaunchedWith>? SessionStarted;
 
-    // The same moment, only for a session Home Assistant's launch path or an agent under a grant started (never a person's app
-    // or PWA launch, a restore or a verification launch), with the identity its launch read, never an unverified one. The lite
-    // fleet-target gate's registry; raised by this host alone. A handler that throws costs only itself.
+    // The same moment, only for a session Home Assistant's launch path or an agent under a grant started (never a person's app or PWA launch, a restore or a verification
+    // launch), with the identity and Generation its launch read; an Unverified one ends the id's authority. Raised by this host alone; a handler that throws costs only itself.
     public event Action<string, Started>? FleetTargetStarted;
+    long generations;
     public bool? Owns(Started started, int processId) => starter.OwnsExactly(started, processId);
 
     // A launch already answered Unconfirmed (its window not seen ready in time) whose window is seen
@@ -1325,7 +1325,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             if (fleet && !credentialIssued) { provenance.Abandon(key); return Refused("a read+reply fleet worker credential could not be issued"); }
             Started started;
-            try { started = starter.Start(spec); created = null; }
+            try { started = starter.Start(spec) with { Generation = Interlocked.Increment(ref generations) }; created = null; }
             catch (Exception e)
             {
                 if (credentialIssued) { credentials!.Abandon(launchId); }
@@ -1703,7 +1703,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         p.NotedId = id;
         try { SessionStarted?.Invoke(id, p.Launched); }
         catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the restore record could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
-        try { if (p.FleetTarget && !p.Started.Unverified) { FleetTargetStarted?.Invoke(id, p.Started); } }
+        try { if (p.FleetTarget) { FleetTargetStarted?.Invoke(id, p.Started); } }
         catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the fleet-target registry could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
     }
 

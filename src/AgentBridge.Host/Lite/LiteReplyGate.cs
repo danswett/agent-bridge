@@ -41,20 +41,21 @@ public interface ILiteLaunches
 
 // unknown and refused: the safe direction. In memory only, so a restart forgets every fleet target
 // (relay A has no persistence). A fleet entry holds the exact id and the process LaunchService started for it, as it started it: a session
-// whose live process is not that one or under it (an npm shim's cmd.exe starts the agent) is not it, and the entry leaves once seen gone or replaced.
+// whose live process is not that one or under it (an npm shim's cmd.exe starts the agent) is not it. An Unverified entry (a tombstone, also
+// what an entry seen gone or replaced becomes) authorizes nothing; a note with a lower Generation than the held entry is ignored.
 public sealed class LiteLaunchLog(Func<string, SessionProcess?>? current = null, Func<Started, int, bool?>? owns = null) : ILiteLaunches
 {
     readonly ConcurrentDictionary<string, string> modes = new(StringComparer.Ordinal);
     readonly ConcurrentDictionary<string, Started> fleet = new(StringComparer.Ordinal);
     public void Launched(string session, LaunchedWith with) => modes[session] = with.Permissions;
     public string? PermissionsOf(string session) => modes.GetValueOrDefault(session);
-    public void FleetLaunched(string session, Started started) { if (started.Unverified) { fleet.TryRemove(session, out _); } else { fleet[session] = started; } }
+    public void FleetLaunched(string session, Started started) => fleet.AddOrUpdate(session, started, (_, held) => held.Generation > started.Generation ? held : started);
     public bool IsFleetTarget(string session)
     {
-        if (!fleet.TryGetValue(session, out var launched)) { return false; }
-        // Unknown (the started process gone or its tree unreadable) refuses and keeps the entry; a known other process removes it.
+        if (!fleet.TryGetValue(session, out var launched) || launched.Unverified) { return false; }
+        // Unknown (the started process gone or its tree unreadable) refuses and keeps the entry; a known other process ends it.
         var own = current?.Invoke(session) is { StartedAt: not null } live ? owns?.Invoke(launched, live.Id) : false;
-        if (own == false) { fleet.TryRemove(new(session, launched)); } // only this entry, never a newer launch's
+        if (own == false) { fleet.TryUpdate(session, launched with { Unverified = true }, launched); } // only this entry, never a newer launch's
         return own == true;
     }
 }
@@ -102,11 +103,9 @@ public sealed class AllowlistedAllTargetsGate(ILiteLaunches launches, Func<Agent
     }
 }
 
-// A session Home Assistant's launch path or an agent under a grant launched, typed into only when the sending
-// machine is a serving host in the pinned, verified device roster (owner, Nov 20 12:37 PT). The
-// roster condition is about the serving host, not the agent principal. With no pin, a roster not
-// yet verified, or any other sender, it refuses. Permission and trust prompts stay person-only:
-// LiteDeliver types only into an idle session with no question.
+// A session Home Assistant's launch path or an agent under a grant launched, typed into only when the sending machine is a serving host in
+// the pinned, verified device roster (owner, Nov 20 12:37 PT; about the serving host, not the agent principal). With no pin, a roster not
+// yet verified, or any other sender, it refuses. Permission and trust prompts stay person-only: LiteDeliver types only into an idle session with no question.
 public sealed class FleetTargetGate(ILiteLaunches launches, Func<RosterVerifier?> roster) : IReplyTargetGate
 {
     public const string Reason = "the session is not a fleet target for a serving-host sender";

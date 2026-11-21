@@ -569,9 +569,10 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal((o.Session, "copilot", "API", "ask"), (id, launched.Agent, launched.Workspace, launched.Permissions));
     }
 
-    // Relay A: only a session.launch request (HA, a device, or an agent under a grant) marks its session a fleet target; a restore and a verification launch never do.
+    // Relay A: only a session.launch request (HA, a device, or an agent under a grant) marks its session a fleet target; a restore, a
+    // verification launch and (Engineering ruling, Nov 20) a person's app or PWA launch, audited or not, never do.
     [Fact]
-    public async Task Only_a_fleet_target_launch_marks_its_session_never_a_restore_or_verification_launch()
+    public async Task Only_a_fleet_target_launch_marks_its_session_never_a_restore_verification_app_or_pwa_launch()
     {
         const string Restored = "79797979-7979-4979-8979-797979797979";
         Resumable(Restored, app, "Restored");
@@ -581,21 +582,10 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var launched = await launcher.LaunchFleetTargetAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "home-assistant", null);
         var restored = await launcher.ResumeAsync(new ResumeAsk(Restored, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
         var verified = await launcher.LaunchVerificationAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-1");
-        Assert.All([launched, restored, verified], r => Assert.Equal(LaunchOutcome.Started, r.Outcome));
-        lock (fleet) { Assert.Equal([launched.Session!], fleet); }
-    }
-
-    // Engineering ruling (Nov 20): a person's app or PWA session.launch, audited or not, is never a fleet target.
-    [Fact]
-    public async Task An_app_or_pwa_launch_is_not_a_fleet_target()
-    {
-        var launcher = Launcher(Config());
-        var fleet = new List<string>();
-        launcher.FleetTargetStarted += (id, _) => { lock (fleet) { fleet.Add(id); } };
         var plain = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-1");
         var audited = await launcher.LaunchAuditedAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API" }, "device-2", _ => _ => { });
-        Assert.All([plain, audited], r => Assert.Equal(LaunchOutcome.Started, r.Outcome));
-        lock (fleet) { Assert.Empty(fleet); }
+        Assert.All([launched, restored, verified, plain, audited], r => Assert.Equal(LaunchOutcome.Started, r.Outcome));
+        lock (fleet) { Assert.Equal([launched.Session!], fleet); }
     }
 
     // The registry keeps the process the launch started: one taking the session id before the note (a SessionStarted handler runs first) inherits nothing; it leaves on exit.
@@ -618,6 +608,40 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         starter.Exit(starter.Pids[0]);
         await source.RefreshAsync();
         Assert.False(log.IsFleetTarget(launched.Session!));
+    }
+
+    // Brief 210: an unverified fleet launch or resume ends that id's authority, and the newest launch wins over a late note from an older one.
+    [Fact]
+    public async Task An_unverified_fleet_launch_or_resume_ends_the_ids_authority_and_the_newest_launch_wins()
+    {
+        var launcher = Launcher(Config());
+        var log = new AgentBridge.Host.Lite.LiteLaunchLog(source.ProcessOf, launcher.Owns);
+        var notes = new List<Started>();
+        launcher.FleetTargetStarted += (id, started) => { notes.Add(started); log.FleetLaunched(id, started); };
+        async Task<string> Launch(bool unverified, string? resume = null)
+        {
+            starter.Unverified = unverified;
+            if (resume is not null) { Resumable(resume, api, "Fleet"); }
+            var r = await launcher.LaunchFleetTargetAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = resume is null ? "API" : null, Resume = resume }, "home-assistant", null);
+            return r.Outcome == LaunchOutcome.Started ? r.Session! : throw new InvalidOperationException(r.Reason);
+        }
+        Assert.False(log.IsFleetTarget(await Launch(unverified: true)));
+        var id = await Launch(unverified: false);
+        var (first, wasTarget) = (starter.Pids[^1], log.IsFleetTarget(id));
+        starter.Exit(first); await source.RefreshAsync();
+        await Launch(unverified: true, resume: id);
+        // The fake knows a process by its pid alone: revived, it stands for any process the older verified identity still matches.
+        starter.Exit(starter.Pids[^1]); starter.Revive(first);
+        f.CopilotSession(id, first, lockWrite: DateTimeOffset.UtcNow.AddSeconds(1));
+        f.Processes.Run(AgentKind.Copilot, first, $"copilot --session-id {id}", DateTimeOffset.UtcNow);
+        await source.RefreshAsync();
+        Assert.Equal((true, false), (wasTarget, log.IsFleetTarget(id)));
+        foreach (var pid in starter.Pids.ToArray()) { starter.Exit(pid); }
+        await source.RefreshAsync();
+        await Launch(unverified: false, resume: id);
+        var newest = log.IsFleetTarget(id);
+        log.FleetLaunched(id, notes[^2]); // a late note from the older, unverified resume
+        Assert.Equal((true, true), (newest, log.IsFleetTarget(id)));
     }
 
     // #780 Host B: a restore is a resume through the same path as one from Launch, with nothing typed
@@ -1765,8 +1789,9 @@ public abstract partial class LaunchFlowFixture
             int pid;
             lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } if (HandsOn) { running.Add(pid + 3000); } }
             if (Registers) { Register(spec, HandsOn ? pid + 3000 : pid); }
-            return new Started(pid, DateTimeOffset.UtcNow);
+            return new Started(pid, DateTimeOffset.UtcNow, Unverified);
         }
+        public bool Unverified; public void Revive(int pid) { lock (Specs) { running.Add(pid); } }
 
         public bool Running(Started started)
         {

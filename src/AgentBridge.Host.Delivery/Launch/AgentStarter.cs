@@ -26,7 +26,7 @@ internal static class ConsoleStartup
 
 // A started process, by id and start time (which tells it from a later one given the same id),
 // or why nothing started.
-public sealed record Started(int ProcessId, DateTimeOffset StartedAt, bool Unverified = false);
+public sealed record Started(int ProcessId, DateTimeOffset StartedAt, bool Unverified = false, long Generation = 0);
 
 // Starts an agent in a console window of its own on the person's desktop. The real one is
 // WindowsAgentStarter; tests use a fake, so no test ever starts an agent.
