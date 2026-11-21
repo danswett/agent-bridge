@@ -24,6 +24,6 @@ export async function poll(session, options) {
       await live.wait(signal => options.sleep ? options.sleep(Math.min(2000, live.remaining()), signal) : sleep(Math.min(2000, live.remaining()), undefined, { signal }));
     }
     return await finish('FAIL');
-  } catch (error) { if (error?.name !== 'AbortError') throw error; return await finish('FAIL'); }
+  } catch (error) { if (error?.name !== 'AbortError') { if (error !== null && typeof error === 'object') error.invalidBlobs = invalidBlobs; throw error; } return await finish('FAIL'); }
   finally { session.ended = true; live.close(); }
 }

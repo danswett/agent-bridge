@@ -16,7 +16,7 @@ export async function verifyEvidence(bundle, raw, clocks = {}) {
   store.open(bundle.create); store.register(bundle.create.sessionId, 'spike', r.registration); store.open(bundle.get);
   const facts = store.verify(bundle.get.sessionId, 'spike', r.assertion), phone = {};
   for (const field of ['OS', 'browser', 'path', 'authenticatorAttachment']) {
-    const v = r.phone?.[field], markers = [r.registration.id, r.registration.attestationObject, ...Object.values(r.assertion)];
+    const v = r.phone?.[field], markers = [...Object.values(r.registration), ...Object.values(r.assertion)];
     if (typeof v !== 'string' || v.length > 512 || markers.some(m => typeof m === 'string' && m.length > 0 && v.includes(m))) throw new Error('Refused: phone metadata.');
     phone[field] = v;
   }
@@ -35,7 +35,7 @@ export async function runPC(options = {}) {
       read: signal => readMailbox(bundle.get.sessionId, { ...options, signal }).then(blobs => { if (blobs.length && blobs[0] !== raw) throw new Error('Refused: request slot changed; retry in a NEW session.'); return blobs.slice(1); }),
       verify: blob => verifyEvidence(bundle, blob, options),
     });
-  } catch (error) { if (!attempted) await write({ outcome: 'FAIL', invalidBlobs: 0 }); throw error; }
+  } catch (error) { if (!attempted) await write({ outcome: 'FAIL', invalidBlobs: Number.isSafeInteger(error?.invalidBlobs) ? error.invalidBlobs : 0 }); throw error; }
   finally { live.close(); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -43,6 +43,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   runPC({ signal: abort.signal, confirm: async (code, expiry, clocks) => {
     if (!process.stdin.isTTY) throw new Error('Refused: owner console required.');
     const rl = createInterface({ input: process.stdin, output: process.stdout });
-    try { return await confirmOwnerCode(code, expiry, { ...clocks, ask: (text, opts) => rl.question(text, opts) }); } finally { rl.close(); }
+    try { return await confirmOwnerCode(code, expiry, { ...clocks, ask: (text, opts) => rl.question(text, opts), print: console.log }); } finally { rl.close(); }
   } }).then(r => { process.exitCode = r.outcome === 'PASS' ? 0 : 1; }).catch(() => { console.error('Refused: PC spike failed. Check RESULTS-PHONE.md; retry in a new session.'); process.exitCode = 1; });
 }

@@ -156,5 +156,25 @@ test('PC runner seeds a fresh request, verifies real ES256 and writes only after
     fetch: async (_, o) => { if (o.method === 'POST') { raw = o.body; v = vector(JSON.parse(raw).request); return new Response(null, { status: 201 }); } return Response.json({ blobs: [raw, JSON.stringify(v.evidence)] }); },
     confirm: async code => { assert.equal(code, await authenticationString(v.spki, challenge(v.bundle.get))); return true; } };
   const result = await runPC(options); assert.equal(result.outcome, 'PASS'); assert.equal(result.invalidBlobs, 0); assert.equal(writes.length, 1);
-  assert.match(prints[0], /Genesis UNSOLVED/); assert.match(prints[0], /https:\/\/proof\.slipgates\.com\/\?pc=/);
+  assert.match(prints[0], /Genesis UNSOLVED/); assert.ok(prints[0].includes('Open on PC: https://proof.slipgates.com/?pc='));
+});
+
+test('phone metadata echoing registration clientDataJSON is refused', async () => {
+  const { verifyEvidence } = await import('./pc.mjs'), v = vector(), echoed = structuredClone(v.evidence);
+  echoed.phone.OS = 'Fixture ' + v.evidence.registration.clientDataJSON;
+  await assert.rejects(verifyEvidence(v.bundle, JSON.stringify(echoed), { now: () => 0 }), /phone metadata/);
+});
+test('fallback after a mailbox failure keeps the accumulated invalid blob count', async () => {
+  const { runPC } = await import('./pc.mjs');
+  let raw, clock = 0, reads = 0; const writes = [];
+  const options = { now: () => clock, monotonic: () => clock, sleep: async ms => { clock += ms; }, print: () => {}, refuse: () => {}, write: async r => writes.push(r),
+    fetch: async (_, o) => { if (o.method === 'POST') { raw = o.body; return new Response(null, { status: 201 }); } if (++reads > 1) throw new TypeError('fetch failed'); return Response.json({ blobs: [raw, 'junk'] }); } };
+  await assert.rejects(runPC(options));
+  assert.equal(writes.length, 1); assert.equal(writes[0].outcome, 'FAIL'); assert.equal(writes[0].invalidBlobs, 1);
+});
+test('owner prompt is blind: expected code is never printed before the typed compare', async () => {
+  const asked = [], printed = [];
+  assert.equal(await confirmOwnerCode(code, 6000, { now: () => 0, ask: async text => { asked.push(text); return code; }, print: s => printed.push(s) }), true);
+  assert.equal(asked.some(t => t.includes(code)), false); assert.match(printed.join('\n'), /match/i); assert.equal(printed.some(t => t.includes(code)), false);
+  printed.length = 0; await confirmOwnerCode(code, 6000, { now: () => 0, ask: async () => 'nope', print: s => printed.push(s) }); assert.match(printed.join('\n'), /no match/i);
 });

@@ -21,7 +21,8 @@ Assertions require strict minimal low-S DER. `none` and ES256 packed self-attest
 are supported; certificates/extensions refuse, and neither supported fmt proves provenance.
 SignCount is recorded, never used to refuse: devices.md/device-approval.md are silent.
 BE/BS/UV/AAGUID/fmt/counter/id length/transports are recorded without policy approval.
-QR is HTTPS URL plus id/fingerprint only. Full request delivery remains a later cut.
+QR is HTTPS URL plus id/fingerprint only (an unauthenticated channel; its integrity limit stands).
+The full request is delivered through the mailbox (PR 2b/2c), not the QR. Spike only, no deploy.
 
 No real credential is created here. After any later phone run:
 Find the proof.slipgates.com spike entry in the phone's passkey manager.

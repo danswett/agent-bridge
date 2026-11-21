@@ -30,3 +30,5 @@ reports actual credential facts/self-reported OS/browser/path. No run is claimed
 Static publication after exact-head Quality approval must include the browser
 modules (`index`, `bootstrap`, `client`, `lifetime`, `return`, `phone`, `page`,
 `screen`, `sas`, `qr`) and existing `pwa/js/roster` framing/codec/strict-json/p256/refusal.
+
+The PC console prompt is blind: the expected code is never printed; the owner types the phone code and the console prints only match / no match. The same-PC limit above still applies (a program on the PC can read or fake the console).
