@@ -27,15 +27,16 @@ static partial class SelfTest
         return double.NaN;
     }
 
-    static async Task<AnimationController?> RowMotionController(Visual visual, FrameworkElement root, Action<bool, string> check, string phase)
+    // A retarget needs both RowShift's restamp and a fresh controller: the paused first one stays resolvable until replaced.
+    static async Task<AnimationController?> RowMotionController(Visual visual, FrameworkElement root, Action<bool, string> check, string phase, AnimationController? previous = null, Func<bool>? restamped = null)
     {
-        const int frames = 4;
+        var frames = previous is null ? 4 : 8;
         for (var waited = 0; waited <= frames; waited++)
         {
-            if (visual.TryGetAnimationController("Offset") is { } controller) { return controller; }
+            if (visual.TryGetAnimationController("Offset") is { } controller && !ReferenceEquals(controller, previous) && restamped?.Invoke() != false) { return controller; }
             if (waited < frames) { await CaptureFrame(root); }
         }
-        check(false, $"{phase} row shift Offset animation never started while sampled: no controller observed after {frames} capture frames.");
+        check(false, previous is null ? $"{phase} row shift Offset animation never started while sampled: no controller observed after {frames} capture frames." : $"{phase} found no replacement controller after {frames} capture frames");
         return null;
     }
 
@@ -98,34 +99,26 @@ static partial class SelfTest
             await CaptureFrame(root);
             check(LayoutInformation.GetLayoutSlot(neighbour) == slot, "row shift does not change the layout between frames");
             var initialStart = RowShiftStart(shifts, neighbour);
+            var inserted = System.Diagnostics.Stopwatch.GetTimestamp();
             items.Insert(0, added);
             list.UpdateLayout();
             var gateStart = RowShiftStart(shifts, neighbour);
-            var retarget = await RowMotionController(ElementCompositionPreview.GetElementVisual(neighbour), root, check, "retarget");
-            if (retarget is null) { return; }
+            var visual = ElementCompositionPreview.GetElementVisual(neighbour);
+            var tops = new List<double>();
+            var failure = "";
+            Action<bool, string> reportFailure = (ok, text) => failure = ok ? failure : $"{failure}; {text}";
+            var retarget = await RowMotionController(visual, root, reportFailure, "retarget", initial,
+                () => RowShiftStart(shifts, neighbour).Started is { } stamp && stamp != initialStart.Started);
+            if (retarget is null) { check(false, Diagnosis()); return; }
             // A window capture blocks the UI thread, not the compositor. Sample the
             // retarget's own paused start, not an earlier picture of the first shift.
-            retarget.Pause();
-            retarget.Progress = 0;
-            var tops = new List<double>();
-            var moving = await RowMotionSettled(root, () => { var top = TrackedTop(); tops.Add(top); return top; }, check, "retarget start");
-            if (!double.IsFinite(moving) || moving <= slot.Y + 1 || moving >= original)
-            {
-                var current = ElementCompositionPreview.GetElementVisual(neighbour).TryGetAnimationController("Offset");
-                var shift = Motion.Catalogue.Enter("Shift", true).Duration;
-                var gateElapsed = initialStart.Started is { } start && gateStart.Started is { } end ? System.Diagnostics.Stopwatch.GetElapsedTime(start, end) : (TimeSpan?)null;
-                var gate = gateElapsed is not { } elapsed ? "unknown (row untracked or unstamped)" : gateStart == initialStart ? "not reached (start stamp unchanged)" : elapsed < shift ? "inferred explicit" : "inferred implicit only";
-                check(false, $"retarget start diagnosis: initial start to retarget layout {gateElapsed?.TotalMilliseconds.ToString("0") ?? "unknown"}ms vs Shift {shift.TotalMilliseconds:0}ms, to now {(initialStart.Started is { } since ? System.Diagnostics.Stopwatch.GetElapsedTime(since).TotalMilliseconds.ToString("0") : "unknown")}ms; "
-                    + $"explicit-retarget gate {gate} from RowShift start stamps (branch not observed); restamped after retarget layout={RowShiftStart(shifts, neighbour) != gateStart}; "
-                    + $"Offset controllers compared as managed wrappers, not native ids: retarget is initial={ReferenceEquals(retarget, initial)}, current is retarget={ReferenceEquals(current, retarget)}, current is initial={ReferenceEquals(current, initial)}; "
-                    + $"progress initial={initial.Progress} retarget={retarget.Progress} current={current?.Progress.ToString() ?? "none"}; last TrackedTop [{string.Join(", ", tops.TakeLast(8))}]");
-            }
-            if (!double.IsFinite(moving)) { return; }
-            check(moving > slot.Y + 1 && moving < original, $"row neighbour is mid-shift ({original}, {moving}, {slot.Y})");
+            var moving = await RowMotionSettled(root, () => Sample(0), reportFailure, "retarget start");
+            if (!double.IsFinite(moving)) { check(false, Diagnosis()); return; }
+            var midShift = moving > slot.Y + 1 && moving < original;
+            check(midShift, $"row neighbour is mid-shift ({original}, {moving}, {slot.Y})" + (midShift ? "" : $"; {Diagnosis()}"));
             var target = original;
-            retarget.Progress = 0.25f;
-            var later = await RowMotionSettled(root, TrackedTop, check, "retarget quarter progress");
-            if (!double.IsFinite(later)) { return; }
+            var later = await RowMotionSettled(root, () => Sample(0.25f), reportFailure, "retarget quarter progress");
+            if (!double.IsFinite(later)) { check(false, Diagnosis()); return; }
             check(later >= moving - 5 && later <= target + 1,
                 $"interrupted shift continues from its drawn position ({moving}, {later}, {target})");
             var progress = (later - moving) / (target - moving);
@@ -133,13 +126,12 @@ static partial class SelfTest
             var standard = t * t * (3 - 2 * t);
             check(progress > standard + 0.12,
                 $"interrupted shift decelerates toward its new position ({t:0.00} timeline, {progress:0.00} progress)");
-            retarget.Progress = 0;
-            var paused = await RowMotionSettled(root, TrackedTop, check, $"retarget rewind (moving={moving}, original={original}, slot.Y={slot.Y})");
-            if (!double.IsFinite(paused)) { return; }
+            var paused = await RowMotionSettled(root, () => Sample(0), reportFailure, $"retarget rewind (moving={moving}, original={original}, slot.Y={slot.Y})");
+            if (!double.IsFinite(paused)) { check(false, Diagnosis()); return; }
             await CaptureFrame(root);
-            var held = TrackedTop();
-            check(retarget.Progress == 0 && double.IsFinite(paused) && Math.Abs(held - paused) <= 1 && Math.Abs(paused - moving) <= 3,
-                $"retarget is paused before motion is disabled ({later}, {target}; moving={moving}, original={original}, slot.Y={slot.Y}, paused={paused}, held={held}, controller={retarget.Progress})");
+            var held = Sample(0);
+            check(retarget?.Progress == 0 && double.IsFinite(paused) && Math.Abs(held - paused) <= 1 && Math.Abs(paused - moving) <= 3,
+                $"retarget is paused before motion is disabled ({later}, {target}; moving={moving}, original={original}, slot.Y={slot.Y}, paused={paused}, held={held}, controller={retarget?.Progress.ToString() ?? "none"}); {Diagnosis()}");
             animations = false;
             shifts.Changing();
             await CaptureFrame(root);
@@ -165,6 +157,27 @@ static partial class SelfTest
             await CaptureFrame(root);
             check(Math.Abs(TrackedTop() - reducedSlot) <= 1,
                 "disabling motion settles an implicit shift without another list change");
+            // Re-resolve every capture and seek: pausing a replaced controller's stale wrapper leaves the row running.
+            double Sample(float progress)
+            {
+                retarget = visual.TryGetAnimationController("Offset");
+                if (retarget is null || ReferenceEquals(retarget, initial)) { failure = "no replacement controller during capture"; return double.NaN; }
+                retarget.Pause(); retarget.Progress = progress;
+                tops.Add(TrackedTop());
+                return tops[^1];
+            }
+            string Diagnosis()
+            {
+                var current = visual.TryGetAnimationController("Offset");
+                var restamp = RowShiftStart(shifts, neighbour).Started is { } at && at != initialStart.Started && initialStart.Started is { } start ? System.Diagnostics.Stopwatch.GetElapsedTime(start, at) : (TimeSpan?)null;
+                var shift = Motion.Catalogue.Enter("Shift", true).Duration;
+                var gate = restamp is not { } elapsed ? "unknown (not restamped)" : elapsed < shift ? "inferred explicit" : "inferred implicit only";
+                return $"retarget diagnosis: {failure}; Offset controllers as managed wrappers, not native ids: sampled is initial={ReferenceEquals(retarget, initial)}, current is sampled={ReferenceEquals(current, retarget)}, current is initial={ReferenceEquals(current, initial)}; "
+                    + $"progress initial={initial?.Progress.ToString() ?? "none"} sampled={retarget?.Progress.ToString() ?? "none"} current={current?.Progress.ToString() ?? "none"}; "
+                    + $"Shift {shift.TotalMilliseconds:0}ms vs initial start to insertion {Since(inserted)}, latest restamp {restamp?.TotalMilliseconds.ToString("0") ?? "none"}ms, now {Since(System.Diagnostics.Stopwatch.GetTimestamp())}; "
+                    + $"restamped by layout={gateStart != initialStart}; gate {gate} from start stamps, branch not observed; pixels [{string.Join(", ", tops.TakeLast(8))}]";
+            }
+            string Since(long at) => initialStart.Started is { } start ? $"{System.Diagnostics.Stopwatch.GetElapsedTime(start, at).TotalMilliseconds:0}ms" : "unknown";
         }
         finally { root.Children.Remove(list); }
 

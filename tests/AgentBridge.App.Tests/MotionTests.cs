@@ -45,18 +45,20 @@ public sealed class MotionTests
     [InlineData("initial", 1, 1, true)]
     [InlineData("retarget", 4, 4, true)]
     [InlineData("initial", 5, 4, false)]
-    [InlineData("retarget", 5, 4, false)]
-    public async Task The_row_sampler_waits_bounded_frames_for_each_controller_and_reports_absence(string phase, int starts, int frames, bool found)
+    [InlineData("retarget", 2, 6, true, 6)]
+    [InlineData("retarget", 0, 8, false, 9)]
+    [InlineData("retarget", 9, 8, false)]
+    public async Task The_row_sampler_waits_bounded_frames_for_each_controller_and_reports_absence(string phase, int starts, int frames, bool found, int restamp = 0)
     {
-        var result = await (Task<object[]>)RowController.Value.Invoke(null, [starts, phase])!;
+        var result = await (Task<object[]>)RowController.Value.Invoke(null, [starts, phase, restamp])!;
         Assert.Equal(found, result[0]);
         Assert.Equal(frames, result[1]);
         if (found) { Assert.Equal("", result[2]); }
         else
         {
             Assert.Contains(phase, (string)result[2]);
-            Assert.Contains("4 capture frames", (string)result[2]);
-            Assert.Contains("never started", (string)result[2]);
+            Assert.Contains($"{frames} capture frames", (string)result[2]);
+            Assert.Contains(phase == "retarget" ? "no replacement controller" : "never started", (string)result[2]);
         }
     }
 
@@ -74,7 +76,7 @@ public sealed class MotionTests
             #nullable enable
             using System; using System.Threading.Tasks;
             class AnimationController { public float Progress; } class UIElement; class FrameworkElement : UIElement;
-            class Visual { public int Starts; public AnimationController? TryGetAnimationController(string name) => Probe.Frames >= Starts ? new() : null; }
+            class Visual { public int Starts; public AnimationController? Previous; public AnimationController? TryGetAnimationController(string name) => Probe.Frames >= Starts ? new() : Previous; }
             public static class Probe {
                 public static int Frames;
                 static Task CaptureFrame(FrameworkElement root) { Frames++; return Task.CompletedTask; }
@@ -89,9 +91,10 @@ public sealed class MotionTests
                     var retarget = new AnimationController { Progress = progress }; var paused = before; var held = after; var later = after;
                     return {{paused}};
                 }
-                public static async Task<object[]> Run(int starts, string phase) {
+                public static async Task<object[]> Run(int starts, string phase, int restamp) {
                     Frames = 0; var message = "";
-                    var result = await RowMotionController(new Visual { Starts = starts }, new(), (ok, text) => { if (!ok) message = text; }, phase);
+                    var previous = phase == "retarget" ? new AnimationController() : null;
+                    var result = await RowMotionController(new Visual { Starts = starts, Previous = previous }, new(), (ok, text) => { if (!ok) message = text; }, phase, previous, previous is null ? null : () => Frames >= restamp);
                     return [result is not null, Frames, message];
                 }
             }
