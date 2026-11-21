@@ -1,5 +1,6 @@
 using AgentBridge.App.Core;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 
 namespace AgentBridge.App;
@@ -12,6 +13,10 @@ public sealed partial class SessionDetails : UserControl
     public SessionDetails()
     {
         InitializeComponent();
+        EndStatus.RegisterPropertyChangedCallback(TextBlock.TextProperty, (_, _) =>
+        {
+            DispatcherQueue.TryEnqueue(() => FrameworkElementAutomationPeer.CreatePeerForElement(EndStatus)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged));
+        });
         Loaded += (_, _) => Bindings.Update();
         // Let go of the card off screen, so a closed flyout or a hidden inspector keeps nothing alive.
         Unloaded += (_, _) => { if (!IsLoaded) { Bindings.StopTracking(); } };

@@ -1,5 +1,6 @@
 using AgentBridge.App.Core;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 
 namespace AgentBridge.App;
@@ -14,6 +15,10 @@ public sealed partial class DelegateInspector : UserControl
     public DelegateInspector()
     {
         InitializeComponent();
+        DelegateNote.RegisterPropertyChangedCallback(TextBlock.TextProperty, (_, _) =>
+        {
+            DispatcherQueue.TryEnqueue(() => FrameworkElementAutomationPeer.CreatePeerForElement(DelegateNote)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged));
+        });
         Loaded += (_, _) => Bindings.Update();
         // Let go of the card off screen, as SessionDetails does.
         Unloaded += (_, _) => { if (!IsLoaded) { Bindings.StopTracking(); } };
