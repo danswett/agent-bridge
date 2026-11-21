@@ -19,8 +19,9 @@ on:
 permissions: {}
 
 concurrency:
-  group: iac-scan-${{ github.ref }}
-  cancel-in-progress: true
+  # Only obsolete PR analysis is cancellable; other events get their own run slot.
+  group: iac-scan-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   psrule:
