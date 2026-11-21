@@ -266,6 +266,15 @@ transcript (`not-added`), and that approver is neither on probation nor held (§
 `expired`); signing in as another account ends the attempt. A held pin is never replaced (`pin-exists`), and the writer's capSign (v3)
 gate still applies.
 
+The host checks each remote step and local code entry against the attempt's monotonic elapsed
+time, even if its expiry timer is delayed. The joiner's deadline is the earlier of its own
+five-minute window and the advertised host deadline; expired entries neither match nor charge.
+The third wrong code's persisted mark and clearing of the attempt share the same lock.
+Finish adopts earlier add-acceptance times only from this host's retained verified chain for
+the same account, generation and genesis, matching exact add hashes on the same running clock.
+Peer-supplied times are never adopted; unconfirmed non-genesis adds without prior acceptance
+start probation here. Retries retain authenticated earlier probation.
+
 ## Acceptance and state
 
 A verifier (`RosterVerifier`) holds one generation's accepted entries as a DAG and decides each

@@ -21,7 +21,7 @@ internal interface IHostEnrollmentKey : IDisposable
 internal sealed class HostEnrollment(HostRosterReader reader, string account, string? generation,
     Func<string, IHostEnrollmentKey>? openKey = null, string name = "host", TimeProvider? time = null) : IDisposable
 {
-    sealed record Attempt(DeviceDescriptor Own, IDisposable Held, ITimer Expiry, EnrollmentLockout Lockout, DateTimeOffset Expires, string Log)
+    sealed record Attempt(DeviceDescriptor Own, IDisposable Held, ITimer Expiry, EnrollmentLockout Lockout, DateTimeOffset Expires, long Started, string Log)
     {
         public EnrollmentJoiner? Joiner; public byte[]? H, Genesis; public string? Approver, PeerName; public bool Matched;
     }
@@ -62,6 +62,7 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
                 try { marks = File.Exists(log) ? JsonSerializer.Deserialize<long[]>(File.ReadAllBytes(log)) ?? throw new InvalidDataException() : []; }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidDataException) { return (null, "attempt-store"); }
                 var now = Clock.GetUtcNow();
+                var started = Clock.GetTimestamp();
                 charged = [.. marks.Where(m => now - DateTimeOffset.FromUnixTimeSeconds(m) < EnrollmentLockout.Window + EnrollmentLockout.LockFor)];
                 // §4.4, brief 198: only the person's wrong code 2 typed here is charged (never opening, binding, abandoning, expiry
                 // or a peer's message); replayed so a restart cannot reset it, kept for hour + lock (a third mark's lock outlasts the first's hour).
@@ -74,7 +75,7 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
                 if (descriptor is null) { return (null, refused); }
                 Attempt? attempt = null;
                 var expiry = Clock.CreateTimer(_ => End(attempt!), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-                (open, held) = (attempt = new Attempt(descriptor, held, expiry, lockout, now + EnrollmentLockout.AttemptLifetime, log), null);
+                (open, held) = (attempt = new Attempt(descriptor, held, expiry, lockout, now + EnrollmentLockout.AttemptLifetime, started, log), null);
                 expiry.Change(EnrollmentLockout.AttemptLifetime, Timeout.InfiniteTimeSpan);
                 return (json, null);
             }
@@ -88,6 +89,11 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
         attempt.Held.Dispose();
         attempt.Expiry.Dispose();
     }
+
+    bool Expired(Attempt attempt) => Clock.GetElapsedTime(attempt.Started) >= EnrollmentLockout.AttemptLifetime;
+
+    DateTimeOffset AttemptNow(Attempt attempt) =>
+        attempt.Expires - EnrollmentLockout.AttemptLifetime + Clock.GetElapsedTime(attempt.Started);
 
     (DeviceDescriptor?, string?, string?) V1(byte[] dh)
     {
@@ -140,6 +146,7 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
             var approver = Ids.Device(peerStatic);
             if (asserted is null || asserted.Id != approver || !PersonKinds.Contains(asserted.Kind)) { return (null, "not-person"); }
             if (open is not { } attempt) { return (null, "no-attempt"); }
+            if (Expired(attempt)) { End(attempt); return (null, "expired"); }
             if (step == "commit")
             {
                 var now = Clock.GetUtcNow();
@@ -149,7 +156,7 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
                 if (attempt.Joiner is not null) { return (null, "attempt-bound"); }
                 if (value.Length != 0) { return (null, "invalid-value"); }
                 (attempt.H, attempt.Approver, attempt.PeerName) = (h.ToArray(), approver, HostConfigFile.CleanName(asserted.Name));
-                attempt.Joiner = new EnrollmentJoiner(account, attempt.H, attempt.Lockout, Clock.GetUtcNow);
+                attempt.Joiner = new EnrollmentJoiner(account, attempt.H, attempt.Lockout, () => AttemptNow(attempt), expires: attempt.Expires);
                 return attempt.Joiner.Commit() is { } commit ? (commit, null) : (null, "locked");
             }
             if (attempt.Joiner is null || !CryptographicOperations.FixedTimeEquals(attempt.H, h) || attempt.Approver != approver) { return (null, "attempt-bound"); }
@@ -167,18 +174,18 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
     // Code 2 as the person typed it here: the only thing charged (persisted before the answer). Three wrong end the attempt; three an hour lock.
     public string EnterCode2(string typed)
     {
-        Attempt? ended = null; CodeResult result; string? stored = null;
         lock (sync)
         {
             if (open is not { Joiner: { } joiner } attempt) { return "no-exchange"; }
-            var live = joiner.Code1Shown is not null && Clock.GetUtcNow() < attempt.Expires;
-            result = joiner.EnterCode2(typed);
+            if (Expired(attempt)) { End(attempt); return "ended"; }
+            var live = joiner.Code1Shown is not null;
+            var result = joiner.EnterCode2(typed);
             attempt.Matched |= result == CodeResult.Match;
-            if (result == CodeResult.Wrong || result == CodeResult.Ended && live) { stored = Charge(attempt.Log); }
-            if (result == CodeResult.Ended || stored is not null) { ended = attempt; }
+            string? stored = null;
+            if ((result == CodeResult.Wrong || result == CodeResult.Ended && live) && !Expired(attempt)) { stored = Charge(attempt.Log); }
+            if (result == CodeResult.Ended || stored is not null) { End(attempt); }
+            return stored ?? result.ToString().ToLowerInvariant();
         }
-        if (ended is not null) { End(ended); }
-        return stored ?? result.ToString().ToLowerInvariant();
     }
 
     string? Charge(string log)
@@ -222,7 +229,7 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
         {
             if (open is not { } attempt || !ReferenceEquals(attempt, expected)) { return "no-attempt"; }
             if (currentAccount() != account) { return "account-changed"; }
-            if (Clock.GetUtcNow() >= attempt.Expires) { End(attempt); return "expired"; }
+            if (Expired(attempt)) { End(attempt); return "expired"; }
             if (!attempt.Matched || attempt.Joiner is not { } joiner) { return "not-matched"; }
             if (attempt.Genesis is not { } genesis) { return "no-genesis"; }
             if (relay.Generation is not { } generationId || relay.Entries.Count == 0) { return "no-roster"; }
@@ -234,6 +241,21 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
             }
             catch (RosterFormatException) { return "chain-invalid"; }
             if (!CryptographicOperations.FixedTimeEquals(verifier.Graph[0].Hash, genesis)) { return "genesis-mismatch"; }
+            var history = reader.Enrolling<string?>(account, generationId, earlier =>
+            {
+                if (earlier is null) { return null; }
+                lock (earlier)
+                {
+                    if (earlier.Graph.Count == 0 || !CryptographicOperations.FixedTimeEquals(earlier.Graph[0].Hash, genesis)) { return "genesis-mismatch"; }
+                    for (var i = 0; i < verifier.Graph.Count; i++)
+                    {
+                        var node = verifier.Graph[i];
+                        if (earlier.FirstAccepted(node.Hash) is { } at) { verifier.AdoptFirstAccepted(node.Hash, at); }
+                    }
+                }
+                return null;
+            }, code => code);
+            if (history is not null) { return history; }
             if (!verifier.State.PersonDevices.Contains(attempt.Approver) || verifier.State.ActiveAdd(attempt.Own.Id) is not { } add
                 || !joiner.Accepts(verifier.Graph[add].Entry, attempt.Own, attempt.Approver!)) { return "not-added"; }
             if (verifier.State.ActiveAdd(attempt.Approver!) is not { } by || verifier.OnProbation(by) || verifier.Held.Contains(attempt.Approver!)) { return "approver-probation"; }

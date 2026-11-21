@@ -573,6 +573,11 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
         if (_g.Find(add) is { } i && _g[i].IsAdd && (!_firstAccepted.TryGetValue(i, out var t) || at < t)) { _firstAccepted[i] = at; }
     }
 
+    // Only an accepted add, never a refused candidate. The caller must authenticate this verifier
+    // and use the same persisted running clock before adopting its time into another verifier.
+    public TimeSpan? FirstAccepted(byte[] add) =>
+        Holds(add) && _g.Find(add) is { } i && _firstAccepted.TryGetValue(i, out var at) ? at : null;
+
     public bool OnProbation(int add)
     {
         if (_g[add].Op == EntryOp.Genesis || State.IsConfirmed(add)) { return false; }

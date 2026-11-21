@@ -257,7 +257,141 @@ public sealed class HostEnrollmentTests : IDisposable
     // Its expiry timer never fires, so Finish's own expiry check is what refuses.
     sealed class StalledTimers() : FakeTimeProvider(DateTimeOffset.UnixEpoch)
     {
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) => new FakeTimeProvider().CreateTimer(callback, state, dueTime, period);
+        public Action? OnTimerDispose;
+        public TimeSpan WallShift;
+        public override DateTimeOffset GetUtcNow() => base.GetUtcNow() + WallShift;
+        public override long GetTimestamp() => base.GetUtcNow().UtcTicks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        sealed class TimerProbe(ITimer timer, Action disposing) : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => timer.Change(dueTime, period);
+            public void Dispose() { try { disposing(); } finally { timer.Dispose(); } }
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
+            new TimerProbe(new FakeTimeProvider().CreateTimer(callback, state, dueTime, period), () => OnTimerDispose?.Invoke());
+    }
+
+    [HostSignKeyTests.WindowsHostSignTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Only_an_approver_accepted_earlier_by_the_hosts_verified_chain_can_finish_and_retry(bool authenticated)
+    {
+        var reader = Reader(switched: false);
+        w.Add("+P", "G", "P", "G");
+        if (authenticated) { Assert.Equal("verified", reader.Update(Relay("+P"), Account).Outcome); }
+        w.Now += RosterVerifier.Probation - TimeSpan.FromHours(1);
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var (host, a, h) = Exchanged(time, "P", reader);
+        using (host)
+        {
+            var key = World.Keys("P").Dh.Public;
+            Assert.Equal("match", host.EnterCode2(a.Code2Shown!));
+            Assert.Null(host.Exchange(h, key, Asserted(key, "phone", "P"), "genesis", w.Entry("G").Hash).Refusal);
+            w.Add("+H", "P", "H", "+P", kind: "host", transcript: a.TranscriptToSign);
+            Assert.Equal("approver-probation", host.Finish(Relay("+P", "+H"), PinPath, () => w.Now, _ => true));
+            w.Now += TimeSpan.FromHours(1);
+            // The closed writer gate is not opened by enrollment; retrying with the same verified history must not reset probation.
+            Assert.Equal(authenticated ? "genesis-not-v3" : "approver-probation", host.Finish(Relay("+P", "+H"), PinPath, () => w.Now));
+            Assert.False(File.Exists(PinPath));
+            Assert.Equal(authenticated ? "pinned" : "approver-probation", host.Finish(Relay("+P", "+H"), PinPath, () => w.Now, _ => true));
+            Assert.Equal(authenticated, File.Exists(PinPath));
+        }
+    }
+
+    [HostSignKeyTests.WindowsHostSignTheory]
+    [InlineData("commit")]
+    [InlineData("offer")]
+    [InlineData("genesis")]
+    [InlineData("abandon")]
+    public void Every_remote_step_refuses_expiry_even_when_the_timer_has_not_fired(string step)
+    {
+        var time = new StalledTimers();
+        using var host = new HostEnrollment(Unpinned(), Account, null, name: "H", time: time);
+        Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        var h = RandomNumberGenerator.GetBytes(32);
+        byte[] value = [];
+        if (step != "commit")
+        {
+            var a = new EnrollmentApprover(Account, h, w.Id("H"), new(EnrollmentLockout.Counts.WrongEntries, time.GetUtcNow), time.GetUtcNow);
+            value = a.OnCommit(host.Exchange(h, G, Person, "commit", []).Value!)!;
+            if (step == "genesis")
+            {
+                Assert.True(a.OnReveal(host.Exchange(h, G, Person, "offer", value).Value!));
+                Assert.Equal(CodeResult.Match, a.EnterCode1(host.Shown.Code!));
+                Assert.Equal("match", host.EnterCode2(a.Code2Shown!));
+                w.Genesis();
+                value = w.Entry("G").Hash;
+            }
+        }
+        time.Advance(TimeSpan.FromMinutes(6));
+        Assert.Equal("expired", host.Exchange(h, G, Person, step, value).Refusal);
+        Assert.Null(host.Shown.Expires);
+        Assert.Empty(host.Charged);
+        Assert.False(File.Exists(AttemptLog));
+    }
+
+    [WindowsFact("host enrollment runs on the Windows host")]
+    public void Remote_expiry_uses_elapsed_time_not_forward_or_backward_wall_clock_changes()
+    {
+        var time = new StalledTimers();
+        using var host = new HostEnrollment(Unpinned(), Account, null, time: time);
+        Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        var h = RandomNumberGenerator.GetBytes(32);
+        time.WallShift = TimeSpan.FromDays(1);
+        Assert.Null(host.Exchange(h, G, Person, "commit", []).Refusal);
+        time.Advance(TimeSpan.FromMinutes(6));
+        time.WallShift = -TimeSpan.FromDays(1);
+        Assert.Equal("expired", host.Exchange(h, G, Person, "abandon", []).Refusal);
+        Assert.Null(host.Shown.Expires);
+        Assert.Empty(host.Charged);
+    }
+
+    [HostSignKeyTests.WindowsHostSignTheory]
+    [InlineData("correct")]
+    [InlineData("wrong")]
+    [InlineData("matched")]
+    public void A_late_commit_never_extends_code_entry_past_the_advertised_host_deadline(string entry)
+    {
+        var time = new StalledTimers();
+        using var host = new HostEnrollment(Unpinned(), Account, null, name: "H", time: time);
+        Assert.Null(host.Describe(profile, World.Keys("H").Dh.Public).Refusal);
+        var deadline = host.Shown.Expires;
+        time.Advance(EnrollmentLockout.AttemptLifetime - TimeSpan.FromSeconds(1));
+        var (a, _) = Join(host, time);
+        Assert.Equal(deadline, host.Shown.Expires);
+        var code = a.Code2Shown!;
+        if (entry == "matched") { Assert.Equal("match", host.EnterCode2(code)); }
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.Equal("ended", host.EnterCode2(entry == "wrong" ? "invalid" : code));
+        Assert.Empty(host.Charged);
+        Assert.False(File.Exists(AttemptLog));
+        Assert.Null(host.Shown.Expires);
+    }
+
+    [WindowsFact("host enrollment runs on the Windows host")]
+    public async Task The_third_wrong_mark_ends_under_the_real_lock_before_a_concurrent_entry_can_charge()
+    {
+        var time = new StalledTimers();
+        var (host, _, _) = Exchanged(time);
+        using (host)
+        {
+            var sync = typeof(HostEnrollment).GetField("sync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(host)!;
+            Assert.Equal("wrong", host.EnterCode2("invalid"));
+            Assert.Equal("wrong", host.EnterCode2("invalid"));
+            Task<string>? concurrent = null;
+            time.OnTimerDispose = () =>
+            {
+                Assert.Equal(3, JsonSerializer.Deserialize<long[]>(File.ReadAllBytes(AttemptLog))!.Length);
+                Assert.True(Monitor.IsEntered(sync), "ending must not release the mark's synchronization lock");
+                concurrent = Task.Run(() => host.EnterCode2("invalid"));
+            };
+            Assert.Equal("ended", host.EnterCode2("invalid"));
+            Assert.NotNull(concurrent);
+            Assert.Equal("no-exchange", await concurrent.WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.Equal(3, host.Charged.Count);
+            Assert.Equal(3, JsonSerializer.Deserialize<long[]>(File.ReadAllBytes(AttemptLog))!.Length);
+        }
     }
 
     [WindowsFact("host enrollment runs on the Windows host")]
