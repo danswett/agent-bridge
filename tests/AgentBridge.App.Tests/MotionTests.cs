@@ -1,5 +1,9 @@
 using System.Xml.Linq;
+using System.Reflection;
 using AgentBridge.App.Core;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 
 // Motion (ui.md §5.3, #232): every entry timed by the generated AbMotion* resources and nothing
@@ -8,6 +12,98 @@ using Xunit;
 // at its end and not touching it.
 public sealed class MotionTests
 {
+    [Theory]
+    [InlineData(0f, 81, 81, 1, false)]
+    [InlineData(0f, 1, 1, 1, true)]
+    [InlineData(0f, 1, 4, 1, false)]
+    [InlineData(0.25f, 1, 1, 1, false)]
+    [InlineData(0f, double.NaN, 1, 1, false)]
+    public void The_paused_row_proof_requires_stationary_pixels_near_its_own_start(float progress, double before, double after, double moving, bool expected) =>
+        Assert.Equal(expected, RowController.Value.DeclaringType!.GetMethod("Paused")!.Invoke(null, [progress, before, after, moving]));
+
+    [Theory]
+    [InlineData(new double[] { 1, 1 }, 1, 2)]
+    [InlineData(new double[] { 24, 46, 1, 1 }, 1, 4)]
+    [InlineData(new double[] { double.NaN, 1, 1 }, 1, 3)]
+    [InlineData(new double[] { 10, 20, 30, 40, 50, 60, 1, 1 }, 1, 8)]
+    [InlineData(new double[] { 1, 4, 8, 16, 32, 48, 64, 128 }, double.NaN, 8)]
+    public async Task The_row_sampler_waits_for_drawn_settlement_and_fails_with_last_pixels(double[] pixels, double expected, int frames)
+    {
+        var result = await (Task<object[]>)RowController.Value.DeclaringType!.GetMethod("Settle")!.Invoke(null, [pixels])!;
+        Assert.Equal(expected, (double)result[0]);
+        Assert.Equal(frames, result[1]);
+        if (double.IsNaN(expected))
+        {
+            Assert.Contains("8 capture frames", (string)result[2]);
+            Assert.Contains("64, 128", (string)result[2]);
+        }
+        else { Assert.Equal("", result[2]); }
+    }
+
+    [Theory]
+    [InlineData("initial", 0, 0, true)]
+    [InlineData("initial", 1, 1, true)]
+    [InlineData("retarget", 4, 4, true)]
+    [InlineData("initial", 5, 4, false)]
+    [InlineData("retarget", 5, 4, false)]
+    public async Task The_row_sampler_waits_bounded_frames_for_each_controller_and_reports_absence(string phase, int starts, int frames, bool found)
+    {
+        var result = await (Task<object[]>)RowController.Value.Invoke(null, [starts, phase])!;
+        Assert.Equal(found, result[0]);
+        Assert.Equal(frames, result[1]);
+        if (found) { Assert.Equal("", result[2]); }
+        else
+        {
+            Assert.Contains(phase, (string)result[2]);
+            Assert.Contains("4 capture frames", (string)result[2]);
+            Assert.Contains("never started", (string)result[2]);
+        }
+    }
+
+    static readonly Lazy<MethodInfo> RowController = new(() =>
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent; }
+        Assert.NotNull(root);
+        var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.App", "SelfTest.RowMotion.cs"))).GetRoot();
+        var method = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "RowMotionController");
+        var settle = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "RowMotionSettled");
+        var paused = syntax.DescendantNodes().OfType<InvocationExpressionSyntax>().Single(i => i.Expression.ToString() == "check"
+            && i.ArgumentList.Arguments[1].ToString().Contains("retarget is paused before motion is disabled")).ArgumentList.Arguments[0].Expression;
+        var source = $$"""
+            #nullable enable
+            using System; using System.Threading.Tasks;
+            class AnimationController { public float Progress; } class UIElement; class FrameworkElement : UIElement;
+            class Visual { public int Starts; public AnimationController? TryGetAnimationController(string name) => Probe.Frames >= Starts ? new() : null; }
+            public static class Probe {
+                public static int Frames;
+                static Task CaptureFrame(FrameworkElement root) { Frames++; return Task.CompletedTask; }
+                {{method}}
+                {{settle}}
+                public static async Task<object[]> Settle(double[] pixels) {
+                    Frames = 0; var message = "";
+                    var value = await RowMotionSettled(new(), () => pixels[Math.Min(Frames - 1, pixels.Length - 1)], (ok, text) => { if (!ok) message = text; }, "retarget");
+                    return [value, Frames, message];
+                }
+                public static bool Paused(float progress, double before, double after, double moving) {
+                    var retarget = new AnimationController { Progress = progress }; var paused = before; var held = after; var later = after;
+                    return {{paused}};
+                }
+                public static async Task<object[]> Run(int starts, string phase) {
+                    Frames = 0; var message = "";
+                    var result = await RowMotionController(new Visual { Starts = starts }, new(), (ok, text) => { if (!ok) message = text; }, phase);
+                    return [result is not null, Frames, message];
+                }
+            }
+            """;
+        var refs = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator).Select(p => MetadataReference.CreateFromFile(p));
+        using var output = new MemoryStream();
+        var result = CSharpCompilation.Create("RowControllerProbe", [CSharpSyntaxTree.ParseText(source)], refs,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)).Emit(output);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        return Assembly.Load(output.ToArray()).GetType("Probe")!.GetMethod("Run")!;
+    });
+
     // The generated file the app loads (tools/design-gen), read as the app reads it: by key.
     static readonly MotionCatalogue Catalogue = MotionCatalogue.From(Generated());
 
@@ -24,7 +120,7 @@ public sealed class MotionTests
     [Fact]
     public void Every_entry_runs_for_its_generated_token_and_none_runs_past_300_ms()
     {
-        Assert.Equal(15, MotionCatalogue.Names.Count);
+        Assert.Equal(16, MotionCatalogue.Names.Count);
         foreach (var name in MotionCatalogue.Names)
         {
             var entry = Catalogue[name];
@@ -155,6 +251,18 @@ public sealed class MotionTests
     {
         Assert.Equal(TimeSpan.FromSeconds(1.2), Catalogue.WorkingPeriod);
         Assert.Equal(TimeSpan.FromSeconds(8), Catalogue.DelegatingPeriod);
+    }
+
+    [Fact]
+    public void Rows_shift_on_the_generated_curve_and_reduced_motion_closes_the_gap_without_travel()
+    {
+        var resources = Generated();
+        var shift = Catalogue.Enter("Shift", animations: true);
+        Assert.Equal(TimeSpan.Parse(resources("AbMotionShiftDuration")!, System.Globalization.CultureInfo.InvariantCulture), shift.Duration);
+        Assert.Equal(MotionEase.Parse(resources("AbMotionShiftEase")!), shift.Ease);
+        Assert.Equal(MotionStep.None, Catalogue.Enter("Shift", animations: false));
+        Assert.Equal(Catalogue.CrossFade, Catalogue.Exit("ListItem", animations: false).Duration);
+        Assert.True(Catalogue.Exit("ListItem", animations: true).Duration < shift.Duration);
     }
 
     [Fact]
