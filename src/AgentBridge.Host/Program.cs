@@ -987,7 +987,20 @@ async Task<int> ServeAsync(HostHandover handover)
     var liteRegistry = new AgentBridge.Host.Fleet.RelayFleetRoster(accountGate: samePcPin.AccountGate);
     var liteFleetRoster = new AgentBridge.Host.Fleet.LiteFleetRoster(liteRegistry.CaptureMessagingConnection, liteKill, () => identity.Account?.AccountId, samePcPin.AccountGate);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin), Log); }
+    AgentPipeLaunch? grantPipe = null;
+    if (agentCredentials is { } grantCredentials)
+    {
+        var (grantRequests, grantRequestsProblem) = homeAssistant is { } ha ? (ha.LaunchRequests, ha.LaunchRequestsProblem)
+            : AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(identity.Folder, TimeProvider.System);
+        grantPipe = new AgentPipeLaunch(identity.Folder, grantCredentials, service, agentAudit, grantRequests, grantRequestsProblem,
+            fleetGrants: new FleetGrantLaunch(identity.Folder, identity.Key, () => identity.Account?.AccountId,
+                Wire.DeviceId(identity.Key.Public), grantCredentials, service, launcher));
+        if (homeAssistant is not null && !ReferenceEquals(grantPipe.Requests, homeAssistant.LaunchRequests))
+        { throw new InvalidOperationException("HA and grant launches must share one request-store writer."); }
+        launcher.RequestRegistered += (id, session) => grantPipe.Registered(id, session);
+        launcher.RequestFailed += id => grantPipe.Failed(id);
+    }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);

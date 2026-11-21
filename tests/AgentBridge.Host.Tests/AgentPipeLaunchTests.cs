@@ -31,7 +31,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
 
     Pipe Open(string session = "parent", string scope = AgentProtocol.ScopeReadReplyLaunch, int depth = 0,
         string launch = "person-launch", AgentCredentials? credentials = null, (LaunchRequestStore?, string?)? store = null,
-        P256KeyPair? grantKey = null, bool legacy = false)
+        P256KeyPair? grantKey = null, bool legacy = false, bool grantOnly = false)
     {
         credentials ??= new AgentCredentials(folder, "machine");
         launcher.FleetConfig ??= Running();
@@ -45,7 +45,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem, fleetGrants: grantKey is null ? null
             : new FleetGrantLaunch(folder, grantKey, () => "123", new('a', 32), credentials, service, launcher));
         return new(LocalApi.Handler(service, null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")),
-            credentials: credentials, audit: audit, agentLaunch: legacy ? null : agentLaunch), channel, credentials);
+            credentials: credentials, audit: audit, agentLaunch: legacy || grantOnly ? null : agentLaunch, grantLaunch: grantOnly ? agentLaunch : null), channel, credentials);
     }
 
     JsonElement Body(string? id = null, string prompt = "hello", string workspace = "App", string? permissions = LaunchProtocol.Ask) =>
@@ -131,9 +131,9 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal("{ damaged", File.ReadAllText(Path.Combine(folder, LaunchRequestStore.FileName)));
     }
 
-    (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key)
+    (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key, bool grantOnly = false)
     {
-        var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key);
+        var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, grantOnly: grantOnly);
         var caller = pipe.Credentials.Of(pipe.Channel)!;
         var now = DateTimeOffset.UtcNow;
         var scope = new GrantScope([new('a', 32)], ["App"], ["claude"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
@@ -149,6 +149,27 @@ public sealed class AgentPipeLaunchTests : IDisposable
             Model: "small", Effort: "medium", Context: "default", Permissions: "ask", Prompt: prompt), ProtocolJson.Options);
     static async Task<FleetLaunchReceipt> GrantedLaunch(Pipe pipe, JsonElement body) =>
         Assert.IsType<FleetLaunchReceipt>(await pipe.Handle(pipe.Channel, LaunchProtocol.Launch, body));
+
+    [Fact]
+    public async Task Production_grant_only_wiring_keeps_ordinary_refusal_and_uses_the_existing_grant_pipe()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, _) = Granted(key, grantOnly: true);
+        Assert.Contains("for the person", await Refusal(pipe, LaunchProtocol.Launch, Body()));
+        Assert.Equal(0, launcher.Launches);
+        var result = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(1, launcher.Launches);
+        Assert.False(result.Registered);
+        Assert.Equal(LaunchOutcome.Unconfirmed, result.Result.Outcome);
+    }
+
+    [Fact]
+    public async Task An_unavailable_shared_request_store_does_not_change_the_ordinary_legacy_route()
+    {
+        var pipe = Open(store: (null, "not open"), grantOnly: true);
+        Assert.Contains("for the person", await Refusal(pipe, LaunchProtocol.Launch, Body()));
+        Assert.Equal(0, launcher.Launches);
+    }
 
     [Theory]
     [InlineData(false)]
