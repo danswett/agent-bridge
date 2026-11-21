@@ -198,8 +198,10 @@ Owner decision, Nov 21, 2026, 12:47 PT: grants may launch Allow-all sessions.
   `allowAllLaunch: true` **and** the receiving host's current policy permits Allow-all
   for that origin. Either one false refuses `scope`.
 - Policy bounds the grant, never the reverse: a grant cannot reinterpret `ask` limits
-  or exceed agent launch ceilings. Until the separately reviewed Allow-all policy
-  extension lands, policy refuses even with the flag set.
+  or exceed agent launch ceilings. The owner approved grants launching Allow-all
+  (12:47 PT); the Allow-all policy extension is in scope of G5 (brief 266). Before G5
+  lands, host policy refuses Allow-all even with the flag set; after G5, the grant
+  flag AND receiver policy are both required.
 - With the flag false or policy off, omitted permissions resolve to `ask`; the result
   reports the `permissions` actually used.
 
@@ -234,7 +236,7 @@ Fleet wrappers become thin, policy-only callers of these verbs.
 |---|---|
 | `launch-remote.ps1` | `fleet launch --target <node id>` (omit `--target` for local) |
 | `end-one.ps1` | `fleet end --session <id>` |
-| `end-many.ps1` | One `fleet end` per session, each with its own fresh `--request`; never one request id for many sessions |
+| `end-many.ps1`, `end-sessions.ps1` | One `fleet end` per session, each with its own fresh `--request`; never one request id for many sessions |
 
 Wrapper rules, all mandatory:
 
