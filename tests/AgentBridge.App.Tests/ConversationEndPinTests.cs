@@ -24,13 +24,17 @@ public sealed class ConversationEndPinTests
         Assert.Empty(view.Scroller.Targets);
     }
 
-    [Fact]
-    public void A_screen_reader_move_during_remeasurement_releases_the_end_pin()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_screen_reader_move_during_remeasurement_releases_the_end_pin(bool layoutFirst)
     {
         var view = new SessionView();
+        view.Scroller.ViewportHeight = 299;
         view.Scroller.ScrollableHeight = 52304;
         view.Moved(52304);
         view.Scroller.ScrollableHeight = 52149;
+        if (layoutFirst) { view.Follow(); view.Scroller.Targets.Clear(); }
         view.Moved(50000);
         view.Follow();
         Assert.False(view.Pinned);
@@ -137,6 +141,7 @@ public sealed class ConversationEndPinTests
     public void A_remeasured_extent_does_not_release_the_bottom_pin_when_the_list_adjusts_its_anchor(bool layoutFirst)
     {
         var view = new SessionView();
+        view.Scroller.ViewportHeight = 299;
         view.Scroller.ScrollableHeight = 52304;
         view.Moved(52304);
         view.Scroller.ScrollableHeight = 52149;
@@ -148,6 +153,33 @@ public sealed class ConversationEndPinTests
         view.Moved(52149);
         view.Moved(52049);
         Assert.False(view.Pinned);
+    }
+
+    [Theory]
+    [InlineData(52304)]
+    [InlineData(52149)]
+    public void A_shrinking_extent_keeps_the_old_or_clamped_end_pinned(double offset)
+    {
+        var view = new SessionView();
+        view.Scroller.ScrollableHeight = 52304;
+        view.Moved(52304);
+        view.Scroller.ScrollableHeight = 52149;
+        view.Moved(offset);
+        view.Follow();
+        Assert.True(view.Pinned);
+        Assert.Equal(offset == 52304 ? [52149.0] : [], view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void A_prepend_during_our_own_pending_correction_compensates_the_added_rows()
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        view.ReleasePin();
+        view.Scrolling(correction: 150);
+        view.DrawEarlierForProbe();
+        Assert.Equal(2, view.ShownCount);
+        Assert.Equal([300.0], view.Scroller.Targets);
     }
 
     [Fact]

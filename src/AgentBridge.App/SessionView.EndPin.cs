@@ -86,9 +86,16 @@ public sealed partial class SessionView
     void PinViewChanged(ScrollViewer scroll)
     {
         var (offset, extent) = (scroll.VerticalOffset, scroll.ScrollableHeight);
-        if (pinEnd && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5
-            && Math.Abs(extent - was.Extent) < 0.5
-            && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5 && Math.Abs(extent - asked) >= 0.5)) { ReleasePin(); }
+        if (pinEnd && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5)
+        {
+            var remeasure = Math.Abs(extent - was.Extent);
+            // A remeasure can shift the virtualised anchor by the extent delta plus one viewport.
+            // After layout queued the end correction, only that viewport-sized residual is exempt.
+            var layoutOnly = Math.Abs(extent - offset) <= 1.5
+                || remeasure >= 0.5 && Math.Abs(offset - was.Offset) <= remeasure + scroll.ViewportHeight + 1.5
+                || anchoring is { } end && Math.Abs(extent - end) < 0.5 && extent - offset <= scroll.ViewportHeight + 1.5;
+            if (!layoutOnly && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5)) { ReleasePin(); }
+        }
         seen = (offset, extent);
     }
     // A final event can belong to a correction queued before this navigation request.

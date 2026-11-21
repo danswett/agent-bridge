@@ -77,6 +77,7 @@ public sealed partial class SessionView
             for (var i = 0; i < common; i++) { blocks[i] = new ConversationBlock(next[i]); }
             while (blocks.Count > next.Count) { blocks.RemoveAt(blocks.Count - 1); }
             for (var i = common; i < next.Count; i++) { blocks.Add(new ConversationBlock(next[i])); }
+            ConversationList.ItemsSource = blocks;
         }
         // Indexes have moved: the anchor taken again once the list has laid them out.
         anchor = null;

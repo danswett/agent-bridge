@@ -97,7 +97,7 @@ namespace Microsoft.UI.Xaml.Controls
         readonly List<(object Event, Input.PointerEventHandler Handler, bool HandledToo)> handlers = [];
         public double VerticalOffset { get; set; } = 100;
         public double ScrollableHeight { get; set; } = 200;
-        public double ViewportHeight { get; } = 100;
+        public double ViewportHeight { get; set; } = 100;
         public List<double> Targets { get; } = [];
         public bool AcceptChange { get; set; } = true;
 
