@@ -31,14 +31,16 @@ public sealed class HaltPolicyStore(string folder, TimeProvider? time = null)
     internal Action<string, byte[]> Replace { get; set; } = (path, bytes) => { File.WriteAllBytes(path + ".tmp", bytes); File.Move(path + ".tmp", path, overwrite: true); };
     internal TimeSpan LockWait { get; set; } = TimeSpan.FromSeconds(45);
 
-    sealed record State(HaltPolicyEnvelope? Policy, DateTimeOffset Seen, bool Contradicted, IReadOnlyDictionary<string, long> Floors)
-    { public static readonly State Empty = new(null, DateTimeOffset.MinValue, false, new Dictionary<string, long>()); }
+    // Halts: the policy's, plus those of any other body signed at its sequence, until a higher one.
+    sealed record State(HaltPolicyEnvelope? Policy, DateTimeOffset Seen, bool Contradicted, IReadOnlyDictionary<string, long> Floors, IReadOnlySet<string> Halts)
+    { public static readonly State Empty = new(null, DateTimeOffset.MinValue, false, new Dictionary<string, long>(), new HashSet<string>()); }
 
     // read: a policy ReadAsync verified just now, or null when none was read (cached state only).
     public async Task<HaltPolicyVerdict> CheckAsync(HaltPolicyEnvelope? read, string? version, CancellationToken cancellationToken = default)
     {
-        var now = time.GetUtcNow();
         using var held = await LockAsync(cancellationToken).ConfigureAwait(false);
+        // After the wait: the lock can take long enough for a policy to expire meanwhile.
+        var now = time.GetUtcNow();
         var disk = held is null ? null : Load();
         var state = disk is null ? memory : Merge(memory, disk);
         var problem = disk is null ? "halt policy state could not be locked or read" : now < state.Seen ? "the clock went back" : null;
@@ -46,14 +48,18 @@ public sealed class HaltPolicyStore(string folder, TimeProvider? time = null)
         {
             if (read.IssuedAt > now) { problem ??= "halt policy issued in the future"; }
             else if (read.Sequence < (state.Policy?.Sequence ?? 0)) { problem ??= "halt policy sequence went back"; }
-            else { state = Merge(state, new State(read, now, false, read.Releases.ToDictionary(Key, Run))); }
+            // An expired policy, however high, clears no halt.
+            else if (read.ExpiresAt <= (state.Seen > now ? state.Seen : now)) { problem ??= "halt policy already expired"; }
+            else { state = Merge(state, new State(read, now, false, read.Releases.ToDictionary(Key, Run), read.Halted.ToHashSet(StringComparer.Ordinal))); }
         }
         memory = state = state with { Seen = state.Seen > now ? state.Seen : now };
         if (disk is not null && !Save(state)) { problem ??= "halt policy state not saved"; }
         var policy = state.Policy;
+        // Again after the save, which can be slow; a verdict holds at most until now.
+        var end = time.GetUtcNow();
         problem ??= policy is null ? "no verified halt policy" : state.Contradicted ? "halt policy contradicted at its sequence"
-            : state.Seen >= policy.ExpiresAt ? "halt policy expired" : null;
-        var outcome = version is not null && policy?.Halted.Contains(version, StringComparer.Ordinal) == true ? HaltPolicyOutcome.KnownHalted
+            : state.Seen >= policy.ExpiresAt || end >= policy.ExpiresAt ? "halt policy expired" : null;
+        var outcome = version is not null && state.Halts.Contains(version) ? HaltPolicyOutcome.KnownHalted
             : problem is null ? HaltPolicyOutcome.Verified : HaltPolicyOutcome.Unavailable;
         return new(outcome, policy, state.Floors, problem);
     }
@@ -70,7 +76,8 @@ public sealed class HaltPolicyStore(string folder, TimeProvider? time = null)
         var floors = new Dictionary<string, long>(low.Floors);
         foreach (var (key, run) in high.Floors) { floors[key] = Math.Max(run, floors.GetValueOrDefault(key)); }
         return new(high.Policy, a.Seen > b.Seen ? a.Seen : b.Seen,
-            high.Contradicted || same && (low.Contradicted || high.Policy!.BodyHash != low.Policy!.BodyHash), floors);
+            high.Contradicted || same && (low.Contradicted || high.Policy!.BodyHash != low.Policy!.BodyHash), floors,
+            same ? high.Halts.Union(low.Halts, StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal) : high.Halts);
     }
 
     // Null when the file exists but can't be read now; unparseable content is lost state.
@@ -82,7 +89,8 @@ public sealed class HaltPolicyStore(string folder, TimeProvider? time = null)
             var root = doc.RootElement;
             var body = root.GetProperty("body").GetBytesFromBase64();
             return new(body.Length == 0 ? null : HaltPolicyReader.Parse(body), root.GetProperty("seen").GetDateTimeOffset(),
-                root.GetProperty("contradicted").GetBoolean(), root.GetProperty("floors").EnumerateObject().ToDictionary(f => f.Name, f => f.Value.GetInt64()));
+                root.GetProperty("contradicted").GetBoolean(), root.GetProperty("floors").EnumerateObject().ToDictionary(f => f.Name, f => f.Value.GetInt64()),
+                root.GetProperty("halts").EnumerateArray().Select(h => h.GetString() ?? throw new FormatException()).ToHashSet(StringComparer.Ordinal));
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException or JsonException or InvalidOperationException
             or FormatException or KeyNotFoundException or HaltPolicyUnavailableException) { return State.Empty; }
@@ -101,6 +109,9 @@ public sealed class HaltPolicyStore(string folder, TimeProvider? time = null)
             json.WriteStartObject("floors");
             foreach (var (key, run) in state.Floors) { json.WriteNumber(key, run); }
             json.WriteEndObject();
+            json.WriteStartArray("halts");
+            foreach (var halt in state.Halts) { json.WriteStringValue(halt); }
+            json.WriteEndArray();
             json.WriteEndObject();
         }
         try { Replace(Path.Combine(folder, FileName), buffer.ToArray()); return true; }

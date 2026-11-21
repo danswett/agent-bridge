@@ -87,6 +87,29 @@ public sealed class HaltPolicyStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Equivocation_keeps_the_halts_of_both_bodies_and_an_expired_higher_sequence_clears_none()
+    {
+        await Outcome(Policy(42, halted: ""), null);
+        Assert.Equal(KnownHalted, await Outcome(Policy(42), "0.1.7214"));
+        Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214"));
+        Assert.Equal(Unavailable, await Outcome(Policy(43, halted: "", issued: Issued.AddHours(-6)), "0.1.7300"));
+        Assert.Equal(KnownHalted, await Outcome(Policy(43, halted: "", issued: Issued.AddHours(-6)), "0.1.7214"));
+    }
+
+    [Fact]
+    public async Task Time_is_read_after_the_lock_wait_and_again_after_the_save()
+    {
+        await Outcome(Policy(42), null);
+        clock.SetUtcNow(Issued.AddHours(6).AddMinutes(-1));
+        var waits = new HaltPolicyStore(folder, clock)
+        { OpenLock = path => { clock.Advance(TimeSpan.FromMinutes(2)); return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); } };
+        Assert.Equal(Unavailable, await Outcome(null, "0.1.7300", waits));
+        var late = new FakeTimeProvider(Issued.AddHours(7));
+        var saves = new HaltPolicyStore(folder, late) { Replace = (_, _) => late.Advance(TimeSpan.FromHours(6)) };
+        Assert.Equal(Unavailable, await Outcome(Policy(43, issued: Issued.AddHours(6.5)), "0.1.7300", saves));
+    }
+
+    [Fact]
     public async Task A_clock_put_back_after_a_restart_is_unavailable_and_cannot_revive_an_expired_sequence()
     {
         await Outcome(Policy(42), null);
