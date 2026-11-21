@@ -18,6 +18,7 @@ public sealed class ConversationBlocksTests
         var card = new SessionCardViewModel(Make.Session(), new CardContext
         {
             Host = connection, Deliveries = new Deliveries(connection, new LockedDispatcher()), Folds = new FoldStore(null),
+            Capabilities = () => connection.Capabilities,
         });
         void Say(string id, string response)
         {
