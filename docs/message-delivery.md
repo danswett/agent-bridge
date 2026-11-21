@@ -32,10 +32,11 @@ This slice supplies only fake adapters in tests: no CLI verb, owner approval UI,
 Fleet store writer, qualification keys or live run is enabled.
 
 ## Inactive qualification controller (A-ii-2b)
-`qualification.start` has a source-only, grant-id-only core; registration and trusted
-adapters remain absent, hence default refusal. Each consumed grant permits one
-A-ii-1 challenge and at most one minute of qualification/receipt validity, also
-bounded by the grant. Final-effect fencing, raw queued correlation and current
+`qualification.start` has a source-only core requiring the grant id and host-owned
+approved target/challenge; registration and trusted adapters remain absent, hence
+default refusal. Each consumed grant permits that nonce once and at most one minute
+of qualification/receipt validity, bounded by the grant. Final-effect fencing,
+raw queued correlation and current
 identity are mandatory; ambiguity stays Unknown. Explicit unsupported transport
 is a negative result, never permission to fall back. Receipt fields contain only
 the SHA, hashed bindings/nonce/snapshot, verdict, expiry and content hash, appended

@@ -57,7 +57,7 @@ internal sealed class QueueQualification
     internal static async Task<QueueQualification> CaptureAtLaunchAsync(Func<Task<string?>> capture, Func<IReadOnlyList<string>?> read, TimeProvider clock)
         => new(capture, read, clock, QueueTarget.Decode(await capture()));
 
-    internal async Task<Challenge?> IssueAsync(TimeSpan expiresAfter)
+    internal async Task<Challenge?> IssueAsync(TimeSpan expiresAfter, Challenge? approvedChallenge = null)
     {
         await gate.WaitAsync();
         try
@@ -67,7 +67,7 @@ internal sealed class QueueQualification
                 || !Read(null, out _) || !working || QueueTarget.Decode(await capture()) != target) { return null; }
             lifetime = expiresAfter;
             issued = clock.GetTimestamp();
-            return pending = new Challenge("agent-bridge-qualify:" + Convert.ToHexString(RandomNumberGenerator.GetBytes(32)));
+            return pending = approvedChallenge ?? new Challenge("agent-bridge-qualify:" + Convert.ToHexString(RandomNumberGenerator.GetBytes(32)));
         }
         finally { gate.Release(); }
     }
