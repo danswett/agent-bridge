@@ -6,6 +6,35 @@ public sealed class HaInventoryTests
 {
     static readonly string[] Artifacts = ["ha-token.dpapi", "ha-token", "ha-auth.json", "ha-connector.json"];
 
+    [Fact]
+    public void Load_phase_inventory_exists_and_its_repository_source_links_resolve()
+    {
+        var path = Path.GetFullPath(Path.Combine(VectorFiles.Folder, "..", "..", "design", "load-phase-data-source.md"));
+        Assert.True(File.Exists(path), "The sampler load/phase discovery document must exist.");
+        var links = System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(path), @"\[[^\]]+\]\(([^)]+)\)");
+        Assert.NotEmpty(links);
+        var localSources = 0;
+        foreach (System.Text.RegularExpressions.Match link in links)
+        {
+            var target = link.Groups[1].Value;
+            if (Uri.TryCreate(target, UriKind.Absolute, out _)) { continue; }
+            var parts = target.Split('#', 2);
+            var destination = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!,
+                parts[0].Replace('/', Path.DirectorySeparatorChar)));
+            Assert.True(File.Exists(destination), $"Broken load/phase source link: {target}");
+            if (parts.Length == 2 && parts[1].StartsWith('L'))
+            {
+                foreach (var line in parts[1].Split("-L"))
+                {
+                    Assert.True(int.TryParse(line.TrimStart('L'), out var number), $"Invalid source line: {target}");
+                    Assert.InRange(number, 1, File.ReadLines(destination).Count());
+                }
+            }
+            localSources++;
+        }
+        Assert.True(localSources > 0, "The discovery must cite repository source files, not only external URLs.");
+    }
+
     static (int Code, string Text, string Error) Inventory(string folder)
     {
         var output = new StringWriter();
