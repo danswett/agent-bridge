@@ -21,7 +21,7 @@ public sealed partial class MainViewModel
     public SignInSheetViewModel? SignInSheet { get => signInSheet; private set => Set(ref signInSheet, value); }
     SignInSheetViewModel? signInSheet;
 
-    // A polite announcement for the app to make: "Copilot on DEV-VM1 needs sign-in". Never the code.
+    // A polite announcement for the app to make: "Copilot on Laptop needs sign-in". Never the code.
     public event Action<string>? Announce;
     // The sheet closed, by its banner's key: focus goes back to that banner. True when this close is
     // a person here signing in: focus goes to its status line, never back to Sign in. Decided for

@@ -258,7 +258,8 @@ The relay's own received-time/sequence checks are not independent reader verific
 in-memory cache, the purge of unlisted machines, and pinned-roster membership (#2643). The 60 s
 `at` rule, `registry-subscribe` and signature checks are still to come.
 
-* A host sends a new snapshot when any listed field changes, debounced to at most one per 2 s,
+* A host sends a new snapshot when any listed field changes, debounced to at most one per 2 s
+  (a session that ends is sent at once, never held for the debounce),
   plus a heartbeat every 20 s even if nothing changed. A heartbeat is a new snapshot: `seq` rises
   and `at` is the current time. The relay pushes each accepted change at once. Expected lag:
   under 3 s, with a hard target of 5 s.

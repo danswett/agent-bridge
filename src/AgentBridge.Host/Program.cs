@@ -877,6 +877,8 @@ async Task<int> ServeAsync(HostHandover handover)
     // Approve-gesture enrollment (#3450, brief 184): one attempt holder per signed-in account, app-only on the pipe.
     var enrollmentGate = new object();
     HostEnrollment? enrollment = null;
+    // The serving connection's roster read, for Finish: never a second connection as this device.
+    Func<Task<RelayRoster?>>? liveRoster = null;
     HostEnrollment? Enrollment()
     {
         lock (enrollmentGate)
@@ -928,7 +930,11 @@ async Task<int> ServeAsync(HostHandover handover)
         AgentVerification = agentVerification,
         AgentSignIn = agentSignIn,
         EnrollDescribe = () => Enrollment()?.Describe(identity.Folder, identity.Key.Public) ?? (null, "signed-out"),
-        EnrollStatus = () => Enrollment()?.Status(null, "") ?? "not-enrolled",
+        EnrollStatus = () => Enrollment()?.Status() ?? "not-enrolled",
+        EnrollShown = () => Enrollment()?.Shown ?? default,
+        EnrollCode = typed => Enrollment()?.EnterCode2(typed) ?? "signed-out",
+        EnrollFinish = () => HostEnrollment.FinishAsync(Enrollment(), liveRoster, HostRosterPinWriter.PinPath(identity.Folder), HostRoster.Now,
+            () => identity.Account?.AccountId),
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -939,6 +945,8 @@ async Task<int> ServeAsync(HostHandover handover)
             // Before anything says the new account: other machines' readings kept for the one before
             // are never served under it, even while the relay reconnects.
             peerUsage?.Bind(result.AccountId);
+            // An enrollment attempt for the account before ends first; a Finish already writing completes before it.
+            lock (enrollmentGate) { enrollment?.Dispose(); enrollment = null; }
             identity.Save(result);
             File.WriteAllText(Path.Combine(identity.Folder, "relay.txt"), relay.ToString());
             signedInRelay = relay;
@@ -1027,10 +1035,14 @@ async Task<int> ServeAsync(HostHandover handover)
             attempt.Restart();
             await using var relay = await RelayClient.ConnectAsync(relayUri, account.Token, identity.Key, name, "host", current.Token);
             diagnosticsJournal.Record(JournalEvents.RelayConnected(attempt.Elapsed, HostVersion()));
+            var remote = trustedPeers.Handler(service, agentAudit);
             var hub = new ChannelHub(relay, identity.Key, name, "host", trustedPeers.Allows)
             {
                 JsonOptions = ProtocolJson.Options,
-                Handler = trustedPeers.Handler(service, agentAudit),
+                // The approver's enrollment steps reach only an attempt the person opened here, from a relay-asserted person (pinned while device pins are on).
+                Handler = (ch, op, data) => op.StartsWith(HostEnrollment.StepPrefix, StringComparison.Ordinal)
+                    ? Task.FromResult<object?>(HostEnrollment.Remote(trustedPeers.HasRole(ch, TrustedPeerStore.Person) ? Enrollment() : null,
+                        ch.HandshakeHash, ch.PeerStatic, ch.Relay.Presence.FirstOrDefault(p => p.Id == ch.PeerId), op, data)) : remote(ch, op, data),
                 // Answered from an IK first message (#603), which a relay can replay: hello only
                 // reads, so running it again changes nothing.
                 EarlyOps = [Ops.Hello],
@@ -1066,6 +1078,7 @@ async Task<int> ServeAsync(HostHandover handover)
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff.Reset();
+            liveRoster = () => relay.GetRosterAsync(current.Token);
             // security.roster: off reads, verifies and logs once; observe keeps the pinned reader fed, read-only.
             _ = Task.Run(() => rosterObserve.ConnectedAsync(relay.GetRosterAsync, relay.AccountId, relay.Completion, current.Token));
             since.Restart();
@@ -1098,7 +1111,7 @@ async Task<int> ServeAsync(HostHandover handover)
         // Anything else the relay or network does to one connection is a reason to
         // reconnect, never to exit: the relay is not trusted, and a host that one bad frame
         // can stop is a denial of service. That includes a cancellation neither token above
-        // asked for: the socket's own keep-alive aborts with one, and on DSWETT-DEV-VM1 one
+        // asked for: the socket's own keep-alive aborts with one, and on a dev machine one
         // that got this far took the host down for good, minutes after a relay deploy (#40).
         catch (Exception e)
         {

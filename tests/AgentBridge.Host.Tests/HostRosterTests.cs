@@ -5,6 +5,16 @@ using Xunit;
 
 public sealed class HostRosterTests
 {
+    [Fact]
+    public void Unsupported_security_roster_reports_both_available_modes()
+    {
+        using var document = JsonDocument.Parse("{\"roster\":\"enforce\"}");
+        var (_, problems) = SecuritySettings.Read(document.RootElement);
+        var problem = Assert.Single(problems);
+        Assert.Contains("\"off\" or \"observe\"", problem);
+        Assert.DoesNotContain("the only mode", problem);
+    }
+
     static RelayRoster Held(World w, params string[] labels) =>
         new("observe", RosterFixture.Generation, [.. labels.Select(l => w.Entry(l).Canonical())]);
 
