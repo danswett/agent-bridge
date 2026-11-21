@@ -100,6 +100,63 @@ public sealed class MotionCatalogue
     public static bool Loops(bool animations) => animations;
 }
 
+public enum ExceptionLineMotion { None, Enter, Leave }
+public readonly record struct ExceptionLineChange(ExceptionLineMotion Motion, string Text, Tone Tone);
+
+// Only changed exception words move; a cleared line leaves a drawn-only copy of its last words.
+public sealed class ExceptionLineFade
+{
+    string text = "";
+    Tone tone;
+
+    public ExceptionLineChange Read(string next, Tone nextTone, bool reset = false)
+    {
+        var old = new ExceptionLineChange(ExceptionLineMotion.Leave, text, tone);
+        var changed = text != next;
+        (text, tone) = (next, nextTone);
+        if (reset || !changed) { return new(ExceptionLineMotion.None, next, nextTone); }
+        return next.Length > 0 ? new(ExceptionLineMotion.Enter, next, nextTone) : old;
+    }
+}
+
+public enum SelectionMotionKind { None, Slide, Fade }
+public readonly record struct SelectionMove(SelectionMotionKind Kind, double X = 0, double Y = 0);
+
+public sealed class SelectionTracker<T> where T : class
+{
+    public T? Current { get; private set; }
+
+    public bool Change(T? next, T? chosen)
+    {
+        // ListView may clear selection while moving a container, or on Ctrl+click; the chosen
+        // session stays open and SyncList restores it. That is not another selection.
+        if (ReferenceEquals(Current, next) || next is null && Current is not null && ReferenceEquals(Current, chosen)) { return false; }
+        Current = next;
+        return true;
+    }
+
+    public void Reset() => Current = null;
+}
+
+public static class SelectionMotion
+{
+    public static SelectionMove Between(LookBox? previous, LookBox? next, LookBox viewport, bool animations)
+    {
+        if (!animations || next is not { } to || !Visible(to, viewport)) { return default; }
+        return previous is { } from && Visible(from, viewport)
+            ? new(SelectionMotionKind.Slide, from.X - to.X, from.Y - to.Y)
+            : new(SelectionMotionKind.Fade);
+    }
+
+    static bool Visible(LookBox box, LookBox viewport) =>
+        Usable(box) && Usable(viewport) && box.X < viewport.X + viewport.Width && box.X + box.Width > viewport.X
+        && box.Y < viewport.Y + viewport.Height && box.Y + box.Height > viewport.Y;
+
+    static bool Usable(LookBox box) =>
+        double.IsFinite(box.X) && double.IsFinite(box.Y) && double.IsFinite(box.Width) && double.IsFinite(box.Height)
+        && box.Width > 0 && box.Height > 0;
+}
+
 // Scroll to a question (ui.md §5.3): the conversation follows a question that arrives only while
 // the person is at its end, and never while they have scrolled back through it, are touching it, or
 // have the pointer over it (#261's guard: a pointer over the conversation counts as a finger on it).
@@ -119,6 +176,9 @@ public sealed class ConversationFollow
     public bool AtEnd { get; private set; } = true;
     // A finger on the conversation, a pan under way, or a mouse or pen over it or pressed in it.
     public bool Held => contacts.Count > 0 || manipulating || over.Count > 0 || pressed.Count > 0;
+    public event Action? HoldEnded;
+
+    void EndedHold(bool held) { if (held && !Held) { HoldEnded?.Invoke(); } }
 
     // The view moved. Only a move of the view counts: the conversation growing or shrinking under
     // a still view (a response streaming in, a question laid out above) leaves the person where
@@ -139,20 +199,20 @@ public sealed class ConversationFollow
 
     // Each finger by its pointer id: the view is free only once the last one lifts.
     public void TouchDown(uint pointer) => contacts.Add(pointer);
-    public void TouchUp(uint pointer) => contacts.Remove(pointer);
+    public void TouchUp(uint pointer) => EndedHold(contacts.Remove(pointer));
     // A touch the panning took over from: Windows cancels the pointer while the finger is still
     // down, and the manipulation carries on. Only a cancel with no pan under way ends the touch.
-    public void TouchCanceled(uint pointer) { if (!manipulating) { contacts.Remove(pointer); } }
+    public void TouchCanceled(uint pointer) { if (!manipulating) { TouchUp(pointer); } }
     public void PanStarted() => manipulating = true;
-    public void PanEnded() { manipulating = false; contacts.Clear(); }
+    public void PanEnded() { var held = Held; manipulating = false; contacts.Clear(); EndedHold(held); }
 
     // A mouse or pen over the conversation, by pointer id, until it leaves (or is lost).
     public void PointerOver(uint pointer) => over.Add(pointer);
-    public void PointerLeft(uint pointer) => over.Remove(pointer);
+    public void PointerLeft(uint pointer) => EndedHold(over.Remove(pointer));
     // A mouse button or pen pressed in the conversation holds it until released anywhere: a drag
     // (selecting text, the scroll bar's thumb) carries on after the pointer has left it.
     public void Pressed(uint pointer) => pressed.Add(pointer);
-    public void Released(uint pointer) => pressed.Remove(pointer);
+    public void Released(uint pointer) => EndedHold(pressed.Remove(pointer));
 
     // A question arrived on the session shown: whether to bring it into view.
     public bool Follows => AtEnd && !Held;

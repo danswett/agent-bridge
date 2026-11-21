@@ -239,7 +239,7 @@ if ($publishing -and -not $DryRun -and $MainHead -cne $Commit) {
         throw "couldn't read the selector's jobs for $Commit..$MainHead; not publishing $tag"
     }
     if ($ciJobs -and $ciJobs.Contains('app')) {
-        Write-Plan "main has moved on to $MainHead, which changes the app since $Commit; its run publishes both, not $tag"
+        Write-Plan "main has moved on to $MainHead, which changes the app since $Commit; commit $MainHead must publish both, not $tag" -Warn
         $publishing = $false
     }
 }

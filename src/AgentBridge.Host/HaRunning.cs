@@ -67,10 +67,15 @@ public sealed class HaRunning : IAsyncDisposable
         // Launches from the card go through the host's own launcher, as an app's do (its checks,
         // its one-at-a-time start, its following to registration); whether it offers launching
         // here is its own Available, asked when the connector starts.
+        // Agents' launch requests by id, on a record in the profile folder that survives restarts
+        // (#2743): each id launches once, and its outcome is readable for 15 minutes.
+        var (requests, requestsProblem) = launcher is null ? (null, null) : AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(folder, TimeProvider.System);
+        if (requestsProblem is not null) { log($"Home Assistant launch requests with an id are refused: {requestsProblem}"); }
         var launch = launcher is null ? null : new HaLauncher(() => launcher.Available, launcher.OptionsAsync,
             (request, ct) => launchAudit is null ? launcher.LaunchAsync(request, "home-assistant", ct)
                 : GateLaunchAudit.LaunchAsync(launcher, request, "home-assistant", launchAudit,
-                    new("legacy-ha", "ha-component", "ha-component:local", launchAudit.ControlWriterRun), ct));
+                    new("legacy-ha", "ha-component", "ha-component:local", launchAudit.ControlWriterRun), ct))
+        { Requests = requests, RequestsProblem = requestsProblem, PublishStatus = (id, request, result) => launcher.PublishAlias("home-assistant", id, request, result) };
         var connector = new HaConnector(new HaConnectorOptions
         {
             MachineName = machine,

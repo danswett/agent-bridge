@@ -1,10 +1,33 @@
 using System.Text.Json;
 using AgentBridge.Host;
+using AgentBridge.Roster;
 using AgentBridge.Transport;
 using Xunit;
 
 public sealed class HostRosterTests
 {
+    [Fact]
+    public void The_process_clock_does_not_credit_epoch_time_as_running_probation()
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("addB", "G", "B", "G");
+        var verifier = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, HostRoster.Now);
+        verifier.Offer(w.Entry("G"), w.Entry("addB"));
+        verifier.AdoptFirstAccepted(w.Entry("addB").Hash, TimeSpan.Zero);
+        Assert.True(verifier.OnProbation(verifier.State.ActiveAdd(w.Id("B"))!.Value));
+    }
+
+    [Fact]
+    public void Unsupported_security_roster_reports_both_available_modes()
+    {
+        using var document = JsonDocument.Parse("{\"roster\":\"enforce\"}");
+        var (_, problems) = SecuritySettings.Read(document.RootElement);
+        var problem = Assert.Single(problems);
+        Assert.Contains("\"off\" or \"observe\"", problem);
+        Assert.DoesNotContain("the only mode", problem);
+    }
+
     static RelayRoster Held(World w, params string[] labels) =>
         new("observe", RosterFixture.Generation, [.. labels.Select(l => w.Entry(l).Canonical())]);
 
@@ -74,9 +97,11 @@ public sealed class HostRosterTests
     [Theory]
     [InlineData(null, "off", 0)]
     [InlineData("{ \"roster\": \"off\" }", "off", 0)]
+    [InlineData("{ \"roster\": \"observe\" }", "observe", 0)]
     [InlineData("{ \"roster\": \"enforce\" }", "off", 1)]
+    [InlineData("{ \"roster\": \"Observe\" }", "off", 1)]
     [InlineData("[]", "off", 1)]
-    public void Only_off_is_a_value_this_host_acts_on_and_anything_else_is_reported_and_read_as_off(string? json, string roster, int problems)
+    public void Only_off_and_observe_are_values_this_host_acts_on_and_anything_else_is_reported_and_read_as_off(string? json, string roster, int problems)
     {
         JsonElement? section = json is null ? null : JsonDocument.Parse(json).RootElement;
 

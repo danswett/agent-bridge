@@ -1401,7 +1401,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
 }
 
 // The grouped notice's words (#913 rule 3), in one place for Creative (6690989275). #913's example
-// names each machine ("3 sessions need you: DEV-VM1 (2), ULTRA (1)"); a host knows only its own, so
+// names each machine ("3 sessions need you: Laptop (2), Desk (1)"); a host knows only its own, so
 // its group names it once. No agent text (#263), and nothing to answer from the notice (#253).
 static class PushGroupWords
 {

@@ -35,12 +35,12 @@ export const EVIDENCE_PER_SIGNER = 256;
 export const EVIDENCE_TOTAL = 1024;
 export const PROBATION_MS = 72 * 3600 * 1000;
 
-// A hostSign is for nothing but its host's own statements: it equals no other device's dh, sign,
-// webauthn key or hostSign, whichever add came first.
+// A hostSign or capSign is for nothing but its own statements: it equals no other device's dh,
+// sign, webauthn key, hostSign or capSign, whichever add came first (devices.md L589-594).
 function hostKeyCollides(added, other) {
-  const keys = (d) => [d.dh, d.sign, d.webauthn && d.webauthn.key, d.hostSign].filter(Boolean);
-  const hit = (hostSign, d) => Boolean(hostSign) && keys(d).some((k) => equal(k, hostSign));
-  return hit(added.hostSign, other) || hit(other.hostSign, added);
+  const keys = (d) => [d.dh, d.sign, d.webauthn && d.webauthn.key, d.hostSign, d.capSign].filter(Boolean);
+  const hit = (own, d) => Boolean(own) && keys(d).some((k) => equal(k, own));
+  return hit(added.hostSign, other) || hit(other.hostSign, added) || hit(added.capSign, other) || hit(other.capSign, added);
 }
 
 // `clock` is the verifier's persisted monotonic running time in milliseconds (§3.4): it moves

@@ -92,7 +92,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     }
 
     private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null, IDiagnosticsJournal? journal = null,
-        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null)
+        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null,
+        string? statusFolder = null, TimeSpan? rememberFor = null)
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
@@ -122,6 +123,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             Transfers = fetcher ?? transfers,
             TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
             ProvenanceFile = Path.Combine(f.Root, "profile", "launch-provenance.json"),
+            StatusFolder = statusFolder,
+            RememberFor = rememberFor ?? TimeSpan.FromMinutes(25),
             Journal = journal,
             AgentWorktreeCheck = agentWorktreeCheck,
             AgentWorktreeRefusalAudit = agentWorktreeRefusalAudit,
@@ -1077,6 +1080,10 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var o = await LaunchAsync(ch, new { workspace = "App" });
 
         Assert.Equal("unconfirmed", o.Outcome_);
+        // Under load the clock can run out the registration wait before the host's first look, so the
+        // outcome returns first and the session is told to the restore record when that look sees it.
+        await source.RefreshAsync();
+        await WaitAsync(() => { lock (told) { return Task.FromResult(told.Count > 0); } });
         lock (told) { Assert.Equal([o.Session!], told); }
     }
     [Fact]
@@ -1611,6 +1618,12 @@ public abstract partial class LaunchFlowFixture
         public readonly List<int> Typed = [];
         public readonly List<KeyPlan> Plans = [];
         public int Reads;
+        public readonly List<(int Process, DateTimeOffset Created, int Columns)> Sizes = [];
+        public Task<ConsoleWidth> SizeForLaunchAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default)
+        {
+            lock (Sizes) { Sizes.Add((processId, createdAt, columns)); }
+            return Task.FromResult(new ConsoleWidth(columns, null, false));
+        }
         // What the agent does with keys that reached it (a folder-trust answer).
         public Action<KeyPlan>? OnTyped;
         public InjectionResult? Fails;

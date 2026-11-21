@@ -28,13 +28,14 @@ public sealed class FleetPublication
 
     public FleetPublicationStatus Status => Volatile.Read(ref status);
 
-    public async Task<bool> PollAsync(Func<JsonElement, CancellationToken, Task> put, bool force = false, CancellationToken ct = default)
+    public async Task<bool> PollAsync(Func<JsonElement, CancellationToken, Task> put, bool force = false, CancellationToken ct = default,
+        bool relaySupportsSessionId = false)
     {
         ct.ThrowIfCancellationRequested();
         if (failedAt is { } at && clock.GetElapsedTime(at) < retry) { return false; }
         try
         {
-            var sent = await publisher.PublishAsync(put, share: share, force: force, ct: ct);
+            var sent = await publisher.PublishAsync(put, share: share, force: force, ct: ct, relaySupportsSessionId: relaySupportsSessionId);
             if (sent)
             {
                 failedAt = null;
@@ -68,7 +69,8 @@ public sealed class FleetPublication
         Changed?.Invoke();
     }
 
-    public async Task RunAsync(Func<JsonElement, CancellationToken, Task> put, Task disconnected, CancellationToken ct = default)
+    // relaySupportsSessionId is what this connection's relay advertised; each connection passes its own.
+    public async Task RunAsync(Func<JsonElement, CancellationToken, Task> put, Task disconnected, CancellationToken ct = default, bool relaySupportsSessionId = false)
     {
         ct.ThrowIfCancellationRequested();
         if (disconnected.IsCompleted) { await disconnected; return; }
@@ -87,7 +89,7 @@ public sealed class FleetPublication
             var force = true;
             while (true)
             {
-                if (await PollAsync(put, force, token)) { force = false; }
+                if (await PollAsync(put, force, token, relaySupportsSessionId)) { force = false; }
                 await Task.Delay(TimeSpan.FromSeconds(2), clock, token);
             }
         }

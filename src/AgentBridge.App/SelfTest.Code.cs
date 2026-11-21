@@ -28,7 +28,7 @@ static partial class SelfTest
     // A fence's backtick lines are a command substitution to bash: drawn as a box, this read as a
     // harmless echo, and bash runs `rm -rf ~`.
     const string Fenced = "bash -c '\n```\necho rm -rf ~\n```\n'";
-    const string LongCommand = "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\me\\repos\\agent-bridge\\tools\\rehearsal\\run-rehearsal.ps1\" -Profile dev -Machine DEV-VM2 -Checklist docs\\parity-checklist.md -Evidence out\\evidence -Verbose";
+    const string LongCommand = "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\me\\repos\\agent-bridge\\tools\\rehearsal\\run-rehearsal.ps1\" -Profile dev -Machine BUILD-2 -Checklist docs\\parity-checklist.md -Evidence out\\evidence -Verbose";
 
     static async Task CheckCodeBlocks(MainWindow window, Action<bool, string> check, string outFile)
     {

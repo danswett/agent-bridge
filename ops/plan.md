@@ -137,7 +137,7 @@ leaves a machine. Design §5.10's anonymous client histograms come later, opt-ou
 aggregated before they leave the device.
 
 The relay's logs already catch one class of client bug: a device reconnecting on a fixed
-cycle. #403 (DSWETT-HOME's host reconnecting about every 199 s, 117 times in an afternoon) was
+cycle. #403 (the dashboard writer's host reconnecting about every 199 s, 117 times in an afternoon) was
 found by reading another machine's host log. The `session-lengths` query shows such a cycle as
 a cluster of disconnects at one duration, and A-STORM catches the large cases.
 
@@ -266,7 +266,7 @@ Today the owner is production's only real user, so dogfood can't simply mean "th
 account on PPE": that would make PPE the owner's production. Until other people use
 production, the **dogfood account is separate**: the rehearsal VMs, any machine the owner
 chooses, and a phone signed in to PPE. A machine moved to it leaves the owner's main view, along
-with its sessions, so no machine running a coordinator session (DEV-VM1, DEV-VM2) is a
+with its sessions, so no machine running a coordinator session is a
 candidate. Once there are other users, the owner's own account moves to PPE, which is classic
 dogfooding.
 

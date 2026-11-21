@@ -1,0 +1,15 @@
+name = "phone-presence-mailbox"
+main = "worker.mjs"
+compatibility_date = "2026-11-20"
+routes = [{ pattern = "proof-mailbox.slipgates.com", custom_domain = true }]
+
+[observability]
+enabled = false
+
+[[durable_objects.bindings]]
+name = "MAILBOX"
+class_name = "SessionMailbox"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionMailbox"]

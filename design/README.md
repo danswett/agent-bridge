@@ -123,6 +123,7 @@ pt on Apple, dp on Android).
 | `platform.<p>.easing.accelerate` | Leaving. Windows Fluent's Slow Out Fast In, Apple easeIn, Android standard accelerate |
 | `platform.apple.spring.<duration>` | SwiftUI `Spring(response:dampingFraction:)` for movement, one per duration: response 0.15, 0.25 and 0.3 s, damping 1 (no bounce) |
 | `platform.pwa` | Inherits Windows: the PWA follows the Windows feel (ui.md §7) |
+| `platform.pwa.css` | PWA-only CSS timings extracted without changing behavior (#2102): feedback disclosure 120 ms `ease`, image viewer 200 ms `ease-out`, progress ring 1000 ms, and `linear` easing. Durations collapse to zero under reduced motion; the existing CSS media rules stop the loops. These generate no Windows resources |
 | `distance.nudge`, `.small`, `.medium` | 4, 12 and 24: a menu's or a disclosure's settle, a pane or a toast sliding in, a pushed screen |
 | `catalogue.<entry>` | One per row of ui.md §5.3's table: its `duration` and `easing`, an optional `distance` and `exit` (the leaving half), and `reduced`, `crossFade` or `instant` |
 

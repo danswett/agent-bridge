@@ -129,16 +129,39 @@ token is accepted only from a person's device).
 3. **Not from inside an agent session.** The caller's ancestry must be read in full and must
    contain no agent session: the reverse of `agent.hello`'s rule, as agent-launch-scope.md §11
    states it. A partial or untraceable ancestry is refused, never treated as a script.
+   A task the scheduler runs never passes that (its SYSTEM service host can't be opened), and
+   ancestry couldn't vouch for it anyway: any user process can register a task that runs anything.
+   A scheduled script needs a credential bound to its task, minted elevated with
+   `scripts add <name> --task <\Folder\Task> [--file <path>]...`. The mint is refused unless the
+   task and every file it runs (its program, the script it names, each `--file` that script runs)
+   are writable only by SYSTEM and Administrators; it records hashes of the task's definition
+   (actions, principal, triggers) and of each file. Accepting it needs a running instance of that
+   task, as the Task Scheduler reports it, whose engine (the program it started) is an ancestor
+   read in full up to the caller, with the task, ACLs and hashes unchanged. The engine must be the
+   same process, not just the same pid: `IScriptTaskReader.RunningEngines(task)` returns each running
+   instance's engine as `ScriptTaskEngine(int Pid, DateTimeOffset StartedAt)` (the engine process's
+   creation time, UTC; an engine whose start can't be read is left out), and the ancestor must match
+   both, its start within a second. At `agent.hello` the host reads the caller's chain again rather
+   than trusting the one from connect, and refuses unless it is still the same caller process (pid
+   and start): a parent the caller ended after connecting may since be the engine under its pid. Any
+   other task path, edit, loosened ACL or wrong engine is refused. A mint that pins more than 16
+   files, no action program or anything that isn't a SHA-256 hash is refused, so it can't fault the
+   store. **The admin-only ACLs hold this, not ancestry:**
+   an agent can't change the task or its files, and running it runs only the pinned files. As the
+   same user it can still reach into a running instance (its process handles, a spoofed parent, or
+   the user's environment and profile scripts its processes load): the residual below. #3312 is
+   the host-side check with fakes; the Windows reads and `--task` follow, and until then every bound
+   credential is refused.
    **A script a coordinator starts does not pass this rule, on purpose.** A script started
    from inside a coordinator's session (a child of its shell) has an agent session in its
    ancestry and is refused. There are two ways to run such work:
    * **Recommended: the coordinator sends and reads with its own session credential**
      (`agent.send`, `fleet.list`), which it already holds; no script credential is involved.
-   * **Scheduled runs:** the owner starts the script from the machine's task scheduler (or by
-     hand in a terminal), so its ancestry holds no agent session. A coordinator that wants one
-     run now asks the scheduler to run the task. Its parent is then the scheduler, not the
-     session. This is the rail's known gap (a detached process has an agent-free ancestry),
-     not a feature: it is why the credential file, not rule 3, is the real barrier.
+   * **Scheduled runs:** the owner binds the credential to an admin-locked task (above), or runs
+     the script by hand in a terminal, so its ancestry holds no agent session. A coordinator that
+     wants one run now asks the scheduler to run the bound task; it runs only the pinned files.
+     An unbound credential from a detached process with an agent-free ancestry is still the rail's
+     known gap, not a feature: it is why the credential file, not rule 3, is the real barrier.
    Running a script credential's file from a session by copying or exporting it is a
    leak (§8), not a supported path.
 4. **No launch, no answers.** The ops list is an allow-list; an op not on it is refused by
