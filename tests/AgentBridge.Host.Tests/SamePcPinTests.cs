@@ -28,8 +28,8 @@ public sealed class SamePcPinTests : IDisposable
     string PinPath => HostRosterPinWriter.PinPath(profile);
     RelayRoster Relay() => new("off", w.GenerationId, [.. w.Labels.Select(l => w.Entry(l).Canonical())]);
     HostRosterReader Reader() => new(PinPath, () => w.Now);
-    SamePcPinHandoff Handoff(HostRosterReader? reader = null) =>
-        new(profile, () => hostAccount, _ => { fetches++; return Task.FromResult<RelayRoster?>(Relay()); }, reader ?? Reader(), () => w.Now, _ => true);
+    SamePcPinHandoff Handoff(HostRosterReader? reader = null, string mode = SecuritySettings.Observe) =>
+        new(profile, () => hostAccount, _ => { fetches++; return Task.FromResult<RelayRoster?>(Relay()); }, reader ?? Reader(), () => w.Now, _ => true, () => mode);
 
     SamePcPinRequest Request(string device = "B")
     {
@@ -79,6 +79,27 @@ public sealed class SamePcPinTests : IDisposable
         Assert.NotNull(unnotified.Pinned(RosterFixture.Account));
         Assert.Equal("pin-mismatch", other.Update(Relay() with { Generation = new string('0', 32) }, RosterFixture.Account).Outcome);
         Assert.Equal(w.Entry("G").Hash, HostRosterReader.ReadPinned(PinPath).Genesis);
+    }
+
+    [Fact]
+    public async Task A_retained_pin_still_refuses_handoff_if_the_pin_file_is_deleted()
+    {
+        var serving = Reader();
+        var request = Request();
+        Assert.Equal("pinned", await Hand(request, serving));
+        File.Delete(PinPath);
+        fetches = 0;
+        Assert.Equal("pin-exists", await Hand(request, serving));
+        Assert.Equal(0, fetches);
+    }
+
+    [Fact]
+    public async Task A_successful_handoff_does_not_activate_fleet_membership_while_roster_mode_is_off()
+    {
+        var serving = Reader();
+        Assert.Equal("pinned", (await Handoff(serving, SecuritySettings.Off).HandleAsync(Json(Request()), default)).State);
+        Assert.Null(serving.Verified);
+        Assert.Throws<InvalidOperationException>(() => new AgentBridge.Host.Fleet.FleetTrust(serving, profile, () => hostAccount).Membership());
     }
 
     [Theory]

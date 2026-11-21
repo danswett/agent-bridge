@@ -18,13 +18,14 @@ public sealed class SamePcPinHandoff
     readonly HostRosterReader reader;
     readonly Func<TimeSpan> clock;
     readonly Func<byte[], bool>? isCapSignGenesis;
+    readonly Func<string> mode;
     internal object AccountGate { get; } = new();
     long accountVersion;
 
     public SamePcPinHandoff(string profileFolder, Func<string?> account, Func<CancellationToken, Task<RelayRoster?>> fetch,
-        HostRosterReader reader, Func<TimeSpan> clock, Func<byte[], bool>? isCapSignGenesis = null) =>
-        (pinPath, this.account, this.fetch, this.reader, this.clock, this.isCapSignGenesis) =
-            (HostRosterPinWriter.PinPath(profileFolder), account, fetch, reader, clock, isCapSignGenesis);
+        HostRosterReader reader, Func<TimeSpan> clock, Func<byte[], bool>? isCapSignGenesis = null, Func<string>? mode = null) =>
+        (pinPath, this.account, this.fetch, this.reader, this.clock, this.isCapSignGenesis, this.mode) =
+            (HostRosterPinWriter.PinPath(profileFolder), account, fetch, reader, clock, isCapSignGenesis, mode ?? (() => SecuritySettings.Off));
 
     public async Task<SamePcPinResult> HandleAsync(JsonElement data, CancellationToken ct) => new(await StateAsync(data, ct));
 
@@ -42,7 +43,7 @@ public sealed class SamePcPinHandoff
         {
             if (account() is not { Length: > 0 } current) { return "no-account"; }
             if (request.Account != current) { return "account-mismatch"; }
-            if (File.Exists(pinPath)) { return "pin-exists"; }
+            if (reader.HasPin() || File.Exists(pinPath)) { return "pin-exists"; }
             (own, version) = (current, accountVersion);
         }
         RelayRoster? relay;
@@ -65,9 +66,11 @@ public sealed class SamePcPinHandoff
         lock (AccountGate)
         {
             if (version != accountVersion || account() != own) { return "account-mismatch"; }
+            if (reader.HasPin()) { return "pin-exists"; }
             ct.ThrowIfCancellationRequested();
             var state = HostRosterPinWriter.Write(pinPath, new PersonGenesis("same-pc-app", request.GenesisHash), relay, own, clock, isCapSignGenesis);
-            return state == SamePcPinProtocol.Pinned && reader.Update(relay, own).Outcome != "verified" ? "pin-readback" : state;
+            return state == SamePcPinProtocol.Pinned && mode() == SecuritySettings.Observe
+                && reader.Update(relay, own).Outcome != "verified" ? "pin-readback" : state;
         }
     }
 

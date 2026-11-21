@@ -758,7 +758,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var hostRoster = new HostRosterReader(HostRosterPinWriter.PinPath(identity.Folder), HostRoster.Now);
     RelayClient? pinRelay = null;
     var samePcPin = new SamePcPinHandoff(identity.Folder, () => identity.Account?.AccountId,
-        ct => Volatile.Read(ref pinRelay) is { } r ? r.GetRosterAsync(ct) : throw new InvalidOperationException("not connected"), hostRoster, HostRoster.Now);
+        ct => Volatile.Read(ref pinRelay) is { } r ? r.GetRosterAsync(ct) : throw new InvalidOperationException("not connected"), hostRoster, HostRoster.Now, mode: () => settings.Security.Roster);
     var rosterObserve = new HostRosterObserve(hostRoster, () => settings.Security.Roster, HostRoster.Now, Log);
     var fleetTrust = new AgentBridge.Host.Fleet.FleetTrust(hostRoster, identity.Folder, () => identity.Account?.AccountId);
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,

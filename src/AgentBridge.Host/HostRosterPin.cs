@@ -29,6 +29,11 @@ public sealed partial class HostRosterReader
 
     public RosterVerifier? Verified { get; private set; }
 
+    internal bool HasPin()
+    {
+        lock (sync) { return pin is not null; }
+    }
+
     public RosterCheck Update(RelayRoster? relay, string account)
     {
         // Also the verifier's own lock, which the fleet reader takes to read its serving hosts.
