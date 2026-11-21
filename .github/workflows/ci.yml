@@ -27,7 +27,7 @@ permissions:
 # them runs and one waits, a newer waiting push run cancelling the one waiting before it starts
 # (re-runs, below, run beside them). GitHub promises no order
 # between them, so nothing here relies on one: each run plans from the last commit main's CI
-# passed on, so a replaced run's changes are tested with a later one (the plan job), merge-rule
+# passed on and the latest published release, so untested and unpaid app changes reach a later run, merge-rule
 # ignores cancelled or unfinished product evidence (quality/README.md §4.9), and publish's checks keep
 # releases in version and commit order (publish-gate). A re-run (attempt 2 on) never joins
 # ci-main, so it can't take a waiting push run's place: like a run by hand, it's grouped by its
@@ -58,8 +58,8 @@ jobs:
     # What this run tests (quality/README.md §4): the selector reads quality/catalog.yml and the
     # change, and each job below runs only when a suite it runs is selected. A ready pull request
     # is ring 1 over what merging it adds. A push to main is ring 1 too, over everything since the
-    # last commit main's CI passed on, so a commit whose own run was replaced while pending, or
-    # failed, is tested with this one; when that commit can't be found, main runs the whole ring.
+    # last passed CI and latest published release's common ancestor, so replaced, failed or
+    # green-but-unpublished app changes reach this head; an unknown base runs the whole ring.
     # A draft pull request is the fast ring: ring 0 on Linux, so a work in progress holds one or
     # two runners, not a dozen; ready for review runs ring 1 on the same head.
     # A change to CI, the catalog, the selector or the build runs the whole ring, decided here
@@ -140,7 +140,7 @@ jobs:
       # gated job and step, on every runner, whatever the selector says. A draft keeps its fast
       # ring; its gate is not the required check. Its own step, so nothing the change runs can
       # write these outputs, the base included.
-      # Main's base is the newest commit main's CI passed on (a push run, at any attempt) that is
+      # Main's CI base is the newest commit main's CI passed on (a push run, at any attempt) that is
       # an ancestor of this one: a pending run replaced in ci-main tested nothing, and a failed
       # one proved nothing, so their changes are in this diff. A base found but older than
       # needed only tests more. None found, or the runs unreadable, never reads as "no change":
@@ -178,7 +178,31 @@ jobs:
                 if ($LASTEXITCODE -eq 0) { $base = $sha; $known = $true; break }
               }
             }
-            $said = if ($known) { "Main's change since ``$base``, the last commit its CI passed on." } else { "**No ancestor of this commit passed main's CI** (among the latest 100 passed runs), so the whole ring runs." }
+            # A green run may have skipped publishing because main changed the app again.
+            # Never discard that release debt: include everything since the latest published
+            # version, not a draft or a retained tag whose release has been deleted.
+            $published = @(gh api "repos/$env:REPO/releases?per_page=100" --paginate --jq '.[] | select(.draft == false) | .tag_name')
+            $readable = $LASTEXITCODE -eq 0
+            $latest = @($published | Where-Object { $_ -cmatch '^v\d+\.\d+\.\d+$' } | Sort-Object { [semver]$_.Substring(1) } -Descending | Select-Object -First 1)
+            $releaseKnown = $false
+            if ($readable -and $latest.Count -eq 1) {
+              $releaseBase = git rev-parse "$($latest[0])^{commit}"
+              if ($LASTEXITCODE -eq 0 -and $releaseBase -cmatch '^[0-9a-f]{40}$') {
+                git merge-base --is-ancestor $releaseBase HEAD
+                if ($LASTEXITCODE -eq 0) {
+                  $releaseKnown = $true
+                  if ($known) {
+                    $base = git merge-base $base $releaseBase
+                    if ($LASTEXITCODE -ne 0 -or $base -cnotmatch '^[0-9a-f]{40}$') { $known = $false }
+                  }
+                }
+              }
+            }
+            if (-not $releaseKnown -or -not $known) {
+              $known = $false; $base = 'HEAD^1'
+              "::warning title=plan::no proven CI/released ancestor for $env:SHA; the whole ring includes app packaging"
+            }
+            $said = if ($known) { "Main's change since ``$base``, covering passed CI and published $($latest[0]); unpaid app changes publish from this head." } else { "**No proven CI/released base**, so the whole ring runs." }
             $said | Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8
           }
           $out = git diff -z --name-only --no-renames $base HEAD
@@ -319,7 +343,7 @@ jobs:
       # (quality/README.md §5): nothing here fails the run but the tests themselves. TEST_FILTER is
       # ring 0's in-process filter on a draft (the fast ring), and empty otherwise: every test runs.
       - name: dotnet test, with coverage and per-test times
-        if: env.DOTNET_TARGET != '' && matrix.os != 'windows-latest'
+        if: env.DOTNET_TARGET != '' && matrix.os == 'ubuntu-latest'
         shell: pwsh
         run: |
           . ./quality/dotnet-test-command.ps1
@@ -330,7 +354,7 @@ jobs:
         env:
           DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
       - name: Windows product tests retry only failed cases once
-        if: env.DOTNET_TARGET != '' && matrix.os == 'windows-latest'
+        if: env.DOTNET_TARGET != '' && (matrix.os == 'windows-latest' || matrix.os == 'windows-11-arm')
         shell: pwsh
         run: |
           . ./quality/product-test-retry.ps1
