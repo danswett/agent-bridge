@@ -18,6 +18,101 @@ public sealed class AgentLaunchGateTests : IDisposable
         """{"agents":{"enabled":true,"launch":""" + launch + ""","limits":""" + limits + "}}";
 
     [Fact]
+    public void A_temporary_raise_lapses_after_four_hours_and_the_refusal_names_the_limit_in_force()
+    {
+        var clock = new FakeTimeProvider();
+        var start = clock.GetUtcNow();
+        var baseline = DefaultLimits.Replace(":3", ":1");
+        var temporary = JsonSerializer.Serialize(new
+        { startedAt = start, expiresAt = start.AddHours(4), limits = new { launchesPerOriginPerHour = 3 } });
+        Write(Config(baseline.Replace("}", ",\"temporaryRaise\":" + temporary + "}")));
+        var gate = new AgentLaunchGate(folder, () => clock.GetUtcNow(), clock);
+        Assert.Equal(3, gate.CheckPolicy().Limits?.LaunchesPerOriginPerHour);
+        clock.Advance(TimeSpan.FromHours(4) - TimeSpan.FromSeconds(1));
+        Assert.True(gate.CheckLaunch("a", Guid.NewGuid().ToString("D"), "hash").Allowed);
+        Assert.True(gate.CheckLaunch("a", Guid.NewGuid().ToString("D"), "hash").Allowed);
+        clock.Advance(TimeSpan.FromSeconds(1));
+
+        var refusal = gate.CheckLaunch("a", Guid.NewGuid().ToString("D"), "hash");
+
+        Assert.False(refusal.Allowed);
+        Assert.Equal("rate-limited", refusal.Reason);
+        Assert.Equal(1, refusal.Limits?.LaunchesPerOriginPerHour);
+        var row = JsonSerializer.Deserialize<JsonElement>(File.ReadAllLines(
+            Assert.Single(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl")))[^1]);
+        Assert.Contains("launches 1 per agent", row.GetProperty("reason").GetString());
+        Assert.Equal(1, new AgentLaunchGate(folder, () => clock.GetUtcNow()).CheckPolicy().Limits?.LaunchesPerOriginPerHour);
+    }
+
+    [Theory]
+    [InlineData("launchesPerOriginPerHour", 3)]
+    [InlineData("launchesPerMachinePerHour", 10)]
+    [InlineData("launchAttemptsPerOriginPerHour", 20)]
+    [InlineData("liveAgentLaunched", 6)]
+    [InlineData("agentLaunchedIdleHours", 2)]
+    public void Each_launch_limit_can_be_temporarily_restored_to_its_ceiling(string key, int ceiling)
+    {
+        var start = new DateTimeOffset(2026, 11, 16, 12, 0, 0, TimeSpan.FromHours(-8));
+        var values = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(DefaultLimits)!;
+        values[key] = JsonSerializer.SerializeToElement(1);
+        values["temporaryRaise"] = JsonSerializer.SerializeToElement(new
+        { startedAt = start, expiresAt = start.AddHours(1), limits = new Dictionary<string, int> { [key] = ceiling } });
+        Write(Config(JsonSerializer.Serialize(values)));
+        int Value(DateTimeOffset now)
+        {
+            var policy = new AgentLaunchGate(folder, () => now).CheckPolicy();
+            Assert.True(policy.Allowed, policy.Reason);
+            return JsonSerializer.SerializeToElement(policy.Limits, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                .GetProperty(key).GetInt32();
+        }
+
+        Assert.Equal(ceiling, Value(start));
+        Assert.Equal(1, Value(start.AddHours(1)));
+        Assert.Equal(1, Value(start.AddSeconds(-1)));
+    }
+
+    [Theory]
+    [InlineData("""{"startedAt":"2026-11-16T12:00:00-08:00","expiresAt":"2026-11-16T16:00:01-08:00","limits":{"launchesPerOriginPerHour":3}}""")]
+    [InlineData("""{"startedAt":"2026-11-16T12:00:00-08:00","expiresAt":"2026-11-16T12:00:00-08:00","limits":{"launchesPerOriginPerHour":3}}""")]
+    [InlineData("""{"expiresAt":"2026-11-16T16:00:00-08:00","limits":{"launchesPerOriginPerHour":3}}""")]
+    [InlineData("""{"startedAt":false,"expiresAt":42,"limits":{}}""")]
+    [InlineData("""{"startedAt":"2026-11-16T12:00:00","expiresAt":"2026-11-16T16:00:00","limits":{}}""")]
+    [InlineData("""{"startedAt":"2026-11-16T16:00:00Z","expiresAt":"2026-11-16T12:00:00Z","limits":{}}""")]
+    [InlineData("""{"startedAt":"2026-11-16T12:00:00Z","expiresAt":"2026-11-16T16:00:00Z","limits":[] }""")]
+    [InlineData("""{"startedAt":"2026-11-16T12:00:00Z","expiresAt":"2026-11-16T16:00:00Z","limits":{},"unknown":true}""")]
+    [InlineData("""{"startedAt":"2026-11-16T12:00:00-08:00","expiresAt":"2026-11-16T16:00:00-08:00","limits":{"launchesPerOriginPerHour":4}}""")]
+    [InlineData("""{"startedAt":"2026-11-16T12:00:00-08:00","expiresAt":"2026-11-16T16:00:00-08:00","limits":{"launchesPerOriginPerHour":0}}""")]
+    [InlineData("""{"startedAt":"2026-11-16T12:00:00-08:00","expiresAt":"2026-11-16T16:00:00-08:00","limits":{"launchesPerOriginPerHour":1.5}}""")]
+    [InlineData("""{"startedAt":"2026-11-16T12:00:00-08:00","expiresAt":"2026-11-16T16:00:00-08:00","limits":{"unknown":3}}""")]
+    [InlineData("null")]
+    public void An_invalid_temporary_raise_refuses_launch_instead_of_granting_a_fallback(string temporary)
+    {
+        Write(Config(DefaultLimits.Replace("}", ",\"temporaryRaise\":" + temporary + "}")));
+        var result = new AgentLaunchGate(folder).CheckPolicy();
+        Assert.False(result.Allowed);
+        Assert.Contains("agents.limits.temporaryRaise", result.Reason);
+    }
+
+    [Fact]
+    [Trait("Category", "Process")]
+    public async Task An_agent_session_cannot_change_a_launch_limit()
+    {
+        var start = new System.Diagnostics.ProcessStartInfo("dotnet")
+        { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var arg in new[] { typeof(AgentLaunchGate).Assembly.Location, "config", "set",
+            "agents.limits.launchesPerOriginPerHour", "1", "--profile", ".." })
+        { start.ArgumentList.Add(arg); }
+        start.Environment["AGENT_BRIDGE_SESSION"] = "fixture-agent-session";
+        using var process = System.Diagnostics.Process.Start(start)!;
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Equal(4, process.ExitCode);
+        Assert.Empty(await output);
+        Assert.Contains("person", await error);
+    }
+
+    [Fact]
     public void A_launch_over_the_hourly_cap_returns_the_named_refusal_and_an_audit_line()
     {
         Write(Config(DefaultLimits));
