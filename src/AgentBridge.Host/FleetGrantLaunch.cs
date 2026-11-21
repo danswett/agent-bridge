@@ -143,7 +143,8 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
     {
         var row = record.Reservation!;
         if (row.Caps is null) { return new(context.Input.Request, row.Grant, row.Generation,
-            new(row.Outcome == GrantLaunchOutcome.Started ? LaunchOutcome.Unconfirmed : LaunchOutcome.Refused),
+            new(row.Outcome switch { GrantLaunchOutcome.Refused => LaunchOutcome.Refused,
+                GrantLaunchOutcome.Failed => LaunchOutcome.Failed, _ => LaunchOutcome.Unconfirmed }),
             null, false, null, null, "policy"); }
         var outcome = row.Outcome switch { GrantLaunchOutcome.Started => LaunchOutcome.Started, GrantLaunchOutcome.Refused => LaunchOutcome.Refused,
             GrantLaunchOutcome.Failed => LaunchOutcome.Failed, _ => LaunchOutcome.Unconfirmed };
