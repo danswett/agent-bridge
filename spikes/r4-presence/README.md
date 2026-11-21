@@ -32,7 +32,7 @@ prompt ends during an injection, the input reached it and the proof FAILS; any a
 FAILS. Not tried: direct NCrypt access to the Hello key, keyboard hooks, WM_CHAR posting.
 
 If Windows refuses the passkey request as an invalid parameter, it retries once per single change
-(foreground window as parent, resident key off, attestation none), stops at the first Windows accepts,
+(resident key off, then attestation none; the parent is always the harness's own window), stops at the first Windows accepts,
 records which, deletes anything made and runs no attack: you may be asked for the PIN once more.
 
 Verdict: held (all blocked, exit 0), failed (exit 1), inconclusive (exit 2). Tests:

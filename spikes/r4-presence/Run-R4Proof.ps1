@@ -14,9 +14,10 @@ $root = Resolve-Path "$PSScriptRoot\..\.."
 # All bin and obj go here (the projects' own folders stay untouched); deleted at the end.
 $out = Join-Path $PSScriptRoot '.out'
 $results = Join-Path $PSScriptRoot "RESULTS-$env:COMPUTERNAME.md"
-# Offline: restore only from this machine's package cache, no nuget.org and no audit call.
-$cache = ((dotnet nuget locals global-packages -l) -replace '^global-packages:\s*', '').Trim()
-# The CLI's home moves into .out; NUGET_PACKAGES keeps the cache found above while DOTNET_CLI_HOME moves.
+# Offline: restore only from this machine's package cache (found without running dotnet), no nuget.org,
+# no audit call. Every dotnet env var, including the CLI's home inside .out, is set before any dotnet call.
+$cache = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { Join-Path $env:USERPROFILE '.nuget\packages' }
+if (-not (Test-Path $cache)) { Write-Host "No NuGet package cache at $cache; nothing was run. Send this message back."; exit 3 }
 $env:NUGET_PACKAGES = $cache; $env:DOTNET_CLI_HOME = Join-Path $out 'cli-home'
 $offline = @("--source", $cache, "-p:NuGetAudit=false", "--artifacts-path", $out, "--nologo", "-v", "q")
 $code = 3
