@@ -24,15 +24,16 @@ public sealed class QualificationGrantTests
         readonly object gate = new();
         public readonly List<QualificationGrant> Entries = [];
         public bool Available = true;
-        public Action? Racing; // Runs once inside the next append, before its compare.
+        public Action? Racing; // Runs once inside the next nonce lookup or append, before it reads.
+        void Race() { var race = Racing; Racing = null; race?.Invoke(); }
         public QualificationGrant? Find(Guid id) { lock (gate) { return Entries.LastOrDefault(x => x.Id == id); } }
-        public QualificationGrant? FindChallenge(string nonce) { lock (gate) { return Entries.LastOrDefault(x => x.Binding.Challenge == nonce); } }
+        public QualificationGrant? FindChallenge(string nonce) { Race(); lock (gate) { return Entries.LastOrDefault(x => x.Binding.Challenge == nonce); } }
         public bool TryAppend(QualificationGrant? expected, QualificationGrant next)
         {
             lock (gate)
             {
                 if (!Available) { throw new IOException("receipt store unavailable"); }
-                var race = Racing; Racing = null; race?.Invoke();
+                Race();
                 if (Find(next.Id) != expected || FindChallenge(next.Binding.Challenge) != expected) { return false; }
                 Entries.Add(next); return true;
             }

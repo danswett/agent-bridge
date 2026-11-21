@@ -98,8 +98,8 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
     bool Matches(QualificationGrant grant)
     {
         var now = Now();
-        if (journal!.FindChallenge(grant.Binding.Challenge) != grant) { return false; }
         if (now >= grant.Expires) { Expire(grant.Id); return false; }
+        if (journal!.FindChallenge(grant.Binding.Challenge) != grant) { return false; }
         return Valid(grant.Binding) && grant.Binding == trust?.Binding && grant.Issued <= now
             && grant.Expires - grant.Issued <= TimeSpan.FromMinutes(60);
     }
