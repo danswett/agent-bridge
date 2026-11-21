@@ -482,6 +482,9 @@ async Task<int> ServeAsync(HostHandover handover)
     }
     // Started at logon there is no console; the app shows the end of this file.
     HostLog.OpenFile(Path.Combine(identity.Folder, "logs", "host.log"));
+    var exitMarker = HostExitMarker.Begin(Path.Combine(identity.Folder, "logs", HostExitMarker.FileName), DateTimeOffset.UtcNow, Log);
+    AppDomain.CurrentDomain.UnhandledException += (_, e) => exitMarker.End(HostExitReason.UnhandledException, e.ExceptionObject);
+    AppDomain.CurrentDomain.ProcessExit += (_, _) => exitMarker.End(HostExitReason.Unknown);
     var name = Option("--name") ?? HostConfigFile.ReadName(identity.Folder) ?? $"{Environment.MachineName}{(profile == "default" ? "" : $"/{profile}")}";
     // Instance: this run's own id. A client that lost an outcome sends the request again only to
     // the run that may have acted on it, which remembers the request; never to a fresh one.
@@ -492,6 +495,7 @@ async Task<int> ServeAsync(HostHandover handover)
     if (trustedPeers.Enabled) { Log("trusted-peer enforcement is on; only explicit full-key pins grant remote authority"); }
 
     using var stop = new CancellationTokenSource();
+    using var exitOnStop = stop.Token.Register(() => exitMarker.End(handover.Requested ? HostExitReason.PlannedRestart : HostExitReason.CleanStop));
     var deliveryGate = new DeliveryGate();
     var plannedStops = new PlannedStops(deliveryGate, TimeSpan.FromSeconds(15), Log);
     Task<IDisposable?> PrepareStop() => plannedStops.PrepareStopAsync();
@@ -670,7 +674,8 @@ async Task<int> ServeAsync(HostHandover handover)
     // serve as Ctrl+C would, once the release is handed to the updater. None on a read-only host
     // (delivery.readOnly), which acts on nothing from another device: the buttons are withdrawn.
     var hostUpdates = VelopackHostUpdates.For(ReadOnlyReason(), OperatingSystem.IsWindows(),
-        () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile, () => stop.Cancel(), Log,
+        () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile,
+            () => { exitMarker.End(HostExitReason.PlannedRestart); stop.Cancel(); }, Log,
             ready: ct => HostUpdateGate.ReadyAsync(HostUpdateGate.OtherHosts, usageMonitor is null ? null : usageMonitor.SettleProbesAsync, ct),
             prepareStop: PrepareStop));
     // Home Assistant's refusals of this machine, counted with every other process of this user so a
@@ -994,6 +999,7 @@ async Task<int> ServeAsync(HostHandover handover)
     if (handover.StoppedFromTheApp(identity.Folder))
     {
         Log($"stopped from the {Product.App} while starting; not serving");
+        exitMarker.End(HostExitReason.CleanStop);
         return 0;
     }
     // Only now: a host stopped while starting, whose pipe the app could not reach, must start no

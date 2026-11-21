@@ -1,5 +1,15 @@
 # Host lifecycle seam: quiet lease and release eligibility (slice 1)
 
+## Host exit record
+
+`logs/host-exit.json`, beside `host.log` in the profile, records this host run.
+Start atomically writes `state: running`, the process id and start instant.
+Exit atomically replaces it with `state: ended`, an exit instant and a reason:
+`clean-stop`, `planned-restart`, `unhandled-exception` or `unknown`.
+Unhandled exceptions keep only a recognized type, never messages, paths or ids.
+An exception supersedes a requested stop; ProcessExit cannot erase a known reason.
+Marker I/O failure is logged by type and does not change host lifecycle behavior.
+
 Implementation slice for #805/#580/#581, consumed by #819. The full design remains
 draft [#815](https://github.com/danswett/agent-bridge/pull/815).
 [SRE's slice decision](https://github.com/danswett/agent-bridge/pull/815#issuecomment-6654417590)
