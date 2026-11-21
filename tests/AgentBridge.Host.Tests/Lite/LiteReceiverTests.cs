@@ -80,6 +80,16 @@ public class LiteReceiverTests
     }
 
     [Fact]
+    public async Task A_signed_envelope_from_another_account_is_refused_even_with_a_matching_present_host_channel_key()
+    {
+        using var r = new Rig();
+        r.Channel = r.Channel with { Account = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" };
+        Assert.Null(r.Channel.Untrusted);
+        Refused(await r.Send(r.Request()), LiteRefusal.Account);
+        Assert.Equal(0, r.Deliver.Calls + r.Receiver.Replays.Count);
+    }
+
+    [Fact]
     public async Task Mode_off_answers_off_and_does_no_work()
     {
         using var r = new Rig();

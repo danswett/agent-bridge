@@ -21,6 +21,8 @@ It does **not** defend against a dishonest relay or a stolen relay-account login
 nothing records which device a person approved or revoked. That is why the mode is temporary and
 own-agents-only.
 
+The signed roster does not gate own-account lite messaging or its local `fleet.find`/`fleet.list` routing: a fresh present host row carries `trust: "own-account"` (not roster verification), even with no pin or an unreadable pin and with `security.roster` off or observe. This trust is for messaging only, never launches, stop or remote manage; those retain their existing authorization gates. An explicit messaging off or kill refuses this routing as `off`. The actual send still requires the same account and a channel key matching the device id.
+
 ## The plain limits
 
 - Own machines and own agents only. A message from any other account is never accepted, whatever it carries.

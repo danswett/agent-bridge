@@ -973,8 +973,10 @@ async Task<int> ServeAsync(HostHandover handover)
     LocalServer? local = null;
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
     var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
+    var liteRegistry = new AgentBridge.Host.Fleet.RelayFleetRoster();
+    var liteFleetRoster = new AgentBridge.Host.Fleet.LiteFleetRoster(liteRegistry, liteKill, liteLink);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit, samePcPin: samePcPin), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
@@ -1070,6 +1072,7 @@ async Task<int> ServeAsync(HostHandover handover)
                 catch (OperationCanceledException) { }
             });
             fleetRoster.Attach(relay);
+            liteRegistry.Attach(relay);
             Volatile.Write(ref pinRelay, relay);
             usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);
@@ -1131,6 +1134,7 @@ async Task<int> ServeAsync(HostHandover handover)
             transfers.Attach(null, null);
             liteLink.Attach(null, null);
             fleetRoster.Attach(null);
+            liteRegistry.Attach(null);
             Volatile.Write(ref pinRelay, null);
             usagePeers?.Attach(null, null);
             trustAnswers.Attach(null);
