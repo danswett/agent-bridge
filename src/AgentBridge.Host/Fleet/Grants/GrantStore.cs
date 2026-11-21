@@ -149,9 +149,14 @@ public sealed class GrantStore
         catch (FileNotFoundException) { state = new(1, 0, [], [], []); }
         long retained = 0;
         var adopted = false;
-        var (rows, complete) = GateAuditProjection.Load(folder, alreadyLocked: readOnly, boundary: (floor, unproven) => { retained = floor; adopted = unproven; });
-        // Adopted history is unproven, and per-stream chains cannot see a rollback of one stream: require one global gated sequence.
-        if (!complete || adopted || retained > 0 || !audit.Verify(readOnly: readOnly).Intact || !audit.Verify(launch: true, readOnly: readOnly).Intact
+        var adoptionIncomplete = false;
+        var (rows, complete) = GateAuditProjection.Load(folder, alreadyLocked: readOnly, boundary: (floor, unproven) =>
+        {
+            retained = floor; adopted = unproven;
+            adoptionIncomplete = unproven && !AgentAuditLog.LegacyOnlyAdoption(Path.Combine(folder, AgentAuditLog.FolderName));
+        });
+        // Legacy-only adoption cannot hide grant history; per-stream rollback still requires a global gated sequence.
+        if (!complete || adoptionIncomplete || retained > 0 || !audit.Verify(readOnly: readOnly).Intact || !audit.Verify(launch: true, readOnly: readOnly).Intact
             || rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().Where((s, i) => s != i + 1L).Any())
         { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
         var history = rows.Where(r => r.Action is "grant.issue" or "grant.revoke").ToArray();
@@ -162,17 +167,18 @@ public sealed class GrantStore
             || g.First().Gate!.GrantBinding != g.Last().Gate!.GrantBinding))
         { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
         if (body is null && operations.Length > 0) { throw new StoreFault(GrantStoreProblem.Missing); }
-        if (operations.Length != state.Generation) { throw new StoreFault(GrantStoreProblem.Generation); }
+        var revisionProblem = adopted ? GrantStoreProblem.AuditIncomplete : GrantStoreProblem.Generation;
+        if (operations.Length != state.Generation) { throw new StoreFault(revisionProblem); }
         for (var i = 0; i < operations.Length; i++)
         {
             var intent = state.Intents[i];
             if (intent is null || intent.Generation != i + 1 || operations[i].Any(r => r.Gate!.Operation != intent.Operation
                 || r.Request != intent.Operation.ToString() || r.Target != intent.Grant.ToString() || r.Action != intent.Action
                 || r.Gate.Incarnation != intent.Grant || r.Principal != "person:local"))
-            { throw new StoreFault(GrantStoreProblem.Generation); }
+            { throw new StoreFault(revisionProblem); }
         }
         if (body is not null && operations[^1].First().Gate!.GrantBinding != Convert.ToHexString(SHA256.HashData(body)))
-        { throw new StoreFault(GrantStoreProblem.Generation); }
+        { throw new StoreFault(revisionProblem); }
         if (body is null && !allowNew) { throw new StoreFault(GrantStoreProblem.Missing); }
         return state;
     }
