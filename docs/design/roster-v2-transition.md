@@ -26,8 +26,9 @@ Today `CommandAction` has no `accept-host-sign` action.
 the PWA verifier also defaults to false. `HostRosterReader` reads an existing
 four-field pin and retains a verifier in memory, but has no disk write API.
 `DeviceRoster.Apply` reconstructs the relay verifier without v2 enabled.
-`SecuritySettings` reads only `off`; live observe reporting is not implemented
-at this head. Only the pin-reader foundation (#1830) merged; observe remains the
+`SecuritySettings` reads `off` and `observe`; observe feeds the read-only pin reader
+(#3450) but reports no would-refuse reasons yet. The pin-reader foundation (#1830), the pin
+writer and that read-only feed merged; observe reporting remains the
 follow-up dependency described by devices.md, despite #1358's closed issue state.
 These are foundations, not proof that the transition or enrollment works.
 
@@ -248,8 +249,8 @@ the blocked transition. Never fork a replacement roster, change genesis or
 silently drop the entry. Bounded holding/retry and recovery behavior need the
 separate reviewed consumer cut below; no current implementation is claimed.
 
-`off` is today's only implemented mode and remains the default. Live `observe`
-mode is a dependency not yet built, not behavior delivered by this note or #1830.
+`off` remains the default. Live `observe` now only feeds the read-only pin reader
+(#3450); its reporting contract below is a dependency not yet built, not behavior delivered by this note or #1830.
 Its intended contract is to allow ordinary operations and report would-refuse
 reasons with bounded recent reports and an overflow counter; that integration
 remains separate work and must not be claimed as passing evidence here.
