@@ -16,6 +16,17 @@ the three principal kinds (agents, connectors and cross-account peers) are set a
 other. It covers what they share, what each needs from #55, and who owns each piece. §9 designs
 the third-party connector API that Home Assistant is the first client of.
 
+**Fleet-launch grant staging (Nov 17, 22:40 PT).** [H1](https://github.com/danswett/agent-bridge/issues/3053)
+adds local-app-only `host.agents.fleetLaunchGrant`: `action: read|issue|revoke`. Issue requires
+`principal: fleet-launcher`, `scope: session.launch`, `role: fleet` and a future `expiresAt`.
+The app offers one hour; the host creates `grant.id`. Revoke must name that exact `grant`.
+The host profile durably stores one grant in `agent-fleet-launch-grant.json`; reads return
+`state: none|active|expired|revoked` and the record. Restart preserves it; corrupt state refuses.
+Agent, script and remote-device callers cannot manage it. This is not a bearer credential
+or launch authority by itself: H2/H3 supply enforcement/audit/caps before native activation.
+No reply, answer, trust or end permission changes. The owner's [decision](../owner-decisions.md)
+supersedes earlier launch reasoning only within [Cut H](https://github.com/danswett/agent-bridge/issues/3052).
+
 ## Contents
 
 1. [Goals, non-goals and the owner's decisions](#1-goals-non-goals-and-the-owners-decisions)

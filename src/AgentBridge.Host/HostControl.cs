@@ -92,6 +92,10 @@ public sealed class HostControl
     {
         lock (settingsGate) { return FleetWorkerSettings.Handle(options.Folder, data, log); }
     }
+    internal AgentFleetLaunchGrantState FleetLaunchGrant(JsonElement data)
+    {
+        lock (settingsGate) { return AgentFleetLaunchGrants.Handle(options.Folder, data, options.Time); }
+    }
 
     readonly Action<string> log;
     readonly object gate = new();

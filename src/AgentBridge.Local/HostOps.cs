@@ -20,6 +20,7 @@ public static class HostOps
     public const string AgentsVerifyCancel = "host.agents.verify.cancel";
     public const string AgentSignInCapability = "host.agents.signIn";
     public const string AgentsSignIn = "host.agents.signIn";
+    public const string FleetLaunchGrant = "host.agents.fleetLaunchGrant";
 
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.

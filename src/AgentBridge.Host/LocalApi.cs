@@ -27,6 +27,13 @@ public static class LocalApi
         RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet,
         AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin) => async (channel, op, data) =>
     {
+        if (op == HostOps.FleetLaunchGrant)
+        {
+            var caller = callers.Classify(channel, fresh: true);
+            if (channel is not LocalChannel || caller.Kind != CallerKind.App || credentials?.IsCredentialed(channel) == true)
+            { throw Refuse(op, caller, "only the local app may issue, read or revoke an agent fleet-launch grant", log); }
+            return control.FleetLaunchGrant(data);
+        }
         if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
         {
             if (credentials.Of(channel)?.FleetLaunch != true) { credentials.CheckScriptOperation(channel, op, log); }
@@ -229,7 +236,7 @@ public static class LocalApi
         // Shaped inside the service, so hello.changed compares what this caller is told (#651).
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
-            CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
+            CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability, HostOps.FleetLaunchGrant,
                 .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability } : [],
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],

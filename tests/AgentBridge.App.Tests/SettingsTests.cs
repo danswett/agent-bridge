@@ -72,6 +72,7 @@ public sealed class SettingsTests : IAsyncLifetime
         host.Capabilities.Add(HostOps.AgentVerificationCapability);
         host.Capabilities.Add(LaunchProtocol.Capability);
         host.Capabilities.Add(HostOps.AgentSignInCapability);
+        host.Capabilities.Add(HostOps.FleetLaunchGrant);
         host.Start();
         connection = host.Connect(ui);
         // Start and stop timeouts on a clock that never moves, as in AutoUpdaterTests: they wait
@@ -99,6 +100,36 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     Task Connected() => Wait.UntilAsync(() => settings.HostRunning && connection.Status is not null, "the connection");
+
+    [Fact]
+    public async Task Fleet_grant_controls_show_host_state_send_exact_revocation_and_clear_state_on_failure()
+    {
+        await Connected();
+        var grant = new AgentFleetLaunchGrant(Guid.NewGuid().ToString("D"), "fleet-launcher", "session.launch", "fleet",
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1));
+        host.On(HostOps.FleetLaunchGrant, data =>
+        {
+            var action = data.GetProperty("action").GetString();
+            if (action == "issue")
+            {
+                Assert.Equal(grant.Principal, data.GetProperty("principal").GetString());
+                Assert.Equal(grant.Scope, data.GetProperty("scope").GetString());
+                Assert.Equal(grant.Role, data.GetProperty("role").GetString());
+            }
+            if (action == "revoke") { Assert.Equal(grant.Id, data.GetProperty("grant").GetString()); }
+            return new AgentFleetLaunchGrantState(action == "revoke" ? "revoked" : "active", grant);
+        });
+        await settings.FleetLaunchGrantAsync("issue");
+        Assert.True(settings.CanRevokeFleetGrant);
+        await settings.FleetLaunchGrantAsync("revoke");
+        Assert.Contains("revoked", settings.FleetGrantText);
+        Assert.False(settings.CanRevokeFleetGrant);
+        host.On(HostOps.FleetLaunchGrant, _ => throw new InvalidOperationException("fixture refusal"));
+        await settings.FleetLaunchGrantAsync("read");
+        Assert.NotNull(settings.Error);
+        Assert.False(settings.CanRevokeFleetGrant);
+        Assert.Contains("not checked", settings.FleetGrantText);
+    }
 
     [Fact]
     public async Task The_reply_Return_choice_is_local_persisted_and_updates_existing_cards_at_once()
