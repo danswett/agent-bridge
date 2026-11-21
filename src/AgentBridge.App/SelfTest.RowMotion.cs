@@ -77,7 +77,7 @@ static partial class SelfTest
         var items = new ObservableCollection<object> { first, tracked };
         var animations = true;
         using var shifts = Motion.Shift(list, () => true, () => animations);
-        items.CollectionChanged += (_, _) => shifts.Changing();
+        items.CollectionChanged += (_, e) => shifts.Changing(e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Remove ? e.OldItems!.Cast<object>() : []);
         list.ItemsSource = items;
         root.Children.Add(list);
         try
@@ -141,14 +141,14 @@ static partial class SelfTest
             check(retarget.Progress == 0 && double.IsFinite(paused) && Math.Abs(held - paused) <= 1 && Math.Abs(paused - moving) <= 3,
                 $"retarget is paused before motion is disabled ({later}, {target}; moving={moving}, original={original}, slot.Y={slot.Y}, paused={paused}, held={held}, controller={retarget.Progress})");
             animations = false;
-            shifts.Changing();
+            shifts.Changing([]);
             await CaptureFrame(root);
             check(Math.Abs(TrackedTop() - target) <= 1,
                 "disabling motion settles an interrupted shift without another list change");
             animations = true;
-            shifts.Changing();
+            shifts.Changing([]);
             var implicitStart = TrackedTop();
-            items.Remove(added);
+            items.Insert(0, first);
             list.UpdateLayout();
             var reducedSlot = LayoutInformation.GetLayoutSlot(neighbour).Y;
             var implicitMove = double.NaN;
@@ -156,15 +156,74 @@ static partial class SelfTest
             {
                 await CaptureFrame(root);
                 implicitMove = TrackedTop();
-                if (implicitMove > reducedSlot + 1 && implicitMove < implicitStart - 1) { break; }
+                if (implicitMove < reducedSlot - 1 && implicitMove > implicitStart + 1) { break; }
             }
-            check(implicitMove > reducedSlot + 1 && implicitMove < implicitStart - 1,
+            check(implicitMove < reducedSlot - 1 && implicitMove > implicitStart + 1,
                 $"row is moving before its implicit shift is disabled ({implicitStart}, {implicitMove}, {reducedSlot})");
             animations = false;
-            shifts.Changing();
+            shifts.Changing([]);
             await CaptureFrame(root);
             check(Math.Abs(TrackedTop() - reducedSlot) <= 1,
                 "disabling motion settles an implicit shift without another list change");
+            animations = true;
+            items.Remove(first);
+            items.Remove(added);
+            list.UpdateLayout();
+            await Task.Delay(250);
+            items.Insert(0, first);
+            list.UpdateLayout();
+            await Task.Delay(250);
+            var source = (ListViewItem)list.ContainerFromItem(first);
+            items.Remove(first);
+            list.UpdateLayout();
+            var overlay = ElementCompositionPreview.GetElementChildVisual(list) as ContainerVisual;
+            var ghost = overlay?.Children.OfType<SpriteVisual>().SingleOrDefault();
+            var fade = ghost?.TryGetAnimationController("Opacity");
+            fade?.Pause();
+            if (fade is not null) { fade.Progress = 0.5f; }
+            check(fade is not null, "a departing row has a drawn-only fading composition copy");
+            source.Content = null;
+            items.Add(added);
+            list.UpdateLayout();
+            check(!ReferenceEquals(list.ContainerFromItem(items[^1]), source), "a fading row's source is not recycled");
+            await CaptureFrame(root);
+            var picture = WindowPicture.Take(MainWindow.CurrentHandle, 0);
+            var point = list.TransformToVisual(root).TransformPoint(new Windows.Foundation.Point(120, 40));
+            var x = (int)Math.Round(point.X * picture.Width / root.ActualWidth);
+            var y = (int)Math.Round(point.Y * picture.Height / root.ActualHeight);
+            var at = (y * (int)picture.Width + x) * 4;
+            bool Matches(SolidColorBrush brush) => Math.Abs(picture.Pixels[at + 2] - brush.Color.R) <= 2
+                && Math.Abs(picture.Pixels[at + 1] - brush.Color.G) <= 2 && Math.Abs(picture.Pixels[at] - brush.Color.B) <= 2;
+            check(!Matches(background) && !Matches(first) && !Matches(tracked),
+                "a cleared departure source still paints its faded copy");
+            fade?.Resume();
+            await Task.Delay(250);
+            check(ElementCompositionPreview.GetElementChildVisual(list) is null, "a completed departure releases its composition copy");
+
+            items.Insert(0, first);
+            list.UpdateLayout();
+            await Task.Delay(40);
+            items.Insert(0, background);
+            list.UpdateLayout();
+            var shiftedTarget = LayoutInformation.GetLayoutSlot(neighbour).Y;
+            var shifting = ElementCompositionPreview.GetElementVisual(neighbour).TryGetAnimationController("Offset");
+            shifting?.Pause();
+            if (shifting is not null) { shifting.Progress = 0.25f; }
+            await CaptureFrame(root);
+            var departingTop = TrackedTop();
+            check(shifting is not null && Math.Abs(departingTop - shiftedTarget) > 1,
+                $"departing row is mid-retarget ({departingTop}, {shiftedTarget})");
+            items.Remove(tracked);
+            list.UpdateLayout();
+            var movingGhost = (ElementCompositionPreview.GetElementChildVisual(list) as ContainerVisual)?
+                .Children.OfType<SpriteVisual>().SingleOrDefault();
+            var movingFade = movingGhost?.TryGetAnimationController("Opacity");
+            movingFade?.Pause();
+            await CaptureFrame(root);
+            var ghostTop = TrackedTop();
+            check(movingFade is not null && Math.Abs(ghostTop - departingTop) <= 2,
+                $"departing row fades at its presented position ({departingTop}, {ghostTop})");
+            movingFade?.Resume();
         }
         finally { root.Children.Remove(list); }
 
