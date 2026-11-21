@@ -11,6 +11,11 @@ an incomplete transaction or replay refuses all use rather than repairing/resett
 Issuance uses full G1 validation against the receiver's required known-options snapshot.
 Retired audit coverage refuses, including when the store is missing; it cannot reset tombstones.
 G4 adds the Windows person-only local CLI and read-only verified listing; no acting adapter or counters.
+G5a completes counter receipts: exact duplicates return their recorded reservation,
+outcome and usage without a second admission, including after grant revocation/expiry.
+Refused/failed terminals retain hourly/daily spend but release live capacity; settled
+bindings remain 30 days after completion, while pending/uncertain/live bindings stay.
+At 4096 retained requests or the existing store-size/intent bound, new admissions refuse full.
 
 ## Authority and existing boundaries
 
