@@ -19,7 +19,7 @@ the first-machine-pin requirement, following fleet #171/#433. A unique verified 
 match returns `found`; every result carries `fleetScope`, the authenticated relay
 account ID captured with that roster read. Caller-supplied scope/account fields cannot
 select another fleet. Missing scope refuses explicitly. Reconnect during a read refuses.
-Verification is unchanged: real unsigned records remain `unverified` until `hostSign`.
+Roster verification is unchanged: unsigned records remain unverified until `hostSign`; the messaging-only exception below does not set `Verified`.
 The typed result carries optional `model` only when supplied by the authenticated
 roster, never inferred from the request or name. The publisher and relay allow-list
 still exclude model; this does not enable live model-checked broadcasts (#416).
@@ -42,6 +42,8 @@ The completed signed record is byte-fitted within 16 KiB, retaining recent state
 changes and marking omissions with `truncated`/`total`. S-N2b's strict relay
 allow-list/total semantics and S-N2c's vectors must precede deployment of this
 publisher. This slice changes neither verification nor selection.
+
+Own-account messaging exception (owner, Nov 20, 2026, 21:22 PT): [AP5-lite](../protocol/agent-lite.md) local `fleet.find`/`fleet.list` uses fresh present-host rows marked `trust: "own-account"` while messaging is on, even without a verified roster. `found.session.trust` and list-row `trust` authorize messaging routing only, never launches, stop, phone approval or remote manage. Off or kill refuses routing as `off`; presence and registry must stay bound to one current connection snapshot whose account still matches the host's current identity account, or the read refuses `notSameAccount`. The actual send still requires own account and matching channel key. Statements below forbidding unsigned routing describe the roster-governed path and future replacement selection, not this temporary exception.
 
 ## Summary in plain English
 
@@ -81,8 +83,8 @@ cannot sign (agent-principals.md section 2); custody alone does not establish en
 Until the signing and verification dependencies land,
 **the relay can invent, change, hide or replay any record, and no client can tell.** So
 an unsigned record is only a display hint, like presence is today: clients may show
-it labelled "unverified", but name lookup never returns "found" from it and no message is ever
-routed by it. When #1776's signing and trusted readers land, a forged
+it labelled "unverified"; outside the own-account messaging exception, name lookup never returns "found"
+or routes a message from it. When #1776's signing and trusted readers land, a forged
 or altered record is rejected. Even then the relay can still read the list, hold it back, or show
 a copy up to 60 seconds old. The list is kept in relay memory only: never in the stored roster,
 never in logs, never in metrics.
@@ -402,7 +404,7 @@ Every `session` and candidate holds typed fields only; **the session name is nev
 Where a reply includes a machine object, session or candidate, it may also carry `machineName`
 as described above. `incomplete` still lists only machine IDs. Display names do not verify a
 record or alter any lookup result. Only
-verified, live records ever contribute a `node`: `unverified` and `incomplete` answers
+roster-verified live records or messaging-only own-account live matches contribute a `node`: `unverified` and `incomplete` answers
 list machines and flags, never a node to route to. `model` is omitted when unavailable;
 callers requiring model binding must refuse missing/mismatched values, never guess.
 
@@ -541,8 +543,8 @@ sender's own pinned machines. It cannot make a message reach another account or 
 machine. That is the only protection, and it is not enough to rely on a name.
 
 **What a record is worth before #1776 verification.** A display hint, equal to a machine's presence today.
-Clients may show it, labelled "unverified". `fleet.find` returns `unverified`, never `found`, and
-scripts do not act on it. A person who needs a verified answer uses the end-to-end path (`sessions.list`
+Clients may show it, labelled "unverified". Outside the own-account messaging exception, `fleet.find` returns `unverified`, never `found`,
+and scripts do not act on it. A person who needs a verified answer uses the end-to-end path (`sessions.list`
 over the Noise channel, Option B), which does authenticate the host.
 
 **What changes after #1776** (roster v2, agent-principals.md section 8.10):
@@ -624,8 +626,8 @@ Issues to resize when this note is accepted: #1400 splits into 2a and 2b (both L
 #1399 grows from S to M; #1412 stays L; the reader core RC is a new issue. The epic's seven-day
 estimate for the host side is unchanged only if `hostSign` (R) is built elsewhere in parallel.
 
-Until R lands, slices 1 to 8 still ship and the fleet view works, labelled "unverified"; `found`
-cannot be returned, so slice 9 (the scripts) cannot switch off HA name lookup before R. That makes
+Until R lands, slices 1 to 8 still ship and the fleet view works, labelled "unverified"; outside the own-account
+messaging exception, `found` cannot be returned and slice 9 cannot switch off HA name lookup before R. That makes
 roster v2 a real dependency of #1399's acceptance criterion "correct with HA blocked"; see
 Decision 4. #2151 removes the caller's machine requirement, not R's verification gate.
 
@@ -694,7 +696,7 @@ Hosted failing-first red proof/output; no live changes; wrapper #605 separate. Q
    rename; S-N1 owns app enrollment and CLI disclosure/warning, not a new authority.
 4. **Signing and routing** (Engineering). #2360 confirms: records are unverified until #1776's
    roster-v2 enrollment, signing and trusted reader dependencies land; `fleet.find` returns
-   `found` only for verified live records. No routing from unverified records and no interim
+   `found` only for verified live records outside the own-account messaging exception. No other unsigned routing and no interim
    key; protected custody alone is insufficient.
 5. **Transport shape and limits** (Engineering). Recommended: dedicated `registry-*` frames, opt-in
    by `registry-get` or `registry-subscribe`, one machine per frame, 64 sessions, 16 KiB per
@@ -711,13 +713,12 @@ Hosted failing-first red proof/output; no live changes; wrapper #605 separate. Q
 * Same-account fan-out, host-only put, and refusal of cross-account requests.
 * The name rules, the "untrusted display text" marking, that `fleet.find` never echoes a name, and
   that no agent-written title (Claude `aiTitle`, Copilot `name:`) reaches the relay.
-* That current name-only `found` requires one verified live match; #2360's future duplicate
+* That name-only `found` requires one roster-verified or messaging-only own-account live match; #2360's future duplicate
   selection requires all matches verified and one provably newest signed start. Scope,
   incomplete/unverified precedence, no inferred model and name-ownership limits remain.
 * That the relay's power is stated honestly: today it can forge, alter, hide and replay records and
   no client can tell; after `hostSign` it can read, withhold and replay within 60 s, not forge.
-* That `found` and `agent.send` are never produced or driven by an unverified, stale or offline
-  record.
+* That only the temporary own-account exception may route messaging from an unsigned record; stale/offline rows never route.
 
 ## Not in this note
 

@@ -1,9 +1,13 @@
 using AgentBridge.Host.Lite;
+using AgentBridge.Transport;
 
 namespace AgentBridge.Host.Fleet;
 
 // Routing metadata only. The actual send still checks the peer's channel key and signed envelope.
-internal sealed class LiteFleetRoster(IScopedFleetRoster roster, ILiteMode mode, ILiteLink link) : IScopedFleetRoster
+internal sealed record LiteFleetConnection(string Account, IReadOnlyList<PresenceEntry> Presence,
+    Func<CancellationToken, Task<FleetRosterSnapshot>> ReadAsync, Func<bool> Current);
+
+internal sealed class LiteFleetRoster(Func<LiteFleetConnection?> connection, ILiteMode mode, Func<string?> identityAccount) : IScopedFleetRoster
 {
     public const string Trust = "own-account";
 
@@ -12,16 +16,17 @@ internal sealed class LiteFleetRoster(IScopedFleetRoster roster, ILiteMode mode,
     public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct)
     {
         CheckOn();
-        var account = link.Account;
-        if (string.IsNullOrWhiteSpace(account)) { throw new InvalidOperationException("refused: notSameAccount: no signed-in relay account"); }
-        var snapshot = await roster.ReadScopedAsync(ct);
-        CheckOn();
-        if (snapshot.FleetScope != account || link.Account != account)
+        var captured = connection() ?? throw new InvalidOperationException("refused: notSameAccount: no signed-in relay connection");
+        CheckAccount(captured);
+        FleetRosterSnapshot snapshot;
+        try { snapshot = await captured.ReadAsync(ct); }
+        finally { CheckOn(); CheckAccount(captured); }
+        if (snapshot.FleetScope != captured.Account)
         {
             throw new InvalidOperationException("refused: notSameAccount: the fleet connection changed account during lookup");
         }
-        var hosts = link.Presence.Where(p => p.Kind == "host").Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
-        return snapshot with
+        var hosts = captured.Presence.Where(p => p.Kind == "host").Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
+        var result = snapshot with
         {
             Machines = snapshot.Machines.Select(m => m with
             {
@@ -30,6 +35,17 @@ internal sealed class LiteFleetRoster(IScopedFleetRoster roster, ILiteMode mode,
                 MessagingTrust = m.Online && hosts.Contains(m.Id) ? Trust : null,
             }).ToList(),
         };
+        CheckOn();
+        CheckAccount(captured);
+        return result;
+    }
+
+    void CheckAccount(LiteFleetConnection captured)
+    {
+        if (string.IsNullOrWhiteSpace(captured.Account) || identityAccount() != captured.Account || !captured.Current())
+        {
+            throw new InvalidOperationException("refused: notSameAccount: the host account or fleet connection changed during lookup");
+        }
     }
 
     void CheckOn()

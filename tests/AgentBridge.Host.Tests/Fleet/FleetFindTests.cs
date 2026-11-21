@@ -75,11 +75,13 @@ public sealed class FleetFindTests : IDisposable
     sealed class FrameRoster(RelayFleetRoster reader, JsonElement frame, string account = "account-a") : IScopedFleetRoster
     {
         public Action? Reading;
+        public Func<Task>? BeforeRead;
         public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => Task.FromResult(reader.Read([frame]));
-        public Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct)
+        public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct)
         {
+            if (BeforeRead is not null) { await BeforeRead(); }
             Reading?.Invoke();
-            return Task.FromResult(new FleetRosterSnapshot(account, reader.Read([frame])));
+            return new FleetRosterSnapshot(account, reader.Read([frame]));
         }
     }
 
@@ -87,15 +89,76 @@ public sealed class FleetFindTests : IDisposable
     {
         public string Self => "self";
         public string Account { get; set; } = "account-a";
-        public IReadOnlyList<PresenceEntry> Presence { get; set; } = [new("a", "host-a", "host", Started)];
+        IReadOnlyList<PresenceEntry> presence = [new("a", "host-a", "host", Started)];
+        public Action? ReadingPresence;
+        public IReadOnlyList<PresenceEntry> Presence { get { ReadingPresence?.Invoke(); return presence; } set => presence = value; }
+        public object Connection = new();
+        public LiteFleetConnection Capture(FrameRoster frames)
+        {
+            var account = Account;
+            var captured = Connection;
+            return new(account, Presence.ToArray(), frames.ReadScopedAsync, () => Account == account && ReferenceEquals(captured, Connection));
+        }
         public Task<LiteAck> SendAsync(string peerId, string account, object request, CancellationToken ct) => throw new NotSupportedException();
     }
+
+    static LiteFleetRoster LiteRoster(FrameRoster frames, LiteKill mode, LiteLink link, Func<string?>? identityAccount = null) =>
+        new(() => link.Capture(frames), mode, identityAccount ?? (() => "account-a"));
 
     static JsonElement LiteFrame() => Body(new
     {
         machine = "a", online = true,
         record = new { sessions = new[] { new { node = "n-a", name = "SG Quality", state = "idle", since = Started } } },
     });
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Switching_host_identity_before_the_old_relay_detaches_refuses_find_and_list(bool find)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        string? identityAccount = "account-a";
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var frames = new FrameRoster(new RelayFleetRoster(), LiteFrame()) { BeforeRead = async () => { entered.SetResult(); await release.Task; } };
+        var own = LiteRoster(frames, new LiteKill(root), new LiteLink(), () => identityAccount);
+        var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+            : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
+        try { await entered.Task.WaitAsync(TimeSpan.FromSeconds(5)); identityAccount = "account-b"; }
+        finally { release.TrySetResult(); }
+        Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_connection_switch_on_the_presence_read_cannot_mix_accounts_in_find_or_list(bool find)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var link = new LiteLink();
+        link.ReadingPresence = () => { link.Account = "account-b"; link.Presence = [new("a", "host-b", "host", Started)]; };
+        var own = LiteRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), link);
+        var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+            : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
+        Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Replacing_the_connection_with_the_same_account_during_the_registry_read_refuses_find_and_list(bool find)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var link = new LiteLink();
+        var frames = new FrameRoster(new RelayFleetRoster(), LiteFrame()) { Reading = () => link.Connection = new() };
+        var own = LiteRoster(frames, new LiteKill(root), link);
+        var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+            : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
+        Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
+    }
 
     [Theory]
     [InlineData(false, false)]
@@ -110,7 +173,7 @@ public sealed class FleetFindTests : IDisposable
         var trust = new FleetTrust(new HostRosterReader(pin, HostRoster.Now), root, () => "account-a");
         var signed = new FrameRoster(new RelayFleetRoster(trust.Membership), LiteFrame());
         if (unreadable) { Assert.Throws<InvalidOperationException>(() => trust.Membership()); }
-        var own = new LiteFleetRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), new LiteLink());
+        var own = LiteRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), new LiteLink());
         var op = new FleetList(store, signed, audit: new AgentAuditLog(root), messagingRoster: own);
         if (find)
         {
@@ -138,7 +201,7 @@ public sealed class FleetFindTests : IDisposable
         world.Feed(verified, "G");
         var signed = new FrameRoster(new RelayFleetRoster(() => verified), LiteFrame());
         Assert.Empty(await signed.ReadAsync(default));
-        var own = new LiteFleetRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), new LiteLink());
+        var own = LiteRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), new LiteLink());
         var result = await Find(new FleetList(store, signed, audit: new AgentAuditLog(root), messagingRoster: own), new { name = "SG Quality" });
         Assert.Equal("found", result.GetProperty("result").GetString());
         Assert.Equal("own-account", result.GetProperty("session").GetProperty("trust").GetString());
@@ -157,7 +220,7 @@ public sealed class FleetFindTests : IDisposable
         if (state == "kill") { mode.Kill(); }
         else if (state == "off") { Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.remote", "off"], root, TextWriter.Null, TextWriter.Null)); }
         else { frames.Reading = () => mode.Kill(); }
-        var own = new LiteFleetRoster(frames, mode, new LiteLink());
+        var own = LiteRoster(frames, mode, new LiteLink());
         var op = new FleetList(store, new Roster(M("a", true, "SG Quality", verified: true)), audit: new AgentAuditLog(root), messagingRoster: own);
         Assert.Contains("refused: off:", (await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { name = "SG Quality" }))).Message);
         Assert.Contains("refused: off:", (await Assert.ThrowsAsync<InvalidOperationException>(() => op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { })))).Message);
@@ -178,7 +241,7 @@ public sealed class FleetFindTests : IDisposable
         if (state == "changed-account") { frames.Reading = () => link.Account = "account-b"; }
         if (state == "absent-host") { link.Presence = []; }
         if (state == "non-host") { link.Presence = [new("a", "host-a", "phone", Started)]; }
-        var own = new LiteFleetRoster(frames, new LiteKill(root), link);
+        var own = LiteRoster(frames, new LiteKill(root), link);
         var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
         if (state is "absent-host" or "non-host")
         {

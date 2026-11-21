@@ -105,6 +105,18 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct)
     {
         var current = Volatile.Read(ref relay) ?? throw new InvalidOperationException("refused: this host isn't connected to the relay");
+        return await ReadConnectionAsync(current, ct);
+    }
+
+    internal LiteFleetConnection? CaptureMessagingConnection()
+    {
+        var current = Volatile.Read(ref relay);
+        return current is null ? null : new(current.AccountId, current.Presence.ToArray(),
+            ct => ReadConnectionAsync(current, ct), () => ReferenceEquals(current, Volatile.Read(ref relay)));
+    }
+
+    async Task<FleetRosterSnapshot> ReadConnectionAsync(RelayClient current, CancellationToken ct)
+    {
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
         var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
         lock (cache)
