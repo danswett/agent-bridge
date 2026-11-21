@@ -4,6 +4,7 @@
 No code, grant issuance, policy change, rollout or tool retirement is authorized
 by this document. Implementation needs separately assigned briefs and review.
 Tracking: https://github.com/danswett/agent-bridge/issues/3237.
+G1 landed: pure grant validation and policy-intersection evaluation only; no authority enabled.
 
 ## Authority and existing boundaries
 
