@@ -170,8 +170,10 @@ export function watchDisclosures(doc = globalThis.document) {
 // choices or a toggle: their release changes what is selected, which shows at once.
 export const PRESSABLE = '.button, .icon-button, .row-main, .nav-item, .view-tab, .machine-tab, .row-menu-item';
 
+const pausedMotion = new WeakMap();
 function watchVisibility(doc) {
-  const paused = new Set();
+  const paused = pausedMotion.get(doc) ?? new Set();
+  pausedMotion.set(doc, paused);
   const changed = () => {
     const hidden = isPageHidden(doc);
     // CSS also covers animations created while hidden, including pseudo-elements.
@@ -361,12 +363,12 @@ export function leave(el, entry, { dy = 0 } = {}) {
   });
   host.attachShadow({ mode: 'closed' }).append(inlineCopy(el));
   doc.body.append(host);
-  copies.add(host);
   sweepOn(doc);
   const y = dy * t.distance;
   const frames = y ? [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translate(0px, ${y}px)` }] : [{ opacity: 1 }, { opacity: 0 }];
   const a = run(host, frames, entry, t, { fill: 'forwards' });
-  if (!a) { host.remove(); copies.delete(host); return null; }
+  if (!a) { host.remove(); return null; }
+  copies.set(host, a);
   const done = () => { host.remove(); copies.delete(host); };
   a.finished.then(done, done);
   return a;
@@ -376,13 +378,21 @@ export function leave(el, entry, { dy = 0 } = {}) {
 // backgrounded or navigated (WebKit on a phone), so `finished` never settles and the copy would
 // stay over the row it was drawn for (#1641). A copy is a still picture of what has already
 // changed, so it goes whenever the app is hidden or navigated.
-const copies = new Set();
+const copies = new Map();
 const swept = new WeakSet();
 function sweepOn(doc) {
   const win = doc.defaultView;
   if (swept.has(doc) || !win) { return; }
   swept.add(doc);
-  const sweep = () => { for (const c of copies) { c.remove(); } copies.clear(); };
+  const sweep = () => {
+    for (const [c, a] of copies) {
+      a.cancel();
+      // Swept copies are disposed, unlike temporarily detached live motion.
+      pausedMotion.get(c.ownerDocument)?.delete(a);
+      c.remove();
+    }
+    copies.clear();
+  };
   doc.addEventListener('visibilitychange', () => { if (doc.visibilityState === 'hidden') { sweep(); } });
   win.addEventListener('pagehide', sweep);
   win.addEventListener('popstate', sweep);

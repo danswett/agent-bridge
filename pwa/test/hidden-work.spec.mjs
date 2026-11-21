@@ -142,3 +142,26 @@ test('motion reconnected while hidden resumes, even across a detached visible re
   await visibility(page, true);
   expect(await page.evaluate(() => state.motion.playState)).toBe('running');
 });
+
+test('a leaving fade swept while hidden cannot resume when its discarded host is reattached', async ({ page }) => {
+  await surface(page);
+  await page.evaluate(async () => {
+    const { watchPresses, leave } = await import('/js/ui/motion.js');
+    watchPresses(document);
+    document.documentElement.style.setProperty('--ab-motion-list-item-exit-duration', '60000ms');
+    const source = document.createElement('div');
+    source.style.cssText = 'position:fixed;left:0;top:0;width:50px;height:50px';
+    document.body.append(source);
+    state.motion = leave(source, 'listItem');
+    source.remove();
+    state.target = state.motion.effect.target;
+  });
+  expect(await page.evaluate(() => state.motion.playState)).toBe('running');
+  await visibility(page, false);
+  expect(await page.evaluate(() => ({ connected: state.target.isConnected,
+    motion: state.motion.playState }))).toEqual({ connected: false, motion: 'idle' });
+  await visibility(page, true);
+  await page.evaluate(() => document.body.append(state.target));
+  await visibility(page, true);
+  expect(await page.evaluate(() => state.motion.playState)).toBe('idle');
+});
