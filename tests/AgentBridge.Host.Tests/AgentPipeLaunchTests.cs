@@ -237,6 +237,19 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(0, launcher.Launches);
     }
 
+    [Fact]
+    public async Task Policy_narrowing_after_admission_refuses_at_the_execution_slot()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, store) = Granted(key);
+        Assert.True(new GrantCounters(store).Reserve(grant.Id, 1, Guid.NewGuid(), grant.Subjects[0], new('b', 64)).Accepted);
+        var path = Path.Combine(folder, HostSettings.FileName);
+        launcher.BeforeDispatch = () => File.WriteAllText(path,
+            File.ReadAllText(path).Replace("\"launchesPerOriginPerHour\":3", "\"launchesPerOriginPerHour\":1"));
+        Assert.Equal("grant-exhausted", (await GrantedLaunch(pipe, GrantBody(grant))).Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
     sealed class FakeLauncher : ISessionLauncher
     {
         public int Launches;
