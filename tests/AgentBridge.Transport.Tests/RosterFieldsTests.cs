@@ -84,7 +84,8 @@ public sealed class RosterFieldsTests
         var records = await host.Relay.RegistryGetAsync();
         Assert.Equal(host.Id, Assert.Single(records).GetProperty("machine").GetString());
         var wrong = JsonSerializer.SerializeToElement(Record(new string('f', 32)));
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => host.Relay.RegistryPutAsync(wrong));
+        var error = await Assert.ThrowsAsync<RegistryPublicationRefusedException>(() => host.Relay.RegistryPutAsync(wrong));
+        Assert.Equal("bad-record", error.ReasonCode);
         Assert.Contains("bad-record", error.Message);
         using var stop = new CancellationTokenSource();
         stop.Cancel();

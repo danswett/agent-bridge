@@ -211,7 +211,7 @@ public sealed class RelayClient : IAsyncDisposable
             var result = await done.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
             if (result.TryGetProperty("error", out var error) && error.GetString() is { } why)
             {
-                throw new InvalidOperationException("registry publication refused: " + why);
+                throw new RegistryPublicationRefusedException(why);
             }
         }
         finally { registryPuts.TryRemove(id, out _); }

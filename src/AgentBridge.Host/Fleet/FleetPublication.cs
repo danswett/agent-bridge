@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using System.Text.Json;
 using AgentBridge.Host.Core;
 using AgentBridge.Local;
+using AgentBridge.Transport;
 
 namespace AgentBridge.Host.Fleet;
 
@@ -56,16 +57,18 @@ public sealed class FleetPublication
                 InvalidDataException or JsonException => "invalid-snapshot", ObjectDisposedException => "transport",
                 InvalidOperationException => "refused", TimeoutException => "timeout", _ => "transport",
             };
-            Set(new("failed", publisher.SkippedInvalidIds, failures, clock.GetUtcNow() + retry, failure));
+            Set(new("failed", publisher.SkippedInvalidIds, failures, clock.GetUtcNow() + retry, failure),
+                e is RegistryPublicationRefusedException refusal ? refusal.ReasonCode : null);
             return false;
         }
     }
 
-    void Set(FleetPublicationStatus next)
+    void Set(FleetPublicationStatus next, string? refusalCode = null)
     {
         if (Status == next) { return; }
         Volatile.Write(ref status, next);
-        log?.Invoke($"fleet registry: {next.Result}; skipped invalid ids {next.SkippedInvalidIds}; failures {next.Failures}; {next.Failure}");
+        var reason = refusalCode is null ? "" : $"; reason {refusalCode}";
+        log?.Invoke($"fleet registry: {next.Result}; skipped invalid ids {next.SkippedInvalidIds}; failures {next.Failures}; {next.Failure}{reason}");
         Changed?.Invoke();
     }
 

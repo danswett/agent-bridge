@@ -155,6 +155,9 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
 * **`registry-put`** (host only): `{ t, id, record }`. The reply is `registry-result` with
   `error` null, or `too-large` (over 16 KiB), `bad-record` or `stale` (a sequence not above the
   one held; a new `epoch` needs a later `at`). The socket stays open on every refusal.
+  Host publication logs retain only the exact refusal codes `too-large`, `bad-record`,
+  `stale` and `not-allowed`; any other relay error becomes `unknown`. Arbitrary relay
+  error text and record content are never included in the publication failure log.
 * **`registry-get`** (any device): `{ t, id }`, at most one per two seconds per socket
   (`slow-down`). The reply is one `registry` frame per machine holding a record, `{ machine,
   name, online, lastSeen, record, part, of }`, then one `{ known: [{ machine, name, lastSeen, online }] }`
