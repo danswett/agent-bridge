@@ -1339,10 +1339,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             if (credentialIssued) { credentials!.Bind(launchId, started.ProcessId, started.StartedAt); }
             if (claim is not null) { attachments!.Consume(claim); handed.Value = true; }
             if (sessionId.Length > 0) { Launched(sessionId, started); }
+            var consoleSize = plan.Launcher.Kind == AgentKind.Copilot ? new LaunchedConsoleSize(injector, started, log) : null;
+            if (consoleSize is not null) { await consoleSize.AtLaunchAsync(); }
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
             // The reservation is the follow's now, released when the session registers.
             follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched)
-                { Transcript = transcriptFrom, AuditRegistered = auditRegistered, Principal = principal };
+            { Transcript = transcriptFrom, AuditRegistered = auditRegistered, Principal = principal, ConsoleSize = consoleSize };
             reservation = null;
             lock (pendingGate) { pending.Add(follow); }
             resumable.Forget();
@@ -1453,6 +1455,15 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     ConsoleScreen screen;
                     try { screen = await injector.ReadScreenAsync(window); }
                     catch (Exception) { screen = new ConsoleScreen(null, "unreadable"); }
+                    if (screen.Rows is not null && p.ConsoleSize is { } sizing)
+                    {
+                        // One final sizing check when a console is first readable. A handoff never
+                        // widens a different PID: the worker still checks the original creation time.
+                        p.ConsoleSize = null;
+                        await sizing.FirstReadAsync();
+                        try { screen = await injector.ReadScreenAsync(window); }
+                        catch (Exception) { screen = new ConsoleScreen(null, "unreadable"); }
+                    }
                     var question = StartupQuestions.Read(screen.Rows);
                     p.Ready = p.Launcher.RegistersBeforeReady && StartupQuestions.CopilotReady(screen.Rows);
                     // Read again on every look while it waits: what is shown to a person is what
@@ -2018,6 +2029,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         public Launcher Launcher { get; } = launcher;
         public string SessionId { get; } = sessionId;
         public Started Started { get; } = started;
+        public LaunchedConsoleSize? ConsoleSize;
         public string Where { get; } = where;
         public DateTimeOffset At { get; } = at;
         public HashSet<string> CodexBefore { get; } = codexBefore;

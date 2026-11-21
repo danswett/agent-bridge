@@ -23,6 +23,7 @@ public sealed class GrantStoreTests : IDisposable
         [new("123", Device, Guid.NewGuid().ToString(), "AAAAAAAAAAAAAAAAAAAAAA", new(42, clock.GetUtcNow()))],
         ["launch", "stop"], Scope,
         new(3, 10, 6), clock.GetUtcNow(), 1, Roles: [], StopTargets: []);
+    GrantDocument Issued() { var grant = Grant(); Assert.True(Open().Issue(grant).Usable); return grant; }
     public void Dispose() { key.Dispose(); Directory.Delete(root, true); }
 
     [Fact]
@@ -169,6 +170,16 @@ public sealed class GrantStoreTests : IDisposable
         var body = System.Text.Encoding.UTF8.GetBytes(json.ToJsonString());
         DeviceMacFile.Write(PathName, [.. DeviceMacFile.Mac(body, key, "agent-bridge fleet grant store v1"u8), .. body], _ => { });
         Assert.Equal(expected, Open().TryGetUsable(grant.Id, 1).Problem);
+    }
+
+    [Fact]
+    public void Revoke_past_the_lifetime_intent_cap_always_succeeds_is_idempotent_and_survives_restart()
+    {
+        var grants = Enumerable.Range(0, 256).Select(_ => Grant()).ToArray();
+        Assert.All(grants, g => Assert.True(Open().Issue(g).Usable));
+        Assert.True(Open().Revoke(grants[0].Id, 1).Usable && Open().Revoke(grants[0].Id, 1).Usable && Open().Revoke(grants[1].Id, 1).Usable);
+        Assert.Equal(GrantStoreProblem.Oversize, Open().Issue(Grant()).Problem);
+        Assert.Equal([GrantStoreProblem.Revoked, GrantStoreProblem.Revoked, GrantStoreProblem.None], grants[..3].Select(g => Open().TryGetUsable(g.Id, 1).Problem));
     }
 
     [Fact]
