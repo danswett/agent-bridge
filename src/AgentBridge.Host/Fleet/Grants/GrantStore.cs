@@ -23,7 +23,8 @@ public sealed class GrantStore
         RespectRequiredConstructorParameters = true, MaxDepth = 16
     };
     internal sealed record Intent(Guid Operation, Guid Grant, long Generation, string Action);
-    internal sealed record State(int Version, long Generation, GrantDocument[] Grants, Guid[] Tombstones, Intent[] Intents);
+    internal sealed record State(int Version, long Generation, GrantDocument[] Grants, Guid[] Tombstones, Intent[] Intents,
+        GrantCounterState? Counters = null);
     readonly string folder, path;
     readonly P256KeyPair key;
     readonly AgentAuditLog audit;
@@ -66,9 +67,9 @@ public sealed class GrantStore
     public GrantStoreResult TryGetUsable(Guid id, long generation) =>
         Transaction(state => (null, Find(state, id, generation, checkTime: true)), allowNew: false);
 
-    static State Next(State state, Guid id, string action) => state with { Generation = state.Generation + 1,
+    internal static State Next(State state, Guid id, string action) => state with { Generation = state.Generation + 1,
         Intents = [.. state.Intents, new(Guid.NewGuid(), id, state.Generation + 1, action)] };
-    GrantStoreResult Find(State state, Guid id, long generation, bool checkTime)
+    internal GrantStoreResult Find(State state, Guid id, long generation, bool checkTime)
     {
         if (state.Tombstones.Contains(id)) { return new(GrantStoreProblem.Revoked); }
         var grant = state.Grants.SingleOrDefault(g => g.Id == id);
@@ -79,7 +80,7 @@ public sealed class GrantStore
             : checkTime && now >= GrantValidator.Expiry(grant) ? new(GrantStoreProblem.Expired) : new(GrantStoreProblem.None, grant);
     }
 
-    GrantStoreResult Transaction(Func<State, (State? Next, GrantStoreResult Result)> change, bool allowNew = true)
+    internal GrantStoreResult Transaction(Func<State, (State? Next, GrantStoreResult Result)> change, bool allowNew = true)
     {
         if (failure != GrantStoreProblem.None) { return new(failure); }
         try
@@ -131,7 +132,7 @@ public sealed class GrantStore
                 || state.Grants.Any(g => !GrantValidator.ValidateShape(g).Valid)
                 || state.Grants.Select(g => g.Id).Distinct().Count() != state.Grants.Length
                 || state.Tombstones.Any(id => id == Guid.Empty || state.Grants.Any(g => g.Id == id))
-                || state.Tombstones.Distinct().Count() != state.Tombstones.Length)
+                || state.Tombstones.Distinct().Count() != state.Tombstones.Length || !GrantCounters.Valid(state.Counters))
             { throw new StoreFault(GrantStoreProblem.Malformed); }
         }
         catch (FileNotFoundException) { state = new(1, 0, [], [], []); }
@@ -139,7 +140,7 @@ public sealed class GrantStore
         var (rows, complete) = GateAuditProjection.Load(folder, boundary: (floor, _) => retained = floor);
         if (!complete || retained > 0 || !audit.Verify().Intact || !audit.Verify(launch: true).Intact)
         { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
-        var history = rows.Where(r => r.Action is "grant.issue" or "grant.revoke").ToArray();
+        var history = rows.Where(r => r.Action is "grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update").ToArray();
         if (body is not null && history.Length == 0) { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
         var operations = history.GroupBy(r => r.Gate?.Operation).OrderBy(g => g.First().Gate?.Sequence).ToArray();
         if (operations.Any(g => g.Count() != 2 || g.First().Gate is not { Phase: "intent" }
