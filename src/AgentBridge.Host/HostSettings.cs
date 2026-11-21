@@ -147,6 +147,7 @@ public sealed record HostSettings(bool RemoteApproval)
     public bool RemoteManage { get; init; } = true;
 
     public bool RestoreOnStart { get; init; } = true;
+    public bool AutoRetry { get; init; } = true;
     // permissions.phoneSignIn: off unless set true.
     public bool PhoneSignIn { get; init; }
     // permissions.escapedApproval: EscapedApproval.Confirm or .Machine.
@@ -169,7 +170,7 @@ public sealed record HostSettings(bool RemoteApproval)
     // anyway would read a setting meant as off as on.
     static HostSettings Off => Default with
     {
-        RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, FleetShare = false, FleetLaunchRule = "off", LoadEnabled = false, ReadOnly = true,
+        RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, FleetShare = false, FleetLaunchRule = "off", LoadEnabled = false, ReadOnly = true, AutoRetry = false,
         Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RemoteManage = false, RestoreOnStart = false, RestoreKept = true,
         EscapedApproval = AgentBridge.Protocol.EscapedApproval.Machine, EscapedApprovalDevices = [],
         AgentMessaging = AgentMessagingSettings.Closed,
@@ -285,6 +286,14 @@ public sealed record HostSettings(bool RemoteApproval)
             if (root.TryGetProperty("sessions", out var sessions) && sessions.ValueKind != JsonValueKind.Null)
             {
                 if (sessions.ValueKind != JsonValueKind.Object) { throw new JsonException("sessions is not an object"); }
+                if (sessions.TryGetProperty("autoRetry", out var autoRetry))
+                {
+                    settings = settings with { AutoRetry = autoRetry.ValueKind switch
+                    {
+                        JsonValueKind.True => true, JsonValueKind.False => false,
+                        _ => throw new JsonException("sessions.autoRetry is not true or false"),
+                    } };
+                }
                 if (sessions.TryGetProperty("restoreOnStart", out var restore) && restore.ValueKind != JsonValueKind.Null)
                 {
                     settings = settings with

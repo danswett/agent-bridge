@@ -450,6 +450,7 @@ public sealed record Session
     // truthful beside it (idle after an error), so an older client, which ignores this,
     // reads the session as it always did. Absent when nothing is wrong.
     public Attention? Attention { get; init; }
+    public AutoRetryStatus? AutoRetry { get; init; }
     // The notification tier the session is in (#913): NeedsYou interrupts, Done waits, Fyi never
     // notifies. The host sets it from the fields above, the parent session carrying its
     // delegates' questions. Absent from an older host, and a client then keeps its own rules.
@@ -468,12 +469,16 @@ public sealed record Session
     public Session WithoutHistory() => Activity.History is null ? this : this with { Activity = Activity with { History = null } };
 }
 
+public sealed record AutoRetryStatus(string State, string ErrorClass, int Attempts);
+
 // session.attention (#800, v1-sessions.md "Attention"). Which fields a kind uses is the spec's;
 // a reader takes whatever is there. Nothing in it is a credential, a sign-in code or a link:
 // message is a sentence the host composes from kind, errorClass, statusCode and provider alone,
 // never the agent's words (#841), shown as text only.
 public sealed record Attention
 {
+    [JsonIgnore]
+    public bool AutoRetryable { get; init; }
     public required AttentionKind Kind { get; init; }
     // When it began: the error's time, or for NotResponding the last event's.
     public required DateTimeOffset Since { get; init; }

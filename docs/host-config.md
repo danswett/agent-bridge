@@ -61,7 +61,7 @@ stack cuts; this policy cut installs no timer, task or live action.
   },
   "push": { "enabled": true },
   "delivery": { "readOnly": false },
-  "sessions": { "restoreOnStart": true },
+  "sessions": { "restoreOnStart": true, "autoRetry": true },
   "fleet": { "share": true },
   "fleetNames": { "launchRule": "on" },
   "load": { "enabled": true },
@@ -117,6 +117,7 @@ stack cuts; this policy cut installs no timer, task or live action.
 Comments and trailing commas are allowed. Absent and `null` mean the default,
 except an explicit `null` for `fleet` or `fleet.share` disables sharing with a problem,
 and `fleetNames` or `fleetNames.launchRule` set to `null` disables named launches with a problem.
+`sessions.autoRetry` is read fresh without restart; invalid values, including explicit `null`, turn it off with a problem.
 
 | Key | Default | Meaning |
 |---|---|---|

@@ -142,6 +142,7 @@ public static class HaPayloads
         if (s.Activity.Background is { Shells: > 0 } sh) { a["background_shells"] = sh.Shells; }
         if (s.Activity.Compactions is > 0 and var c) { a["compactions"] = c; }
         if (Attention(s.Attention) is { } attention) { a["attention"] = attention; }
+        if (s.AutoRetry is { } retry) { a["auto_retry"] = System.Text.Json.JsonSerializer.SerializeToNode(retry, ProtocolJson.Options); }
         return a;
     }
 
@@ -195,7 +196,8 @@ public static class HaPayloads
 
     // A session whose agent needs a person to sign it in again: not one signed in and waiting for
     // the session to confirm (recovery pending), which needs nobody.
-    public static bool NeedsPerson(Session s) => s.Attention is { Kind: AttentionKind.SignInNeeded } a && a.Recovery != RecoveryState.Pending;
+    public static bool NeedsPerson(Session s) => s.AutoRetry?.State == "needs-person"
+        || s.Attention is { Kind: AttentionKind.SignInNeeded } a && a.Recovery != RecoveryState.Pending;
 
     // A session that looks stuck (#687), decided on data, never on how long it has been in error:
     // Not responding as the host already decides it, or the wedge the host recognised from Copilot

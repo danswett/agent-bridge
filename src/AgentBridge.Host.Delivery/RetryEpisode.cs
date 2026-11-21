@@ -7,7 +7,7 @@ namespace AgentBridge.Host.Delivery;
 
 internal enum RetryReason { Auto, Owner }
 internal enum RetryStop { None, Changed, Ineligible, Expired, Exhausted, Cancelled, Failed }
-internal sealed record RetryObservation(JsonElement Error, DateTimeOffset ErrorAt, SessionProcess Process, long ActivityVersion, bool CanReply);
+internal sealed record RetryObservation(JsonElement Error, DateTimeOffset ErrorAt, SessionProcess Process, long ActivityVersion, bool CanReply, bool? Retryable = null);
 internal sealed record RetryAttempt(int Number, DateTimeOffset At, RetryReason Reason, AnswerOutcome? Outcome);
 
 internal sealed class RetryEpisode
@@ -38,7 +38,7 @@ internal sealed class RetryEpisode
         initial = observe();
         started = time.GetTimestamp();
         age = initial is null ? TimeSpan.Zero : time.GetUtcNow() - initial.ErrorAt;
-        if (initial is not null && (!initial.CanReply || initial.Process.Id <= 0 || initial.Process.StartedAt is null || !CopilotTurnErrors.CanRetry(initial.Error)))
+        if (initial is not null && (!initial.CanReply || initial.Process.Id <= 0 || initial.Process.StartedAt is null || !(initial.Retryable ?? CopilotTurnErrors.CanRetry(initial.Error))))
             End(RetryStop.Ineligible);
         else Check(observe(), replier.Available);
     }
@@ -48,7 +48,8 @@ internal sealed class RetryEpisode
     public IReadOnlyList<RetryAttempt> Attempts { get { lock (sync) return attempts.ToArray(); } }
     public void Cancel() { lock (sync) End(RetryStop.Cancelled); }
 
-    public async Task<bool> TryAsync(int expectedAttempt, Guid request, RetryReason reason, CancellationToken cancellation = default)
+    // Not ready still checks freshness and expiry, but admits no send.
+    public async Task<bool> TryAsync(int expectedAttempt, Guid request, RetryReason reason, CancellationToken cancellation = default, bool ready = true)
     {
         if (request == Guid.Empty) throw new ArgumentException("Request must be nonempty.", nameof(request));
         if (!Enum.IsDefined(reason)) throw new ArgumentOutOfRangeException(nameof(reason));
@@ -65,7 +66,7 @@ internal sealed class RetryEpisode
                 End(RetryStop.Cancelled);
                 cancellation.ThrowIfCancellationRequested();
             }
-            if (expectedAttempt != attempts.Count + 1 || requests.Contains(request)) return false;
+            if (!ready || expectedAttempt != attempts.Count + 1 || requests.Contains(request)) return false;
             if (reason == RetryReason.Auto && Elapsed.TotalSeconds < DueSeconds[attempts.Count]) return false;
             index = attempts.Count;
             requests.Add(request);
@@ -126,7 +127,7 @@ internal sealed class RetryEpisode
         if (Elapsed >= TimeSpan.FromMinutes(5)) return End(RetryStop.Expired);
         if (initial is null || current is null || current.Process != initial.Process || current.ActivityVersion != initial.ActivityVersion)
             return End(RetryStop.Changed);
-        if (!current.CanReply || !available || !CopilotTurnErrors.CanRetry(current.Error))
+        if (!current.CanReply || !available || !(current.Retryable ?? CopilotTurnErrors.CanRetry(current.Error)))
             return End(RetryStop.Ineligible);
         if (Elapsed >= TimeSpan.FromMinutes(5)) return End(RetryStop.Expired);
         return true;

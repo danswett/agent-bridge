@@ -157,6 +157,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
 
     void ForgetTarget()
     {
+        if (S.Attention is { AutoRetryable: true } attention) S.Attention = attention with { AutoRetryable = false };
         _inAssistantTurn = false;
         _unknownReply = false;
         _pendingNotice = _activeNotice = null;

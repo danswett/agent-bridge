@@ -42,6 +42,7 @@ internal static class AgentErrors
         var attention = new Attention
         {
             Kind = AttentionKind.Error, Since = at, Agent = AgentKind.Copilot,
+            AutoRetryable = CopilotTurnErrors.CanRetry(data),
             ErrorType = type switch
             {
                 "query" => AgentErrorType.Query, "execution" => AgentErrorType.Execution,
@@ -53,7 +54,7 @@ internal static class AgentErrors
         {
             return attention with { Kind = AttentionKind.SignInNeeded, Provider = "github", Message = Template(AttentionKind.SignInNeeded, null, status, AgentKind.Copilot) };
         }
-        var errorClass = status switch { 403 => ErrorClass.Auth, 429 => ErrorClass.Rate, _ => ErrorClass.Other };
+        var errorClass = status switch { 402 => ErrorClass.Quota, 403 => ErrorClass.Auth, 429 => ErrorClass.Rate, _ => ErrorClass.Other };
         // #687: the CLI's own session host stopped acknowledging events (errorType "query", then
         // "execution" on every later session.send, 1.0.105 and later; seen again 2026-11-09 on
         // several sessions). It is the CLI's fault and never recovers until the session is

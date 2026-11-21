@@ -37,6 +37,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // Sessions the host is ending, and since when. Under _gate.
     readonly Dictionary<string, DateTimeOffset> _ending = new(StringComparer.Ordinal);
     readonly Dictionary<string, (DateTimeOffset ErrorAt, string Generation, RecoveryState State)> _recovery = new(StringComparer.Ordinal);
+    readonly Dictionary<string, AutoRetryStatus> _autoRetry = new(StringComparer.Ordinal);
     // Sessions restored after a reboot or a crash (#780, RestoreRecorder), with their mark. Set before
     // the session registers, too: shown from its first upsert. Under _gate.
     readonly Dictionary<string, RestoreMarkState> _restoreMarks = new(StringComparer.Ordinal);
@@ -981,6 +982,24 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         finally { _pass.Release(); }
     }
 
+    public async Task SetAutoRetryAsync(string id, AutoRetryStatus? status, CancellationToken cancellation = default)
+    {
+        await _pass.WaitAsync(cancellation).ConfigureAwait(false);
+        try
+        {
+            Entry? entry;
+            lock (_gate)
+            {
+                if (!_entries.TryGetValue(id, out entry) || _autoRetry.GetValueOrDefault(id) == status) return;
+                if (status is null) _autoRetry.Remove(id);
+                else _autoRetry[id] = status;
+                entry.CommittedFull = null;
+            }
+            Commit(entry, entry.Full);
+        }
+        finally { _pass.Release(); }
+    }
+
     // A press armed a session's driver: shown at once, as the ending override is, and dated, since
     // it is something a client shows.
     void OnDriverChanged(string id) => _ = RecommitDriverAsync(id);
@@ -1188,6 +1207,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         shown = shown with { StartedAt = null };
         lock (_gate)
         {
+            shown = shown with { AutoRetry = _autoRetry.GetValueOrDefault(full.Id) };
             if (_recovery.TryGetValue(full.Id, out var recovery))
             {
                 if (shown.Attention is { Kind: AttentionKind.SignInNeeded } attention && attention.Since == recovery.ErrorAt)
@@ -1335,6 +1355,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             _lastActivity = _time.GetTimestamp();
             _ending.Remove(id);
             _recovery.Remove(id);
+            _autoRetry.Remove(id);
             _restoreMarks.Remove(id);
             _restoreMarksBefore.Remove(id);
             _drivers?.Forget(id);

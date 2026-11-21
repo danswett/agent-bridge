@@ -14,6 +14,7 @@ namespace AgentBridge.Host;
 public sealed class HostStartGate(HostHandover handover, string profileFolder)
 {
     readonly TaskCompletionSource serving = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal bool IsServing => serving.Task.IsCompletedSuccessfully;
 
     // Gives the recorder its resume path, held until Serving, and starts it; unless the app's Stop
     // came first, and then nothing is started, and the host is not to serve.

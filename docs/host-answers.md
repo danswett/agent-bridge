@@ -18,10 +18,9 @@ captured record and refusal tests first.
 
 This predicate does not send anything or grant permission to act.
 
-### Inert retry episode contract (#1846)
+### Retry episode contract (#1846)
 
-`RetryEpisode` is an internal, unwired Host.Delivery component, not an enabled
-retry loop. One instance owns one session/error episode. Inputs are its session
+`RetryEpisode` is an internal Host.Delivery component. One instance owns one session/error episode. Inputs are its session
 UUID, guarded `ISessionReplier`, clock, safe log callback, and a fresh observation
 callback. Observations carry the original error time, captured error data, process
 identity, non-error activity version, and eligibility (live Copilot, idle, writable,
@@ -61,9 +60,29 @@ already admitted. The replier must await actual typing completion (including the
 injector's worker handling), not return early on cancellation: the episode keeps
 its in-flight exclusion until that delivery settles.
 
-Nothing enables retries at runtime here. Production ownership, timers, owner Retry
-wiring, protocol visibility and staged healing remain #2127/#1846 follow-up work.
-Existing G5, #67 and replier guards are unchanged.
+### Host auto-resend (#2877)
+
+Each running host owns a disposable, fake-clock-testable scheduler for its locally
+discovered Copilot sessions; no host map or remote-session selection is added.
+It sends only the captured retryable error above through the guarded replier.
+Repeated transient failures retain one three-attempt budget at 30/90/180 seconds
+from the original error, expiring at five minutes. After an acknowledged continue,
+another slot requires a newly observed, later failure, never the same error still
+showing in a stale projection. Only a completed main-agent response clears the
+episode; delegate text/turns cannot refill it. A main abort withdraws eligibility.
+The scheduler starts only after the second startup Stop check and Serving, with
+serving readiness checked again at the final effect. Uncertain delivery never
+retries. Host shutdown cancels and awaits the scheduler; its process-local state
+does not migrate to another host.
+`sessions.autoRetry` defaults on and is read fresh, including at the final-effect
+fence. False, malformed config, read-only delivery, G5, questions, permission/trust
+prompts, auth, quota (including 402), and unrecognized failures never auto-send.
+The host log audits session id, attempt, reason and outcome, never raw errors.
+Session `autoRetry` and HA status attribute `auto_retry` publish `state`
+(`backoff`, `off`, `needs-person`), `errorClass` and `attempts`. Excluded classes
+are `auth`, `quota`, `permission`, `question`, or `other`; the allowlisted class
+is `no-response`. This adds no fields to the coarse relay registry allow-list.
+Owner Retry UI and staged healing remain separate follow-ups.
 
 ## Person CLI: ordinary approval (#2491 C3)
 

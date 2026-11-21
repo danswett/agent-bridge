@@ -645,6 +645,9 @@ async Task<int> ServeAsync(HostHandover handover)
     if (replies is ReplyService typist) { typist.LaunchHeld = launcher.HeldForReply; typist.Stopping = stop.Token; }
     // Nor /exit, whose Enter would answer it the same way: such a session is terminated untyped (#855).
     if (stops is StopService stopper) { stopper.LaunchHeld = launcher.HeldForReply; }
+    await using var autoRetry = new AutoRetryWatch(source, replies,
+        () => HostSettings.Load(identity.Folder).Settings.AutoRetry && ReadOnlyReason() is null, TimeProvider.System, Log,
+        id => launcher.HeldForReply(id) is not null, () => startGate.IsServing);
     // A Copilot session whose host stopped taking messages (#687) is ended and resumed when that
     // costs nothing (docs/host-launch.md); never when anything is running or typed.
     if (OperatingSystem.IsWindows() && replies is ReplyService deafReplies)
@@ -1008,6 +1011,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // What ended serving, for the journal's HostStopped: nothing on a normal stop.
     Exception? stoppedBy = null;
     startGate.Serving();
+    autoRetry.Start(stop.Token);
     // The try covers the loop below; its body is left at its old indent so this stays a small diff.
     try
     {
