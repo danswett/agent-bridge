@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using AgentBridge.Host.Core;
-using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 
@@ -76,41 +75,18 @@ public sealed class LiteLaunchLog : ILiteLaunches
         }
     }
 
-    // Self-ECDH works with TPM/non-exportable keys too. A separate domain never reuses a wire MAC key.
-    byte[] Mac(byte[] body)
-    {
-        if (key is null) { throw new CryptographicException("no host key"); }
-        var shared = key.Dh(key.Public);
-        byte[]? derived = null;
-        try
-        {
-            derived = HKDF.DeriveKey(HashAlgorithmName.SHA256, shared, 32, "agent-bridge lite launch log v1"u8.ToArray());
-            return HMACSHA256.HashData(derived, body);
-        }
-        finally { CryptographicOperations.ZeroMemory(shared); if (derived is not null) { CryptographicOperations.ZeroMemory(derived); } }
-    }
+    byte[] Mac(byte[] body) => DeviceMacFile.Mac(body, key, "agent-bridge lite launch log v1"u8);
 
     void Save()
     {
         if (path is null) { return; }
-        var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             var body = JsonSerializer.SerializeToUtf8Bytes(entries);
             if (body.Length > MaxBytes - 32) { throw new IOException("launch record is full"); }
-            using (var stream = PrivateFolder.CreateNew(temp))
-            {
-                if (OperatingSystem.IsWindows()) { AgentAuditLog.NarrowFileWindows(temp); }
-                stream.Write(Mac(body)); stream.Write(body); stream.Flush(true);
-            }
-            File.Move(temp, path, overwrite: true);
+            DeviceMacFile.Write(path, [.. Mac(body), .. body], log);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or CryptographicException or System.Security.SecurityException)
         { entries.Clear(); log("lite launch record could not be saved; no recorded session is a reply target"); }
-        finally
-        {
-            try { File.Delete(temp); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log("lite launch record temporary file could not be removed"); }
-        }
     }
 }
