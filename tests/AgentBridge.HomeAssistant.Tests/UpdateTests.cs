@@ -424,6 +424,27 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Check_queued_behind_a_background_check_that_finishes_during_an_install_still_reports_why_it_was_not_checked()
+    {
+        var check = updates.CheckGate = new TaskCompletionSource<UpdateRelease?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        updates.Newer = Release();
+        updates.DownloadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var c = await Ready();
+        await Press(c, "check_updates");
+        Assert.Equal(1, updates.Checks);
+        await Press(c, "install_update");
+        await Settle(c, () => updates.Downloaded.Count == 1);
+
+        check.SetResult(null);
+        await PassUntil(c, () => LogSnapshot().Any(m => m.Contains("update check pressed: not checked", StringComparison.Ordinal)));
+
+        Assert.Equal(2, updates.Checks);
+        Assert.Contains("Home Assistant connector: update check pressed: not checked, as an update is under way here and reports what it finds", LogSnapshot());
+        updates.DownloadGate.SetResult();
+        await Settle(c, () => updates.Applied.Count == 1);
+    }
+
+    [Fact]
     public async Task A_press_of_Check_on_a_current_host_answers_for_itself_for_ten_minutes()
     {
         updates.ReleasesUrl = null;

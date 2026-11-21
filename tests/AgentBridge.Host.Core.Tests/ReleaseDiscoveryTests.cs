@@ -105,6 +105,125 @@ public sealed class ReleaseDiscoveryTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task A_pressed_500_keeps_the_fresh_list_without_backoff_and_the_next_background_check_proceeds(bool relay) =>
+        PressedTransientFailure(relay, () => new(HttpStatusCode.InternalServerError));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task A_pressed_network_failure_keeps_the_fresh_list_without_backoff_and_the_next_background_check_proceeds(bool relay) =>
+        PressedTransientFailure(relay, () => throw new HttpRequestException("No such host is known."));
+
+    async Task PressedTransientFailure(bool relay, Func<HttpResponseMessage> fail)
+    {
+        var list = RelayList("0.1.2");
+        github.Answer = _ => Ok(list, "\"v1\"");
+        using var discovery = new ReleaseDiscovery(folder, github, time, random: () => 0, cdn: relay);
+        await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win");
+        if (relay)
+        {
+            time.Advance(ReleaseDiscovery.Interval);
+            github.Answer = _ => new(HttpStatusCode.OK) { Content = new StringContent(list), Headers = { Age = TimeSpan.FromMinutes(37) } };
+            await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win");
+        }
+        var fetched = discovery.FetchedAt;
+        time.Advance(TimeSpan.FromMinutes(1));
+        github.Answer = _ => fail();
+
+        Assert.Equal(list, await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win", pressed: true));
+        Assert.Equal(fetched, discovery.FetchedAt);
+        using (var saved = JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, ReleaseDiscovery.FileName))))
+        {
+            Assert.Equal(JsonValueKind.Null, saved.RootElement.GetProperty("notBefore").ValueKind);
+            Assert.Equal(0, saved.RootElement.GetProperty("failures").GetInt32());
+        }
+        var requests = github.Requests.Count;
+        using var otherProfile = new ReleaseDiscovery(folder, github, time, random: () => 0, cdn: relay);
+        Assert.Equal(list, await otherProfile.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        Assert.Equal(requests, github.Requests.Count);
+        time.Advance(ReleaseDiscovery.Interval);
+        github.Answer = _ => new(HttpStatusCode.OK) { Content = new StringContent(list), Headers = { Age = TimeSpan.Zero } };
+        Assert.Equal(list, await otherProfile.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        Assert.Equal(requests + 1, github.Requests.Count);
+    }
+
+    [Fact]
+    public async Task A_pressed_transient_failure_does_not_extend_the_freshness_of_the_kept_list()
+    {
+        using var discovery = new ReleaseDiscovery(folder, github, time, random: () => 0, cdn: false);
+        github.Answer = _ => Ok(Releases, "\"v1\"");
+        await discovery.ReleasesAsync(Url, CancellationToken.None);
+        time.Advance(TimeSpan.FromMinutes(9));
+        github.Answer = _ => new(HttpStatusCode.InternalServerError);
+        Assert.Equal(Releases, await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, pressed: true));
+
+        time.Advance(TimeSpan.FromMinutes(1));
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
+        Assert.Equal(3, github.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_kept_list_that_ages_out_during_a_pressed_transient_failure_is_not_served(bool relay)
+    {
+        var list = RelayList("0.1.2");
+        github.Answer = _ => Ok(list, "\"v1\"");
+        using var discovery = new ReleaseDiscovery(folder, github, time, random: () => 0, cdn: relay);
+        await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win");
+        if (relay)
+        {
+            time.Advance(ReleaseDiscovery.Interval);
+            github.Answer = _ => new(HttpStatusCode.OK) { Content = new StringContent(list), Headers = { Age = TimeSpan.FromMinutes(59) } };
+            await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win");
+        }
+        github.Answer = _ =>
+        {
+            time.Advance(relay ? TimeSpan.FromMinutes(2) : ReleaseDiscovery.Interval);
+            return new(HttpStatusCode.InternalServerError);
+        };
+
+        var failed = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win", pressed: true));
+        Assert.False(failed.Limited);
+    }
+
+    [Fact]
+    public async Task A_pressed_429_still_backs_off_even_with_a_fresh_kept_list()
+    {
+        using var discovery = new ReleaseDiscovery(folder, github, time, random: () => 0, cdn: false);
+        github.Answer = _ => Ok(Releases, "\"v1\"");
+        await discovery.ReleasesAsync(Url, CancellationToken.None);
+        time.Advance(TimeSpan.FromMinutes(1));
+        github.Answer = _ => new(HttpStatusCode.TooManyRequests) { Headers = { RetryAfter = new(TimeSpan.FromMinutes(5)) } };
+
+        var limited = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, b => b, CancellationToken.None, pressed: true));
+        Assert.True(limited.Limited);
+        Assert.Equal(time.GetUtcNow() + TimeSpan.FromMinutes(5), limited.RetryAt);
+        using var otherProfile = new ReleaseDiscovery(folder, github, time, random: () => 0, cdn: false);
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => otherProfile.ReleasesAsync(Url, CancellationToken.None));
+        Assert.Equal(2, github.Requests.Count);
+    }
+
+    [Fact]
+    public async Task A_pressed_429_with_a_recent_GitHub_answer_logs_the_relays_grace_window()
+    {
+        var list = RelayList("0.1.2");
+        var log = new List<string>();
+        using var discovery = new ReleaseDiscovery(folder, github, time, random: () => 0, log: log.Add);
+        github.Answer = _ => Ok(list, "\"v1\"");
+        await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win");
+        time.Advance(TimeSpan.FromMinutes(1));
+        github.Answer = r => r.RequestUri!.AbsoluteUri == Url
+            ? new(HttpStatusCode.TooManyRequests) { Headers = { RetryAfter = new(TimeSpan.FromMinutes(5)) } }
+            : new(HttpStatusCode.OK) { Content = new StringContent(list), Headers = { Age = TimeSpan.Zero } };
+
+        Assert.Equal(list, await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win", pressed: true));
+        Assert.Contains($"update check: using the relay under a grace window ending {(Now + ReleaseDiscovery.GithubRelayAtMost):O}", log);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("-1")]
     [InlineData("unknown")]
