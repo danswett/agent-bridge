@@ -981,7 +981,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // The roster changing changes who the app's Settings lists (#972).
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
-    var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
+    var liteLink = new AgentBridge.Host.Lite.RelayLiteLink(service.LiteReceiver, identity.Key.Public, () => identity.Account?.AccountId ?? "");
     var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
     var liteRegistry = new AgentBridge.Host.Fleet.RelayFleetRoster(accountGate: samePcPin.AccountGate);
     var liteFleetRoster = new AgentBridge.Host.Fleet.LiteFleetRoster(liteRegistry.CaptureMessagingConnection, liteKill, () => identity.Account?.AccountId, samePcPin.AccountGate);
