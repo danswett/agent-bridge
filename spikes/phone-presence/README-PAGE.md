@@ -5,8 +5,9 @@ confused-deputy mitigation.** None/self attestation permits a software key on
 the PC; malware can show its own QR and matching fingerprint. Engineering owns
 unresolved F1 authenticated provenance and F2 a PC-independent trusted display.
 These modules have no network, hosting or deployment code.
-`index.html` is deliberately inert until PR 2b supplies session loading and the
-automatic return callback. No owner run or real phone credential facts are claimed.
+`index.html` loads the session from the URL and posts evidence through the automatic
+return callback to the evidence mailbox (PR 2b/2c; see README-RETURN.md). No owner run or
+real phone credential facts are claimed, and nothing here is deployed.
 `renderSession` accepts the short-lived create/get contexts from the future loader;
 the root view shows the PC QR, the fragment view shows the phone approval screen.
 No sheet opens without fingerprint comparison and a configured return callback.
