@@ -38,8 +38,11 @@ Host implementation, November 16, 2026 (Pacific), #2518 / S-N2a:
 `FleetPublisher` uses only discovery's `ISessionSource.ProcessOf` binding for optional
 `startedAt`, floors to UTC whole seconds and omits unknown starts. A host restart
 re-observes the still-live process; a replacement process supplies its own start.
-The completed signed record is byte-fitted within 16 KiB, retaining recent state
-changes and marking omissions with `truncated`/`total`. S-N2b's strict relay
+Entries are byte-fitted before signing, reserving 105 bytes for the maximum P-256
+DER/base64url signature and its `sig` member. The final bounded record is signed
+once and checked against 16 KiB, retaining recent state changes and marking
+omissions with `truncated`/`total`. Boundary tests also assert that the serialized
+`registry-put` frame stays within 24 KiB. S-N2b's strict relay
 allow-list/total semantics and S-N2c's vectors must precede deployment of this
 publisher. This slice changes neither verification nor selection.
 
