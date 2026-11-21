@@ -92,7 +92,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     }
 
     private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null, IDiagnosticsJournal? journal = null,
-        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null)
+        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null,
+        string? statusFolder = null, TimeSpan? rememberFor = null)
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
@@ -122,6 +123,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             Transfers = fetcher ?? transfers,
             TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
             ProvenanceFile = Path.Combine(f.Root, "profile", "launch-provenance.json"),
+            StatusFolder = statusFolder,
+            RememberFor = rememberFor ?? TimeSpan.FromMinutes(25),
             Journal = journal,
             AgentWorktreeCheck = agentWorktreeCheck,
             AgentWorktreeRefusalAudit = agentWorktreeRefusalAudit,

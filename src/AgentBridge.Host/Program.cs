@@ -95,6 +95,10 @@ if (command == "stop")
 {
     return await StopCommands.RunWithProfileAsync(arguments, Identity.DefaultRoot, () => Refused("end a session"), Console.Out, Console.Error);
 }
+if (command == "launches")
+{
+    return await LaunchStatusCommands.RunAsync(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
+}
 
 if (command == "sessions" && arguments.ElementAtOrDefault(1) == "find")
 {
@@ -1211,6 +1215,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         Transfers = transfers,
         TransferStaging = transfers.Staging,
         ProvenanceFile = Path.Combine(serveFolder!, "launch-provenance.json"),
+        StatusFolder = Path.Combine(serveFolder!, "launch-status"),
         Journal = journal,
         AgentWorktreeCheck = AgentLaunchWorktreeCheck.Check,
         AgentWorktreeRefusalAudit = (request, principal, reason) => audit.Append(
