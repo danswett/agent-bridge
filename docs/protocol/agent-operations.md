@@ -6,7 +6,7 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 | --- | --- | --- |
 | `agent.send` | read+reply | Sends text to one session; see [local-pipe.md](local-pipe.md#agentsend-ap5-lite). |
 | `fleet.list` | read | Lists the sessions and online/offline machines of the agent's own account, with optional machine display names. |
-| `fleet.find` | read | Finds one session of the agent's own account by exact name, with optional machine display names; answers `unverified` until records are signed. |
+| `fleet.find` | read | Finds one session of the agent's own account by exact name; unsigned matches answer `unverified` except for messaging-only `trust: "own-account"` below. |
 
 ## `fleet.list`
 
@@ -41,10 +41,9 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 
 ## `fleet.find`
 
-The table lists implemented selector branches; production matches stay `unverified`
-(or `incomplete`). Engineering approved the
+The table lists implemented selector branches. The [own-account lite exception](agent-lite.md) allows fresh present-host matches to route messaging with `trust: "own-account"`, without roster verification; off or kill refuses this routing. Other unsigned matches stay `unverified` (or `incomplete`). Engineering approved the
 [#2360 replacement contract](../design/fleet-session-registry.md#approved-replacement-contract-2360-not-implemented)
-as a future change; this documentation PR does not implement it or enable routing.
+as a future change; signed replacement selection remains unimplemented.
 
 ```json
 { "id": 4, "op": "fleet.find", "data": { "name": "SG Quality" } }
@@ -55,17 +54,17 @@ Optional `"machine"` (1 to 64 of letters, digits, `.`, `_`, `-`) limits the matc
 | `result` | Meaning | Body |
 | --- | --- | --- |
 | `incomplete` | A live machine in scope published a truncated list, so a duplicate could be hidden | `machines`: ids |
-| `unverified` | A live unverified match exists, even beside a verified match; #1776 verification is not integrated today | `machines`: `{ machine, online }`, no node |
-| `ambiguous` | Two or more verified live matches, including on one machine | `candidates`: `{ id, node, machine, state, since, online, model? }` |
+| `unverified` | A live unverified match without own-account messaging trust exists, even beside a verified match | `machines`: `{ machine, online }`, no node |
+| `ambiguous` | Two or more verified or own-account messaging live matches, including on one machine | `candidates`: `{ id, node, machine, state, since, online, model?, trust? }` |
 | `offline` | Matches only on offline machines | `machines`: `{ machine }` |
-| `found` | One verified live match, with or without a `machine` filter | `session`: `{ id, node, machine, state, since, online, model?, sessionId? }` |
+| `found` | One verified live match or one own-account messaging live match, with or without a `machine` filter | `session`: `{ id, node, machine, state, since, online, model?, sessionId?, trust? }` |
 | `notFound` | Otherwise | none |
 
 - Every machine object, session and candidate above also carries optional `machineName` under the same rules as `fleet.list`; `incomplete` remains an array of IDs. A display name is never a machine pin.
 - Every result carries `fleetScope`, the authenticated relay account ID captured with the roster. Request `account`/`fleetScope` fields are ignored; missing authenticated scope refuses explicitly. Reconnect during the read refuses rather than mixing scopes.
 - Name-only lookup is canonical (#2151); offline matches do not create a live duplicate. `model` is carried only when the authenticated roster supplies a string, never inferred from caller data or names. Missing model is omitted, so model-dependent callers fail closed. No publisher or relay allow-list change supplies model today.
 - `found.session.sessionId`, when present, is the full lowercase hyphenated UUID (`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`). The publisher carries the source session ID, only to a relay whose `ready` advertises the `rosterSessionId` capability ([roster.md](roster.md)), and the finding host verifies `node == "agent_bridge_" + sessionId.Replace("-", "")[..16]` before exposing it. Missing, noncanonical or mismatched values are omitted; consumers must refuse an unverified ID, never truncate or prefix-match a caller UUID. Existing 16-hex `id` and `node` are unchanged; no role ID or name-derived value is used.
-- Until #1776's signing and trusted reader integration lands no record is verified, so today a live match answers `unverified` and `found` is not returned: a name alone, or an impostor machine of the same account beside an offline original, never yields a routable node. Protected key custody (#1782) alone is insufficient. **Deviation from issue #1399**, which asked for a plain found/ambiguous/not-found; the design governs.
+- Until #1776's signing and trusted reader integration lands no record is roster-verified. The temporary own-account exception returns `session.trust: "own-account"` (also `trust` on fresh `fleet.list` session rows) for messaging only; it never grants launches, stop or remote manage. Registry account and presence come from one connection snapshot and must still agree with the host's current identity account when the read completes; a switch refuses `notSameAccount`. Actual sends still check the same account and channel key matching the device id. Other unsigned matches remain `unverified`, without a routable node.
 - The name is trimmed, then matched exactly and case-sensitively; it is refused if empty or over 64 characters (before any audit entry). It is never echoed back, so the call does not taint the caller with session text.
 - Same account, scope and refusal rules as `fleet.list`. Each accepted call invokes the same `AuditFleetList` hook.
 
@@ -76,4 +75,4 @@ enrollment, disclosure, warning, ordering, dependency and failing-first test con
 Only explicit host-owned names publish; no inferred fallback or agent rename.
 After incomplete/unverified checks, same-host live duplicates stay ambiguous; cross-host proof is specified there.
 This is not implemented. #1776 and the design's unowned reader/clock prerequisites
-still gate verification and routing: no interim key and no unsigned `found`.
+still gate roster verification and replacement selection: no interim key and no unsigned `found` beyond the messaging-only own-account exception above.
