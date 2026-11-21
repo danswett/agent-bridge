@@ -8,12 +8,12 @@ internal static class ReadCommandRoots
     {
         var index = arguments.ToList().IndexOf("--read-root");
         if (index < 0) { return currentUser(); }
-        if (arguments[0] is not ("sessions" or "get")
+        if (arguments[0] is not ("sessions" or "get" or "question-target")
             || arguments.Count(a => a == "--read-root") != 1 || index + 1 >= arguments.Count
             || !Path.IsPathFullyQualified(arguments[index + 1])
             || arguments.Any(a => a is "--copilot-home" or "--claude-home" or "--codex-home" or "--profile"))
         {
-            throw new ArgumentException("--read-root requires one absolute directory, sessions or get, and no agent-home or profile options.");
+            throw new ArgumentException("--read-root requires one absolute directory, sessions, get or question-target, and no agent-home or profile options.");
         }
         var root = Path.GetFullPath(arguments[index + 1]);
         if (!Directory.Exists(root)) { throw new ArgumentException("--read-root directory does not exist."); }

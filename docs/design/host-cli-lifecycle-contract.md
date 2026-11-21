@@ -113,6 +113,23 @@ implemented or executable RED invented by these vectors.
 | V17 | Agent or agent-child CLI attempts a focus/presence assertion | No person-focus assertion, notification suppression, borrowed host/App identity or approval authority. |
 | V18 | Finished push lacks turn ID; timestamps/text/tag match an old notice | Do not manufacture a unique turn identity or duplicate display evidence; retain the correlation limitation. |
 
+## C9 read-only exact-question validation
+
+| Command | Result and boundary |
+| --- | --- |
+| `question-target <session-id> <question-id>` | Refreshes the local source and checks both full IDs exactly. JSON identifies the selected tuple, `outcome` and known `turn`; only `pending` exits 0. No answer, focus assertion, notification registration or delivery occurs. |
+
+`stale` means a different session/question was returned; `missing` means the
+session is absent. `answered` requires explicit Answered/Approved/Denied evidence
+for that question in the newest bounded history page, followed by a fresh target
+check. Absence alone is `no-longer-pending`, never proof of an answer.
+Discovery holds or inconsistent pending state report `unknown`; read failures
+report `unavailable`. These exit 1 with the outcome on stderr; bad syntax exits 2.
+The existing isolated `--read-root <absolute-home>` read seam is supported.
+Scope is the local source, not an authenticated machine/person selection.
+This validates a snapshot, not continuing currentness, answerability, notice
+opening, background delivery or completion of row 28.
+
 ## Dispositions and retained work
 
 [Engineering's disposition][engineering] retains row 16 background/locked
