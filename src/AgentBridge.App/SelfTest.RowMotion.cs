@@ -12,19 +12,50 @@ namespace AgentBridge.App;
 
 static partial class SelfTest
 {
-    static async Task<double> RowMotionSettled(FrameworkElement root, Func<double> read, Action<bool, string> check, string phase)
+    static async Task<double> RowMotionSettled(FrameworkElement root, Func<double> read, Action<bool, string> check, string phase, Action? prepare = null)
     {
         const int frames = 8;
         double previous = double.NaN, current = double.NaN;
         for (var frame = 0; frame < frames; frame++)
         {
             previous = current;
+            prepare?.Invoke();
             await CaptureFrame(root);
             current = read();
             if (double.IsFinite(previous) && double.IsFinite(current) && Math.Abs(current - previous) <= 1) { return current; }
         }
         check(false, $"{phase} drawn position did not settle after {frames} capture frames ({previous}, {current}).");
         return double.NaN;
+    }
+
+    static async Task<double> RowMotionSample(Visual visual, FrameworkElement root, AnimationController initial, float progress, Func<double> read, Action<bool, string> check, string phase, bool settle = true)
+    {
+        AnimationController? prepared = null;
+        void Prepare()
+        {
+            var current = visual.TryGetAnimationController("Offset");
+            if (current is null || ReferenceEquals(current, initial))
+            {
+                prepared = null;
+                check(false, $"{phase}: no replacement controller during capture");
+                return;
+            }
+            if (!ReferenceEquals(current, prepared))
+            {
+                current.Pause();
+                current.Progress = progress;
+                prepared = current;
+            }
+        }
+        double Read()
+        {
+            var current = visual.TryGetAnimationController("Offset");
+            return current is not null && ReferenceEquals(current, prepared) && current.Progress == progress ? read() : double.NaN;
+        }
+        if (settle) { return await RowMotionSettled(root, Read, check, phase, Prepare); }
+        Prepare();
+        await CaptureFrame(root);
+        return Read();
     }
 
     // A retarget needs both RowShift's restamp and a fresh controller: the paused first one stays resolvable until replaced.
@@ -110,12 +141,12 @@ static partial class SelfTest
             if (retarget is null) { check(false, Diagnosis()); return; }
             // A window capture blocks the UI thread, not the compositor. Sample the
             // retarget's own paused start, not an earlier picture of the first shift.
-            var moving = await RowMotionSettled(root, () => Sample(0), reportFailure, "retarget start");
+            var moving = await RowMotionSample(visual, root, initial, 0, Sample, reportFailure, "retarget start");
             if (!double.IsFinite(moving)) { check(false, Diagnosis()); return; }
             var midShift = moving > slot.Y + 1 && moving < original;
             check(midShift, $"row neighbour is mid-shift ({original}, {moving}, {slot.Y})" + (midShift ? "" : $"; {Diagnosis()}"));
             var target = original;
-            var later = await RowMotionSettled(root, () => Sample(0.25f), reportFailure, "retarget quarter progress");
+            var later = await RowMotionSample(visual, root, initial, 0.25f, Sample, reportFailure, "retarget quarter progress");
             if (!double.IsFinite(later)) { check(false, Diagnosis()); return; }
             check(later >= moving - 5 && later <= target + 1,
                 $"interrupted shift continues from its drawn position ({moving}, {later}, {target})");
@@ -124,17 +155,16 @@ static partial class SelfTest
             var standard = t * t * (3 - 2 * t);
             check(progress > standard + 0.12,
                 $"interrupted shift decelerates toward its new position ({t:0.00} timeline, {progress:0.00} progress)");
-            var paused = await RowMotionSettled(root, () => Sample(0), reportFailure, $"retarget rewind (moving={moving}, original={original}, slot.Y={slot.Y})");
+            var paused = await RowMotionSample(visual, root, initial, 0, Sample, reportFailure, $"retarget rewind (moving={moving}, original={original}, slot.Y={slot.Y})");
             if (!double.IsFinite(paused)) { check(false, Diagnosis()); return; }
-            await CaptureFrame(root);
-            var held = Sample(0);
+            var held = await RowMotionSample(visual, root, initial, 0, Sample, reportFailure, "retarget held", settle: false);
             check(retarget?.Progress == 0 && double.IsFinite(paused) && Math.Abs(held - paused) <= 1 && Math.Abs(paused - moving) <= 3,
                 $"retarget is paused before motion is disabled ({later}, {target}; moving={moving}, original={original}, slot.Y={slot.Y}, paused={paused}, held={held}, controller={retarget?.Progress.ToString() ?? "none"}); {Diagnosis()}");
             animations = false;
             shifts.Changing();
-            await CaptureFrame(root);
-            check(Math.Abs(TrackedTop() - target) <= 1,
-                "disabling motion settles an interrupted shift without another list change");
+            var disabled = await RowMotionSettled(root, TrackedTop, check, "disabled retarget");
+            check(Math.Abs(disabled - target) <= 1,
+                $"disabling motion settles an interrupted shift without another list change ({disabled}, target={target})");
             animations = true;
             shifts.Changing();
             var implicitStart = TrackedTop();
@@ -155,12 +185,11 @@ static partial class SelfTest
             await CaptureFrame(root);
             check(Math.Abs(TrackedTop() - reducedSlot) <= 1,
                 "disabling motion settles an implicit shift without another list change");
-            // Re-resolve every capture and seek: pausing a replaced controller's stale wrapper leaves the row running.
-            double Sample(float progress)
+            // Read only after the prepared controller's capture barrier; never seek while taking its picture.
+            double Sample()
             {
                 retarget = visual.TryGetAnimationController("Offset");
                 if (retarget is null || ReferenceEquals(retarget, initial)) { failure = "no replacement controller during capture"; return double.NaN; }
-                retarget.Pause(); retarget.Progress = progress;
                 tops.Add(TrackedTop());
                 return tops[^1];
             }
