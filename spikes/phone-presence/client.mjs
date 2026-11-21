@@ -20,8 +20,8 @@ export async function readMailbox(id, { fetch: send = globalThis.fetch, signal }
   return data.blobs;
 }
 export async function seedRequest(bundle, { fetch: send = globalThis.fetch, signal } = {}) {
-  const raw = JSON.stringify({ request: bundle }); if (!isId(bundle.get.sessionId) || utf8(raw).length > 4096) throw new Error('Refused: request size or id.');
-  const response = await send(`${mailboxBase}/s/${bundle.get.sessionId}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: phoneOrigin }, body: raw, redirect: 'error', cache: 'no-store', signal });
+  const raw = JSON.stringify({ request: bundle }); if (!isId(bundle.get.sessionId) || !isId(bundle.create.sessionId) || bundle.create.sessionId === bundle.get.sessionId || utf8(raw).length > 4096) throw new Error('Refused: request size or distinct idempotency key.');
+  const response = await send(`${mailboxBase}/s/${bundle.get.sessionId}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: phoneOrigin, 'Idempotency-Key': bundle.create.sessionId }, body: raw, redirect: 'error', cache: 'no-store', signal });
   if (response.status !== 201) throw new Error('Refused: request slot unavailable; retry in a NEW session.');
   return raw;
 }

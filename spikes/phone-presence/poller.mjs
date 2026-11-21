@@ -8,7 +8,7 @@ export async function poll(session, options) {
     while (live.valid()) {
       let blobs;
       try { blobs = await live.wait(signal => options.read(signal)); }
-      catch (error) { if (!live.valid()) break; if (!(error instanceof TypeError)) throw error; options.refuse('Refused: mailbox network failure.'); blobs = []; }
+      catch (error) { if (!live.valid()) break; if (!(error instanceof DOMException && error.name === 'NetworkError')) throw error; options.refuse('Refused: mailbox network failure.'); blobs = []; }
       if (!Array.isArray(blobs) || blobs.length > 3) throw new Error('Refused: malformed mailbox response.');
       for (const blob of blobs) {
         if (seen.has(blob)) continue; seen.add(blob);

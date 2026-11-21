@@ -17,11 +17,14 @@ nonces/expiry; the fake body separately uses the roster F assertion challenge.
 The phone verifies slot one and its complete hash before displaying approval.
 A malicious PC can show its own QR/fingerprint; native Origin is NOT authentication.
 Junk posts can burn slots: failure/retry requires a NEW session. No Worker change.
-Slot one is request, two/three are unchanged evidence and one network retry.
+Slot one uses the enrollment nonce key; evidence uses the distinct assertion id key.
+An explicit NetworkError retries identical evidence once, deduplicated in slot two;
+slot three remains available. TypeError/redirect/HTTP/cancel never retry.
 Record "owner console confirmation": same-PC code able to write to that console
 could fake it. Signature/flags are spike facts, not phone provenance or root policy.
 Five-minute wall/monotonic deadline; Ctrl+C closes; existing results never overwrite.
 Tests use injected fetch plus real-network ban, serial/BelowNormal/one CPU on VM7.
+Helper must verify the mailbox README's mandatory 10 POST/min/IP rule before deploy.
 Only helper deployment proves binding/domain/CORS; only the attended owner run
 reports actual credential facts/self-reported OS/browser/path. No run is claimed.
 Static publication after exact-head Quality approval must include the browser

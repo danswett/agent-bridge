@@ -10,6 +10,7 @@ import { authenticationString } from './sas.mjs';
 import { poll } from './poller.mjs';
 import { confirmOwnerCode } from './owner.mjs';
 import { resultText, writeResult } from './results.mjs';
+import { handle, SessionMailbox } from './mailbox/worker.mjs';
 test.before(() => mock.method(globalThis, 'fetch', () => { throw new Error('Real network forbidden.'); }));
 test.after(() => mock.restoreAll());
 const origin = 'https://proof.slipgates.com', code = 'abcd ef01 2345 6789', id = 'ab'.repeat(16);
@@ -95,6 +96,12 @@ test('bounded fixed-origin mailbox reads forbid redirects and foreign URLs', asy
   assert.deepEqual(await readMailbox(id, { fetch: local }), ['bad']);
   await assert.rejects(readMailbox(id, { fetch: async () => new Response('x'.repeat(80001)) }), /size/);
   assert.deepEqual(await readMailbox(id, { fetch: async () => new Response(null, { status: 404 }) }), []);
+  for (const error of [new TypeError('redirect'), new TypeError('network')]) {
+    const f = fixture(); let calls = 0; f.options.read = async () => { calls++; throw error; };
+    await assert.rejects(poll(f.session, f.options), error); assert.equal(calls, 1);
+  }
+  const f = fixture(); let reads = 0; f.options.read = async () => { if (++reads === 1) throw new DOMException('offline', 'NetworkError'); return ['good']; };
+  assert.equal((await poll(f.session, f.options)).outcome, 'PASS'); assert.equal(reads, 2);
 });
 test('missing or tampered slot one refuses before any request display or WebAuthn', async () => {
   const { boot } = await import('./bootstrap.mjs');
@@ -109,17 +116,25 @@ test('missing or tampered slot one refuses before any request display or WebAuth
     assert.equal(elements.account.textContent, ''); assert.equal(elements.fingerprint.textContent, ''); assert.equal(elements.approval.hidden, true);
   }
 });
-test('native seed uses slot one once and unchanged phone evidence can occupy slots two and three', async () => {
+test('native seed key is distinct; lost network response retry deduplicates evidence in slot two', async () => {
   const { seedRequest, requestFingerprint } = await import('./client.mjs');
-  const v = vector(), blobs = [];
-  const local = async (_, options) => {
-    blobs.push(options.body); if (blobs.length === 1) assert.equal(options.headers.Origin, origin);
-    if (blobs.length === 2) throw new TypeError('lost response'); return new Response(null, { status: 201 });
+  const v = vector(), calls = []; let state, alarm;
+  const storage = { get: async () => structuredClone(state), put: async (_, value) => { state = structuredClone(value); }, getAlarm: async () => alarm ?? null, setAlarm: async value => { alarm = value; }, transaction: async fn => fn() };
+  const actor = new SessionMailbox({ storage, blockConcurrencyWhile: fn => fn() }, { now: () => 0 }), env = { MAILBOX: { idFromName: name => name, get: () => actor } };
+  const local = async (url, options) => {
+    calls.push(options); const response = await handle(new Request(url, { ...options, headers: { ...options.headers, Origin: origin } }), env);
+    if (calls.length === 1) { assert.equal(options.headers.Origin, origin); assert.equal(options.headers['Idempotency-Key'], v.bundle.create.sessionId); }
+    if (calls.length === 2) throw new DOMException('lost response', 'NetworkError'); return response;
   };
   const raw = await seedRequest(v.bundle, { fetch: local });
-  assert.equal(raw, blobs[0]); assert.equal((await requestFingerprint(raw)).replaceAll(' ', ''), createHash('sha256').update(raw).digest('hex').slice(0, 16));
+  assert.equal(raw, calls[0].body); assert.equal((await requestFingerprint(raw)).replaceAll(' ', ''), createHash('sha256').update(raw).digest('hex').slice(0, 16));
   const { postEvidence } = await import('./return.mjs'); await postEvidence(v.bundle.get.sessionId, v.evidence, { fetch: local });
-  assert.deepEqual(blobs.slice(1), [JSON.stringify(v.evidence), JSON.stringify(v.evidence)]);
+  assert.deepEqual(calls.slice(1).map(o => o.body), [JSON.stringify(v.evidence), JSON.stringify(v.evidence)]);
+  assert.equal(calls[1].headers['Idempotency-Key'], v.bundle.get.sessionId); assert.notEqual(calls[0].headers['Idempotency-Key'], calls[1].headers['Idempotency-Key']);
+  assert.equal(state.posts.length, 2);
+  assert.equal((await handle(new Request('https://proof-mailbox.slipgates.com/s/' + v.bundle.get.sessionId, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', 'Idempotency-Key': 'ef'.repeat(16) }, body: JSON.stringify(v.evidence) }), env)).status, 201);
+  assert.deepEqual((await (await handle(new Request('https://proof-mailbox.slipgates.com/s/' + v.bundle.get.sessionId), env)).json()).blobs, [raw, JSON.stringify(v.evidence), JSON.stringify(v.evidence)]);
+  await assert.rejects(seedRequest({ ...v.bundle, create: v.bundle.get }, { fetch: local }), /id|key/); assert.equal(calls.length, 3);
 });
 test('valid full request fingerprint enables phone approval and automatic unchanged evidence', async () => {
   const { boot } = await import('./bootstrap.mjs'), v = vector(), raw = JSON.stringify({ request: v.bundle }), posted = [];
