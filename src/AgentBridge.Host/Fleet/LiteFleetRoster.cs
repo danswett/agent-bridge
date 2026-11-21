@@ -26,13 +26,14 @@ internal sealed class LiteFleetRoster(Func<LiteFleetConnection?> connection, ILi
         lock (accountGate)
         {
             CheckOn();
-            CheckAccount(captured);
+            CheckAccount(captured, final: true);
             if (snapshot.FleetScope != captured.Account)
             {
                 throw new InvalidOperationException("refused: notSameAccount: the fleet connection changed account during lookup");
             }
             return snapshot with
             {
+                Completion = build => { lock (accountGate) { CheckOn(); CheckAccount(captured, final: true); var result = build(); CheckOn(); CheckAccount(captured, final: true); return result; } },
                 Machines = snapshot.Machines.Select(m => m with
                 {
                     Online = m.Online && hosts.Contains(m.Id),
@@ -43,9 +44,9 @@ internal sealed class LiteFleetRoster(Func<LiteFleetConnection?> connection, ILi
         }
     }
 
-    void CheckAccount(LiteFleetConnection captured)
+    void CheckAccount(LiteFleetConnection captured, bool final = false)
     {
-        if (string.IsNullOrWhiteSpace(captured.Account) || !captured.Current() || identityAccount() != captured.Account)
+        if (string.IsNullOrWhiteSpace(captured.Account) || !captured.Current() || identityAccount() != captured.Account || final && !captured.Current())
         {
             throw new InvalidOperationException("refused: notSameAccount: the host account or fleet connection changed during lookup");
         }

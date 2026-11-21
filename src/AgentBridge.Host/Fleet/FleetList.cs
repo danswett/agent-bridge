@@ -29,7 +29,11 @@ public interface IFleetRoster
     Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct);
 }
 
-public sealed record FleetRosterSnapshot(string FleetScope, IReadOnlyList<FleetMachine> Machines);
+public sealed record FleetRosterSnapshot(string FleetScope, IReadOnlyList<FleetMachine> Machines)
+{
+    [JsonIgnore] internal Func<Func<object>, object>? Completion { get; init; }
+    internal object CompleteRead(Func<object> build) => Completion is { } complete ? complete(build) : build();
+}
 
 public interface IScopedFleetRoster : IFleetRoster
 {
@@ -45,12 +49,15 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     RelayClient? relay;
     readonly Func<RosterVerifier?>? signedRoster;
     readonly TimeProvider clock;
+    readonly object accountGate;
+    long connectionEpoch;
     readonly Dictionary<string, (FleetMachine Machine, long Seen)> cache = new(StringComparer.Ordinal);
 
-    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null)
+    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null, object? accountGate = null)
     {
         signedRoster = verifiedRoster;
         clock = time ?? TimeProvider.System;
+        this.accountGate = accountGate ?? new();
     }
 
     // design/fleet-session-registry.md "Offline machines and the cache": a machine's last accepted
@@ -97,7 +104,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     // A new connection may be another account's, so nothing cached carries over.
     public void Attach(RelayClient? connection)
     {
-        lock (cache) { cache.Clear(); Volatile.Write(ref relay, connection); }
+        lock (accountGate) { lock (cache) { cache.Clear(); connectionEpoch++; Volatile.Write(ref relay, connection); } }
     }
 
     public async Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => (await ReadScopedAsync(ct)).Machines;
@@ -110,9 +117,13 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
 
     internal LiteFleetConnection? CaptureMessagingConnection()
     {
-        var current = Volatile.Read(ref relay);
-        return current is null ? null : new(current.AccountId, current.Presence.ToArray(),
-            ct => ReadConnectionAsync(current, ct), () => ReferenceEquals(current, Volatile.Read(ref relay)));
+        lock (accountGate)
+        {
+            var current = Volatile.Read(ref relay);
+            var epoch = connectionEpoch;
+            return current is null ? null : new(current.AccountId, current.Presence.ToArray(),
+                ct => ReadConnectionAsync(current, ct), () => epoch == Volatile.Read(ref connectionEpoch) && ReferenceEquals(current, Volatile.Read(ref relay)));
+        }
     }
 
     async Task<FleetRosterSnapshot> ReadConnectionAsync(RelayClient current, CancellationToken ct)
@@ -258,9 +269,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var withNames = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("include", out var inc) && inc.ValueKind == JsonValueKind.String && inc.GetString() == "content";
         LocalApi.AuditAgentAction(credentials!, caller, Op, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
-        var result = await ListAsync(withNames, ct);
-        credentials!.CompleteFleetRead(caller, result);
-        return result;
+        return await ListAsync(withNames, caller, ct);
     }
 
     // fleet.find (#1399, design "Names and lookup"): a filter over the same roster. The name is
@@ -286,9 +295,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var snapshot = await scoped.ReadScopedAsync(ct);
         var fleetScope = snapshot.FleetScope;
         if (string.IsNullOrWhiteSpace(fleetScope)) { throw new InvalidOperationException("refused: fleet.find has no authenticated account scope"); }
-        var result = Find(snapshot, name, machine);
-        credentials!.CompleteFleetRead(caller, result);
-        return result;
+        return snapshot.CompleteRead(() => Complete(caller, Find(snapshot, name, machine)));
     }
 
     static object Find(FleetRosterSnapshot snapshot, string name, string? machine)
@@ -338,10 +345,17 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         return caller;
     }
 
-    async Task<object> ListAsync(bool withNames, CancellationToken ct)
+    object Complete(AgentCredential caller, object result) { credentials!.CompleteFleetRead(caller, result); return result; }
+
+    async Task<object> ListAsync(bool withNames, AgentCredential caller, CancellationToken ct)
     {
-        var now = (time ?? TimeProvider.System).GetUtcNow();
-        var machines = await RoutingRoster!.ReadAsync(ct);
+        var snapshot = RoutingRoster is IScopedFleetRoster scoped ? await scoped.ReadScopedAsync(ct)
+            : new FleetRosterSnapshot("", await RoutingRoster!.ReadAsync(ct));
+        return snapshot.CompleteRead(() => Complete(caller, List(snapshot.Machines, withNames, (time ?? TimeProvider.System).GetUtcNow())));
+    }
+
+    static object List(IReadOnlyList<FleetMachine> machines, bool withNames, DateTimeOffset now)
+    {
         return new
         {
             sessions = machines.SelectMany(m => m.Sessions.Select(s => new FleetListSession(
