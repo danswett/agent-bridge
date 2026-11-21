@@ -4,16 +4,16 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; connect-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
-<title>Slipgates phone-presence spike</title>
+<title>Slipgates credential-possession spike</title>
 <style>body{font:18px system-ui;max-width:38rem;margin:2rem auto;padding:1rem}#fingerprint{font:2rem monospace}svg{width:22rem;max-width:100%}button{font:inherit;padding:1rem}#status{white-space:pre-wrap}</style>
-<h1>Phone-presence spike: test only</h1>
+<h1>Credential-possession spike: test only</h1>
 <p id="account">Account: spike (test only)</p>
-<p>Compare these four groups on your separate phone with the PC screen before approving.</p>
+<p>Compare these four groups on your phone with the PC screen before approving. A malicious PC can show its own QR and matching fingerprint.</p>
 <p id="fingerprint"></p><div id="qr"></div>
-<p>Enrollment code: compare this with the code printed by the PC after automatic return. Without a match, the PC must write FAIL.</p>
+<p>Enrollment code: TYPE this phone code in your owner-run PC console after automatic return. No match means FAIL. Same-PC code able to write to that console can fake the confirmation.</p>
 <p id="enrollment"></p>
 <button id="approve" disabled>I compared all four groups. Approve on this phone.</button>
 <p id="status" role="status">Waiting for the short-lived session. No presence result claimed.</p>
-<p>First use opens two passkey prompts. Nothing to type. Cancel or close to refuse.</p>
+<p>First use opens two prompts: register on a nonce, then assert a fake body. Final key-inclusive genesis assembly/exchange is not implemented. No typing on the phone. Cancel or close to refuse.</p>
 <p>After the run, delete only the proof.slipgates.com spike passkey in your phone's passkey manager.</p>
-<p>This spike is not root acceptance. First-use enrollment through an untrusted mailbox has a key-substitution trust gap; the separate enrollment-code comparison mitigates it.</p>
+<p>Not a trust root, device-provenance proof or confused-deputy mitigation. None/self attestation permits a software key on the PC. Engineering owns F1 authenticated device provenance and F2 a PC-independent trusted request display; both remain unsolved.</p>

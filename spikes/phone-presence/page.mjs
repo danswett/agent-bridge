@@ -13,6 +13,6 @@ export function renderSession(doc, bundle, fragment, actualOrigin, nav, returnEv
   }
   find('qr').innerHTML = qrSvg(u.href);
   find('approve').hidden = true;
-  find('status').textContent = 'Scan with your separate phone. Compare fingerprint groups, then compare its enrollment code with the PC verifier. No match means FAIL.';
+  find('status').textContent = 'Scan with your phone and compare the groups. Type its enrollment code in the owner-run PC console. No match means FAIL; a malicious PC display/input can defeat these comparisons.';
   return () => { find('qr').innerHTML = ''; find('status').textContent = 'Refused: PC session closed.'; };
 }
