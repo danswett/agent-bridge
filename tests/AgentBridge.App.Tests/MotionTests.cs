@@ -21,6 +21,31 @@ public sealed class MotionTests
         return key => values.GetValueOrDefault(key);
     }
 
+    [Theory]
+    [InlineData("App.xaml", "BrushTransition", "Press", 83, 1)]
+    [InlineData("SessionView.xaml", "ScalarTransition", "Acknowledge", 167, 2)]
+    public void Custom_control_transitions_use_the_exact_generated_catalogue_timing(
+        string file, string transition, string entry, int milliseconds, int count)
+    {
+        Assert.Equal(TimeSpan.FromMilliseconds(milliseconds), Catalogue[entry].Duration);
+        XNamespace ui = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        var transitions = AppMarkup(file).Descendants(ui + transition).ToArray();
+        Assert.Equal(count, transitions.Length);
+        Assert.All(transitions, item =>
+            Assert.Equal($"{{StaticResource AbMotion{entry}Duration}}", (string?)item.Attribute("Duration")));
+    }
+
+    static XDocument AppMarkup(string file)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx")))
+        {
+            root = root.Parent;
+        }
+        if (root is null) { throw new DirectoryNotFoundException("Cannot find the app source checkout."); }
+        return XDocument.Load(Path.Combine(root.FullName, "src", "AgentBridge.App", file));
+    }
+
     [Fact]
     public void Every_entry_runs_for_its_generated_token_and_none_runs_past_300_ms()
     {
