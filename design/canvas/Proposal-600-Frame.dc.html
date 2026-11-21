@@ -58,7 +58,7 @@
               <span>Release notes for 1.33</span>
             </div>
             <div style="padding: 6px 8px; border-radius: 4px; background: {{t.card}}; border: 1px solid {{t.stroke2}}; font-family: 'Cascadia Mono', Consolas, monospace; font-size: 12px; line-height: 16px">git push origin release/1.33</div>
-            <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">ULTRA · Main agent · 2m</div>
+            <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">host-a · Main agent · 2m</div>
             <div style="display: flex; gap: 8px">
               <span class="p600f-qsend" style="background: {{t.bridge}}; color: {{t.onBridge}}">Approve once</span>
               <span class="p600f-qsend" style="background: {{t.card}}; color: {{t.text}}; border: 1px solid {{t.stroke2}}; font-weight: 400">Deny</span>
@@ -184,10 +184,10 @@ const CAP = {
   light: { text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', bridge: '#0B7A6E', tag: 'rgba(11,122,110,.12)', tag2: 'rgba(0,0,0,.05)' },
 };
 const SESSION = {
-  working: { status: 'Working · ULTRA', p1: TOP, p2: BOT, o2: 0.3, c: 'active' },
-  idle: { status: 'Idle · ULTRA', p1: TOP + BOT, p2: '', o2: 1, c: 'neutral' },
+  working: { status: 'Working · host-a', p1: TOP, p2: BOT, o2: 0.3, c: 'active' },
+  idle: { status: 'Idle · host-a', p1: TOP + BOT, p2: '', o2: 1, c: 'neutral' },
   offline: { status: 'Offline · last seen 2m ago', p1: '', p2: OFFLINE, o2: 0.85, c: 'neutral' },
-  needs: { status: 'Waiting on you · ULTRA', p1: NEEDS_S, p2: '', o2: 1, c: 'needsHead', bg: 1 },
+  needs: { status: 'Waiting on you · host-a', p1: NEEDS_S, p2: '', o2: 1, c: 'needsHead', bg: 1 },
 };
 const AGENT_TEXT = {
   phone: 'I’ve drafted the 1.33 notes. Want the breaking changes first, or the fixes?',
@@ -250,7 +250,7 @@ class Component extends DCLogic {
       radius: phone ? 22 : 8,
       devBorder: phone ? `6px solid ${t.bezel}` : `1px solid ${t.stroke2}`,
       title: needsMode ? 'Sessions' : 'Release notes for 1.33', titleSize: phone ? 17 : 15, titleLine: phone ? 22 : 20,
-      status: needsMode ? 'ULTRA · 3 sessions' : s.status, showGlyph: !needsMode, showAgent: !needsMode, convJustify: needsMode ? 'flex-start' : 'flex-end',
+      status: needsMode ? 'host-a · 3 sessions' : s.status, showGlyph: !needsMode, showAgent: !needsMode, convJustify: needsMode ? 'flex-start' : 'flex-end',
       nv: needsMode ? { bg: f.hc ? t.card : t.needsFill, edge: t.needsEdge, glyph: NEEDS_S, ink: f.hc ? t.layer : '#14100A' } : null,
       modeChip: f.rm ? 'Reduced motion' : '', glyph: { p1: s.p1, p2: s.p2, o2: s.o2, c: glyphColor, bg: !!s.bg, f1: s.bg ? (f.hc ? t.layer : '#14100A') : 'currentColor' },
       agentAge: f.age || '1m', agentText: AGENT_TEXT[phone ? 'phone' : 'desktop'],

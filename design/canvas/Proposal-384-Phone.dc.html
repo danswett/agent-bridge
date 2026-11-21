@@ -20,13 +20,13 @@ button,textarea,input{font:inherit}
   <header style="padding: 52px 8px 8px 4px; display: flex; align-items: center; gap: 4px">
     <button aria-label="Back to Machines" style="width: 44px; height: 44px; border: 0; border-radius: 6px; background: transparent; color: {{t.text}}; display: grid; place-items: center"><dc-import name="Icon" icon="back" size="20" hint-size="20px,20px"></dc-import></button>
     <div style="flex: 1; min-width: 0">
-      <h1 style="margin: 0; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 24px; line-height: 32px; font-weight: 600">ULTRA</h1>
+      <h1 style="margin: 0; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 24px; line-height: 32px; font-weight: 600">host-a</h1>
     </div>
   </header>
   <div style="padding: 0 20px 12px; font-size: 13px; line-height: 18px; color: {{t.text2}}">Online · checked 14:52 · read only</div>
   <div style="flex: 1; overflow: hidden; background: {{t.layer}}; border-top: 1px solid {{t.stroke}}; padding: 8px 12px 0">
     <div role="note" style="margin: 8px 0 4px; padding: 12px 14px; border-radius: 8px; border: 1px solid {{t.stroke2}}; background: {{t.card}}; font-size: 14px; line-height: 20px">
-      <span style="font-weight: 600">Change these on ULTRA</span>
+      <span style="font-weight: 600">Change these on host-a</span>
       <span style="color: {{t.text2}}"> · Settings in the Windows app</span>
     </div>
     <sc-for list="{{groups}}" as="gp">
@@ -82,7 +82,7 @@ class Component extends DCLogic {
         group('Agents', [
           ['Copilot CLI', 'Last hook 14:49', 'ok', 'Working'],
           ['Agency', 'Last hook 13:02', 'ok', 'Working'],
-          ['Codex CLI', 'Hook not trusted in Codex', 'needs', 'Needs you on ULTRA'],
+          ['Codex CLI', 'Hook not trusted in Codex', 'needs', 'Needs you on host-a'],
           ['Claude Code', 'Installed, not set up', 'off', 'Not selected']
         ]),
         group('This machine', [
