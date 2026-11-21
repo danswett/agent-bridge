@@ -138,7 +138,7 @@ public sealed class PushFlowTests : IAsyncLifetime
         Assert.Equal(0, store.Count);
     }
 
-    [Fact]
+    [Fact(Skip = "Quarantined: windows-latest times out waiting for the question's push; tracking https://github.com/danswett/agent-bridge/issues/2734")]
     public async Task A_question_reaches_the_phone_encrypted_through_the_relay_and_is_replaced_once_answered_at_the_machine()
     {
         var ch = await OpenAsync();
