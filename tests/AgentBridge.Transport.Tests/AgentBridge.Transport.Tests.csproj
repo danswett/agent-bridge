@@ -28,6 +28,7 @@
     <ProjectReference Include="..\..\src\AgentBridge.Relay\AgentBridge.Relay.csproj" />
     <ProjectReference Include="..\..\tools\AgentBridge.RelaySmoke\AgentBridge.RelaySmoke.csproj" />
     <None Include="testdata\**" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\docs\protocol\vectors\fleet-registry-fields.json" Link="testdata\fleet-registry-fields.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

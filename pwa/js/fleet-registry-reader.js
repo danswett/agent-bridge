@@ -8,7 +8,7 @@ import { isUtc } from './roster/entry.js';
 import { instant, instantOfMs, compareInstants } from './roster/commands.js';
 
 const recordFields = ['v', 'machine', 'epoch', 'seq', 'at', 'truncated', 'total', 'sessions', 'sig'];
-const sessionFields = ['id', 'node', 'name', 'state', 'since'];
+const sessionFields = ['id', 'node', 'name', 'state', 'since', 'startedAt'];
 const hex16 = (v) => typeof v === 'string' && /^[0-9a-f]{16}$/.test(v);
 const members = (v, allowed) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).every((k) => allowed.includes(k));
 const canonical = (n, root = false) => {
@@ -26,11 +26,13 @@ export const registrySignedBytes = (record) => frame(utf8('agent-bridge fleet re
 function schema(r, machine) {
   return members(r, recordFields) && r.v === 1 && r.machine === machine && hex16(r.epoch)
     && typeof r.seq === 'number' && r.seq >= 1 && typeof r.at === 'string' && isUtc(r.at) && typeof r.truncated === 'boolean'
-    && (r.total === undefined || (r.truncated && Number.isInteger(r.total) && r.total > 64 && r.total <= 2147483647))
     && typeof r.sig === 'string' && r.sig.length <= 256 && Array.isArray(r.sessions) && r.sessions.length <= 64
+    && (r.total === undefined || (r.truncated && Number.isInteger(r.total) && r.total > r.sessions.length && r.total <= 2147483647))
     && r.sessions.every((s) => members(s, sessionFields) && hex16(s.id) && typeof s.node === 'string'
       && s.node.startsWith('agent_bridge_') && hex16(s.node.slice(13)) && ['working', 'waiting', 'idle', 'ending'].includes(s.state)
-      && typeof s.since === 'string' && isUtc(s.since) && (s.name === undefined || (typeof s.name === 'string' && /^[\x20-\x7e]{1,64}$/.test(s.name))));
+      && typeof s.since === 'string' && isUtc(s.since)
+      && (s.startedAt === undefined || (typeof s.startedAt === 'string' && s.startedAt.length === 20 && isUtc(s.startedAt)))
+      && (s.name === undefined || (typeof s.name === 'string' && /^[\x20-\x7e]{1,64}$/.test(s.name))));
 }
 
 // C1's reader contract, ported for the PWA. The caller supplies retained, independently pinned

@@ -1,0 +1,55 @@
+{
+  "description": "S-N2c neutral fixtures. Apply record/session overrides to a fresh base; sign only after applying them. Lifetime session indexes refer to the base sessions. Machine membership requires the independently pinned roster, never a relay-supplied name.",
+  "record": {
+    "v": 1,
+    "machine": "c69c83474da2ac399b19623b26479f44",
+    "epoch": "0123456789abcdef",
+    "seq": 2,
+    "at": "2026-11-12T18:00:00Z",
+    "truncated": false,
+    "sessions": [
+      {"id":"0000000000000001","node":"agent_bridge_0000000000000001","name":"Fixture one","state":"idle","since":"2026-11-12T18:00:00Z"},
+      {"id":"0000000000000002","node":"agent_bridge_0000000000000002","name":"Fixture two","state":"working","since":"2026-11-12T18:00:00Z"}
+    ]
+  },
+  "schema": [
+    {"name":"legacy without process start","accepted":true},
+    {"name":"UTC second","session":{"startedAt":"2026-11-12T17:00:00Z"},"accepted":true},
+    {"name":"leap day","session":{"startedAt":"2024-02-29T23:59:59Z"},"accepted":true},
+    {"name":"UTC offset","session":{"startedAt":"2026-11-12T17:00:00+00:00"},"accepted":false},
+    {"name":"non UTC","session":{"startedAt":"2026-11-12T17:00:00-08:00"},"accepted":false},
+    {"name":"subsecond","session":{"startedAt":"2026-11-12T17:00:00.001Z"},"accepted":false},
+    {"name":"lowercase zone","session":{"startedAt":"2026-11-12T17:00:00z"},"accepted":false},
+    {"name":"invalid calendar","session":{"startedAt":"2026-02-29T17:00:00Z"},"accepted":false},
+    {"name":"malformed","session":{"startedAt":"not-a-time"},"accepted":false},
+    {"name":"null start","session":{"startedAt":null},"accepted":false},
+    {"name":"numeric start","session":{"startedAt":42},"accepted":false},
+    {"name":"byte truncated below count cap","record":{"truncated":true,"total":3},"accepted":true},
+    {"name":"empty truncated","record":{"truncated":true,"total":1,"sessions":[]},"accepted":true},
+    {"name":"equal total","record":{"truncated":true,"total":2},"accepted":false},
+    {"name":"smaller total","record":{"truncated":true,"total":1},"accepted":false},
+    {"name":"untruncated total","record":{"total":3},"accepted":false},
+    {"name":"noninteger total","record":{"truncated":true,"total":3.5},"accepted":false},
+    {"name":"overflow total","record":{"truncated":true,"total":2147483648},"accepted":false},
+    {"name":"unrostered machine","record":{"machine":"unrostered-fixture"},"accepted":false}
+  ],
+  "lifetime": [
+    {"op":"put","seq":2,"sessions":[0,1],"error":null},
+    {"op":"read","sessions":[0,1],"fresh":true},
+    {"op":"put","seq":3,"sessions":[1],"error":null},
+    {"op":"read","sessions":[1],"fresh":true},
+    {"op":"put","seq":4,"sessions":[],"error":null},
+    {"op":"read","sessions":[],"fresh":true},
+    {"op":"put","seq":5,"sessions":[0],"error":null},
+    {"op":"advance","seconds":61},
+    {"op":"read","sessions":[],"fresh":false},
+    {"op":"advance","seconds":-61},
+    {"op":"read","sessions":[],"fresh":false},
+    {"op":"put","seq":5,"sessions":[0],"error":"stale"},
+    {"op":"put","seq":4,"sessions":[0],"error":"stale"},
+    {"op":"put","seq":6,"sessions":[1],"error":null},
+    {"op":"read","sessions":[1],"fresh":true},
+    {"op":"drop"},
+    {"op":"read","absent":true}
+  ]
+}

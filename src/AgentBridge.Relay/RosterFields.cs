@@ -133,11 +133,16 @@ public sealed class SessionRegistry(TimeProvider time)
     public void Drop(string account, string machine) => held.TryRemove((account, machine), out _);
 
     // The account's held machines. Fresh is false once a host has gone a minute without a new
-    // snapshot: its sessions are then withheld and it reads as offline, whatever its socket says.
+    // snapshot: erase its sessions, retaining only offline metadata and the replay watermark.
     public List<(string Machine, string Json, DateTimeOffset LastSeen, bool Fresh)> Read(string account)
     {
         var now = time.GetUtcNow();
-        return [.. held.Where(h => h.Key.Account == account)
-            .Select(h => (h.Key.Machine, h.Value.Json, h.Value.ReceivedAt, now - h.Value.ReceivedAt <= RosterFields.HeartbeatWindow))];
+        return [.. held.Where(h => h.Key.Account == account).Select(h =>
+        {
+            var fresh = h.Value.Json != "null" && now - h.Value.ReceivedAt <= RosterFields.HeartbeatWindow;
+            // JSON null is a tombstone: a clock rewind cannot revive an erased payload.
+            if (!fresh && h.Value.Json != "null") { held.TryUpdate(h.Key, h.Value with { Json = "null" }, h.Value); }
+            return (h.Key.Machine, fresh ? h.Value.Json : "null", h.Value.ReceivedAt, fresh);
+        })];
     }
 }
