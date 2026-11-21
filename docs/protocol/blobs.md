@@ -131,7 +131,12 @@ These are relay settings (`Relay:Blobs:*`), not protocol constants:
 | `UrlLifetime`, how long one URL works | 30 minutes |
 
 A reply attachment is at most **100 MiB** (`AttachmentLimits.BlobBytes`) whatever the relay
-allows. A session transfer is at most `launch.transfer.maxBytes` on each host, **25 MiB** by
+allows. The host refuses an announced size above its current limit before fetching, and
+bounds decrypted writes to the announced size before any excess byte reaches disk.
+Changed or missing encrypted records and a mismatched whole-file SHA-256 leave no
+claimable attachment; the partial local file is deleted at once, or by the store's next sweep
+if the disk refuses then. This path makes no HA calls.
+A session transfer is at most `launch.transfer.maxBytes` on each host, **25 MiB** by
 default and up to **200 MiB** (design §9), within `MaxBytes`. The receiving host deletes a
 transfer's blob as soon as it has fetched it, whatever the outcome.
 
