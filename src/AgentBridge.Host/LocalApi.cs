@@ -45,6 +45,16 @@ public static class LocalApi
                 actual => credentials.FleetGrant.CheckDispatch(actual, request));
         }
         credentials?.CheckScriptOperation(channel, op, log);
+        if (op == AgentSettingsStatus.Op)
+        {
+            var caller = callers.Classify(channel, fresh: true);
+            if (channel is not LocalChannel || caller.Kind is not (CallerKind.App or CallerKind.HostCli)
+                || credentials?.IsCredentialed(channel) == true)
+            {
+                throw Refuse(op, caller, "agent settings are for the person at this machine", log);
+            }
+            return AgentSettingsStatus.Read(control.Folder);
+        }
         if (op == FleetWorkerSettings.Op)
         {
             var caller = callers.Classify(channel, fresh: true);
