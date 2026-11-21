@@ -518,6 +518,8 @@ public sealed record Activity
     // The turn the main agent's own latest reply (Own.Response, else Response) was written in:
     // Turn once the latest turn has replied, an earlier turn's until then. Never trimmed.
     public string? ResponseTurn { get; init; }
+    // The main reply's session.history response-part id; updates to it remain one message.
+    public string? ResponseId { get; init; }
     public int? TurnCount { get; init; }
     public int? Compactions { get; init; }
     // Work the session started that outlives its own turn, still running. Absent when there

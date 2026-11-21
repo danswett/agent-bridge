@@ -96,6 +96,7 @@ public sealed partial class SessionCardViewModel : Observable
     {
         if (ctx.Host is not { } host) { return null; }
         var result = new SessionHistory(host, session.Id);
+        result.Observe(session);
         result.Changed += OnStoredChanged;
         return result;
     }
@@ -191,7 +192,9 @@ public sealed partial class SessionCardViewModel : Observable
     public bool Attributed => Voice.Attributed;
     public string Speaker => Attributed ? "Main agent" : AgentName;
     HistoryPart? HeldReply => stored?.ReplyFor(session.Activity.ResponseTurn ?? session.Activity.Turn);
-    public string Response => Voice.Response ?? HeldReply?.Text ?? "";
+    public string Response => !string.IsNullOrEmpty(session.Activity.ResponseId) && stored is not null
+        ? (stored.RepliesFor(session.Activity.ResponseTurn ?? session.Activity.Turn) is { Length: > 0 } replies ? replies : Voice.Response ?? "")
+        : Voice.Response ?? HeldReply?.Text ?? "";
     public bool HasResponse => Response.Length > 0;
     public bool ResponseTruncated => Voice.Response is null ? HeldReply?.Truncated == true : Voice.ResponseTruncated;
     // The main agent had a response, but the session budget left it out to make room for its

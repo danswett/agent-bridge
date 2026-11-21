@@ -45,6 +45,27 @@ public sealed class ConversationBlocksTests
     }
 
     [Fact]
+    public async Task An_old_hosts_missing_reply_identity_keeps_the_legacy_single_streaming_slot()
+    {
+        await using var connection = HostConnection.ForProfile("not-connected", new LockedDispatcher());
+        var card = new SessionCardViewModel(Make.Session(), new CardContext
+        {
+            Host = connection, Deliveries = new Deliveries(connection, new LockedDispatcher()), Folds = new FoldStore(null),
+            Capabilities = () => connection.Capabilities,
+        });
+        try
+        {
+            foreach (var response in new[] { "Partial", "Complete answer" })
+            {
+                card.Update(card.Session with { Activity = new Activity { Turn = "owner", ResponseTurn = "owner", Response = response } });
+            }
+            Assert.Equal("Complete answer", card.Response);
+            Assert.Equal("Complete answer", Assert.Single(card.Stored!.Turns.Single().Parts).Text);
+        }
+        finally { card.Detach(); }
+    }
+
+    [Fact]
     public void A_code_block_is_named_by_the_text_it_draws_with_hidden_characters_as_their_escapes_nested_or_not()
     {
         var shown = Shown("```\necho ok \u2067# note\n```\n\n> ```\n> run\u200B\n> ```");

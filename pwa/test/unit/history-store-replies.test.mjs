@@ -6,7 +6,8 @@ import { DemoHost } from '../../js/demo.js';
 import { HostClient } from '../../js/host-client.js';
 import { HistoryStore } from '../../js/history-store.js';
 import { readSession } from '../../js/protocol.js';
-import { shownParts } from '../../js/ui/history-view.js';
+import { currentReply, shownParts } from '../../js/ui/history-view.js';
+import { HISTORY, readHistoryResult } from '../../js/history.js';
 
 const ID = 's1';
 const turn = (n) => `${ID}-turn-${n}`;
@@ -27,6 +28,48 @@ test('successive assistant messages keep both replies in order and a third appen
   say('completion', 'Background task completed.');
   say('completion', 'Background task completed.');
   assert.deepEqual(replies(), ['Original answer.', 'Scheduled pulse, complete.', 'Background task completed.']);
+  const current = readSession({ id: ID, activity: { turn: turn(6), responseTurn: turn(6), responseId: 'completion', response: 'Background task completed.' } });
+  assert.equal(currentReply(store.get('h', ID), current), 'Original answer.\n\nScheduled pulse, complete.\n\nBackground task completed.');
+});
+
+test('an old hosts missing reply identity keeps the legacy single streaming slot', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  let session;
+  for (const response of ['Partial', 'Complete answer']) {
+    session = readSession({ id: ID, activity: { turn: turn(6), responseTurn: turn(6), response } });
+    store.live('h', session);
+  }
+  const snapshot = store.get('h', ID);
+  assert.equal(currentReply(snapshot, session), 'Complete answer');
+  assert.deepEqual(shownParts(snapshot.turns.at(-1)).map((p) => p.text), ['Complete answer']);
+});
+
+test('finished history parts replace live slots by identity without duplicating equal replies', async () => {
+  let page = [];
+  const store = new HistoryStore({ current: () => ({ client: {
+    capabilities: [HISTORY.capability],
+    history: async () => readHistoryResult({ turns: page }),
+  } }) });
+  await store.open('h', ID);
+  const session = (responseId) => readSession({ id: ID, activity: { turn: 'owner', responseTurn: 'owner', responseId, response: 'Same answer' } });
+  store.live('h', session('first'));
+  store.live('h', session('second'));
+  page = [{ id: 'owner', at: '2026-11-21T22:00:00Z', parts: ['first', 'second'].map((id) => ({
+    id, kind: 'response', text: 'Same answer', at: '2026-11-21T22:00:01Z',
+  })) }];
+  await store.open('h', ID);
+  store.live('h', session('second'));
+  const snapshot = store.get('h', ID);
+  assert.deepEqual(snapshot.turns[0].parts.map((p) => p.id), ['first', 'second']);
+  assert.equal(currentReply(snapshot, session('second')), 'Same answer\n\nSame answer');
+  assert.ok(snapshot.turns[0].parts.every((p) => p.at === '2026-11-21T22:00:01Z'));
+  const stale = session('second');
+  store.live('h', { ...stale, activity: { ...stale.activity, response: 'Stale partial', responseTruncated: true } });
+  assert.equal(currentReply(store.get('h', ID), stale), 'Same answer\n\nSame answer');
+  page = [{ ...page[0], parts: [page[0].parts[0]] }];
+  await store.open('h', ID);
+  assert.equal(currentReply(store.get('h', ID), session('second')), 'Same answer\n\nSame answer');
 });
 
 async function setup(t, { count = 5, ...options } = {}) {

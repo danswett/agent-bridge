@@ -136,6 +136,13 @@ export function shownParts(t) {
   return [...t.parts, { kind: 'response', text: t.live.response, truncated: t.live.responseTruncated === true }];
 }
 
+export function currentReply(snapshot, session) {
+  const voice = liveVoice(session);
+  if (!session.activity.responseId || !voice.response) { return voice.response ?? ''; }
+  const turn = snapshot?.turns.find((t) => t.id === session.activity.responseTurn);
+  return turn ? shownParts(turn).filter((p) => p.kind === 'response' && p.text).map((p) => p.text).join('\n\n') : voice.response;
+}
+
 export function turnView(t, inline = null) {
   if (t.unreadable) { return h('section', { class: 'history-turn', dataset: { turn: t.id } }, h('p', { class: 'history-meta' }, WORDS.unreadable)); }
   const from = t.kind === 'notification' ? 'notification' : t.kind === 'scheduled' ? 'schedule' : t.prompt?.from ?? 'person';

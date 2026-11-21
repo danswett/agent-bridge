@@ -519,6 +519,17 @@ export class HistoryStore {
       const reply = { reasoning: null, currentTool: null, ...turns[of].live, response: voice.response, responseTruncated: voice.responseTruncated };
       if (!same(reply, turns[of].live)) { turns[of] = { ...turns[of], live: reply }; changed = true; }
     }
+    const target = replied ? i : of;
+    const finished = target >= 0 && turns[target].parts.find((p) => p.id === a.responseId && p.at && !p.truncated);
+    if (target >= 0 && a.responseId && voice.response && !finished) {
+      const parts = mergeParts(turns[target].parts, [{
+        id: a.responseId, kind: 'response', text: voice.response, truncated: voice.responseTruncated,
+      }]);
+      const responses = parts.filter((p) => p.kind === 'response');
+      const kept = new Set(responses.slice(-50));
+      const bounded = parts.filter((p) => p.kind !== 'response' || kept.has(p));
+      if (!same(bounded, turns[target].parts)) { turns[target] = { ...turns[target], parts: bounded }; changed = true; }
+    }
     return changed;
   }
 
