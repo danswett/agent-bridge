@@ -109,7 +109,7 @@ static partial class SelfTest
             retarget.Progress = 0;
             var tops = new List<double>();
             var moving = await RowMotionSettled(root, () => { var top = TrackedTop(); tops.Add(top); return top; }, check, "retarget start");
-            if (!double.IsFinite(moving))
+            if (!double.IsFinite(moving) || moving <= slot.Y + 1 || moving >= original)
             {
                 var current = ElementCompositionPreview.GetElementVisual(neighbour).TryGetAnimationController("Offset");
                 var shift = Motion.Catalogue.Enter("Shift", true).Duration;
