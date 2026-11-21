@@ -28,6 +28,8 @@ public interface ISessionLauncher
         CancellationToken cancellationToken = default) => Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "fleet launch is unavailable"));
     bool IsFleetWorker(string session, SessionProcess? process) => false;
     LaunchConfig? FleetConfig => null;
+    IReadOnlyList<LaunchStatus> LaunchStatuses() => [];
+    void PublishAlias(string request, LaunchRequest source, LaunchResult result) { }
     Task<LaunchResult>? ReplayAuditedAsync(LaunchRequest request, string peer) => null;
 
     Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
@@ -146,6 +148,7 @@ public sealed class LaunchServiceOptions
 
     // The profile's launch-provenance.json, independent of credential storage.
     public string? ProvenanceFile { get; init; }
+    public string? StatusFolder { get; init; }
 }
 
 // Launches and resumes agent sessions as agent-ha-bridge's Launch button does
@@ -181,6 +184,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     readonly AgencyCatalog agency;
     readonly ResumableStore resumable;
     readonly LaunchProvenance provenance;
+    readonly LaunchStatusLedger statusLedger;
     readonly LaunchServiceOptions options;
     readonly Action<string> log;
     readonly AttachmentStore? attachments;
@@ -232,6 +236,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         this.options = options;
         this.log = log ?? (_ => { });
         provenance = new LaunchProvenance(options.ProvenanceFile, this.log);
+        statusLedger = new LaunchStatusLedger(options.StatusFolder, this.log);
         this.attachments = attachments;
         resumable = new ResumableStore(options.CopilotHome, options.ClaudeHome, options.CodexHome, options.Time);
         var deliveryGate = gate ?? throw new ArgumentNullException(nameof(gate));
@@ -244,6 +249,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     }
 
     LaunchConfig Config => options.Config;
+    public IReadOnlyList<LaunchStatus> LaunchStatuses() => statusLedger.Read();
+    public void PublishAlias(string request, LaunchRequest source, LaunchResult result)
+    {
+        if (Guid.TryParseExact(request, "D", out var id))
+        { statusLedger.Publish(new(id.ToString("D"), result.Outcome.ToString().ToLowerInvariant(), result.Session, result.Launched?.Permissions, false, options.Time.GetUtcNow()) { SourceRequest = source.Request }); }
+    }
+    void PublishStatus(Guid request, string outcome, LaunchResult? result = null) =>
+        statusLedger.Publish(new(request.ToString("D"), outcome, result?.Session, result?.Launched?.Permissions, false, options.Time.GetUtcNow()));
 
     public IReadOnlyList<Started> LaunchedProcesses()
     {
@@ -789,6 +802,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // is what requests.Once's settled callback guarantees).
     void Settled(LaunchRequest request, LaunchResult result, string who)
     {
+        PublishStatus(Guid.Parse(request.Request), result.Outcome.ToString().ToLowerInvariant(), result);
         log($"{who}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Session is { } s ? $" session {Short(s)}" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}");
         var index = Launchers.All.ToList().FindIndex(l => l.Id == request.Agent);
         try { options.Journal?.Record(JournalEvents.LaunchRequested(result.Outcome, index < 0 ? null : index + 1)); }
@@ -852,6 +866,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default,
         Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
     {
+        PublishStatus(key, "starting");
         try
         {
             if (!options.PlatformSupported) { return Refused("launching sessions is not supported on this platform yet; start it at the machine"); }
@@ -1656,6 +1671,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     void Decide(Pending p, LaunchResult result)
     {
+        PublishStatus(p.Key, result.Outcome.ToString().ToLowerInvariant(), result);
         // Before the outcome is told, so the record has it by the time anyone hears of the session.
         if (result is { Outcome: LaunchOutcome.Started, Session: { } id })
         {

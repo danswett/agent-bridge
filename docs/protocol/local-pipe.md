@@ -90,6 +90,14 @@ the connection closes:
 
 ## Who may manage the host
 
+`launches.status`: exactly `{ "request": "<guid>" }`; `launches.list`: optional
+`{ "since": <minutes> }` (default 15; integer 0-43200). Pipe-only reads, agents included;
+script-credential restrictions are unchanged. Result: one row or at most 128 rows with
+`request`, `outcome` (`started`, `starting`, `unconfirmed`, `failed`, `refused`, `busy`,
+`unknown`), `session` (16 lowercase hex or null), `permissions` (`ask`, `allowAll` or null),
+`registered` (live full-ID match only), `time` (UTC ISO). No launch, stop or approval.
+See [host CLI status](../host-launch.md#host-cli-read-launch-status).
+
 `host.workspace.fleetWorkers` reads or changes the stored fleet-worker tick for one
 approved workspace. Its data is `{ "workspace": "<approved absolute path>" }`, with
 optional `"fleetWorkers": true` or `false` to set it. No other keys are accepted.

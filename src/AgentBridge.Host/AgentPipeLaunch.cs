@@ -90,6 +90,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         // The launcher hears an id of this caller's own, so no other launch (HA's or another caller's)
         // shares its events or audit rows. Pending first: a registration may come before the launch returns.
         var id = new Guid(SHA256.HashData(Encoding.UTF8.GetBytes("launcher\n" + key)).AsSpan(0, 16));
+        sessions.PublishLaunchAlias(request.Request, request with { Request = id.ToString("D") }, new(LaunchOutcome.Unconfirmed));
         Pending(id, principal, request.Request, key);
         // Launching on the record first: a restart from here reads it as unconfirmed, never as one to start.
         try { store.Begin(key); }
@@ -100,6 +101,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         }
         // An exception from here leaves the record launching and the slot held: something may have started.
         var result = await sessions.LaunchAgentAsync(request with { Request = id.ToString("D") }, principal, audit, () => Still(caller, request));
+        sessions.PublishLaunchAlias(request.Request, request with { Request = id.ToString("D") }, result);
         if (result is { Outcome: LaunchOutcome.Started, Session: { } session })
         {
             // A registration is told before its outcome, so one still pending here is the audit's replay of
