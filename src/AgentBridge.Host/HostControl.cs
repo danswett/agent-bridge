@@ -32,6 +32,7 @@ public sealed class HostControlOptions
     // What Home Assistant's refusals of this machine say now (HaAuthGuard.Problem), or null.
     public Func<string?> HomeAssistant { get; init; } = () => null;
     public Func<FleetPublicationStatus?> FleetPublication { get; init; } = () => null;
+    public Func<long>? ProfileDiskAvailableBytes { get; init; }
     // GitHub's device flow through a relay: (relay, show(code, uri), ct) -> the account.
     public required Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> SignIn { get; init; }
     // Keeps a finished sign-in (the profile's account and relay) and starts using it.
@@ -88,6 +89,7 @@ public sealed class HostControl
     // Deliberately not in HostStatus: that is the app's local-pipe contract.
     public DepartureStatus Departure => options.Lifecycle?.Departure ?? DepartureStatus.None;
     readonly HostControlOptions options;
+    readonly FleetLaunchGrant fleetLaunchGrant;
     internal object WorkspaceFleetWorkers(JsonElement data)
     {
         lock (settingsGate) { return FleetWorkerSettings.Handle(options.Folder, data, log); }
@@ -109,6 +111,7 @@ public sealed class HostControl
     public HostControl(HostControlOptions options, Action<string>? log = null)
     {
         this.options = options;
+        fleetLaunchGrant = new FleetLaunchGrant(options.Folder, options.ProfileDiskAvailableBytes);
         this.log = log ?? (_ => { });
         startedAt = options.Time.GetUtcNow();
         running = options.Running;
@@ -177,6 +180,7 @@ public sealed class HostControl
             Account = options.Account(),
             Relay = relay,
             FleetPublication = options.FleetPublication(),
+            FleetLaunchProblem = fleetLaunchGrant.DiskProblem,
             HostSigning = HostSignCustody.Read(options.Folder),
             SignIn = signIn,
             AgentHaBridge = options.AgentHaBridge(),

@@ -21,6 +21,71 @@ public sealed class FleetLaunchGrantTests : IDisposable
     public void Dispose() => Directory.Delete(folder, true);
 
     [Fact]
+    public void Under_1_GiB_free_refuses_the_grant_and_fleet_launches_with_diskLow()
+    {
+        const long gib = 1024L * 1024 * 1024;
+        var available = gib - 1;
+        Config();
+        var grant = new FleetLaunchGrant(folder, () => available);
+        Assert.Contains("diskLow", grant.CheckGrant(Script));
+        Assert.Contains("diskLow", grant.CheckLaunch(Script, Outside, Request));
+        var actual = HostSettings.Load(folder).Settings.Launch;
+        Assert.Contains("diskLow", grant.CheckDispatch(actual, Request));
+        var control = new HostControl(new HostControlOptions
+        {
+            Profile = "fixture", Folder = folder, Version = "0.1.0",
+            Machine = new("fixture", "fixture", "windows", "0.1.0"),
+            Running = new HostSettingsView(RemoteApproval: true),
+            ProfileDiskAvailableBytes = () => available,
+            SignIn = (_, _, _) => throw new NotSupportedException(), SignedIn = (_, _) => { },
+            Stop = () => { }, Restart = () => { },
+        });
+        Assert.Equal("diskLow", control.Status().FleetLaunchProblem);
+        available = gib;
+        Assert.Null(grant.CheckGrant(Script));
+        Assert.Null(grant.CheckLaunch(Script, Outside, Request));
+        Assert.Null(grant.CheckDispatch(actual, Request));
+        Assert.Null(control.Status().FleetLaunchProblem);
+        available--;
+        Assert.Contains("diskLow", grant.CheckDispatch(actual, Request));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Unreadable_profile_disk_space_refuses_grants_launches_and_dispatch(bool unauthorized)
+    {
+        Config();
+        var grant = new FleetLaunchGrant(folder, () => throw (unauthorized
+            ? new UnauthorizedAccessException("fixture") : new IOException("fixture")));
+        Assert.Equal("diskUnavailable", grant.DiskProblem);
+        Assert.Contains("diskUnavailable", grant.CheckGrant(Script));
+        Assert.Contains("diskUnavailable", grant.CheckLaunch(Script, Outside, Request));
+        Assert.Contains("diskUnavailable", grant.CheckDispatch(HostSettings.Load(folder).Settings.Launch, Request));
+    }
+
+    [Fact]
+    public void A_fleet_worker_is_not_ended_at_two_hours_idle()
+    {
+        var now = Now;
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
+            """{"agents":{"enabled":true,"launch":{"enabled":true},"limits":{"launchesPerOriginPerHour":3,"launchesPerMachinePerHour":10,"liveAgentLaunched":6,"agentLaunchedIdleHours":2}}}""");
+        var gate = new AgentLaunchGate(folder, () => now);
+        Assert.True(gate.CheckLaunch("script:fixture/dispatcher", "request", "hash").Allowed);
+        gate.LaunchStarted("script:fixture/dispatcher", "request", "fleet-worker");
+        Assert.True(gate.ObserveSession("fleet-worker", now, personTyped: false, fleetWorker: true));
+        Assert.True(gate.ObserveSession("fleet-worker", now, personTyped: false));
+        Assert.True(gate.CheckLaunch("agent:fixture/parent", "agent-request", "hash").Allowed);
+        gate.LaunchStarted("agent:fixture/parent", "agent-request", "agent-session");
+        Assert.True(gate.ObserveSession("agent-session", now, personTyped: false));
+        now = now.AddHours(2);
+        Assert.Equal(["agent-session"], gate.IdleSessions());
+        Assert.True(gate.SessionEnded("agent-session"));
+        now = now.AddHours(2);
+        Assert.Empty(gate.IdleSessions());
+    }
+
+    [Fact]
     public void allowAll_is_allowed_only_in_a_ticked_isolated_workspace()
     {
         var grant = new FleetLaunchGrant(folder);

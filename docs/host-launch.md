@@ -512,3 +512,7 @@ Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
 an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,
 transfers and attachments. A fresh worktree is checked before starting; its worker receives
 only `read+reply`, and the durable launch audit records `grant: fleet`.
+With less than 1 GiB free on the profile disk, grants and fleet launches refuse with
+`diskLow`, also shown in `host.status.fleetLaunchProblem`. Ensure at least 1 GiB is
+free and retry; `diskUnavailable` means free space could not be read and also refuses.
+Space is checked again before dispatch. Fleet workers are exempt from the two-hour idle-end policy.
