@@ -12,7 +12,7 @@ function bodyBytes(c) {
   const body = JSON.parse(new TextDecoder().decode(bytes));
   requireThat(body.account === c.account && body.generation === c.generation, 'body binding'); return bytes;
 }
-export function plan(bundle, fragment, now, actualOrigin) {
+export function plan(bundle, fragment, now, actualOrigin, requestFingerprint) {
   requireThat(actualOrigin === origin, 'wrong origin');
   const b = structuredClone(bundle), params = new URLSearchParams(fragment.replace(/^#/, ''));
   for (const c of [b.create, b.get]) {
@@ -21,7 +21,8 @@ export function plan(bundle, fragment, now, actualOrigin) {
   }
   requireThat(b.create.enrollment === true && b.create.body === undefined && b.create.genesisHash === undefined && b.create.generation === undefined && b.get.enrollment !== true && b.create.sessionId !== b.get.sessionId, 'nonce-first enrollment');
   bodyBytes(b.get);
-  const fingerprint = b.get.genesisHash.slice(0, 16).match(/.{4}/g).join(' ');
+  const fingerprint = requestFingerprint ?? b.get.genesisHash.slice(0, 16).match(/.{4}/g).join(' ');
+  requireThat(typeof fingerprint === 'string' && /^[a-f0-9]{4}( [a-f0-9]{4}){3}$/.test(fingerprint), 'request fingerprint');
   requireThat([...params.keys()].join(',') === 'session,fingerprint' && params.get('session') === b.get.sessionId && params.get('fingerprint') === fingerprint, 'QR id or fingerprint');
   return { ...b, fingerprint };
 }
