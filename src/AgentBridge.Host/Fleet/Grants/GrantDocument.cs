@@ -50,6 +50,7 @@ public static class GrantValidator
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = false,
+        NumberHandling = JsonNumberHandling.Strict,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         RespectRequiredConstructorParameters = true,
         MaxDepth = 12,
@@ -86,10 +87,18 @@ public static class GrantValidator
         { return new(GrantRefusal.Identifier); }
         if (!List(grant.Actions, a => a is "launch" or "stop")) { return new(GrantRefusal.Action); }
         if (!ValidScope(grant.Scope) || !grant.Scope.Machines.Contains(audience.Device)) { return new(GrantRefusal.Scope); }
-        if (!Positive(grant.Caps)) { return new(GrantRefusal.Caps); }
-        if (issuer.IssuedAt == default || issuer.IssuedAt > DateTimeOffset.MaxValue.AddHours(-8)
-            || grant.NotBefore < issuer.IssuedAt || Expiry(grant) <= grant.NotBefore
-            || Expiry(grant) - issuer.IssuedAt > TimeSpan.FromHours(24))
+        if (!Positive(grant.Caps) || grant.Caps is not { Hourly: <= 1000, Daily: <= 5000, Live: <= 100 }
+            || grant.Caps.Hourly > grant.Caps.Daily) { return new(GrantRefusal.Caps); }
+        grant = grant with
+        {
+            Issuer = issuer with { IssuedAt = issuer.IssuedAt.ToUniversalTime() },
+            NotBefore = grant.NotBefore.ToUniversalTime(), ExpiresAt = grant.ExpiresAt?.ToUniversalTime()
+        };
+        // Reserve the full maximum lifetime horizon before doing expiry arithmetic.
+        var issuedAt = grant.Issuer.IssuedAt;
+        if (issuedAt == default || issuedAt > DateTimeOffset.MaxValue.AddHours(-24)
+            || grant.NotBefore < issuedAt || Expiry(grant) <= grant.NotBefore
+            || Expiry(grant) - issuedAt > TimeSpan.FromHours(24))
         { return new(GrantRefusal.Lifetime); }
         return new(GrantRefusal.None, grant);
     }
@@ -111,8 +120,8 @@ public static class GrantValidator
         && values.Length <= 64 && (empty || values.Length > 0) && values.All(valid) && values.Distinct().Count() == values.Length;
     internal static bool ValidScope(GrantScope? s) => s is not null && List(s.Machines, Device)
         && List(s.Workspaces, v => Name(v, true)) && List(s.Agents, a => LaunchProtocol.Agents.Contains(a, StringComparer.Ordinal))
-        && List(s.Models, v => Name(v)) && List(s.Profiles, v => Name(v))
-        && List(s.Efforts, v => Name(v)) && List(s.Contexts, v => Name(v))
+        && List(s.Models, LaunchProtocol.IsTuning) && List(s.Profiles, v => Name(v))
+        && List(s.Efforts, LaunchProtocol.IsTuning) && List(s.Contexts, LaunchProtocol.IsTuning)
         && List(s.Permissions, p => p is LaunchProtocol.Ask or LaunchProtocol.AllowAll);
     static bool Known(GrantScope scope, GrantScope options) =>
         new[] { (scope.Machines, options.Machines), (scope.Workspaces, options.Workspaces), (scope.Agents, options.Agents),
@@ -134,6 +143,7 @@ public static class GrantEvaluator
     {
         var validation = GrantValidator.ValidateShape(grant);
         if (!validation.Valid) { return new(validation.Reason); }
+        grant = validation.Grant!;
         if (policy is null || request is null || !GrantValidator.ValidScope(policy.Scope) || !GrantValidator.Positive(policy.Caps))
         { return new(GrantRefusal.Policy); }
         if (policy.Account != grant.Account || request.Subject?.Account != grant.Account) { return new(GrantRefusal.Account); }
@@ -148,13 +158,6 @@ public static class GrantEvaluator
         { return new(GrantRefusal.Scope); }
         if ((request.Action == "launch" && request.Target is not null) || !Both(request.Workspace, grant.Scope.Workspaces, policy.Scope.Workspaces)
             || !Both(request.Agent, grant.Scope.Agents, policy.Scope.Agents)) { return new(GrantRefusal.Scope); }
-        var model = Resolve(request.Model, grant.Scope.Models, policy.Scope.Models);
-        var profile = Resolve(request.Profile, grant.Scope.Profiles, policy.Scope.Profiles);
-        var effort = Resolve(request.Effort, grant.Scope.Efforts, policy.Scope.Efforts);
-        var context = Resolve(request.Context, grant.Scope.Contexts, policy.Scope.Contexts);
-        var permission = Resolve(request.Permission, grant.Scope.Permissions, policy.Scope.Permissions);
-        if (model is null || profile is null || effort is null || context is null) { return new(GrantRefusal.Scope); }
-        if (permission is null || (permission == LaunchProtocol.AllowAll && !policy.AllowAll)) { return new(GrantRefusal.Permission); }
         if (request.Action == "stop")
         {
             var target = request.Target;
@@ -164,6 +167,15 @@ public static class GrantEvaluator
             return GrantValidator.Target(target) && !policy.StopTargets.IsDefault && policy.StopTargets.Contains(target!) && (own || named)
                 ? new(GrantRefusal.None) : new(GrantRefusal.StopTarget);
         }
+        var model = Resolve(request.Model, grant.Scope.Models, policy.Scope.Models);
+        var profile = Resolve(request.Profile, grant.Scope.Profiles, policy.Scope.Profiles);
+        var effort = Resolve(request.Effort, grant.Scope.Efforts, policy.Scope.Efforts);
+        var context = Resolve(request.Context, grant.Scope.Contexts, policy.Scope.Contexts);
+        var permissions = policy.Scope.Permissions.Where(p => p != LaunchProtocol.AllowAll || policy.AllowAll).ToImmutableArray();
+        var permission = Resolve(request.Permission ?? (Both(LaunchProtocol.Ask, grant.Scope.Permissions, permissions) ? LaunchProtocol.Ask : null),
+            grant.Scope.Permissions, permissions);
+        if (model is null || profile is null || effort is null || context is null) { return new(GrantRefusal.Scope); }
+        if (permission is null) { return new(GrantRefusal.Permission); }
         var caps = new GrantCaps(Math.Min(grant.Caps.Hourly, policy.Caps.Hourly),
             Math.Min(grant.Caps.Daily, policy.Caps.Daily), Math.Min(grant.Caps.Live, policy.Caps.Live));
         return new(GrantRefusal.None, new(model, profile, effort, context, permission, caps));

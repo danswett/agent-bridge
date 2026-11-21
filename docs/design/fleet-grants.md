@@ -57,7 +57,7 @@ Unknown versions, fields, identifiers or enum values refuse, not ignore.
 | `actions` | Nonempty subset of `launch`, `stop` |
 | `scope` | Exact machines, workspace identities/labels, agent ids, models, profiles, effort/context and permission modes |
 | `stopTargets` | Default: sessions this exact subject launched under this grant; optionally enumerated existing session/process bindings approved by the person |
-| `caps` | Positive integers: launches per rolling hour, launches per rolling 24 hours, maximum live/reserved sessions; no unlimited/zero/null interpretation |
+| `caps` | Strict positive JSON integers: at most 1000 hourly, 5000 daily, 100 live/reserved; hourly <= daily; no unlimited/zero/null interpretation |
 | `notBefore`, `expiresAt` | Default lifetime 8 hours; hard maximum 24 hours; no agent renewal |
 | `generation` | Immutable issuance revision; changing scope/caps/subjects means revoke and issue a new id |
 
@@ -70,6 +70,10 @@ paths/arguments are excluded. Child sessions receive no grant automatically.
 All scope selections are explicit snapshots of receiving-host launch options.
 Missing model, profile, effort, context or permissions on an agent request resolve
 only to a value recorded in that snapshot; no newly widened host default is inherited.
+Omitted permission filters policy-disabled `allowAll`, prefers `ask`, then policy order.
+Model, effort and context identifiers reuse the launch-tuning grammar, including `opus[1m]`.
+Times normalize to UTC; issuance must leave a representable 24-hour lifetime horizon.
+Stops check exact target authority before launch-only choices; narrowed launch options do not prevent stopping.
 Canonical approved workspace identity and isolation policy are checked again;
 an isolated worktree derives only from that approved workspace.
 Resume, restore and transfer are not delegated in version 1.
