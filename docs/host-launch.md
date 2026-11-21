@@ -1,5 +1,22 @@
 # How the host launches sessions
 
+## Host CLI: read launch status
+
+`agent-bridge-host launches status --request <guid> [--json] [--profile <name>]` reads
+one request; `launches list [--since <minutes>] [--json] [--profile <name>]` lists retained
+results (default 15 minutes; range 0-43200). Both use the same-user local pipe, never act.
+Fields: `request`, `outcome`, `session` (16 lowercase hex or null), `permissions`
+(`ask`, `allowAll` or null), `registered` (live full-ID match, never name), `time`.
+Status exits: 0 started/registered; 3 unknown; 5 refused/failed; 6 unavailable/invalid
+(stderr stage/reason); 7 accepted but not confirmed registered, including busy; bad args 2.
+List exits 0 on a valid list. The private, atomic `launch-status/results.json` retains
+128 content-free results and the HA caller UUID mapping through late registration.
+Unexpired outcomes are never evicted: capacity rejects the new row with a host-log warning;
+only rows at least 15 minutes old expire. Records are principal/request keyed; an ambiguous
+UUID query returns unknown. Invalid status records are logged, never abort launch completion.
+Corruption reads empty with a log warning. Deduplication, provenance and authorization
+are unchanged; unknown never authorizes a relaunch.
+
 `session.launch` and `launch.options` ([contract](protocol/v1-launch.md)) start or resume an
 agent session from another device, the way agent-ha-bridge's launch card does. A session from
 another machine is a launch too: [host-transfer.md](host-transfer.md). So is a press of Launch on

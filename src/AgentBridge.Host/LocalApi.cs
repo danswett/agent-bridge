@@ -45,6 +45,7 @@ public static class LocalApi
                 actual => credentials.FleetGrant.CheckDispatch(actual, request));
         }
         credentials?.CheckScriptOperation(channel, op, log);
+        if (op is "launches.status" or "launches.list") { return sessions.LaunchStatus(data, op == "launches.list"); }
         if (op == FleetWorkerSettings.Op)
         {
             var caller = callers.Classify(channel, fresh: true);

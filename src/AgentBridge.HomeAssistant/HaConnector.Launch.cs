@@ -22,6 +22,7 @@ public sealed record HaLauncher(
     // Why the record could not be opened: requests with an id are refused rather than launched
     // without it.
     public string? RequestsProblem { get; init; }
+    public Action<string, LaunchRequest, LaunchResult>? PublishStatus { get; init; }
 }
 
 // Stage 5: the launch card (docs/ha-connector.md, "Stage 5"). agent-ha-bridge's
@@ -762,6 +763,7 @@ public sealed partial class HaConnector
     {
         launchBusy = true;
         launchInFlight = requestId;
+        if (requestId is not null) { launcher!.PublishStatus?.Invoke(requestId, request, new LaunchResult(LaunchOutcome.Unconfirmed)); }
         var cancel = replyStop.Token;
         log($"Home Assistant connector: launch {request.Request[..8]} handed to the host ({request.Agent ?? "default agent"}{(request.Resume is null ? $" in {request.Workspace ?? "the default workspace"}" : ", resuming")})");
         Track(Task.Run(async () =>
@@ -770,6 +772,7 @@ public sealed partial class HaConnector
             try { result = await launcher!.Launch(request, cancel); }
             catch (OperationCanceledException) when (cancel.IsCancellationRequested) { result = new LaunchResult(LaunchOutcome.Unconfirmed, "the host stopped while the launch was starting; check the machine"); }
             catch (Exception e) { result = new LaunchResult(LaunchOutcome.Failed, $"Launch failed: {e.GetType().Name}"); }
+            if (requestId is not null) { launcher!.PublishStatus?.Invoke(requestId, request, result); }
             launchesDone.Enqueue(new LaunchDone(request, requestId, pressed, driver, principal, launched, prompt, result));
         }, CancellationToken.None));
     }
