@@ -161,6 +161,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     readonly HashSet<string> groupAlertOwed = new(StringComparer.Ordinal);
     readonly SemaphoreSlim wake = new(0);
     IPushSender? sender;
+    long accountGeneration;
     // A sender whose connection failed a push: nothing more is tried on it, and the next
     // Attach (a new connection) sends what it could not.
     IPushSender? broken;
@@ -270,9 +271,11 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
 
     public int Subscribers => store.Count;
 
-    bool MayNotify(PushSubscriber subscriber) => trust is not { Enabled: true } ||
-        (subscriber.Grant is { Role: TrustedPeerStore.Person } grant && trust.Store.Current(grant, store.Account)
-            && BlobFormat.FromBase64Url(grant.PublicKey) is { } key && Wire.DeviceId(key) == subscriber.Device);
+    bool CurrentPersonGrant(string device, TrustedPeerLease? grant) => trust is not { Enabled: true } ||
+        (grant is { Role: TrustedPeerStore.Person } && trust.Store.Current(grant, store.Account)
+            && BlobFormat.FromBase64Url(grant.PublicKey) is { } key && Wire.DeviceId(key) == device);
+
+    bool MayNotify(PushSubscriber subscriber) => CurrentPersonGrant(subscriber.Device, subscriber.Grant);
 
     public void RevalidateTrust()
     {
@@ -284,6 +287,11 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                 if (MayNotify(subscriber)) { continue; }
                 store.RemoveIfEndpoint(subscriber.Device, subscriber.Endpoint);
                 Forget(subscriber.Device);
+            }
+            foreach (var registration in store.AllApns)
+            {
+                if (CurrentPersonGrant(registration.Device, registration.Grant)) { continue; }
+                store.RemoveApns(registration);
             }
         }
     }
@@ -306,6 +314,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         {
             if (store.Account != next.AccountId)
             {
+                Interlocked.Increment(ref accountGeneration);
                 var dropped = store.Bind(next.AccountId);
                 if (dropped > 0) { log($"signed in to another account: dropped {dropped} push subscription(s)"); }
                 outbox.Clear();
@@ -413,10 +422,12 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
 
     internal object? Handle(PushPeer peer, string op, JsonElement data)
     {
-        if (op is not (Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList)) { return null; }
+        if (op is not (Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList
+            or ApnsPushRequest.Subscribe or ApnsPushRequest.Unsubscribe or ApnsPushRequest.List)) { return null; }
         // Push goes straight to a device, around the relay's account boundary, so the host
         // keeps it itself: only a device of the account this host is signed in to, which that
         // account's relay connection lists, may register, list or remove.
+        var generation = Volatile.Read(ref accountGeneration);
         var account = store.Account;
         if (account is null || peer.AccountId != account || !peer.InAccount)
         {
@@ -437,6 +448,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                     var name = Clean(request.Device) ?? Clean(peer.Name) ?? "device";
                     lock (gate)
                     {
+                        RequireRegistrationAccount(generation, peer.AccountId);
                         if (trust?.Enabled == true && store.Get(peer.Device)?.Grant != grant) { Forget(peer.Device); }
                         store.Put(new PushSubscriber(peer.Device, name, request.Endpoint, request.Keys.P256dh, request.Keys.Auth, request.App, time.GetUtcNow(), grant));
                     }
@@ -453,9 +465,51 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                     if (removed) { log($"push subscription removed by {Clean(peer.Name) ?? peer.Device[..Math.Min(8, peer.Device.Length)]}; {store.Count} left"); }
                     return new PushUnsubscribeResult(removed);
                 }
+            case ApnsPushRequest.Subscribe:
+                {
+                    var request = ReadApns(op, data);
+                    if (request is not { Target: { } target, Token: { } token, KeyId: { } keyId, Keys: { } keys })
+                    {
+                        throw new InvalidOperationException("validated native push request was incomplete");
+                    }
+                    var name = Clean(request.Device) ?? Clean(peer.Name) ?? "device";
+                    lock (gate)
+                    {
+                        RequireRegistrationAccount(generation, peer.AccountId);
+                        store.PutApns(new ApnsRegistration(peer.Device, name, target, token, keyId, keys.P256dh, keys.Auth, time.GetUtcNow(), grant));
+                    }
+                    log($"APNs registration from {name} ({peer.Device[..Math.Min(8, peer.Device.Length)]}) for {target}; {store.ApnsCount} in all");
+                    return new PushSubscribeResult(true, store.ApnsCount);
+                }
+            case ApnsPushRequest.Unsubscribe:
+                {
+                    var request = ReadApns(op, data);
+                    if (request.Target is not { } target) { throw new InvalidOperationException("validated native push request had no target"); }
+                    var removed = store.RemoveApns(peer.Device, target);
+                    if (removed) { log($"APNs registration removed by {Clean(peer.Name) ?? peer.Device[..Math.Min(8, peer.Device.Length)]} for {target}; {store.ApnsCount} left"); }
+                    return new PushUnsubscribeResult(removed);
+                }
+            case ApnsPushRequest.List:
+                ReadApns(op, data);
+                return new PushListResult([.. store.AllApns.Select(s => new PushDevice(s.Device, s.Name, $"apns:{s.Target}", s.Since, s.Device == peer.Device))]);
             default:
                 return new PushListResult([.. store.All.Select(s => new PushDevice(s.Device, s.Name, ServiceOf(s.Endpoint), s.Since, s.Device == peer.Device))]);
         }
+    }
+
+    // Called under gate: switching away and back still invalidates work from the old binding.
+    void RequireRegistrationAccount(long generation, string account)
+    {
+        if (generation != accountGeneration || account != store.Account)
+        {
+            throw new InvalidOperationException("push registration discarded because the account changed");
+        }
+    }
+
+    static ApnsPushRequest ReadApns(string op, JsonElement data)
+    {
+        try { return ApnsPushRequest.Read(op, data); }
+        catch (JsonException e) { throw new ArgumentException("invalid native push request", e); }
     }
 
     static T Read<T>(JsonElement data, string what)
