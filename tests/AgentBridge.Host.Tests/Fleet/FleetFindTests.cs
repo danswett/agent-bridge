@@ -11,7 +11,7 @@ using AgentBridge.Transport.Tests;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
-public sealed class FleetFindTests : IDisposable
+public sealed partial class FleetFindTests : IDisposable
 {
     readonly string root = Path.Combine(Path.GetTempPath(), "abfind-" + Guid.NewGuid().ToString("N")[..8]);
     static readonly DateTimeOffset Started = new(2026, 11, 7, 12, 0, 0, TimeSpan.Zero);
