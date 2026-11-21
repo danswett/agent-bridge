@@ -259,7 +259,7 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
             if (!attempt.Matched || attempt.Joiner is not { } joiner) { return "not-matched"; }
             if (attempt.Genesis is not { } genesis) { return "no-genesis"; }
             if (relay.Generation is not { } generationId || relay.Entries.Count == 0) { return "no-roster"; }
-            var verifier = new RosterVerifier(account, generationId, clock);
+            var verifier = new RosterVerifier(account, generationId, reader.RunningTime);
             try
             {
                 if (verifier.Offer(relay.Entries.Select(t => Entry.Parse(System.Text.Encoding.UTF8.GetBytes(t)))).Any(o => o.Verdict == Verdict.Refused)
@@ -267,25 +267,12 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
             }
             catch (RosterFormatException) { return "chain-invalid"; }
             if (!CryptographicOperations.FixedTimeEquals(verifier.Graph[0].Hash, genesis)) { return "genesis-mismatch"; }
-            var history = reader.Enrolling<string?>(account, generationId, earlier =>
-            {
-                if (earlier is null) { return null; }
-                lock (earlier)
-                {
-                    if (earlier.Graph.Count == 0 || !CryptographicOperations.FixedTimeEquals(earlier.Graph[0].Hash, genesis)) { return "genesis-mismatch"; }
-                    for (var i = 0; i < verifier.Graph.Count; i++)
-                    {
-                        var node = verifier.Graph[i];
-                        if (earlier.FirstAccepted(node.Hash) is { } at) { verifier.AdoptFirstAccepted(node.Hash, at); }
-                    }
-                }
-                return null;
-            }, code => code);
-            if (history is not null) { return history; }
             if (!verifier.State.PersonDevices.Contains(attempt.Approver) || verifier.State.ActiveAdd(attempt.Own.Id) is not { } add
                 || !joiner.Accepts(verifier.Graph[add].Entry, attempt.Own, attempt.Approver!)) { return "not-added"; }
+            var history = reader.RememberEnrollment(verifier);
+            if (history is not null) { return history; }
             if (verifier.State.ActiveAdd(attempt.Approver!) is not { } by || verifier.OnProbation(by) || verifier.Held.Contains(attempt.Approver!)) { return "approver-probation"; }
-            var written = HostRosterPinWriter.Write(pinPath, new PersonGenesis("enrollment", genesis), relay, account, clock, isCapSignGenesis);
+            var written = HostRosterPinWriter.Write(pinPath, new PersonGenesis("enrollment", genesis), relay, account, reader.RunningTime, isCapSignGenesis);
             if (written == "pinned") { reader.Update(relay, account); }
             return written;
         }
@@ -331,6 +318,36 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
 
 public sealed partial class HostRosterReader
 {
+    RosterVerifier? enrollmentHistory;
+    internal TimeSpan RunningTime() => clock();
+
+    // Called only after Finish verified the matched genesis and this exchange's exact host add.
+    // Pre-pin history is never published as Verified or used as fleet/command authority.
+    internal string? RememberEnrollment(RosterVerifier candidate) =>
+        Enrolling<string?>(candidate.Account, candidate.Generation, pinned =>
+        {
+            var earlier = pinned ?? enrollmentHistory;
+            if (earlier is not null)
+            {
+                lock (earlier)
+                {
+                    var sameRoot = earlier.Account == candidate.Account && earlier.Generation == candidate.Generation
+                        && earlier.Graph.Count != 0 && CryptographicOperations.FixedTimeEquals(earlier.Graph[0].Hash, candidate.Graph[0].Hash);
+                    if (pinned is not null && !sameRoot) { return "genesis-mismatch"; }
+                    if (sameRoot)
+                    {
+                        for (var i = 0; i < candidate.Graph.Count; i++)
+                        {
+                            var hash = candidate.Graph[i].Hash;
+                            if (earlier.FirstAccepted(hash) is { } at) { candidate.AdoptFirstAccepted(hash, at); }
+                        }
+                    }
+                }
+            }
+            enrollmentHistory = candidate;
+            return null;
+        }, code => code);
+
     // Record signing's gate (FleetTrust): a verified pin of this account and generation with the switch on.
     internal T Enrollment<T>(string account, string? generation, Func<RosterVerifier, T> ready, Func<string, T> refused)
     {
