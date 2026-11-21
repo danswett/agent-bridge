@@ -27,8 +27,11 @@ Every target field and binding id must be present and well formed, or issue refu
 issued once: any journaled grant holding it, in any state and after restart, refuses a new approval id.
 Consume and current-grant checks require that same target and nonce; a second consume or any
 different target/challenge refuses. Expiry is journaled when first observed, so a wall-clock
-rollback cannot revive it. Revocation requires SRE CLI with the grant's own binding.
-Journal replay preserves the binding and consumed state, not challenge object references.
+rollback cannot revive it, including consumed replays and mismatched current-grant checks.
+The journal durably advances a time high-water before checks; issue, consume, current and revoke
+refuse an earlier clock even after restart, and every append atomically fences against that high-water.
+Revocation requires SRE CLI with the grant's own binding and retries a competing transition's CAS.
+Journal replay preserves binding, state and time high-water, not challenge object references.
 Every transition requires an atomic append and durable flush through the Fleet
 journal adapter; revocation never erases history. Missing adapters refuse.
 This slice supplies only fake adapters in tests: no CLI verb, owner approval UI,

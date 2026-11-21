@@ -25,11 +25,14 @@ internal interface IQualificationTrust
 internal interface IQualificationGrantJournal
 {
     QualificationGrant? Find(Guid id);
+    // Atomically advance+durably flush the journal's time high-water; replay it after restart.
+    DateTimeOffset ObserveTime(DateTimeOffset now);
     // Latest entry holding this challenge nonce under any id or state, durable across restart.
     QualificationGrant? FindChallenge(string nonce);
     // Atomically require the latest entries for next.Id AND next's nonce both to equal expected
-    // (null: neither ever journaled, in any state), then append+durably flush. No overwrite or deletion.
-    bool TryAppend(QualificationGrant? expected, QualificationGrant next);
+    // (null: neither ever journaled, in any state), AND observedAt >= the durable time high-water,
+    // then append+durably flush with that time. No overwrite or deletion.
+    bool TryAppend(QualificationGrant? expected, QualificationGrant next, DateTimeOffset observedAt);
 }
 
 // Inactive until trusted control and durable Fleet journal adapters are supplied.
@@ -37,8 +40,6 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
     IQualificationGrantJournal? journal = null, TimeProvider? clock = null)
 {
     readonly TimeProvider time = clock ?? TimeProvider.System;
-    readonly object gate = new();
-    DateTimeOffset latest = DateTimeOffset.MinValue;
 
     internal QualificationGrantDecision Issue(Guid approval, TimeSpan lifetime)
     {
@@ -47,12 +48,13 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
         var binding = trust!.Binding;
         if (approval == Guid.Empty || !Valid(binding) || lifetime <= TimeSpan.Zero || lifetime > TimeSpan.FromMinutes(60))
         { return QualificationGrantDecision.Refuse("qualification approval binding or lifetime invalid"); }
+        var now = time.GetUtcNow();
+        if (now < journal.ObserveTime(now)) { return QualificationGrantDecision.Refuse("qualification clock earlier than journal high-water"); }
         // A nonce names one queued turn; reuse under another approval id could bless a second target.
         if (journal.FindChallenge(binding.Challenge) is not null)
         { return QualificationGrantDecision.Refuse("qualification challenge nonce already used"); }
-        var now = Now();
         var next = new QualificationGrant(approval, binding, now, now + lifetime, QualificationGrantState.Issued);
-        return journal.TryAppend(null, next) ? new(next, null)
+        return journal.TryAppend(null, next, now) ? new(next, null)
             : QualificationGrantDecision.Refuse("qualification approval already used");
     }
 
@@ -61,56 +63,61 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
         if (!Authorized(start: true) || journal is null)
         { return QualificationGrantDecision.Refuse("qualification.start requires SRE CLI on the approved disposable run"); }
         var old = journal.Find(id);
-        if (id == Guid.Empty || old is null || old.Id != id || old.State != QualificationGrantState.Issued
-            || !Matches(old) || !MatchesAttempt(old, target, challenge))
+        if (old is null || !Matches(old, out var now) || id == Guid.Empty || old.Id != id
+            || old.State != QualificationGrantState.Issued || !MatchesAttempt(old, target, challenge))
         { return QualificationGrantDecision.Refuse("qualification grant missing, expired, used or mismatched"); }
         var next = old with { State = QualificationGrantState.Consumed };
-        if (!journal.TryAppend(old, next))
+        if (!journal.TryAppend(old, next, now))
         { return QualificationGrantDecision.Refuse("qualification grant concurrently changed"); }
         return IsCurrent(next, target, challenge) ? new(next, null)
             : QualificationGrantDecision.Refuse("qualification grant invalidated during consumption");
     }
 
-    internal bool IsCurrent(QualificationGrant grant, QueueTarget? target, QueueQualification.Challenge? challenge) =>
-        Authorized(start: true) && journal is not null && grant.State == QualificationGrantState.Consumed
-        && journal.Find(grant.Id) == grant && Matches(grant) && MatchesAttempt(grant, target, challenge);
+    internal bool IsCurrent(QualificationGrant grant, QueueTarget? target, QueueQualification.Challenge? challenge)
+    {
+        if (!Authorized(start: true) || journal is null) { return false; }
+        return journal.Find(grant.Id) is { } old && Matches(old, out _) && grant.State == QualificationGrantState.Consumed
+            && old == grant && MatchesAttempt(grant, target, challenge);
+    }
 
     internal QualificationGrantDecision Revoke(Guid id)
     {
         if (trust?.Access != QualificationAccess.SreCli || trust.HostKind != QualificationHostKind.Disposable || journal is null)
         { return QualificationGrantDecision.Refuse("qualification revocation requires SRE CLI"); }
-        var old = journal.Find(id);
-        if (id == Guid.Empty || old is null || old.Id != id || old.Binding != trust.Binding || old.State == QualificationGrantState.Revoked)
-        { return QualificationGrantDecision.Refuse("qualification grant missing, foreign or already revoked"); }
-        var next = old with { State = QualificationGrantState.Revoked };
-        return journal.TryAppend(old, next) ? new(next, null)
-            : QualificationGrantDecision.Refuse("qualification grant concurrently changed");
+        for (var tries = 0; tries < 8; tries++)
+        {
+            var now = time.GetUtcNow();
+            if (now < journal.ObserveTime(now)) { return QualificationGrantDecision.Refuse("qualification clock earlier than journal high-water"); }
+            var old = journal.Find(id);
+            if (id == Guid.Empty || old is null || old.Id != id || old.Binding != trust.Binding || old.State == QualificationGrantState.Revoked)
+            { return QualificationGrantDecision.Refuse("qualification grant missing, foreign or already revoked"); }
+            var next = old with { State = QualificationGrantState.Revoked };
+            if (journal.TryAppend(old, next, now)) { return new(next, null); }
+        }
+        return QualificationGrantDecision.Refuse("qualification grant concurrently changed");
     }
 
     bool Authorized(bool start) => trust?.HostKind == QualificationHostKind.Disposable
         && (trust.Access == QualificationAccess.SreCli || !start && trust.Access == QualificationAccess.OwnerApproval);
 
-    // Wall time never runs backwards within one controller; restarts rely on journaled expiry.
-    DateTimeOffset Now() { lock (gate) { var now = time.GetUtcNow(); return latest = now > latest ? now : latest; } }
-
-    // One time sample decides expiry, and an observed expiry is journaled before refusing,
-    // so a later wall-clock rollback cannot revive the grant.
-    bool Matches(QualificationGrant grant)
+    // Check time/expiry before every state or binding refusal, including consumed replays.
+    bool Matches(QualificationGrant grant, out DateTimeOffset now)
     {
-        var now = Now();
-        if (now >= grant.Expires) { Expire(grant.Id); return false; }
+        now = time.GetUtcNow(); var high = journal!.ObserveTime(now);
+        if (high >= grant.Expires) { Expire(grant.Id, high); return false; }
+        if (now < high) { return false; }
         if (journal!.FindChallenge(grant.Binding.Challenge) != grant) { return false; }
         return Valid(grant.Binding) && grant.Binding == trust?.Binding && grant.Issued <= now
             && grant.Expires - grant.Issued <= TimeSpan.FromMinutes(60);
     }
 
     // An observed expiry must become durable even when another controller wins a CAS first.
-    void Expire(Guid id)
+    void Expire(Guid id, DateTimeOffset observedAt)
     {
         for (var tries = 0; journal!.Find(id) is { State: QualificationGrantState.Issued or QualificationGrantState.Consumed } latest; tries++)
         {
             if (tries == 8) { throw new IOException("qualification expiry could not be journaled"); }
-            journal.TryAppend(latest, latest with { State = QualificationGrantState.Expired });
+            journal.TryAppend(latest, latest with { State = QualificationGrantState.Expired }, journal.ObserveTime(observedAt));
         }
     }
 

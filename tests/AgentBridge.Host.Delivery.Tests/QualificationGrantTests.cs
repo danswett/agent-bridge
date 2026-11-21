@@ -23,19 +23,29 @@ public sealed class QualificationGrantTests
     {
         readonly object gate = new();
         public readonly List<QualificationGrant> Entries = [];
+        public DateTimeOffset HighWater = DateTimeOffset.MinValue;
         public bool Available = true;
         public Action? Racing; // Runs once inside the next nonce lookup or append, before it reads.
+        public Action? TimeRacing; // Competes before the next time checkpoint is flushed.
         void Race() { var race = Racing; Racing = null; race?.Invoke(); }
         public QualificationGrant? Find(Guid id) { lock (gate) { return Entries.LastOrDefault(x => x.Id == id); } }
         public QualificationGrant? FindChallenge(string nonce) { Race(); lock (gate) { return Entries.LastOrDefault(x => x.Binding.Challenge == nonce); } }
-        public bool TryAppend(QualificationGrant? expected, QualificationGrant next)
+        public DateTimeOffset ObserveTime(DateTimeOffset now)
+        { lock (gate) { var race = TimeRacing; TimeRacing = null; race?.Invoke(); if (!Available) { throw new IOException("receipt store unavailable"); } return HighWater = now > HighWater ? now : HighWater; } }
+        sealed record Snapshot(List<QualificationGrant> Entries, DateTimeOffset HighWater);
+        public Journal Restart()
+        {
+            var data = JsonSerializer.Deserialize<Snapshot>(JsonSerializer.Serialize(new Snapshot(Entries, HighWater)))!;
+            var copy = new Journal { HighWater = data.HighWater }; copy.Entries.AddRange(data.Entries); return copy;
+        }
+        public bool TryAppend(QualificationGrant? expected, QualificationGrant next, DateTimeOffset observedAt)
         {
             lock (gate)
             {
                 if (!Available) { throw new IOException("receipt store unavailable"); }
                 Race();
-                if (Find(next.Id) != expected || FindChallenge(next.Binding.Challenge) != expected) { return false; }
-                Entries.Add(next); return true;
+                if (observedAt < HighWater || Find(next.Id) != expected || FindChallenge(next.Binding.Challenge) != expected) { return false; }
+                Entries.Add(next); HighWater = observedAt; return true;
             }
         }
     }
@@ -181,8 +191,7 @@ public sealed class QualificationGrantTests
     {
         var run = new Run(); var issued = run.Issue();
         var grant = Assert.IsType<QualificationGrant>(run.Consume().Grant);
-        var restored = new Journal();
-        restored.Entries.AddRange(JsonSerializer.Deserialize<List<QualificationGrant>>(JsonSerializer.Serialize(run.Journal.Entries))!);
+        var restored = run.Journal.Restart();
         var controller = new QualificationGrants(run.Trust, restored, run.Clock);
         Assert.Equal(issued.Binding, restored.Entries[0].Binding);
         Assert.True(controller.IsCurrent(grant, run.Trust.Binding.Target with { }, new(run.Challenge.Text)));
@@ -214,8 +223,7 @@ public sealed class QualificationGrantTests
         if (history is "consumed" or "restart") { Assert.Null(run.Consume().Refusal); }
         if (history == "revoked") { Assert.Null(run.Grants().Revoke(run.Id).Refusal); }
         if (history == "expired") { run.Clock.Advance(TimeSpan.FromMinutes(60)); Assert.NotNull(run.Consume().Refusal); }
-        var journal = history == "restart" ? new Journal() : run.Journal;
-        if (history == "restart") { journal.Entries.AddRange(JsonSerializer.Deserialize<List<QualificationGrant>>(JsonSerializer.Serialize(run.Journal.Entries))!); }
+        var journal = history == "restart" ? run.Journal.Restart() : run.Journal;
         var count = journal.Entries.Count;
         run.Trust.Binding = run.Trust.Binding with { Target = run.Trust.Binding.Target with { ProcessId = 43 } };
         Assert.NotNull(new QualificationGrants(run.Trust, journal, run.Clock).Issue(Guid.NewGuid(), TimeSpan.FromMinutes(1)).Refusal);
@@ -285,7 +293,7 @@ public sealed class QualificationGrantTests
     [Fact]
     public void An_observed_expiry_is_journaled_even_when_another_controller_consumes_first()
     {
-        var run = new Run(); run.Issue(); run.Journal.Racing = () => Assert.Null(run.Consume().Refusal);
+        var run = new Run(); run.Issue(); run.Journal.TimeRacing = () => Assert.Null(run.Consume().Refusal);
         var late = new QualificationGrants(run.Trust, run.Journal, new WallClock(run.Clock.GetUtcNow().AddMinutes(61)));
         Assert.NotNull(late.Consume(run.Id, run.Trust.Binding.Target, run.Challenge).Refusal);
         Assert.Equal(QualificationGrantState.Expired, run.Journal.Entries.Last().State);
@@ -301,5 +309,79 @@ public sealed class QualificationGrantTests
         if (caller == "foreign") { run.Trust.Binding = run.Trust.Binding with { Run = Guid.NewGuid() }; }
         Assert.NotNull(run.Grants().Revoke(run.Id).Refusal);
         Assert.Single(run.Journal.Entries);
+    }
+
+    public static IEnumerable<object[]> StateClockRestartCases()
+    {
+        foreach (var state in Enum.GetValues<QualificationGrantState>())
+        foreach (var minutes in new[] { -1, 29, 30, 59, 60, 61 })
+        foreach (var restart in new[] { false, true })
+        foreach (var current in new[] { false, true })
+        foreach (var mismatch in new[] { false, true })
+        { yield return new object[] { (int)state, minutes, restart, current, mismatch }; }
+    }
+
+    [Theory]
+    [MemberData(nameof(StateClockRestartCases))]
+    public void Every_state_clock_restart_combination_refuses_stale_or_mismatched_authority(
+        int state, int minutes, bool restart, bool current, bool mismatch)
+    {
+        var run = new Run(); run.Issue(); var grant = Assert.IsType<QualificationGrant>(run.Consume().Grant);
+        var clock = new WallClock(grant.Issued.AddMinutes(30)); var controller = new QualificationGrants(run.Trust, run.Journal, clock);
+        Assert.True(controller.IsCurrent(grant, run.Trust.Binding.Target, run.Challenge));
+        var old = grant with { State = (QualificationGrantState)state }; run.Journal.Entries.Add(old);
+        var journal = restart ? run.Journal.Restart() : run.Journal;
+        if (restart) { controller = new(run.Trust, journal, clock); }
+        clock.Now = grant.Issued.AddMinutes(minutes);
+        var target = mismatch ? run.Trust.Binding.Target with { ProcessId = 43 } : run.Trust.Binding.Target;
+        var accepted = current ? controller.IsCurrent(old, target, run.Challenge)
+            : controller.Consume(run.Id, target, run.Challenge).Refusal is null;
+        Assert.Equal(!mismatch && minutes is >= 30 and < 60
+            && old.State == (current ? QualificationGrantState.Consumed : QualificationGrantState.Issued), accepted);
+        if (minutes >= 60 && old.State is QualificationGrantState.Issued or QualificationGrantState.Consumed)
+        {
+            Assert.Equal(QualificationGrantState.Expired, journal.Entries.Last().State);
+            clock.Now = grant.Issued.AddMinutes(30);
+            var restored = journal.Restart();
+            var after = new QualificationGrants(run.Trust, restored, clock);
+            Assert.False(after.IsCurrent(grant, run.Trust.Binding.Target, run.Challenge));
+            Assert.NotNull(after.Consume(run.Id, run.Trust.Binding.Target, run.Challenge).Refusal);
+        }
+    }
+
+    [Theory]
+    [InlineData("issue")][InlineData("consume")][InlineData("revoke")]
+    public void Restart_refuses_issue_consume_and_revoke_below_the_journal_clock_high_water(string operation)
+    {
+        var run = new Run(); run.Issue(); var grant = Assert.IsType<QualificationGrant>(run.Consume().Grant);
+        var clock = new WallClock(grant.Issued.AddMinutes(30));
+        Assert.True(new QualificationGrants(run.Trust, run.Journal, clock).IsCurrent(grant, run.Trust.Binding.Target, run.Challenge));
+        if (operation == "consume") { run.Journal.Entries.Add(grant with { State = QualificationGrantState.Issued }); }
+        var restored = run.Journal.Restart();
+        clock.Now = grant.Issued.AddMinutes(29); var controller = new QualificationGrants(run.Trust, restored, clock);
+        run.Trust.Binding = operation == "issue" ? run.Trust.Binding with { Challenge = "agent-bridge-qualify:" + new string('b', 64) } : run.Trust.Binding;
+        var result = operation switch { "issue" => controller.Issue(Guid.NewGuid(), TimeSpan.FromMinutes(1)),
+            "consume" => controller.Consume(run.Id, run.Trust.Binding.Target, run.Challenge), _ => controller.Revoke(run.Id) };
+        Assert.NotNull(result.Refusal); Assert.Equal(run.Journal.Entries.Count, restored.Entries.Count);
+    }
+
+    [Fact]
+    public void Revocation_retries_when_a_competing_consume_wins_the_append()
+    {
+        var run = new Run(); run.Issue(); run.Journal.Racing = () => Assert.Null(run.Consume().Refusal);
+        Assert.Null(run.Grants().Revoke(run.Id).Refusal);
+        Assert.Equal(QualificationGrantState.Revoked, run.Journal.Entries.Last().State);
+    }
+
+    [Theory]
+    [InlineData("issue")][InlineData("consume")][InlineData("revoke")]
+    public void A_clock_checkpoint_winning_before_append_fences_the_older_operation(string operation)
+    {
+        var run = new Run(); run.Issue(); var count = run.Journal.Entries.Count;
+        if (operation == "issue") { run.Trust.Binding = run.Trust.Binding with { Challenge = "agent-bridge-qualify:" + new string('b', 64) }; }
+        run.Journal.Racing = () => run.Journal.ObserveTime(run.Clock.GetUtcNow().AddMinutes(30));
+        var result = operation switch { "issue" => run.Grants().Issue(Guid.NewGuid(), TimeSpan.FromMinutes(1)),
+            "consume" => run.Consume(), _ => run.Grants().Revoke(run.Id) };
+        Assert.NotNull(result.Refusal); Assert.Equal(count, run.Journal.Entries.Count);
     }
 }
