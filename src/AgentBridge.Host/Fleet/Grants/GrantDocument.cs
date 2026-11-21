@@ -14,7 +14,11 @@ public sealed record GrantAudience(string Device, string Profile);
 public sealed record GrantRole(string Name, GrantSubject Subject);
 public sealed record StopTarget(string Session, ProcessInstance ProcessInstance);
 public sealed record GrantLaunch(Guid GrantId, GrantSubject Subject, StopTarget Target);
-public sealed record GrantCaps(int Hourly, int Daily, int Live);
+public sealed record GrantCaps(int Hourly, int Daily, int Live)
+{
+    public GrantCaps Intersect(GrantCaps other) => new(Math.Min(Hourly, other.Hourly),
+        Math.Min(Daily, other.Daily), Math.Min(Live, other.Live));
+}
 public sealed record GrantScope(ImmutableArray<string> Machines, ImmutableArray<string> Workspaces,
     ImmutableArray<string> Agents, ImmutableArray<string> Models, ImmutableArray<string> Profiles,
     ImmutableArray<string> Efforts, ImmutableArray<string> Contexts, ImmutableArray<string> Permissions);
@@ -176,8 +180,7 @@ public static class GrantEvaluator
             grant.Scope.Permissions, permissions);
         if (model is null || profile is null || effort is null || context is null) { return new(GrantRefusal.Scope); }
         if (permission is null) { return new(GrantRefusal.Permission); }
-        var caps = new GrantCaps(Math.Min(grant.Caps.Hourly, policy.Caps.Hourly),
-            Math.Min(grant.Caps.Daily, policy.Caps.Daily), Math.Min(grant.Caps.Live, policy.Caps.Live));
+        var caps = grant.Caps.Intersect(policy.Caps);
         return new(GrantRefusal.None, new(model, profile, effort, context, permission, caps));
     }
     static bool Both(string value, ImmutableArray<string> grant, ImmutableArray<string> policy) =>
