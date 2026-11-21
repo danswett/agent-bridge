@@ -41,13 +41,24 @@ public interface ILiteLaunches
 // the routine never names a gate itself.
 public static class LiteComposition
 {
-    public static LiteDeliver Create(ISessionSource source, ISessionReplier replier, IConsoleInjector injector, Func<AgentMessagingSettings> currentSettings, LaunchService launcher, string folder, P256KeyPair key, Action<string> log)
+    public static LiteDeliver Create(ISessionSource source, ISessionReplier replier, IConsoleInjector injector, Func<AgentMessagingSettings> currentSettings, Func<bool> modeOn, LaunchService launcher, string folder, P256KeyPair key, Action<string> log)
     {
         var launches = new LiteLaunchLog(id => LiveProcess(source, id), folder, key, log);
         launcher.SessionStarted += launches.Launched;
         source.Changed += (_, _) => launches.Prune();
         IReplyTargetGate[] gates = [new ForcedAskGate(launches), new AllowlistedAllTargetsGate(launches, currentSettings)];
-        return new LiteDeliver(gates, source, replier, injector, log, launchedStillCurrent: id => launches.PermissionsOf(id) is not null);
+        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn));
+    }
+
+    internal static Func<string, Func<bool>> TargetFence(LiteLaunchLog launches, Func<AgentMessagingSettings> settings, Func<bool> modeOn)
+    {
+        var all = new AllowlistedAllTargetsGate(launches, settings);
+        return id =>
+        {
+            var admitted = launches.Capture(id);
+            return () => modeOn() && settings().RemoteEnabled && admitted is not null && launches.Capture(id) == admitted
+                && (admitted.Permissions == LaunchProtocol.Ask || all.Allows(id));
+        };
     }
 
     static SessionProcess? LiveProcess(ISessionSource source, string id)
@@ -76,12 +87,13 @@ public sealed class ForcedAskGate(ILiteLaunches launches) : IReplyTargetGate
 public sealed class AllowlistedAllTargetsGate(ILiteLaunches launches, Func<AgentMessagingSettings> currentSettings) : IReplyTargetGate
 {
     public Task<GateDecision> CheckAsync(VerifiedEnvelope env, string targetSession)
+        => Task.FromResult(Allows(targetSession) ? GateDecision.Allow() : GateDecision.Refuse("the allow-all session is not a live launch here with an enabled grant"));
+
+    internal bool Allows(string targetSession)
     {
         var settings = currentSettings();
-        return Task.FromResult(launches.PermissionsOf(targetSession) == LaunchProtocol.AllowAll
+        return launches.PermissionsOf(targetSession) == LaunchProtocol.AllowAll
             && settings.RemoteEnabled
-            && (settings.AllowAllLaunchedTargets || (settings.AllowAllTargets && settings.AllowAllTargetSessions.Contains(targetSession, StringComparer.Ordinal)))
-                ? GateDecision.Allow()
-                : GateDecision.Refuse("the allow-all session is not a live launch here with an enabled grant"));
+            && (settings.AllowAllLaunchedTargets || (settings.AllowAllTargets && settings.AllowAllTargetSessions.Contains(targetSession, StringComparer.Ordinal)));
     }
 }

@@ -1,4 +1,6 @@
 using System.Text.Json;
+using AgentBridge.Host;
+using AgentBridge.Host.Lite;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Protocol;
@@ -8,6 +10,37 @@ using Xunit;
 public sealed class ReplyClearTests
 {
     const string Id = "99999999-9999-4999-8999-999999999999";
+
+    [Theory]
+    [InlineData("remote", false)]
+    [InlineData("remote", true)]
+    [InlineData("grant", false)]
+    [InlineData("grant", true)]
+    [InlineData("kill", false)]
+    [InlineData("kill", true)]
+    [InlineData("permission", false)]
+    [InlineData("permission", true)]
+    public async Task A_lite_target_revoked_at_the_shared_slot_or_final_inject_fence_types_nothing(string change, bool atKeys)
+    {
+        await using var h = await Harness.Create(); h.Draft = "";
+        File.WriteAllText(Path.Combine(h.Folder, HostSettings.FileName), """{"agentMessaging":{"remote":"own-account","allowAllLaunchedTargets":true}}""");
+        var kill = new LiteKill(h.Folder);
+        var launches = new LiteLaunchLog(_ => new SessionProcess(100, DateTimeOffset.UnixEpoch));
+        launches.Launched(Id, new LaunchedWith { Agent = "copilot", Permissions = LaunchProtocol.AllowAll });
+        var fence = LiteComposition.TargetFence(launches, () => HostSettings.CurrentAgentMessaging(h.Folder), () => kill.On)(Id);
+        Assert.True(fence());
+        Action revoke = () => { if (change == "kill") Directory.CreateDirectory(Path.Combine(h.Folder, LiteKill.FileName));
+            else if (change == "permission") launches.Launched(Id, new LaunchedWith { Agent = "copilot", Permissions = LaunchProtocol.Ask });
+            else Assert.Equal(0, ConfigCommands.Run(["config", "set", change == "remote" ? "agentMessaging.remote" : "agentMessaging.allowAllLaunchedTargets", change == "remote" ? "off" : "false"], h.Folder, TextWriter.Null, TextWriter.Null)); };
+        if (atKeys) h.BeforeKeys = revoke; else await h.Gate.WaitToTypeAsync();
+        var replying = h.Replier.ReplyAsync(h.Request() with { ClearConfirmation = null, ClearDraftSource = null, RequireIdle = true, StillCurrent = fence });
+        if (!atKeys) { Assert.False(replying.IsCompleted); revoke(); h.Gate.DoneTyping(); }
+        var result = await replying.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(AnswerOutcome.Stale, result.Outcome);
+        Assert.Equal(0, h.Replies);
+        Assert.Equal(0, h.Clears);
+        if (change == "kill") { Assert.True(HostSettings.CurrentAgentMessaging(h.Folder).RemoteEnabled); Assert.False(kill.On); }
+    }
 
     [Theory]
     [InlineData("unfinished draft")]
@@ -224,6 +257,8 @@ public sealed class ReplyClearTests
         readonly SessionSource source;
         readonly string events;
         public readonly ReplyService Replier;
+        public readonly DeliveryGate Gate = new();
+        public string Folder => f.Root;
         public readonly List<string> Log = [];
         public string Draft = "unfinished draft";
         public bool Shell, Stuck, Unresponsive;
@@ -236,7 +271,7 @@ public sealed class ReplyClearTests
             Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
             f.Processes.Run(AgentKind.Copilot, 100);
             source = f.Source();
-            Replier = new ReplyService(new DeliveryGate(), source, f.Processes, this, this, this, new ReplyOptions
+            Replier = new ReplyService(Gate, source, f.Processes, this, this, this, new ReplyOptions
             {
                 CopilotHome = f.CopilotHome, PlatformSupported = true, PreRead = false,
                 ConfirmTimeout = TimeSpan.FromSeconds(1), PollInterval = TimeSpan.FromMilliseconds(10),

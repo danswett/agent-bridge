@@ -18,7 +18,7 @@ public sealed class LiteLaunchLog : ILiteLaunches
     readonly string? path;
     readonly P256KeyPair? key;
     readonly Action<string> log;
-    sealed record Entry(string Permissions, SessionProcess Process);
+    internal sealed record Entry(string Permissions, SessionProcess Process);
 
     public LiteLaunchLog(Func<string, SessionProcess?> process, string? folder = null, P256KeyPair? key = null, Action<string>? log = null)
     {
@@ -59,9 +59,11 @@ public sealed class LiteLaunchLog : ILiteLaunches
         }
     }
 
-    public string? PermissionsOf(string session)
+    public string? PermissionsOf(string session) => Capture(session)?.Permissions;
+
+    internal Entry? Capture(string session)
     {
-        lock (gate) { Prune(); return entries.GetValueOrDefault(session)?.Permissions; }
+        lock (gate) { Prune(); return entries.GetValueOrDefault(session); }
     }
 
     public void Prune()
@@ -103,7 +105,7 @@ public sealed class LiteLaunchLog : ILiteLaunches
             }
             File.Move(temp, path, overwrite: true);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or CryptographicException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or CryptographicException or System.Security.SecurityException)
         { entries.Clear(); log("lite launch record could not be saved; no recorded session is a reply target"); }
         finally
         {

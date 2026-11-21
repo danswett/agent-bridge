@@ -91,7 +91,7 @@ Receiver refusals, in the order they are checked:
 | `notReplyTarget` | the target is not a session this host can type into |
 | `busy` | the target is not idle, or the duplicate memory is full |
 | `composerNotEmpty` | someone has typed in the target's input box; nothing was typed |
-| `noSuchSession` | the target session does not exist, or the target is a node id that no live session or more than one maps to, or discovery is held |
+| `noSuchSession` | the target session does not exist, or the target is a node id that no live session or more than one maps to, or discovery is held. A fresh Copilot session with no `events.jsonl` yet also fails closed at the typing fence (including a full id); retry after its first transcript event |
 
 What the sender gets, and what the messenger does:
 
@@ -114,7 +114,7 @@ Run on staging, then production, with two approved machines first and the other 
 - [ ] A fresh install has the mode on only when signed in with a present same-account peer; signed out it sends and receives nothing; after a kill it stays off across restarts; a malformed or unreadable setting is off. A 60 KB message is refused at the cap; a one-character message is delivered.
 - [ ] The 7th message in a minute from one pair is refused as `rate` and not retried over Home Assistant; another pair is unaffected.
 - [ ] A deliberate refusal case, a host-down fallback to Home Assistant, and a coordinator and a builder session on each machine each receive a message. A host restart keeps recorded forced-ask targets; a changed pid, reused pid with another start time, or corrupt launch file refuses them. Hand-started sessions are always `notReplyTarget`.
-- [ ] Delivered text carries the prefix line. A live recorded allow-all session receives only when idle, explicit remote is on, and the existing master-plus-list grant or the owner-set all-launched switch is on. Restart preserves it; default/invalid/off preserves the list path; remote off and kill refuse everything.
+- [ ] Delivered text carries the prefix line. A live recorded allow-all session receives only when idle, explicit remote is on, and the existing master-plus-list grant or the owner-set all-launched switch is on. Restart preserves it; default/invalid/off preserves the list path. The receiver rechecks its kill switch, remote setting, grant and process generation after waiting for the shared typing slot and immediately before injection; remote off, a revoked grant or kill types nothing.
 - [ ] Fleet switch off: every messenger is back on Home Assistant within 60 seconds. Per-machine kill: that machine stops using the relay at once (it refuses with `off`) and messengers fall back to Home Assistant.
 
 ## Home Assistant retirement checklist (tick after the 24 hour soak of all four machines)
