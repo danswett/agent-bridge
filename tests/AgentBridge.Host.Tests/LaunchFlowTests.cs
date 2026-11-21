@@ -1618,6 +1618,12 @@ public abstract partial class LaunchFlowFixture
         public readonly List<int> Typed = [];
         public readonly List<KeyPlan> Plans = [];
         public int Reads;
+        public readonly List<(int Process, DateTimeOffset Created, int Columns)> Sizes = [];
+        public Task<ConsoleWidth> SizeForLaunchAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default)
+        {
+            lock (Sizes) { Sizes.Add((processId, createdAt, columns)); }
+            return Task.FromResult(new ConsoleWidth(columns, null, false));
+        }
         // What the agent does with keys that reached it (a folder-trust answer).
         public Action<KeyPlan>? OnTyped;
         public InjectionResult? Fails;

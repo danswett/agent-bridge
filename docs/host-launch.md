@@ -118,7 +118,7 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
   so the agent's console is a normal window on the person's desktop. No window title is set
   on Windows.
 * **Width.** The host's launches (Windows) open the agent's console in a normal window, shown
-  as any program started from the desktop is, and set no width. When Windows Terminal is the
+  as any program started from the desktop is. When Windows Terminal is the
   default terminal it takes the console over (tabs, scrollbars, a live title), and the person
   can type into it at the machine; otherwise the console host shows it. The width is whatever
   that window gives. #1160 made the host start every launch minimized and widen its console to
@@ -128,7 +128,17 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
   into it. That promise of 250 columns is given up. Where a form's tab bar (the console's width
   less four) is too wide for the window, Copilot draws a windowed bar and the host checks
   the labels it shows, answering the form field by field (host-answers.md, #1554).
-  The injector still has `--widen` (host-answers.md), which no launch calls.
+  Copilot launches (including Agency) now request a modest minimum of 100 columns and
+  30 visible rows through the injector's `--launch-size` mode. It grows the buffer before
+  growing the visible window, preserves larger dimensions, and verifies both afterwards.
+  One attempt runs immediately after launch and one when the host first reads the screen;
+  neither retries, including on failure. Both bind the PID to its exact creation time.
+  This may visibly enlarge a narrow window, but does not minimize it or change terminal
+  settings. A terminal or display that refuses the resize is logged; later manual resizes
+  are not overridden. Screen reads still use the full buffer width, and reply checks still
+  refuse a narrow working box or an unknown, shell or vim-normal mode
+  ([related issue](https://github.com/danswett/agent-bridge/issues/1013)).
+  The buffer-only `--widen` (host-answers.md) remains unchanged and no launch calls it.
 * **The command line**, per agent: Copilot `--session-id <id> --banner [--model]
   [--reasoning-effort] [--context] [--allow-all] [extras] [-i <prompt>]`; Agency `copilot
   [--profile-only <profile>]` then Copilot's; Claude `--session-id <id>` (`--resume <id>`)

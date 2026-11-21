@@ -59,7 +59,13 @@ public sealed class WorkerInjector : IConsoleInjector
     // agent-bridge-injector <pid> --widen <columns> <created>: one attach that types nothing and
     // makes the console's screen buffer at least that wide, only while <pid> is the process
     // created then; "width <n>" as read back, then "ok".
-    public async Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default)
+    public Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
+        SizeAsync(processId, createdAt, columns, "--widen", cancellationToken);
+
+    public Task<ConsoleWidth> SizeForLaunchAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
+        SizeAsync(processId, createdAt, columns, "--launch-size", cancellationToken);
+
+    async Task<ConsoleWidth> SizeAsync(int processId, DateTimeOffset createdAt, int columns, string mode, CancellationToken cancellationToken)
     {
         if (!File.Exists(path)) { return new ConsoleWidth(null, $"the injector is missing beside the host ({FileName})", false); }
         await One.WaitAsync(cancellationToken);
@@ -75,7 +81,7 @@ public sealed class WorkerInjector : IConsoleInjector
                 StandardOutputEncoding = Encoding.UTF8,
             };
             start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
-            start.ArgumentList.Add("--widen");
+            start.ArgumentList.Add(mode);
             start.ArgumentList.Add(columns.ToString(CultureInfo.InvariantCulture));
             start.ArgumentList.Add(createdAt.ToFileTime().ToString(CultureInfo.InvariantCulture));
             Process? process;
