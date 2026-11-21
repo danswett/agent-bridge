@@ -258,6 +258,11 @@ measured, `question.truncated` and `answerAtMachine` set: a record is read up to
 but a message is written at most 64 deep, and a default sits about ten levels into a page. A turn
 that still could not be written would be `unreadable` in its place, never the page's failure.
 
+The session seeds history with its latest 4,096 distinct delegate tool-call owners, separately
+from the live 64-call lookup. An unstamped approval can therefore keep its delegate across a
+page boundary after more than 64 later calls. Repeated call ids keep their original history
+owner and retention order; resetting the transcript clears both maps.
+
 **Reading is bounded too**, so a request costs a host a bounded amount whatever a transcript
 holds. A host reads at most 256 MiB of transcript backwards per request, finding the end of the
 last whole line included (a line still being written that is longer than that leaves nothing to

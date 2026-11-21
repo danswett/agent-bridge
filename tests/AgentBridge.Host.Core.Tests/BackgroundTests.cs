@@ -170,6 +170,49 @@ public class BackgroundTests
     }
 
     [Fact]
+    public void History_call_owners_evict_the_oldest_unique_call_and_clear_with_the_session()
+    {
+        var work = new AgentBridge.Host.Core.Parsing.BackgroundWork();
+        for (var i = 0; i < 4096; i++) { work.RememberCall($"call-{i}", $"agent-{i % 2}"); }
+        var seed = work.CallOwners();
+        Assert.Equal(4096, seed.Count);
+
+        work.RememberCall("call-0", "other-agent");
+        Assert.Equal("agent-0", work.CallOwners()["call-0"]);
+        work.RememberCall("call-4096", "agent-0");
+        var owners = work.CallOwners();
+        Assert.Equal(4096, owners.Count);
+        Assert.False(owners.ContainsKey("call-0"));
+        Assert.Equal("agent-1", owners["call-1"]);
+        Assert.Equal("agent-0", owners["call-4096"]);
+        Assert.Equal("agent-0", seed["call-0"]);
+
+        work.Clear();
+        Assert.Empty(work.CallOwners());
+        Assert.Null(work.CallAgent("call-4096"));
+        Assert.Equal(0, work.Tracked);
+        work.RememberCall("fresh-call", "fresh-agent");
+        Assert.Equal("fresh-agent", Assert.Single(work.CallOwners()).Value);
+    }
+
+    [Theory]
+    [InlineData(65)]
+    [InlineData(4096)]
+    public void History_call_owners_outlive_live_tracking_until_the_history_bound(int calls)
+    {
+        var work = new AgentBridge.Host.Core.Parsing.BackgroundWork();
+        for (var i = 0; i < calls; i++) { work.RememberCall($"call-{i}", $"agent-{i % 2}"); }
+
+        var owners = work.CallOwners();
+        Assert.Equal(calls, owners.Count);
+        Assert.Equal("agent-0", owners["call-0"]);
+        Assert.Equal(64, work.Tracked);
+        Assert.Null(work.CallAgent($"call-{calls - 65}"));
+        Assert.All(Enumerable.Range(calls - 64, 64),
+            i => Assert.Equal($"agent-{i % 2}", work.CallAgent($"call-{i}")));
+    }
+
+    [Fact]
     public async Task An_agent_idle_notification_alone_also_ends_a_run()
     {
         await using var s = new Session_();
