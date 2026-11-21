@@ -39,6 +39,14 @@ static partial class SelfTest
         return null;
     }
 
+    // Failure text only: reflection keeps RowShift uninstrumented, and a renamed field throws rather than reading as a default.
+    static (bool Tracked, long? Started) RowShiftStart(Motion.RowShift shifts, ListViewItem item)
+    {
+        var hidden = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var rows = (System.Collections.IDictionary)typeof(Motion.RowShift).GetField("rows", hidden)!.GetValue(shifts)!;
+        return rows[item] is { } state ? (true, (long?)state.GetType().GetField("Started", hidden)!.GetValue(state)) : (false, null);
+    }
+
     static async Task CheckRowMotion(MainWindow window, Action<bool, string> check, string outFile)
     {
         var root = (Panel)window.RootElement;
@@ -89,15 +97,29 @@ static partial class SelfTest
             initial.Progress = 0.25f;
             await CaptureFrame(root);
             check(LayoutInformation.GetLayoutSlot(neighbour) == slot, "row shift does not change the layout between frames");
+            var initialStart = RowShiftStart(shifts, neighbour);
             items.Insert(0, added);
             list.UpdateLayout();
+            var gateStart = RowShiftStart(shifts, neighbour);
             var retarget = await RowMotionController(ElementCompositionPreview.GetElementVisual(neighbour), root, check, "retarget");
             if (retarget is null) { return; }
             // A window capture blocks the UI thread, not the compositor. Sample the
             // retarget's own paused start, not an earlier picture of the first shift.
             retarget.Pause();
             retarget.Progress = 0;
-            var moving = await RowMotionSettled(root, TrackedTop, check, "retarget start");
+            var tops = new List<double>();
+            var moving = await RowMotionSettled(root, () => { var top = TrackedTop(); tops.Add(top); return top; }, check, "retarget start");
+            if (!double.IsFinite(moving))
+            {
+                var current = ElementCompositionPreview.GetElementVisual(neighbour).TryGetAnimationController("Offset");
+                var shift = Motion.Catalogue.Enter("Shift", true).Duration;
+                var gateElapsed = initialStart.Started is { } start && gateStart.Started is { } end ? System.Diagnostics.Stopwatch.GetElapsedTime(start, end) : (TimeSpan?)null;
+                var gate = gateElapsed is not { } elapsed ? "unknown (row untracked or unstamped)" : gateStart == initialStart ? "not reached (start stamp unchanged)" : elapsed < shift ? "inferred explicit" : "inferred implicit only";
+                check(false, $"retarget start diagnosis: initial start to retarget layout {gateElapsed?.TotalMilliseconds.ToString("0") ?? "unknown"}ms vs Shift {shift.TotalMilliseconds:0}ms, to now {(initialStart.Started is { } since ? System.Diagnostics.Stopwatch.GetElapsedTime(since).TotalMilliseconds.ToString("0") : "unknown")}ms; "
+                    + $"explicit-retarget gate {gate} from RowShift start stamps (branch not observed); restamped after retarget layout={RowShiftStart(shifts, neighbour) != gateStart}; "
+                    + $"Offset controllers compared as managed wrappers, not native ids: retarget is initial={ReferenceEquals(retarget, initial)}, current is retarget={ReferenceEquals(current, retarget)}, current is initial={ReferenceEquals(current, initial)}; "
+                    + $"progress initial={initial.Progress} retarget={retarget.Progress} current={current?.Progress.ToString() ?? "none"}; last TrackedTop [{string.Join(", ", tops.TakeLast(8))}]");
+            }
             if (!double.IsFinite(moving)) { return; }
             check(moving > slot.Y + 1 && moving < original, $"row neighbour is mid-shift ({original}, {moving}, {slot.Y})");
             var target = original;
