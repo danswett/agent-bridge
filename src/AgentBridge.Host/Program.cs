@@ -756,6 +756,9 @@ async Task<int> ServeAsync(HostHandover handover)
         log: Log);
     var fleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder);
     var hostRoster = new HostRosterReader(HostRosterPinWriter.PinPath(identity.Folder), HostRoster.Now);
+    RelayClient? pinRelay = null;
+    var samePcPin = new SamePcPinHandoff(identity.Folder, () => identity.Account?.AccountId,
+        ct => Volatile.Read(ref pinRelay) is { } r ? r.GetRosterAsync(ct) : throw new InvalidOperationException("not connected"), hostRoster, HostRoster.Now, mode: () => settings.Security.Roster);
     var rosterObserve = new HostRosterObserve(hostRoster, () => settings.Security.Roster, HostRoster.Now, Log);
     var fleetTrust = new AgentBridge.Host.Fleet.FleetTrust(hostRoster, identity.Folder, () => identity.Account?.AccountId);
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
@@ -937,7 +940,7 @@ async Task<int> ServeAsync(HostHandover handover)
             using var http = new HttpClient();
             return await SignIn.DeviceFlowAsync(http, relay, show, ct);
         },
-        SignedIn = (result, relay) =>
+        SignedIn = (result, relay) => samePcPin.AccountChanged(() =>
         {
             // Before anything says the new account: other machines' readings kept for the one before
             // are never served under it, even while the relay reconnects.
@@ -952,7 +955,7 @@ async Task<int> ServeAsync(HostHandover handover)
             // Whatever connection there is belongs to the account before; start over.
             connection?.Cancel();
             wake.Release();
-        },
+        }),
         Stop = () => stop.Cancel(),
         PrepareStop = PrepareStop,
         Restart = RestartHost,
@@ -971,7 +974,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
     var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit, samePcPin: samePcPin), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
@@ -1067,6 +1070,7 @@ async Task<int> ServeAsync(HostHandover handover)
                 catch (OperationCanceledException) { }
             });
             fleetRoster.Attach(relay);
+            Volatile.Write(ref pinRelay, relay);
             usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);
             escapedApprovals.Attach(relay);
@@ -1127,6 +1131,7 @@ async Task<int> ServeAsync(HostHandover handover)
             transfers.Attach(null, null);
             liteLink.Attach(null, null);
             fleetRoster.Attach(null);
+            Volatile.Write(ref pinRelay, null);
             usagePeers?.Attach(null, null);
             trustAnswers.Attach(null);
             escapedApprovals.Attach(null);
@@ -1153,13 +1158,19 @@ async Task<int> ServeAsync(HostHandover handover)
         {
             try { if (await wake.WaitAsync(TimeSpan.FromSeconds(5), stop.Token)) { return true; } }
             catch (OperationCanceledException) { return false; }
-            if (identity.ReloadAccount())
+            lock (samePcPin.AccountGate)
             {
-                peerUsage?.Bind(identity.Account!.AccountId);
-                signedInRelay = SavedRelay(identity) ?? signedInRelay;
-                PublishCredential();
-                Log($"signed in as {identity.Account!.Login} by another process");
-                return true;
+                if (identity.ReloadAccount())
+                {
+                    samePcPin.AccountChanged(() =>
+                    {
+                        peerUsage?.Bind(identity.Account!.AccountId);
+                        signedInRelay = SavedRelay(identity) ?? signedInRelay;
+                        PublishCredential();
+                        Log($"signed in as {identity.Account!.Login} by another process");
+                    });
+                    return true;
+                }
             }
         }
     }

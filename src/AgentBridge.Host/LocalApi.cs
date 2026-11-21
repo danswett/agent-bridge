@@ -18,10 +18,10 @@ public static class LocalApi
     // What an agent's hello offers: reading only.
     static readonly HashSet<string> AgentCapabilities = [Capabilities.SessionsRead, UsageProtocol.Capability];
 
-    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null,     AgentAuditLog? audit = null, TimeProvider? auditTime = null, AgentPipeLaunch? agentLaunch = null) =>
-            Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch);
+    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null,     AgentAuditLog? audit = null, TimeProvider? auditTime = null,     AgentPipeLaunch? agentLaunch = null, SamePcPinHandoff? samePcPin = null) =>
+                Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin);
 
-    static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch) => async (channel, op, data) =>
+        static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin) => async (channel, op, data) =>
     {
         if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
         {
@@ -47,6 +47,14 @@ public static class LocalApi
             if (channel is not LocalChannel || caller.Kind != CallerKind.App || credentials?.Of(channel) is not null)
             { throw Refuse(op, caller, "only the local app may read or change workspace fleet workers", log); }
             return control.WorkspaceFleetWorkers(data);
+        }
+        if (op == SamePcPinProtocol.Op)
+        {
+            // Ruling item 3 (#3450): the person's signed-in app on this machine, never an agent, script, CLI or relay peer.
+            var caller = callers.Classify(channel, fresh: true);
+            if (samePcPin is null || channel is not LocalChannel || caller.Kind != CallerKind.App || credentials?.Of(channel) is not null)
+            { throw Refuse(op, caller, "only the signed-in app on this machine may hand this host its roster root", log); }
+            return await samePcPin.HandleAsync(data, CancellationToken.None);
         }
         if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet")
         { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }

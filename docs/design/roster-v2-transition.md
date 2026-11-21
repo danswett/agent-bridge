@@ -76,10 +76,17 @@ Only then may the host verify and persist the person's transition command,
 and only after that commit may it evaluate its own v2 add. A prefix pin alone
 never means "enrolled": the host stays pending until its complete verified roster
 contains the matching, person's approved v2 add. Engineering must rule on this
-bootstrap sequencing before the enrollment cut; no automatic pin creation is granted.
+bootstrap sequencing before the enrollment cut; Engineering ruled (Nov 20, 13:30 PT,
+[relay trust](https://github.com/danswett/agent-bridge/issues/3450)) that only the signed-in app on
+the same machine or a person's approve gesture may supply that genesis.
 The fleet-operator explicit local action is `agent-bridge-host roster-pin set` (#3450, owner
 Nov 20, 13:21 PT; [runbook](../runbooks/roster-pin.md)); it pins only a v3 genesis whose person
 descriptor carries capSign (owner 13:36 PT; refuses until K1's parser is wired) and enables nothing.
+The same-PC path is `host.roster.pin` on the local pipe, from a freshly classified App caller
+without agent or script credentials. Its device must be active, a person's and past probation
+in its verified roster. Account replacement invalidates pending handoffs; the final account
+check and pin commit share the replacement gate. Success populates the serving reader immediately,
+without a restart. Existing pins are never replaced, re-read or advanced; the capSign gate still applies.
 
 ## Proposed command and capability precondition
 
