@@ -166,9 +166,9 @@ public sealed class AgentAuditLog
         }
     }
 
-    public (bool Intact, bool LegacyPrefix) Verify(bool launch = false)
+    public (bool Intact, bool LegacyPrefix) Verify(bool launch = false, bool readOnly = false)
     {
-        lock (gate) { return VerifyProfile(profile, launch, log, synchronize: true); }
+        lock (gate) { return VerifyProfile(profile, launch, log, synchronize: !readOnly); }
     }
 
     internal bool Bootstrap()
