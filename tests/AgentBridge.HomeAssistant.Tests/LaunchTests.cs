@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Launch;
 using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
@@ -52,7 +53,7 @@ public sealed class LaunchTests : IDisposable
 
     readonly SessionDrivers drivers = new();
 
-    HaConnector Connector(bool launches = true) => new(new HaConnectorOptions
+    HaConnector Connector(bool launches = true, LaunchRequestStore? requests = null, string? problem = null) => new(new HaConnectorOptions
     {
         MachineName = Machine,
         Version = "0.1.0",
@@ -72,7 +73,7 @@ public sealed class LaunchTests : IDisposable
                 Session = "6f000000-0000-4000-8000-0000000000aa",
                 Launched = new LaunchedWith { Agent = r.Agent ?? "copilot", Workspace = r.Workspace ?? "agent-bridge", Resume = r.Resume, Profile = r.Profile, Model = r.Model, Permissions = r.Permissions ?? LaunchProtocol.Ask },
             });
-        }) : null);
+        }) { Requests = requests, RequestsProblem = problem } : null);
 
     async Task Pass(HaConnector c, double seconds = 1)
     {
@@ -82,9 +83,9 @@ public sealed class LaunchTests : IDisposable
 
     // Published, pinned once the pin delay has passed, and its selectors driven to their
     // defaults on a later pass, well before the card would next be refreshed.
-    async Task<HaConnector> Ready()
+    async Task<HaConnector> Ready(LaunchRequestStore? requests = null, string? problem = null)
     {
-        var c = Connector();
+        var c = Connector(requests: requests, problem: problem);
         await Pass(c);
         await Pass(c, 2);
         await Pass(c, 6);
@@ -764,5 +765,127 @@ public sealed class LaunchTests : IDisposable
         var global = JsonNode.Parse(ha.Retained[HaContract.GlobalAttributesTopic(Slug)])!;
         Assert.False(global["capabilities"]!["newSession"]!.GetValue<bool>());
         Assert.Equal(0, global["capabilities"]!["launchRequest"]!.GetValue<int>());
+    }
+
+    // The host's record of launch requests (#2743), in this test's folder, on the connector's clock.
+    LaunchRequestStore Store()
+    {
+        Directory.CreateDirectory(folder);
+        var (store, problem) = LaunchRequestStore.Open(folder, time);
+        Assert.Null(problem);
+        return store!;
+    }
+
+    JsonArray Recent() => JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray();
+
+    async Task Request(HaConnector c, string id, string text = "build it", JsonObject? settings = null)
+    {
+        ha.Now = ha.Now.AddSeconds(11);
+        Payload(new JsonObject { ["text"] = text, ["request"] = id, ["settings"] = settings });
+        await Launch(c, AgentUser);
+    }
+
+    [Fact]
+    public async Task A_served_id_is_not_launched_again_after_a_restart_even_when_home_assistant_no_longer_lists_it()
+    {
+        var first = await Ready(Store());
+        await Request(first, "req-0101-abcd");
+        await first.DisposeAsync();
+        ha.Seed(HaContract.LaunchOutcomeTopic(Slug), """{"recent":[]}""");
+
+        await using var c = await Ready(Store());
+        await Request(c, "req-0101-abcd");
+
+        Assert.Single(launched);
+        Assert.Equal(("req-0101-abcd", "started"), (Outcome()["request"]!.GetValue<string>(), Outcome()["outcome"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_second_press_of_the_same_id_reports_the_stored_outcome_and_launches_once()
+    {
+        await using var c = await Ready(Store());
+        await Request(c, "req-0102-abcd");
+        await Request(c, "req-0102-abcd");
+
+        Assert.Equal("build it", Assert.Single(launched).Prompt);
+        Assert.Single(Recent());
+        Assert.Equal(("started", "6f000000-0000-4000-8000-0000000000aa"), (Outcome()["outcome"]!.GetValue<string>(), Outcome()["session"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task The_same_id_with_different_text_is_refused_as_a_conflict()
+    {
+        await using var c = await Ready(Store());
+        await Request(c, "req-0103-abcd", "one");
+        await Request(c, "req-0103-abcd", "two");
+
+        Assert.Equal("one", Assert.Single(launched).Prompt);
+        Assert.Equal("refused", Outcome()["outcome"]!.GetValue<string>());
+        Assert.Contains("used already for a different launch", Outcome()["note"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_outcome_older_than_five_entries_is_still_published_within_fifteen_minutes()
+    {
+        await using var c = await Ready(Store());
+        for (var i = 0; i < 7; i++) { await Request(c, $"req-01{10 + i}-abcd"); }
+        Assert.Equal(7, Recent().Count);
+
+        time.Advance(TimeSpan.FromMinutes(14));
+        ha.Now = ha.Now.AddMinutes(14);
+        await Request(c, "req-0120-abcd");
+        Assert.Contains("req-0110-abcd", Recent().Select(o => o!["request"]!.GetValue<string>()));
+
+        time.Advance(TimeSpan.FromMinutes(2));
+        ha.Now = ha.Now.AddMinutes(2);
+        await Request(c, "req-0121-abcd");
+        Assert.Equal(["req-0121-abcd", "req-0120-abcd"], Recent().Select(o => o!["request"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task The_published_outcomes_stop_at_twenty_and_under_the_sensors_attribute_size()
+    {
+        await using var c = await Ready(Store());
+        for (var i = 0; i < 22; i++) { await Request(c, $"req-{i:D4}-many", settings: new JsonObject { ["workspace"] = "nowhere" }); }
+        Assert.Equal(HaContract.LaunchOutcomesPublished, Recent().Count);
+
+        for (var i = 0; i < 6; i++) { await Request(c, $"req-{i:D4}-wide", settings: new JsonObject { ["workspace"] = new string('w', 3000) }); }
+        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)]), 3000, 16384);
+        Assert.Equal("req-0005-wide", Outcome()["request"]!.GetValue<string>());
+        Assert.Empty(launched);
+    }
+
+    [Fact]
+    public async Task A_request_left_launching_or_queued_by_a_restart_is_unconfirmed_and_not_launched_again()
+    {
+        var before = Store();
+        before.Enqueue("req-0130-abcd", "{}");
+        before.Begin("req-0130-abcd");
+        before.Enqueue("req-0131-abcd", "{}");
+
+        await using var c = await Ready(Store());
+        Assert.Equal(["unconfirmed", "unconfirmed"], Recent().Select(o => o!["outcome"]!.GetValue<string>()));
+        await Request(c, "req-0130-abcd");
+        await Request(c, "req-0131-abcd");
+
+        Assert.Empty(launched);
+    }
+
+    [Fact]
+    public async Task A_damaged_record_refuses_request_launches_and_says_why_while_a_persons_press_still_launches()
+    {
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, LaunchRequestStore.FileName), "{");
+        var (store, problem) = LaunchRequestStore.Open(folder, time);
+        await using var c = await Ready(store, problem);
+        await Request(c, "req-0140-abcd");
+
+        Assert.Empty(launched);
+        Assert.Equal("refused", Outcome()["outcome"]!.GetValue<string>());
+        Assert.Contains(LaunchRequestStore.FileName, Outcome()["note"]!.GetValue<string>(), StringComparison.Ordinal);
+        lock (log) { Assert.Contains(log, l => l.Contains(problem!, StringComparison.Ordinal)); }
+
+        await Launch(c);
+        Assert.Null(Assert.Single(launched).Prompt);
     }
 }

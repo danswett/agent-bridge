@@ -14,7 +14,7 @@ async function longSession(page, browserName) {
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 2 });
   }
-  await page.goto('?demo=1&static=1&signin=1&name=BUILD-1#/sessions');
+  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
   await page.waitForSelector('html[data-demo-ready]');
   await page.evaluate((turnCount) => {
     const at = new Date().toISOString();

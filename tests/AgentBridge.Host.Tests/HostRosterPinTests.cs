@@ -46,6 +46,25 @@ public sealed class HostRosterPinTests : IDisposable
     }
 
     [Fact]
+    public void A_pin_written_while_serving_is_used_by_the_next_verify_without_a_restart()
+    {
+        var path = HostRosterPinWriter.PinPath(folder);
+        try
+        {
+            var reader = new HostRosterReader(path, () => w.Now);
+            Assert.Contains("unpinned", reader.Update(null, RosterFixture.Account).Reasons);
+            Assert.Null(reader.Pinned(RosterFixture.Account));
+            var typed = PersonGenesis.FromFingerprint(HostRosterPinWriter.Fingerprint(w.Entry("G").Hash));
+            // The fixture genesis is v1; stand in K1's v3 (capSign) predicate as the writer's own tests do.
+            Assert.Equal("pinned", HostRosterPinWriter.Write(path, typed, Relay("G", "B"), RosterFixture.Account, () => w.Now, _ => true));
+            Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
+            Assert.NotNull(reader.Verified);
+            Assert.Same(reader.Verified, reader.Pinned(RosterFixture.Account));
+        }
+        finally { Directory.Delete(Path.GetDirectoryName(path)!, recursive: true); }
+    }
+
+    [Fact]
     public async Task A_pinned_roster_with_the_switch_off_neither_signs_nor_supplies_registry_authority()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -79,27 +98,22 @@ public sealed class HostRosterPinTests : IDisposable
         Assert.Same(reader.Verified, new FleetTrust(reader, folder, () => RosterFixture.Account).Membership());
     }
 
-    // #3245 review: only a pin that is genuinely absent lets unverified rows through. A pin this
-    // host can't use must not widen the fleet list to every machine.
     [Fact]
-    public void An_unreadable_other_account_or_unverified_pin_lets_no_machine_into_the_fleet_list()
+    public void A_pin_that_cannot_supply_verified_membership_refuses_fleet_reads_instead_of_passing_every_host()
     {
-        w.Add("H", "G", "H", "B", kind: "host");
-        var row = JsonSerializer.SerializeToElement(new { machine = w.Id("H"), online = true, record = new { sessions = Array.Empty<object>() } });
-        int Listed(HostRosterReader reader, string? account) =>
-            new RelayFleetRoster(new FleetTrust(reader, folder, () => account).Membership).Read([row]).Count;
-
-        Assert.Equal(1, Listed(new HostRosterReader(PathName, () => w.Now), RosterFixture.Account));
         Pin();
         var reader = new HostRosterReader(PathName, () => w.Now);
-        Assert.Equal(0, Listed(reader, RosterFixture.Account));
-        Assert.Equal("verified", reader.Update(Relay("G", "B", "H"), RosterFixture.Account).Outcome);
-        Assert.Equal(1, Listed(reader, RosterFixture.Account));
-        Assert.Equal(0, Listed(reader, "another-account"));
-        Assert.Equal(0, Listed(reader, null));
+        var before = new FleetTrust(reader, folder, () => RosterFixture.Account);
+        Assert.Contains("refused", Assert.Throws<InvalidOperationException>(() => before.Membership()).Message);
+        Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
+        Assert.Same(reader.Verified, before.Membership());
+        Assert.Throws<InvalidOperationException>(() => new FleetTrust(reader, folder, () => "another-account").Membership());
+        Assert.Throws<InvalidOperationException>(() => new FleetTrust(reader, folder, () => null).Membership());
+
         File.Delete(PathName);
-        Write("{}");
-        Assert.Equal(0, Listed(new HostRosterReader(PathName, () => w.Now), RosterFixture.Account));
+        Write("{broken");
+        var unreadable = new FleetTrust(new HostRosterReader(PathName, () => w.Now), folder, () => RosterFixture.Account);
+        Assert.Throws<InvalidOperationException>(() => unreadable.Membership());
     }
 
     [Fact]
@@ -146,6 +160,96 @@ public sealed class HostRosterPinTests : IDisposable
         Assert.Same(verified, reader.Verified);
         Assert.True(reader.Verified!.Serving.ContainsKey(w.Id("B")));
     }
+
+    // security.roster on connect (#3450, brief 181); a completed `closed` stops after the first pass.
+    async Task<List<string>> Connect(HostRosterReader reader, string mode, Func<RelayRoster?> relay, List<string>? log = null)
+    {
+        log ??= [];
+        await new HostRosterObserve(reader, () => mode, () => w.Now, log.Add)
+            .ConnectedAsync(_ => Task.FromResult(relay()), RosterFixture.Account, Task.CompletedTask, default);
+        return log;
+    }
+
+    [Fact]
+    public async Task Off_never_feeds_the_pinned_reader_and_logs_todays_report()
+    {
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "off", () => Relay("G", "B"));
+        Assert.Null(reader.Verified);
+        Assert.Throws<InvalidOperationException>(() => reader.Pinned(RosterFixture.Account));
+        Assert.Equal("device roster (security.roster off): " + HostRoster.Verify(Relay("G", "B"), RosterFixture.Account, () => w.Now).Summary, Assert.Single(log));
+    }
+
+    [Fact]
+    public async Task Observe_feeds_a_matching_pinned_chain_so_pinned_lists_the_serving_host_and_the_pin_is_unchanged()
+    {
+        Pin();
+        var before = File.ReadAllBytes(PathName);
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "observe", () => Relay("G", "B"));
+        Assert.True(reader.Pinned(RosterFixture.Account)!.Serving.ContainsKey(w.Id("B")));
+        Assert.Equal("device roster (security.roster observe): verified", Assert.Single(log));
+        Assert.Equal(before, File.ReadAllBytes(PathName));
+    }
+
+    [Fact]
+    public async Task Observe_without_a_pin_keeps_the_unpinned_answer_and_creates_no_pin()
+    {
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "observe", () => Relay("G", "B"));
+        Assert.Null(reader.Pinned(RosterFixture.Account));
+        Assert.Null(reader.Verified);
+        Assert.False(File.Exists(PathName));
+        Assert.Equal("device roster (security.roster observe): unpinned", Assert.Single(log));
+    }
+
+    [Fact]
+    public async Task Observe_refuses_an_unverifiable_snapshot_or_a_failed_fetch()
+    {
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "observe", () => new RelayRoster("observe", w.GenerationId, ["not an entry"]));
+        await Connect(reader, "observe", () => throw new IOException("relay connection ended"), log);
+        Assert.Throws<InvalidOperationException>(() => reader.Pinned(RosterFixture.Account));
+        Assert.Equal(["device roster (security.roster observe): pin-mismatch", "device roster (security.roster observe): unavailable"], log);
+    }
+
+    [Fact]
+    public async Task Observe_refuses_a_relay_serving_another_accounts_roster()
+    {
+        Pin();
+        var other = new World { AccountId = "someone-else@example" };
+        other.Genesis();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "observe", () => new RelayRoster("observe", other.GenerationId, [other.Entry("G").Canonical()]));
+        Assert.Throws<InvalidOperationException>(() => reader.Pinned(RosterFixture.Account));
+        Assert.Equal("device roster (security.roster observe): pin-mismatch", Assert.Single(log));
+    }
+
+    [Fact]
+    public async Task Observe_logs_one_line_per_state_change_and_no_roster_contents()
+    {
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = new List<string>();
+        var observe = new HostRosterObserve(reader, () => "observe", () => w.Now, log.Add);
+        foreach (var _ in Enumerable.Range(0, 3))
+        {
+            await observe.ConnectedAsync(_ => Task.FromResult<RelayRoster?>(Relay("G", "B")), RosterFixture.Account, Task.CompletedTask, default);
+        }
+        Assert.Equal("device roster (security.roster observe): verified", Assert.Single(log));
+        Assert.DoesNotContain(log, l => l.Contains(Convert.ToHexString(w.Entry("B").Hash)[..12], StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(0, 0.5, 5.0)]
+    [InlineData(0, 0.0, 4.0)]
+    [InlineData(0, 1.0, 6.0)]
+    [InlineData(1, 0.5, 10.0)]
+    [InlineData(9, 0.5, 40.0)]
+    public void Observe_refetches_about_every_five_minutes_with_jitter_and_backs_off_on_failure(int failures, double random, double minutes) =>
+        Assert.Equal(TimeSpan.FromMinutes(minutes), HostRosterObserve.Next(failures, random));
 
     [Fact]
     public void Repeated_sync_does_not_restart_the_verifiers_probation_clock()

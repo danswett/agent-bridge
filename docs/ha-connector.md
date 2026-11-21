@@ -582,10 +582,25 @@ FIFO, at most 16 per session, and is acked `queued` (a rid already waiting is re
 `duplicate: true`). A 17th is refused with `queue full`, never replacing one already waiting. The
 activity sensor shows `reply_queue_count`. A question that is replaced or cleared keeps what agents
 had already sent to it. Once no question is open, waiting messages go through the normal reply
-delivery, oldest first, one at a time, ahead of anything sent after. There is **no durable
-persistence**: a host restart drops the queue (the count shows 0 again, and nothing waiting is
-delivered), and so does the session ending; a session back under the same id starts empty. Senders
-that see `queued` and then a count that drops without their rid being acked `delivered` send again.
+delivery, oldest first, one at a time, ahead of anything sent after. Each queued message is also kept
+in the `DurableInbox` at `ha-reply-inbox.json`, next to `ha-connector.json` in the host identity folder
+(the directory of `HaConnectorOptions.StateFile`; no state file, no inbox), under the session's node
+([#2780](https://github.com/danswett/agent-bridge/issues/2780) slice a). A message is queued only once the inbox
+has kept it: when it cannot be written (or the node's 100 or the inbox's 1000 entries are taken) the message
+is refused with `reply inbox unavailable` and never typed (fail closed). A message is marked delivered in the
+inbox once its delivery is taken, so a host restart no longer drops waiting messages: after a restart the
+oldest undelivered one is read back ahead of anything new, then the next once that one is taken, oldest first.
+`reply_queue_count` and the 16-message cap count only messages read back so far. A rid still waiting after a
+restart is a duplicate acked `queued`; one delivered before the restart is a duplicate acked `unconfirmed`, and
+one already delivered since this start is refused. With no question open, a rid the inbox marked delivered before this
+start is also a duplicate acked `unconfirmed` and never typed again (an unreadable inbox leaves that check to the rids
+remembered in memory). A delivery mark the inbox could not take is retried on later passes, ahead of the next message
+read back ([#3359](https://github.com/danswett/agent-bridge/issues/3359)). The session ending still discards its queue (each entry is
+marked delivered); a discard the inbox could not take is retried on later passes and before the same id reads anything
+back, so a session returning under that id never receives the ended one's messages. A session that ended while the host was down leaves its entries in the file (counting toward
+the 1000), and they are delivered if a session returns under that id. A crash after a message was typed but before it was marked types it again after the
+restart. The `reply_ack` protocol (slice b) and the end-to-end restart proof across roster and relay (slice c)
+are separate. Senders that see `queued` and then a count that drops without their rid being acked `delivered` send again.
 An agent's own Send press is not taken as the owner's confirmation, by count: while an agent
 message still owes its press, the next new Send press is taken as the agent's, and a press read when the payload
 cannot be read is too (fail closed). A mixed watched stamp remains uncertain even if REST still
@@ -598,9 +613,23 @@ confirms the form as it then stands. Another limit: messages overwritten before 
 or a read observes them cannot be counted; their extra Send presses cannot be distinguished from
 the owner's. An unreadable closing boundary is retained until its split payload completes or is
 replaced by a newer complete publish. Both split orders are tracked against the previously
-observed payload, so a lagging snapshot cannot end that uncertainty.
+observed payload, so a lagging snapshot cannot end that uncertainty. When neither half was seen
+before, a complete payload that Home Assistant wrote after the split snapshot (its `last_updated`) ends it too,
+and a watched split at the same stamp never hides the complete payload a read returns: that one is queued
+([#3224](https://github.com/danswett/agent-bridge/issues/3224)). Such a split owes a Send for each of its two
+publishes, not only its state's, so neither agent press can become the owner's once it completes
+([#3296](https://github.com/danswett/agent-bridge/pull/3296)). A split whose attributes carry no stamp missed no
+publish: its own stamp written complete later ends it ([#3298](https://github.com/danswett/agent-bridge/issues/3298)).
+A press taken as the agent's only because no payload
+could be read is matched to that payload once it is read, if the press came at or after the payload changed
+(both on Home Assistant's clock; for a split's attributes, when the snapshot was last updated): the payload then owes no further press. The latest 64 Send presses per session
+are remembered; a press at or before the newest forgotten one is never classified again, so it is never the owner's
+and never spends an agent message's debt. The latest 64 owed Sends are remembered by stamp; older debts are kept
+as a count, still each taking a press as the agent's, but a later read can no longer settle them, so the owner may
+have to press again ([#3356](https://github.com/danswett/agent-bridge/issues/3356)).
 
-**Durable inbox foundation.** `DurableInbox` is an internal, not-yet-connected store: it
+**Durable inbox foundation.** `DurableInbox` is an internal store, connected only to the question-time queue
+above (#2780 slice a); the paragraph below describes the store itself: it
 atomically saves per-node FIFO entries and their delivered timestamps for process restart,
 and returns the original entry on a matching rid retry, even if a retry is restamped. It keeps
 at most 100 entries per node and 1000 total; when full, it prunes the oldest delivered entries
@@ -611,10 +640,9 @@ For #2780 integration, deduplication lasts only while that metadata is retained 
 delivered rid is accepted as new and may be delivered again; this is not permanent deduplication.
 Load and save remove this inbox's GUID-named crash-leftover temporary files under its lock,
 so obsolete copies cannot retain payloads after a later delivery.
-Power-loss durability is not established. It does not change the live reply path, publish acks,
-or provide native receipt. A later slice must provide an access-controlled storage directory,
-one dispatcher per node (a peek does not reserve a message), and reconcile the crash window
-between typing and recording delivery before enabling it.
+Power-loss durability is not established. Beyond that queue it does not change the live reply path,
+publish acks, or provide native receipt. Slice a stores it in the host identity folder and drains each node only
+from that session's reply pass; the crash window between typing and recording delivery remains (see above).
 
 **`tools/agents/reply-session.ps1`** is the in-repo sender. It posts the payload with a rid, waits
 for the reply sensor to show its own stamp (there is one slot per node, so rapid sends can overwrite
@@ -745,6 +773,17 @@ card keeps while it asks (`Get-DaemonCardSummary`).
 * What the button holds when the connector first reads it is not a press; a session asking a
   question can be ended like any other.
 
+The graceful budget covers typing admission and `/exit`; a blocked typing slot or provisional
+departure exclusion skips typing and forces termination, while a committing or committed departure
+answers Busy. While any failed injector worker (this stop's or an earlier delivery's) is not proven
+exited, a stop never terminates or reports ended: it returns Failed and keeps the PID handle, and its
+own typing fence, until the worker's exit is proven, and for good if it never can be.
+
+Pre-Ending hypotheses for [2910](https://github.com/danswett/agent-bridge/issues/2910),
+not established incident causes:
+* HA: disabled/read-only connector, baselined/busy press, confirmation timing or dispatch failure.
+* Host: press not received, unknown process, confirmation, audit refusal or delivery conflict.
+
 Where stage 4 knowingly differs from the daemon:
 
 | Difference | Why |
@@ -791,11 +830,19 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   PowerShell compares them, and the host is given the offered spelling; permissions alone must
   be exact. Its outcome (`starting`, then `started`,
   `refused`, `busy`, `failed` or `unconfirmed`, with the session id and what was launched) is
-  kept with the four before it, newest first, on `new_session_result`'s `recent`, which is what
-  the bridge's MCP `launch_agent_session` reads. A request published after the press waits for
+  published newest first on `new_session_result`'s `recent`, which is what the bridge's MCP
+  `launch_agent_session` reads. The host keeps each request in its launch request store
+  (`launch-requests.json` in the host profile folder, #3237): `recent` lists every request it
+  still holds (finished ones for 15 minutes), up to 20 entries and 15,000 bytes so the attribute
+  stays under Home Assistant's 16 KiB recorder limit. Without a store (tests, other callers) it
+  keeps the newest five, as before. A request published after the press waits for
   its own; one more than 60 s older than the press is skipped, words and all, and the press
-  launches from the card; an id not matching `^[A-Za-z0-9-]{8,64}$` is refused; one already
-  served is never served again; and one that reached the machine more than five minutes after
+  launches from the card; an id not matching `^[A-Za-z0-9-]{8,64}$` is refused; one the store
+  already holds is never launched again, whatever its state, and a second press reports its
+  stored outcome; the same id with different text or settings is refused as a conflict, the
+  first request standing; when the store cannot be read or written, request launches are refused
+  with that reason (and a log line) rather than launched without dedupe, while a person's press
+  still launches; and one that reached the machine more than five minutes after
   its press is refused rather than started late. An agent's second press within 10 s of the one
   that took a request launches nothing (the daemon's guard against two presses for one request).
   A press whose prompt payload cannot be read waits for the next pass rather than launching from
@@ -819,10 +866,16 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   press meanwhile launches nothing, and a request hears `busy`, even when the launch finished
   before the press was read: the card still said `Starting...` when it was made.
 * **A restart**, or taking the machine back after agent-ha-bridge had it, reads the outcomes back
-  before taking any press: what Home Assistant holds is the newest account, the requests it
-  names are not served again, the history agents read carries on, and one left at `starting`
-  (other than the connector's own launch still under way) is reported `unconfirmed` rather than
-  launched a second time.
+  before taking any press: the launch request store is the account (Home Assistant's `recent`
+  only adds notes and what was launched), so a served request is not served again even when
+  Home Assistant no longer lists it; requests Home Assistant names that the store does not are
+  not served again either; the history agents read carries on, and one left at `starting`,
+  queued or launching (other than the connector's own launch still under way) is reported
+  `unconfirmed` rather than launched a second time.
+* **One payload slot per machine.** The prompt payload is still a single retained slot, so two
+  coordinators writing it before the press can overwrite each other before the host reads it;
+  the store cannot see a request it never read. A pipe operation that bypasses the slot
+  (#3237, a later slice) removes that.
 * What the button holds when the connector first reads it is not a press, and the note is
   cleared after ten minutes, as the daemon clears it. A note that cannot be shown does not stop
   the launch it describes.
@@ -984,7 +1037,19 @@ device.
   it is never taken for GitHub, which would be another channel. A press of Check that finds
   nothing newer says `current`, `Checked just now; <version> is the latest release.` for ten
   minutes, until a check finds a newer one. A press while a check is already under way gets a
-  check of its own once that one is done, so "just now" is never an earlier check's answer.
+  check of its own once that one is done, so "just now" is never an earlier check's answer;
+  if Install starts meanwhile and is still running, the queued press instead reports why it
+  was not checked. A press first revalidates the release list kept for background checks (#3441): the CDN's
+  copy may be most of an hour old, so a press asks GitHub (conditionally, on a list GitHub gave),
+  and uses the CDN's only while GitHub is rate-limited. If that pressed request fails for a
+  non-limit reason (such as a 500 or network failure), a still-fresh kept list that passes the
+  same channel, age and GitHub-revalidation rules as a background check answers instead,
+  without extending its freshness or starting a backoff for other profiles. The discovery log
+  says that the pressed request failed and the kept list answered; without an eligible list,
+  the failure still backs off. A real 403/429 limit still holds subsequent GitHub requests and
+  may use a validated CDN list within the logged grace window. Every press ends with a host log line,
+  `update check pressed:` and the newer release, `no newer release`, `failed: <why>`, or why
+  an update under way answers instead.
 * **Install.** A press shows `checking` at once (`in_progress`, the spinner), then looks for the
   newest release again, downloads it (`downloading` with `update_percentage`), records the
   attempt in the connector's state file (an attempt that cannot be recorded is not handed
@@ -1550,6 +1615,14 @@ hex characters, checks the local JWT shape (not validity), then warns about the 
 three-rejection budget (the real HA ban count is unknown). Only an explicit `yes` stores it
 and authorizes one attempt; a rejection stops it until consent is given again, even after
 restart. Neither this command nor a declined prompt contacts HA; malformed input changes nothing.
+
+If the masked prompt receives zero characters, it reports "Nothing was entered (0 characters)"
+instead of a JWT-format error. In PowerShell, the installed host can also read a pasted token
+without requiring its executable on PATH:
+
+```powershell
+Get-Clipboard | & "$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe" ha token set
+```
 
 ## Troubleshooting
 

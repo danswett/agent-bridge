@@ -14,7 +14,7 @@ import { h } from './dom.js';
 import { glyph } from './glyph.js';
 import { whileVisible } from './ticker.js';
 import { copyText } from '../markdown.js';
-import { AGENT_NAME, RESOLVED_SHOWN_MS, SIGN_IN, clockTime, confirming, flowExpired, needsSignIn, plainText, readCode, readDone, readStartResult, spelled } from '../auth-state.js';
+import { AGENT_NAME, RESOLVED_SHOWN_MS, SIGNED_IN_HOLD_MS, SIGN_IN, clockTime, confirming, flowExpired, needsSignIn, plainText, readCode, readDone, readStartResult, spelled } from '../auth-state.js';
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const uuid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -25,6 +25,9 @@ const TITLE_MAX = 120;
 // A banner's drawing: rebuilt when this changes, so a needed banner's button never lingers.
 const viewState = (b) => (b.state === 'needed' ? 'needed' : b.state === 'confirming' ? 'confirming' : 'resolved');
 const keyOf = (hostId, agent, account) => `${hostId}\n${agent}\n${account ?? ''}`;
+// A done signedIn this device keeps for SIGNED_IN_HOLD_MS (#902), and one that has lapsed.
+const signedInHold = (f) => f?.state === 'done' && f.outcome === 'signedIn';
+const holdLapsed = (f, now) => signedInHold(f) && Number.isFinite(f.at) && now - f.at >= SIGNED_IN_HOLD_MS;
 
 // What the banners show, from every machine shown. Pure, so each case is tested on its own.
 // links: [{ hostId, name, rollUp: hello.machine.signIn, sessions: [session], canSignIn }]
@@ -74,7 +77,7 @@ export function signInBanners(links, { flows = new Map(), resolved = new Map(), 
     }
     for (const g of groups.values()) {
       live.add(g.key);
-      const flow = flows.get(g.key) ?? null;
+      const flow = holdLapsed(flows.get(g.key), now) ? null : flows.get(g.key) ?? null;
       const code = flow?.code && !flow.code.refused && flowExpired(flow.code, now) ? null : flow?.code ?? null;
       const expired = !!flow?.code && !flow.code.refused && !code;
       const waiting = !g.needed.length && g.confirming.length > 0 && !['starting', 'pending'].includes(flow?.state);
@@ -87,6 +90,8 @@ export function signInBanners(links, { flows = new Map(), resolved = new Map(), 
         machine: name || 'this machine',
         account: g.account,
         state: waiting ? 'confirming' : 'needed',
+        // Signed in here, the host not yet saying pending: worded and said as confirming (#902).
+        held: !waiting && signedInHold(flow),
         // An agent's title, revealed and at most a line long (as a host's sentence): a hidden or bidi
         // character can't reorder the banner, nor a long one stretch it (#979). Each opens by its id.
         sessions: shown.map((s) => ({ id: s.id, title: plainText(s.title, TITLE_MAX) ?? 'Untitled session' })),
@@ -109,7 +114,7 @@ export function signInBanners(links, { flows = new Map(), resolved = new Map(), 
 }
 
 // What a banner says, and what is read aloud when it comes or changes (ui.md §6.13): "Copilot on
-// BUILD-1 needs sign-in · @octocat" over "2 sessions affected: Fix the relay, Draft the notes".
+// DEV-VM1 needs sign-in · @octocat" over "2 sessions affected: Fix the relay, Draft the notes".
 export function bannerWords(b) {
   const who = `${b.agentName} on ${b.machine}`;
   const acct = b.account ? ` \u00b7 @${b.account}` : '';
@@ -118,7 +123,7 @@ export function bannerWords(b) {
     return { head: `${who}${acct}`, line, said: `${who}: ${line}` };
   }
   if (b.state === 'recovered') { return { head: `${who}${acct}`, line: 'Recovered by itself', said: `${who} recovered by itself` }; }
-  if (b.state === 'confirming') {
+  if (b.state === 'confirming' || b.held) {
     const line = `Signed in \u00b7 waiting for ${plural(b.sessions.length, 'session', 'sessions')} to confirm`;
     return { head: `${who}${acct}`, line, said: `${who}: ${line}` };
   }
@@ -144,7 +149,7 @@ function stateLine(b) {
 const affected = (b) => `${plural(b.sessions.length, 'session', 'sessions')} affected${b.sessions.length ? ': ' : ''}`;
 
 // Whether the banner's line names its sessions: a needed banner with nothing else to say.
-const listsSessions = (b) => b.state === 'needed' && b.sessions.length > 0 && stateLine(b) === null;
+const listsSessions = (b) => b.state === 'needed' && !b.held && b.sessions.length > 0 && stateLine(b) === null;
 
 // What is said aloud as a banner changes, once each (§9.1 A6): every way an attempt can end, as the
 // banner or the sheet shows it, so none passes unsaid. Never the machine's own words, nor the code.
@@ -153,6 +158,7 @@ const SAID_KEEP_MS = 10000;
 export function bannerSaid(b) {
   const who = `${b.agentName} on ${b.machine}`;
   if (b.state !== 'needed') { return { state: b.state, words: bannerWords(b).said }; }
+  if (b.held) { return { state: 'confirming', words: bannerWords(b).said }; }
   const f = b.flow;
   if (b.atMachine) { return { state: 'machine', words: `${who} needs sign-in at the machine` }; }
   if (f?.outcome === 'failed') { return { state: 'failed', words: `Sign-in failed for ${who}` }; }
@@ -168,6 +174,7 @@ export function bannerVerb(b) {
   if (!b.canSignIn) { return null; }
   const f = b.flow;
   if (f && (f.state === 'starting' || f.state === 'pending') && !f.expired) { return null; }
+  if (b.held) { return 'Sign in'; }
   if (f?.expired || ['failed', 'refused', 'expired'].includes(f?.outcome)) { return 'Try again'; }
   if (b.recovery === 'signingIn') { return 'Show code'; }
   return 'Sign in';
@@ -268,7 +275,9 @@ export class SignInBanners {
     // Code lifetime still ends out of sight, without an idle periodic sweep.
     clearTimeout(this.#expiryTimer);
     const expires = [...this.#flows.values()].map((f) => f.code?.expiresAt)
-      .concat(this.#early.map((e) => e.read.expiresAt)).map((at) => Date.parse(at ?? '')).filter((at) => at > now);
+      .concat(this.#early.map((e) => e.read.expiresAt)).map((at) => Date.parse(at ?? ''))
+      // A signed-in hold ends on its deadline, not at the next sweep (#902).
+      .concat([...this.#flows.values()].filter(signedInHold).map((f) => f.at + SIGNED_IN_HOLD_MS)).filter((at) => at > now);
     if (expires.length) { this.#expiryTimer = setTimeout(() => this.render(), Math.min(2147483647, Math.min(...expires) - now)); }
     const banners = signInBanners(links, { flows: this.#flows, resolved: this.#resolved, now });
     // A banner that went without a press here: its sessions no longer need sign-in, so it
@@ -299,8 +308,11 @@ export class SignInBanners {
       this.#signedHere.delete(k);
       if (cleared.length) { this.#resolve(b, here ? 'signedIn' : 'recovered', cleared.length); }
     }
-    // An ended flow whose banner has gone keeps nothing.
-    for (const [k, f] of [...this.#flows]) { if (f.state === 'done' && !live.has(k)) { this.#flows.delete(k); } }
+    // An ended flow whose banner has gone keeps nothing; nor does a hold that has lapsed or whose
+    // banner the host now says is confirming (#902).
+    for (const [k, f] of [...this.#flows]) {
+      if (f.state === 'done' && (!live.has(k) || holdLapsed(f, now) || (signedInHold(f) && banners.some((b) => b.key === k && b.state === 'confirming')))) { this.#flows.delete(k); }
+    }
     const all = signInBanners(links, { flows: this.#flows, resolved: this.#resolved, now });
     let prev = null;
     const keep = new Set();
@@ -502,8 +514,10 @@ export class SignInBanners {
       if (done.outcome === 'signedIn') {
         // Signing in isn't recovery (ui.md §6.13): the banner and rows follow the host, which says
         // pending (waiting for the session to confirm) and clears the sessions only once the model
-        // answers. All this device keeps is that a person here signed in.
-        this.#flows.delete(key);
+        // answers. All this device keeps is that a person here signed in, and for a moment
+        // (SIGNED_IN_HOLD_MS) the banner's words, so it never flips to Show code before the host's
+        // pending lands (#902).
+        this.#flows.set(key, { state: 'done', flow: null, outcome: 'signedIn', code: null, at: this.now() });
         this.#signedHere.set(key, this.now());
         this.#closeSheet(key);
         // Focus to the banner's line, never back to Sign in: the host's pending may come after this,
@@ -682,6 +696,11 @@ export class SignInBanners {
       els.dialog = h('dialog', { class: 'sign-in-sheet', 'aria-labelledby': 'sign-in-sheet-title' }, els.title, els.body, h('div', { class: 'sign-in-sheet-actions' }, els.cancel));
       // Escape is Cancel.
       els.dialog.addEventListener('cancel', (e) => { e.preventDefault(); this.#cancel(this.#sheet?.key); });
+      els.dialog.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.defaultPrevented || !this.#sheet?.cancelDefault || e.target?.closest?.('button')) { return; }
+        e.preventDefault();
+        this.#cancel(this.#sheet.key);
+      });
       globalThis.document.body.append(els.dialog);
       this.#sheet = { els, key: null, opener: null, shape: null };
     }
@@ -727,6 +746,8 @@ export class SignInBanners {
     const shape = `${kind}\n${b.canSignIn}`;
     s.els.title.textContent = `Sign in to ${subject}`;
     s.els.cancel.setAttribute('aria-label', `Cancel sign-in for ${subject}`);
+    s.cancelDefault = kind === 'refused' || kind === 'expired';
+    s.els.cancel.classList.toggle('secondary', !s.cancelDefault);
     if (s.shape === shape) { return; }
     s.shape = shape;
     const retry = b.canSignIn ? [this.#retryButton(subject)] : [];
@@ -758,13 +779,15 @@ export class SignInBanners {
     } else {
       parts = [h('p', { class: 'sign-in-starting' }, `Starting ${b.agentName}\u2019s sign-in on ${b.machine}\u2026`)];
     }
+    const restoreCancel = s.cancelDefault && s.els.body.contains(document.activeElement);
     s.els.body.replaceChildren(...parts);
+    if (restoreCancel) { s.els.cancel.focus({ preventScroll: true }); }
   }
 
   // Try again, in the sheet: a new request, the one before cancelled at the machine.
   #retryButton(subject) {
     return h('div', { class: 'sign-in-flow-actions' },
-      h('button', { type: 'button', class: 'button sign-in-retry', 'aria-label': `Try again to sign in to ${subject}`, onclick: (e) => this.#retry(e.detail > 0) }, 'Try again'));
+      h('button', { type: 'button', class: 'button secondary sign-in-retry', 'aria-label': `Try again to sign in to ${subject}`, onclick: (e) => this.#retry(e.detail > 0) }, 'Try again'));
   }
 
   // The flow before is cancelled at the machine first, and only then a new request sent, so the new

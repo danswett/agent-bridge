@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Protocol;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed class ReplyClearTests
@@ -28,6 +29,35 @@ public sealed class ReplyClearTests
         Assert.Equal(result, await h.Replier.ReplyAsync(request));
         Assert.Equal(1, h.Clears);
         Assert.DoesNotContain(h.Log, line => line.Contains("unfinished draft", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("unfinished draft")]
+    [InlineData("  unfinished draft  ")]
+    public async Task A_clear_with_slow_empty_reads_uses_the_test_clock_not_the_runners_wall_time(string draft)
+    {
+        var clock = new ClearClock();
+        await using var h = await Harness.Create(clock);
+        h.Draft = draft;
+        h.DelayedEmpty = 2;
+        var waiting = clock.NextTimer();
+        var replying = h.Replier.ReplyAsync(h.Request());
+        await waiting.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.False(replying.IsCompleted);
+
+        waiting = clock.NextTimer();
+        clock.Advance(TimeSpan.FromMilliseconds(1100));
+        await waiting.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(1, h.EmptyReads);
+        Assert.Equal(0, h.Replies);
+        clock.Advance(TimeSpan.FromMilliseconds(50));
+
+        var result = await replying.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
+        Assert.Equal(draft, result.Cleared?.Text);
+        Assert.Equal(1, h.Clears);
+        Assert.Equal(1, h.Replies);
+        Assert.Equal(2, h.EmptyReads);
     }
 
     [Theory]
@@ -174,9 +204,23 @@ public sealed class ReplyClearTests
         Assert.Equal(1, h.Replies);
     }
 
+    // As ReplyFlowTests.ReplyClock does, wait for a registered timer before advancing it.
+    sealed class ClearClock : FakeTimeProvider
+    {
+        TaskCompletionSource? next;
+        public Task NextTimer() => (next = new(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            Interlocked.Exchange(ref next, null)?.TrySetResult();
+            return timer;
+        }
+    }
+
     sealed class Harness : IConsoleInjector, IAgentHaBridgeProbe, ITargetGuard, IAsyncDisposable
     {
         readonly Fixture f = new();
+        readonly PollClock? polling;
         readonly SessionSource source;
         readonly string events;
         public readonly ReplyService Replier;
@@ -186,7 +230,7 @@ public sealed class ReplyClearTests
         public int Clears, Replies, EmptyReads, DelayedEmpty;
         public Action? BeforeKeys;
         public Func<Task>? AfterClear;
-        Harness()
+        Harness(TimeProvider? time)
         {
             events = f.CopilotSession(Id, 100);
             Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
@@ -196,11 +240,12 @@ public sealed class ReplyClearTests
             {
                 CopilotHome = f.CopilotHome, PlatformSupported = true, PreRead = false,
                 ConfirmTimeout = TimeSpan.FromSeconds(1), PollInterval = TimeSpan.FromMilliseconds(10),
+                Time = time ?? (polling = new PollClock()),
             }, Log.Add);
         }
-        public static async Task<Harness> Create()
+        public static async Task<Harness> Create(TimeProvider? time = null)
         {
-            var h = new Harness();
+            var h = new Harness(time);
             await h.source.RefreshAsync();
             return h;
         }
@@ -258,6 +303,11 @@ public sealed class ReplyClearTests
         }
         public string? Active() => null;
         public string? Refuse(int processId) => null;
-        public async ValueTask DisposeAsync() { await source.DisposeAsync(); f.Dispose(); }
+        public async ValueTask DisposeAsync()
+        {
+            if (polling is not null) await polling.DisposeAsync();
+            await source.DisposeAsync();
+            f.Dispose();
+        }
     }
 }

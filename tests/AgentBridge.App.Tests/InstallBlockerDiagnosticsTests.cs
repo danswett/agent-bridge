@@ -51,6 +51,17 @@ public sealed class InstallBlockerDiagnosticsTests : IDisposable
     string? Probe() => InstallBlockers.Find(root,
         () => Directory.EnumerateFiles(Path.Combine(root, "current"), "*", SearchOption.AllDirectories).ToList(), Query);
 
+    [Fact]
+    public void The_in_place_install_is_given_every_file_held_from_outside_and_none_of_the_apps_own()
+    {
+        var dac = Hold("mscordaccore.dll", new(External, 1, "Connected User Experiences and Telemetry", "DiagTrack", null));
+        var pri = Hold("resources.pri", new(External, 1, "unidentified", "", null));
+        File.WriteAllText(Path.Combine(root, "current", "free.dll"), "free");
+        Assert.Equal(new[] { dac, pri }, InstallBlockers.HeldFiles(root, Query).Order());
+        unreadable = true;
+        Assert.Throws<UnauthorizedAccessException>(() => InstallBlockers.HeldFiles(root, Query));
+    }
+
     public void Dispose()
     {
         foreach (var handle in locks) { handle.Dispose(); }
@@ -79,7 +90,7 @@ public sealed class InstallBlockerDiagnosticsTests : IDisposable
         Assert.Contains("blocked-runtime.dll", Probe()!, StringComparison.Ordinal);
         holders.Clear();
         foreach (var handle in locks) { handle.Dispose(); }
-        var blockers = await InstallationFiles.AwaitReleaseAsync(Probe, new FakeTimeProvider(), default)
+        var blockers = await InstallationFiles.AwaitReleaseAsync(_ => Probe(), new FakeTimeProvider(), default)
             .WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Null(blockers);
         File.WriteAllText(file, "replacement");
@@ -134,6 +145,26 @@ public sealed class InstallBlockerDiagnosticsTests : IDisposable
         vanishing = Hold("second.dll", new(External + 1, 1, "second holder", "", Path.Combine(Path.GetTempPath(), "external", "second.exe")));
         vanishThrows = true;
         var blockers = InstallBlockers.Find(root, () => [vanishing, confirmed], Query);
+        Assert.Equal(InstallationFiles.Unknown, blockers);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void A_scan_cancelled_by_quit_or_its_deadline_makes_no_further_query_and_names_no_file(int queriesBeforeCancel)
+    {
+        Hold("blocked-runtime.dll");
+        Hold("resources.pri");
+        using var stop = new CancellationTokenSource();
+        if (queriesBeforeCancel == 0) { stop.Cancel(); }
+        var made = 0;
+        var blockers = InstallBlockers.Find(root,
+            () => Directory.EnumerateFiles(Path.Combine(root, "current"), "*", SearchOption.AllDirectories).ToList(), files =>
+            {
+                if (++made == queriesBeforeCancel) { stop.Cancel(); }
+                return Query(files);
+            }, stop.Token);
+        Assert.Equal(queriesBeforeCancel, made);
         Assert.Equal(InstallationFiles.Unknown, blockers);
     }
 }

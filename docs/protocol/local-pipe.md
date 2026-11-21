@@ -234,6 +234,14 @@ is among the caller's ancestors. Anything else is refused, and a token presented
 session is logged as `credential presented from outside its session`. `AGENT_BRIDGE_SESSION` is
 never proof. The reply is `{ "principal": "agent:<machine>/<session>", "scope": "read" }`.
 
+A script credential (`kind` `script`) refuses an agent in its caller's ancestry. Unbound, it needs
+that ancestry read in full, so a scheduled task (SYSTEM service host) is refused. Minted with
+`--task`, it needs the Scheduler-reported engine of a running instance of that task (same pid and
+start) among the ancestors, read in full up to it, and the task and files unchanged and writable
+only elevated; that chain is read again at `agent.hello`, not taken from connect
+([design/script-credentials.md §6](../design/script-credentials.md#6-limits-and-what-holds-them), rule 3).
+Until the Windows Scheduler reader and `--task` land, every bound credential is refused.
+
 This is a safety rail, not a boundary: a same-user process that spoofs its parent or joins the
 session's Job object gets through (design/agent-principals.md §3.4). A new credential for a
 session replaces its old one, so a resumed session's old token is dead. This slice only proves who
@@ -388,6 +396,8 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `manage.*` | any | Refused to every caller, the app included: `managing a machine from another device goes through the relay; on this machine, use the app's Settings`. Managing a machine from another device ([v1-sessions.md](v1-sessions.md#managing-a-machine)) is through the relay only, so the #67 guard on `host.restart` and `host.stop` gains no way around it |
 | `host.update.report` | `{ "state": UpdateState, "taken"?: [request], "carriesUpdateNow"?: bool }`: what the app's updater is doing, the presses in `updateAsks` it has taken on, and whether it can carry out an Update now (#1159; absent from an older app, whose machine then offers none, `updateNowWhy` `old-app`) ([v1-update.md](v1-update.md)) | `{ "ok": true }`. The host serves the state to the account's other devices (`update.*`) until the app's connection closes, then says the app is not running, and drops the presses taken from `updateAsks`. `canUpdateNow`, `updateNowWhy`, `updateNowAt` and `busy` are the host's own, and dropped from what the app reports. Refused to anything but the app: `only the Slipgates app beside this host reports its updates, and takes other devices' presses of Install` |
 | `host.update.depart` | `{ "request": UUID }`: an Update now's press (#1159) the app is carrying, its download checked and its probe hold over | `{ "outcome": "committed" \| "waiting" \| "refused", "code"?, "transition"? }` ([v1-update.md](v1-update.md#going-the-lease-and-the-departure), step 3). The host takes #805's quiet lease as purpose `Update`, compares what is busy with what the person confirmed, announces and commits: `committed` (the host refuses new deliveries until it exits; the app then stops it with `host.stop` and installs), `waiting` (`code` is `turn-running`, `question-waiting` or `unknown`; the app keeps the download for the next quiet moment) or `refused` (`code` says why; the host serves on). An unknown outcome reads as `refused`. A request that isn't a UUID is an error. This is #870's departure step, wired minimally until that lane lands it. Refused to anything but the app, as `host.update.report` is; an older host answers `unknown op`, and the press ends refused |
+| `host.enroll.describe` | none | `{ "device"?: object, "refusal"?: string }`: this host's enrollment descriptor for an approve gesture ([devices.md](devices.md#host-descriptor-foundation-2289)), a v1 host while host-sign v2 is off, opening the profile's one 5-minute attempt; or a closed refusal code (`attempt-already-open`, `account`, `signed-out`, ...). Writes no pin. Refused to anything but the app; never reached through the relay |
+| `host.enroll.status` | none | `{ "state": "not-enrolled" \| "pending" \| "enrolled" }` for the open attempt. Refused to anything but the app |
 
 `HostStatus`:
 

@@ -69,6 +69,9 @@ public sealed class HostControlOptions
     public LifecycleCoordinator? Lifecycle { get; init; }
     public AgentVerificationService? AgentVerification { get; init; }
     public AgentCliSignInService? AgentSignIn { get; init; }
+    // Approve-gesture enrollment's descriptor and attempt state (HostEnrollment), app-only on the pipe.
+    public Func<(string? Descriptor, string? Refusal)>? EnrollDescribe { get; init; }
+    public Func<string>? EnrollStatus { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -269,6 +272,11 @@ public sealed class HostControl
                     ?? throw new ArgumentException($"{HostOps.UpdateDepart} needs the press's request"));
             case HostOps.ProbeHold:
                 return options.HoldProbes() is { } why ? new ProbeHoldResult(true, why) : new ProbeHoldResult(false);
+            case HostOps.EnrollDescribe when options.EnrollDescribe is not null:
+                var (descriptor, refusal) = options.EnrollDescribe();
+                return new { device = descriptor is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(descriptor), refusal };
+            case HostOps.EnrollStatus when options.EnrollStatus is not null:
+                return new { state = options.EnrollStatus() };
             default:
                 return null;
         }

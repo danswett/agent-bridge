@@ -2,6 +2,7 @@
 // C# library's codes (Invalid in src/AgentBridge.Roster/RosterVerifier.cs).
 export const INVALID = Object.freeze({
   version: 'version',
+  // A hostSign or capSign key that is, or is made by this add the same as, another device's key.
   hostKey: 'host-key',
   parent: 'parent',
   account: 'account',

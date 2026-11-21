@@ -18,7 +18,8 @@ public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSes
 
 public sealed record FleetSession(string Node, string? Name, string State, DateTimeOffset Since, string? Id = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model = null,
-    [property: JsonIgnore] SessionEvidence? Evidence = null);
+    [property: JsonIgnore] SessionEvidence? Evidence = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SessionId = null);
 
 public interface IFleetRoster
 {
@@ -34,54 +35,43 @@ public interface IScopedFleetRoster : IFleetRoster
 
 // Reads the registry over the host's relay connection, which is the host's own account: the relay
 // never sends another account's machines. Once this host holds a pinned, verified device roster,
-// only that roster's serving hosts are read (#2643); a pin it can't use admits none. Only with no
-// pin at all do rows pass unverified, as before.
+// only that roster's serving hosts are read (#2643); with no pin, rows pass unverified as before.
 public sealed class RelayFleetRoster : IScopedFleetRoster
 {
     public static readonly TimeSpan CacheAge = TimeSpan.FromHours(24);
-    public static readonly TimeSpan Freshness = TimeSpan.FromSeconds(60);
     RelayClient? relay;
     readonly Func<RosterVerifier?>? signedRoster;
     readonly TimeProvider clock;
     readonly Dictionary<string, (FleetMachine Machine, long Seen)> cache = new(StringComparer.Ordinal);
 
-    readonly Func<RelayClient, CancellationToken, Task>? refreshRoster;
-
-    // refresh re-reads the signed device roster before each lookup, so who counts as a fleet host
-    // is never older than the lookup itself (#2643).
-    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null, Func<RelayClient, CancellationToken, Task>? refresh = null)
+    public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null)
     {
         signedRoster = verifiedRoster;
         clock = time ?? TimeProvider.System;
-        refreshRoster = refresh;
     }
 
     // design/fleet-session-registry.md "Offline machines and the cache": a machine's last accepted
     // rows stay, offline and stale, until it leaves the signed roster or the relay's lists, or for
-    // CacheAge. Within an epoch seq never falls (a jump is just a newer whole snapshot); a new epoch
-    // needs a later `at`. A refused record leaves the last accepted rows stale. The relay requires
-    // epoch, seq and at, so a record without them never replaces an ordered one, which would leave
-    // nothing to refuse a later replay with. CacheAge runs on the monotonic clock: a wall-clock step
-    // must neither drop live rows early nor keep stale ones forever. An accepted record
-    // is live only while its `at` is within Freshness of this clock, either way ("Freshness and
-    // replay"): a silent host the relay still calls online goes stale, and an old replay never reads live.
+    // CacheAge, measured on the monotonic clock so a wall-clock correction cannot stretch or cut it
+    // (`at` is protocol ordering only). Within an epoch seq never falls (a jump is just a newer whole
+    // snapshot); a new epoch needs a later `at`. Once an order is cached, a record whose own order is
+    // missing or malformed is refused too, so the relay cannot erase it. A refused record leaves the
+    // last accepted rows stale.
     public IReadOnlyList<FleetMachine> Read(IEnumerable<JsonElement> frames)
     {
         lock (cache)
         {
-            var now = clock.GetUtcNow();
-            var tick = clock.GetTimestamp();
+            var now = clock.GetTimestamp();
             var machines = Parse(frames, signedRoster?.Invoke() is { } roster ? Hosts(roster) : null).ToList();
             var listed = machines.Select(m => m.Id).ToHashSet(StringComparer.Ordinal);
-            foreach (var id in cache.Keys.Where(id => !listed.Contains(id) || clock.GetElapsedTime(cache[id].Seen, tick) >= CacheAge).ToList()) { cache.Remove(id); }
+            foreach (var id in cache.Keys.Where(id => !listed.Contains(id) || clock.GetElapsedTime(cache[id].Seen, now) >= CacheAge).ToList()) { cache.Remove(id); }
             for (var i = 0; i < machines.Count; i++)
             {
                 var m = machines[i];
                 FleetMachine? held = cache.TryGetValue(m.Id, out var c) ? c.Machine : null;
-                if (m.Online && m.HasRegistryRecord && (held?.Order is not { } a || (m.Order is { } b && (a.Epoch == b.Epoch ? b.Seq >= a.Seq : b.At > a.At))))
+                if (m.Online && m.HasRegistryRecord && (held?.Order is not { } a || m.Order is { } b && (a.Epoch == b.Epoch ? b.Seq >= a.Seq : b.At > a.At)))
                 {
-                    cache[m.Id] = (m, tick);
-                    if (m.Order is { } o && (now - o.At).Duration() > Freshness) { machines[i] = m with { Online = false, Verified = false, HasRegistryRecord = false }; }
+                    cache[m.Id] = (m, now);
                 }
                 else if (held is not null)
                 {
@@ -113,12 +103,6 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     {
         var current = Volatile.Read(ref relay) ?? throw new InvalidOperationException("refused: this host isn't connected to the relay");
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
-        if (refreshRoster is not null)
-        {
-            // A roster that can't be read leaves the lookup on the one it already holds.
-            try { await refreshRoster(current, ct); }
-            catch (Exception e) when (e is not OperationCanceledException) { }
-        }
         var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
         lock (cache)
         {
@@ -154,16 +138,19 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
             {
                 hasRegistryRecord = true;
                 truncated = rec.TryGetProperty("truncated", out var tr) && tr.ValueKind == JsonValueKind.True;
-                if (rec.TryGetProperty("epoch", out var ep) && ep.ValueKind == JsonValueKind.String && rec.TryGetProperty("seq", out var sq) && sq.ValueKind == JsonValueKind.Number
-                    && sq.TryGetInt64(out var seq) && rec.TryGetProperty("at", out var at) && at.ValueKind == JsonValueKind.String && at.TryGetDateTimeOffset(out var stamp))
+                // The relay's own format (RosterFields): a 16-digit lowercase hex epoch and seq from 1.
+                if (rec.TryGetProperty("epoch", out var ep) && ep.ValueKind == JsonValueKind.String && ep.GetString() is { Length: 16 } epoch && epoch.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'))
+                    && rec.TryGetProperty("seq", out var sq) && sq.ValueKind == JsonValueKind.Number
+                    && sq.TryGetInt64(out var seq) && seq >= 1 && rec.TryGetProperty("at", out var at) && at.ValueKind == JsonValueKind.String && at.TryGetDateTimeOffset(out var stamp))
                 {
-                    order = (ep.GetString()!, seq, stamp);
+                    order = (epoch, seq, stamp);
                 }
                 foreach (var s in list.EnumerateArray())
                 {
                     sessions.Add(new FleetSession(s.GetProperty("node").GetString()!, s.TryGetProperty("name", out var n) ? n.GetString() : null,
                         s.GetProperty("state").GetString()!, s.GetProperty("since").GetDateTimeOffset(), s.TryGetProperty("id", out var sid) ? sid.GetString() : null,
-                        s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null, SessionEvidence.Read(s, futureAttention: true)));
+                        s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null, SessionEvidence.Read(s, futureAttention: true),
+                        s.TryGetProperty("sessionId", out var fullId) && fullId.ValueKind == JsonValueKind.String ? fullId.GetString() : null));
                 }
             }
             machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name, LastSeen: LastSeen(f), HasRegistryRecord: hasRegistryRecord, Order: order));
@@ -305,7 +292,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
             return new { result = "notFound", fleetScope };
         }
         // Only reachable once records can be verified (hostSign): one verified live match.
-        return new { result = "found", fleetScope, session = cands[0] };
+        return new { result = "found", fleetScope, session = cands[0] with { SessionId = FleetSessionId.ForNode(live[0].Sessions[0].SessionId, cands[0].Node) } };
     }
 
     sealed record FindMachine(string Machine,
@@ -314,7 +301,8 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
 
     sealed record FindSession(string Id, string? Node, string Machine, string State, DateTimeOffset Since, bool Online,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SessionId = null);
 
     AgentCredential Authorize(IProtocolChannel channel, string op)
     {

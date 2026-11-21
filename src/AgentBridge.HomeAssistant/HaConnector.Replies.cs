@@ -79,17 +79,74 @@ public sealed partial class HaConnector
         // their own Send press, the ones counted; and each Send press read with whether it was the agent's.
         public readonly List<HaState> Queued = [];
         public readonly List<string> AgentSends = [];
-        public (string State, string? At, string? Before)? UncertainPayload;
+        // #3356: messages whose Sends never came grew AgentSends for the session's life. Past the newest 64, the
+        // oldest keep only their debt, here: each still makes a press the agent's (fail closed), but no later read
+        // of its stamp can settle it, so an owner may have to press again, but an agent press never answers.
+        int forgottenSends;
+        public bool OwesSend => forgottenSends > 0 || AgentSends.Count > 0;
+
+        public void OweSend(string stamp)
+        {
+            AgentSends.Add(stamp);
+            if (AgentSends.Count > 64)
+            {
+                AgentSends.RemoveAt(0);
+                forgottenSends++;
+            }
+        }
+
+        // The oldest debt first, as presses come in the order their messages did.
+        public void PaySend()
+        {
+            if (forgottenSends > 0) { forgottenSends--; }
+            else { AgentSends.RemoveAt(0); }
+        }
+
+        // #2780: whether the durable inbox was read back (Restore), when, and the queued rids taken but not yet
+        // marked delivered there, oldest first.
+        public bool Restored;
+        public DateTimeOffset Since;
+        public readonly List<string> Marks = [];
+        // Updated: when Home Assistant last wrote the split snapshot, so a complete one written later ends it (#3224).
+        public (string State, string? At, string? Before, DateTimeOffset? Updated)? UncertainPayload;
         public readonly List<string> PayloadStamps = [];
         public readonly Dictionary<string, bool> Presses = new(StringComparer.Ordinal);
+        // #3224: presses taken as the agent's only because no payload could be read, owing nothing yet.
+        public readonly List<string> Unmatched = [];
+        // #3224: the most recent presses are kept; one at or before the newest forgotten is never taken anew,
+        // so a forgotten agent press read again can never become the owner's.
+        readonly Queue<(string Press, DateTimeOffset At)> pressOrder = new();
+        DateTimeOffset? forgotten;
+
+        public bool TakePress(string press, bool agent)
+        {
+            var at = DateTimeOffset.TryParse(press, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) ? parsed : (DateTimeOffset?)null;
+            if (Presses.ContainsKey(press) || at <= forgotten) { return false; }
+            Presses[press] = agent;
+            // Not a Home Assistant press stamp, so it has no place in the order: kept, never forgotten.
+            if (at is not { } when) { return true; }
+            pressOrder.Enqueue((press, when));
+            if (pressOrder.Count > 64)
+            {
+                var (gone, goneAt) = pressOrder.Dequeue();
+                Presses.Remove(gone);
+                Unmatched.Remove(gone);
+                if (!(goneAt <= forgotten)) { forgotten = goneAt; }
+            }
+            return true;
+        }
 
         public void Drop()
         {
             Queued.Clear();
             AgentSends.Clear();
+            forgottenSends = 0;
             UncertainPayload = null;
             PayloadStamps.Clear();
             Presses.Clear();
+            Unmatched.Clear();
+            pressOrder.Clear();
+            forgotten = null;
         }
         // The last acknowledgement: which rid the host delivered, published with the card's activity.
         public JsonObject? Ack;
@@ -204,7 +261,9 @@ public sealed partial class HaConnector
                 // so what is sent after that is still new once the delivery is done.
                 if (!p.Reply.Baselined) { touched.TryAdd(p.Node, []); continue; }
                 if (underWay.ContainsKey(id)) { continue; }
-                if (sweep || p.Reply.ReadAgain || p.Reply.PendingPress is not null || p.Reply.Log.Queued.Count > 0) { touched.TryAdd(p.Node, []); }
+                // #3359: so is one whose delivery mark failed, until the inbox takes it.
+                if (sweep || p.Reply.ReadAgain || p.Reply.PendingPress is not null || p.Reply.Log.Queued.Count > 0
+                    || (p.Reply.Log.Since != default && !p.Reply.Log.Restored)) { touched.TryAdd(p.Node, []); }
             }
         }
     }
@@ -454,6 +513,13 @@ public sealed partial class HaConnector
                 p.Reply.Ack = MakeAck(rid, sender, prior, duplicate: true);
                 await TransientAsync(p, "Duplicate reply dropped", [], ct);
             }
+            p.Reply.Handle(stamp);
+            return CardRead.Taken;
+        }
+        if (!queued && rid is not null && DeliveredBefore(p, rid))
+        {
+            p.Reply.Ack = MakeAck(rid, sender, "unconfirmed", duplicate: true);
+            await TransientAsync(p, "Duplicate reply dropped", [], ct);
             p.Reply.Handle(stamp);
             return CardRead.Taken;
         }

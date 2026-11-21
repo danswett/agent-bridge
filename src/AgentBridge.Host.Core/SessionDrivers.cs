@@ -97,7 +97,10 @@ public sealed partial class SessionDriver
     // By record where the parser knows it, so the same words sent by the person and by an agent are
     // two prompts.
     string? agentPrompt;
+    string? agentPromptLabel;
     bool awaitingAgentPrompt;
+    string? awaitingLabel;
+    string? armedLabel;
     string? lastMessage;
     // The words an agent's reply was sent with, where the arm knows them (Expect): only a prompt
     // that starts with them is the agent's. A prompt the person typed while it was on its way, read
@@ -152,7 +155,13 @@ public sealed partial class SessionDriver
     // one, so it never makes the prompt before it the agent's.
     public bool PromptIsAgents
     {
-        get { lock (gate) { return agentPrompt is not null && agentPrompt == lastMessage; } }
+        get => PromptSender.IsAgent;
+    }
+
+    // Display text captured with the send arm, not identity or the current driver's principal.
+    public (bool IsAgent, string? Label) PromptSender
+    {
+        get { lock (gate) { return agentPrompt is not null && agentPrompt == lastMessage ? (true, agentPromptLabel) : (false, null); } }
     }
 
     // A reply or a press of Send: shown at once, and armed for the prompt it is. With its words,
@@ -195,6 +204,7 @@ public sealed partial class SessionDriver
             wordsToCome = toCome && expected is null;
             driver = by;
             principal = by == SessionDrivers.Agent ? agentPrincipal : null;
+            armedLabel = by == SessionDrivers.Agent && pending is not null ? Limits.KeepStart(agentPrincipal, Limits.UserMessageLabel) : null;
             pendingAt = pending;
             openingPrompt = opening;
             openingResumed = resumed;
@@ -206,9 +216,9 @@ public sealed partial class SessionDriver
     }
 
     // The driver and its arm as they are, to be put back when an arm turns out to be for nothing.
-    public readonly record struct Saved(string Driver, string? Principal, DateTimeOffset? Pending, string? Expected = null, bool WordsToCome = false);
+    public readonly record struct Saved(string Driver, string? Principal, DateTimeOffset? Pending, string? Expected = null, bool WordsToCome = false, string? Label = null);
 
-    public Saved Save() { lock (gate) { return new Saved(driver, principal, pendingAt, expected, wordsToCome); } }
+    public Saved Save() { lock (gate) { return new Saved(driver, principal, pendingAt, expected, wordsToCome, armedLabel); } }
 
     public void Restore(Saved saved)
     {
@@ -216,7 +226,8 @@ public sealed partial class SessionDriver
         lock (gate)
         {
             var before = ShownLocked();
-            (driver, principal, pendingAt, expected, wordsToCome) = (saved.Driver, saved.Principal, saved.Pending, saved.Expected, saved.WordsToCome);
+            (awaitingAgentPrompt, awaitingLabel) = (false, null);
+            (driver, principal, pendingAt, expected, wordsToCome, armedLabel) = (saved.Driver, saved.Principal, saved.Pending, saved.Expected, saved.WordsToCome, saved.Label);
             generation++;
             changed = before != ShownLocked();
         }
@@ -252,6 +263,7 @@ public sealed partial class SessionDriver
                     principal = null;
                 }
                 awaitingAgentPrompt = driver == SessionDrivers.Agent;
+                awaitingLabel = armedLabel;
                 pendingAt = null;
                 openingPrompt = null;
             }
@@ -261,6 +273,7 @@ public sealed partial class SessionDriver
                 && Prompt(full, prompt) is { } next && next != lastMessage)
             {
                 awaitingAgentPrompt = driver == SessionDrivers.Agent;
+                awaitingLabel = armedLabel;
                 pendingAt = null;
             }
             else if (openingPrompt is { } opening && !(openingResumed && openingSeen is not null && Prompt(full, prompt) == openingSeen))
@@ -275,7 +288,7 @@ public sealed partial class SessionDriver
                     // is still theirs.
                     if (driver == SessionDrivers.Agent && Matches(opening, full.Activity.UserMessage))
                     {
-                        (agentPrompt, awaitingAgentPrompt) = (Prompt(full, prompt), false);
+                        (agentPrompt, agentPromptLabel, awaitingAgentPrompt) = (Prompt(full, prompt), armedLabel, false);
                     }
                     pendingAt = null;
                     openingPrompt = null;
@@ -288,7 +301,7 @@ public sealed partial class SessionDriver
             var said = Prompt(full, prompt);
             if (awaitingAgentPrompt && said is not null && said != lastMessage && Sent(full))
             {
-                (agentPrompt, awaitingAgentPrompt) = (said, false);
+                (agentPrompt, agentPromptLabel, awaitingAgentPrompt) = (said, awaitingLabel, false);
             }
             if (prompts is not null) { lastPrompts = prompts; }
             lastMessage = said;

@@ -49,6 +49,7 @@ runs:
         BROWSERS: ${{ inputs.browsers }}
         PLAYWRIGHT_APT_FORCE_FALLBACK: ${{ inputs.force-apt-fallback }}
         DEBS_CACHE_HIT: ${{ steps.debs.outputs.cache-matched-key != '' }}
+        DEBS_CACHE_EXACT_HIT: ${{ steps.debs.outputs.cache-hit }}
       run: |
         read -ra browsers <<< "$BROWSERS"
         bash "$GITHUB_ACTION_PATH/download.sh" "${browsers[@]}"

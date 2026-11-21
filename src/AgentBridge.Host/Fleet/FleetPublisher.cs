@@ -23,7 +23,8 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
 
     // Called at least every two seconds; force the first snapshot on each new connection.
     // Refusals, timeouts and cancellation propagate to the host's diagnostics owner.
-    public async Task<bool> PublishAsync(Func<JsonElement, CancellationToken, Task> put, bool share = true, bool force = false, CancellationToken ct = default)
+    public async Task<bool> PublishAsync(Func<JsonElement, CancellationToken, Task> put, bool share = true, bool force = false, CancellationToken ct = default,
+        bool relaySupportsSessionId = false)
     {
         await publishing.WaitAsync(ct);
         try
@@ -48,6 +49,7 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
                     return new
                     {
                         id, node, name = displayName is not null && FleetNames.IsValidName(displayName) ? displayName : null,
+                        sessionId = relaySupportsSessionId ? FleetSessionId.ForNode(s.Id, node) : null,
                         state = s.Status, since = s.StatusSince,
                         startedAt = source.ProcessOf(s.Id) is { Id: > 0, StartedAt: { } started }
                             ? started.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture) : null,

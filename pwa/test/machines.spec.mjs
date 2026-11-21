@@ -85,7 +85,7 @@ test('with more than one machine, every machine is shown at first: one list, new
   expect(updated).toEqual([...updated].sort().reverse());
 
   await expect(card(page, LAPTOP, 'laptop-ask-1').locator('.row-facts .machine-label')).toHaveText('Laptop');
-  await expect(card(page, SHADOW, 'shadow-ask-1').locator('.row-facts .machine-label')).toHaveText('BUILD-1 (shadow)');
+  await expect(card(page, SHADOW, 'shadow-ask-1').locator('.row-facts .machine-label')).toHaveText('DEV-VM1 (shadow)');
   await expect(card(page, 'demo', '6f1c2b7e-claude-example').locator('.row-facts .machine-label')).toHaveText('Demo machine');
   // In text colour, not Bridge: a machine's name is not a link (#214).
   expect(await card(page, LAPTOP, 'laptop-ask-1').locator('.machine-label').evaluate((e) => getComputedStyle(e).color))
@@ -678,6 +678,11 @@ test.describe('one truthful update line', () => {
   const refused = "the release feed's rate limit refused the check (rate limit exceeded; check again after 9:46 AM); checking again after 9:46 AM";
   const heldDetail = 'Checked 28 minutes ago \u00b7 checking again soon';
   const update = (page) => page.locator('#machine-list [data-device-id="demo"] .machine-update');
+  // A paused clock must deliver the demo transport's timers before an event reaches the UI.
+  const clockPoll = (page, read) => expect.poll(async () => {
+    await page.clock.runFor(1);
+    return read();
+  });
   async function show(page, change) {
     await page.clock.setFixedTime(now);
     await page.goto('?demo=1&static=1&updates=1&updateNow=1#/machines');
@@ -861,33 +866,32 @@ test.describe('one truthful update line', () => {
     await page.clock.pauseAt(new Date(now.getTime() + 60_000));
     await check.focus();
     await page.keyboard.press('Enter');
-    await page.clock.runFor(50);
-    await expect(check).toHaveText('Checking…');
+    await clockPoll(page, () => check.textContent()).toBe('Checking…');
     await expect(check).toBeFocused();
     await page.evaluate(() => window.agentBridgeDemo.setUpdate({
       ...window.agentBridgeDemo.host.update, available: '0.1.4462',
     }));
-    await page.clock.runFor(400);
-    await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4415)');
+    await page.clock.runFor(await page.evaluate(() => window.agentBridgeDemo.host.updateStepMs));
+    await clockPoll(page, () => block.locator('.machine-update-line').textContent())
+      .toBe('Update available · 0.1.4462 (running 0.1.4415)');
     await expect(check).toHaveCount(0);
     await expect(block.locator('.machine-update-now')).toBeFocused();
     expect(await page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op }) => op))).toEqual(['update.check']);
     await page.evaluate(() => window.agentBridgeDemo.setUpdate({
       ...window.agentBridgeDemo.host.update, available: null,
     }));
-    await page.clock.runFor(50);
+    await clockPoll(page, () => check.count()).toBe(1);
     await expect(check).toBeFocused();
     await page.evaluate(() => window.agentBridgeDemo.setUpdate({
       ...window.agentBridgeDemo.host.update, installer: false,
     }));
-    await page.clock.runFor(50);
-    await expect(block.getByRole('button')).toHaveCount(0);
+    await clockPoll(page, () => block.getByRole('button').count()).toBe(0);
     const machine = page.locator('#machine-list > [data-device-id="demo"]');
     await expect(machine).toBeFocused();
     await page.evaluate(() => window.agentBridgeDemo.setUpdate({
       ...window.agentBridgeDemo.host.update, checkedAt: '2026-11-10T17:00:00Z',
     }));
-    await page.clock.runFor(50);
+    await clockPoll(page, () => block.locator('.machine-update-detail').textContent()).toBe('Checked 40 min ago');
     await expect(machine).toBeFocused();
   });
 
@@ -966,16 +970,15 @@ test.describe('one truthful update line', () => {
       await expect(block.locator('.glyph')).toHaveCount(1);
       await page.clock.pauseAt(new Date(now.getTime() + 60_000));
       await check.click();
-      await page.clock.runFor(50);
-      await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
-      await expect(block.locator('.machine-update-line')).toHaveText('Checking…');
+      await clockPoll(page, () => block.locator('.machine-update-line').textContent()).toBe('Checking…');
+      expect(await page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
       await expect(block.getByRole('button', { name: 'Checking… on Demo machine', exact: true })).toBeDisabled();
       await expect(block.locator('.machine-update-actions .glyph')).toHaveCount(1);
       await page.evaluate(() => window.agentBridgeDemo.setUpdate({
         ...window.agentBridgeDemo.host.update, phase: 'idle', available: '0.1.4462', current: '0.1.4384',
       }));
-      await page.clock.runFor(50);
-      await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4384)');
+      await clockPoll(page, () => block.locator('.machine-update-line').textContent())
+        .toBe('Update available · 0.1.4462 (running 0.1.4384)');
       const text = block.locator('.machine-update-line > span:last-child');
       const normalSize = await text.evaluate((e) => parseFloat(getComputedStyle(e).fontSize));
       for (const scale of [1, 2]) {
@@ -1140,7 +1143,7 @@ test('picking one machine shows only its sessions, unlabelled, and the choice is
   // Picked on the Machines page, as well: it goes back to the sessions.
   await go(page, 'machines');
   await row(page, SHADOW).click();
-  await expect(page.locator('#sessions-h')).toHaveText('Sessions on BUILD-1 (shadow)');
+  await expect(page.locator('#sessions-h')).toHaveText('Sessions on DEV-VM1 (shadow)');
   await expect(page.locator('#session-list')).toBeVisible();
   await page.reload();
   await page.waitForSelector('html[data-demo-ready]');

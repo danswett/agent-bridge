@@ -152,7 +152,7 @@ bytes.
 
 **Display string.** `driverPrincipal` becomes `agent:<machine>/<session>`, at most 75 ASCII bytes
 (6 + 32 + 1 + 36), which fits v1-sessions.md:833's 128-byte limit. It is an identifier. What a
-person reads ("from copilot on *DESK*") is built from verified structured fields
+person reads ("from copilot on *DSWETT-HOME*") is built from verified structured fields
 (§6.1, §6.3).
 
 ### 3.2 Who gets one (decision 3)
@@ -738,7 +738,7 @@ meant as off is never read as on (host-config.md:139-141).
 | `limits.*` | integers | §5.4, §5.5 |
 | `label` | `prefix` \| `none` | Whether delivered text carries the provenance prefix (§6.4). `prefix` is forced for cross-account |
 | `links` | `[]` | Federation (§7). Must be empty in v1 |
-| `agentMessaging.remote`, `agentMessaging.allowAllTargets`, `agentMessaging.allowAllTargetSessions` | `"off"` \| `"own-account"`; `false` \| `true`; `[]` | The **temporary AP5-lite mode** (#728), in the host's `config.json`, not this policy. Owner-decided 2026-11-08 for the owner's own agents on the owner's own account only, until the signed roster (#55) lands, when it is deleted or folded into AP5. **Default: `"off"`, `false` and `[]`**; an unknown value is off. `allowAllTargets` is only a master switch: an allow-all session also needs its exact id in `allowAllTargetSessions`. Read per message, so a change needs no restart ([host-config.md](../host-config.md)) |
+| `agentMessaging.remote`, `agentMessaging.allowAllTargets`, `agentMessaging.allowAllTargetSessions` | `"off"` \| `"own-account"`; `false` \| `true`; `[]` | The **temporary AP5-lite mode** (#728), in the host's `config.json`, not this policy. Owner-decided 2026-11-08 for the owner's own agents on the owner's own account only, until the signed roster (#55) lands, when it is deleted or folded into AP5. **Default: `"own-account"` (owner decision 2026-11-19; acts only for a signed-in host with a present same-account peer, and an explicit `"off"` or any kill keeps it off), `false` and `[]`**; an unknown value is off. `allowAllTargets` is only a master switch: an allow-all session also needs its exact id in `allowAllTargetSessions`. Read per message, so a change needs no restart ([host-config.md](../host-config.md)) |
 
 **Defaults** (Q2, Q37). Decision 2 is "any session on the owner's account, subject to a
 per-machine policy". So the defaults let any session be **read** from the owner's other machines,

@@ -20,7 +20,7 @@ public sealed class ReceiptTests
     Receipt NewReceipt(bool answer = false) => new(clock, InlineDispatcher.Instance,
         (e, stalled) => e.State == DeliveryState.Done
             ? new ReceiptLine("delivered", "", null, Tone.None, ReceiptMark.Check, $"{(answer ? "Answer" : "Reply")} delivered")
-            : ReceiptWords.InFlight(answer, e, "DESK", stalled),
+            : ReceiptWords.InFlight(answer, e, "ULTRA", stalled),
         line => { drawn.Add(line.Whole); keys.Add(line.Key); }, (speech, _) => said.Add(speech));
 
     void Show(Receipt r, Func<Delivery, Delivery>? change = null)
@@ -63,7 +63,7 @@ public sealed class ReceiptTests
     public void Only_a_failure_or_a_refusal_is_announced_assertively(DeliveryState state, string? outcome, bool urgent)
     {
         var heard = new List<(string Speech, bool Urgent)>();
-        using var r = new Receipt(clock, InlineDispatcher.Instance, (e, stalled) => QuestionViewModel.Describe(e, "DESK", stalled), _ => { }, (s, u) => heard.Add((s, u)));
+        using var r = new Receipt(clock, InlineDispatcher.Instance, (e, stalled) => QuestionViewModel.Describe(e, "ULTRA", stalled), _ => { }, (s, u) => heard.Add((s, u)));
         Show(r);
         Tick(1000);
         Show(r, e => e with { Stage = DeliveryProgress.Received });
@@ -165,7 +165,7 @@ public sealed class ReceiptTests
         Tick(4599);
         Assert.Equal(("received", ""), (Key, Shown));
         Tick(1);
-        Assert.Equal("Sent · still waiting on DESK", Shown);
+        Assert.Equal("Sent · still waiting on ULTRA", Shown);
     }
 
     [Fact]
@@ -199,8 +199,8 @@ public sealed class ReceiptTests
         Assert.Equal("Still sending…", Shown);
         Tick(400);
         Show(r, e => e with { Reason = Deliveries.NotConnected });
-        Assert.Equal("Waiting for DESK · it goes when DESK is back", Shown);
-        Assert.Equal(ReceiptMark.Still, ReceiptWords.InFlight(false, entry, "DESK", false).Mark);
+        Assert.Equal("Waiting for ULTRA · it goes when ULTRA is back", Shown);
+        Assert.Equal(ReceiptMark.Still, ReceiptWords.InFlight(false, entry, "ULTRA", false).Mark);
     }
 
     [Fact]
@@ -221,7 +221,7 @@ public sealed class ReceiptTests
         }
         Tick(1000);
         Assert.Equal("Sent · still being delivered", Shown);
-        Assert.Single(drawn, d => d == "Sent · still waiting on DESK");
+        Assert.Single(drawn, d => d == "Sent · still waiting on ULTRA");
         Assert.Single(said, s => s == "Reply still being delivered");
         Assert.Equal("Reply still being delivered", said[^1]);
     }
@@ -292,7 +292,7 @@ public sealed class ReceiptTests
     {
         var ui = new HeldDispatcher();
         var heard = new List<string>();
-        using var r = new Receipt(clock, ui, (e, stalled) => QuestionViewModel.Describe(e, "DESK", stalled), _ => { }, (s, _) => heard.Add(s));
+        using var r = new Receipt(clock, ui, (e, stalled) => QuestionViewModel.Describe(e, "ULTRA", stalled), _ => { }, (s, _) => heard.Add(s));
         Show(r, e => e with { Stage = DeliveryProgress.Received });
         Tick(400);
         Assert.Single(heard);
@@ -387,12 +387,12 @@ public sealed class ReceiptTests
     public void An_unconfirmed_answer_says_check_the_conversation_and_never_to_send_it_again()
     {
         var unconfirmed = new Delivery { Key = "k", Request = "r", State = DeliveryState.Done, Outcome = "unconfirmed" };
-        Assert.Equal("Sent, but not confirmed. Check the conversation.", QuestionViewModel.Describe(unconfirmed, "DESK").Whole);
-        Assert.Equal("Sent, but not confirmed. Check the conversation. (no word from the agent)", QuestionViewModel.Describe(unconfirmed with { Reason = "no word from the agent" }, "DESK").Whole);
+        Assert.Equal("Sent, but not confirmed. Check the conversation.", QuestionViewModel.Describe(unconfirmed, "ULTRA").Whole);
+        Assert.Equal("Sent, but not confirmed. Check the conversation. (no word from the agent)", QuestionViewModel.Describe(unconfirmed with { Reason = "no word from the agent" }, "ULTRA").Whole);
         // A retry of an answer already typed (#1093): the bridge's reason only adds that this send typed nothing.
         Assert.Equal("Sent, but not confirmed. Check the conversation. (nothing was typed again: this repeats an answer already typed once)",
-            QuestionViewModel.Describe(unconfirmed with { Reason = "nothing was typed again: this repeats an answer already typed once" }, "DESK").Whole);
-        Assert.DoesNotContain("sending it again", QuestionViewModel.Room("DESK"), StringComparison.Ordinal);
+            QuestionViewModel.Describe(unconfirmed with { Reason = "nothing was typed again: this repeats an answer already typed once" }, "ULTRA").Whole);
+        Assert.DoesNotContain("sending it again", QuestionViewModel.Room("ULTRA"), StringComparison.Ordinal);
     }
 
     [Fact]

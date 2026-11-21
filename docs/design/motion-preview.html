@@ -58,14 +58,14 @@
 <div class="phone">
   <div class="screen list-screen">
     <h1>Sessions</h1>
-    <div class="tabs"><span class="on" data-tab="all">All</span><span data-tab="BUILD-1">BUILD-1</span><span data-tab="DESK">DESK</span><i class="indicator"></i></div>
+    <div class="tabs"><span class="on" data-tab="all">All</span><span data-tab="DEV-VM1">DEV-VM1</span><span data-tab="ULTRA">ULTRA</span><i class="indicator"></i></div>
     <div class="section">Sessions</div>
     <div class="list"></div>
     <div class="menu"><div>Move up</div><div>Move down</div><div>Pin</div></div>
   </div>
   <div class="screen session">
     <div class="bar"><span class="back"><svg class="icon"><use href="../../pwa/design/sprite.svg#icon-back"/></svg></span><span class="stitle">Fix relay tests</span></div>
-    <div class="smeta"><span class="g"></span><span>Idle · BUILD-1 · agent-bridge</span></div>
+    <div class="smeta"><span class="g"></span><span>Idle · DEV-VM1 · agent-bridge</span></div>
     <div class="convo">
       <div>
         <div class="label">Main agent · 2m</div>
@@ -75,7 +75,7 @@
       </div>
     </div>
     <div class="reply"><span class="text">Message the main agent</span><span class="send"><svg class="icon"><use href="../../pwa/design/sprite.svg#icon-send"/></svg></span></div>
-    <div class="toast">DESK went offline</div>
+    <div class="toast">ULTRA went offline</div>
   </div>
   <div class="caption"></div>
 </div>
@@ -105,10 +105,10 @@ const $ = (s, el = document) => el.querySelector(s);
 
 const glyph = (name, role) => `<svg style="color: var(--ab-${role})"><use href="../../pwa/design/sprite.svg#glyph-${name}"/></svg>`;
 const sessions = [
-  { id: 'plan', title: 'Plan migration to the Windows app', meta: 'Working · DESK', glyph: ['working', 'active'], age: '1m', machine: 'DESK' },
-  { id: 'fix', title: 'Fix relay tests', meta: 'Idle · BUILD-1', glyph: ['idle', 'neutral'], age: '4m', machine: 'BUILD-1' },
-  { id: 'review', title: 'Review the usage page', meta: 'Delegating to 3 agents · BUILD-1', glyph: ['delegating', 'active'], age: '9m', machine: 'BUILD-1' },
-  { id: 'docs', title: 'Docs pass on ui.md', meta: 'Idle · DESK', glyph: ['idle', 'neutral'], age: '22m', machine: 'DESK' },
+  { id: 'plan', title: 'Plan migration to the Windows app', meta: 'Working · ULTRA', glyph: ['working', 'active'], age: '1m', machine: 'ULTRA' },
+  { id: 'fix', title: 'Fix relay tests', meta: 'Idle · DEV-VM1', glyph: ['idle', 'neutral'], age: '4m', machine: 'DEV-VM1' },
+  { id: 'review', title: 'Review the usage page', meta: 'Delegating to 3 agents · DEV-VM1', glyph: ['delegating', 'active'], age: '9m', machine: 'DEV-VM1' },
+  { id: 'docs', title: 'Docs pass on ui.md', meta: 'Idle · ULTRA', glyph: ['idle', 'neutral'], age: '22m', machine: 'ULTRA' },
 ];
 function rowEl(s) {
   const el = document.createElement('div');
@@ -135,7 +135,7 @@ const say = (s) => { $('.caption').textContent = s; };
 
 const steps = [
   [400, 'A session arrives · listItem', () => {
-    const el = rowEl({ id: 'hoku', title: 'Hoku tracker cleanup', meta: 'Working · BUILD-1', glyph: ['working', 'active'], age: 'now', machine: 'BUILD-1' });
+    const el = rowEl({ id: 'hoku', title: 'Hoku tracker cleanup', meta: 'Working · DEV-VM1', glyph: ['working', 'active'], age: 'now', machine: 'DEV-VM1' });
     list.prepend(el);
     anim(el, [{ opacity: 0 }, { opacity: 1 }], 'listItem');
   }],
@@ -147,11 +147,11 @@ const steps = [
     const g = $('.glyph', row('plan'));
     const old = g.firstElementChild;
     g.insertAdjacentHTML('beforeend', glyph('idle', 'neutral'));
-    $('.meta', row('plan')).textContent = 'Idle · DESK';
+    $('.meta', row('plan')).textContent = 'Idle · ULTRA';
     anim(old, [{ opacity: 1 }, { opacity: 0 }], 'glyph');
     anim(g.lastElementChild, [{ opacity: 0 }, { opacity: 1 }], 'glyph');
   }],
-  [3600, 'Machine tab · tab and selection', () => tab('BUILD-1')],
+  [3600, 'Machine tab · tab and selection', () => tab('DEV-VM1')],
   [4800, 'Machine tab · tab and selection', () => tab('all')],
   [6000, 'Alt+↑ moves one row · reorder', () => {
     const el = row('docs');

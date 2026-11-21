@@ -43,6 +43,8 @@ using AgentBridge.Transport;
 //                                               profile; it logs to <profile>\logs\host.log too
 //   agent-bridge-host whoami                    this device and the account it signed in to
 //   agent-bridge-host devices descriptor        dormant: refuses until the pinned reader is wired
+//   agent-bridge-host roster-pin set|show       pin this host to the genesis a person compared out
+//                                               of band, or read the pin back (docs/runbooks/roster-pin.md)
 //   agent-bridge-host usage                     ask each agent for its allowance once, as JSON
 //                                               (serve does it on a timer; docs/protocol/v1-usage.md)
 //   agent-bridge-host workspace list|add|remove the folders sessions may be launched in from
@@ -104,6 +106,7 @@ var isolatedRead = Flag("--read-root");
 
 if (command == "audit")
 {
+    if (arguments.ElementAtOrDefault(1) == "archive" && Refused("archive the audit log")) { return 4; }
     return AuditCommands.Run(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
 }
 
@@ -127,6 +130,23 @@ if (command == "host-sign")
     return HostSignCommands.Run(arguments, Identity.DefaultRoot,
         () => callers.Classify(ProcessChain.Read(Environment.ProcessId)),
         !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_BRIDGE_TOKEN")), Console.Out, Console.Error);
+}
+
+if (command == "roster-pin")
+{
+    if (arguments.ElementAtOrDefault(1) != "show" && Refused("pin this host's device roster", stateOnly: true)) { return 4; }
+    var callers = RosterPinCommands.Guard(() => KnownAgents.Running(new SystemProcessInspector()), () => Environment.ProcessPath);
+    // The relay only supplies the chain; the person's typed fingerprint decides (HostRosterPinWriter).
+    return await RosterPinCommands.RunAsync(arguments, Identity.DefaultRoot, () => callers.Classify(ProcessChain.Read(Environment.ProcessId)),
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_BRIDGE_TOKEN")), Console.IsInputRedirected ? null : Console.ReadLine,
+        async (profile, ct) =>
+        {
+            var identity = Identity.Load(profile);
+            if (identity.Account is not { } account || SavedRelay(identity) is not { } relayUri) { return new PinFetch(null, null, null); }
+            var name = HostConfigFile.ReadName(identity.Folder) ?? $"{Environment.MachineName}{(profile == "default" ? "" : $"/{profile}")}";
+            await using var relay = await RelayClient.ConnectAsync(relayUri, account.Token, identity.Key, name, "host", ct);
+            return new PinFetch(await relay.GetRosterAsync(ct), account.AccountId, relay.AccountId);
+        }, HostRoster.Now, Console.Out, Console.Error);
 }
 
 // Inventory must return before even intake or device/account identity files are opened.
@@ -183,7 +203,7 @@ var options = new SessionSourceOptions
     PhoneSignIn = PhoneSignInSetup.Agents(settings, signInCopilot is not null),
     PhoneSignInPinned = () => PersonDevices.Any(personRoster, rosterAccount()),
     Log = command == "serve" ? Log : null,
-    // Only serve keeps what it listed for its next start (#147); no other command reads or writes it.
+    // Serve persists process-generation resume guards, not roster membership (#147).
     StateFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "sessions-listed.json") : null,
     // session.history's cursors outlive a restart of serve (docs/protocol/v1-history.md).
     HistoryKeyFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "history-cursor.key") : null,
@@ -233,7 +253,7 @@ switch (command)
     case "agents":
         {
             return await AgentCommands.RunWithProfileAsync(arguments, Identity.DefaultRoot,
-                () => Refused("adopt a session or end its adoption"), Console.Out, Console.Error);
+                () => Refused(arguments.ElementAtOrDefault(1) == "lite" ? "kill own-agents messaging" : "adopt a session or end its adoption"), Console.Out, Console.Error);
         }
     case "watch":
         {
@@ -401,6 +421,7 @@ switch (command)
         Console.Error.WriteLine("       agent-bridge-host approve <session> <question> <request-uuid> <approve|deny> [--profile <name>]");
         Console.Error.WriteLine("       agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>] (empty name clears)");
         Console.Error.WriteLine("       agent-bridge-host host-sign init [--profile <name>]");
+        Console.Error.WriteLine("       agent-bridge-host roster-pin set|show [--profile <name>] (set: a person types the genesis fingerprint)");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Cli.ScriptCredentialCommands.Usage);
@@ -734,11 +755,14 @@ async Task<int> ServeAsync(HostHandover handover)
             : RemoteDiagnostics.AgentHaBridge(g5),
         log: Log);
     var fleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder);
-    var hostRoster = new HostRosterReader(Path.Combine(identity.Folder, "roster-pin.json"), HostRoster.Now);
+    var hostRoster = new HostRosterReader(HostRosterPinWriter.PinPath(identity.Folder), HostRoster.Now);
+    var rosterObserve = new HostRosterObserve(hostRoster, () => settings.Security.Roster, HostRoster.Now, Log);
     var fleetTrust = new AgentBridge.Host.Fleet.FleetTrust(hostRoster, identity.Folder, () => identity.Account?.AccountId);
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
         name: fleetNames.Get, log: Log, sign: fleetTrust.Sign);
     var loadService = new LoadService(source, () => load.Current, () => settings.LoadEnabled, Log);
+    // L6: one kill switch is the mode of both sides; it trusts present same-account hosts, no pins.
+    var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         LoadEnabled = () => settings.LoadEnabled,
@@ -757,7 +781,8 @@ async Task<int> ServeAsync(HostHandover handover)
         SignInDevices = self => PersonDevices.View(personRoster, rosterAccount(), self),
         Manage = manage,
         Diagnostics = diagnostics,
-        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)),         new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteDeliver),
+        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(liteKill, liteDeliver),
+        LiteKill = liteKill,
     };
     Log(settings.LoadStatus);
     // Who is on the other end of the pipe: the app beside this host, or something inside an
@@ -846,6 +871,22 @@ async Task<int> ServeAsync(HostHandover handover)
     }
     await using var agentVerification = OperatingSystem.IsWindows()
         ? new AgentVerificationService(source, launcher, intake, VerificationUnavailable, Log, stop.Token) : null;
+    // Approve-gesture enrollment (#3450, brief 184): one attempt holder per signed-in account, app-only on the pipe.
+    var enrollmentGate = new object();
+    HostEnrollment? enrollment = null;
+    HostEnrollment? Enrollment()
+    {
+        lock (enrollmentGate)
+        {
+            var id = identity.Account?.AccountId;
+            if (enrollment?.Account != id)
+            {
+                enrollment?.Dispose();
+                enrollment = id is null ? null : new HostEnrollment(hostRoster, id, null, name: machine.Name);
+            }
+            return enrollment;
+        }
+    }
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -883,6 +924,8 @@ async Task<int> ServeAsync(HostHandover handover)
         SignInDevices = signIn is null ? null : self => PersonDevices.View(personRoster, rosterAccount(), self),
         AgentVerification = agentVerification,
         AgentSignIn = agentSignIn,
+        EnrollDescribe = () => Enrollment()?.Describe(identity.Folder, identity.Key.Public) ?? (null, "signed-out"),
+        EnrollStatus = () => Enrollment()?.Status(null, "") ?? "not-enrolled",
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -917,9 +960,9 @@ async Task<int> ServeAsync(HostHandover handover)
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
-    var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership, refresh: (connection, ct) => HostRoster.SyncAsync(connection, HostRoster.Now, ct, hostRoster));
+    var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
@@ -996,6 +1039,20 @@ async Task<int> ServeAsync(HostHandover handover)
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
             liteLink.Attach(relay, hub);
+            // L6: tells the other pinned hosts of a newer kill, including one `agents lite kill` made in another process.
+            _ = Task.Run(async () =>
+            {
+                using var tick = new PeriodicTimer(TimeSpan.FromSeconds(5));
+                try
+                {
+                    while (!relay.Completion.IsCompleted && await tick.WaitForNextTickAsync(current.Token))
+                    {
+                        try { await liteKill.PushAsync(relay, hub, current.Token); }
+                        catch (Exception e) when (e is not OperationCanceledException) { Log($"lite: kill push failed ({e.GetType().Name})"); }
+                    }
+                }
+                catch (OperationCanceledException) { }
+            });
             fleetRoster.Attach(relay);
             usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);
@@ -1005,14 +1062,11 @@ async Task<int> ServeAsync(HostHandover handover)
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff.Reset();
-            // Off mode: read and verify the roster in the background, log what it says, enforce nothing.
-            _ = Task.Run(async () =>
-            {
-                var check = await HostRoster.SyncAsync(relay, HostRoster.Now, current.Token, hostRoster);
-                Log($"device roster (security.roster {settings.Security.Roster}): {check.Summary}");
-            });
+            // security.roster: off reads, verifies and logs once; observe keeps the pinned reader fed, read-only.
+            _ = Task.Run(() => rosterObserve.ConnectedAsync(relay.GetRosterAsync, relay.AccountId, relay.Completion, current.Token));
             since.Restart();
-            await fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token);
+            await fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token,
+                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability));
             (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);
             diagnosticsJournal.Record(JournalEvents.RelayClosed(endedWith, since.Elapsed, HostVersion()));
             Log($"connection ended after {since.Elapsed.TotalMinutes:F1} min: {(int?)relay.CloseStatus} {relay.CloseReason}");
