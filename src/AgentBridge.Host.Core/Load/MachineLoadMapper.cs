@@ -18,18 +18,20 @@ public static class MachineLoadMapper
         var percent = Percent(machine.CpuPercent);
         var total = Number(machine.TotalMemoryBytes);
         var available = Number(machine.AvailableMemoryBytes);
+        var queue = machine.RunQueueAvg is >= 0 and <= int.MaxValue ? machine.RunQueueAvg : null;
         double? used = total is long totalBytes && totalBytes > 0
             && available is long availableBytes && availableBytes <= totalBytes
             ? (double)(totalBytes - availableBytes) / totalBytes * 100 : null;
         var sessions = report.Sessions.Select(s => MapSession(s.Key, s.Value)).ToArray();
         long? age = now >= report.SampledAt ? (now - report.SampledAt).Ticks / TimeSpan.TicksPerMillisecond : null;
-        var any = percent is not null || total is not null || available is not null
+        var any = queue is not null || percent is not null || total is not null || available is not null
             || sessions.Any(s => s.State != SessionLoadState.Unavailable);
         var complete = percent is not null && machine.Processors > 0 && total is not null && available is not null
             && sessions.All(s => s.State == SessionLoadState.Fresh);
         result = result with
         {
             SampledAt = report.SampledAt, AgeMs = age,
+            RunQueueAvg = age is not null && age <= result.StaleAfterMs ? queue : null,
             State = !any || age is null ? MachineLoadState.Unavailable : age > result.StaleAfterMs ? MachineLoadState.Stale
                 : complete ? MachineLoadState.Fresh : MachineLoadState.Partial,
             Cpu = percent is null ? null : new(percent, machine.Processors > 0 ? machine.Processors : null),

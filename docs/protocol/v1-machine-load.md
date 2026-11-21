@@ -1,6 +1,6 @@
 # Bridge Protocol v1: machine load and session move (contract)
 
-Status: **load records, vectors and host relay handlers implemented; session move remains a contract.** It settles what #1150 (host measures
+Status: **load records, vectors, relay handlers and authenticated local reads implemented; session move remains a contract.** It settles what #1150 (host measures
 session process trees and headroom) must publish, what a session move carries and records
 (#1146, fleet #22), and where #1142 (real launch options) already stands. Same channel, framing
 and rules as [v1-sessions.md](v1-sessions.md). Load records live in
@@ -27,8 +27,11 @@ typed into, launched, or a process change, per owner rule #1511). It never sends
 update per second. Nothing waits, refuses or recovers because an interval elapsed. A background
 sampler is measurement only: it keeps a short in-memory ring so an event's record can show the
 minutes before it, and a last-resort timer is a documented alarm reported as a fault, never a
-trigger. Both calls are for a client admitted on the relay channel only (not the local pipe); a
-connection may hold one subscription, and `load.unsubscribe` `{}` ends it. `seq` is the channel's.
+trigger. `load.get` also works on the OS-authenticated local pipe for launch admission
+([#2982](https://github.com/danswett/agent-bridge/issues/2982)), using the same sampler and host freshness.
+Pipe peer checks and scoped-script restrictions are unchanged. Subscriptions, updates and the
+`load` capability remain relay-only; a connection may hold one subscription, and
+`load.unsubscribe` `{}` ends it. `seq` is the channel's.
 
 ### MachineLoad
 
@@ -36,6 +39,7 @@ connection may hold one subscription, and `load.unsubscribe` `{}` ends it. `seq`
 |---|---|---|
 | `sampledAt` | time | When the snapshot was taken |
 | `ageMs` | number | Host clock age when sent, so a client need not trust the two clocks to agree |
+| `runQueueAvg` | number? | Native processor run-queue mean over the sampler's last two readings (normally 10 seconds). Finite, 0 to 2147483647; not divided by core count. Absent when unknown, invalid, stale or unavailable; a measured zero is `0`, never a fallback |
 | `state` | `"fresh"` \| `"partial"` \| `"stale"` \| `"unavailable"` | `partial`: some fields or sessions could not be read. `stale`: the figures are older than the host's own stale limit (`staleAfterMs`, in the record, so a client never guesses). `unavailable`: the sampler is not running or the OS gives nothing. Unknown is never sent as `0` |
 | `staleAfterMs` | number | How old `sampledAt` may be before the host calls it `stale` |
 | `cpu` | `{ percent, cores }`? | `percent` 0 to 100, **of the whole machine**: the counter delta over the interval divided by (cores x interval). `cores` are logical cores. Absent on the first sample or after a counter reset |
@@ -124,10 +128,11 @@ minute, with `measuredAt`). A client never infers it.
 
 A record is at most 64 KiB as sent. A client that sees `state: "stale"` or `unavailable` shows
 "no figure", not zero. The relay channel is cleared by the owner as linked above. The host offers
-`load` only on the relay when `load.enabled` is true (boolean, default `true`, beside
+the relay `load` capability and local `load.get` when `load.enabled` is true (boolean, default `true`, beside
 `launch.transfer.serve` in [host-config.md](../host-config.md), per the
 [owner-approved default-on amendment](https://github.com/danswett/agent-bridge/issues/1871#issuecomment-6790914065)).
-A person can turn it off; disabled and local-pipe load requests remain unsupported.
+A person can turn it off; disabled requests and local-pipe subscriptions remain unsupported.
+No new sampling loop, HA dependency or client-side age calculation is introduced.
 
 ## 2. Session move (#1146, fleet #22)
 

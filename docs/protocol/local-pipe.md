@@ -74,6 +74,11 @@ devices that reach the host through the relay (`push` is not in hello's capabili
 here). Hello's capabilities on the pipe add `host.manage` for the app, and are cut to
 reading for a process inside an agent session ([below](#who-may-manage-the-host)).
 
+`load.get` `{}` returns the current [MachineLoad](v1-machine-load.md#machineload),
+including optional `runQueueAvg` and host-computed `ageMs`, when `load.enabled` is on.
+OS peer authentication and scoped-script restrictions still apply. `load.subscribe`,
+`load.unsubscribe`, `load.update` and the `load` capability remain relay-only.
+
 Attachments differ in size only. The pipe is a direct path (design §4.6): its bytes cost
 the relay nothing, so hello offers `sessions.attach.direct` with `sessions.attach`, and
 `attachment.chunk` takes files up to 100 MiB, not 256 KiB. The host writes one over

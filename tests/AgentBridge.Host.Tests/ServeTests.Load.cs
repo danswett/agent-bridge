@@ -97,7 +97,7 @@ public sealed partial class ServeTests
     [InlineData(TrustedPeerStore.Person, true)]
     [InlineData(TrustedPeerStore.Service, false)]
     [InlineData(TrustedPeerStore.Host, false)]
-    public async Task Load_is_relay_only_enabled_only_and_person_only(string role, bool allowed)
+    public async Task Relay_load_requires_enabled_sharing_and_a_person_role(string role, bool allowed)
     {
         ServeLoad();
         var store = new TrustedPeerStore(Path.Combine(f.Root, "load-trust"), host.Key.Public, () => host.Relay.AccountId, loadTime);
