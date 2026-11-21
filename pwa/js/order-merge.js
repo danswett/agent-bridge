@@ -31,7 +31,7 @@ function cleanRegister(r) {
   const deviceTag = tagOf(r.deviceTag);
   if (deviceTag === null || !Number.isSafeInteger(r.counter) || r.counter < 0) { return null; }
   if (r.tombstone === true) { return { tombstone: true, counter: r.counter, deviceTag }; }
-  return { value: r.value, counter: r.counter, deviceTag };
+  return { value: r.value ?? null, counter: r.counter, deviceTag };
 }
 
 // Positive when a wins, negative when b wins, zero only for identical registers.

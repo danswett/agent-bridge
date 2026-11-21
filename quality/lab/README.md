@@ -333,7 +333,7 @@ where that session has a working audio endpoint, shown by the control below.
 
 These never count as a target:
 
-- the owner's machines, or VM4 or any other development VM;
+- the owner's machines, or any development VM;
 - a session that has an endpoint only while someone's RDP connection is attached;
 - a machine with no render endpoint at all, which is what an Azure VM has unless its image
   provides one.

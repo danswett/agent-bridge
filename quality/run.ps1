@@ -38,6 +38,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'dotnet-test-command.ps1')
 $project = Join-Path $root 'tools/AgentBridge.Quality/AgentBridge.Quality.csproj'
 $tool = Join-Path $root 'tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll'
 
@@ -113,7 +114,7 @@ foreach ($s in $selection.suites) {
         continue
     }
     # The selector adds ring 0's test filter (in-process tests only); see RingCommand.cs.
-    $command = $s.runCommand
+    $command = Add-DotnetCrashBlame $s.runCommand
     Write-Host ""
     Write-Host "== $($s.id): $command" -ForegroundColor Cyan
     $watch = [System.Diagnostics.Stopwatch]::StartNew()

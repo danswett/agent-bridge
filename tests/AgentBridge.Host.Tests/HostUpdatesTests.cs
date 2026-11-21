@@ -177,6 +177,30 @@ public sealed class HostUpdatesTests : IDisposable
         Assert.Equal("https://api.github.com/repos/danswett/agent-bridge/releases?per_page=10&page=1", github.Url);
     }
 
+    // #3441: a press from Home Assistant must not be answered from the shared list a background
+    // check would reuse.
+    [Fact]
+    public async Task A_check_pressed_from_Home_Assistant_asks_past_the_shared_list_and_a_background_check_does_not()
+    {
+        var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
+        var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
+        var github = new FakeGitHub
+        {
+            Answer = () => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""[{"name":"Agent Bridge 0.1.601","prerelease":true,"published_at":"2026-11-04T19:00:00Z","assets":[]}]"""),
+            },
+        };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, random: () => 0, cdn: false);
+        IHostUpdates updates = new VelopackHostUpdates(root, "default", () => { }, _ => { }, copy, discovery);
+
+        Assert.Null(await updates.CheckAsync(CancellationToken.None));
+        Assert.Null(await updates.CheckAsync(CancellationToken.None, pressed: false));
+        Assert.Equal(1, github.Requests);
+        Assert.Null(await updates.CheckAsync(CancellationToken.None, pressed: true));
+        Assert.Equal(2, github.Requests);
+    }
+
     // GitHub's own shape, as the API lists releases: the adapter keeps each release's assets, so
     // Velopack finds the channel's feed among them, and leaves pre-releases out when they are off.
     [Theory]
@@ -380,6 +404,29 @@ public sealed class HostUpdatesTests : IDisposable
         Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
         Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
         Assert.Contains($"update check: the CDN's release list was not used, as the CDN answered {(int)status}; asking GitHub", said);
+    }
+
+    [Fact]
+    public async Task A_check_pressed_from_Home_Assistant_bypasses_a_fresh_CDN_list_with_the_CDN_switch_on()
+    {
+        GitHubAnsweredAt(AMinuteAgo());
+        var web = new FakeWeb
+        {
+            Cdn = () => Relayed($"[{Listed("0.1.601")}]"),
+            GitHub = () => Listing("[]"),
+        };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, cdn: true);
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+        Assert.Equal(ReleaseDiscovery.Sources.Cdn, discovery.Source);
+        var packages = Path.Combine(root, "packages");
+        var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
+        IHostUpdates updates = new VelopackHostUpdates(root, "default", () => { }, _ => { }, copy, discovery);
+
+        Assert.Null(await updates.CheckAsync(CancellationToken.None, pressed: true));
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+        Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
+        Assert.Null(await updates.CheckAsync(CancellationToken.None));
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
     }
 
     [Fact]

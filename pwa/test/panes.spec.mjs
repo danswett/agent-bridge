@@ -612,7 +612,7 @@ test('a row is two lines: the title, then the status and the repository, never t
   expect(main.height).toBeLessThanOrEqual(title.height + facts.height + 16 + 1);
   // The header carries one meta line: status, machine, repository; the rest is in Details.
   const v = view(page, COPILOT);
-  await expect(v.locator('.status-line')).toHaveText('Waiting on you · Demo machine · danswett/agent-ha-bridge');
+  await expect(v.locator('.status-line')).toHaveText('Waiting on you · compacted once · Demo machine · danswett/agent-ha-bridge');
   await expect(v.locator('.fact-model dd')).toHaveText('claude-opus-5.5');
   await expect(v.locator('.fact-branch dd')).toHaveText('detached@5e59309');
   await expect(v.locator('.fact-pid dd')).toHaveText('pid 39844');

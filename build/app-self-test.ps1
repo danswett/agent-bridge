@@ -61,6 +61,12 @@ if ($env:GITHUB_ACTIONS -eq 'true') {
     Write-Output 'WER dumps are isolated from publication inputs, including if cleanup is interrupted'
 }
 try {
+# A retry starts only on the desktop the first attempt found (build/app-self-test-desktop.ps1, #2026).
+if ($env:GITHUB_ACTIONS -eq 'true') {
+    . (Join-Path $PSScriptRoot 'app-self-test-desktop.ps1')
+    try { Enter-SelfTestDesktop -State (Join-Path $env:RUNNER_TEMP 'app-self-test-desktop.json') -Exe (Resolve-Path -LiteralPath $Exe).Path }
+    catch { Write-Output "::error::$($_.Exception.Message)"; exit 1 }
+}
 $started = Get-Date
 $stderrPath = Join-Path $Logs 'app.stderr.log'
 $evidencePath = Join-Path $Logs 'app-exit-cause.json'

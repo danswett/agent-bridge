@@ -427,17 +427,36 @@ for (const attempt of ['retry', 'start']) {
     await signIn(page).click();
     const retry = sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' });
     await expect(retry).toBeVisible();
-    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
-    await page.evaluate(() => window.agentBridgeDemo.delayCancels(1500));
+    // Hold the real cancel response until the capability change has reached the client.
+    await page.evaluate(() => {
+      const client = window.agentBridgeDemo.hosts.route('demo').client;
+      const request = client.request.bind(client);
+      const released = new Promise((resolve) => { window.__releaseSignInCancel = resolve; });
+      window.__signInCancelReplyHeld = new Promise((ready) => {
+        client.request = async (...args) => {
+          const result = await request(...args);
+          if (args[0] === 'signin.cancel') { ready(); await released; }
+          return result;
+        };
+      });
+    });
     if (attempt === 'retry') { await retry.click(); }
-    else { await page.keyboard.press('Escape'); await signIn(page).click(); }
+    else {
+      await page.keyboard.press('Escape');
+      await expect(sheet(page)).toBeHidden();
+      await signIn(page).click();
+    }
     await expect(sheet(page).locator('.sign-in-starting')).toBeVisible();
+    await page.evaluate(() => window.__signInCancelReplyHeld);
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
     await page.evaluate(() => {
       const h = window.agentBridgeDemo.host;
       h.frame({ ev: 'signin.code', seq: h.seq + 1, data: { flow: 'late-flow', agent: 'copilot', userCode: 'LATE-CODE', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() } });
     });
-    await page.clock.runFor(50);
-    expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(1);
+    await expect.poll(async () => {
+      await page.clock.runFor(1);
+      return page.evaluate(() => window.agentBridgeDemo.signInCodesHeld);
+    }).toBe(1);
     await visibility(page, false);
     // The host stops offering this device sign-in while the cancel finishes.
     await page.evaluate(() => {
@@ -445,12 +464,16 @@ for (const attempt of ['retry', 'start']) {
       const s = d.host.get('signin-1');
       d.upsert({ ...s, attention: { ...s.attention, signIn: 'unknown', since: new Date().toISOString() } });
     });
-    await page.clock.runFor(1600);
-    await expect(sheet(page)).toBeHidden({ timeout: 5000 });
+    await expect.poll(async () => {
+      await page.clock.runFor(1);
+      return page.evaluate(() => window.agentBridgeDemo.hosts.link('demo').store.get('signin-1').attention.signIn);
+    }).toBeNull();
+    await page.evaluate(() => window.__releaseSignInCancel());
+    await expect(sheet(page)).toBeHidden();
     expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
     await page.clock.runFor(10000);
     expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
-    expect((await page.evaluate(() => window.agentBridgeDemo.signInLog)).map((l) => l.op)).toEqual(['signin.start', 'signin.cancel', 'cancelled']);
+    expect((await page.evaluate(() => window.agentBridgeDemo.signInLog)).map((l) => l.op)).toEqual(['signin.start', 'signin.cancel']);
   });
 }
 
@@ -826,6 +849,59 @@ test('signed in before the host says pending, focus a person moves elsewhere bef
   await elsewhere.evaluate((el) => { if (!el.matches('button, a, [tabindex]')) { el.setAttribute('tabindex', '-1'); } el.focus(); });
   await page.evaluate(() => window.__flush());
   await expect(elsewhere).toBeFocused();
+});
+
+// signin.done alone, the host's pending not yet come, while the host still says a sign-in is under way.
+async function doneBeforePendingWhileSigningIn(page) {
+  await setAttention(page, { recovery: 'signingIn' });
+  await page.evaluate(() => {
+    const h = window.agentBridgeDemo.host;
+    const f = h.signInFlow;
+    h.signInFlow = null;
+    h.frame({ ev: 'signin.done', seq: h.seq + 1, data: { flow: f.id, outcome: 'signedIn', resumed: [], continue: [] } });
+  });
+}
+
+test('signed in before the host says pending, Show code never flashes and the banner says it is waiting from the first frame (#902)', async ({ page }) => {
+  await openDemo(page);
+  await signIn(page).click();
+  await expect(sheet(page).locator('.sign-in-code')).toBeVisible();
+  // Every verb the banner has drawn from here on, in any frame.
+  await page.evaluate(() => {
+    window.__verbs = [];
+    new MutationObserver(() => { for (const b of document.querySelectorAll('#sign-in-banners .sign-in-start')) { window.__verbs.push(b.textContent); } })
+      .observe(document.querySelector('#sign-in-banners'), { childList: true, subtree: true, characterData: true, attributes: true });
+  });
+  await doneBeforePendingWhileSigningIn(page);
+  await expect(sheet(page)).toBeHidden();
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
+  await expect(banner(page).locator('.sign-in-line')).toBeFocused();
+  await setAttention(page, { recovery: 'pending' });
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
+  await expect(banner(page).locator('.sign-in-line')).toBeFocused();
+  await expect(banner(page).locator('.sign-in-start')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__verbs)).not.toContain('Show code');
+  // Said once, as confirming: the host's pending adds nothing.
+  await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Copilot on DEV-VM1: Signed in \u00b7 waiting for 4 sessions to confirm');
+  await expect(page.locator('#sign-in-said .sign-in-said-line', { hasText: 'waiting for 4 sessions' })).toHaveCount(1);
+});
+
+test('signed in with no pending from the host, the hold ends after a short grace and the banner follows the host again (#902)', async ({ page }) => {
+  await page.clock.install();
+  await openDemo(page);
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
+  await signIn(page).click();
+  await page.clock.runFor(100);
+  await expect(sheet(page).locator('.sign-in-code')).toBeVisible();
+  await doneBeforePendingWhileSigningIn(page);
+  await page.clock.runFor(100); // The demo delivers frames on a timer.
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
+  await page.clock.runFor(4000);
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
+  // Past the hold's deadline with no sweep and nothing from the host: the banner follows it again.
+  await page.clock.runFor(1500);
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Waiting for sign-in');
+  await expect(banner(page).getByRole('button', { name: 'Show code for Copilot on DEV-VM1' })).toBeVisible();
 });
 
 test('signed out, nothing said about the account\'s machines stays in the live region (#878)', async ({ page }) => {
