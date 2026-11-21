@@ -624,8 +624,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      tests-only bypass used`). Owner decision Nov 20 14:16 PT
      ([#3471](https://github.com/danswett/agent-bridge/issues/3471)): with
      `main_green.source_bypass: true` (off when absent), a labelled source fix skips it too when
-     all of these hold, each refused with its own reason: main's CI read as a failure (an
-     `error` or pending main is never waived); its file list is fully read and
+     all of these hold, each refused with its own reason: main's CI read as a failure, a
+     completed run whose named job isn't green (an `error` main, or a pending one with no
+     completed product evidence yet, whether in progress, queued, missing or every plan failed,
+     is never waived); its file list is fully read and
      complete; its description has a well-formed `fixes-main-test: <fully qualified test name>`
      line per test (the evaluator checks only the form: Quality checks the name against main's
      failing run before adding the label); additions plus deletions are at most

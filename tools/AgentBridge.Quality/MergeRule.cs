@@ -157,8 +157,9 @@ sealed class CopilotWaiverConfig
 }
 
 /// <summary>
-/// The base branch's CI, read once per run: success, failure (a named job not green or a missing
-/// run) or error (couldn't be read), and the reason, which a blocked pull request's description
+/// The base branch's CI, read once per run: success, failure (a completed run's named job not
+/// green), pending (no completed product evidence yet: in progress, queued, no run or every plan
+/// failed) or error (couldn't be read), and the reason, which a blocked pull request's description
 /// starts with.
 /// </summary>
 sealed record MainFact(string State, string Reason)
@@ -427,7 +428,9 @@ static class MergeRule
         void Check(bool ok, string pass, string fail) => log.Add(ok ? "ok: " + pass : "refused: " + fail);
         var sha = Short(pr.HeadSha);
         // Only a red main it could read is waived: error or pending could hide anything.
-        Check(main.State == "failure", "main's CI read as failing", $"main's CI is {main.State}, not a read failure, and only a red main it could read is waived");
+        Check(main.State == "failure", "main's CI read as failing", main.State == "pending"
+            ? "main's CI has no completed failed run yet, and only a red main is waived"
+            : $"main's CI is {main.State}, not a read failure, and only a red main it could read is waived");
         Check(true, "the fixes-main label is on it (added by Quality, with triage rights)", "");
         var listed = pr.FullyRead && pr.FilesComplete && pr.Files.Count > 0;
         Check(listed, "its file list is fully read and complete", "its file list isn't fully read and complete");

@@ -351,14 +351,14 @@ public class MergeRuleTests
     }
 
     [Theory]
-    [InlineData("error")]
-    [InlineData("pending")]
-    public void A_source_fix_never_waives_a_main_whose_CI_could_not_be_read_as_red(string state)
+    [InlineData("error", "main's CI is error, not a read failure, and only a red main it could read is waived")]
+    [InlineData("pending", "main's CI has no completed failed run yet, and only a red main is waived")]
+    public void A_source_fix_never_waives_a_main_whose_CI_could_not_be_read_as_red(string state, string refusal)
     {
         var verdict = MergeRule.Evaluate(BypassConfig, new MainFact(state, RedMain), SourceFix())!;
 
         Assert.NotEqual("success", verdict.State);
-        Assert.Contains($"source bypass refused: main's CI is {state}, not a read failure, and only a red main it could read is waived", verdict.Reasons);
+        Assert.Contains($"source bypass refused: {refusal}", verdict.Reasons);
     }
 
     [Theory]
@@ -482,6 +482,31 @@ public class MergeRuleTests
 
             Assert.StartsWith(state == "success" ? $"{Head} success merge-rule Source bypass used (fixes-main: {FixedTest})" : $"{Head} failure merge-rule ", Assert.Single(github.Posted));
             Assert.Contains($"source bypass {log}", output.ToString(), StringComparison.Ordinal);
+        }
+        finally { File.Delete(config); }
+    }
+
+    // An unfinished main isn't a red one (#3478): only a completed run whose product jobs failed lets a source fix past.
+    [Theory]
+    [InlineData("in_progress", null, false, false)]
+    [InlineData("queued", null, false, false)]
+    [InlineData("in_progress", null, true, false)]
+    [InlineData("completed", "failure", false, true)]
+    public void A_source_fix_waits_while_main_has_no_completed_failed_run(string status, string? conclusion, bool planFailed, bool passes)
+    {
+        var pr = GraphQLPullRequest(Head, labels: ["fixes-main"], body: $"fixes-main-test: {FixedTest}", extraStatuses: [
+            new { context = "independent-review", state = "SUCCESS", description = "CLEAN claude-opus-5.5", createdAt = "2026-11-03T20:02:00Z", creator = new { login = "danswett" } },
+            new { context = "independent-review-2", state = "SUCCESS", description = "CLEAN gpt-6.1-sol", createdAt = "2026-11-03T20:02:00Z", creator = new { login = "danswett" } }]);
+        var plan = planFailed ? """{"total_count": 1, "jobs": [{"id": 1, "name": "plan", "status": "completed", "conclusion": "failure", "run_attempt": 1}]}""" : null;
+        var github = new FakeGitHub(pr, mainRuns: MainRuns((5, status, conclusion, 1)), files: $$"""{"files": [{{FiveLineSource}}]}""", mainJobs: plan);
+        var config = WriteConfig(sourceBypass: true);
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], output, github, OnMain);
+
+            Assert.StartsWith(passes ? $"{Head} success merge-rule Source bypass used" : $"{Head} failure merge-rule No completed CI product evidence on main: waiting for one", Assert.Single(github.Posted));
+            Assert.Equal(!passes, output.ToString().Contains("source bypass refused: main's CI has no completed failed run yet", StringComparison.Ordinal));
         }
         finally { File.Delete(config); }
     }

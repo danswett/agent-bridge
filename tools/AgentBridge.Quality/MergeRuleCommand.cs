@@ -463,7 +463,8 @@ static class MergeRuleCommand
             if (!found)
             {
                 log = $"Main: no completed product evidence in {config.MainGreen.Workflow}'s push history.";
-                return new("failure", $"no completed CI product evidence on {config.Base}: waiting for one");
+                // Pending, not failure: an unfinished main isn't a red one, and the source bypass waives only red (#3478).
+                return new("pending", $"no completed CI product evidence on {config.Base}: waiting for one");
             }
             var (run, latest, all, _) = evidence.Current;
             var sha = run.GetProperty("head_sha").GetString();
