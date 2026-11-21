@@ -5,7 +5,7 @@ namespace AgentBridge.Host;
 
 // Only the run-control writer assigns this context; ingress never infers it from a request or journal.
 internal sealed record GateRunContext(Guid Run);
-internal sealed record GateLaunchIngress(string Path, string ActorKind, string Principal, GateRunContext? Run);
+internal sealed record GateLaunchIngress(string Path, string ActorKind, string Principal, GateRunContext? Run, string? Grant = null);
 
 internal static class GateLaunchAudit
 {
@@ -28,6 +28,7 @@ internal static class GateLaunchAudit
         {
             if (first.Gate is not { Phase: "intent" } gate || first.Target != id.ToString() || gate.Incarnation != gate.Operation
                 || first.Principal != ingress.Principal || gate.LaunchBinding != binding
+                || ingress.Grant is not null && first.Grant != ingress.Grant
                 || gate.Path != ingress.Path || gate.ActorKind != ingress.ActorKind
                 || matching.Any(r => r.Principal != first.Principal || r.Gate is not { } other
                     || other.Operation != gate.Operation || other.LaunchBinding != binding))
@@ -44,18 +45,22 @@ internal static class GateLaunchAudit
         }
 
         string? denied = null;
+        bool? terminalWritten = null;
         Action<string>? Prepare(Guid operation)
         {
             if ((denied = refusal?.Invoke()) is not null) { return null; }
             var gate = new GateAuditMetadata(1, operation, ingress.Run?.Run ?? Guid.Empty, 0, "intent",
                 ingress.Path, ingress.ActorKind, operation, "none", LaunchBinding: binding);
             var intent = new AgentAuditEntry(ingress.Path == "relay" ? "in" : "local", id.ToString(),
-                ingress.Principal, [], "session.launch", id.ToString(), "reserved", Gate: gate) { Grant = fleet ? "fleet" : null };
+                ingress.Principal, [], "session.launch", id.ToString(), "reserved", Gate: gate) { Grant = ingress.Grant ?? (fleet ? "fleet" : null) };
             if (!audit.Append(intent)) { return null; }
-            return session => { audit.Append(intent with { Target = session, Outcome = "started", Gate = gate with { Phase = "terminal" } }); };
+            return session => { terminalWritten = audit.Append(intent with { Target = session, Outcome = "started", Gate = gate with { Phase = "terminal" } }); };
         }
         var outcome = fleet ? await launcher.LaunchFleetAsync(request, peer, Prepare, ct)
+            : ingress.Grant is not null ? await launcher.LaunchAuditedAsync(request, peer, Prepare, () => refusal?.Invoke(), ct)
             : await launcher.LaunchAuditedAsync(request, peer, Prepare, ct);
+        if (ingress.Grant is not null && outcome.Outcome == LaunchOutcome.Started && terminalWritten != true)
+        { return new(LaunchOutcome.Unconfirmed, "audit-unavailable"); }
         return denied is null ? outcome : Refused(denied);
     }
 

@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core.Launch;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Host.Fleet.Grants;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -29,7 +30,8 @@ public sealed class AgentPipeLaunchTests : IDisposable
     sealed record Pipe(Func<IProtocolChannel, string, JsonElement, Task<object?>> Handle, Chan Channel, AgentCredentials Credentials);
 
     Pipe Open(string session = "parent", string scope = AgentProtocol.ScopeReadReplyLaunch, int depth = 0,
-        string launch = "person-launch", AgentCredentials? credentials = null, (LaunchRequestStore?, string?)? store = null)
+        string launch = "person-launch", AgentCredentials? credentials = null, (LaunchRequestStore?, string?)? store = null,
+        P256KeyPair? grantKey = null)
     {
         credentials ??= new AgentCredentials(folder, "machine");
         launcher.FleetConfig ??= Running();
@@ -40,7 +42,8 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var (requests, problem) = store ?? LaunchRequestStore.Open(folder, TimeProvider.System);
         var audit = new AgentAuditLog(folder);
         var service = new SessionService(new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
-        var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem);
+        var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem, fleetGrants: grantKey is null ? null
+            : new FleetGrantLaunch(folder, grantKey, () => "123", new('a', 32), credentials, service, launcher));
         return new(LocalApi.Handler(service, null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")),
             credentials: credentials, audit: audit, agentLaunch: agentLaunch), channel, credentials);
     }
@@ -119,13 +122,94 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal("{ damaged", File.ReadAllText(Path.Combine(folder, LaunchRequestStore.FileName)));
     }
 
+    (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key)
+    {
+        var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key);
+        var caller = pipe.Credentials.Of(pipe.Channel)!;
+        var now = DateTimeOffset.UtcNow;
+        var scope = new GrantScope([new('a', 32)], ["App"], ["claude"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
+        var store = new GrantStore(folder, key, new(folder), scope);
+        var grant = new GrantDocument(1, Guid.NewGuid(), "123", new("123", new('a', 32), "AQ", now, new('a', 64)),
+            new(new('a', 32), Path.GetFileName(folder)), [new("123", new('a', 32), caller.Session, caller.Id, new(caller.RootPid, caller.RootStartUtc))],
+            ["launch"], scope, new(3, 3, 2), now, 1, now.AddHours(8));
+        Assert.True(store.Issue(grant).Usable);
+        return (pipe, grant, store);
+    }
+    JsonElement GrantBody(GrantDocument grant, string workspace = "App", string prompt = "hello") =>
+        JsonSerializer.SerializeToElement(new FleetLaunchInput(1, Guid.Parse(request), grant.Id, "SG Builder 266", workspace, "claude",
+            Model: "small", Effort: "medium", Context: "default", Permissions: "ask", Prompt: prompt), ProtocolJson.Options);
+    static async Task<FleetLaunchReceipt> GrantedLaunch(Pipe pipe, JsonElement body) =>
+        Assert.IsType<FleetLaunchReceipt>(await pipe.Handle(pipe.Channel, LaunchProtocol.Launch, body));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Grant_scope_and_excluded_launch_names_are_checked_on_the_receiver(bool excluded)
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, _) = Granted(key);
+        if (excluded)
+        {
+            var path = Path.Combine(folder, HostSettings.FileName);
+            File.WriteAllText(path, File.ReadAllText(path).Replace("\"inbound\":{", "\"inbound\":{\"exclude\":{\"sessions\":[\"SG Builder 266\"]},"));
+        }
+        Assert.Equal("scope", (await GrantedLaunch(pipe, GrantBody(grant, excluded ? "App" : "Private"))).Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task Revocation_while_queued_refuses_before_start_and_a_non_grant_launch_stays_unchanged()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, store) = Granted(key);
+        launcher.BeforeDispatch = () => Assert.True(store.Revoke(grant.Id, 1).Usable);
+        Assert.Equal("grant-revoked", (await GrantedLaunch(pipe, GrantBody(grant))).Reason);
+        Assert.Equal(0, launcher.Launches);
+        Assert.Equal(LaunchOutcome.Started, (await Launch(pipe, Body(Guid.NewGuid().ToString()))).Outcome);
+        Assert.Equal(1, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task Exact_grant_duplicates_replay_after_revocation_but_changed_payloads_refuse()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, store) = Granted(key);
+        var first = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.True(store.Revoke(grant.Id, 1).Usable);
+        var duplicate = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(first.Permissions, duplicate.Permissions);
+        Assert.Equal(first.Result.Outcome, duplicate.Result.Outcome);
+        Assert.Equal(1, launcher.Launches);
+        Assert.Equal("duplicate-id", (await GrantedLaunch(pipe, GrantBody(grant, prompt: "different"))).Reason);
+    }
+
+    [Fact]
+    public async Task A_grant_with_unavailable_audit_never_starts_a_process()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, _) = Granted(key);
+        File.WriteAllText(Path.Combine(folder, AgentAuditLog.FolderName, $"launches-{DateTime.UtcNow:yyyy-MM-dd}.jsonl"), "{ damaged");
+        Assert.Equal("audit-unavailable", (await GrantedLaunch(pipe, GrantBody(grant))).Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
     sealed class FakeLauncher : ISessionLauncher
     {
         public int Launches;
         public List<string> Peers { get; } = [];
         public LaunchConfig? FleetConfig { get; set; }
         public bool Available => true;
-        public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Action? BeforeDispatch;
+        public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => Task.FromResult(new LaunchOptions
+        { Agents = [new() { Id = "claude", Label = "Claude", Kind = AgentKind.Claude, Models = ["small"], Efforts = ["medium"], Contexts = ["default"] }],
+            Workspaces = [new() { Label = "App", Path = "unused", Isolate = true }], Defaults = new() { Permissions = "ask" } });
+        public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
+            Func<string?> dispatch, CancellationToken cancellationToken = default)
+        {
+            BeforeDispatch?.Invoke();
+            return dispatch() is { } denied ? Task.FromResult(new LaunchResult(LaunchOutcome.Refused, denied))
+                : LaunchAuditedAsync(request, peer, prepare, cancellationToken);
+        }
         public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("only the audited path launches");
 

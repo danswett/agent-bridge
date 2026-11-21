@@ -69,7 +69,7 @@ public sealed class GrantCountersTests : IDisposable
         var grant = Issue(new(3, 3, 1));
         var reservation = Reserve(Open(), grant).Reservation!;
         var target = Target();
-        Assert.True(Open().Reconcile(grant.Id, _ => new(target), pid =>
+        Assert.True(Open().Reconcile(grant.Id, _ => new(target, Permissions: "ask"), pid =>
         {
             Assert.Equal(target.ProcessInstance.Pid, pid);
             return new(GrantProcessStatus.Live, target.ProcessInstance);
@@ -234,13 +234,16 @@ public sealed class GrantCountersTests : IDisposable
         var request = Guid.NewGuid();
         var target = Target();
         Assert.True(Reserve(Open(), grant, request).Accepted);
-        Assert.True(Open().Commit(request, target).Accepted);
+        Assert.Equal(GrantCounterProblem.Binding, Open().Commit(request, target, "auto").Problem);
+        Assert.True(Open().Commit(request, target, "ask").Accepted);
+        Assert.Equal(GrantCounterProblem.Binding, Open().Commit(request, target, "allowAll").Problem);
         Assert.True(Store().Revoke(grant.Id, 1).Usable);
         clock.Advance(TimeSpan.FromHours(24));
         var duplicate = Reserve(Open(), grant, request);
         Assert.Equal(GrantCounterProblem.Duplicate, duplicate.Problem);
         Assert.Equal(GrantLaunchOutcome.Started, duplicate.Reservation!.Outcome);
         Assert.Equal(target, duplicate.Reservation.Target);
+        Assert.Equal("ask", duplicate.Reservation.Permissions);
         Assert.Equal(GrantCounterProblem.Binding, Reserve(Open(), grant, request, new('c', 64)).Problem);
     }
 
