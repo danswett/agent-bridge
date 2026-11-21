@@ -5,6 +5,39 @@ namespace AgentBridge.App.Tests;
 public sealed class ConversationEndPinTests
 {
     [Theory]
+    [InlineData("pan", false)]
+    [InlineData("scroll", false)]
+    [InlineData("key", false)]
+    [InlineData("pan", true)]
+    [InlineData("scroll", true)]
+    [InlineData("key", true)]
+    public void A_reply_correction_never_undoes_navigation_that_already_released_the_pin(string gesture, bool startsAfterQueue)
+    {
+        var view = new SessionView();
+        view.ReleasePin();
+        if (!startsAfterQueue) { view.GestureForProbe(gesture); }
+        view.KeepPlaceForProbe();
+        view.GestureForProbe(gesture);
+        view.Scroller.VerticalOffset = 80;
+        view.DrainForProbe();
+        Assert.Equal(80, view.Scroller.VerticalOffset);
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void A_screen_reader_move_during_remeasurement_releases_the_end_pin()
+    {
+        var view = new SessionView();
+        view.Scroller.ScrollableHeight = 52304;
+        view.Moved(52304);
+        view.Scroller.ScrollableHeight = 52149;
+        view.Moved(50000);
+        view.Follow();
+        Assert.False(view.Pinned);
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public void Scrolling_up_while_still_hovered_resumes_cached_history_drawing(bool heldBeforeFrame)

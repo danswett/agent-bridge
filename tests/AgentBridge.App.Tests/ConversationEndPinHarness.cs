@@ -196,6 +196,13 @@ namespace AgentBridge.App
         public void ProgrammaticBringForProbe(Microsoft.UI.Xaml.UIElement target, double alignment) => ScrollProgrammatically(() => Scroller.Bring(target, alignment));
         public void AnchorForProbe(double to) => Anchoring(Scroller, to);
         public void DrainForProbe() => DispatcherQueue.Drain();
+        public void KeepPlaceForProbe() => KeepPlace(false, Scroller.VerticalOffset);
+        public void GestureForProbe(string gesture)
+        {
+            panning = gesture == "pan";
+            scrolling = gesture == "scroll";
+            keyTarget = gesture == "key" ? 50 : null;
+        }
         public void DetachForProbe() => UnwatchHistory();
         public void SwitchForProbe()
         {
