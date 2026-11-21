@@ -36,7 +36,7 @@ public sealed record SecuritySettings
         if (s.TryGetProperty("roster", out roster) && roster.ValueKind != JsonValueKind.Null
             && !(roster.ValueKind == JsonValueKind.String && roster.GetString() == Off))
         {
-            problems.Add("security.roster is not \"off\", the only mode this host has, so it is off");
+            problems.Add("security.roster is not \"off\" or \"observe\", the modes this host has, so it is off");
         }
         return (Default, problems);
     }

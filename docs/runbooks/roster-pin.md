@@ -29,4 +29,11 @@ Any other `state` is a refusal and nothing was written: `fingerprint-format`, `f
 Not typed: each is approved with one tap in the Slipgates app (briefs 184 and 185), as for users
 (owner 13:43 PT).
 
+Set `security.roster` to `"observe"` in each pinned host's config. Observe verifies the pin on
+connect and refreshes about every five minutes (jittered); failed passes back off to at most
+40 minutes. Unpinned passes keep the normal cadence, so a pin added while serving is checked
+on the next normal pass. Until a pass verifies the pin, the fleet gate refuses. `"off"` only
+reports the relay roster and does not feed the pinned reader: a pinned host in off mode keeps
+the fleet gate refusing. Later fetch or verification failures keep the last verified roster.
+
 **Rollback (per host):** delete `roster-pin.json` and restart the host; `roster-pin show` then prints `unpinned`.
