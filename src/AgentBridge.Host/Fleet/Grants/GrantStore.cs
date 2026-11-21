@@ -136,14 +136,17 @@ public sealed class GrantStore
         }
         catch (FileNotFoundException) { state = new(1, 0, [], [], []); }
         long retained = 0;
-        var (rows, complete) = GateAuditProjection.Load(folder, boundary: (floor, _) => retained = floor);
-        if (!complete || retained > 0 || !audit.Verify().Intact || !audit.Verify(launch: true).Intact)
+        var adopted = false;
+        var (rows, complete) = GateAuditProjection.Load(folder, boundary: (floor, unproven) => { retained = floor; adopted = unproven; });
+        // Adopted history is unproven, and per-stream chains cannot see a rollback of one stream: require one global gated sequence.
+        if (!complete || adopted || retained > 0 || !audit.Verify().Intact || !audit.Verify(launch: true).Intact
+            || rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().Where((s, i) => s != i + 1L).Any())
         { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
         var history = rows.Where(r => r.Action is "grant.issue" or "grant.revoke").ToArray();
         if (body is not null && history.Length == 0) { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
         var operations = history.GroupBy(r => r.Gate?.Operation).OrderBy(g => g.First().Gate?.Sequence).ToArray();
         if (operations.Any(g => g.Count() != 2 || g.First().Gate is not { Phase: "intent" }
-            || g.Last().Gate is not { Phase: "terminal" } || g.Last().Outcome != GateAuditProjection.SuccessFor(g.First().Action)
+            || g.Last().Gate is not { Phase: "terminal" } || g.Last().Gate!.Sequence <= g.First().Gate!.Sequence || g.Last().Outcome != GateAuditProjection.SuccessFor(g.First().Action)
             || g.First().Gate!.GrantBinding != g.Last().Gate!.GrantBinding))
         { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
         if (body is null && operations.Length > 0) { throw new StoreFault(GrantStoreProblem.Missing); }
