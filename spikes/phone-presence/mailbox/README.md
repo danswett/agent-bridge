@@ -39,12 +39,16 @@ app/relay/profile/key/roster is used. No third-party dependency or workflow file
 
 **NO DEPLOY WITHOUT RATE LIMITING.** The helper MUST apply a Cloudflare
 rate-limiting rule on `proof-mailbox.slipgates.com`: match POST, limit
-**10 POST requests per minute per IP**, block excess with 429 for 60 seconds.
+**2 POST requests per 10 seconds per IP**, block excess with 429 for **10 seconds**
+(12 requests/minute ceiling). The zone is on Free, which only allows 10-second
+rate-limit periods. Pro allows the 1-minute form; it is not this Free-plan gate.
 The helper verifies that rule before deployment; it is not optional or implemented
 by this code. Signed ids are not required for this temporary spike.
 Helper ONLY, after exact-head Quality receipts and the required rate rule: deploy from this reviewed head
 with `wrangler deploy` in this directory; its DO migration/binding is `MAILBOX`;
 attach custom domain `proof-mailbox.slipgates.com`, never the Pages domain.
+The phone page at `proof.slipgates.com` may use GitHub Pages or Cloudflare Pages
+if the GitHub certificate never issues; the Origin/rpId remains unchanged.
 Leave request observability/logging disabled; never commit provisioning secrets.
 Only helper deployment proves real Cloudflare binding/domain/CORS behavior.
 
