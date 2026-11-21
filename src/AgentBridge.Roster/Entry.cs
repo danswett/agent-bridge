@@ -23,8 +23,9 @@ public sealed class Entry
     public Assertion? UvCosigner { get; }
     public byte[] Hash { get; }
     public int Size { get; }
+    public bool EvidenceOnly { get; }
 
-    Entry(byte[] bodyBytes, EntryBody body, byte[] sig, byte[]? cosig, Assertion? uvBy, Assertion? uvCosigner, int size)
+    Entry(byte[] bodyBytes, EntryBody body, byte[] sig, byte[]? cosig, Assertion? uvBy, Assertion? uvCosigner, int size, bool evidenceOnly = false)
     {
         BodyBytes = bodyBytes;
         Body = body;
@@ -34,9 +35,10 @@ public sealed class Entry
         UvCosigner = uvCosigner;
         Hash = Ids.Entry(bodyBytes);
         Size = size;
+        EvidenceOnly = evidenceOnly;
     }
 
-    static readonly string[] WrapperFields = ["body", "sig", "cosig", "uv"];
+    static readonly string[] WrapperFields = ["body", "sig", "cosig", "uv", "evidence"];
     static readonly string[] UvFields = ["by", "cosigner"];
     static readonly string[] AssertionFields = ["authenticatorData", "clientDataJSON", "signature"];
 
@@ -66,7 +68,9 @@ public sealed class Entry
         if (parsed.Op != EntryOp.Remove && size > MaxBytes) { throw new RosterFormatException(Refusal.Size, "entry"); }
         if ((cosig is null) != (parsed.Cosigner is null)) { throw new RosterFormatException(Refusal.Cosigner, "entry.cosig"); }
         if (uvCosigner is not null && parsed.Cosigner is null) { throw new RosterFormatException(Refusal.Cosigner, "entry.uv.cosigner"); }
-        return new Entry(body, parsed, sig, cosig, uvBy, uvCosigner, size);
+        var evidenceOnly = root.TryGetProperty("evidence", out var evidence) && StrictJson.Bool(evidence, "entry.evidence");
+        if (root.TryGetProperty("evidence", out _) && !evidenceOnly) { throw new RosterFormatException(Refusal.Value, "entry.evidence"); }
+        return new Entry(body, parsed, sig, cosig, uvBy, uvCosigner, size, evidenceOnly);
     }
 
     static int Sized(Assertion? a) => a is null ? 0 : a.AuthenticatorData.Length + a.ClientDataJson.Length + a.Signature.Length;
@@ -91,9 +95,11 @@ public sealed class Entry
 
     // The wrapper as every sender and forwarder emits it: members in the table's order, no
     // insignificant whitespace.
-    public string Canonical() => Canonical(BodyBytes, Sig, Cosig, UvBy, UvCosigner);
+    public string Canonical() => Canonical(BodyBytes, Sig, Cosig, UvBy, UvCosigner, EvidenceOnly);
 
-    public static string Canonical(byte[] body, byte[] sig, byte[]? cosig = null, Assertion? uvBy = null, Assertion? uvCosigner = null)
+    public Entry AsEvidence() => EvidenceOnly ? this : new(BodyBytes, Body, Sig, Cosig, UvBy, UvCosigner, Size, true);
+
+    public static string Canonical(byte[] body, byte[] sig, byte[]? cosig = null, Assertion? uvBy = null, Assertion? uvCosigner = null, bool evidenceOnly = false)
     {
         var b = new StringBuilder();
         b.Append("{\"body\":\"").Append(Codec.Base64Url(body)).Append("\",\"sig\":\"").Append(Codec.Base64Url(sig)).Append('"');
@@ -110,6 +116,7 @@ public sealed class Entry
             }
             b.Append('}');
         }
+        if (evidenceOnly) { b.Append(",\"evidence\":true"); }
         return b.Append('}').ToString();
     }
 

@@ -150,7 +150,8 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
 
     Offered OfferOne(Entry e)
     {
-        if (_g.Find(e.Hash) is { } known)
+        var existing = _g.Find(e.Hash);
+        if (existing is { } known && (e.EvidenceOnly || (!_candidate[known] && !_g[known].Entry.EvidenceOnly)))
         {
             if (!_candidate[known]) { return new(e.Hash, Verdict.Duplicate); }
             return new(e.Hash, Verdict.Refused, _refusedCandidates.GetValueOrDefault(known, Invalid.Budget));
@@ -165,7 +166,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             if (_g.Find(body.Prev[i]) is not { } p) { return new(e.Hash, Verdict.Refused, Invalid.Parent); }
             parents[i] = p;
         }
-        if (body.Op == EntryOp.Genesis && _g.Count > 0) { return new(e.Hash, Verdict.Refused, Invalid.Genesis); }
+        if (body.Op == EntryOp.Genesis && _g.Count > 0 && existing is null) { return new(e.Hash, Verdict.Refused, Invalid.Genesis); }
         if (body.Op != EntryOp.Genesis && _g.Count == 0) { return new(e.Hash, Verdict.Refused, Invalid.Parent); }
 
         var ancestors = new Bits(_g.Count + 1);
@@ -176,6 +177,8 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
         }
         var before = parents.Length == 0 ? RosterState.Empty : StateOf(parents);
         var reason = Validate(e, parents, ancestors, before, out var facts);
+        // An unsigned storage hint can only withhold application, never bypass validation.
+        if (reason is null && e.EvidenceOnly) { reason = Invalid.Cap; }
         var candidateParent = parents.Any(p => _candidate[p]);
         var overCap = reason is Invalid.Cap or Invalid.Budget;
         if (reason is not null && !overCap) { return new(e.Hash, Verdict.Refused, reason); }
@@ -185,6 +188,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             // Kept aside, in case a removal in this or a later offer needs it as evidence.
             if (body.Op != EntryOp.Remove || overCap)
             {
+                if (existing is { } held) { return !_candidate[held] ? new(e.Hash, Verdict.Duplicate) : new(e.Hash, Verdict.Refused, reason ?? Invalid.Evidence); }
                 if (_refusedCandidates.Count >= 2 * EvidenceCap) { return new(e.Hash, Verdict.Refused, reason ?? Invalid.Evidence); }
                 var c = Commit(e, parents, before, facts, candidate: true);
                 _candidate.Set(c.Index);
@@ -213,7 +217,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             {
                 if (!q[i] && !_candidate[i] && !_g[i].Evidence && !ancestors[i]) { unseen++; }
             }
-            var heads = HeadIndices().Count(h => !parents.Contains(h)) + 1;
+            var heads = HeadIndices().Count(h => h != existing && !parents.Contains(h)) + 1;
             arrival = parents.Length != 1 || unseen > Window || heads > MaxHeads;
         }
 
@@ -231,7 +235,20 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     // counted, its parent stopped being a head and a refused rename left the roster with none.
     RosterNode Commit(Entry e, int[] parents, RosterState before, Facts facts, bool candidate = false)
     {
-        var node = _g.Add(e, parents);
+        var existing = _g.Find(e.Hash);
+        var node = existing is { } i ? _g[i] : _g.Add(e, parents);
+        if (existing is not null)
+        {
+            _candidate.Clear(node.Index);
+            _refusedCandidates.Remove(node.Index);
+            if (node.Evidence)
+            {
+                _evidenceBySigner[node.Signer]--; _evidence--;
+                foreach (var p in parents) { _children[p]--; }
+                node.Evidence = false;
+            }
+        }
+        node.Entry = e;
         node.Signer = e.Body.Op == EntryOp.Genesis ? node.Index : facts.Signer;
         node.Cosigner = facts.Cosigner;
         node.Target = facts.Target;
@@ -251,7 +268,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             }
             node.Takes = takes;
         }
-        _children.Add(0);
+        if (existing is null) { _children.Add(0); }
         if (!candidate && !parents.Any(p => _candidate[p]))
         {
             foreach (var p in parents) { _children[p]++; }
@@ -279,20 +296,44 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     bool EvidenceFor(Facts r, Bits ancestors, out List<int> evidence)
     {
         evidence = [.. ancestors.Members().Where(i => _candidate[i])];
+        return EligibleEvidence(r, evidence);
+    }
+
+    // Storage-cap refusals use the same policy as the verifier's own cap refusals.
+    public bool CanCarryEvidence(Entry removal, IEnumerable<Entry> evidence)
+    {
+        if (_g.Find(removal.Hash) is not { } index || !Holds(removal.Hash) || _g[index].Op != EntryOp.Remove) { return false; }
+        var r = _g[index];
+        var pending = new List<int>();
+        foreach (var e in evidence)
+        {
+            if (_g.Find(e.Hash) is not { } ancestor || !_g.IsAncestor(ancestor, index)) { return false; }
+            pending.Add(ancestor);
+        }
+        return EligibleEvidence(new Facts(r.Signer, r.Cosigner, r.Target, r.Keep, r.Rank), pending.Distinct().ToList());
+    }
+
+    bool EligibleEvidence(Facts r, IReadOnlyList<int> evidence)
+    {
         if (r.Target == r.Signer) { return false; }
         var bySigner = new Dictionary<int, int>();
+        var fresh = 0;
         foreach (var x in evidence)
         {
             var s = _g[x].Signer;
             if (s != r.Target && !_g.InSubtree(s, r.Target)) { return false; }
             if (r.Keep.Contains(s)) { return false; }
-            bySigner[s] = bySigner.GetValueOrDefault(s) + 1;
+            if (!_g[x].Evidence)
+            {
+                bySigner[s] = bySigner.GetValueOrDefault(s) + 1;
+                fresh++;
+            }
         }
         foreach (var (s, n) in bySigner)
         {
             if (n > EvidenceSignerCap || _evidenceBySigner.GetValueOrDefault(s) + n > EvidenceSignerCap) { return false; }
         }
-        return _evidence + evidence.Count <= EvidenceCap;
+        return _evidence + fresh <= EvidenceCap;
     }
 
     // The history state of a set of parents: computed from all their ancestors, quarantine ignored.

@@ -126,7 +126,7 @@ export class RosterVerifier {
   async #offerOne(e) {
     const g = this.#g;
     const known = g.find(e.hash);
-    if (known !== null) {
+    if (known !== null && (e.evidenceOnly || (!this.#candidate.has(known) && !g.at(known).entry.evidenceOnly))) {
       if (!this.#candidate.has(known)) return { hash: e.hash, verdict: VERDICT.duplicate };
       return { hash: e.hash, verdict: VERDICT.refused, reason: this.#refusedCandidates.get(known) ?? INVALID.budget };
     }
@@ -141,7 +141,7 @@ export class RosterVerifier {
       if (p === null) return refused(INVALID.parent);
       parents.push(p);
     }
-    if (body.op === 'genesis' && g.count > 0) return refused(INVALID.genesis);
+    if (body.op === 'genesis' && g.count > 0 && known === null) return refused(INVALID.genesis);
     if (body.op !== 'genesis' && g.count === 0) return refused(INVALID.parent);
 
     const ancestors = new Bits(g.count + 1);
@@ -151,7 +151,8 @@ export class RosterVerifier {
     }
     const before = parents.length === 0 ? RosterState.empty : this.stateOf(parents);
     const facts = { signer: -1, cosigner: -1, target: -1, keep: [], rank: 0 };
-    const reason = await this.#validate(e, parents, ancestors, before, facts);
+    let reason = await this.#validate(e, parents, ancestors, before, facts);
+    if (reason === null && e.evidenceOnly) reason = INVALID.cap;
     const candidateParent = parents.some((p) => this.#candidate.has(p));
     const overCap = reason === INVALID.cap || reason === INVALID.budget;
     if (reason !== null && !overCap) return refused(reason);
@@ -159,6 +160,7 @@ export class RosterVerifier {
     if (overCap || candidateParent) {
       // Kept aside, in case a removal in this or a later offer needs it as evidence.
       if (body.op !== 'remove' || overCap) {
+        if (known !== null) return !this.#candidate.has(known) ? { hash: e.hash, verdict: VERDICT.duplicate } : refused(reason ?? INVALID.evidence);
         if (this.#refusedCandidates.size >= 2 * EVIDENCE_TOTAL) return refused(reason ?? INVALID.evidence);
         const c = this.#commit(e, parents, before, facts, true);
         this.#candidate.set(c.index);
@@ -186,7 +188,7 @@ export class RosterVerifier {
       for (let i = 0; i < g.count; i++) {
         if (!q.has(i) && !this.#candidate.has(i) && !g.at(i).evidence && !ancestors.has(i)) unseen++;
       }
-      const heads = this.#headIndices().filter((h) => !parents.includes(h)).length + 1;
+      const heads = this.#headIndices().filter((h) => h !== known && !parents.includes(h)).length + 1;
       arrival = parents.length !== 1 || unseen > WINDOW || heads > MAX_HEADS;
     }
 
@@ -200,7 +202,19 @@ export class RosterVerifier {
   // A candidate (kept aside, not accepted) is no parent's child until it is admitted as evidence.
   #commit(e, parents, before, facts, candidate) {
     const g = this.#g;
-    const node = g.add(e, parents);
+    const existing = g.find(e.hash);
+    const node = existing === null ? g.add(e, parents) : g.at(existing);
+    if (existing !== null) {
+      this.#candidate.clear(existing);
+      this.#refusedCandidates.delete(existing);
+      if (node.evidence) {
+        this.#evidenceBySigner.set(node.signer, this.#evidenceBySigner.get(node.signer) - 1);
+        this.#evidence--;
+        for (const p of parents) this.#children[p]--;
+        node.evidence = false;
+      }
+    }
+    node.entry = e;
     node.signer = e.body.op === 'genesis' ? node.index : facts.signer;
     node.cosigner = facts.cosigner;
     node.target = facts.target;
@@ -217,7 +231,7 @@ export class RosterVerifier {
       }
       node.takes = takes;
     }
-    this.#children.push(0);
+    if (existing === null) this.#children.push(0);
     if (!candidate && !parents.some((p) => this.#candidate.has(p))) {
       for (const p of parents) this.#children[p]++;
     }
@@ -440,7 +454,7 @@ export class RosterVerifier {
       let more = false;
       for (let i = 0; i < g.count; i++) {
         const n = g.at(i);
-        if (n.op !== 'merge' || !n.body.adopt || this.#adoptingMerges.has(i) || this.#candidate.has(i) || q.has(n.signer)) continue;
+        if (n.op !== 'merge' || !n.body.adopt || this.#adoptingMerges.has(i) || this.#candidate.has(i) || n.evidence || q.has(n.signer)) continue;
         this.#adoptingMerges.add(i);
         this.#adoptClosure(i);
         more = true;

@@ -77,3 +77,51 @@ for (const scenario of vectors.scenarios) {
     assert.deepEqual(state, scenario.state);
   });
 }
+
+test('storage evidence is a non-applying candidate and survives canonical replay', async () => {
+  const scenario = vectors.scenarios.find((s) => s.name === 'line');
+  const v = new RosterVerifier(vectors.account, vectors.generation, () => 0);
+  const wrappers = [];
+  for (const item of scenario.entries) {
+    const wrapper = JSON.stringify({ ...JSON.parse(item.wrapper), ...(item.label === scenario.entries.at(-1).label ? { evidence: true } : {}) });
+    const e = await parseEntry(utf8(wrapper));
+    wrappers.push(e.canonical);
+    const [result] = await v.offer([e]);
+    if (item === scenario.entries.at(-1)) {
+      assert.equal(result.verdict, 'refused');
+      assert.equal(result.reason, 'cap');
+      assert.equal(v.holds(e.hash), false);
+      assert.equal(JSON.parse(e.canonical).evidence, true);
+    }
+  }
+  const replay = new RosterVerifier(vectors.account, vectors.generation, () => 0);
+  await replay.offer(await Promise.all(wrappers.map((w) => parseEntry(utf8(w)))));
+  assert.deepEqual(replay.heads, v.heads);
+});
+
+test('a plain copy upgrades marked candidates without duplicating them, including removals', async () => {
+  const scenario = vectors.scenarios.find((s) => s.name === 'cascade');
+  for (const item of scenario.entries.toReversed()) {
+    const v = new RosterVerifier(vectors.account, vectors.generation, () => 0);
+    for (const prior of scenario.entries.slice(0, scenario.entries.indexOf(item))) await v.offer([await parseEntry(utf8(prior.wrapper))]);
+    const plain = await parseEntry(utf8(item.wrapper));
+    const marked = await parseEntry(utf8(JSON.stringify({ ...JSON.parse(item.wrapper), evidence: true })));
+    assert.equal((await v.offer([marked]))[0].verdict, 'refused');
+    const count = v.graph.count;
+    assert.equal((await v.offer([{ ...plain, sig: new Uint8Array(plain.sig.length) }]))[0].reason, 'signature');
+    assert.equal((await v.offer([plain]))[0].verdict, 'accepted', item.label);
+    assert.equal(v.graph.count, count);
+    assert.equal(v.graph.at(v.graph.find(plain.hash)).entry.evidenceOnly, false);
+    assert.equal((await v.offer([plain]))[0].verdict, 'duplicate');
+    if (plain.body.op === 'remove') assert.equal(v.state.active.has(plain.body.target.id), false);
+  }
+  const promotion = vectors.scenarios.find((s) => s.name === 'evidence-only-adopting-merge');
+  const v = new RosterVerifier(vectors.account, vectors.generation, () => 0);
+  for (const item of promotion.entries) await v.offer([await parseEntry(utf8(item.wrapper))]);
+  const plain = await parseEntry(utf8(JSON.stringify({ ...JSON.parse(promotion.entries.find((e) => e.label === 'adopt').wrapper), evidence: undefined })));
+  assert.equal((await v.offer([plain]))[0].verdict, 'accepted');
+  assert.equal(v.graph.at(v.graph.find(plain.hash)).evidence, false);
+  const budget = vectors.scenarios.find((s) => s.name === 'evidence'), held = new RosterVerifier(vectors.account, vectors.generation, () => 0);
+  for (const item of budget.entries) await held.offer([await parseEntry(utf8(JSON.stringify({ ...JSON.parse(item.wrapper), ...(budget.state.evidence.includes(item.label) ? { evidence: true } : {}) })))]);
+  assert.deepEqual((await held.offer(await Promise.all(budget.entries.slice(-2).reverse().map((e) => parseEntry(utf8(e.wrapper)))))).map((r) => r.verdict), ['duplicate', 'duplicate']);
+});

@@ -265,7 +265,7 @@ function parseTarget(node) {
   return { id: id(t.get('id'), 'body.target.id'), add: fromBase64Url(string(t.get('add'), 'body.target.add'), 'body.target.add', 32) };
 }
 
-const WRAPPER_FIELDS = ['body', 'sig', 'cosig', 'uv'];
+const WRAPPER_FIELDS = ['body', 'sig', 'cosig', 'uv', 'evidence'];
 const UV_FIELDS = ['by', 'cosigner'];
 const ASSERTION_FIELDS = ['authenticatorData', 'clientDataJSON', 'signature'];
 
@@ -311,13 +311,15 @@ export async function parseEntry(wrapper) {
   if (parsed.op !== 'remove' && size > MAX_BYTES) throw new RosterFormatError(REFUSAL.size, 'entry');
   if ((cosig === null) !== (parsed.cosigner === null)) throw new RosterFormatError(REFUSAL.cosigner, 'entry.cosig');
   if (uvCosigner !== null && parsed.cosigner === null) throw new RosterFormatError(REFUSAL.cosigner, 'entry.uv.cosigner');
-  return { bodyBytes: body, body: parsed, sig, cosig, uvBy, uvCosigner, hash: await entryHash(body), size, canonical: canonical(body, sig, cosig, uvBy, uvCosigner) };
+  const evidenceOnly = root.has('evidence') && bool(root.get('evidence'), 'entry.evidence');
+  if (root.has('evidence') && !evidenceOnly) throw new RosterFormatError(REFUSAL.value, 'entry.evidence');
+  return { bodyBytes: body, body: parsed, sig, cosig, uvBy, uvCosigner, evidenceOnly, hash: await entryHash(body), size, canonical: canonical(body, sig, cosig, uvBy, uvCosigner, evidenceOnly) };
 }
 
 const assertionJson = (a) => `{"authenticatorData":"${base64Url(a.authenticatorData)}","clientDataJSON":"${base64Url(a.clientDataJSON)}","signature":"${base64Url(a.signature)}"}`;
 
 // The wrapper as every sender and forwarder emits it: members in order, no whitespace.
-export function canonical(body, sig, cosig = null, uvBy = null, uvCosigner = null) {
+export function canonical(body, sig, cosig = null, uvBy = null, uvCosigner = null, evidenceOnly = false) {
   let out = `{"body":"${base64Url(body)}","sig":"${base64Url(sig)}"`;
   if (cosig) out += `,"cosig":"${base64Url(cosig)}"`;
   if (uvBy || uvCosigner) {
@@ -326,5 +328,6 @@ export function canonical(body, sig, cosig = null, uvBy = null, uvCosigner = nul
     if (uvCosigner) parts.push(`"cosigner":${assertionJson(uvCosigner)}`);
     out += `,"uv":{${parts.join(',')}}`;
   }
+  if (evidenceOnly) out += ',"evidence":true';
   return `${out}}`;
 }

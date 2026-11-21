@@ -69,7 +69,7 @@ public sealed class RosterNode
     }
 
     public int Index { get; }
-    public Entry Entry { get; }
+    public Entry Entry { get; internal set; }
     public EntryBody Body => Entry.Body;
     public EntryOp Op => Entry.Body.Op;
     public byte[] Hash => Entry.Hash;
