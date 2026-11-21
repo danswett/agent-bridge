@@ -73,7 +73,7 @@ test('only the machine a command is for can make its key, from its side of the e
 });
 
 test('a transfer must open in a workspace here, and is not also a resume', () => {
-  const transfer = { from: 'a'.repeat(32), session: 's', command: { body: 'b', by: 'k', mac: 'm' } };
+  const transfer = { from: 'a'.repeat(32), session: '2b6e1f0a-7c3d-4e5f-8a9b-0c1d2e3f4a5b', command: { body: 'b', by: 'k', mac: 'm' } };
   assert.match(checkLaunch({ agent: 'copilot', transfer }), /name the workspace it opens in/);
   assert.match(checkLaunch({ agent: 'copilot', transfer, resume: 'x' }), /not both/);
   assert.equal(checkLaunch({ agent: 'copilot', transfer, workspace: 'Bridge' }), null);

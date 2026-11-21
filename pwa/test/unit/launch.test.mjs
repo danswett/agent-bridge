@@ -165,6 +165,48 @@ test('a launch the machine would refuse is caught before it is sent, in the mach
   assert.match(checkLaunch({ workspace: 'B', attachments: [{ id: REQUEST }, { id: REQUEST.toUpperCase() }] }), /twice/);
 });
 
+const transfer = () => ({
+  from: '0123456789abcdef0123456789abcdef',
+  session: REQUEST,
+  command: { body: 'aA0_-', by: 'aA0_-', mac: 'aA0_-' },
+});
+
+for (const [field, values, reason] of [
+  ['from', [undefined, null, '', 'not-a-device-id', 'A'.repeat(32), `${'a'.repeat(31)}\n`, `${'a'.repeat(32)}\n`],
+    'transfer.from must be the device id of the machine the session is on'],
+  ['session', [undefined, null, '', 'not-a-uuid', REQUEST.replaceAll('-', '')],
+    'transfer.session must be the UUID of a session on that machine'],
+  ['command', [undefined, null],
+    'transfer.command is missing: a transfer needs a command signed by the device asking for it'],
+]) {
+  test(`a transfer with an invalid ${field} is refused in the host's words`, () => {
+    for (const value of values) {
+      assert.equal(checkLaunch({ workspace: 'B', transfer: { ...transfer(), [field]: value } }), reason);
+    }
+  });
+}
+
+for (const [part, max] of [['body', 2048], ['by', 96], ['mac', 64]]) {
+  test(`a transfer command's ${part} must be nonempty base64url within the host's limit`, () => {
+    for (const value of [undefined, null, 1, [], '', 'a=', 'a+', 'a/', 'a b', 'a\n', 'é', 'a'.repeat(max + 1)]) {
+      const t = transfer();
+      t.command[part] = value;
+      assert.equal(checkLaunch({ workspace: 'B', transfer: t }), 'the signed command is malformed');
+    }
+    const t = transfer();
+    t.command[part] = 'a'.repeat(max);
+    t.session = REQUEST.toUpperCase();
+    assert.equal(checkLaunch({ workspace: 'B', transfer: t }), null);
+  });
+}
+
+test('a transfer keeps the host validation order and accepts a well-formed signed command', () => {
+  assert.equal(checkLaunch({ workspace: 'B', transfer: transfer() }), null);
+  assert.equal(checkLaunch({ transfer: {} }), 'a session from another machine has no folder here; name the workspace it opens in');
+  assert.equal(checkLaunch({ resume: REQUEST, transfer: {} }), 'a transferred session is brought from another machine; name a session to resume or one to transfer, not both');
+  assert.equal(checkLaunch({ workspace: '', transfer: {} }), 'transfer.from must be the device id of the machine the session is on');
+});
+
 test('a prompt reaches the agent on one line, as the machine flattens it', () => {
   assert.equal(flattenPrompt('  first\nsecond\u2028third\t '), 'first second third');
   assert.equal(flattenPrompt(undefined), '');

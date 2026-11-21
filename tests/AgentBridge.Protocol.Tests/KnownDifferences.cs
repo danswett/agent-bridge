@@ -31,13 +31,6 @@ public static class KnownDifferences
         "TrustQuestion/missing-askedAt", "TrustQuestion/missing-label", "UpdateResult/missing-at", "UsageWindow/missing-label",
     ];
 
-    // #447: checkLaunch does not run TransferProtocol.Check on a launch's transfer.
-    static readonly string[] UncheckedTransfer =
-    [
-        "LaunchRequest/a-transfer-from-something-not-a-device-id", "LaunchRequest/a-transfer-of-something-not-a-uuid",
-        "LaunchRequest/a-transfer-without-a-command", "LaunchRequest/a-transfer-with-a-malformed-command",
-    ];
-
     // #766: the PWA carries a field's constraints but does not check them yet; the host does.
     static readonly string[] Constraints =
     [
@@ -57,9 +50,6 @@ public static class KnownDifferences
         new("SessionsSynced/not-a-record", 446, "pwa", "read",
             "refuses it: the snapshot does not end, so no session is removed and no hold lifted",
             "reads it as a synced with no revision, which ends the snapshot"),
-        .. UncheckedTransfer.Select(v => new KnownDifference(v, 447, "pwa", "check",
-            "LaunchProtocol.Check refuses it with TransferProtocol.Check's reason",
-            "checkLaunch takes it")),
         .. Constraints.Select(v => new KnownDifference($"AnswerRequest/{v}", 766, "pwa", "check",
             "Answers.Check refuses it: outside the field's constraints",
             "checkAnswer takes it: it does not check constraints yet")),

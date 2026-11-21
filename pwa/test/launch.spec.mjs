@@ -223,13 +223,14 @@ test.describe('bringing a session from another machine', () => {
 
   const AWAY = '2b4e6f80-1a3c-4d5e-8f70-9a0b1c2d3e4f';
   const CODEX_AWAY = '5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f';
+  const SOURCE = '0123456789abcdef0123456789abcdef';
   const body = (b64) => JSON.parse(Buffer.from(b64, 'base64url').toString('utf8'));
 
   test('its sessions are listed by machine, and one opens here as a copy in the workspace picked', async ({ page }) => {
     await openDemo(page);
     await openPanel(page);
     await expect(field(page, 'resume').locator('option')).toHaveText(['New session', 'Fix the flaky relay test · agent-bridge', 'Draft the transfer docs · on Studio PC', 'Profile the relay under load · on Studio PC']);
-    await field(page, 'resume').selectOption(`@demo-studio/${AWAY}`);
+    await field(page, 'resume').selectOption(`@${SOURCE}/${AWAY}`);
     // Its folder is on Studio PC: it opens in a workspace here, picked like a new session's.
     await expect(field(page, 'workspace')).toBeVisible();
     await expect(field(page, 'agent').locator('option')).toHaveText(['Copilot']);
@@ -240,7 +241,7 @@ test.describe('bringing a session from another machine', () => {
 
     await expect(status(page)).toHaveText('Session brought over and started. The original is still on its machine.');
     const [sent] = await log(page);
-    expect(sent).toMatchObject({ agent: 'copilot', workspace: 'notes', transfer: { from: 'demo-studio', session: AWAY } });
+    expect(sent).toMatchObject({ agent: 'copilot', workspace: 'notes', transfer: { from: SOURCE, session: AWAY } });
     expect(sent.resume).toBeUndefined();
     const command = body(sent.transfer.command.body);
     expect(command).toMatchObject({ v: 1, action: 'session.transfer', request: expect.stringMatching(UUID), principal: { kind: 'user' }, target: { session: AWAY }, to: 'demo' });
@@ -274,7 +275,7 @@ test.describe('bringing a session from another machine', () => {
     await openDemo(page, '&timeout=1000&retry=200');
     await openPanel(page);
     await script(page, { outcome: 'started', drop: true });
-    await field(page, 'resume').selectOption(`@demo-studio/${CODEX_AWAY}`);
+    await field(page, 'resume').selectOption(`@${SOURCE}/${CODEX_AWAY}`);
     await field(page, 'prompt').fill('Carry on from the last profile.');
     await launchButton(page).tap();
     await expect(status(page)).toHaveText(/^Session brought over and started in a new worktree\./, { timeout: 10000 });
@@ -287,7 +288,7 @@ test.describe('bringing a session from another machine', () => {
   test("the other machine's refusal is shown in its words", async ({ page }) => {
     await openDemo(page);
     await openPanel(page);
-    await field(page, 'resume').selectOption(`@demo-studio/${AWAY}`);
+    await field(page, 'resume').selectOption(`@${SOURCE}/${AWAY}`);
     // Remove it only when the host receives the transfer: an in-flight choices refresh must
     // not see it disappear before the press and turn this into a new-session launch (#1909).
     await page.evaluate((id) => {
@@ -301,11 +302,11 @@ test.describe('bringing a session from another machine', () => {
       };
     }, AWAY);
     await page.evaluate(() => window.agentBridgeDemo.launchPanel.refresh());
-    await expect(field(page, 'resume')).toHaveValue(`@demo-studio/${AWAY}`);
+    await expect(field(page, 'resume')).toHaveValue(`@${SOURCE}/${AWAY}`);
     await launchButton(page).tap();
     await expect(panel(page)).toHaveAttribute('data-launch', 'refused');
     await expect(status(page)).toHaveText('Not launched: the session could not be brought from the other machine: Studio PC refused: that session is not one its machine offers (it is not on its resume list).');
-    expect(await log(page)).toEqual([expect.objectContaining({ transfer: expect.objectContaining({ from: 'demo-studio', session: AWAY }) })]);
+    expect(await log(page)).toEqual([expect.objectContaining({ transfer: expect.objectContaining({ from: SOURCE, session: AWAY }) })]);
   });
 
   test('a machine that takes no sessions from others lists only its own', async ({ page }) => {

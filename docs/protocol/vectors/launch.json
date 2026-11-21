@@ -2064,38 +2064,6 @@
       "step": "read",
       "csharp": "reads it, the field its type's default",
       "pwa": "reads it, the field absent or filled in from another"
-    },
-    {
-      "vector": "LaunchRequest/a-transfer-from-something-not-a-device-id",
-      "issue": 447,
-      "differs": "pwa",
-      "step": "check",
-      "csharp": "LaunchProtocol.Check refuses it with TransferProtocol.Check's reason",
-      "pwa": "checkLaunch takes it"
-    },
-    {
-      "vector": "LaunchRequest/a-transfer-of-something-not-a-uuid",
-      "issue": 447,
-      "differs": "pwa",
-      "step": "check",
-      "csharp": "LaunchProtocol.Check refuses it with TransferProtocol.Check's reason",
-      "pwa": "checkLaunch takes it"
-    },
-    {
-      "vector": "LaunchRequest/a-transfer-without-a-command",
-      "issue": 447,
-      "differs": "pwa",
-      "step": "check",
-      "csharp": "LaunchProtocol.Check refuses it with TransferProtocol.Check's reason",
-      "pwa": "checkLaunch takes it"
-    },
-    {
-      "vector": "LaunchRequest/a-transfer-with-a-malformed-command",
-      "issue": 447,
-      "differs": "pwa",
-      "step": "check",
-      "csharp": "LaunchProtocol.Check refuses it with TransferProtocol.Check's reason",
-      "pwa": "checkLaunch takes it"
     }
   ]
 }

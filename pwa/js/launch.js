@@ -19,6 +19,8 @@ const MAX_NAME = 256;
 const MAX_ATTACHMENTS = 10;
 const TUNING = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,127}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const COMMAND_LIMITS = Object.freeze({ body: 2048, by: 96, mac: 64 });
+const commandPart = (s, max) => typeof s === 'string' && s.length > 0 && s.length <= max && !/[^A-Za-z0-9_-]/.test(s);
 
 export const LaunchOutcomes = Object.freeze(['started', 'unconfirmed', 'busy', 'refused', 'failed']);
 // Something may have started: an outcome from a newer host is never read as refused.
@@ -46,6 +48,11 @@ export function checkLaunch(l) {
   if (l.transfer != null) {
     if (l.resume != null) { return 'a transferred session is brought from another machine; name a session to resume or one to transfer, not both'; }
     if (l.workspace == null) { return 'a session from another machine has no folder here; name the workspace it opens in'; }
+    const t = l.transfer;
+    if (typeof t.from !== 'string' || t.from.length !== 32 || !/^[0-9a-f]{32}$/.test(t.from)) { return 'transfer.from must be the device id of the machine the session is on'; }
+    if (typeof t.session !== 'string' || !UUID.test(t.session)) { return 'transfer.session must be the UUID of a session on that machine'; }
+    if (t.command == null) { return 'transfer.command is missing: a transfer needs a command signed by the device asking for it'; }
+    if (Object.entries(COMMAND_LIMITS).some(([part, max]) => !commandPart(t.command[part], max))) { return 'the signed command is malformed'; }
   }
   if (l.workspace === '') { return 'the workspace is empty'; }
   if (l.permissions != null && l.permissions !== ASK && l.permissions !== ALLOW_ALL) { return `unknown permissions '${cut(l.permissions)}'; use '${ASK}' or '${ALLOW_ALL}'`; }
