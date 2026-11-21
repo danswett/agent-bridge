@@ -43,7 +43,7 @@ public sealed class SamePcPinHandoff
         {
             if (account() is not { Length: > 0 } current) { return "no-account"; }
             if (request.Account != current) { return "account-mismatch"; }
-            if (reader.HasPin() || File.Exists(pinPath)) { return "pin-exists"; }
+            if (ExistingPinState() is { } existing) { return existing; }
             (own, version) = (current, accountVersion);
         }
         RelayRoster? relay;
@@ -66,12 +66,18 @@ public sealed class SamePcPinHandoff
         lock (AccountGate)
         {
             if (version != accountVersion || account() != own) { return "account-mismatch"; }
-            if (reader.HasPin()) { return "pin-exists"; }
+            if (ExistingPinState() is { } existing) { return existing; }
             ct.ThrowIfCancellationRequested();
             var state = HostRosterPinWriter.Write(pinPath, new PersonGenesis("same-pc-app", request.GenesisHash), relay, own, clock, isCapSignGenesis);
             return state == SamePcPinProtocol.Pinned && mode() == SecuritySettings.Observe
-                && reader.Update(relay, own).Outcome != "verified" ? "pin-readback" : state;
+                && (reader.Update(relay, own).Outcome != "verified" || !reader.HasPin()) ? "pin-readback" : state;
         }
+    }
+
+    string? ExistingPinState()
+    {
+        if (reader.HasFailedPinReadback() && mode() == SecuritySettings.Observe) { return "pin-readback"; }
+        return reader.HasPin() || File.Exists(pinPath) ? "pin-exists" : null;
     }
 
     sealed record Request(string Account, string Generation, byte[] GenesisHash, byte[][] HeadHashes, string Device);

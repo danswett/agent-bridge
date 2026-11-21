@@ -109,8 +109,11 @@ are refused with a reason. This slice adds no app view or launch-policy enforcem
 return `invalid-request` before any fetch. The same caller rule applies: a freshly classified
 App on a LocalChannel without agent or script credentials; everything else is refused before any read.
 An existing pin refuses before the relay is asked. Account replacement invalidates pending handoffs
-and shares a gate with the final account check and pin commit. Success immediately populates the
-serving reader from the fetched, verified roster without a restart; the writer's capSign gate still applies.
+and shares a gate with the final account check and pin commit. In observe mode, success immediately
+populates the serving reader from the fetched, verified roster without a restart; in off mode,
+it writes the pin without feeding the reader or activating fleet membership. A failed observe-mode
+readback returns `pin-readback`, including later handoffs while the reader's latest pin verification
+remains failed. The writer's capSign gate still applies.
 
 Design §6.3 invariant 13: no session the bridge launched, nor any agent process, may stop or
 restart its host. On 2026-10-15 an agent ran `agent-ha-bridge restart`. The new daemon took

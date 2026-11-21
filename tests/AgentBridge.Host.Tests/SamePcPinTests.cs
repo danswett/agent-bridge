@@ -94,6 +94,46 @@ public sealed class SamePcPinTests : IDisposable
     }
 
     [Fact]
+    public async Task A_missing_pin_after_writer_readback_cannot_be_reported_as_pinned()
+    {
+        var serving = Reader();
+        var handoff = new SamePcPinHandoff(profile, () => hostAccount, _ => Task.FromResult<RelayRoster?>(Relay()),
+            serving, () => w.Now, _ => true, () =>
+            {
+                Assert.Equal(w.Entry("G").Hash, HostRosterReader.ReadPinned(PinPath).Genesis);
+                File.Delete(PinPath);
+                return SecuritySettings.Observe;
+            });
+
+        Assert.Equal("pin-readback", (await handoff.HandleAsync(Json(Request()), default)).State);
+        Assert.False(serving.HasPin());
+        Assert.Null(serving.Pinned(hostAccount));
+    }
+
+    [Fact]
+    public async Task A_failed_serving_reader_readback_is_reported_consistently_on_later_handoffs()
+    {
+        var serving = Reader();
+        var request = Request();
+        var handoff = new SamePcPinHandoff(profile, () => hostAccount, _ =>
+            {
+                fetches++;
+                return Task.FromResult<RelayRoster?>(Relay());
+            }, serving, () => w.Now, _ => true, () =>
+            {
+                if (File.Exists(PinPath)) { File.WriteAllText(PinPath, "{}"); }
+                return SecuritySettings.Observe;
+            });
+
+        Assert.Equal("pin-readback", (await handoff.HandleAsync(Json(request), default)).State);
+        Assert.True(File.Exists(PinPath));
+        Assert.Null(serving.Verified);
+        Assert.Equal("pin-readback", (await handoff.HandleAsync(Json(request), default)).State);
+        Assert.Equal("pin-readback", await Hand(request));
+        Assert.Equal(1, fetches);
+    }
+
+    [Fact]
     public async Task A_successful_handoff_does_not_activate_fleet_membership_while_roster_mode_is_off()
     {
         var serving = Reader();
