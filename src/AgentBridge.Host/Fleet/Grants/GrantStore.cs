@@ -27,23 +27,25 @@ public sealed class GrantStore
     readonly string folder, path;
     readonly P256KeyPair key;
     readonly AgentAuditLog audit;
+    readonly GrantScope knownOptions;
     readonly TimeProvider time;
     readonly Action<string, byte[]> write;
     GrantStoreProblem failure;
 
-    public GrantStore(string profileFolder, P256KeyPair key, AgentAuditLog audit, TimeProvider? time = null)
-        : this(profileFolder, key, audit, time, null) { }
-    internal GrantStore(string profileFolder, P256KeyPair key, AgentAuditLog audit, TimeProvider? time, Action<string, byte[]>? write)
+    public GrantStore(string profileFolder, P256KeyPair key, AgentAuditLog audit, GrantScope knownOptions, TimeProvider? time = null)
+        : this(profileFolder, key, audit, knownOptions, time, null) { }
+    internal GrantStore(string profileFolder, P256KeyPair key, AgentAuditLog audit, GrantScope knownOptions, TimeProvider? time, Action<string, byte[]>? write)
     {
         folder = Path.GetFullPath(profileFolder); path = Path.Combine(folder, FileName);
         if (folder != Path.GetFullPath(audit.Profile)) { throw new ArgumentException("audit profile mismatch", nameof(audit)); }
         this.key = key; this.audit = audit; this.time = time ?? TimeProvider.System;
+        this.knownOptions = knownOptions;
         this.write = write ?? ((file, bytes) => DeviceMacFile.Write(file, bytes, message => throw new IOException(message)));
     }
 
     public GrantStoreResult Issue(GrantDocument acceptedGrant) => Transaction(state =>
     {
-        var valid = GrantValidator.ValidateShape(acceptedGrant);
+        var valid = GrantValidator.Validate(acceptedGrant, knownOptions);
         if (!valid.Valid) { return (null, new(GrantStoreProblem.Malformed)); }
         var grant = valid.Grant!;
         if (state.Tombstones.Contains(grant.Id)) { return (null, new(GrantStoreProblem.Revoked)); }
@@ -133,8 +135,9 @@ public sealed class GrantStore
             { throw new StoreFault(GrantStoreProblem.Malformed); }
         }
         catch (FileNotFoundException) { state = new(1, 0, [], [], []); }
-        var (rows, complete) = GateAuditProjection.Load(folder);
-        if (!complete || !audit.Verify().Intact || !audit.Verify(launch: true).Intact)
+        long retained = 0;
+        var (rows, complete) = GateAuditProjection.Load(folder, boundary: (floor, _) => retained = floor);
+        if (!complete || retained > 0 || !audit.Verify().Intact || !audit.Verify(launch: true).Intact)
         { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
         var history = rows.Where(r => r.Action is "grant.issue" or "grant.revoke").ToArray();
         if (body is not null && history.Length == 0) { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }

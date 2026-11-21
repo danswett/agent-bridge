@@ -8,6 +8,8 @@ G1 landed: pure grant validation and policy-intersection evaluation only; no aut
 G2 adds `GrantStore` Issue/Revoke/TryGetUsable APIs only, with a 1 MiB/256-intent bound
 and no eviction. Every generation requires its matching intact audit intent/terminal;
 an incomplete transaction or replay refuses all use rather than repairing/resetting state.
+Issuance uses full G1 validation against the receiver's required known-options snapshot.
+Retired audit coverage refuses, including when the store is missing; it cannot reset tombstones.
 
 ## Authority and existing boundaries
 

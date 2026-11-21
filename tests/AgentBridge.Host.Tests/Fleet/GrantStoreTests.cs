@@ -12,17 +12,47 @@ public sealed class GrantStoreTests : IDisposable
     readonly P256KeyPair key = P256KeyPair.Generate();
     readonly FakeTimeProvider clock = new(new(2026, 11, 21, 18, 0, 0, TimeSpan.Zero));
     const string Device = "0123456789abcdef0123456789abcdef";
+    static readonly GrantScope Scope = new([Device], ["repo"], ["copilot"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
     string Folder => Path.Combine(root, "default");
     string PathName => Path.Combine(Folder, GrantStore.FileName);
     AgentAuditLog Audit => new(Folder, clock);
     GrantStore Open(P256KeyPair? signingKey = null, Action<string, byte[]>? write = null) =>
-        new(Folder, signingKey ?? key, Audit, clock, write);
+        new(Folder, signingKey ?? key, Audit, Scope, clock, write);
     GrantDocument Grant() => new(1, Guid.NewGuid(), "123",
         new("123", Device, "AQ", clock.GetUtcNow(), new('a', 64)), new(Device, "default"),
         [new("123", Device, Guid.NewGuid().ToString(), "AAAAAAAAAAAAAAAAAAAAAA", new(42, clock.GetUtcNow()))],
-        ["launch", "stop"], new([Device], ["repo"], ["copilot"], ["small"], ["default"], ["medium"], ["default"], ["ask"]),
+        ["launch", "stop"], Scope,
         new(3, 10, 6), clock.GetUtcNow(), 1, Roles: [], StopTargets: []);
     public void Dispose() { key.Dispose(); Directory.Delete(root, true); }
+
+    [Fact]
+    public void Issue_refuses_a_grant_the_G1_known_options_validator_refuses()
+    {
+        var grant = Grant() with { Scope = Scope with { Models = ["future-model"] } };
+        Assert.True(GrantValidator.ValidateShape(grant).Valid);
+        Assert.Equal(GrantRefusal.Identifier, GrantValidator.Validate(grant, Scope).Reason);
+        Assert.Equal(GrantStoreProblem.Malformed, Open().Issue(grant).Problem);
+        Assert.False(File.Exists(PathName));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Retired_audit_coverage_refuses_even_when_the_store_is_deleted(bool deleted)
+    {
+        var grant = Grant();
+        Assert.True(Open().Issue(grant).Usable);
+        Assert.True(Open().Revoke(grant.Id, 1).Usable);
+        clock.Advance(TimeSpan.FromDays(35));
+        Assert.True(Audit.Append(new("local", "fixture", "person:local", [], "host.fixture", "profile", "seen")));
+        clock.Advance(TimeSpan.FromDays(1));
+        Assert.True(Audit.Append(new("local", "fixture", "person:local", [], "host.fixture", "profile", "seen")));
+        Assert.True(AgentAuditLog.RetainedThrough(Path.Combine(Folder, "audit")) > 0);
+        Assert.True(GateAuditProjection.Load(Folder).Complete);
+        if (deleted) { File.Delete(PathName); }
+        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().Issue(grant).Problem);
+        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
+    }
 
     [Fact]
     public void Restart_preserves_expiry_and_tombstones_and_never_reissues_an_id()
