@@ -73,6 +73,13 @@ public sealed class FleetStopTests : IDisposable
         Assert.Equal("scope", (await End(session: other)).Reason);
         Assert.Equal("scope", (await End()).Reason);
         Assert.Equal(0, injector.Calls);
+        var otherSubject = grant.Subjects[0] with { Session = Guid.NewGuid().ToString() };
+        grant = grant with { Id = Guid.NewGuid(), Subjects = [grant.Subjects[0], otherSubject] };
+        Assert.True(store.Issue(grant).Usable);
+        var otherLaunch = Guid.NewGuid();
+        Assert.True(counters.Reserve(grant.Id, 1, otherLaunch, otherSubject, new('c', 64)).Accepted);
+        Assert.True(counters.Commit(otherLaunch, Target, "ask").Accepted);
+        Assert.Equal("scope", (await End()).Reason);
         grant = grant with { Id = Guid.NewGuid(), StopTargets = [Target] };
         Assert.True(store.Issue(grant).Usable);
         Assert.Equal("ended", (await End(session: id.Replace("-", "")[..16])).Outcome);
@@ -97,8 +104,17 @@ public sealed class FleetStopTests : IDisposable
         Assert.Equal("person-required", (await End()).Reason);
         Assert.Equal(0, injector.Calls);
         stops.LaunchHeld = null;
+        control.Opens = 0;
+        control.Before = () => { if (control.Opens == 2) { source.Sessions[0] = source.Sessions[0] with { Status = SessionStatus.Working }; } };
+        Assert.Equal("person-required", (await End()).Reason);
+        Assert.Equal(0, injector.Calls);
+        control.Before = null;
+        source.Sessions[0] = source.Sessions[0] with { Status = SessionStatus.Idle };
+        var confirmed = await stops.StopAuditedAsync(new() { Id = id, Request = Guid.NewGuid().ToString(), Confirm = "fake" }, null, personConfirmation: false);
+        Assert.Equal(StopOutcome.Refused, confirmed.Outcome);
         control.ExitOnTyping = false;
         Assert.Equal("still-running", (await End()).Reason);
+        Assert.Equal(new GrantUsage(1, 1, 1), counters.Read(grant.Id, 1).Usage);
         Assert.Equal(0, control.Terminations);
     }
     [Fact]
