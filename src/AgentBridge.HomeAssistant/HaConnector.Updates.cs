@@ -34,6 +34,9 @@ public sealed partial class HaConnector
     DateTimeOffset nextUpdateCheck;
     Task<UpdateRelease?>? updateCheck;
     bool updateCheckPressed;
+    // Once Check was requested here, Install must not return to the older background list.
+    // Background checks still use the cache; an Install with no prior Check keeps its old path.
+    bool updateInstallRevalidates;
     // A press of Check that came while a check was already under way: answered by a check of its
     // own once that one is done, not by one begun before it.
     bool updateCheckQueued;
@@ -227,6 +230,7 @@ public sealed partial class HaConnector
     // that is slow to answer must hold up no session's card.
     void StartCheck(DateTimeOffset now, bool pressed)
     {
+        if (pressed) { updateInstallRevalidates = true; }
         nextUpdateCheck = now + options.UpdateCheck;
         if (updateCheck is not null)
         {
@@ -344,7 +348,8 @@ public sealed partial class HaConnector
         {
             updateVerdict = null;
             updateProgress = ("checking", null);
-            installing = Task.Run(() => InstallAsync(updateCancel.Token), CancellationToken.None);
+            var revalidate = updateInstallRevalidates;
+            installing = Task.Run(() => InstallAsync(updateCancel.Token, revalidate), CancellationToken.None);
         }
         await PublishUpdateAsync(now, ct);
     }
@@ -366,12 +371,12 @@ public sealed partial class HaConnector
     // Invoke-BridgeSelfUpdate, in the host: the release looked for again (Install acts on what is
     // newest now, not on what the last check found), downloaded, and handed to the updater, which
     // replaces the host once it has exited and starts it again.
-    async Task InstallAsync(CancellationToken ct)
+    async Task InstallAsync(CancellationToken ct, bool revalidate)
     {
         string? target = null;
         try
         {
-            var release = await updates!.CheckAsync(ct).WaitAsync(options.UpdateCheckTimeout, time, ct);
+            var release = await updates!.CheckAsync(ct, pressed: revalidate).WaitAsync(options.UpdateCheckTimeout, time, ct);
             if (release is null)
             {
                 var detail = $"{Installed} is already installed, and it is the latest release";
