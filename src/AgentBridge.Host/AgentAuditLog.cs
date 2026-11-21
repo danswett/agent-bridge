@@ -95,7 +95,9 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var folderLock = Lock(folder, timing: LockTiming);
-                if (entry.Gate is not null) { Bootstrap(folder); }
+                // A first notice is evidence too, not a legacy prefix for the first answer to adopt.
+                var evidence = entry.Gate is not null || entry.Action == "push";
+                if (evidence) { Bootstrap(folder); }
                 if (entry.Gate is { } metadata)
                 {
                     metadata = metadata with { Sequence = checked(new[] { LastGateSequence(folder, false), LastGateSequence(folder, true),
@@ -110,7 +112,7 @@ public sealed class AgentAuditLog
                     line = line with { Gate = metadata, Reason = metadata.ReasonCode, DataSha256 = null, TextLength = null };
                 }
                 var launch = entry.Action == "session.launch";
-                var anchored = entry.Gate is not null || HasHeads(folder);
+                var anchored = evidence || HasHeads(folder);
                 var expected = ReadHead(folder, launch);
                 string[] faults = anchored ? new[] { Continuity(profile, false, log), Continuity(profile, true, log) } : [];
                 var fault = faults.Contains("coverage-break") ? "coverage-break" : faults.FirstOrDefault(f => f != "none") ?? "none";

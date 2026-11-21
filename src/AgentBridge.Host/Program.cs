@@ -552,11 +552,14 @@ async Task<int> ServeAsync(HostHandover handover)
     // app closed. Subscriptions live in the profile's own folder, for this account only. None at
     // all when push.enabled is off (the shadow host beside agent-ha-bridge, which already notifies
     // the phones): no subscription is taken and nothing is sent.
+    var agentAudit = new AgentAuditLog(identity.Folder, log: Log);
+    await using var phoneNotices = new PhoneNoticeRecorder(agentAudit, Log);
     await using var push = settings.Push
         ? new PushNotifier(source, machine, PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), identity.Account?.AccountId, Log), log: Log, trust: trustedPeers)
         : null;
     if (push is not null)
     {
+        push.NoticeOutcome += phoneNotices.Record;
         trustedPeers.Changed += push.RevalidateTrust;
         push.RevalidateTrust();
     }
@@ -624,7 +627,6 @@ async Task<int> ServeAsync(HostHandover handover)
     var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive) : null;
     // Made here, not beside RemoteDiagnostics, because launches record into it too (#737).
     var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
-    var agentAudit = new AgentAuditLog(identity.Folder, log: Log);
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit);
     launcher.SessionStarted += restore.Launched;
     launcher.StartScanning();
