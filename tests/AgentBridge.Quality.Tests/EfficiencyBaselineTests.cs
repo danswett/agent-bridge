@@ -16,6 +16,21 @@ public class EfficiencyBaselineTests
     [InlineData("metric-values")]
     [InlineData("entrypoint")]
     public async Task The_baseline_contract_holds_for_each_fixture(string scenario)
+        => await RunScenario(scenario);
+
+    [Fact]
+    public async Task Cpu_verdict_fails_only_over_the_spin_ceiling_before_budget_approval()
+        => await RunScenario("cpu-spin");
+
+    [Fact]
+    public async Task Cpu_verdict_reruns_once_then_decides()
+        => await RunScenario("cpu-rerun");
+
+    [Fact]
+    public async Task Cpu_verdict_reports_not_measured_when_the_control_is_noisy()
+        => await RunScenario("cpu-control");
+
+    private static async Task RunScenario(string scenario)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var start = new ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };

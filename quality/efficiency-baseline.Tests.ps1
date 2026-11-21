@@ -1,9 +1,65 @@
 #Requires -Version 7.4
-param([ValidateSet('elapsed', 'exit', 'replacement', 'readonly', 'no-survivors', 'partial', 'ambiguous', 'metric-values', 'entrypoint')][string] $Scenario)
+param([ValidateSet('elapsed', 'exit', 'replacement', 'readonly', 'no-survivors', 'partial', 'ambiguous', 'metric-values', 'entrypoint', 'cpu-spin', 'cpu-rerun', 'cpu-control')][string] $Scenario)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'efficiency-baseline.ps1')
 function Assert($Condition, [string] $Reason) { if (-not $Condition) { throw $Reason } }
+if ($Scenario -like 'cpu-*') {
+    function Samples([double[]] $Values) {
+        foreach ($value in $Values) { @{ status = 'available'; cpuSecondsPerMinute = $value } }
+    }
+    $idle = @(Samples @(0.01, 0.02, 0.03))
+    $borderline = @(Samples @(0.7, 0.8, 0.9))
+    $options = @{ Samples = $borderline; ControlSamples = $idle; Budget = 0.3
+        MarginFraction = 0.5; MarginFloor = 0.15; SpinMultiple = 20; BudgetsApproved = $false }
+    switch ($Scenario) {
+        'cpu-spin' {
+            $options.RerunSamples = $borderline; $options.RerunControlSamples = $idle
+            $result = Get-EfficiencyCpuVerdict @options
+            Assert ($result.verdict -eq 'pass' -and $result.budgetComparison -eq 'over margin') 'Proposed budget caused a failure or lost its comparison.'
+            $options.Samples = @(Samples @(6.02, 6.02, 6.02))
+            Assert ((Get-EfficiencyCpuVerdict @options).verdict -eq 'pass') 'Exact spin ceiling failed.'
+            $options.Samples = @(Samples @(6.03, 60, 6.04))
+            $result = Get-EfficiencyCpuVerdict @options
+            Assert ($result.verdict -eq 'fail' -and $result.attempts -eq 1) 'Spin did not fail immediately using the median less control.'
+            $options.Budget = 0; $options.Samples = @(Samples @(3.03, 3.04, 3.05))
+            Assert ((Get-EfficiencyCpuVerdict @options).verdict -eq 'fail') 'Zero budget lost the margin-floor spin ceiling.'
+        }
+        'cpu-rerun' {
+            $options.BudgetsApproved = $true
+            $result = Get-EfficiencyCpuVerdict @options
+            Assert ($result.verdict -eq 'not measured' -and $result.rerunRequired -and $result.attempts -eq 1) 'Borderline did not request exactly one rerun.'
+            $options.RerunSamples = $borderline; $options.RerunControlSamples = $idle
+            $result = Get-EfficiencyCpuVerdict @options
+            Assert ($result.verdict -eq 'fail' -and -not $result.rerunRequired -and $result.attempts -eq 2) 'Confirmed borderline did not fail after one rerun.'
+            $options.RerunSamples = @(Samples @(0.46, 0.47, 0.48))
+            $result = Get-EfficiencyCpuVerdict @options
+            Assert ($result.verdict -eq 'pass' -and $result.budgetComparison -eq 'within margin') 'Rerun at the inclusive margin did not pass.'
+            $options.Samples = @(Samples @(0.1, 0.2, 20))
+            $result = Get-EfficiencyCpuVerdict @options
+            Assert ($result.verdict -eq 'pass' -and $result.attempts -eq 1 -and $result.budgetComparison -eq 'within budget') 'Passing median unnecessarily used the rerun.'
+        }
+        'cpu-control' {
+            $options.ControlSamples = @(Samples @(0.11, 0.12, 0.13))
+            $result = Get-EfficiencyCpuVerdict @options
+            Assert ($result.verdict -eq 'not measured' -and $result.rerunRequired) 'Noisy control looked measured.'
+            $options.RerunSamples = $borderline; $options.RerunControlSamples = $options.ControlSamples
+            $result = Get-EfficiencyCpuVerdict @options
+            Assert ($result.verdict -eq 'not measured' -and -not $result.rerunRequired -and $result.attempts -eq 2 -and $result.reason -like '*control*') 'Persistent noise did not stop as not measured.'
+            $options.RerunControlSamples = $idle
+            Assert ((Get-EfficiencyCpuVerdict @options).verdict -eq 'pass') 'Clean rerun could not recover.'
+            $options.QuietCheckPassed = $false; $options.RerunQuietCheckPassed = $false
+            Assert ((Get-EfficiencyCpuVerdict @options).verdict -eq 'not measured') 'Failed quiet checks looked measured.'
+            $options.QuietCheckPassed = $true; $options.RerunQuietCheckPassed = $true
+            foreach ($bad in @(@{ status = 'partial'; cpuSecondsPerMinute = 0 }), @(@{ status = 'available'; cpuSecondsPerMinute = $null }), @(Samples @(0.1, [double]::NaN, 0.1))) {
+                $options.RerunSamples = $bad
+                Assert ((Get-EfficiencyCpuVerdict @options).verdict -eq 'not measured') 'Missing or invalid samples looked measured.'
+            }
+        }
+    }
+    Write-Output "PASS: $Scenario"
+    return
+}
 function Test-ReadOnlyCommands($Ast) {
     return -not @($Ast.FindAll({ param($a) $a -is [Management.Automation.Language.CommandAst] }, $true) | Where-Object {
         $_.GetCommandName() -match '^(Stop-Process|taskkill|Restart-.*|Debug-Process|Enter-PSHostProcess|Invoke-Expression|iex)$' -or
