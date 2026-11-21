@@ -1,9 +1,7 @@
 # The Beta acceptance run (#1185, #736): the real published Beta installer on a clean Windows
 # runner, as a person would install it. One architecture per invocation; the workflow runs both.
-# Steps are named so a failure says which one broke. This slice does steps 1, 2, 3 and 6
-# (download and verify, install and first run, the simulated agent, uninstall and leftovers);
-# pairing and driving from the PWA are NOT RUN until built (a relay built from the Beta's source
-# plus a fake GitHub, #1185 option e; no account, no secrets), and the feedback step is NOT RUN. Nothing unrun is ever reported PASS, and only a full PASS exits 0.
+# Steps 4/5 use a relay from the Beta's source, fake GitHub and an isolated host profile;
+# the PWA opens the simulated session read-only. Feedback remains NOT RUN.
 #
 #   pwsh quality/lab/beta-acceptance.ps1 -Arch x64 -Out out/accept
 #Requires -Version 7
@@ -16,6 +14,7 @@ param(
     [string]$Tag)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($env:AGENT_BRIDGE_SESSION -or $env:AGENT_BRIDGE_TOKEN) { throw 'Beta acceptance requires a clean disposable runner, not an agent session' }
 New-Item -ItemType Directory -Force $Out | Out-Null
 $Out = (Resolve-Path $Out).Path
 $key = if ($Arch -eq 'x64') { 'win-x64' } else { 'win-arm64' }
@@ -23,11 +22,15 @@ $steps = [ordered]@{}
 foreach ($n in '1-download', '2-install-first-run', '3-simulated-agent', '4-pair', '5-drive-from-pwa', '5b-feedback', '6-uninstall') {
     $steps[$n] = [ordered]@{ result = 'NOT RUN'; detail = '' }
 }
-$state = @{ Version = $null; Setup = $null; Root = $null; Sim = $null }
+$state = @{ Version = $null; Setup = $null; Root = $null; Sim = $null; Commit = $null }
 
-function Step([string]$name, [string[]]$Needs, [scriptblock]$body) {
+function Step([string]$name, [string[]]$Needs, [scriptblock]$body, [switch]$Required) {
     $unmet = @($Needs | Where-Object { $steps[$_].result -ne 'PASS' })
-    if ($unmet) { $steps[$name].detail = "not run: step $($unmet -join ', ') did not pass"; return }
+    if ($unmet) {
+        $steps[$name].detail = "not run: step $($unmet -join ', ') did not pass"
+        if ($Required) { $steps[$name].result = 'FAIL' }
+        return
+    }
     try {
         & $body
         $steps[$name].result = 'PASS'
@@ -36,6 +39,108 @@ function Step([string]$name, [string[]]$Needs, [scriptblock]$body) {
         $steps[$name].result = 'FAIL'
         $steps[$name].detail = $_.Exception.Message
         Write-Host "::error title=Beta acceptance $Arch step $name::$($_.Exception.Message)"
+    }
+}
+
+function Invoke-PairAndDrive([hashtable]$Context, [scriptblock]$Driver) {
+    try {
+        Step '4-pair' @('2-install-first-run') {
+            foreach ($operation in 'start-relay', 'sign-in', 'start-host', 'presence') { & $Driver $operation $Context }
+            $steps['4-pair'].detail = 'installed host signed in; relay presence confirmed with a fake account'
+        } -Required
+        Step '5-drive-from-pwa' @('4-pair', '3-simulated-agent') {
+            & $Driver 'drive' $Context
+            $steps['5-drive-from-pwa'].detail = 'PWA opened the simulated session and displayed its question; no answer or reply sent'
+        } -Required
+    }
+    finally {
+        try { & $Driver 'cleanup' $Context }
+        catch { $steps['4-pair'].result = 'FAIL'; $steps['4-pair'].detail += "; cleanup failed: $($_.Exception.Message)" }
+    }
+}
+
+function Start-AcceptanceProcess($c, [string]$File, [string[]]$Arguments, [switch]$Ready, [hashtable]$Environment = @{}) {
+    $psi = [Diagnostics.ProcessStartInfo]::new($File)
+    $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
+    foreach ($entry in $Environment.GetEnumerator()) { $psi.Environment[$entry.Key] = $entry.Value }
+    $p = [Diagnostics.Process]::Start($psi)
+    $c.Processes.Add($p)
+    $c.Readers.Add($p.StandardError.ReadToEndAsync())
+    if (-not $Ready) { $c.Readers.Add($p.StandardOutput.ReadToEndAsync()) }
+    return $p
+}
+
+function Wait-AcceptanceExit($p, [int]$Seconds = 60) {
+    if (-not $p.WaitForExit($Seconds * 1000)) { throw "acceptance $Operation process timed out after $Seconds s" }
+    if ($p.ExitCode -ne 0) { throw "acceptance $Operation process exited with $($p.ExitCode)" }
+}
+
+function Invoke-AcceptanceDriver([string]$Operation, [hashtable]$c) {
+    switch ($Operation) {
+        'start-relay' {
+            if (-not $state.Commit) { throw 'the Beta source commit was not resolved' }
+            if (Test-Path -LiteralPath $c.Source) { throw 'relay source folder already exists' }
+            $c.SourceOwned = $true
+            git -C $c.Repo worktree add --detach $c.Source $state.Commit
+            if ($LASTEXITCODE -ne 0) { throw 'could not check out the Beta source commit' }
+            $project = Join-Path $c.Source 'tools/AgentBridge.AcceptRelay/AgentBridge.AcceptRelay.csproj'
+            $p = Start-AcceptanceProcess $c 'dotnet' @('publish', $project, '-c', 'Release', '-o', $c.Build, '--source', 'https://packagefeedproxy.microsoft.io/nuget/v3/index.json')
+            Wait-AcceptanceExit $p 180
+            $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+            try { $listener.Start(); $c.SitePort = $listener.LocalEndpoint.Port } finally { $listener.Stop() }
+            $p = Start-AcceptanceProcess $c 'dotnet' @((Join-Path $c.Build 'accept-relay.dll'), 'serve', '--port', '0') -Ready -Environment @{ Relay__AllowedOrigins__0 = "http://127.0.0.1:$($c.SitePort)" }
+            $line = $p.StandardOutput.ReadLineAsync()
+            if (-not $line.Wait(30000) -or $line.Result -notmatch '^READY relay=(http://127\.0\.0\.1:\d+)$') { throw 'relay did not report loopback readiness within 30 s' }
+            $c.Relay = $Matches[1]
+            $c.Readers.Add($p.StandardOutput.ReadToEndAsync())
+        }
+        'sign-in' {
+            if (Test-Path -LiteralPath $c.Identity) { throw 'isolated identity folder already exists' }
+            New-Item -ItemType Directory -Path $c.Identity | Out-Null
+            $c.IdentityOwned = $true
+            '{"version":1,"usage":{"publish":false},"push":{"enabled":false},"sessions":{"restoreOnStart":false},"delivery":{"readOnly":true}}' | Set-Content (Join-Path $c.Identity 'config.json')
+            $hostFile = Get-ChildItem (Join-Path $state.Root 'current') -Filter 'agent-bridge-host.exe' -Recurse | Select-Object -First 1
+            if (-not $hostFile) { throw 'the installed host executable is missing' }
+            $c.HostExe = $hostFile.FullName
+            Wait-AcceptanceExit (Start-AcceptanceProcess $c $c.HostExe @('sign-in', '--relay', $c.Relay, '--profile', $c.Profile))
+        }
+        'start-host' {
+            $c.HostProcess = Start-AcceptanceProcess $c $c.HostExe @('serve', '--relay', $c.Relay, '--profile', $c.Profile, '--name', $c.Profile, '--copilot-home', (Join-Path $Out 'copilot-home'), '--claude-home', (Join-Path $Out 'empty-claude'), '--codex-home', (Join-Path $Out 'empty-codex'))
+        }
+        'presence' {
+            Wait-AcceptanceExit (Start-AcceptanceProcess $c 'node' @((Join-Path $PSScriptRoot 'beta-pwa.mjs'), 'presence', $c.Relay, $c.Profile))
+            if ($c.HostProcess.HasExited) { throw 'the installed host exited before presence was confirmed' }
+        }
+        'drive' {
+            Wait-AcceptanceExit (Start-AcceptanceProcess $c 'node' @((Join-Path $PSScriptRoot 'beta-pwa.mjs'), 'drive', $c.Relay, $c.Profile, "$($c.SitePort)", $state.Sim.SessionId, $Out)) 90
+        }
+        'cleanup' {
+            $errors = [Collections.Generic.List[string]]::new()
+            foreach ($p in $c.Processes) {
+                try { if (-not $p.HasExited) { $p.Kill($true); if (-not $p.WaitForExit(10000)) { throw 'process did not stop' } }; $p.Dispose() }
+                catch { $errors.Add("process cleanup: $($_.Exception.Message)") }
+            }
+            try {
+                if ($c.IdentityOwned) {
+                    $reference = Join-Path $c.Identity 'device-key.json'
+                    if (Test-Path -LiteralPath $reference) {
+                        $keyRef = Get-Content -LiteralPath $reference -Raw | ConvertFrom-Json
+                        if ($keyRef.Storage -eq 'tpm') {
+                            $key = [Security.Cryptography.CngKey]::Open($keyRef.Name, [Security.Cryptography.CngProvider]::new('Microsoft Platform Crypto Provider'))
+                            try { $key.Delete() } finally { $key.Dispose() }
+                        }
+                    }
+                    Remove-Item -LiteralPath $c.Identity -Recurse -Force
+                }
+            } catch { $errors.Add("identity cleanup: $($_.Exception.Message)") }
+            if ($c.SourceOwned) {
+                git -C $c.Repo worktree remove $c.Source
+                if ($LASTEXITCODE -ne 0) { $errors.Add('Beta source worktree cleanup failed') }
+            }
+            if ($errors.Count) { throw ($errors -join '; ') }
+        }
+        default { throw "unknown acceptance driver operation: $Operation" }
     }
 }
 
@@ -100,6 +205,10 @@ Step '1-download' @() {
     if ($sig.Status -notin 'Valid', 'NotSigned') { throw "the installer's signature is $($sig.Status)" }
     # Only a fully verified installer is ever recorded for step 2 to run.
     $state.Setup = $setup
+    $ref = gh api "repos/$Repo/git/ref/tags/$t" --jq .object.sha
+    if ($LASTEXITCODE -ne 0 -or $ref -notmatch '^[0-9a-f]{40}$') { throw 'could not resolve the Beta tag reference' }
+    $state.Commit = git -C (Join-Path $PSScriptRoot '../..') rev-parse --verify "$ref^{commit}"
+    if ($LASTEXITCODE -ne 0 -or $state.Commit -notmatch '^[0-9a-f]{40}$') { throw 'Beta tag commit is absent; checkout must fetch full history and tags' }
     $steps['1-download'].detail = "v$($manifest.version) $($d.fileName) $($file.Length) bytes, sha256 verified, signature $($sig.Status)"
 }
 
@@ -146,11 +255,14 @@ Step '3-simulated-agent' @('2-install-first-run') {
     $steps['3-simulated-agent'].detail = "session $($sim.SessionId): transcript written, hook replies as contracted. The host reading it is checked in step 5."
 }
 
-# Steps 4 and 5 (#1185 option e): the relay built from the Beta's source commit runs on the runner
-# against a fake GitHub, the installed host signs in to it and the PWA pairs through it. Not built
-# yet, so they stay NOT RUN, never PASS.
-$why = 'not built yet: relay from source plus fake GitHub (#1185 option e)'
-foreach ($n in '4-pair', '5-drive-from-pwa') { $steps[$n].detail = $why }
+$profile = 'beta-accept-' + [guid]::NewGuid().ToString('N')
+$pair = @{
+    Profile = $profile; Identity = Join-Path $env:LOCALAPPDATA "AgentBridge/$profile"; IdentityOwned = $false
+    Source = Join-Path $Out 'relay-source'; SourceOwned = $false; Repo = Join-Path $PSScriptRoot '../..'
+    Build = Join-Path $Out 'relay-build'; Processes = [Collections.Generic.List[Diagnostics.Process]]::new()
+    Readers = [Collections.Generic.List[object]]::new()
+}
+Invoke-PairAndDrive $pair ${function:Invoke-AcceptanceDriver}
 
 if (-not $state.Root) { $steps['6-uninstall'].detail = 'not run: nothing was installed' }
 else { Step '6-uninstall' @() {

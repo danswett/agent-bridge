@@ -31,8 +31,8 @@ Where this file and those comments disagree, the comments win and this file is f
 | `test-provision.ps1`: its checks against a stand-in `az` | **Written**, catalog suite `lab-scripts` (ring 0, ci.yml `light` on Linux, so a draft's fast ring runs it). Never run against Azure | Engineering |
 | `run.ps1` (§5) | **Nonexecuting interface draft.** Validates requests and plans only; `-Apply` always refuses. No scenario, result or evidence is produced | Engineering |
 | `test-run.ps1`: offline runner-interface checks | **Written**, in the same `lab-scripts` suite; no Azure or product execution | Engineering |
-| `beta-acceptance.ps1` and `.github/workflows/beta-acceptance.yml` (#1185): the Beta installer on hosted `windows-latest` and `windows-11-arm`, not the Azure lab | **Draft.** Steps 1, 2, 3, 6 (download and verify, silent install and first run, simulated agent, uninstall); pairing and driving from the PWA (a relay built from the Beta's source against a fake GitHub, no secrets) and feedback are NOT RUN. Not yet dispatched | Engineering |
-| `tools/AgentBridge.AcceptRelay` (#1272): the product relay beside an auto-approving fake GitHub, both on 127.0.0.1, so acceptance signs a host in with no secret or real account. `dotnet run --project tools/AgentBridge.AcceptRelay -- serve --port 0` prints `READY relay=http://127.0.0.1:<port>` | **Written**; catalog `accept-relay-build` builds it. No script uses it yet | Engineering |
+| `beta-acceptance.ps1` and `.github/workflows/beta-acceptance.yml` (#1185): the Beta installer on hosted `windows-latest` and `windows-11-arm`, not the Azure lab | **Draft, unverified.** Steps 1-6 except feedback are implemented; 4 signs the isolated installed host in and confirms relay presence, 5 opens its simulated session read-only in Chromium. Feedback remains NOT RUN; no answer/reply proof is claimed. Not yet dispatched | Engineering |
+| `tools/AgentBridge.AcceptRelay` (#1272): the product relay beside an auto-approving fake GitHub, both on 127.0.0.1, so acceptance signs a host in with no secret or real account | **Written**; step 4 publishes it from the resolved Beta tag commit and requires `READY relay=http://127.0.0.1:<port>` within 30 seconds | Engineering |
 | `fleet.yml`, the images and their S0 snapshots | **Unbuilt** | SRE |
 | Scenarios and the simulated agent (`tests/AgentBridge.AgentSim`) | **Unbuilt** | Engineering |
 | The `lab` environment, OIDC principal and reusable workflow | **Unbuilt**; nothing is scheduled or dispatchable | SRE, owner (bootstrap) |
@@ -47,6 +47,18 @@ Where this file and those comments disagree, the comments win and this file is f
 
 The catalog's `lab-e2e-simulated` stays `planned` and `lab-e2e-agents` stays `partial` (the
 shadow soak, not this lab) until a scenario runs here.
+
+For [S4b](https://github.com/danswett/agent-bridge/issues/1273), checkout includes all history
+and tags; the tag API resolves the selected Beta and git peels annotated tags to its commit.
+Only the internal NuGet feed `https://packagefeedproxy.microsoft.io/nuget/v3/index.json`
+is used for the relay publish. The product inherits no job token. A unique profile, disabled
+usage probes, empty agent homes and read-only delivery keep the fake run isolated.
+The `finally` teardown stops only owned process trees, removes its profile (including its TPM
+key, when present) and source worktree on success, failure and normal Ctrl-C. Hard process
+termination still requires disposal of the runner; no cleanup guarantee covers a killed job.
+Offline driver tests cover PASS/FAIL, prerequisite failures and cleanup without starting
+the product or a browser. Serial RED/GREEN proof is pending an approved disposable VM;
+no local execution, workflow dispatch or live-host permission is granted by this source.
 
 ## 2. Ownership
 
