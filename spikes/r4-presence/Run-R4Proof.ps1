@@ -1,6 +1,7 @@
 # Runs the R4 presence proof once, unelevated, on a machine with Windows Hello. See README.md.
 # Exit: 0 held, 1 failed, 2 inconclusive, 3 refused to run here.
 $ErrorActionPreference = 'Stop'
+$env:DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE = '1'
 if (-not $IsWindows) { Write-Host 'Windows only.'; exit 3 }
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if ($me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {

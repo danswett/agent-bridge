@@ -13,7 +13,7 @@ public class ProofTests
     static readonly ECDsa Key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
     static readonly BigInteger N = BigInteger.Parse("0FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", System.Globalization.NumberStyles.HexNumber);
 
-    sealed class FakeHello(Action<FakeHello>? onBegin = null, bool synced = false, bool badAttestation = false) : IHello
+    sealed class FakeHello(Action<FakeHello>? onBegin = null, bool synced = false, bool badAttestation = false, bool isolated = false) : IHello
     {
         public TaskCompletionSource<Call>? Pending;
         public int Cancels, Deletes;
@@ -21,6 +21,7 @@ public class ProofTests
         public Created Create(byte[] challenge)
         {
             made = true;
+            if (isolated) { return new(unchecked((int)0x80090027), [], [], false, false, "", "NTE_INVALID_PARAMETER; isolation: attestation none: Success"); }
             return badAttestation ? throw new IndexOutOfRangeException("attestation parse") : new(0, [1, 2, 3], Point(), synced, true, "tpm");
         }
         public Call AssertWithPerson(byte[] challenge) => new(0, Signed(challenge));
@@ -159,5 +160,16 @@ public class ProofTests
         Assert.Equal(7, Attacks.Pick([(5, []), (6, [200]), (7, [300, mine])], mine));
         Assert.Equal(0, Attacks.Pick([(5, []), (6, [200])], mine));
         Assert.Equal(0, Attacks.Pick([(7, [mine]), (8, [mine])], mine));
+    }
+
+    [Fact]
+    public void A_refused_create_whose_isolation_pass_made_a_passkey_records_it_runs_no_attack_and_deletes_it()
+    {
+        var hello = new FakeHello(isolated: true);
+        var report = Run(hello, null, Inject(_ => (true, "esc")));
+        Assert.Equal(1, hello.Deletes);
+        Assert.Empty(report.Steps);
+        Assert.Contains(report.Setup, l => l.Contains("NTE_INVALID_PARAMETER; isolation: attestation none: Success"));
+        Assert.Equal(2, report.ExitCode);
     }
 }

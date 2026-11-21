@@ -8,10 +8,10 @@ namespace R4Proof;
 // webauthn.dll (webauthn.h): a platform credential with user verification required, as the Windows
 // app would make one. The client data is ours, as for any native WebAuthn client; its origin is the
 // one the roster verifier expects, so a person's assertion here is checked exactly as in a roster.
-public sealed unsafe class Hello(string rpId, nint window) : IHello
+public sealed unsafe class Hello(string rpId, nint window, Action<Action> ui) : IHello
 {
     public const int Cancelled = unchecked((int)0x80090036); // NTE_USER_CANCELLED
-    const uint Platform = 1, UvRequired = 1, UvDiscouraged = 3, AttestationDirect = 3;
+    const uint Platform = 1, UvRequired = 1, UvDiscouraged = 3, AttestationNone = 1, AttestationDirect = 3;
     byte[]? credentialId;
 
     public static byte[] ClientData(string type, byte[] challenge, string rpId) => Encoding.UTF8.GetBytes(
@@ -21,22 +21,46 @@ public sealed unsafe class Hello(string rpId, nint window) : IHello
     public static bool PlatformAvailable => WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable(out var b) == 0 && b != 0;
     public static string ErrorName(int hr) => Marshal.PtrToStringUni(WebAuthNGetErrorName(hr)) ?? hr.ToString("x8");
 
+    // ui runs each webauthn.dll call on the owner window's own thread, so the hWnd it names is the caller's.
+    public const int InvalidParameter = unchecked((int)0x80090027); // NTE_INVALID_PARAMETER
+    readonly Action<Action> ui = ui;
+
     public Created Create(byte[] challenge)
     {
-        var rp = new Rp { Version = 1, Id = S(rpId), Name = S("R4 presence proof") };
-        var userId = Bytes(RandomNumberGenerator.GetBytes(16));
-        var user = new User { Version = 1, IdBytes = 16, Id = userId, Name = S("r4-proof"), DisplayName = S("R4 presence proof") };
-        var param = new CoseParam { Version = 1, Type = S("public-key"), Alg = -7 };
-        var pars = new List { Count = 1, Items = (nint)(&param) };
-        var client = Client(ClientData("webauthn.create", challenge, rpId));
-        var opts = new MakeOptions { Version = 3, Timeout = 120_000, Attachment = Platform, RequireResidentKey = 1, Uv = UvRequired, Attestation = AttestationDirect };
-        var hr = WebAuthNAuthenticatorMakeCredential(window, &rp, &user, &pars, &client, &opts, out var p);
-        if (hr != 0) { return new(hr, [], [], false, false, ""); }
+        var made = Make(challenge, window, 1, AttestationDirect);
+        if (made.Hr != InvalidParameter) { return made; }
+        // Diagnosis only: change one parameter at a time; stop at the first the API accepts. Whatever
+        // it makes is not used (the run stays inconclusive) and the runner's finally deletes it.
+        var log = $"{made.Note}; isolation:";
+        foreach (var (name, hwnd, rk, att) in new[] { ("foreground hWnd", GetForegroundWindow(), 1, AttestationDirect), ("resident key off", window, 0, AttestationDirect), ("attestation none", window, 1, AttestationNone) })
+        {
+            var hr = Make(challenge, hwnd, rk, att).Hr;
+            log += $" {name}: {ErrorName(hr)};";
+            if (hr != InvalidParameter) { break; }
+        }
+        return made with { Note = log };
+    }
+
+    Created Make(byte[] challenge, nint hwnd, int residentKey, uint attestation)
+    {
+        int hr = 0; nint p = 0;
+        ui(() =>
+        {
+            var rp = new Rp { Version = 1, Id = S(rpId), Name = S("R4 presence proof") };
+            var userId = Bytes(RandomNumberGenerator.GetBytes(16));
+            var user = new User { Version = 1, IdBytes = 16, Id = userId, Name = S("r4-proof"), DisplayName = S("R4 presence proof") };
+            var param = new CoseParam { Version = 1, Type = S("public-key"), Alg = -7 };
+            var pars = new List { Count = 1, Items = (nint)(&param) };
+            var client = Client(ClientData("webauthn.create", challenge, rpId));
+            var opts = new MakeOptions { Version = 3, Timeout = 120_000, Attachment = Platform, RequireResidentKey = residentKey, Uv = UvRequired, Attestation = attestation };
+            hr = WebAuthNAuthenticatorMakeCredential(hwnd, &rp, &user, &pars, &client, &opts, out p);
+        });
+        if (hr != 0) { return new(hr, [], [], false, false, "", ErrorName(hr)); }
         try
         {
             var a = (Attestation*)p;
             var data = Copy(a->AuthData, a->AuthDataBytes);
-            credentialId = Copy(a->CredentialId, a->CredentialIdBytes);
+            credentialId ??= Copy(a->CredentialId, a->CredentialIdBytes);
             return new(0, credentialId, CoseKey(data), (data[32] & 0x08) != 0, (data[32] & 0x04) != 0, Marshal.PtrToStringUni(a->Format) ?? "");
         }
         finally { WebAuthNFreeCredentialAttestation(p); }
@@ -55,11 +79,15 @@ public sealed unsafe class Hello(string rpId, nint window) : IHello
     Call Assert(byte[] challenge, uint uv, uint timeout, Guid* cancel)
     {
         var client = ClientData("webauthn.get", challenge, rpId);
-        var cd = Client(client);
-        var cred = new Credential { Version = 1, IdBytes = (uint)credentialId!.Length, Id = Bytes(credentialId), Type = S("public-key") };
-        var opts = new GetOptions { Version = 3, Timeout = timeout, Credentials = new List { Count = 1, Items = (nint)(&cred) }, Attachment = Platform, Uv = uv, CancellationId = (nint)cancel };
-        var hr = WebAuthNAuthenticatorGetAssertion(window, rpId, &cd, &opts, out var p);
-        if (hr != 0) { return new(hr, null); }
+        int hr = 0; nint p = 0;
+        ui(() =>
+        {
+            var cd = Client(client);
+            var cred = new Credential { Version = 1, IdBytes = (uint)credentialId!.Length, Id = Bytes(credentialId), Type = S("public-key") };
+            var opts = new GetOptions { Version = 3, Timeout = timeout, Credentials = new List { Count = 1, Items = (nint)(&cred) }, Attachment = Platform, Uv = uv, CancellationId = (nint)cancel };
+            hr = WebAuthNAuthenticatorGetAssertion(window, rpId, &cd, &opts, out p);
+        });
+        if (hr != 0) { return new(hr, null, ErrorName(hr)); }
         try { var a = (AssertionOut*)p; return new(0, new(Copy(a->AuthData, a->AuthDataBytes), client, Copy(a->Signature, a->SignatureBytes))); }
         finally { WebAuthNFreeAssertion(p); }
     }
@@ -107,5 +135,6 @@ public sealed unsafe class Hello(string rpId, nint window) : IHello
     [DllImport("webauthn.dll", CharSet = CharSet.Unicode)] static extern int WebAuthNAuthenticatorGetAssertion(nint hwnd, string rpId, ClientDataIn* client, GetOptions* opts, out nint assertion);
     [DllImport("webauthn.dll")] static extern void WebAuthNFreeCredentialAttestation(nint p);
     [DllImport("webauthn.dll")] static extern void WebAuthNFreeAssertion(nint p);
+    [DllImport("user32.dll")] static extern nint GetForegroundWindow();
     [DllImport("webauthn.dll")] static extern int WebAuthNDeletePlatformCredential(uint bytes, byte* id);
 }

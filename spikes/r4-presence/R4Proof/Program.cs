@@ -5,7 +5,7 @@ using Microsoft.Win32;
 using R4Proof;
 
 // R4Proof <agent-bridge-injector.exe> <results.md>, run by Run-R4Proof.ps1 (README.md).
-const string RpId = "r4-presence-proof.invalid";
+const string RpId = "localhost";
 if (args.Length != 2) { Console.Error.WriteLine("usage: R4Proof <agent-bridge-injector.exe> <results.md>"); return 3; }
 // The app runs unelevated; an elevated harness would prove nothing about same-user code beside it.
 if (new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
@@ -37,8 +37,8 @@ Console.CancelKeyPress += (_, e) =>
     Console.WriteLine("Ctrl+C: stopping after this step, then deleting the test passkey. Press Cancel on any Windows Security prompt.");
 };
 
-var owner = OwnWindow();
-var report = Runner.Run(new Hello(RpId, owner), RpId, Attacks.All(args[0]), () => Attacks.Arm(owner), () => stopping, Console.WriteLine, TimeSpan.FromSeconds(4));
+var (owner, dispatcher) = OwnWindow();
+var report = Runner.Run(new Hello(RpId, owner, a => dispatcher.Invoke(a)), RpId, Attacks.All(args[0]), () => Attacks.Arm(owner), () => stopping, Console.WriteLine, TimeSpan.FromSeconds(4));
 File.WriteAllText(args[1], report.Markdown(environment));
 Console.WriteLine();
 foreach (var s in report.Steps)
@@ -55,16 +55,17 @@ static string Integrity()
     return line?.Split(',')[0].Trim('"').Replace(@"Mandatory Label\", "") ?? "unknown";
 }
 
-// A window of this process, on its own UI thread, that every Hello call names as its parent, so
+// A window of this process, on its own UI thread, that every Hello call names as its parent (and is
+// made on, through its dispatcher), so
 // the attacks can tell this run's prompt (owned by it) from any other window.
-static nint OwnWindow()
+static (nint, System.Windows.Threading.Dispatcher) OwnWindow()
 {
-    var ready = new TaskCompletionSource<nint>();
+    var ready = new TaskCompletionSource<(nint, System.Windows.Threading.Dispatcher)>();
     var ui = new Thread(() =>
     {
         var w = new System.Windows.Window { Title = "R4 presence proof", Width = 420, Height = 90, Content = "R4 presence proof: follow the terminal." };
         w.Show();
-        ready.SetResult(new System.Windows.Interop.WindowInteropHelper(w).Handle);
+        ready.SetResult((new System.Windows.Interop.WindowInteropHelper(w).Handle, w.Dispatcher));
         System.Windows.Threading.Dispatcher.Run();
     }) { IsBackground = true };
     ui.SetApartmentState(ApartmentState.STA);

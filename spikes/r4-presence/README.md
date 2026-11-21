@@ -1,7 +1,7 @@
 # R4 presence proof harness (spike, not shipped)
 
 Brief 211 Phase 1. It asks whether code running as you, unelevated, can get a Windows Hello
-(webauthn.dll) assertion without you. It makes one test passkey for `r4-presence-proof.invalid`,
+(webauthn.dll) assertion without you. It makes one test passkey for `localhost` (deleted by its own id; other passkeys are untouched),
 attacks only its own Hello prompt, and deletes the passkey at the end. It never types, sees or stores
 your PIN, never touches the bridge, its profile, tokens or keys, and changes no Hello or TPM setting.
 
@@ -16,7 +16,7 @@ For the owner, on DSWETT-HOME, in a normal (not admin) terminal at the agent-bri
 Needs the .NET 10 SDK and the packages already in this machine's NuGet cache: it restores offline,
 never from nuget.org, and stops with a clear message if one is missing. Build output goes to
 `spikes\r4-presence\.out` and is deleted at the end. Ctrl+C is safe: it stops, cancels the open prompt and deletes the test passkey.
-If cleanup reports a failure, remove `r4-presence-proof.invalid` in Settings, Accounts, Passkeys.
+If cleanup reports a failure, remove the "R4 presence proof" passkey for localhost in Settings, Accounts, Passkeys.
 
 ## What it tries
 
@@ -30,6 +30,10 @@ minimises and closes the prompt. It also replays your assertion for a new challe
 verifier. Injected keys are dismissals, not a PIN guess (wrong PINs count toward TPM lockout): if the
 prompt ends during an injection, the input reached it and the proof FAILS; any assertion without you
 FAILS. Not tried: direct NCrypt access to the Hello key, keyboard hooks, WM_CHAR posting.
+
+If Windows refuses the passkey request as an invalid parameter, it retries once per single change
+(foreground window as parent, resident key off, attestation none), stops at the first Windows accepts,
+records which, deletes anything made and runs no attack: you may be asked for the PIN once more.
 
 Verdict: held (all blocked, exit 0), failed (exit 1), inconclusive (exit 2). Tests:
 `dotnet test spikes\r4-presence\R4Proof.Tests -c Release` (no Hello needed).

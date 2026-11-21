@@ -10,8 +10,9 @@ namespace R4Proof;
 public enum Outcome { Blocked, Failed, Inconclusive }
 public enum Conclusion { Held, Failed, Inconclusive }
 
-public sealed record Call(int Hr, Assertion? Result);
-public sealed record Created(int Hr, byte[] CredentialId, byte[] Key, bool BackupEligible, bool UserVerified, string Format);
+public sealed record Call(int Hr, Assertion? Result, string Note = "");
+// Note: webauthn.dll's name for a failure, and what a refused create's isolation pass tried.
+public sealed record Created(int Hr, byte[] CredentialId, byte[] Key, bool BackupEligible, bool UserVerified, string Format, string Note = "");
 // Owner: the harness's own window, passed to webauthn.dll as hWnd; the prompt must be owned by it.
 public sealed record Prompt(nint Hwnd, int Pid, string Describe, nint Owner = 0);
 public sealed record Step(string Name, string How, Outcome Outcome, string Raw);
@@ -86,7 +87,7 @@ public static class Runner
             say("Step 1 of 3: Windows Hello asks you to make a test passkey. Enter your PIN.");
             var seen = Task.Run(arm());
             var made = hello.Create(RandomNumberGenerator.GetBytes(32));
-            report.Setup.Add($"Create: {Hr(made.Hr)}, attestation '{made.Format}', backup-eligible {made.BackupEligible}, user verified {made.UserVerified}; prompt {seen.Result?.Describe}");
+            report.Setup.Add($"Create: {Hr(made.Hr)} {made.Note}, attestation '{made.Format}', backup-eligible {made.BackupEligible}, user verified {made.UserVerified}; prompt {seen.Result?.Describe}");
             if (made.Hr != 0) { return report; }
             var credential = new WebAuthnCredential(rpId, made.CredentialId, made.Key, made.Format is "tpm" or "packed", made.BackupEligible);
             say("Step 2 of 3: Windows Hello asks again. Enter your PIN.");
@@ -137,7 +138,7 @@ public static class Runner
             raw += note;
             if (!done.Wait(settle)) { return new(a.Name, a.How, sent ? Outcome.Blocked : Outcome.Inconclusive, raw + "; prompt still waiting for a person"); }
             var call = done.Result;
-            raw += $"; call ended {Hr(call.Hr)}" + (call.Result is { } r ? $", flags 0x{r.AuthenticatorData[32]:x2}" : "");
+            raw += $"; call ended {Hr(call.Hr)} {call.Note}" + (call.Result is { } r ? $", flags 0x{r.AuthenticatorData[32]:x2}" : "");
             return new(a.Name, a.How, call.Hr == 0 || a.EndingMeansDelivered ? Outcome.Failed : Outcome.Blocked, raw);
         }
         catch (Exception e) { return new(a.Name, a.How, Outcome.Inconclusive, raw + $"threw {e.GetType().Name}: {e.Message}"); }
