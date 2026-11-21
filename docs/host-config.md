@@ -506,7 +506,14 @@ The command does not create profiles or load identity, configuration or session 
 It is a metadata read, **not a chain-integrity verdict**. A malformed complete record,
 unsupported major version or read failure returns nonzero with a content-free error;
 earlier output may be partial. An incomplete final JSON prefix is ignored with a warning.
-Archive, durable chain heads and pruning changes remain separate #1401 A6 slices.
+Replay includes daily files in `audit\archive` as well as `audit`, ordered by day;
+duplicate day identities refuse the read. Heads retain the same daily filenames
+across a move; inspection never moves files or changes checkpoints. This adds no archive command.
+Retention conservatively preserves every nonempty run's records and anchored prefix,
+including archives, until lifecycle-aware release is implemented. Exceeding the agents
+size target visibly invalidates coverage, retaining observed totals with no eligible credit,
+not pruning a passing suffix. Launch quota includes archived launch days.
+The same-user filesystem trust limit remains; this is not repair or reset authority.
 Optional `gate` metadata is versioned and allow-listed by the same reader. Its host-only
 ids, sequence, route, actor kind and bounded reason code contain no action text or hashes.
 The internal per-run projection reports observed totals and incomplete evidence, never

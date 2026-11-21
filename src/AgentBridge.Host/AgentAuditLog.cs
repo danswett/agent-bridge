@@ -31,7 +31,8 @@ internal sealed record AuditLockTiming(Func<long> TickCount, Action Wait);
 // carried and never the text, so reading the log leaks nothing a prompt held. Agent files target
 // 30 days and 64 MiB, oldest files first, never deleting the day's file being written.
 // Retention skips coverage-break or unverified roots/chains with a host-log warning,
-// but not audit-incomplete alone; blocked pruning can exceed the target.
+// but not audit-incomplete alone; run evidence and its anchors are pinned, and
+// bounded-retention failure invalidates coverage without deleting those observations.
 //
 // An unwritable log refuses the action (the #1401 row in design/agent-launch-scope.md): Append
 // returns false and never throws, and the caller must then refuse the action it was auditing
@@ -116,11 +117,15 @@ public sealed class AgentAuditLog
                 var fault = faults.Contains("coverage-break") ? "coverage-break" : faults.FirstOrDefault(f => f != "none") ?? "none";
                 var file = Path.Combine(folder, FileFor(now, launch));
                 if (!File.Exists(file) && Path.GetFileName(file) == expected?.Tail) { throw new IOException("missing audit evidence must not be recreated"); }
-                if (Files(folder, launch).Any(f => StringComparer.Ordinal.Compare(f, file) > 0)) { throw new IOException("the agent audit clock moved backwards"); }
+                if (Files(folder, launch).Any(f => StringComparer.Ordinal.Compare(Path.GetFileName(f), Path.GetFileName(file)) > 0))
+                { throw new IOException("the agent audit clock moved backwards"); }
+                if (Files(folder, launch).Any(f => Path.GetFileName(f) == Path.GetFileName(file) && f != file))
+                { throw new IOException("the current audit day is archived"); }
                 var length = File.Exists(file) ? new FileInfo(file).Length : 0;
                 // Only this file receives a separator; predecessor tails still require LF.
                 var tail = TailHash(length > 0 ? file : null, promoteTail: true);
-                var previousFile = tail.HasLine ? null : Files(folder, launch).LastOrDefault(f => StringComparer.Ordinal.Compare(f, file) < 0);
+                var previousFile = tail.HasLine ? null : Files(folder, launch).LastOrDefault(f =>
+                    StringComparer.Ordinal.Compare(Path.GetFileName(f), Path.GetFileName(file)) < 0);
                 var predecessor = TailHash(previousFile);
                 if (previousFile is not null && !predecessor.HasLine) { throw new IOException("the previous agent audit day has no complete line"); }
                 var previous = tail.HasLine ? tail.Hash : predecessor.Hash;
@@ -130,7 +135,7 @@ public sealed class AgentAuditLog
                 line = line with { PreviousSha256 = header.Length == 0 ? previous : Hash(Encoding.UTF8.GetBytes(header[..^1])) };
                 var data = Encoding.UTF8.GetBytes(header + JsonSerializer.Serialize(line, Json) + "\n");
                 // Include a separator after a torn line, and refuse before creating or changing any file.
-                var used = launch ? new DirectoryInfo(folder).EnumerateFiles("launches-*.jsonl").Sum(f => f.Length) : length;
+                var used = launch ? Files(folder, true).Sum(f => new FileInfo(f).Length) : length;
                 var limit = launch ? MaxLaunchBytes : maxBytes;
                 if (used > limit - data.Length - (torn ? 1 : 0)) { throw new IOException("the agent audit quota is full"); }
                 var options = new FileStreamOptions { Mode = FileMode.Append, Access = FileAccess.Write, Share = FileShare.Read };
@@ -293,12 +298,12 @@ public sealed class AgentAuditLog
     {
         var expected = ReadHead(folder, launch);
         if (expected is null) { return "none"; }
-        if (expected.Fault == "coverage-break" || !File.Exists(Path.Combine(folder, expected.Root))
-            || !File.Exists(Path.Combine(folder, expected.Tail)) || !Files(folder, launch).Any()
-            || Files(folder, launch).Any(f => new FileInfo(f).Length == 0)) { return "coverage-break"; }
+        var files = Files(folder, launch).ToArray();
+        var oldTail = files.SingleOrDefault(f => Path.GetFileName(f) == expected.Tail);
+        if (expected.Fault == "coverage-break" || !files.Any(f => Path.GetFileName(f) == expected.Root)
+            || oldTail is null || files.Any(f => new FileInfo(f).Length == 0)) { return "coverage-break"; }
         var actual = CaptureHead(folder, launch, expected.RetiringRoot);
         if (actual.Root != expected.Root || actual.RootSha256 != expected.RootSha256) { return "coverage-break"; }
-        var oldTail = Path.Combine(folder, expected.Tail);
         if ((actual.Tail != expected.Tail || actual.Length > expected.Length)
             && File.Exists(oldTail) && PrefixIntact(oldTail, expected)) { return "audit-incomplete"; }
         if (actual.Tail != expected.Tail) { return "coverage-break"; }
@@ -306,7 +311,7 @@ public sealed class AgentAuditLog
         if (actual.Length == expected.Length) { return expected.Fault; }
         // Losing only LF does not prove that the complete JSON record's contents vanished.
         return actual.Length > expected.Length || actual.Length == expected.Length - 1
-            && EndsWithoutNewline(Path.Combine(folder, actual.Tail)) ? "audit-incomplete" : "coverage-break";
+            && EndsWithoutNewline(oldTail) ? "audit-incomplete" : "coverage-break";
     }
     static bool PrefixIntact(string file, Head expected)
     {
@@ -372,10 +377,20 @@ public sealed class AgentAuditLog
         }
     }
 
-    static IEnumerable<string> Files(string folder, bool launch) =>
-        Directory.EnumerateFiles(folder, $"{(launch ? "launches" : "agents")}-*.jsonl")
+    internal static IEnumerable<string> Files(string folder, bool launch)
+    {
+        var archive = Path.Combine(folder, "archive");
+        IEnumerable<string> archived;
+        try { archived = Directory.GetFiles(archive, $"{(launch ? "launches" : "agents")}-*.jsonl"); }
+        catch (DirectoryNotFoundException) { archived = []; }
+        var files = Directory.EnumerateFiles(folder, $"{(launch ? "launches" : "agents")}-*.jsonl").Concat(archived)
             .Select(f => TryDay(Path.GetFileName(f).Replace("launches-", "agents-", StringComparison.Ordinal), out _)
-                ? f : throw new IOException("the agent audit folder contains an invalid day name")).Order(StringComparer.Ordinal);
+                ? f : throw new IOException("the agent audit folder contains an invalid day name"))
+            .OrderBy(f => Path.GetFileName(f), StringComparer.Ordinal).ToArray();
+        if (files.Select(f => Path.GetFileName(f)).Distinct(StringComparer.Ordinal).Count() != files.Length)
+        { throw new IOException("the agent audit day has multiple copies"); }
+        return files;
+    }
 
     long LastGateSequence(string folder, bool launch, string? onlyFile = null)
     {
@@ -517,14 +532,31 @@ public sealed class AgentAuditLog
         { log("agent audit retention skipped: coverage-break or unverifiable chain"); return 0; }
         var today = now.UtcDateTime.Date;
         var files = new List<(DateTime Day, FileInfo Info)>();
-        foreach (var f in new DirectoryInfo(folder).EnumerateFiles("agents-*.jsonl"))
+        foreach (var path in Files(folder, false))
         {
+            var f = new FileInfo(path);
             if (TryDay(f.Name, out var day)) { files.Add((day, f)); }
             else { throw new IOException("the agent audit folder contains an invalid day name"); }
         }
         files.Sort((a, b) => a.Day.CompareTo(b.Day));
         // A future-dated file (clock stepped back) is never deleted, so it must not count or it would wipe every real day.
         var total = files.Where(f => f.Day <= today).Sum(f => f.Info.Length);
+        // Until lifecycle-aware release exists, protect every nonempty run and its entire anchored prefix.
+        if (expected is not null)
+        {
+            var replay = GateAuditProjection.Load(profile, alreadyLocked: true);
+            if (replay.Rows.Any(r => r.Gate is { Run: var run } && run != Guid.Empty)
+                || !replay.Complete && Math.Max(expected.Sequence, ReadHead(folder, true)?.Sequence ?? 0) > 0)
+            {
+                if (!replay.Complete) { log("agent audit retention preserved potentially active run evidence: audit-incomplete"); }
+                if (total > maxBytes)
+                {
+                    SaveHead(folder, false, expected with { Fault = "coverage-break" });
+                    log("agent audit retention cannot preserve bounded run coverage: coverage-break; evidence retained");
+                }
+                return;
+            }
+        }
         var earlier = files.Where(f => f.Day < today).Select(f => f.Day).DefaultIfEmpty(today).Max();
         var anchor = earlier.AddDays(1) < today ? earlier.AddDays(1) : today;
         var count = 0;

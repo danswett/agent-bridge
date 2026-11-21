@@ -56,8 +56,8 @@ public static class AuditCommands
                 if (status != "none") { fault?.Invoke(status); error.WriteLine($"audit: {status}; report incomplete."); }
             }
             if (anchored) { boundary?.Invoke(AgentAuditLog.RetainedThrough(folder), AgentAuditLog.Adopted(folder)); }
-            var files = Directory.GetFiles(folder, "*.jsonl");
-            foreach (var file in files.Where(IsDaily).Order(StringComparer.Ordinal))
+            var files = AgentAuditLog.Files(folder, false).Concat(AgentAuditLog.Files(folder, true));
+            foreach (var file in files.Where(IsDaily).OrderBy(f => Path.GetFileName(f), StringComparer.Ordinal))
             {
                 using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 var terminated = true;
