@@ -25,7 +25,7 @@ public sealed class LaunchStatusFlowTests : LaunchFlowFixture
         var rebuilt = Launcher(Config(), statusFolder: folder);
         var handler = LocalApi.Handler(new SessionService(source, new MachineInfo("host", "fixture", "windows", "test"), launcher: rebuilt) { Time = clock },
             null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")));
-        var endpoint = LocalEndpoint.For(Path.Combine(f.Root, "pipe"));
+        var endpoint = LocalEndpoint.For(f.Root);
         await using var pipe = LocalServer.Start(endpoint, handler);
         await using var channel = await LocalClient.ConnectAsync(endpoint);
         await channel.HelloAsync();
