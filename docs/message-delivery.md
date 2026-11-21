@@ -20,8 +20,12 @@ The older design below does not authorize an idle-Enter fallback or capability t
 
 ## Inactive qualification authority (A-ii-2a)
 The host-only grant kernel accepts one approval id once, bound to exact SHA,
-disposable VM/run/host identities and at most 60 minutes. Only trusted owner
-approval or SRE may issue; only SRE CLI on that disposable run may consume by CAS.
+disposable VM/run/host identities, the complete `QueueTarget` snapshot and the
+exact `QueueQualification` challenge nonce, for at most 60 minutes. Only trusted
+owner approval or SRE may issue; only SRE CLI on that disposable run may consume by CAS.
+Consume and current-grant checks require that same target and nonce; a second
+consume or any different target/challenge refuses. Journal replay preserves the
+binding and consumed state, not challenge object references.
 Every transition requires an atomic append and durable flush through the Fleet
 journal adapter; revocation never erases history. Missing adapters refuse.
 This slice supplies only fake adapters in tests: no CLI verb, owner approval UI,
