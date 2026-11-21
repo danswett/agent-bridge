@@ -96,6 +96,22 @@ public sealed class SessionService
         return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
     }
 
+    // An agent's own session.launch (#3237 S3), after AgentPipeLaunch's checks: the card's launch
+    // service, with the attributed agent principal as provenance and peer.
+    internal async Task<LaunchResult> LaunchAgentAsync(LaunchRequest request, string principal, AgentAuditLog audit, Func<string?> authorized)
+    {
+        if (launcher is null) { return new(LaunchOutcome.Refused, "the launch service is unavailable"); }
+        if (ReadOnly?.Invoke() is { } readOnly) { return new(LaunchOutcome.Refused, readOnly); }
+        // Again at dispatch: the caller still authorized, and the running launcher's own settings, not
+        // config.json's: extra arguments could still bypass ask.
+        string? Dispatch() => authorized() ?? (launcher.FleetConfig is not { } running ? "the launch settings are unavailable"
+            : running.Agent(request.Agent ?? "").ExtraArgs.Count > 0 ? "extraArgs: this agent starts with extra arguments on this machine; agents may not launch it"
+            : running.Workspaces.Any(w => w.Isolate && w.Label == request.Workspace) ? null : "the workspace is not an isolated launch workspace on this machine");
+        if (Dispatch() is { } problem) { return new(LaunchOutcome.Refused, problem); }
+        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null), refusal: Dispatch);
+        return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
+    }
+
     // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or
     // null. Set, it offers sessions.restore.
     public Func<RestoreNotice?>? Restore { get; init; }
@@ -169,6 +185,7 @@ public sealed class SessionService
     // diagnostics.get, through the relay only, to a device pinned as a person's (RemoteDiagnostics).
     public RemoteDiagnostics? Diagnostics { get; init; }
     public Lite.LiteReceiver? LiteReceiver { get; init; }
+    public Lite.LiteKill? LiteKill { get; init; }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -266,6 +283,8 @@ public sealed class SessionService
                 return await transfers.ServeAsync(secure, data);
             case Lite.LiteReceiver.Op when LiteReceiver is not null && channel is SecureChannel secure:
                 return await LiteReceiver.ServeAsync(secure, data, CancellationToken.None);
+            case Lite.LiteKill.Op when LiteKill is not null && channel is SecureChannel secure:
+                return LiteKill.HandleKill(Lite.LiteChannel.Of(secure), data);
             // A person's device through the relay, with a command it signed. Never this machine's
             // pipe, which agents and the MCP server reach, nor the Home Assistant connector.
             case TrustProtocol.Answer when TrustAnswers is not null && channel is SecureChannel secure:

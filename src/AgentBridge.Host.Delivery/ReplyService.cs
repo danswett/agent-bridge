@@ -391,7 +391,8 @@ public sealed partial class ReplyService : ISessionReplier
         var transcript = Path.Combine(options.CopilotHome, "session-state", session.Id, "events.jsonl");
         if (session.ProcessId is not { } pid) { return Done(Refused("the session's process is not known; reply at the machine")); }
         var process = stillCurrent is null && request.ClearConfirmation is null ? null : source.ProcessOf(session.Id);
-        if (!processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid)) { return Done(Stale("the session's process has ended")); }
+        var target = processes.GetAgentProcesses(AgentKind.Copilot).FirstOrDefault(p => p.Id == pid);
+        if (target is null) { return Done(Stale("the session's process has ended")); }
         if (guard.Refuse(pid) is { } refused) { return Done(Refused(refused)); }
         IReadOnlyList<string> staged = [];
         if (claim is not null)
@@ -411,7 +412,7 @@ public sealed partial class ReplyService : ISessionReplier
         // refused here: a screen without one may be asking something (a permission prompt, or
         // the folder-trust question before a transcript exists), which the checks in the turn
         // name better, and still refuse before any key.
-        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early } && request.ClearConfirmation is null) { return Done(Unverified(early)); }
+        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early } occupied && request.ClearConfirmation is null) { return Done(Unverified(early, occupied.State)); }
         // Caught up before the typing turn is taken, so the first reply to a session with a
         // long transcript reads it without holding up every other delivery; the read in the
         // turn only covers what has been written since.
@@ -473,6 +474,9 @@ public sealed partial class ReplyService : ISessionReplier
             }
             if (before.Asking && !noTranscriptYet) { return Done(Asking()); }
             from = before.ScannedTo;
+            // Which file was read to that boundary: a same-length replacement is not a transcript
+            // a failed reply's cleanup may still trust (#3153 review).
+            var boundary = JsonlMark.Of(transcript, from);
             // Typed only into Copilot's input box, empty and outside shell mode, as the screen
             // shows it now: words left in it would go with the reply, and in shell mode Enter runs
             // what it holds as a shell command. The keys are held to those rows (KeySend.Expect),
@@ -484,7 +488,7 @@ public sealed partial class ReplyService : ISessionReplier
             Func<string?>? clearFence = null;
             if (box is null)
             {
-                if (request.ClearConfirmation is null) { return Done(Unverified(problem!)); }
+                if (request.ClearConfirmation is null) { return Done(Unverified(problem!, state)); }
                 (box, problem, clearFence) = await ClearComposerAsync(session, pid, process, input, request, state, rememberClear, Freshness);
                 if (box is null) { return Done(retryChanged ? Stale(retryChangedReason) : Unverified(problem!)); }
             }
@@ -545,9 +549,14 @@ public sealed partial class ReplyService : ISessionReplier
             try { result = await injector.InjectAsync(pid, keys); }
             catch (Exception e)
             {
-                return new Attempt(Failed(AnswerOutcome.Unconfirmed, $"the injector failed while typing a reply into {Short(session.Id)}", e), null, KeysWent: true);
+                return new Attempt(Failed(AnswerOutcome.Unconfirmed, $"reply delivery to {Short(session.Id)} is uncertain after an injector failure; no background recovery will type further keys", e), null, KeysWent: true);
             }
             finally { timeline.InjectEnd(); }
+            if (stillCurrent is null && result.Status == InjectionStatus.Interrupted
+                && !result.Detail.Contains("console closed", StringComparison.Ordinal))
+            {
+                await ClearCopilotAsync(session, target, transcript, from, boundary, words, result);
+            }
         }
         finally { gate.DoneTyping(); }
 
@@ -561,13 +570,67 @@ public sealed partial class ReplyService : ISessionReplier
                 ? "Copilot's input box changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
                 : DeliveryReasons.Of(result.Detail))),
             InjectionStatus.Interrupted when result.Detail == WorkerInjector.ScreenChangedPartway =>
-                new Attempt(Unconfirmed("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent and its words are still in the box"), null, KeysWent: true),
+                new Attempt(Unconfirmed("reply delivery is uncertain after the input box changed; automatic recovery has ended and will not type further keys"), null, KeysWent: true),
             InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{DeliveryReasons.Of(result.Detail)}; part of the reply may have reached the session"), null, KeysWent: true),
             _ => Typing(AgentKind.Copilot, () => FirstOf(CopilotPrompts.Since(transcript, from).Prompts, p => CopilotReply.Matches(words, p.Content), p => p.At),
                 seen => ConfirmAsync(transcript, from, words, staged, timeline, seen)),
         };
 
         static Attempt Done(ReplyResult r) => new(r, null);
+    }
+
+    async Task ClearCopilotAsync(Session session, AgentProcess process, string transcript, long from, JsonlMark boundary, string words, InjectionResult write)
+    {
+        if (process.StartedAt is null || write.EnterWritten != false
+            || write.TextWritten is not { } length || length <= 0 || length > words.Length) return;
+        var owned = words[..length];
+        if (write.TextFingerprint != InjectionResult.Fingerprint(owned)) return;
+        using var expiry = new CancellationTokenSource(options.SubmitPatience, options.Time);
+        using var cleanup = CancellationTokenSource.CreateLinkedTokenSource(Stopping, expiry.Token);
+        try
+        {
+            if (Proceed() is not null) return;
+            var (_, _, _, box) = await InputBoxAsync(process.Id, cleanup.Token);
+            // Any empty, unsafe or ambiguous observation relinquishes ownership permanently.
+            if (box is not { Main: true, Complete: true, Shell: false, Working: false,
+                Vim: not CopilotVimMode.Normal, Content.Length: > 0, Lines: 1 }) return;
+            // Keep typed leading spaces: only the renderer's glyph and one padding space may go.
+            var row = box.Rows[1].Text;
+            if (row != "\u2503 " + owned && row != "\u276F " + owned) return;
+            var footer = box.Rows[^1].Row + 1;
+            // Still inside the original typing slot: one guarded clear, never Enter.
+            var plan = new KeyPlan([new("\u0005\u0015", false, 0, 0, box.Rows,
+            [
+                new(footer, ScreenCheck.WithAny, CopilotInputBoxReader.FooterSigns),
+                new(footer, ScreenCheck.WithoutParts, CopilotInputBoxReader.UnsafeFooter),
+                new(footer, ScreenCheck.WithNone, CopilotInputBoxReader.TurnSigns),
+                new(footer + 1, ScreenCheck.BlankFrom, []),
+            ])]) { Proceed = Proceed };
+            var result = await injector.InjectAsync(process.Id, plan, cleanup.Token);
+            log($"reply cleanup to {Short(session.Id)}: {length} proven characters, clear {result.Status}");
+        }
+        catch (OperationCanceledException) when (cleanup.IsCancellationRequested) { }
+        catch (Exception e) { log($"reply cleanup to {Short(session.Id)} ended: {e.GetType().Name}; delivery uncertain"); }
+
+        string? Proceed() => !cleanup.IsCancellationRequested
+            && processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == process.Id && p.StartedAt == process.StartedAt)
+            && probe.Active() is null && guard.Refuse(process.Id) is null && LaunchHeld?.Invoke(session.Id) is null
+            && source.Get(session.Id) is { Agent: AgentKind.Copilot, Status: SessionStatus.Idle, Question: null } live && live.ProcessId == process.Id
+            && inputs.TryGetValue(transcript, out var input)
+            // Any transcript advance relinquishes ownership, including before the worker's keys.
+            // ScannedTo moves only at a newline, so the file's own length must still be the
+            // boundary too: a record written without its newline yet is an advance; and it must
+            // still be the file read to it (#3153 review).
+            && (input.Read() is { Readable: true, Asking: false, Resumed: false } latest && latest.ScannedTo == from
+                    && Jsonl.Length(transcript) == from && Unreplaced()
+                || from == 0 && NotYetWritten(transcript, live))
+                ? null : "failed reply cleanup is no longer safe";
+
+        bool Unreplaced()
+        {
+            using var stream = Jsonl.Open(transcript);
+            return stream is not null && boundary.Holds(stream);
+        }
     }
 
     // Why a reply to a Copilot session with no transcript yet must wait, or null when its window
@@ -596,10 +659,10 @@ public sealed partial class ReplyService : ISessionReplier
 
     // Copilot's input box, as the session's screen shows it now, or why no reply can be typed
     // into it: a screen that cannot be read cannot say the box is empty.
-    async Task<(CopilotInputBox? Box, string? Problem, bool Seen, CopilotInputBoxState? State)> InputBoxAsync(int pid)
+    async Task<(CopilotInputBox? Box, string? Problem, bool Seen, CopilotInputBoxState? State)> InputBoxAsync(int pid, CancellationToken cancellationToken = default)
     {
         ConsoleScreen screen;
-        try { screen = await injector.ReadScreenAsync(pid); }
+        try { screen = await injector.ReadScreenAsync(pid, cancellationToken); }
         catch (Exception e) { return (null, Logged($"could not read the screen of pid {pid} for a reply", e), false, null); }
         if (screen.Rows is not { } rows) { return (null, DeliveryReasons.Of(screen.Problem ?? "the host could not read the session's screen; reply at the machine"), false, null); }
         return CopilotInputBoxReader.Read(rows);
@@ -947,7 +1010,11 @@ public sealed partial class ReplyService : ISessionReplier
     // What went wrong goes to the host's log only: the person is given fixed words, never an
     // exception's text (#802, #995).
     ReplyResult Failed(AnswerOutcome outcome, string what, Exception e) => new(outcome, Logged(what, e)) { Refusal = ReplyRefusal.ComposerUnverified };
-    static ReplyResult Unverified(string reason) => Refused(reason) with { Refusal = ReplyRefusal.ComposerUnverified };
+    static ReplyResult Unverified(string reason, CopilotInputBoxState? box = null) => Refused(reason) with
+    {
+        Refusal = box is { Main: true, Complete: true, Shell: false, Vim: not CopilotVimMode.Normal, Content.Length: > 0 }
+            ? ReplyRefusal.Occupied : ReplyRefusal.ComposerUnverified,
+    };
 
     string Logged(string what, Exception e)
     {

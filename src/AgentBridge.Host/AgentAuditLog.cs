@@ -488,16 +488,33 @@ public sealed class AgentAuditLog
             && DateTime.TryParseExact(name[7..^6], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out day);
     }
 
+    internal int Archive(DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            var folder = Path.Combine(profile, FolderName);
+            if (!HasHeads(folder)) { throw new IOException("missing durable audit head"); }
+            using var held = Lock(folder);
+            foreach (var launch in new[] { false, true })
+            {
+                if (Files(folder, launch).Any() && ReadHead(folder, launch) is null
+                    || Continuity(profile, launch, log) != "none")
+                { throw new IOException("audit evidence is incomplete"); }
+            }
+            return Retain(folder, now, archive: true);
+        }
+    }
+
     // Files older than KeepDays go, then the oldest until the rest fit, and the one being written
     // is never a candidate. The age cutoff never runs ahead of the newest earlier file by more
     // than a day, so a clock that jumped forward can't age out the whole history. Deleting stops
     // at the first file that can't be deleted, so newer days are never lost while an older one stays.
-    void Retain(string folder, DateTimeOffset now)
+    int Retain(string folder, DateTimeOffset now, bool archive = false)
     {
         var expected = ReadHead(folder, false);
         if (expected is not null && (HeadFault(folder, false) == "coverage-break"
             || !VerifyProfile(profile, false, log, chainOnly: true).Intact))
-        { log("agent audit retention skipped: coverage-break or unverifiable chain"); return; }
+        { log("agent audit retention skipped: coverage-break or unverifiable chain"); return 0; }
         var today = now.UtcDateTime.Date;
         var files = new List<(DateTime Day, FileInfo Info)>();
         foreach (var f in new DirectoryInfo(folder).EnumerateFiles("agents-*.jsonl"))
@@ -510,23 +527,34 @@ public sealed class AgentAuditLog
         var total = files.Where(f => f.Day <= today).Sum(f => f.Info.Length);
         var earlier = files.Where(f => f.Day < today).Select(f => f.Day).DefaultIfEmpty(today).Max();
         var anchor = earlier.AddDays(1) < today ? earlier.AddDays(1) : today;
+        var count = 0;
         foreach (var (day, info) in files)
         {
             if (day >= today) { break; }
-            if (day > anchor.AddDays(-KeepDays) && total <= maxBytes) { break; }
+            if (day > anchor.AddDays(-KeepDays) && (archive || total <= maxBytes)) { break; }
             var size = info.Length;
+            string? destination = null;
+            if (archive)
+            {
+                var archiveFolder = PrivateFolder.Ensure(Path.Combine(folder, "archive"), "the audit archive", "nothing is archived");
+                destination = Path.Combine(archiveFolder, info.Name);
+                if (Path.Exists(destination)) { throw new IOException("audit archive destination already exists"); }
+            }
             if (expected is not null)
             {
                 var next = files.First(f => f.Day > day).Info;
                 var removed = LastGateSequence(folder, false, info.FullName);
                 expected = expected with { Root = next.Name, RootSha256 = Hash(Encoding.UTF8.GetBytes(File.ReadLines(next.FullName).First())),
                     RetiringRoot = info.Name, RetainedThrough = Math.Max(expected.RetainedThrough, removed), Sequence = Math.Max(expected.Sequence, removed) };
-                // Commit the exact authorized deletion before removing evidence; a crash may leave this one file present.
+                // Commit the exact authorized retirement before removing evidence; a crash may leave this one file present.
                 SaveHead(folder, false, expected);
             }
-            info.Delete();
+            if (destination is null) { info.Delete(); }
+            else { File.Move(info.FullName, destination); }
             if (expected is not null) { expected = expected with { RetiringRoot = null }; SaveHead(folder, false, expected); }
             total -= size;
+            count++;
         }
+        return count;
     }
 }

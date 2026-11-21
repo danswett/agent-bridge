@@ -107,64 +107,6 @@ public sealed class RosterSyncTests
     }
 
     [Fact]
-    public void A_record_more_than_60_s_from_this_hosts_clock_is_stale_even_while_the_relay_says_online()
-    {
-        var old = Assert.Single(reader.Read([Frame("H", seq: 1, at: -61, ids: ["a"])]));
-        Assert.False(old.Online);
-        Assert.Equal(["a"], Ids(old));
-        Assert.False(Assert.Single(reader.Read([Frame("H", seq: 2, at: 61, ids: ["a"])])).Online);
-        Assert.True(Assert.Single(reader.Read([Frame("H", seq: 3, at: 60, ids: ["b"])])).Online);
-        // A half-open host: the relay still lists its last record as online, but nothing new comes.
-        time.Advance(TimeSpan.FromMinutes(2));
-        Assert.True(Assert.Single(reader.Read([Frame("H", seq: 3, at: 60, ids: ["b"])])).Online);
-        time.Advance(TimeSpan.FromSeconds(1));
-        var silent = Assert.Single(reader.Read([Frame("H", seq: 3, at: 60, ids: ["b"])]));
-        Assert.False(silent.Online);
-        Assert.Equal(["b"], Ids(silent));
-    }
-
-    [Fact]
-    public void A_record_without_epoch_seq_and_at_never_replaces_the_cached_order()
-    {
-        Assert.True(Assert.Single(reader.Read([Frame("H", seq: 5, ids: ["a"])])).Online);
-        var unordered = JsonSerializer.SerializeToElement(new
-        {
-            machine = world.Id("H"), online = true,
-            record = new { sessions = new[] { new { id = "x", node = "agent_bridge_x", state = "idle", since = Start } } },
-        });
-        var refused = Assert.Single(reader.Read([unordered]));
-        Assert.False(refused.Online);
-        Assert.Equal(["a"], Ids(refused));
-        // Had the unordered record been taken, nothing would be left to refuse this replay with.
-        var replay = Assert.Single(reader.Read([Frame("H", seq: 3, ids: ["old"])]));
-        Assert.False(replay.Online);
-        Assert.Equal(["a"], Ids(replay));
-    }
-
-    sealed class SteppedClock : TimeProvider
-    {
-        public DateTimeOffset Wall = Start;
-        public long Ticks;
-        public override DateTimeOffset GetUtcNow() => Wall;
-        public override long GetTimestamp() => Ticks;
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-    }
-
-    [Fact]
-    public void Cached_rows_age_by_the_monotonic_clock_whatever_the_wall_clock_does()
-    {
-        var clock = new SteppedClock();
-        var cached = new RelayFleetRoster(() => signed, clock);
-        Assert.True(Assert.Single(cached.Read([Frame("H", ids: ["a"])])).Online);
-        clock.Wall = Start.AddDays(2);
-        clock.Ticks += TimeSpan.FromMinutes(2).Ticks;
-        Assert.Equal(["a"], Ids(Assert.Single(cached.Read([Frame("H", online: false)]))));
-        clock.Wall = Start.AddDays(-2);
-        clock.Ticks += RelayFleetRoster.CacheAge.Ticks;
-        Assert.Empty(Assert.Single(cached.Read([Frame("H", online: false)])).Sessions);
-    }
-
-    [Fact]
     public async Task Peer_rows_from_a_host_in_the_signed_device_roster_appear_with_all_A1_fields()
     {
         var source = new FleetPublisherTests.Source();
@@ -198,7 +140,49 @@ public sealed class RosterSyncTests
         time.Advance(TimeSpan.FromMinutes(2));
         var stale = Rows(Assert.Single(reader.Read([Frame("H", online: false)])));
         Assert.True(stale[2].GetProperty("stale").GetBoolean() && stale[2].GetProperty("finished").GetProperty("value").GetBoolean());
+            }
+
+            [Fact]
+    public void A_record_with_missing_or_malformed_order_never_erases_the_cached_order()
+    {
+        Assert.Equal(["a"], Ids(Assert.Single(reader.Read([Frame("H", seq: 5, ids: ["a"])]))));
+        foreach (var order in new[] { "", "\"epoch\":\"00000000000000e1\",\"seq\":\"x\",\"at\":\"2026-11-19T12:00:09Z\",", "\"epoch\":\"00000000000000e1\",\"seq\":6,\"at\":\"soon\",",
+            "\"epoch\":\"\",\"seq\":1,\"at\":\"2026-11-19T12:01:00Z\",", "\"epoch\":\"00000000000000E9\",\"seq\":1,\"at\":\"2026-11-19T12:01:00Z\",", "\"epoch\":\"00000000000000e1\",\"seq\":0,\"at\":\"2026-11-19T12:01:00Z\"," })
+        {
+            var unordered = Assert.Single(reader.Read([Body("{\"machine\":\"" + world.Id("H") + "\",\"online\":true,\"record\":{" + order + "\"sessions\":[{\"id\":\"evil\",\"node\":\"n\",\"state\":\"idle\",\"since\":\"2026-11-19T12:00:00Z\"}]}}")]));
+            Assert.False(unordered.Online);
+            Assert.Equal(["a"], Ids(unordered));
+        }
+        Assert.False(Assert.Single(reader.Read([Frame("H", seq: 3, ids: ["old"])])).Online);
+        Assert.Equal(["b"], Ids(Assert.Single(reader.Read([Frame("H", seq: 6, ids: ["b"])]))));
+    }
+
+    [Fact]
+    public void Cache_age_follows_the_monotonic_clock_not_wall_clock_corrections()
+    {
+        var clock = new SplitClock(Start);
+        var timed = new RelayFleetRoster(() => signed, clock);
+        timed.Read([Frame("H", ids: ["a"])]);
+        clock.Advance(TimeSpan.FromHours(25));
+        clock.Wall -= TimeSpan.FromHours(2);
+        Assert.Empty(Assert.Single(timed.Read([Frame("H", online: false)])).Sessions);
+
+        timed.Read([Frame("H", ids: ["a"])]);
+        clock.Advance(TimeSpan.FromHours(1));
+        clock.Wall += TimeSpan.FromHours(30);
+        Assert.Equal(["a"], Ids(Assert.Single(timed.Read([Frame("H", online: false)]))));
     }
 
     static JsonElement Body(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
+    // Wall time and the monotonic timestamp move independently, as when the system clock is corrected.
+    sealed class SplitClock(DateTimeOffset wall) : TimeProvider
+    {
+        long ticks;
+        public DateTimeOffset Wall { get; set; } = wall;
+        public override DateTimeOffset GetUtcNow() => Wall;
+        public override long GetTimestamp() => ticks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public void Advance(TimeSpan by) { ticks += by.Ticks; Wall += by; }
+    }
 }

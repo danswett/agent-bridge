@@ -138,7 +138,7 @@
                         TextWrapping="NoWrap"
                         ToolTipService.ToolTip="{x:Bind Card.DriverPrincipal, Mode=OneWay}"
                         AutomationProperties.AutomationId="HeaderMeta">
-                        <Run x:Name="StatusWords" Text="{x:Bind Card.StatusText, Mode=OneWay}" /><Run Text="{x:Bind local:SessionRow.Separator(Card.HeaderPlace), Mode=OneWay}" /><Run Text="{x:Bind Card.HeaderPlace, Mode=OneWay}" />
+                        <Run x:Name="StatusWords" Text="{x:Bind Card.HeaderStatusText, Mode=OneWay}" /><Run Text="{x:Bind local:SessionRow.Separator(Card.HeaderPlace), Mode=OneWay}" /><Run Text="{x:Bind Card.HeaderPlace, Mode=OneWay}" />
                     </TextBlock>
                 </Grid>
             </StackPanel>
@@ -225,7 +225,9 @@
             <ListView.ItemContainerStyle>
                 <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
                     <Setter Property="Padding" Value="0" />
-                    <Setter Property="Margin" Value="0,0,8,0" />
+                    <!-- The scrollbar overlays the scroll content: keep its expanded lane and
+                         focus clearance inside the extent, below every card. -->
+                    <Setter Property="Margin" Value="4,4,4,20" />
                     <Setter Property="MinWidth" Value="0" />
                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                     <Setter Property="VerticalContentAlignment" Value="Stretch" />
@@ -253,8 +255,10 @@
             </ListView.ItemTemplate>
             <ListView.Footer>
                 <TextBlock
-                    Margin="4,0,0,0"
+                    Margin="4,4,12,20"
                     VerticalAlignment="Center"
+                    TextWrapping="NoWrap"
+                    TextTrimming="None"
                     Style="{StaticResource AbTypeMeta}"
                     Foreground="{ThemeResource AbText2}"
                     Text="{x:Bind Card.Delegates.MoreText, Mode=OneWay}"
@@ -1065,7 +1069,7 @@
                 <!-- The receipt (ui.md §6.5, #600, #617): words only, and only for an exception (a stall,
                      a wait, an outcome other than Delivered), in room kept from Send until the box is
                      next typed in; a polite live region, which hears every stage. -->
-                <Grid Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowStatus), Mode=OneWay, FallbackValue=Collapsed}">
+                <Grid x:Name="ReplyStatusSpace" Visibility="Collapsed">
                     <!-- The room the longest outcome needs, drawn clear and unheard (ReceiptWords.Room). -->
                     <TextBlock
                         Style="{StaticResource AbTypeMeta}"
@@ -1075,6 +1079,7 @@
                         AutomationProperties.AccessibilityView="Raw"
                         Text="{x:Bind Card.Reply.StatusRoom, Mode=OneWay}" />
                     <TextBlock
+                        x:Name="ReplyStatusLine"
                         Style="{StaticResource AbTypeMeta}"
                         TextWrapping="Wrap"
                         IsTextSelectionEnabled="True"
@@ -1084,6 +1089,13 @@
                         local:ReceiptMarkView.Announcement="{x:Bind Card.Reply.Announcement, Mode=OneWay}"
                         Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
                         local:ReceiptMarkView.Tone="{x:Bind Card.Reply.StatusTone, Mode=OneWay}" />
+                    <TextBlock
+                        x:Name="ReplyStatusGone"
+                        Style="{StaticResource AbTypeMeta}"
+                        TextWrapping="Wrap"
+                        Visibility="Collapsed"
+                        IsHitTestVisible="False"
+                        AutomationProperties.AccessibilityView="Raw" />
                 </Grid>
             </local:ReadingColumn>
         </ScrollViewer>

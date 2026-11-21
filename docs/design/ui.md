@@ -585,6 +585,17 @@ easing in, its duration out, and how far it travels.
 | Reorder | The session list (#164, #592) | A touch hold then drag; a mouse or pen drag; Alt+↑/↓; Move up or Move down; a screen reader's move action; an order change during a return's grace (§6.1, #950) | The whole card lifts, then follows the pointer 1:1 with no easing. Its neighbours ease one slot aside, leaving a card-sized gap where it will land: no insertion line. The order commits at release; the card settles into the gap and lowers. A key, menu or screen-reader move trades the moved card and its neighbours together, without a lift. Automatic return updates use the move, never the lift; return-grace order changes retarget changed rows from their drawn places. Only rows whose places changed move | `reorder`: standard, standard | Windows: pointer-driven in-list drag, Composition `Translation`, not OLE drag, its ghost or caption, nor `ReorderThemeTransition`. PWA: Pointer Events and transforms with frame-coalesced FLIP, not HTML5 drag-and-drop. Apple and Android: system list drag mapped to this contract | Instant gap, neighbours, drop and cancel. Only the held card follows the pointer |
 | Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
 
+Windows' reply-box exception line fades in place with `acknowledge`, including its
+reduced-motion cross-fade. On clearing, a drawn-only copy fades out with the same
+entry's exit token; it has no hit testing or automation presence. The live line's
+words and announcements change immediately, without waiting for that copy.
+
+Windows animates the list's existing selection bar using `selection`: it slides
+between realized rows intersecting the viewport, or fades in when the previous row
+is off screen. First draw and reduced motion are instant; recycling and unloading
+settle the bar. The row fill and the shipped container-relative bar geometry stay
+unchanged.
+
 **Lift and make room (#592).** The lift uses `fast` and `decelerate`: scale 1.02 about
 the card's centre, a 5% Bridge tint on `card` (4% in light), the drag shadow, a `stroke2`
 edge and `radius.card`. A selected card keeps its selection pill and selected overlay;
@@ -1335,6 +1346,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     draws chrome, that the last block is found by its name, which no other block has, and that every
     block, found and realised as a screen reader does it (FindItemByProperty, then Realize), is a
     list item numbered 1 to N in a set of N, none -1 ([app-windows.md](../app-windows.md)).
+    A Copy-Tab failure records the starting and landing focus paths, each Tab attempt, block
+    indices and realization, scroll offset/viewport/extent and rasterization scale. Focus-scroll
+    suppression uses the stop's position after leading alignment, even while that scroll is pending.
 - **Your messages:** a bubble at the right edge of the conversation's column (card fill,
   platform radius), at most 85% of the column's width, so a short message beside a short reply
   is still at the right (#255). The same in the stored turns above the live exchange, in the
@@ -1350,7 +1364,16 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     · #4" for a schedule (its `userMessageLabel`: "#" before a number, anything else in
     quotes); the
     `driven-badge` diamond and "Sent by an agent" for an agent, with `driverPrincipal` after it in
-    secondary text when the host knows; the diamond and "Automatic prompt" for `other`. Then the
+    secondary text when the host knows. On Windows, a nonempty agent `userMessageLabel` instead
+    reads "From: <session>" in that same agent-colour line, live and in history (#2928).
+    `PromptOrigin.Fact` cleans the untrusted name and caps it at 64 UTF-8 bytes; an empty cleaned
+    name keeps "Sent by an agent". The sender is not inferred from `driverPrincipal`.
+    The host captures `Limits.KeepStart(agentPrincipal, Limits.UserMessageLabel)` at arm time,
+    then binds that agent-principal snapshot to the prompt and keeps it in the turn's history
+    metadata, so a later driver never renames an earlier sender. The snapshot is display-only,
+    not an authenticated identity or an authorization/trust decision. Restoring an arm discards
+    unmatched attribution; labels already bound to a prompt stay.
+    For `other`, the diamond still reads "Automatic prompt". Then the
     age in meta style: when its turn began (`statusSince` when it started running, seen here). The
     protocol doesn't date a prompt, so one first seen after its turn has no age.
   - **Collapsed by default:** two lines of it in secondary text, then **Show prompt**, with the
@@ -1714,8 +1737,22 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   44 px Retry button instead of a gap. Remaining unread/queue/missing-reply UX is C2, not
   implemented or declared complete by C1; these rules supersede the older H3 wording for C2.
   It opens at the end, on the latest reply, and stays there as replies arrive until the person
-  scrolls; once they scroll, a new reply never moves the view (#1635, #1646). Reasoning, tool lines,
-  delegate events and questions are still to come. The Windows app loads earlier turns a page
+  scrolls; once they scroll, a new reply never moves the view (#1635, #1646).
+  A question brought into view, a block requested by a screen reader or any other move back from
+  the end the app did not ask for releases the Windows end pin too: later layout must not scroll that destination away,
+  even before navigation first moves.
+  An unrelated final scroll event cannot end that custody before the requested target is reached.
+  A held scrollbar owns the view from its press until release or cancellation, before its
+  first movement as well as during the drag; history arriving meanwhile cannot restore the pin.
+  Losing capture or rewatching history cancels that pointer's scrollbar custody and pressed hold even if its release happens outside the window.
+  End-following also waits while a finger is down or the pointer is over or pressed in the
+  conversation, then follows the latest measured end when the last hold ends, if still pinned.
+  A held end-pinned view stops the older-prepend timer until the last hold ends, so no prepend lacks its end correction.
+  Opening another session still places its latest reply despite an inherited hold; subsequent
+  scrolling or navigation cancels that queued placement. Unloading or replacing the session
+  clears scrollbar and navigation custody. A nearest-edge bring request already spanning the viewport takes
+  no navigation latch unless an explicit alignment or offset asks it to move.
+  Reasoning, tool lines, delegate events and questions are still to come. The Windows app loads earlier turns a page
   at a time through "Load earlier messages" or scrolling upward within a screen of the top
   (#1593 W2b-1). Both use the history client's cursor and deduplication; the first visible
   stored turn keeps its screen position as a page is inserted above it. With history, a
@@ -3323,6 +3360,7 @@ that survives a failed turn never hides the error behind "Delegating".
 | Code shown | "Waiting for sign-in · code expires *time*" | None (the sheet is open) |
 | Code expired | "Code expired" | Try again (a new request) |
 | Signed in, confirming (`recovery: pending`) | "Signed in · waiting for *n* sessions to confirm" | None |
+| Signed in here, the host's `pending` not yet come (`signin.done` first) | Same line, said once, held at most 5 s | Sign in (never Show code, whatever `recovery` says) |
 | Recovered (the host cleared `signInNeeded`) | "Signed in · *n* sessions recovered" for 60 s, then gone; or "Recovered by itself" when no person signed in | None |
 | Refused (the machine refused the request) | "Sign-in refused · *reason*" | Try again (a new request) |
 | Failed | "Sign-in failed" (`signin.done` carries no reason) | Try again (a new request) |
@@ -3356,6 +3394,9 @@ count, and its row to "Needs sign-in". Sessions that confirm leave the count one
   and it doesn't send the person to the machine: that's only for the host's `signIn: machine`.
 - **Expired:** the code is hidden and the sheet says "Code expired" with Try again, even before
   the host updates.
+- In the expired and couldn't-be-shown states, on both clients **Cancel** is the one filled
+  (accent) button and the default, as well as the Escape action; **Try again** is secondary.
+  The code-shown rule above is unchanged.
 - **Success:** the sheet closes and the banner goes to "Signed in · waiting for *n* sessions to
   confirm", not to recovered. Nothing is typed for the sessions, so each confirms on its next
   turn. A session that died mid-turn is to offer a **Continue** like §6.12's, from `signin.done`'s

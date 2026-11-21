@@ -131,8 +131,8 @@ public sealed class AppUpdateViewModel : Observable
     // The bar's words, and Settings' (ui.md §8: what it is and the next step, nothing to explain).
     public static string Ready(string version) => $"Version {version} is ready. Restart to update.";
 
-    // An install that failed, in one sentence, its reason a kind, never the machine's detail (a
-    // process id, a path, an error's own text: those are in the log). While the release is still
+    // An install that failed, in one sentence: a known profile blocker includes its name and PID;
+    // other reasons stay a kind, never a path or an error's own text. While the release is still
     // ready the bar's button, Try again, is the next step; otherwise the background download that
     // offers it again (Creative on #719, 6675195544).
     public static string DidNotInstall(string why, bool again) =>
@@ -141,6 +141,7 @@ public sealed class AppUpdateViewModel : Observable
     // What kind of reason the updater gave, as the person is told it.
     public static string Reason(string why) => why switch
     {
+        _ when PackageProcesses.RefusalDetail(why) is { } detail => detail,
         _ when why.Contains("runs from this installation", StringComparison.Ordinal) || why.Contains("runs and cannot be looked at", StringComparison.Ordinal)
             => "another bridge profile is running from this installation",
         _ when why.Contains("already being installed", StringComparison.Ordinal) => "another update is already being installed",
@@ -151,7 +152,10 @@ public sealed class AppUpdateViewModel : Observable
         _ when why.StartsWith("no update has been downloaded", StringComparison.Ordinal) || why.StartsWith("no downloaded update", StringComparison.Ordinal)
             => "nothing has been downloaded yet",
         _ when why.StartsWith("the host's status could not be read", StringComparison.Ordinal) => "the host didn't answer",
+        _ when why.Contains(InstallationFiles.TimedOut, StringComparison.Ordinal) => InstallationFiles.TimedOut,
+        // Before Unknown: a confirmed holder can be named beside "could not be checked for 1 other".
         _ when why.Contains(UpdateBlockedException.Prefix, StringComparison.Ordinal) => "another program is holding a file in the installation",
+        _ when why.Contains(InstallationFiles.Unknown, StringComparison.Ordinal) => "Windows file holders could not be checked; no file holder was confirmed",
         _ when why.StartsWith("installing ", StringComparison.Ordinal) && why.Contains(" failed: ", StringComparison.Ordinal) => "the installer reported an error",
         _ => "of an unexpected error",
     };
