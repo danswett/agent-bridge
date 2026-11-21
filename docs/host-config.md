@@ -17,7 +17,7 @@ follow.
 uses this machine's local host pipe and the session's `AGENT_BRIDGE_TOKEN`, with
 the same own-account lite identity, off and kill gates as `fleet.find`; no HA fallback.
 Names are trimmed, whitespace collapsed, and `Copilot: ` / `Claude: ` and ` Status`
-decorations removed before case-sensitive exact matching. Only idle, working, agents
+decorations removed before case-sensitive exact matching. Only idle, working, waiting, agents
 and shell sessions on online machines qualify. `--machine` pins an exact machine id or name.
 Each match has `node`, `machine`, `state`, `name`; JSON has `result` and `matches`.
 Exits: 0 one live match; 3 notFound; 4 ambiguous (all candidate machines shown);

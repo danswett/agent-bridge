@@ -301,7 +301,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         if (RoutingRoster is not IScopedFleetRoster scoped) { throw new InvalidOperationException("refused: fleet.find needs an authenticated account-scoped registry"); }
         FleetRosterSnapshot snapshot;
         try { snapshot = await scoped.ReadScopedAsync(ct); }
-        catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidDataException or IOException or HttpRequestException or TimeoutException
+        catch (Exception e) when (e is JsonException or FormatException or KeyNotFoundException or InvalidDataException or IOException or HttpRequestException or TimeoutException
             || e is InvalidOperationException && !e.Message.StartsWith("refused:", StringComparison.Ordinal))
         { throw new InvalidOperationException($"fleet.find registry-get: {e.Message}", e); }
         var fleetScope = snapshot.FleetScope;

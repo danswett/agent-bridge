@@ -32,7 +32,7 @@ public sealed class SessionsFindCommandTests
                 if (op == "fleet.find")
                 {
                     var request = JsonSerializer.SerializeToElement(data);
-                    Assert.Equal("SG Lead", request.GetProperty("name").GetString());
+                    Assert.Equal(" SG  Lead ", request.GetProperty("name").GetString());
                     Assert.Equal("VM-A", request.GetProperty("machineName").GetString());
                 }
                 return Task.FromResult(op == "fleet.find" ? Json(response

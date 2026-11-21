@@ -138,7 +138,27 @@ public sealed class FleetFindTests : IDisposable
     }
 
     [Theory]
+    [InlineData("Build Status Status", "Build Status")]
+    [InlineData("Copilot: Copilot: Build", "Copilot: Build")]
+    public async Task Native_find_preserves_the_raw_query_until_the_host_matches_it(string exact, string shorter)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        const string node = "agent_bridge_1234567890abcdef";
+        var live = M("a", true, null) with { MessagingTrust = LiteFleetRoster.Trust,
+            Sessions = [new(node, exact, "idle", Started), new("agent_bridge_fedcba0987654321", shorter, "idle", Started)] };
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var op = Op(live);
+        Assert.Equal(0, await SessionsFindCommands.ExecuteAsync(["sessions", "find", "--name", exact, "--json"],
+            output, error, "fixture-token", async (verb, data) => verb == FleetList.FindOp
+                ? await Find(op, data!) : Body(new { })));
+        Assert.Equal(node, JsonSerializer.Deserialize<JsonElement>(output.ToString())
+            .GetProperty("matches")[0].GetProperty("node").GetString());
+    }
+
+    [Theory]
     [InlineData("idle", false, "found")]
+    [InlineData("waiting", false, "found")]
     [InlineData("working", false, "found")]
     [InlineData("agents", false, "found")]
     [InlineData("shell", false, "found")]
@@ -154,21 +174,29 @@ public sealed class FleetFindTests : IDisposable
         var ended = row with { State = "ended" };
         if (expected == "found")
         { Assert.Equal("found", (await Find(Op(M("a", true, null, verified: true) with { Sessions = [ended, row] }), new { name = "SG Lead" })).GetProperty("result").GetString()); }
+        if (state == "waiting")
+        { Assert.Equal("ambiguous", (await Find(Op(M("a", true, null, verified: true) with { Sessions = [row, row with { State = "idle" }] }), new { name = "SG Lead" })).GetProperty("result").GetString()); }
     }
 
     [Theory]
     [InlineData("malformed")]
     [InlineData("503")]
+    [InlineData("since")]
+    [InlineData("lastSeen")]
     public async Task Registry_errors_preserve_the_read_stage_instead_of_becoming_notFound(string failure)
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var frames = new FrameRoster(new RelayFleetRoster(), Body(new { machine = "a", online = true,
             record = new { sessions = new[] { new { name = "SG Lead" } } } }));
         if (failure == "503") { frames.BeforeRead = () => throw new HttpRequestException("HTTP 503 unavailable"); }
+        if (failure is "since" or "lastSeen")
+        { frames = new FrameRoster(new RelayFleetRoster(), Body(new { machine = "a", online = true,
+            lastSeen = failure == "lastSeen" ? "invalid" : Started.ToString("O"),
+            record = new { sessions = new[] { new { node = "n-a", name = "SG Lead", state = "idle", since = failure == "since" ? "invalid" : Started.ToString("O") } } } })); }
         var op = new FleetList(store, frames, audit: new AgentAuditLog(root));
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { name = "SG Lead" }));
         Assert.Contains("fleet.find registry-get:", error.Message);
-        Assert.Contains(failure == "503" ? "503" : "key", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(failure == "503" ? "503" : failure is "since" or "lastSeen" ? "format" : "key", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("notFound", error.Message);
     }
 

@@ -82,11 +82,11 @@ public static class SessionsFindCommands
         for (var i = 2; i < args.Count; i++)
         {
             if (args[i] == "--json" && !json) { json = true; }
-            else if (args[i] == "--name" && name is null && i + 1 < args.Count) { name = FleetSessionMatch.Normalize(args[++i]); }
+            else if (args[i] == "--name" && name is null && i + 1 < args.Count) { name = args[++i]; }
             else if (args[i] == "--machine" && machine is null && i + 1 < args.Count) { machine = args[++i]; }
             else { return null; }
         }
-        return name is null || name.Length is 0 or > 64 || machine is { Length: 0 or > 64 } || machine?.Any(char.IsControl) == true
+        return name is null || FleetSessionMatch.Normalize(name).Length is 0 or > 64 || machine is { Length: 0 or > 64 } || machine?.Any(char.IsControl) == true
             ? null : (name, machine, json);
     }
 
@@ -105,7 +105,7 @@ public static class SessionsFindCommands
         { machine = label.GetString()!; }
         if (pin is not null && pin != machineId && pin != machine)
         { throw new InvalidDataException("host ignored the exact machine pin"); }
-        return new(node, machine, state, name);
+        return new(node, machine, state, FleetSessionMatch.Normalize(name));
     }
 
     static string Text(JsonElement value, string field) =>

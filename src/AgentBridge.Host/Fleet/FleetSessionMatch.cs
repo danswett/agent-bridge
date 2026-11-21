@@ -13,7 +13,7 @@ internal static class FleetSessionMatch
         return text.Trim();
     }
 
-    public static bool Active(string state) => state is "idle" or "working" or "agents" or "shell";
+    public static bool Active(string state) => state is "idle" or "working" or "waiting" or "agents" or "shell";
     public static bool Matches(FleetSession session, string name) =>
         Active(session.State) && Normalize(session.Name) == name
         && !(session.Evidence?.Copy().TryGetValue("stale", out var stale) == true && stale.ValueKind == System.Text.Json.JsonValueKind.True);
