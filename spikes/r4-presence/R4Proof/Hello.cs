@@ -11,7 +11,7 @@ namespace R4Proof;
 public sealed unsafe class Hello(string rpId, nint window, Action<Action> ui) : IHello
 {
     public const int Cancelled = unchecked((int)0x80090036); // NTE_USER_CANCELLED
-    const uint Platform = 1, UvRequired = 1, UvDiscouraged = 3, AttestationNone = 1, AttestationDirect = 3;
+    const uint Platform = 1, UvRequired = 1, UvPreferred = 2, UvDiscouraged = 3, AttestationDirect = 3;
     byte[]? credentialId;
 
     public static byte[] ClientData(string type, byte[] challenge, string rpId) => Encoding.UTF8.GetBytes(
@@ -25,40 +25,59 @@ public sealed unsafe class Hello(string rpId, nint window, Action<Action> ui) : 
     public const int InvalidParameter = unchecked((int)0x80090027); // NTE_INVALID_PARAMETER
     readonly Action<Action> ui = ui;
 
-    public Created Create(byte[] challenge) => Isolate((rk, att) => Make(challenge, rk, att));
+    public Created Create(byte[] challenge) => Isolate(v => Make(challenge, v));
+
+    // One MakeCredential call. Default is the call the app would make; each Isolation entry changes
+    // exactly one thing from it (resident key off and attestation none were refused at 928aa063).
+    public sealed record Variant(string Name, int Rk = 1, uint Att = AttestationDirect, uint Uv = UvRequired, uint Version = 3, bool Rs256 = false, string? RpId = null, bool Activate = false);
+    public static readonly Variant Default = new("default");
+    public static readonly Variant[] Isolation =
+    [
+        new("owner window activated", Activate: true),
+        new("UV preferred", Uv: UvPreferred),
+        new("options version 1", Version: 1),
+        new("ES256+RS256", Rs256: true),
+        new("rpId r4-proof.example.com", RpId: "r4-proof.example.com"),
+    ];
 
     // Every call names the harness's own window. Diagnosis only, after NTE_INVALID_PARAMETER: change
     // one option at a time and stop at the first the API accepts. Whatever that makes is not used
     // (the run stays inconclusive, no attack runs) and the runner's finally deletes it.
-    public static Created Isolate(Func<int, uint, Created> make)
+    public static Created Isolate(Func<Variant, Created> make)
     {
-        var made = make(1, AttestationDirect);
+        var made = make(Default);
         if (made.Hr != InvalidParameter) { return made; }
         var log = $"{made.Note}; isolation:";
-        foreach (var (name, rk, att) in new[] { ("resident key off", 0, AttestationDirect), ("attestation none", 1, AttestationNone) })
+        foreach (var v in Isolation)
         {
-            var next = make(rk, att);
-            log += $" {name}: {(next.Hr == 0 ? "accepted" : next.Note)};";
+            var next = make(v);
+            log += $" {v.Name}: {(next.Hr == 0 ? "accepted" : next.Note)};";
             if (next.Hr != InvalidParameter) { break; }
         }
         return made with { Note = log };
     }
 
-    Created Make(byte[] challenge, int residentKey, uint attestation)
+    Created Make(byte[] challenge, Variant v)
     {
-        int hr = 0; nint p = 0;
+        int hr = 0; nint p = 0; var fg = false;
         ui(() =>
         {
-            var rp = new Rp { Version = 1, Id = S(rpId), Name = S("R4 presence proof") };
+            var id = v.RpId ?? rpId;
+            var rp = new Rp { Version = 1, Id = S(id), Name = S("R4 presence proof") };
             var userId = Bytes(RandomNumberGenerator.GetBytes(16));
             var user = new User { Version = 1, IdBytes = 16, Id = userId, Name = S("r4-proof"), DisplayName = S("R4 presence proof") };
-            var param = new CoseParam { Version = 1, Type = S("public-key"), Alg = -7 };
-            var pars = new List { Count = 1, Items = (nint)(&param) };
-            var client = Client(ClientData("webauthn.create", challenge, rpId));
-            var opts = new MakeOptions { Version = 3, Timeout = 120_000, Attachment = Platform, RequireResidentKey = residentKey, Uv = UvRequired, Attestation = attestation };
+            var param = stackalloc CoseParam[2];
+            param[0] = new CoseParam { Version = 1, Type = S("public-key"), Alg = -7 };
+            param[1] = new CoseParam { Version = 1, Type = S("public-key"), Alg = -257 };
+            var pars = new List { Count = v.Rs256 ? 2u : 1u, Items = (nint)param };
+            var client = Client(ClientData("webauthn.create", challenge, id));
+            var opts = new MakeOptions { Version = v.Version, Timeout = 120_000, Attachment = Platform, RequireResidentKey = v.Rk, Uv = v.Uv, Attestation = v.Att };
+            // Only the harness's own window is ever brought forward, and only it is compared.
+            if (v.Activate) { SetForegroundWindow(window); }
+            fg = GetForegroundWindow() == window;
             hr = WebAuthNAuthenticatorMakeCredential(window, &rp, &user, &pars, &client, &opts, out p);
         });
-        if (hr != 0) { return new(hr, [], [], false, false, "", ErrorName(hr)); }
+        if (hr != 0) { return new(hr, [], [], false, false, "", $"{ErrorName(hr)} (owner window foreground: {(fg ? "yes" : "no")})"); }
         try
         {
             var a = (Attestation*)p;
@@ -129,6 +148,8 @@ public sealed unsafe class Hello(string rpId, nint window, Action<Action> ui) : 
     struct AssertionOut { public uint Version, AuthDataBytes; public nint AuthData; public uint SignatureBytes; public nint Signature; }
 #pragma warning restore CS0649
 
+    [DllImport("user32.dll")] static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(nint hwnd);
     [DllImport("webauthn.dll")] static extern uint WebAuthNGetApiVersionNumber();
     [DllImport("webauthn.dll")] static extern int WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable(out int available);
     [DllImport("webauthn.dll")] static extern nint WebAuthNGetErrorName(int hr);

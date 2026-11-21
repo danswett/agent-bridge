@@ -176,15 +176,17 @@ public class ProofTests
     [Fact]
     public void Isolation_runs_only_after_invalid_parameter_changes_one_option_at_a_time_and_stops_at_the_first_accepted()
     {
-        var calls = new List<(int, uint)>();
-        Created Make(int rk, uint att, int hr) { calls.Add((rk, att)); return new(hr, [], [], false, false, "", $"e{hr:x}"); }
-        Assert.Equal(0, Hello.Isolate((rk, att) => Make(rk, att, 0)).Hr);
-        Assert.Equal([(1, 3u)], calls);
+        var calls = new List<Hello.Variant>();
+        Created Make(Hello.Variant v, int hr) { calls.Add(v); return new(hr, [], [], false, false, "", $"e{hr:x}"); }
+        Assert.Equal(0, Hello.Isolate(v => Make(v, 0)).Hr);
+        Assert.Equal([Hello.Default], calls);
         calls.Clear();
-        var refused = Hello.Isolate((rk, att) => Make(rk, att, calls.Count == 2 ? 0 : Hello.InvalidParameter));
-        Assert.Equal([(1, 3u), (0, 3u), (1, 1u)], calls);
+        var refused = Hello.Isolate(v => Make(v, calls.Count == 3 ? 0 : Hello.InvalidParameter));
+        Assert.Equal([Hello.Default, .. Hello.Isolation.Take(3)], calls);
+        Assert.All(Hello.Isolation, v => Assert.Single(new[] { v.Activate, v.Uv != 1, v.Version != 3, v.Rs256, v.RpId != null, v.Rk != 1, v.Att != 3 }, b => b));
         Assert.Equal(Hello.InvalidParameter, refused.Hr);
-        Assert.Contains("resident key off", refused.Note);
-        Assert.Contains("attestation none", refused.Note);
+        Assert.Contains("owner window activated", refused.Note);
+        Assert.Contains("options version 1: accepted", refused.Note);
+        Assert.DoesNotContain("ES256", refused.Note);
     }
 }
