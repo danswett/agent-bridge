@@ -91,6 +91,21 @@ public sealed class LiteDefaultOnTests : IDisposable
         Assert.Equal(0, deliver.Calls);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task All_launched_targets_never_override_off_or_kill_on_the_receiver(bool kill)
+    {
+        var folder = Folder("b");
+        Assert.Equal(0, Config(folder, "set", "agentMessaging.remote", "own-account"));
+        Assert.Equal(0, Config(folder, "set", "agentMessaging.allowAllLaunchedTargets", "true"));
+        if (kill) { new LiteKill(folder).Kill(); }
+        else { Assert.Equal(0, Config(folder, "set", "agentMessaging.remote", "off")); }
+        var (sender, link, deliver) = Pair();
+        Assert.Equal(("refused", LiteReceiver.Off), await RefusedEarly(sender, link));
+        Assert.Equal(0, deliver.Calls);
+    }
+
     [Fact]
     public async Task A_killed_machine_stays_off_across_a_restart_and_the_default_until_a_person_sets_own_account()
     {
@@ -181,7 +196,7 @@ public sealed class LiteDefaultOnTests : IDisposable
     public async Task The_default_never_lets_own_agents_into_an_allow_all_session()
     {
         File.WriteAllText(Path.Combine(Folder("b"), HostSettings.FileName), $$"""{ "agentMessaging": { "allowAllTargets": true, "allowAllTargetSessions": ["{{Session}}"] } }""");
-        var launches = new LiteLaunchLog();
+        var launches = new LiteLaunchLog(_ => new AgentBridge.Host.Core.SessionProcess(42, DateTimeOffset.UnixEpoch));
         launches.Launched(Session, new LaunchedWith { Agent = "copilot", Permissions = LaunchProtocol.AllowAll });
         var gate = new AllowlistedAllTargetsGate(launches, () => HostSettings.CurrentAgentMessaging(Folder("b")));
         Assert.True(new LiteKill(Folder("b")).On);

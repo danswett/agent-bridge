@@ -454,7 +454,7 @@ public sealed class AgentAuditLog
 
     // The folder's DACL is inherited by new files, but a file already there can carry a looser one.
     [SupportedOSPlatform("windows")]
-    static void NarrowFileWindows(string file)
+    internal static void NarrowFileWindows(string file)
     {
         var me = WindowsIdentity.GetCurrent().User!;
         var info = new FileInfo(file);

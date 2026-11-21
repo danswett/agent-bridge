@@ -14,6 +14,7 @@ namespace AgentBridge.Host.Core.AgentMessaging;
 //                    session. Counts only while remote is explicitly "own-account", so the default
 //                    never opens one; otherwise such a target falls back to Home Assistant.
 //   allowAllTargetSessions [] (default): exact session ids allowed with allowAllTargets on; names and wildcards grant nothing.
+//   allowAllLaunchedTargets false (default): all live allow-all launches here, independently of the list path.
 //
 // Only a clean absent key is on. An explicit "off" (which the kill writes), an unknown value, a
 // section that is not an object, any problem in a section without remote, or a file that cannot
@@ -36,6 +37,7 @@ public sealed record AgentMessagingSettings
     // Whether config.json names remote itself. After a kill, the default alone never turns the mode back on.
     public bool RemoteSet { get; init; }
     public bool AllowAllTargets { get; init; }
+    public bool AllowAllLaunchedTargets { get; init; }
     public IReadOnlyList<string> AllowAllTargetSessions { get; init; } = [];
 
     public bool RemoteEnabled => Remote == OwnAccount;
@@ -61,6 +63,11 @@ public sealed record AgentMessagingSettings
             if (all.ValueKind is JsonValueKind.True or JsonValueKind.False) { settings = settings with { AllowAllTargets = all.ValueKind == JsonValueKind.True }; }
             else { problems.Add("agentMessaging.allowAllTargets is not true or false, so own agents may not type into allow-all sessions"); }
         }
+        if (s.TryGetProperty("allowAllLaunchedTargets", out var launched))
+        {
+            if (launched.ValueKind is JsonValueKind.True or JsonValueKind.False) { settings = settings with { AllowAllLaunchedTargets = launched.ValueKind == JsonValueKind.True }; }
+            else { problems.Add("agentMessaging.allowAllLaunchedTargets is not true or false, so the all-launched grant is off"); }
+        }
         if (s.TryGetProperty("allowAllTargetSessions", out var targets) && targets.ValueKind != JsonValueKind.Null)
         {
             if (targets.ValueKind != JsonValueKind.Array) { problems.Add("agentMessaging.allowAllTargetSessions is not a list, so no allow-all sessions are enabled"); }
@@ -84,6 +91,7 @@ public sealed record AgentMessagingSettings
         // explicit own-account keeps its list problems as before. allow-all counts only with remote set to own-account.
         if (!settings.RemoteSet && problems.Count > 0) { settings = settings with { Remote = Off }; }
         if (!settings.RemoteEnabled || !settings.RemoteSet) { settings = settings with { AllowAllTargets = false }; }
+        if (!settings.RemoteEnabled || !settings.RemoteSet) { settings = settings with { AllowAllLaunchedTargets = false }; }
         return (settings, problems);
     }
 }
