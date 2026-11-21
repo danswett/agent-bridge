@@ -23,7 +23,7 @@ slot three remains available. TypeError/redirect/HTTP/cancel never retry.
 Record "owner console confirmation": same-PC code able to write to that console
 could fake it. Signature/flags are spike facts, not phone provenance or root policy.
 Five-minute wall/monotonic deadline; Ctrl+C closes; existing results never overwrite.
-Tests use injected fetch plus real-network ban, serial/BelowNormal/one CPU on VM7.
+Tests use injected fetch plus real-network ban, serial/BelowNormal/one CPU on a disposable VM.
 Helper must verify the mailbox README's mandatory 10 POST/min/IP rule before deploy.
 Only helper deployment proves binding/domain/CORS; only the attended owner run
 reports actual credential facts/self-reported OS/browser/path. No run is claimed.
