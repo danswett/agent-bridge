@@ -845,7 +845,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // Everything a launch was settled on before it starts.
     sealed record Plan(Launcher Launcher, string Executable, string Directory, string? Workspace, WorkspaceConfig? Isolated, ResumeEntry? Resume,
-        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null, string? Role = null);
+        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null, string? Role = null,
+        bool NoAskUser = false);
 
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
@@ -894,6 +895,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             var (plan, problem) = Settle(request, resolved);
             if (plan is null) { return Refused(problem!); }
+            var agentLaunch = fleet || peer.StartsWith("agent:", StringComparison.Ordinal);
+            plan = plan with { NoAskUser = agentLaunch || request.AskUser == false };
 
             Claim? claim = null;
             if (request.Attachments is { Count: > 0 } refs)
@@ -925,7 +928,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     }
                 }
                 return await StartAsync(plan, claim, key, handed, fetched, ct, restoring,
-                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet);
+                    agentLaunch ? peer : null, prepare: prepare, fleet: fleet);
             }
             finally
             {
@@ -1232,7 +1235,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var newId = fetched is not null ? Guid.NewGuid().ToString() : null;
             var sessionId = newId ?? plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
             var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
-                extras, plan.Profile, prompt);
+                extras, plan.Profile, prompt, noAskUser: plan.NoAskUser);
             var environment = AgentEnvironment.For(options.CopilotHome, options.ClaudeHome,
                 options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath(),
                 options.HomeAssistantEnabled ? options.HomeAssistantBaseUrl : null);

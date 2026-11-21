@@ -24,7 +24,7 @@ public static class AgentLaunchRequestCheck
                 case "profile": return "An agent launch cannot set profile.";
                 case "request": case "agent": case "workspace": case "fleetName":
                 case "model": case "effort": case "context":
-                case "permissions": case "role": case "prompt":
+                case "permissions": case "role": case "prompt": case "askUser":
                     break;
                 default: return "The agent launch request contains an unsupported field.";
             }

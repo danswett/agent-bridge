@@ -74,7 +74,7 @@ public sealed partial class HaConnector
     // A launch request read from the prompt payload (Get-DaemonLaunchRequest).
     sealed record PayloadRequest(string Kind, string? Id = null, string Text = "", IReadOnlyDictionary<string, string>? Settings = null, string Problem = "");
 
-    static readonly string[] LaunchSettings = ["agent", "workspace", "profile", "resume", "model", "effort", "context", "permissions"];
+    static readonly string[] LaunchSettings = ["agent", "workspace", "profile", "resume", "model", "effort", "context", "permissions", "askUser"];
 
     string LaunchEntity(string domain, string key) => HaContract.MachineEntityId(domain, key, Slug);
 
@@ -714,6 +714,13 @@ public sealed partial class HaConnector
             permissions = wantedPermissions == HaContract.PermissionAllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask;
         }
 
+        bool? askUser = null;
+        if (Get("askUser") is { Length: > 0 } wantedAskUser)
+        {
+            if (!bool.TryParse(wantedAskUser, out var value)) { return (null, null, "Launch refused: askUser must be 'true' or 'false'."); }
+            askUser = value;
+        }
+
         var request = new LaunchRequest
         {
             Request = RequestId(Slug, "launch", $"{read.Id}#{pressed}"),
@@ -725,6 +732,7 @@ public sealed partial class HaConnector
             Effort = tuning["effort"],
             Context = tuning["context"],
             Permissions = permissions,
+            AskUser = askUser,
             Prompt = read.Text.Length > 0 ? read.Text : null,
         };
         return (request, Launched(offered, request, resumeLabel), null);
@@ -760,6 +768,8 @@ public sealed partial class HaConnector
     // The launch, beside the passes: the host follows it to registration, up to a minute.
     void Dispatch(LaunchRequest request, string? requestId, string pressed, string driver, string? principal, JsonObject? launched, Consumed? prompt)
     {
+        // A request payload is an agent launch even when HA did not retain its user's identity.
+        if (driver == "agent" || requestId is not null) { request = request with { AskUser = false }; }
         launchBusy = true;
         launchInFlight = requestId;
         var cancel = replyStop.Token;

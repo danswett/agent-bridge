@@ -217,6 +217,17 @@ public sealed class FleetLaunchGrantTests : IDisposable
         var ancestry = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, LaunchProtocol.Launch,
             JsonSerializer.SerializeToElement(Request, ProtocolJson.Options)));
         Assert.Contains("ancestry", ancestry.Message);
+        foreach (var askUser in new[] { true, false })
+        {
+            var overridden = JsonSerializer.SerializeToElement(new { request = Request.Request, askUser });
+            var guarded = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, LaunchProtocol.Launch, overridden));
+            Assert.Contains("ancestry", guarded.Message);
+        }
+        foreach (var askUser in new object[] { "true", 1 })
+        {
+            await Assert.ThrowsAsync<JsonException>(() => handler(channel, LaunchProtocol.Launch,
+                JsonSerializer.SerializeToElement(new { request = Request.Request, askUser })));
+        }
     }
 
     sealed class Channel : IProtocolChannel

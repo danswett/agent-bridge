@@ -129,7 +129,7 @@ public static class Launchers
     // Model, effort and context are already validated against what the agent offers; empty
     // means pass nothing. The prompt is already flattened to one line (LaunchProtocol.Flatten).
     public static IReadOnlyList<string> Arguments(Launcher launcher, string sessionId, bool resume, string model, string effort, string context,
-        bool allowAll, IReadOnlyList<string> extras, string profile, string prompt)
+        bool allowAll, IReadOnlyList<string> extras, string profile, string prompt, bool noAskUser = false)
     {
         var args = new List<string>();
         var extra = extras.Where(e => !string.IsNullOrWhiteSpace(e)).ToList();
@@ -169,6 +169,11 @@ public static class Launchers
                 // flags already cover everything.
                 if (allowAll) { copilot.Add("--allow-all"); }
                 copilot.AddRange(extra);
+                if (noAskUser)
+                {
+                    var separator = copilot.IndexOf("--");
+                    copilot.Insert(separator < 0 ? copilot.Count : separator, "--no-ask-user");
+                }
                 if (prompt.Length > 0) { copilot.AddRange(["-i", prompt]); }
                 if (launcher.Id == "agency")
                 {
