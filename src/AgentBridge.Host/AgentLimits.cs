@@ -29,7 +29,7 @@ public sealed class AgentLimits
     readonly Window machineLaunches = new(Hour);
     DateTimeOffset? lastLaunchCheck;
 
-    sealed record LiveLaunch(string? Session = null, DateTimeOffset? IdleSince = null, bool PersonTyped = false);
+    sealed record LiveLaunch(string? Session = null, DateTimeOffset? IdleSince = null, bool PersonTyped = false, DateTimeOffset? ReservedAt = null);
 
     public AgentLimits(
         Func<DateTimeOffset>? clock = null,
@@ -105,8 +105,39 @@ public sealed class AgentLimits
             launchRequests.Add(key, (requestSha256, now));
             if (reserveLive && liveLaunches.Count >= liveLimit) { return new(false, AgentLimitVerdict.LiveLimited, 0); }
             var result = CheckLaunch(origin, now, originLimit, machineLimit);
-            if (reserveLive && result.Allowed) { liveLaunches.Add(key, new()); }
+            if (reserveLive && result.Allowed) { liveLaunches.Add(key, new(ReservedAt: now)); }
             return result;
+        }
+    }
+
+    // What ReserveLaunch would refuse a new request for now, spending nothing (#3427): the pipe asks
+    // before it writes a request record, so a limited caller never fills the shared store.
+    public AgentLimitVerdict PeekLaunch(string origin, AgentLaunchLimits limits)
+    {
+        lock (gate)
+        {
+            var now = LaunchTime();
+            int Wait(Dictionary<string, Window> windows, int limit) => windows.TryGetValue(origin, out var w) ? w.WaitFor(now, limit) : 0;
+            var wait = Math.Max(Wait(launchAttempts, Positive(limits.LaunchAttemptsPerOriginPerHour)), Math.Max(
+                Wait(originLaunches, Positive(limits.LaunchesPerOriginPerHour)), machineLaunches.WaitFor(now, Positive(limits.LaunchesPerMachinePerHour))));
+            if (wait > 0) { return Refuse(wait); }
+            return liveLaunches.Count >= Positive(limits.LiveAgentLaunched) ? new(false, AgentLimitVerdict.LiveLimited, 0) : AgentLimitVerdict.Admit;
+        }
+    }
+
+    // A launch verified never to have started (busy or refused before any process): its live slot and
+    // its hourly launch hits are given back; the attempt stays spent. Unbound only: a bound one started.
+    public bool LaunchNotStarted(string origin, string request)
+    {
+        lock (gate)
+        {
+            if (!liveLaunches.Remove((origin, request), out var launch)) { return false; }
+            if (launch is { Session: null, ReservedAt: { } at })
+            {
+                originLaunches.GetValueOrDefault(origin)?.Unhit(at);
+                machineLaunches.Unhit(at);
+            }
+            return true;
         }
     }
 
@@ -248,5 +279,14 @@ public sealed class AgentLimits
         public bool IsIdle(DateTimeOffset now) => WaitFor(now, int.MaxValue) == 0 && hits.Count == 0;
 
         public void Hit(DateTimeOffset now) => hits.Enqueue(now);
+
+        // A hit moved by a clock set back no longer matches and stays spent: closed, not open.
+        public void Unhit(DateTimeOffset at)
+        {
+            var kept = hits.ToList();
+            if (!kept.Remove(at)) { return; }
+            hits.Clear();
+            foreach (var h in kept) { hits.Enqueue(h); }
+        }
     }
 }

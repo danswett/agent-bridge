@@ -17,9 +17,22 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
     {
         var policy = CheckPolicy();
         if (!policy.Allowed || policy.Limits is null) { return policy; }
-        var result = limits.ReserveLaunch(origin, request, requestSha256, policy.Limits);
+        return Told(origin, request, policy, limits.ReserveLaunch(origin, request, requestSha256, policy.Limits));
+    }
+
+    // Before a request is recorded (#3427): the same rate and live limits, refused and audited alike,
+    // spending nothing. CheckLaunch stays the authority.
+    public AgentLaunchPolicyVerdict AdmitLaunch(string origin, string request)
+    {
+        var policy = CheckPolicy();
+        if (!policy.Allowed || policy.Limits is null) { return policy; }
+        return Told(origin, request, policy, limits.PeekLaunch(origin, policy.Limits));
+    }
+
+    AgentLaunchPolicyVerdict Told(string origin, string request, AgentLaunchPolicyVerdict policy, AgentLimitVerdict result)
+    {
         var reason = result.Reason == AgentLimitVerdict.LiveLimited
-            ? $"live-limit: this machine has reached its limit of {policy.Limits.LiveAgentLaunched} live agent-started sessions; wait for one to end"
+            ? $"live-limit: this machine has reached its limit of {policy.Limits!.LiveAgentLaunched} live agent-started sessions; wait for one to end"
             : result.Reason;
         if (result.Reason is AgentLimitVerdict.RateLimited or AgentLimitVerdict.LiveLimited)
         {
@@ -27,7 +40,7 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
             {
                 LocalApi.AuditRefusal(origin, [], LaunchProtocol.Launch, JsonSerializer.SerializeToElement(new { request }), audit,
                     result.Reason == AgentLimitVerdict.LiveLimited ? reason!
-                    : $"rate-limited; retry after {result.RetryAfterSeconds}s; hourly caps: launches {policy.Limits.LaunchesPerOriginPerHour} per agent and {policy.Limits.LaunchesPerMachinePerHour} per machine; attempts {policy.Limits.LaunchAttemptsPerOriginPerHour} per agent", refusals);
+                    : $"rate-limited; retry after {result.RetryAfterSeconds}s; hourly caps: launches {policy.Limits!.LaunchesPerOriginPerHour} per agent and {policy.Limits.LaunchesPerMachinePerHour} per machine; attempts {policy.Limits.LaunchAttemptsPerOriginPerHour} per agent", refusals);
             }
             catch (InvalidOperationException)
             { return policy with { Allowed = false, Reason = "auditUnwritable: the launch refusal could not be recorded" }; }
@@ -39,6 +52,7 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
     // Host lifecycle API for the ingress/idle-loop composition; never exposed as agent operations.
     public void LaunchStarted(string origin, string request, string session) => limits.LaunchStarted(origin, request, session);
     public bool LaunchFinished(string origin, string request) => limits.LaunchFinished(origin, request);
+    public bool LaunchNotStarted(string origin, string request) => limits.LaunchNotStarted(origin, request);
     public bool SessionEnded(string session) => limits.SessionEnded(session);
     public bool ObserveSession(string session, DateTimeOffset? idleSince, bool personTyped) =>
         limits.ObserveSession(session, idleSince, personTyped);
