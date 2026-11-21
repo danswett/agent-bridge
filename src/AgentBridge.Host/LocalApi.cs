@@ -18,10 +18,14 @@ public static class LocalApi
     // What an agent's hello offers: reading only.
     static readonly HashSet<string> AgentCapabilities = [Capabilities.SessionsRead, UsageProtocol.Capability];
 
-    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null,     AgentAuditLog? audit = null, TimeProvider? auditTime = null,     AgentPipeLaunch? agentLaunch = null, SamePcPinHandoff? samePcPin = null) =>
-                Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin);
+    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,
+        RemoteAuthorization? authorization = null, AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null,
+        AgentAuditLog? audit = null, TimeProvider? auditTime = null, AgentPipeLaunch? agentLaunch = null, SamePcPinHandoff? samePcPin = null) =>
+        Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin);
 
-        static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin) => async (channel, op, data) =>
+    static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log,
+        RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet,
+        AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin) => async (channel, op, data) =>
     {
         if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
         {

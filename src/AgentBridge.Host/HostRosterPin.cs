@@ -17,12 +17,14 @@ public sealed partial class HostRosterReader
     sealed record Pin(string Account, string Generation, byte[] Genesis, byte[][] Heads);
     Pin? pin;
     string? problem;
+    bool pinReadbackFailed;
     readonly Func<TimeSpan> clock;
     readonly object sync = new();
 
     public HostRosterReader(string pinPath, Func<TimeSpan> clock)
     {
         (pin, problem) = ReadPin(pinPath);
+        pinReadbackFailed = problem is not null;
         this.pinPath = pin is null ? pinPath : Path.GetFullPath(pinPath);
         this.clock = clock;
     }
@@ -34,6 +36,11 @@ public sealed partial class HostRosterReader
         lock (sync) { return pin is not null; }
     }
 
+    internal bool HasFailedPinReadback()
+    {
+        lock (sync) { return pinReadbackFailed; }
+    }
+
     public RosterCheck Update(RelayRoster? relay, string account)
     {
         // Also the verifier's own lock, which the fleet reader takes to read its serving hosts.
@@ -41,7 +48,9 @@ public sealed partial class HostRosterReader
         lock (Verified ?? sync)
         {
             RefreshPin();
-            return UpdateCore(relay, account);
+            var check = UpdateCore(relay, account);
+            pinReadbackFailed = (pin is not null || problem is not null) && check.Outcome != "verified";
+            return check;
         }
     }
 
