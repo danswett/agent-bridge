@@ -196,12 +196,12 @@ public sealed class FleetPublisherTests
     {
         var publisher = new FleetPublisher(source, "machine", time: time);
         Assert.True(await publisher.PublishAsync(Put));
-        source.Sessions.RemoveAt(0);
+        source.Sessions[0] = source.Sessions[0] with { Status = SessionStatus.Working };
         time.Advance(TimeSpan.FromSeconds(1));
         Assert.False(await publisher.PublishAsync(Put));
         time.Advance(TimeSpan.FromSeconds(1));
         Assert.True(await publisher.PublishAsync(Put));
-        Assert.Equal(2, sent[^1].GetProperty("sessions").GetArrayLength());
+        Assert.Single(sent[^1].GetProperty("sessions").EnumerateArray(), s => s.GetProperty("state").GetString() == "working");
         time.Advance(TimeSpan.FromSeconds(19));
         Assert.False(await publisher.PublishAsync(Put));
         time.Advance(TimeSpan.FromSeconds(1));
@@ -212,6 +212,24 @@ public sealed class FleetPublisherTests
         time.Advance(TimeSpan.FromMilliseconds(1));
         Assert.True(await new FleetPublisher(source, "machine", time: time).PublishAsync(Put));
         Assert.NotEqual(sent[0].GetProperty("epoch").GetString(), sent[^1].GetProperty("epoch").GetString());
+    }
+
+    [Fact]
+    public async Task A_session_that_ends_is_published_at_once_and_is_never_lost_to_a_hold_or_a_failed_put()
+    {
+        var publisher = new FleetPublisher(source, "machine", time: time);
+        Assert.True(await publisher.PublishAsync(Put));
+        source.Sessions.RemoveAt(0);
+        time.Advance(TimeSpan.FromMilliseconds(500));
+        source.Held = new DiscoveryHeld("discovery incomplete", [AgentKind.Copilot]);
+        Assert.False(await publisher.PublishAsync(Put));
+        source.Held = null;
+        await Assert.ThrowsAsync<IOException>(() => publisher.PublishAsync((_, _) => throw new IOException("put failed")));
+        Assert.True(await publisher.PublishAsync(Put));
+        Assert.Equal(source.Sessions.Count, sent[^1].GetProperty("sessions").GetArrayLength());
+        // Only an ending skips the two seconds; any other change still waits.
+        source.Sessions[0] = source.Sessions[0] with { Status = SessionStatus.Working };
+        Assert.False(await publisher.PublishAsync(Put));
     }
 
     [Fact]

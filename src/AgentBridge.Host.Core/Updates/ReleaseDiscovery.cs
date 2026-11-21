@@ -175,7 +175,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
             var revalidate = state.RelayExpired || state.GitHubAnsweredAt is not { } answered || answered > now || now - answered >= GithubRevalidateEvery;
             // A person's press (#3441) is not answered from what was kept for background checks:
             // the relay's copy may predate the latest publish by most of CdnOldest (37 minutes, on
-            // VM6), so GitHub is asked, conditionally on a list it gave. Its backoff still holds.
+            // a dev VM), so GitHub is asked, conditionally on a list it gave. Its backoff still holds.
             var press = pressed && !holding;
             if (cached && now < state.FreshUntil && (!holding || state.Source == Sources.Cdn))
             {
