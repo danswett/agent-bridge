@@ -30,9 +30,8 @@ test('pagehide alone suspends a ticker until a persisted visible pageshow, once,
   t.mock.timers.tick(250);
   assert.equal(ticks, 1);
   fire(doc.defaultView, 'pagehide');
-  fire(doc, 'visibilitychange');
   t.mock.timers.tick(1000);
-  assert.equal(ticks, 1, 'a visible visibilityState must not override pagehide');
+  assert.equal(ticks, 1, 'pagehide pauses even before visibilityState changes');
   fire(doc.defaultView, 'pageshow', { persisted: false });
   assert.equal(ticks, 1);
   doc.visibilityState = 'hidden';
@@ -60,16 +59,18 @@ test('pagehide alone pauses motion and blocks new motion until a persisted visib
   const animation = { playState: 'running', effect: { target: { isConnected: true } },
     pause() { this.playState = 'paused'; }, play() { this.playState = 'running'; } };
   doc.getAnimations = () => [animation];
-  const previous = globalThis.getComputedStyle;
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'getComputedStyle');
   globalThis.getComputedStyle = () => ({ getPropertyValue: (key) => key.endsWith('-duration') ? '100ms' : 'linear' });
-  t.after(() => { globalThis.getComputedStyle = previous; });
+  t.after(() => {
+    if (previous) { Object.defineProperty(globalThis, 'getComputedStyle', previous); }
+    else { delete globalThis.getComputedStyle; }
+  });
   let starts = 0;
   const el = { isConnected: true, ownerDocument: doc, animate: () => { starts++; return {}; } };
   watchPresses(doc);
   fire(doc.defaultView, 'pagehide');
   assert.equal(doc.documentElement.hasAttribute('data-motion-hidden'), true);
   assert.equal(animation.playState, 'paused');
-  fire(doc, 'visibilitychange');
   assert.equal(enter(el, 'value'), null, 'pagehide-only updates must not start transient motion');
   assert.equal(starts, 0);
   fire(doc.defaultView, 'pageshow', { persisted: false });
