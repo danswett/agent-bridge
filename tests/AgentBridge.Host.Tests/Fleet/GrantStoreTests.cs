@@ -23,6 +23,7 @@ public sealed class GrantStoreTests : IDisposable
         [new("123", Device, Guid.NewGuid().ToString(), "AAAAAAAAAAAAAAAAAAAAAA", new(42, clock.GetUtcNow()))],
         ["launch", "stop"], Scope,
         new(3, 10, 6), clock.GetUtcNow(), 1, Roles: [], StopTargets: []);
+    GrantDocument Issued() { var grant = Grant(); Assert.True(Open().Issue(grant).Usable); return grant; }
     public void Dispose() { key.Dispose(); Directory.Delete(root, true); }
 
     [Fact]
@@ -40,13 +41,10 @@ public sealed class GrantStoreTests : IDisposable
     [InlineData(true)]
     public void Retired_audit_coverage_refuses_even_when_the_store_is_deleted(bool deleted)
     {
-        var grant = Grant();
-        Assert.True(Open().Issue(grant).Usable);
+        var grant = Issued();
         Assert.True(Open().Revoke(grant.Id, 1).Usable);
-        clock.Advance(TimeSpan.FromDays(35));
-        Assert.True(Audit.Append(new("local", "fixture", "person:local", [], "host.fixture", "profile", "seen")));
-        clock.Advance(TimeSpan.FromDays(1));
-        Assert.True(Audit.Append(new("local", "fixture", "person:local", [], "host.fixture", "profile", "seen")));
+        clock.Advance(TimeSpan.FromDays(35)); Assert.True(Audit.Append(new("local", "fixture", "person:local", [], "host.fixture", "profile", "seen")));
+        clock.Advance(TimeSpan.FromDays(1)); Assert.True(Audit.Append(new("local", "fixture", "person:local", [], "host.fixture", "profile", "seen")));
         Assert.True(AgentAuditLog.RetainedThrough(Path.Combine(Folder, "audit")) > 0);
         Assert.True(GateAuditProjection.Load(Folder).Complete);
         if (deleted) { File.Delete(PathName); }
@@ -59,8 +57,7 @@ public sealed class GrantStoreTests : IDisposable
     {
         var grant = Grant();
         var expired = Grant() with { ExpiresAt = clock.GetUtcNow().AddHours(1) };
-        Assert.True(Open().Issue(grant).Usable);
-        Assert.True(Open().Issue(expired).Usable);
+        Assert.True(Open().Issue(grant).Usable && Open().Issue(expired).Usable);
         Assert.True(Open().Revoke(grant.Id, grant.Generation).Usable);
         Assert.Equal(GrantStoreProblem.Revoked, Open().TryGetUsable(grant.Id, 1).Problem);
         Assert.Equal(GrantStoreProblem.Revoked, Open().Issue(grant).Problem);
@@ -77,8 +74,7 @@ public sealed class GrantStoreTests : IDisposable
     [InlineData("missing", GrantStoreProblem.Missing)]
     public void Invalid_storage_never_becomes_an_empty_writable_store(string fault, GrantStoreProblem expected)
     {
-        var grant = Grant();
-        Assert.True(Open().Issue(grant).Usable);
+        var grant = Issued();
         using var foreign = P256KeyPair.Generate();
         if (fault == "public" && OperatingSystem.IsWindows())
         { var file = new FileInfo(PathName); var acl = file.GetAccessControl(); acl.SetAccessRuleProtection(false, true); file.SetAccessControl(acl); }
@@ -98,8 +94,7 @@ public sealed class GrantStoreTests : IDisposable
     [InlineData(false)]
     public void Restoring_the_pre_revocation_store_and_agents_audit_refuses_when_adopted_or_gapped(bool adopted)
     {
-        var grant = Grant();
-        Assert.True(Open().Issue(grant).Usable);
+        var grant = Issued();
         var auditFolder = Path.Combine(Folder, "audit");
         var head = Path.Combine(auditFolder, "agents.head");
         var old = new[] { PathName, head, Directory.GetFiles(auditFolder, "agents-*.jsonl").Single() }.ToDictionary(f => f, File.ReadAllBytes);
@@ -132,8 +127,7 @@ public sealed class GrantStoreTests : IDisposable
     [InlineData(true)]
     public void Failed_install_leaves_a_durable_intent_and_refuses_even_after_the_disk_recovers(bool issue)
     {
-        var grant = Grant();
-        Assert.True(Open().Issue(grant).Usable);
+        var grant = Issued();
         var failing = Open(write: (_, _) => throw new IOException("fixture"));
         Assert.Equal(GrantStoreProblem.WriteFailed, (issue ? failing.Issue(Grant()) : failing.Revoke(grant.Id, 1)).Problem);
         Assert.False(failing.TryGetUsable(grant.Id, 1).Usable);
@@ -147,8 +141,7 @@ public sealed class GrantStoreTests : IDisposable
     [InlineData("all")]
     public void Missing_or_incomplete_audit_refuses_a_mac_valid_store(string fault)
     {
-        var grant = Grant();
-        Assert.True(Open().Issue(grant).Usable);
+        var grant = Issued();
         var file = Directory.GetFiles(Path.Combine(Folder, "audit"), "agents-*.jsonl").Single();
         if (fault == "all") { Directory.Move(Path.Combine(Folder, "audit"), Path.Combine(root, "lost-audit")); }
         else if (fault == "incomplete") { File.AppendAllText(file, "{"); }
@@ -162,8 +155,7 @@ public sealed class GrantStoreTests : IDisposable
     [InlineData("unknown", GrantStoreProblem.Malformed)]
     public void Mac_valid_unsupported_or_malformed_formats_refuse(string field, GrantStoreProblem expected)
     {
-        var grant = Grant();
-        Assert.True(Open().Issue(grant).Usable);
+        var grant = Issued();
         var json = JsonNode.Parse(File.ReadAllBytes(PathName).AsSpan(32))!;
         json[field] = field == "generation" ? 0 : 2;
         var body = System.Text.Encoding.UTF8.GetBytes(json.ToJsonString());
@@ -172,10 +164,19 @@ public sealed class GrantStoreTests : IDisposable
     }
 
     [Fact]
+    public void Revoke_past_the_lifetime_intent_cap_always_succeeds_is_idempotent_and_survives_restart()
+    {
+        var grants = Enumerable.Range(0, 256).Select(_ => Grant()).ToArray();
+        Assert.All(grants, g => Assert.True(Open().Issue(g).Usable));
+        Assert.True(Open().Revoke(grants[0].Id, 1).Usable && Open().Revoke(grants[0].Id, 1).Usable && Open().Revoke(grants[1].Id, 1).Usable);
+        Assert.Equal(GrantStoreProblem.Oversize, Open().Issue(Grant()).Problem);
+        Assert.Equal([GrantStoreProblem.Revoked, GrantStoreProblem.Revoked, GrantStoreProblem.None], grants[..3].Select(g => Open().TryGetUsable(g.Id, 1).Problem));
+    }
+
+    [Fact]
     public void Wrong_generation_and_uninstalled_terminal_refuse()
     {
-        var grant = Grant();
-        Assert.True(Open().Issue(grant).Usable);
+        var grant = Issued();
         Assert.Equal(GrantStoreProblem.Generation, Open().TryGetUsable(grant.Id, 2).Problem);
         Assert.Equal(GrantStoreProblem.Generation, Open().Revoke(grant.Id, 2).Problem);
         var file = Directory.GetFiles(Path.Combine(Folder, "audit"), "agents-*.jsonl").Single();
