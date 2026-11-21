@@ -619,8 +619,28 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      Unreadable history, plan or product data fails closed without fallback. No usable run in
      the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from Quality, since labels take triage
-     rights: it skips this check and nothing else, the independent review included. CI finishing
-     on main starts a run, so verdicts follow main to red and back.
+     rights: it skips this check and nothing else, the independent review included, when every
+     changed file matches `main_green.exempt_paths` (tests only; the description ends `fixes-main
+     tests-only bypass used`). Owner decision Nov 20 14:16 PT
+     ([#3471](https://github.com/danswett/agent-bridge/issues/3471)): with
+     `main_green.source_bypass: true` (off when absent), a labelled source fix skips it too when
+     all of these hold, each refused with its own reason: main's CI read as a failure, a
+     completed run whose named job isn't green (an `error` main, or a pending one with no
+     completed product evidence yet, whether in progress, queued, missing or every plan failed,
+     is never waived); its file list is fully read and
+     complete; its description has a well-formed `fixes-main-test: <fully qualified test name>`
+     line per test (the evaluator checks only the form: Quality checks the name against main's
+     failing run before adding the label); additions plus deletions are at most
+     `main_green.source_bypass_max_lines` (40 when absent; zero, negative or not a whole number
+     refuses), counting everything but prose Markdown (`docs/**/*.md` outside `docs/protocol/`,
+     and a rename only when its old path is prose too); nothing under `.github/`, `quality/`
+     or `tools/AgentBridge.Quality/`; and success `independent-review` and
+     `independent-review-2` receipts from different model families on the head (statuses are
+     read from the head commit only, so an older head's never count; this also covers any
+     sensitive path). Draft, hold, review and every check are judged as for any pull request.
+     The description then starts `Source bypass used (fixes-main: <test>)` and the log lists each
+     condition. The evaluator reads its rules from main, so the route exists only once this is
+     on main. CI finishing on main starts a run, so verdicts follow main to red and back.
    - Tiers (#3208): a catalog suite with `tier: post-merge` names exact ci.yml job display names
      in `tier_jobs` (Arm64 packaging and product's `windows-11-arm` leg, both installers, pwa-ui's
      WebKit shards and pwa-e2e). The merge rule reads `catalog.yml` beside its rules and counts

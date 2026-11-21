@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
@@ -111,6 +112,16 @@ sealed class MainGreenConfig
     public List<string> Jobs { get; set; } = [];
     public List<List<string>> LegFamilies { get; set; } = [];
     public Dictionary<string, List<string>> InfraSteps { get; set; } = [];
+
+    /// <summary>The source-fix route (#3471): off unless the rules turn it on.</summary>
+    public bool SourceBypass { get; set; }
+
+    /// <summary>The most lines (additions plus deletions, prose docs/*.md aside) a source fix may change, as written.</summary>
+    public string? SourceBypassMaxLines { get; set; }
+
+    /// <summary>The cap: 40 when absent, null when not a positive whole number, which refuses the route.</summary>
+    public int? SourceBypassCap => SourceBypassMaxLines is null ? 40
+        : int.TryParse(SourceBypassMaxLines, NumberStyles.None, CultureInfo.InvariantCulture, out var cap) && cap > 0 ? cap : null;
 }
 
 sealed class Arm64WaiverConfig
@@ -146,8 +157,9 @@ sealed class CopilotWaiverConfig
 }
 
 /// <summary>
-/// The base branch's CI, read once per run: success, failure (a named job not green or a missing
-/// run) or error (couldn't be read), and the reason, which a blocked pull request's description
+/// The base branch's CI, read once per run: success, failure (a completed run's named job not
+/// green), pending (no completed product evidence yet: in progress, queued, no run or every plan
+/// failed) or error (couldn't be read), and the reason, which a blocked pull request's description
 /// starts with.
 /// </summary>
 sealed record MainFact(string State, string Reason)
@@ -200,10 +212,20 @@ sealed record PullRequestFacts(
 
     /// <summary>False when the pull request has more labels than were read: a hold could be among the rest.</summary>
     public bool LabelsComplete { get; init; } = true;
+
+    /// <summary>The description, where a source fix names the main test it fixes. Read only with the checks.</summary>
+    public string Body { get; init; } = "";
+
+    /// <summary>Additions plus deletions against the base, prose docs/*.md aside; null when not read.</summary>
+    public int? ChangedLines { get; init; }
 }
 
 /// <summary>The `merge-rule` status to post: success, pending, failure or error, and why.</summary>
-sealed record MergeVerdict(string State, string Description, IReadOnlyList<string> Reasons, IReadOnlyList<string> SensitiveFiles);
+sealed record MergeVerdict(string State, string Description, IReadOnlyList<string> Reasons, IReadOnlyList<string> SensitiveFiles)
+{
+    /// <summary>Each source-bypass condition, "ok: ..." or "refused: ...", when the route was tried.</summary>
+    public IReadOnlyList<string> SourceBypassLog { get; init; } = [];
+}
 
 static class MergeRule
 {
@@ -258,9 +280,14 @@ static class MergeRule
         var exemptGlobs = config.MainGreen.ExemptPaths.Select(p => new Glob(p, ignoreCase: true)).ToList();
         if (exemptBy is not null && !(pr.FullyRead && pr.FilesComplete && pr.Files.Count > 0 && pr.Files.All(f => exemptGlobs.Any(g => g.IsMatch(f)))))
             exemptBy = null;
-        var mainBlocks = main.State != "success" && exemptBy is null;
+        // Otherwise, with the route on, a source fix may pass on what SourceBypass checks (#3471).
+        var labelled = pr.Labels.Any(l => config.MainGreen.ExemptLabels.Contains(l, StringComparer.OrdinalIgnoreCase));
+        var (fixedTest, bypassLog) = labelled && exemptBy is null && main.State != "success" && config.MainGreen.SourceBypass
+            ? SourceBypass(config, main, pr) : (null, []);
+        var mainBlocks = main.State != "success" && exemptBy is null && fixedTest is null;
         if (mainBlocks)
             failures.Add(main.Reason);
+        failures.AddRange(bypassLog.Where(l => l.StartsWith("refused: ", StringComparison.Ordinal)).Select(l => "source bypass " + l));
 
         if (pr.IsDraft)
             failures.Add("draft: mark it ready for review");
@@ -369,7 +396,7 @@ static class MergeRule
         var reasons = failures.Concat(pending).ToList();
         var state = failures.Count > 0 ? (mainBlocks && main.State == "error" ? "error" : "failure") : pending.Count > 0 ? "pending" : "success";
         var description = state == "success"
-            ? $"{(copilot ? $"Copilot reviewed {sha}" : needsSecond ? "Two model families' reviews on file" : "Independent review on file")}; every check passed{(copilot ? "; independent review on file" : "")}{(main.State != "success" ? $"; fixes-main tests-only bypass used" : "")}"
+            ? $"{(fixedTest is not null ? $"Source bypass used (fixes-main: {fixedTest}); " : "")}{(copilot ? $"Copilot reviewed {sha}" : needsSecond ? "Two model families' reviews on file" : "Independent review on file")}; every check passed{(copilot ? "; independent review on file" : "")}{(exemptBy is not null && main.State != "success" ? $"; fixes-main tests-only bypass used" : "")}"
             : Capitalize(string.Join("; ", reasons));
         // Blocking reasons first: alerts are informational, and the 140-character cut must never
         // drop a hold. The detailed log names every alert.
@@ -380,7 +407,56 @@ static class MergeRule
         if (later.Count > 0)
             description += $"; {later[0]}{More(later.Count)}";
         reasons.AddRange(later);
-        return new MergeVerdict(state, Truncate(Printable(description)), reasons, sensitive);
+        return new MergeVerdict(state, Truncate(Printable(description)), reasons, sensitive) { SourceBypassLog = bypassLog };
+    }
+
+    // The rule can't waive itself, its config or the workflows that run it, however small.
+    static readonly Glob[] RuleOwnPaths = [new(".github/**", ignoreCase: true), new("quality/**", ignoreCase: true), new("tools/AgentBridge.Quality/**", ignoreCase: true)];
+    static readonly Regex FixesMainTest = new(@"^fixes-main-test:\s*([A-Za-z_][\w`]*(?:\.[A-Za-z_][\w`]*)+)\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The source-fix route while main is red (owner decision 2026-11-20, #3471): the fixes-main
+    /// label (which only Quality can add) on a small source fix that names the failing main test,
+    /// leaves the rule and the workflows alone, and has both families' receipts on its head. Each
+    /// condition is logged "ok: " or "refused: ", and the first named test is returned only when
+    /// none is refused. The evaluator checks only that the test line is well formed: Quality
+    /// verifies it against main's run when it adds the label.
+    /// </summary>
+    static (string? Test, List<string> Log) SourceBypass(MergeRuleConfig config, MainFact main, PullRequestFacts pr)
+    {
+        var log = new List<string>();
+        void Check(bool ok, string pass, string fail) => log.Add(ok ? "ok: " + pass : "refused: " + fail);
+        var sha = Short(pr.HeadSha);
+        // Only a red main it could read is waived: error or pending could hide anything.
+        Check(main.State == "failure", "main's CI read as failing", main.State == "pending"
+            ? "main's CI has no completed failed run yet, and only a red main is waived"
+            : $"main's CI is {main.State}, not a read failure, and only a red main it could read is waived");
+        Check(true, "the fixes-main label is on it (added by Quality, with triage rights)", "");
+        var listed = pr.FullyRead && pr.FilesComplete && pr.Files.Count > 0;
+        Check(listed, "its file list is fully read and complete", "its file list isn't fully read and complete");
+        var lines = pr.Body.Split('\n').Select(l => l.Trim()).Where(l => l.StartsWith("fixes-main-test:", StringComparison.OrdinalIgnoreCase)).ToList();
+        var tests = lines.Select(l => FixesMainTest.Match(l)).ToList();
+        var named = tests.Count > 0 && tests.All(m => m.Success);
+        Check(named, $"it names {string.Join(", ", tests.Select(m => m.Groups[1].Value))}",
+            "name the failing main test (a line 'fixes-main-test: <fully qualified test name>' in the description)");
+        var cap = config.MainGreen.SourceBypassCap;
+        if (cap is null)
+            Check(false, "", "main_green.source_bypass_max_lines isn't a positive whole number");
+        else
+            Check(pr.ChangedLines <= cap, $"{pr.ChangedLines} changed lines, not counting prose docs/*.md, within the cap of {cap}",
+                pr.ChangedLines is { } n ? $"{n} changed lines, not counting prose docs/*.md, over the cap of {cap}" : "its changed lines weren't read");
+        var own = listed ? pr.Files.FirstOrDefault(f => RuleOwnPaths.Any(g => g.IsMatch(f))) : null;
+        Check(listed && own is null, "it touches nothing under .github/, quality/ or tools/AgentBridge.Quality/",
+            own is null ? "its files weren't read" : $"it touches {Printable(own)}, and the rule can't waive itself or the workflows");
+        // Statuses are read from the head commit only (MergeRuleCommand.ParseFacts), so both are on this head.
+        var first = LatestReceipt(config, pr, config.IndependentReview.Context);
+        var second = LatestReceipt(config, pr, config.CopilotWaiver.SecondReview);
+        Check(first?.State == "success" && second?.State == "success" && DifferentFamilies(first.Description, second.Description),
+            $"success {config.IndependentReview.Context} and {config.CopilotWaiver.SecondReview} on {sha}, from different model families",
+            $"needs success {config.IndependentReview.Context} and {config.CopilotWaiver.SecondReview} on {sha}, from different model families");
+        var test = tests.FirstOrDefault()?.Groups[1].Value;
+        // The wording leads the description, so a long test name is cut to keep it within 140.
+        return (log.Any(l => l.StartsWith("refused: ", StringComparison.Ordinal)) ? null : test!.Length > 80 ? test[..79] + "…" : test, log);
     }
 
     /// <summary>
