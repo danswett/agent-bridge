@@ -78,11 +78,12 @@ public static partial class Motion
                 else if (state.Offset != visual.Offset)
                 {
                     var step = Catalogue.Enter("Shift", true);
-                    if (state.Started is { } started && Stopwatch.GetElapsedTime(started) < step.Duration)
+                    if (state.Started is not null)
                     {
                         var decelerate = MotionEase.Parse(Convert.ToString(Application.Current.Resources["AbMotionEaseDecelerate"], CultureInfo.InvariantCulture)!);
                         var move = visual.Compositor.CreateVector3KeyFrameAnimation();
-                        // No starting key: replacing the implicit move starts from its drawn offset.
+                        // Progress zero uses the value composition supplies when the retarget starts.
+                        move.InsertExpressionKeyFrame(0, "this.StartingValue");
                         move.InsertKeyFrame(1, visual.Offset, Ease(visual.Compositor, decelerate));
                         move.Duration = step.Duration;
                         move.StopBehavior = AnimationStopBehavior.SetToFinalValue;

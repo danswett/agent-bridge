@@ -13,6 +13,12 @@ using Xunit;
 public sealed class MotionTests
 {
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void A_prior_row_shift_retargets_after_its_old_wall_clock_window(bool prior, bool expected) =>
+        Assert.Equal(expected, RowController.Value.DeclaringType!.GetMethod("LateRetarget")!.Invoke(null, [prior, Catalogue.Enter("Shift", true).Duration]));
+
+    [Theory]
     [InlineData(0f, 81, 81, 1, false)]
     [InlineData(0f, 1, 1, 1, true)]
     [InlineData(0f, 1, 4, 1, false)]
@@ -72,13 +78,20 @@ public sealed class MotionTests
         var settle = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "RowMotionSettled");
         var paused = syntax.DescendantNodes().OfType<InvocationExpressionSyntax>().Single(i => i.Expression.ToString() == "check"
             && i.ArgumentList.Arguments[1].ToString().Contains("retarget is paused before motion is disabled")).ArgumentList.Arguments[0].Expression;
+        var retarget = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.App", "Motion.Rows.cs")))
+            .GetRoot().DescendantNodes().OfType<IfStatementSyntax>().Single(i => i.Condition.ToString().Contains("state.Started")).Condition;
         var source = $$"""
             #nullable enable
-            using System; using System.Threading.Tasks;
+            using System; using System.Threading.Tasks; using System.Diagnostics;
             class AnimationController { public float Progress; } class UIElement; class FrameworkElement : UIElement;
             class Visual { public int Starts; public AnimationController? Previous; public AnimationController? TryGetAnimationController(string name) => Probe.Frames >= Starts ? new() : Previous; }
             public static class Probe {
                 public static int Frames;
+                public static bool LateRetarget(bool prior, TimeSpan duration) {
+                    var state = new { Started = prior ? Stopwatch.GetTimestamp() - (long)(2 * duration.TotalSeconds * Stopwatch.Frequency) : (long?)null };
+                    var step = new { Duration = duration };
+                    return {{retarget}};
+                }
                 static Task CaptureFrame(FrameworkElement root) { Frames++; return Task.CompletedTask; }
                 {{method}}
                 {{settle}}

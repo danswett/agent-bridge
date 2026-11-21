@@ -99,10 +99,8 @@ static partial class SelfTest
             await CaptureFrame(root);
             check(LayoutInformation.GetLayoutSlot(neighbour) == slot, "row shift does not change the layout between frames");
             var initialStart = RowShiftStart(shifts, neighbour);
-            var inserted = System.Diagnostics.Stopwatch.GetTimestamp();
             items.Insert(0, added);
             list.UpdateLayout();
-            var gateStart = RowShiftStart(shifts, neighbour);
             var visual = ElementCompositionPreview.GetElementVisual(neighbour);
             var tops = new List<double>();
             var failure = "";
@@ -169,15 +167,10 @@ static partial class SelfTest
             string Diagnosis()
             {
                 var current = visual.TryGetAnimationController("Offset");
-                var restamp = RowShiftStart(shifts, neighbour).Started is { } at && at != initialStart.Started && initialStart.Started is { } start ? System.Diagnostics.Stopwatch.GetElapsedTime(start, at) : (TimeSpan?)null;
-                var shift = Motion.Catalogue.Enter("Shift", true).Duration;
-                var gate = restamp is not { } elapsed ? "unknown (not restamped)" : elapsed < shift ? "inferred explicit" : "inferred implicit only";
                 return $"retarget diagnosis: {failure}; Offset controllers as managed wrappers, not native ids: sampled is initial={ReferenceEquals(retarget, initial)}, current is sampled={ReferenceEquals(current, retarget)}, current is initial={ReferenceEquals(current, initial)}; "
                     + $"progress initial={initial?.Progress.ToString() ?? "none"} sampled={retarget?.Progress.ToString() ?? "none"} current={current?.Progress.ToString() ?? "none"}; "
-                    + $"Shift {shift.TotalMilliseconds:0}ms vs initial start to insertion {Since(inserted)}, latest restamp {restamp?.TotalMilliseconds.ToString("0") ?? "none"}ms, now {Since(System.Diagnostics.Stopwatch.GetTimestamp())}; "
-                    + $"restamped by layout={gateStart != initialStart}; gate {gate} from start stamps, branch not observed; pixels [{string.Join(", ", tops.TakeLast(8))}]";
+                    + $"pixels [{string.Join(", ", tops.TakeLast(8))}]";
             }
-            string Since(long at) => initialStart.Started is { } start ? $"{System.Diagnostics.Stopwatch.GetElapsedTime(start, at).TotalMilliseconds:0}ms" : "unknown";
         }
         finally { root.Children.Remove(list); }
 
