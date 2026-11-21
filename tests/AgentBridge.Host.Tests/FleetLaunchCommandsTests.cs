@@ -105,4 +105,16 @@ public sealed class FleetLaunchCommandsTests
             });
         Assert.Equal(0, result.Exit);
     }
+
+    [Theory]
+    [InlineData(null, 4)]
+    [InlineData("fixture", 6)]
+    public async Task Missing_caller_or_unavailable_pipe_emits_one_object_without_claiming_uncertainty(string? token, int exit)
+    {
+        var result = await Run(Flags, (_, _) => throw new IOException("fixture-secret-do-not-print"), token);
+        Assert.Equal(exit, result.Exit);
+        Assert.False(result.Json.GetProperty("uncertain").GetBoolean());
+        Assert.False(result.Json.TryGetProperty("remaining", out _));
+        Assert.DoesNotContain("fixture-secret-do-not-print", result.Error);
+    }
 }

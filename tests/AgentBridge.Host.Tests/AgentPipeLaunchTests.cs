@@ -131,16 +131,18 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal("{ damaged", File.ReadAllText(Path.Combine(folder, LaunchRequestStore.FileName)));
     }
 
-    (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key, bool grantOnly = false)
+    (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key, bool grantOnly = false,
+        bool allScope = false, bool allowAllLaunch = false)
     {
         var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, grantOnly: grantOnly);
         var caller = pipe.Credentials.Of(pipe.Channel)!;
         var now = DateTimeOffset.UtcNow;
-        var scope = new GrantScope([new('a', 32)], ["App"], ["claude"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
+        var scope = new GrantScope([new('a', 32)], ["App"], ["claude"], ["small"], ["default"], ["medium"], ["default"],
+            allScope ? ["ask", "allowAll"] : ["ask"]);
         var store = new GrantStore(folder, key, new(folder), scope);
         var grant = new GrantDocument(1, Guid.NewGuid(), "123", new("123", new('a', 32), "AQ", now, new('a', 64)),
             new(new('a', 32), Path.GetFileName(folder)), [new("123", new('a', 32), caller.Session, caller.Id, new(caller.RootPid, caller.RootStartUtc))],
-            ["launch"], scope, new(3, 3, 2), now, 1, now.AddHours(8));
+            ["launch"], scope, new(3, 3, 2), now, 1, now.AddHours(8), AllowAllLaunch: allowAllLaunch);
         Assert.True(store.Issue(grant).Usable);
         return (pipe, grant, store);
     }
@@ -211,6 +213,29 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(first.Result.Outcome, duplicate.Result.Outcome);
         Assert.Equal(1, launcher.Launches);
         Assert.Equal("duplicate-id", (await GrantedLaunch(pipe, GrantBody(grant, prompt: "different"))).Reason);
+        var target = new StopTarget(Guid.NewGuid().ToString(), new(99, DateTimeOffset.UtcNow));
+        Assert.True(new GrantCounters(store).Commit(Guid.Parse(request), target, "ask").Accepted);
+        Assert.True((await GrantedLaunch(pipe, GrantBody(grant))).Registered);
+        Assert.Equal(1, launcher.Launches);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Receiver_all_launch_needs_both_flags_and_never_changes_ordinary_legacy_launch(bool flag, bool enabled)
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, _) = Granted(key, grantOnly: true, allScope: true, allowAllLaunch: flag);
+        var path = Path.Combine(folder, HostSettings.FileName);
+        File.WriteAllText(path, File.ReadAllText(path).Replace("\"permissions\":\"ask\"",
+            "\"permissions\":\"ask\",\"allowAllLaunch\":" + enabled.ToString().ToLowerInvariant()));
+        Assert.Contains("for the person", await Refusal(pipe, LaunchProtocol.Launch, Body(permissions: "allowAll")));
+        var input = GrantBody(grant).Deserialize<FleetLaunchInput>(ProtocolJson.Options)! with { Permissions = "allowAll" };
+        var result = await GrantedLaunch(pipe, JsonSerializer.SerializeToElement(input, ProtocolJson.Options));
+        Assert.Equal(flag && enabled ? 1 : 0, launcher.Launches);
+        if (!flag || !enabled) { Assert.Equal("scope", result.Reason); }
     }
 
     [Fact]
