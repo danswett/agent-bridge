@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace AgentBridge.Host.Delivery.Copilot;
 
 internal enum QualificationAccess { Denied, SreCli, OwnerApproval }
@@ -60,7 +62,7 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
         { return QualificationGrantDecision.Refuse("qualification.start requires SRE CLI on the approved disposable run"); }
         var old = journal.Find(id);
         if (id == Guid.Empty || old is null || old.Id != id || old.State != QualificationGrantState.Issued
-            || !Live(old) || !Matches(old) || !MatchesAttempt(old, target, challenge))
+            || !Matches(old) || !MatchesAttempt(old, target, challenge))
         { return QualificationGrantDecision.Refuse("qualification grant missing, expired, used or mismatched"); }
         var next = old with { State = QualificationGrantState.Consumed };
         if (!journal.TryAppend(old, next))
@@ -71,15 +73,14 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
 
     internal bool IsCurrent(QualificationGrant grant, QueueTarget? target, QueueQualification.Challenge? challenge) =>
         Authorized(start: true) && journal is not null && grant.State == QualificationGrantState.Consumed
-        && journal.Find(grant.Id) == grant && Live(grant) && Matches(grant) && MatchesAttempt(grant, target, challenge);
+        && journal.Find(grant.Id) == grant && Matches(grant) && MatchesAttempt(grant, target, challenge);
 
     internal QualificationGrantDecision Revoke(Guid id)
     {
         if (trust?.Access != QualificationAccess.SreCli || trust.HostKind != QualificationHostKind.Disposable || journal is null)
         { return QualificationGrantDecision.Refuse("qualification revocation requires SRE CLI"); }
         var old = journal.Find(id);
-        if (id == Guid.Empty || old is null || old.Id != id || old.Binding != trust.Binding
-            || old.State == QualificationGrantState.Revoked)
+        if (id == Guid.Empty || old is null || old.Id != id || old.Binding != trust.Binding || old.State == QualificationGrantState.Revoked)
         { return QualificationGrantDecision.Refuse("qualification grant missing, foreign or already revoked"); }
         var next = old with { State = QualificationGrantState.Revoked };
         return journal.TryAppend(old, next) ? new(next, null)
@@ -92,19 +93,14 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
     // Wall time never runs backwards within one controller; restarts rely on journaled expiry.
     DateTimeOffset Now() { lock (gate) { var now = time.GetUtcNow(); return latest = now > latest ? now : latest; } }
 
-    // Journal expiry on first observation so a later wall-clock rollback cannot revive the grant.
-    bool Live(QualificationGrant grant)
-    {
-        if (journal!.FindChallenge(grant.Binding.Challenge) != grant) { return false; }
-        if (Now() < grant.Expires) { return true; }
-        journal.TryAppend(grant, grant with { State = QualificationGrantState.Expired });
-        return false;
-    }
-
+    // One time sample decides expiry, and an observed expiry is journaled before refusing,
+    // so a later wall-clock rollback cannot revive the grant.
     bool Matches(QualificationGrant grant)
     {
         var now = Now();
-        return Valid(grant.Binding) && grant.Binding == trust?.Binding && grant.Issued <= now && now < grant.Expires
+        if (journal!.FindChallenge(grant.Binding.Challenge) != grant) { return false; }
+        if (now >= grant.Expires) { journal.TryAppend(grant, grant with { State = QualificationGrantState.Expired }); return false; }
+        return Valid(grant.Binding) && grant.Binding == trust?.Binding && grant.Issued <= now
             && grant.Expires - grant.Issued <= TimeSpan.FromMinutes(60);
     }
 
@@ -121,12 +117,12 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
 
     // Every QueueTarget field must be the decoded live identity shape; a default target binds nothing.
     static bool Complete(QueueTarget? t) => t is { ProcessId: > 0, StartedAt: > 0, InputMode: not 0 }
-        && t.ConsoleId?.Split(':') is [var window, var owner, var started] && Positive(window) && Positive(owner) && Positive(started)
+        && t.ConsoleId?.Split(':') is [var window, var owner, var started]
+        && ulong.TryParse(window, NumberStyles.None, CultureInfo.InvariantCulture, out var hwnd) && hwnd != 0
+        && uint.TryParse(owner, NumberStyles.None, CultureInfo.InvariantCulture, out var pid) && pid != 0
+        && long.TryParse(started, NumberStyles.None, CultureInfo.InvariantCulture, out var created) && created > 0
         && new[] { t.CliPath, t.CliVersion, t.InjectorPath, t.InjectorVersion }.All(x => !string.IsNullOrWhiteSpace(x))
         && Hex(t.CliHash, 64) && Hex(t.InjectorHash, 64) && t.Protocol == KeyPlan.Header;
 
     static bool Hex(string? value, int length) => value?.Length == length && value.All(char.IsAsciiHexDigit);
-
-    static bool Positive(string value) =>
-        value.Length is > 0 and <= 20 && value.All(char.IsAsciiDigit) && value.Any(c => c != '0');
 }

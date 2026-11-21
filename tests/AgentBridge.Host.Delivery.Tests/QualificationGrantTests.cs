@@ -8,6 +8,8 @@ public sealed class QualificationGrantTests
 {
     sealed class WallClock(DateTimeOffset now) : TimeProvider
     { public DateTimeOffset Now = now; public override DateTimeOffset GetUtcNow() => Now; }
+    sealed class SteppingClock(params DateTimeOffset[] times) : TimeProvider
+    { int next; public override DateTimeOffset GetUtcNow() => times[Math.Min(next++, times.Length - 1)]; }
     internal sealed class Trust : IQualificationTrust
     {
         public QualificationAccess Access { get; set; } = QualificationAccess.SreCli;
@@ -230,12 +232,8 @@ public sealed class QualificationGrantTests
         if (history is "consumed" or "restart") { Assert.Null(run.Consume().Refusal); }
         if (history == "revoked") { Assert.Null(run.Grants().Revoke(run.Id).Refusal); }
         if (history == "expired") { run.Clock.Advance(TimeSpan.FromMinutes(60)); Assert.NotNull(run.Consume().Refusal); }
-        var journal = run.Journal;
-        if (history == "restart")
-        {
-            journal = new Journal();
-            journal.Entries.AddRange(JsonSerializer.Deserialize<List<QualificationGrant>>(JsonSerializer.Serialize(run.Journal.Entries))!);
-        }
+        var journal = history == "restart" ? new Journal() : run.Journal;
+        if (history == "restart") { journal.Entries.AddRange(JsonSerializer.Deserialize<List<QualificationGrant>>(JsonSerializer.Serialize(run.Journal.Entries))!); }
         var count = journal.Entries.Count;
         run.Trust.Binding = run.Trust.Binding with { Target = run.Trust.Binding.Target with { ProcessId = 43 } };
         Assert.NotNull(new QualificationGrants(run.Trust, journal, run.Clock).Issue(Guid.NewGuid(), TimeSpan.FromMinutes(1)).Refusal);
@@ -246,16 +244,17 @@ public sealed class QualificationGrantTests
     [InlineData("pid")][InlineData("started")][InlineData("console")][InlineData("consoleZero")][InlineData("mode")][InlineData("cliPath")]
     [InlineData("cliVersion")][InlineData("cliHash")][InlineData("injectorPath")][InlineData("injectorVersion")][InlineData("injectorHash")]
     [InlineData("protocol")][InlineData("allDefault")][InlineData("nullTarget")][InlineData("head")][InlineData("vm")][InlineData("run")]
-    [InlineData("host")][InlineData("nonce")][InlineData("shortNonce")][InlineData("approval")]
+    [InlineData("host")][InlineData("nonce")][InlineData("shortNonce")][InlineData("approval")][InlineData("consoleOverflow")]
     public void Every_empty_zero_or_default_binding_field_refuses_issue(string field)
     {
-        var run = new Run(); var b = run.Trust.Binding; var t = b.Target; var approval = run.Id;
+        var run = new Run(); var b = run.Trust.Binding; var t = b.Target; var approval = field == "approval" ? Guid.Empty : run.Id;
         run.Trust.Binding = field switch
         {
             "pid" => b with { Target = t with { ProcessId = 0 } },
             "started" => b with { Target = t with { StartedAt = 0 } },
             "console" => b with { Target = t with { ConsoleId = "" } },
             "consoleZero" => b with { Target = t with { ConsoleId = "0:0:0" } },
+            "consoleOverflow" => b with { Target = t with { ConsoleId = "200:4294967296:101" } },
             "mode" => b with { Target = t with { InputMode = 0 } },
             "cliPath" => b with { Target = t with { CliPath = " " } },
             "cliVersion" => b with { Target = t with { CliVersion = "" } },
@@ -274,7 +273,6 @@ public sealed class QualificationGrantTests
             "shortNonce" => b with { Challenge = "agent-bridge-qualify:" + new string('a', 8) },
             _ => b,
         };
-        if (field == "approval") { approval = Guid.Empty; }
         Assert.NotNull(run.Grants().Issue(approval, TimeSpan.FromMinutes(1)).Refusal);
         Assert.Empty(run.Journal.Entries);
     }
@@ -292,6 +290,15 @@ public sealed class QualificationGrantTests
         Assert.False(consumed.Current(grant));
         Assert.Equal(QualificationGrantState.Expired, run.Journal.Entries.Last().State);
         Assert.Equal(QualificationGrantState.Expired, consumed.Journal.Entries.Last().State);
+    }
+
+    [Fact]
+    public void An_expiry_reached_mid_check_is_either_unseen_or_journaled()
+    {
+        var run = new Run(); run.Issue(); var grant = Assert.IsType<QualificationGrant>(run.Consume().Grant);
+        var clock = new SteppingClock(grant.Expires.AddTicks(-1), grant.Expires);
+        var current = new QualificationGrants(run.Trust, run.Journal, clock).IsCurrent(grant, run.Trust.Binding.Target, run.Challenge);
+        Assert.True(current || run.Journal.Entries.Last().State == QualificationGrantState.Expired);
     }
 
     [Theory]
