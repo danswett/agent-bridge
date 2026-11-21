@@ -99,9 +99,19 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
     {
         var now = Now();
         if (journal!.FindChallenge(grant.Binding.Challenge) != grant) { return false; }
-        if (now >= grant.Expires) { journal.TryAppend(grant, grant with { State = QualificationGrantState.Expired }); return false; }
+        if (now >= grant.Expires) { Expire(grant.Id); return false; }
         return Valid(grant.Binding) && grant.Binding == trust?.Binding && grant.Issued <= now
             && grant.Expires - grant.Issued <= TimeSpan.FromMinutes(60);
+    }
+
+    // An observed expiry must become durable even when another controller wins a CAS first.
+    void Expire(Guid id)
+    {
+        for (var tries = 0; journal!.Find(id) is { State: QualificationGrantState.Issued or QualificationGrantState.Consumed } latest; tries++)
+        {
+            if (tries == 8) { throw new IOException("qualification expiry could not be journaled"); }
+            journal.TryAppend(latest, latest with { State = QualificationGrantState.Expired });
+        }
     }
 
     static bool MatchesAttempt(QualificationGrant grant, QueueTarget? target, QueueQualification.Challenge? challenge) =>

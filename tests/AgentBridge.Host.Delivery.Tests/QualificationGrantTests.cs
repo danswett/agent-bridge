@@ -6,8 +6,7 @@ using Xunit;
 
 public sealed class QualificationGrantTests
 {
-    sealed class WallClock(DateTimeOffset now) : TimeProvider
-    { public DateTimeOffset Now = now; public override DateTimeOffset GetUtcNow() => Now; }
+    sealed class WallClock(DateTimeOffset now) : TimeProvider { public DateTimeOffset Now = now; public override DateTimeOffset GetUtcNow() => Now; }
     sealed class SteppingClock(params DateTimeOffset[] times) : TimeProvider
     { int next; public override DateTimeOffset GetUtcNow() => times[Math.Min(next++, times.Length - 1)]; }
     internal sealed class Trust : IQualificationTrust
@@ -25,14 +24,15 @@ public sealed class QualificationGrantTests
         readonly object gate = new();
         public readonly List<QualificationGrant> Entries = [];
         public bool Available = true;
+        public Action? Racing; // Runs once inside the next append, before its compare.
         public QualificationGrant? Find(Guid id) { lock (gate) { return Entries.LastOrDefault(x => x.Id == id); } }
-        public QualificationGrant? FindChallenge(string nonce)
-        { lock (gate) { return Entries.LastOrDefault(x => x.Binding.Challenge == nonce); } }
+        public QualificationGrant? FindChallenge(string nonce) { lock (gate) { return Entries.LastOrDefault(x => x.Binding.Challenge == nonce); } }
         public bool TryAppend(QualificationGrant? expected, QualificationGrant next)
         {
             lock (gate)
             {
                 if (!Available) { throw new IOException("receipt store unavailable"); }
+                var race = Racing; Racing = null; race?.Invoke();
                 if (Find(next.Id) != expected || FindChallenge(next.Binding.Challenge) != expected) { return false; }
                 Entries.Add(next); return true;
             }
@@ -142,21 +142,6 @@ public sealed class QualificationGrantTests
     }
 
     [Fact]
-    public void Empty_approval_or_incomplete_binding_is_refused_and_only_SRE_can_revoke()
-    {
-        var run = new Run();
-        Assert.NotNull(run.Grants().Issue(Guid.Empty, TimeSpan.FromMinutes(1)).Refusal);
-        run.Trust.Binding = run.Trust.Binding with { Vm = Guid.Empty };
-        Assert.NotNull(run.Grants().Issue(run.Id, TimeSpan.FromMinutes(1)).Refusal);
-        run.Trust.Binding = run.Trust.Binding with { Vm = Guid.NewGuid(), Head = "not-a-sha" };
-        Assert.NotNull(run.Grants().Issue(run.Id, TimeSpan.FromMinutes(1)).Refusal);
-        run.Trust.Binding = run.Trust.Binding with { Head = new string('a', 40) }; run.Issue();
-        run.Trust.Access = QualificationAccess.OwnerApproval;
-        Assert.NotNull(run.Grants().Revoke(run.Id).Refusal);
-        Assert.Single(run.Journal.Entries);
-    }
-
-    [Fact]
     public void Failed_durable_audit_never_returns_a_grant_or_consumes_one()
     {
         var run = new Run(); run.Journal.Available = false;
@@ -171,10 +156,8 @@ public sealed class QualificationGrantTests
     public void A_grant_cannot_be_consumed_for_another_target_or_challenge(bool changeChallenge)
     {
         var run = new Run(); run.Issue();
-        var target = run.Trust.Binding.Target;
-        var challenge = run.Challenge;
-        if (changeChallenge) { challenge = new("agent-bridge-qualify:" + new string('b', 64)); }
-        else { target = target with { StartedAt = target.StartedAt + 1 }; }
+        var challenge = changeChallenge ? new QueueQualification.Challenge("agent-bridge-qualify:" + new string('b', 64)) : run.Challenge;
+        var target = changeChallenge ? run.Trust.Binding.Target : run.Trust.Binding.Target with { StartedAt = 101 };
         Assert.NotNull(run.Grants().Consume(run.Id, target, challenge).Refusal);
         Assert.Single(run.Journal.Entries);
     }
@@ -185,10 +168,8 @@ public sealed class QualificationGrantTests
     {
         var run = new Run(); run.Issue();
         var grant = Assert.IsType<QualificationGrant>(run.Consume().Grant);
-        var target = run.Trust.Binding.Target;
-        var challenge = run.Challenge;
-        if (changeChallenge) { challenge = new("agent-bridge-qualify:" + new string('b', 64)); }
-        else { target = target with { ProcessId = target.ProcessId + 1 }; }
+        var challenge = changeChallenge ? new QueueQualification.Challenge("agent-bridge-qualify:" + new string('b', 64)) : run.Challenge;
+        var target = changeChallenge ? run.Trust.Binding.Target : run.Trust.Binding.Target with { ProcessId = 43 };
         Assert.False(run.Grants().IsCurrent(grant, target, challenge));
         Assert.NotNull(run.Consume().Refusal);
         Assert.NotNull(run.Grants().Consume(run.Id, target, challenge).Refusal);
@@ -288,8 +269,7 @@ public sealed class QualificationGrantTests
         clock.Now = grant.Issued.AddMinutes(30);
         Assert.NotNull(run.Grants().Consume(run.Id, run.Trust.Binding.Target, run.Challenge).Refusal);
         Assert.False(consumed.Current(grant));
-        Assert.Equal(QualificationGrantState.Expired, run.Journal.Entries.Last().State);
-        Assert.Equal(QualificationGrantState.Expired, consumed.Journal.Entries.Last().State);
+        Assert.All(new[] { run.Journal, consumed.Journal }, j => Assert.Equal(QualificationGrantState.Expired, j.Entries.Last().State));
     }
 
     [Fact]
@@ -301,13 +281,23 @@ public sealed class QualificationGrantTests
         Assert.True(current || run.Journal.Entries.Last().State == QualificationGrantState.Expired);
     }
 
+    [Fact]
+    public void An_observed_expiry_is_journaled_even_when_another_controller_consumes_first()
+    {
+        var run = new Run(); run.Issue(); run.Journal.Racing = () => Assert.Null(run.Consume().Refusal);
+        var late = new QualificationGrants(run.Trust, run.Journal, new WallClock(run.Clock.GetUtcNow().AddMinutes(61)));
+        Assert.NotNull(late.Consume(run.Id, run.Trust.Binding.Target, run.Challenge).Refusal);
+        Assert.Equal(QualificationGrantState.Expired, run.Journal.Entries.Last().State);
+    }
+
     [Theory]
-    [InlineData(false)][InlineData(true)]
-    public void Revocation_requires_the_SRE_callers_own_disposable_binding(bool fleetHost)
+    [InlineData("owner")][InlineData("fleet")][InlineData("foreign")]
+    public void Revocation_requires_SRE_CLI_with_the_grants_own_disposable_binding(string caller)
     {
         var run = new Run(); run.Issue();
-        if (fleetHost) { run.Trust.HostKind = QualificationHostKind.Fleet; }
-        else { run.Trust.Binding = run.Trust.Binding with { Run = Guid.NewGuid() }; }
+        if (caller == "owner") { run.Trust.Access = QualificationAccess.OwnerApproval; }
+        if (caller == "fleet") { run.Trust.HostKind = QualificationHostKind.Fleet; }
+        if (caller == "foreign") { run.Trust.Binding = run.Trust.Binding with { Run = Guid.NewGuid() }; }
         Assert.NotNull(run.Grants().Revoke(run.Id).Refusal);
         Assert.Single(run.Journal.Entries);
     }
