@@ -20,6 +20,78 @@ public sealed class GrantAuthorityTests
     static GrantValidation Parse(string json) => GrantValidator.Parse(json, Scope);
 
     [Theory]
+    [InlineData("version")]
+    [InlineData("generation")]
+    [InlineData("hourly")]
+    [InlineData("daily")]
+    [InlineData("live")]
+    [InlineData("pid")]
+    public void Quoted_numbers_refuse(string field)
+    {
+        var json = Json();
+        var parent = field is "hourly" or "daily" or "live" ? json["caps"]!.AsObject()
+            : field == "pid" ? json["subjects"]![0]!["processInstance"]!.AsObject() : json;
+        parent[field] = parent[field]!.ToJsonString();
+        Assert.Equal(GrantRefusal.Malformed, Parse(json.ToJsonString()).Reason);
+    }
+
+    [Theory]
+    [InlineData("issuedAt", false)]
+    [InlineData("notBefore", false)]
+    [InlineData("expiresAt", false)]
+    [InlineData("issuedAt", true)]
+    [InlineData("notBefore", true)]
+    [InlineData("expiresAt", true)]
+    public void Numeric_times_refuse(string field, bool quoted)
+    {
+        var json = Json();
+        var parent = field == "issuedAt" ? json["issuer"]!.AsObject() : json;
+        parent[field] = 123;
+        if (quoted) { parent[field] = "123"; }
+        Assert.Equal(GrantRefusal.Malformed, Parse(json.ToJsonString()).Reason);
+    }
+
+    [Fact]
+    public void Offset_times_near_maximum_return_lifetime_refusals_on_all_paths()
+    {
+        var issued = DateTimeOffset.Parse("9999-12-31T23:00:00+14:00");
+        var grant = Grant() with { Issuer = Grant().Issuer with { IssuedAt = issued }, NotBefore = issued };
+        Assert.Equal(GrantRefusal.Lifetime, Validate(grant).Reason);
+        Assert.Equal(GrantRefusal.Lifetime, Parse(JsonSerializer.Serialize(grant, new JsonSerializerOptions(JsonSerializerDefaults.Web))).Reason);
+        Assert.Equal(GrantRefusal.Lifetime, GrantEvaluator.Evaluate(grant, Policy(), Request(), issued).Reason);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Omitted_permission_filters_disabled_allow_all_and_prefers_ask(bool allowAll)
+    {
+        var scope = Scope with { Permissions = ["allowAll", "ask"] };
+        var result = GrantEvaluator.Evaluate(Grant() with { Scope = scope },
+            Policy() with { Scope = scope, AllowAll = allowAll }, Request(), Now);
+        Assert.True(result.Allowed);
+        Assert.Equal("ask", result.Launch!.Permission);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Stops_ignore_dropped_launch_choices_but_keep_target_and_policy_checks(bool named)
+    {
+        var target = new StopTarget(Subject.Session, Subject.ProcessInstance);
+        var grant = Grant() with { StopTargets = named ? [target] : [] };
+        var policy = Policy() with
+        {
+            Scope = Scope with { Models = ["other"], Permissions = ["allowAll"] },
+            StopTargets = [target], Launches = named ? [] : [new(grant.Id, Subject, target)]
+        };
+        var request = Request() with { Action = "stop", Target = target };
+        Assert.True(GrantEvaluator.Evaluate(grant, policy, request, Now).Allowed);
+        Assert.Equal(GrantRefusal.Policy, GrantEvaluator.Evaluate(grant, policy with { StopAllowed = false }, request, Now).Reason);
+        Assert.Equal(GrantRefusal.StopTarget, GrantEvaluator.Evaluate(grant, policy with { StopTargets = [] }, request, Now).Reason);
+    }
+
+    [Theory]
     [InlineData("caps")]
     [InlineData("hourly")]
     [InlineData("daily")]
@@ -43,6 +115,48 @@ public sealed class GrantAuthorityTests
         Assert.False(GrantEvaluator.Evaluate(Grant(), Policy(), Request(), Now.AddHours(8)).Allowed);
         Assert.False(Validate(Grant() with { ExpiresAt = Now.AddHours(24).AddTicks(1) }).Valid);
         Assert.True(Validate(Grant() with { ExpiresAt = Now.AddHours(24) }).Valid);
+        Assert.Equal(GrantRefusal.Lifetime, GrantEvaluator.Evaluate(Grant() with { ExpiresAt = Now.AddHours(24).AddTicks(1) },
+            Policy(), Request(), Now).Reason);
+    }
+
+    [Theory]
+    [InlineData(1001, 5000, 100)]
+    [InlineData(1000, 5001, 100)]
+    [InlineData(1000, 5000, 101)]
+    [InlineData(11, 10, 6)]
+    public void Caps_have_documented_upper_bounds_and_hourly_never_exceeds_daily(int hourly, int daily, int live) =>
+        Assert.Equal(GrantRefusal.Caps, Validate(Grant() with { Caps = new(hourly, daily, live) }).Reason);
+
+    [Fact]
+    public void Maximum_caps_and_launch_tuning_model_names_are_supported()
+    {
+        var scope = Scope with { Models = ["opus[1m]", "vendor:model"] };
+        var grant = Grant() with { Scope = scope, Caps = new(1000, 5000, 100) };
+        Assert.True(GrantValidator.Validate(grant, scope).Valid);
+        Assert.Equal("opus[1m]", GrantEvaluator.Evaluate(grant, Policy() with { Scope = scope }, Request(), Now).Launch!.Model);
+        Assert.False(GrantValidator.Validate(grant with { Scope = scope with { Models = ["-unsafe"] } }, scope).Valid);
+        Assert.False(GrantValidator.Validate(grant with { Scope = scope with { Models = ["opus\n"] } }, scope).Valid);
+        Assert.True(GrantEvaluator.Evaluate(grant, Policy() with { Scope = scope, Caps = new(1001, 5001, 101) }, Request(), Now).Allowed);
+    }
+
+    [Fact]
+    public void Normal_offset_times_are_normalized_before_default_expiry_evaluation()
+    {
+        var grant = Grant() with { Issuer = Grant().Issuer with { IssuedAt = Now.ToOffset(TimeSpan.FromHours(14)) },
+            NotBefore = Now.ToOffset(TimeSpan.FromHours(-12)), ExpiresAt = Now.AddHours(8).ToOffset(TimeSpan.FromHours(10)) };
+        var validated = Validate(grant).Grant!;
+        Assert.Equal(TimeSpan.Zero, validated.Issuer.IssuedAt.Offset);
+        Assert.Equal(TimeSpan.Zero, validated.NotBefore.Offset);
+        Assert.Equal(TimeSpan.Zero, validated.ExpiresAt!.Value.Offset);
+        Assert.True(GrantEvaluator.Evaluate(grant with { ExpiresAt = null }, Policy(), Request(), Now).Allowed);
+    }
+
+    [Fact]
+    public void Child_sessions_do_not_inherit_the_parent_subject_grant()
+    {
+        var child = Subject with { Session = Guid.NewGuid().ToString(), ProcessInstance = new(43, Now) };
+        Assert.Equal(GrantRefusal.Subject, GrantEvaluator.Evaluate(Grant(), Policy() with { AuthenticatedCaller = child },
+            Request() with { Subject = child }, Now).Reason);
     }
 
     [Fact]
