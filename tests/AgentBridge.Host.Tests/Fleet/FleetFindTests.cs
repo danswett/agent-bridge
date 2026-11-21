@@ -93,23 +93,43 @@ public sealed class FleetFindTests : IDisposable
         public Action? ReadingPresence;
         public IReadOnlyList<PresenceEntry> Presence { get { ReadingPresence?.Invoke(); return presence; } set => presence = value; }
         public object Connection = new();
+        public Action? CheckingConnection;
         public LiteFleetConnection Capture(FrameRoster frames)
         {
             var account = Account;
             var captured = Connection;
-            return new(account, Presence.ToArray(), frames.ReadScopedAsync, () => Account == account && ReferenceEquals(captured, Connection));
+            return new(account, Presence.ToArray(), frames.ReadScopedAsync, () => { CheckingConnection?.Invoke(); return Account == account && ReferenceEquals(captured, Connection); });
         }
         public Task<LiteAck> SendAsync(string peerId, string account, object request, CancellationToken ct) => throw new NotSupportedException();
     }
 
-    static LiteFleetRoster LiteRoster(FrameRoster frames, LiteKill mode, LiteLink link, Func<string?>? identityAccount = null) =>
-        new(() => link.Capture(frames), mode, identityAccount ?? (() => "account-a"));
+    static LiteFleetRoster LiteRoster(FrameRoster frames, LiteKill mode, LiteLink link, Func<string?>? identityAccount = null, object? accountGate = null) =>
+        new(() => link.Capture(frames), mode, identityAccount ?? (() => "account-a"), accountGate ?? new());
 
     static JsonElement LiteFrame() => Body(new
     {
         machine = "a", online = true,
         record = new { sessions = new[] { new { node = "n-a", name = "SG Quality", state = "idle", since = Started } } },
     });
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_identity_switch_on_the_final_lease_check_refuses_find_and_list(bool find)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        string? identityAccount = "account-a";
+        var checks = 0;
+        var gate = new object();
+        var link = new LiteLink { CheckingConnection = () => { if (++checks == 3) { Assert.True(Monitor.IsEntered(gate)); identityAccount = "account-b"; } } };
+        var frames = new FrameRoster(new RelayFleetRoster(), LiteFrame()) { BeforeRead = () => { Assert.False(Monitor.IsEntered(gate)); return Task.CompletedTask; } };
+        var own = LiteRoster(frames, new LiteKill(root), link, () => identityAccount, gate);
+        var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+            : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
+        Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
+        Assert.Equal(3, checks);
+    }
 
     [Theory]
     [InlineData(true)]

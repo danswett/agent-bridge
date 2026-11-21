@@ -415,23 +415,23 @@ first-pin requirement. Scope comes from the authenticated connection, never requ
 
 **Implemented selector precedence.** The following branches exist (`FleetList.cs:185-204`),
 but production `Verified` remains false. Verified cases are fixtures/future reader inputs,
-not today's live behavior. #2360 changes those branches only after the external reader lands:
+not today's roster-verified behavior. Own-account messaging uses the distinct trust exception in these branches; #2360 changes signed replacement selection only after the external reader lands:
 
 1. `incomplete`: any machine that could hold a match (every live machine, or only the one given
    as `machine`) has `truncated: true`. This applies even when a verified match was seen, because a
    duplicate could be hidden.
-2. `unverified`: at least one live unverified match, whether or not a verified live match also
+2. `unverified`: at least one live unverified match without own-account messaging trust, whether or not a verified live match also
    exists.
-3. `ambiguous`: two or more verified live matches, including duplicates on the same machine.
+3. `ambiguous`: two or more roster-verified or own-account messaging live matches, including duplicates on the same machine.
 4. `offline`: matches exist only on offline or stale machines.
-5. `found`: exactly one verified live match in scope, with or without `machine`.
+5. `found`: exactly one roster-verified or own-account messaging live match in scope, with or without `machine`.
    Offline/stale matches do not create a live duplicate.
 6. `notFound`: otherwise.
 
 * **Name-only is not identity proof.** A verified same-account machine can claim another
   session's name while the original is offline. Removing the first pin does not solve
-  that limitation. Signature verification remains mandatory; unsigned records never
-  yield `found`. Signed name ownership remains separate roster-v2 work.
+  that limitation. Outside the messaging-only own-account exception, signature verification remains mandatory and unsigned records never
+  yield `found`. The exception still verifies the send's signed envelope and channel key; signed name ownership remains separate roster-v2 work.
 * **Exact match**, case-sensitive, trimmed. Never fuzzy. A caller that wants a fragment search
   filters `fleet.list` itself.
 * **Callers pin.** A caller that is about to act, `agent.send` above all, passes the `machine` and
