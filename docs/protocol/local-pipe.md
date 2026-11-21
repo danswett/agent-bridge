@@ -102,6 +102,16 @@ Every call requires a freshly classified local app on the pipe, without an agent
 credential. Agents, other processes (including the host CLI) and remote channels
 are refused with a reason. This slice adds no app view or launch-policy enforcement.
 
+`host.roster.pin` (#3450, same-PC trust) takes exactly `{ "account", "generation",
+"genesis", "heads", "device" }` from the signed-in app's own verified roster and answers
+`{ "state": "pinned" }` or a closed refusal code (`pin-exists`, `account-mismatch`,
+`genesis-mismatch`, `heads-missing`, `not-person-device`, ...). Null values and malformed shapes
+return `invalid-request` before any fetch. The same caller rule applies: a freshly classified
+App on a LocalChannel without agent or script credentials; everything else is refused before any read.
+An existing pin refuses before the relay is asked. Account replacement invalidates pending handoffs
+and shares a gate with the final account check and pin commit. Success immediately populates the
+serving reader from the fetched, verified roster without a restart; the writer's capSign gate still applies.
+
 Design §6.3 invariant 13: no session the bridge launched, nor any agent process, may stop or
 restart its host. On 2026-10-15 an agent ran `agent-ha-bridge restart`. The new daemon took
 that agent for an unaccounted process, held discovery, and every resumable session vanished

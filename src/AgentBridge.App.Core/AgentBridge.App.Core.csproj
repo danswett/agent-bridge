@@ -30,6 +30,7 @@
     <ProjectReference Include="..\AgentBridge.Local\AgentBridge.Local.csproj" />
     <ProjectReference Include="..\AgentBridge.Host.Core\AgentBridge.Host.Core.csproj" />
     <ProjectReference Include="..\AgentBridge.FeedbackEnvelope\AgentBridge.FeedbackEnvelope.csproj" />
+    <ProjectReference Include="..\AgentBridge.Roster\AgentBridge.Roster.csproj" />
   </ItemGroup>
 
 </Project>

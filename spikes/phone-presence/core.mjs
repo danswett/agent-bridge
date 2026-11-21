@@ -98,6 +98,9 @@ export class Sessions {
     this.#sessions.set(c.sessionId, { ...c, ended: false, expired: false, monotonicDeadline: this.monotonic() + c.expiry - this.now() });
   }
   close(id) { const s = this.#sessions.get(id); requireThat(s && !s.ended, 'session ended'); s.ended = true; }
+  credentialSpki(id) {
+    const c = this.#credentials.get(id); requireThat(c, 'unregistered credential'); return c.publicKey.export({ type: 'spki', format: 'der' });
+  }
   snapshot() {
     return { sessions: [...this.#sessions].map(([id, s]) => [id, { ...s }]), credentials: [...this.#credentials].map(([id, c]) => [id, structuredClone(c.facts)]) };
   }
