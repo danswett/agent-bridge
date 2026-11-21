@@ -132,6 +132,9 @@ function part(p, inline = null) {
 // A turn only activity has told has no stored parts yet: its reply, the words activity gave it while it
 // was the live turn, stays drawn under it until a page brings the stored ones.
 export function shownParts(t) {
+  if (t.live?.responseId && t.live.response && !t.parts.some((p) => p.id === t.live.responseId)) {
+    return [...t.parts, { id: t.live.responseId, kind: 'response', text: t.live.response, truncated: t.live.responseTruncated === true }];
+  }
   if (t.parts.some((p) => p.kind === 'response' && p.text) || !t.live?.response) { return t.parts; }
   return [...t.parts, { kind: 'response', text: t.live.response, truncated: t.live.responseTruncated === true }];
 }

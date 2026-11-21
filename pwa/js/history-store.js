@@ -512,11 +512,13 @@ export class HistoryStore {
     if (a.kind && !turns[i].kind) { turns[i] = { ...turns[i], kind: a.kind }; changed = true; }
     const replied = a.responseTurn === latest && !!voice.response;
     const next = { ...turns[i].live, response: replied ? voice.response : (turns[i].live?.response ?? null), responseTruncated: replied ? voice.responseTruncated : (turns[i].live?.responseTruncated ?? false), reasoning: voice.reasoning, currentTool: a.currentTool ?? null };
+    if (replied && a.responseId) { next.responseId = a.responseId; } else if (replied) { delete next.responseId; }
     if (!same(next, turns[i].live)) { turns[i] = { ...turns[i], live: next }; changed = true; }
     // A reply that is an earlier turn's is drawn there, never under the new prompt.
     const of = voice.response && a.responseTurn && a.responseTurn !== latest ? at(a.responseTurn) : -1;
     if (of >= 0) {
       const reply = { reasoning: null, currentTool: null, ...turns[of].live, response: voice.response, responseTruncated: voice.responseTruncated };
+      if (a.responseId) { reply.responseId = a.responseId; } else { delete reply.responseId; }
       if (!same(reply, turns[of].live)) { turns[of] = { ...turns[of], live: reply }; changed = true; }
     }
     const target = replied ? i : of;

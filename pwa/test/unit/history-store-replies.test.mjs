@@ -72,6 +72,30 @@ test('finished history parts replace live slots by identity without duplicating 
   assert.equal(currentReply(store.get('h', ID), session('second')), 'Same answer\n\nSame answer');
 });
 
+for (const cut of [{ truncated: true }, { partsMore: 1 }]) {
+  test(`a late budgeted page cannot hide the current identified streaming reply: ${JSON.stringify(cut)}`, async () => {
+    const page = { id: 'owner', at: '2026-11-21T22:00:00Z', ...cut,
+      parts: [{ id: 'answer', kind: 'response', text: 'Original answer', at: '2026-11-21T22:00:01Z' }] };
+    let release;
+    let pending = null;
+    const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
+      history: async () => { await pending; return readHistoryResult({ turns: [page] }); },
+    } }) });
+    await store.open('h', ID);
+    pending = new Promise((resolve) => { release = resolve; });
+    const fetch = store.open('h', ID);
+    await new Promise(setImmediate);
+    const session = readSession({ id: ID, activity: { turn: 'owner', responseTurn: 'owner', responseId: 'pulse', response: 'Scheduled pulse' } });
+    store.live('h', session);
+    release();
+    await fetch;
+    assert.equal(currentReply(store.get('h', ID), session), 'Original answer\n\nScheduled pulse');
+    store.live('h', readSession({ id: ID, activity: { turn: 'next', userMessage: 'Next question' } }));
+    assert.deepEqual(shownParts(store.get('h', ID).turns[0]).filter((p) => p.kind === 'response').map((p) => p.text),
+      ['Original answer', 'Scheduled pulse']);
+  });
+}
+
 async function setup(t, { count = 5, ...options } = {}) {
   const host = new DemoHost({ sessions: [{ id: ID, agent: 'copilot', status: 'idle', updatedAt: new Date().toISOString(), activity: { turnCount: count } }] }, { answerDelayMs: 0, history: true });
   const client = new HostClient(host.connect(), { timeoutMs: 2000 });
