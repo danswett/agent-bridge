@@ -180,8 +180,7 @@ day capacity. Rules:
 
 ## Status read
 
-Launch outcomes are read through the existing, read-only
-`agent-bridge-host launches status --request <guid> [--json]` and `launches list`
+Launch outcomes are read through the existing, read-only `agent-bridge-host launches status --request <guid> [--json]` and `launches list`
 ([host-launch.md](../host-launch.md), #3533): fields `request`, `outcome`, `session`,
 `permissions`, `registered`, `time`; exits 0, 3, 5, 6, 7 unchanged. The fleet verbs add
 no second status path. That store keeps outcomes 15 minutes; the 30-day grant dedupe
@@ -247,5 +246,5 @@ Wrapper rules, all mandatory:
 - **Never click, replay or fabricate a person confirmation**, including `--confirm`.
   `person-required` is surfaced, not bypassed.
 - Never retry exit 7 automatically or with a fresh id; surface the request id.
-- `end-many` reports each session's result; one refusal neither stops nor retries the others.
-- Pass the exit code and JSON through unchanged.
+- Pass the exit code and JSON through unchanged. Multi-session wrappers report each
+  result; one refusal neither stops nor retries the others.
