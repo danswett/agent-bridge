@@ -3,7 +3,7 @@
     agent-ha-bridge's own functions rather than restating them.
 
     The HA connector (docs/ha-connector.md) must publish exactly what the PowerShell daemon
-    publishes, so the dashboard DSWETT-HOME generates keeps drawing a migrated machine. The
+    publishes, so the dashboard Home Assistant generates keeps drawing a migrated machine. The
     surest description of "exactly" is the daemon's own code: this script loads the functions
     that build topics, entity ids and payloads from an agent-ha-bridge checkout, replaces the
     one function that would send anything (Invoke-HomeAssistantService) with a recorder, calls
@@ -172,7 +172,9 @@ function Get-Published {
     , @($script:Recorded | ForEach-Object { ConvertTo-Fixture $_ })
 }
 
-$machine = 'DSWETT-DEV-VM1'
+# A stand-in name: no real machine is named in the repo (#2643). Tests read whatever name the
+# fixtures were recorded with, so a recording made under an older name still passes.
+$machine = 'DESK'
 $slug = Get-BridgeMachineSlug -MachineName $machine
 # A publisher that takes no machine name (Publish-CopilotMqttUpdate) names its device after the
 # computer it runs on, which made a recording depend on where it was made: on any computer but
@@ -338,7 +340,7 @@ $fixture = [ordered]@{
         stateMaxChars = $script:CopilotMqttConfig.StateMaxChars
         maxFields = $script:CopilotMqttMaxFields
     }
-    slugs = @(@('DSWETT-DEV-VM1', 'DSWETT-HOME', 'dswett-arm8.redmond.corp.microsoft.com', 'A--B__C', '!!!', 'ÄÖÜ-Laptop', ('x' * 30), ('ab_' * 9)) | ForEach-Object {
+    slugs = @(@($machine, 'BUILD-1', 'build-2.corp.example.com', 'A--B__C', '!!!', 'ÄÖÜ-Laptop', ('x' * 30), ('ab_' * 9)) | ForEach-Object {
         [ordered]@{ machineName = $_; slug = Get-BridgeMachineSlug -MachineName $_ }
     })
     nodes = @(@($copilotId, $claudeId, $codexId, 'abc', '---', 'ABCDEF0123456789ABCDEF', 'session one') | ForEach-Object {

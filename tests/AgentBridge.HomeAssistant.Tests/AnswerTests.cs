@@ -10,7 +10,7 @@ using Xunit;
 // answer delivery.
 public sealed class AnswerTests : IDisposable
 {
-    const string Machine = "DSWETT-DEV-VM1";
+    static readonly string Machine = Contract.Machine;
     const string A = "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20";
     static readonly string Node = HaContract.NodeId(A);
 
