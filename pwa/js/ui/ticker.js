@@ -14,6 +14,9 @@ export function watchPageVisibility(changed, doc = globalThis.document) {
     trackedPages.add(doc);
     win?.addEventListener?.('pagehide', () => hiddenPages.add(doc));
     win?.addEventListener?.('pageshow', (event) => { if (event.persisted) { hiddenPages.delete(doc); } });
+    doc.addEventListener?.('visibilitychange', () => {
+      if (doc.visibilityState === 'visible' && doc.hidden !== true) { hiddenPages.delete(doc); }
+    });
   }
   const show = (event) => { if (event.persisted) { changed(); } };
   doc?.addEventListener?.('visibilitychange', changed);

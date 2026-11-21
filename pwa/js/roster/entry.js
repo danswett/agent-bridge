@@ -57,13 +57,15 @@ export async function parseBody(bytes) {
   const root = object(parseStrict(bytes, 'body'), 'body');
   if (!root.has('v')) throw new RosterFormatError(REFUSAL.missing, 'body.v');
   const v = root.get('v');
-  // Version 2 is a host's add carrying a `hostSign` key (agent-principals.md §8.10, V1).
-  if (v.t !== 'number' || (v.raw !== '1' && v.raw !== '2')) throw new RosterFormatError(REFUSAL.version, 'body.v');
-  const version = v.raw === '2' ? 2 : 1;
+  // Version 2 is a host's add carrying a `hostSign` key (agent-principals.md §8.10, V1); version 3
+  // a person's genesis or add carrying `capSign` (devices.md "Person verifier evidence").
+  if (v.t !== 'number' || !['1', '2', '3'].includes(v.raw)) throw new RosterFormatError(REFUSAL.version, 'body.v');
+  const version = Number(v.raw);
   if (!root.has('op')) throw new RosterFormatError(REFUSAL.missing, 'body.op');
   const op = string(root.get('op'), 'body.op');
   if (!Object.hasOwn(FIELDS, op)) throw new RosterFormatError(REFUSAL.value, 'body.op');
   if (version === 2 && op !== 'add') throw new RosterFormatError(REFUSAL.version, 'body.v: 2 is only for a host\'s add');
+  if (version === 3 && op !== 'genesis' && op !== 'add') throw new RosterFormatError(REFUSAL.version, 'body.v: 3 is only for a person\'s genesis or add');
   const [required, optional] = FIELDS[op];
   members(root, [...required, ...optional], ORDER.filter((f) => required.includes(f)), 'body');
 
@@ -79,7 +81,7 @@ export async function parseBody(bytes) {
   const at = string(root.get('at'), 'body.at');
   if (!isUtc(at)) throw new RosterFormatError(REFUSAL.time, 'body.at');
   const device = root.has('device') ? await parseDevice(root.get('device'), version, account, generation) : null;
-  const approval = root.has('approval') ? parseApproval(root.get('approval'), op) : null;
+  const approval = root.has('approval') ? parseApproval(root.get('approval'), op, version) : null;
   const target = root.has('target') ? parseTarget(root.get('target')) : null;
   const keep = root.has('keep') ? hashes(root.get('keep'), 'body.keep', 0, MAX_KEEP) : [];
   const name = root.has('name') ? deviceName(root.get('name'), 'body.name') : null;
@@ -97,8 +99,13 @@ export async function parseBody(bytes) {
     if (target.id === by && (keep.length > 0 || cosigner !== null)) throw new RosterFormatError(REFUSAL.signer, 'a self-removal keeps nothing and has no cosigner');
     if (cosigner !== null && (cosigner === by || cosigner === target.id)) throw new RosterFormatError(REFUSAL.signer, 'a cosigner is neither the signer nor the target');
   }
-  return { op, version, account, generation, seq, prev, by, cosigner, at, device, approval, target, keep, name, adopt };
+  // A v3 genesis whose device carries capSign, its proof already verified above (the pin seam).
+  const hasCapSign = op === 'genesis' && version === 3 && device?.capSign != null;
+  return { op, version, account, generation, seq, prev, by, cosigner, at, device, approval, target, keep, name, adopt, hasCapSign };
 }
+
+// The exact UTF-8 bytes of a body's `device` object (D of the v3 transcript), never reserialized.
+export const deviceBytes = (body) => utf8(object(parseStrict(body, 'body'), 'body').get('device').text);
 
 export function id(node, what) {
   const value = string(node, what);
@@ -141,6 +148,9 @@ const HOST_V2_ORDER = ['id', 'dh', 'hostSign', 'hostSignAlg', 'hostSignProof', '
 // What `hostSignProof` signs: F("agent-bridge host key binding v1", account, generation, dh).
 export const hostKeyBinding = (account, generation, dh) => frame(utf8(LABEL.hostKeyBinding), utf8(account), utf8(generation), dh);
 
+// What `capSignProof` signs: F("agent-bridge verifier key binding v1", account, generation, dh).
+export const capSignBinding = (account, generation, dh) => frame(utf8(LABEL.verifierKeyBinding), utf8(account), utf8(generation), dh);
+
 async function parseDevice(node, version, account, generation) {
   const d = object(node, 'body.device');
   if (!d.has('kind')) throw new RosterFormatError(REFUSAL.missing, 'body.device.kind');
@@ -148,15 +158,17 @@ async function parseDevice(node, version, account, generation) {
   if (!KINDS.includes(kind)) throw new RosterFormatError(REFUSAL.value, 'body.device.kind');
   const person = isPerson(kind);
   if (version === 2 && person) throw new RosterFormatError(REFUSAL.version, 'body.v: 2 is only for a host\'s add');
+  if (version === 3 && !person) throw new RosterFormatError(REFUSAL.version, 'body.v: 3 is only for a person');
   let presence = null;
   if (person) {
     if (!d.has('presence')) throw new RosterFormatError(REFUSAL.missing, 'body.device.presence');
     presence = string(d.get('presence'), 'body.device.presence');
     if (!PRESENCE.includes(presence)) throw new RosterFormatError(REFUSAL.value, 'body.device.presence');
   }
-  const fields = !person ? (version === 2 ? HOST_V2_ORDER : ['id', 'dh', 'kind', 'platform', 'name'])
+  let fields = !person ? (version === 2 ? HOST_V2_ORDER : ['id', 'dh', 'kind', 'platform', 'name'])
     : presence === 'webauthn' ? DEVICE_ORDER
       : ['id', 'dh', 'sign', 'signAlg', 'presence', 'kind', 'platform', 'name'];
+  if (version === 3) fields = [...fields.slice(0, -3), 'capSign', 'capSignAlg', 'capSignProof', ...fields.slice(-3)];
   members(d, fields, fields, 'body.device');
 
   const deviceIdText = id(d.get('id'), 'body.device.id');
@@ -182,11 +194,23 @@ async function parseDevice(node, version, account, generation) {
     checkRosterSignature(hostSignProof, 'body.device.hostSignProof');
     if (equal(hostSign, dh)) throw new RosterFormatError(REFUSAL.device, 'body.device.hostSign is its dh key');
   }
+  let capSign = null;
+  let capSignAlg = null;
+  let capSignProof = null;
+  if (version === 3) {
+    capSign = point(string(d.get('capSign'), 'body.device.capSign'), 'body.device.capSign');
+    capSignAlg = string(d.get('capSignAlg'), 'body.device.capSignAlg');
+    if (capSignAlg !== SIGN_ALGORITHM) throw new RosterFormatError(REFUSAL.value, 'body.device.capSignAlg');
+    capSignProof = fromBase64Url(string(d.get('capSignProof'), 'body.device.capSignProof'), 'body.device.capSignProof');
+    checkRosterSignature(capSignProof, 'body.device.capSignProof');
+    if ([dh, sign, webauthn?.key].some((k) => k && equal(k, capSign))) throw new RosterFormatError(REFUSAL.device, 'body.device.capSign is its own dh, sign or webauthn key');
+  }
   const platform = string(d.get('platform'), 'body.device.platform');
   if (!PLATFORMS.includes(platform)) throw new RosterFormatError(REFUSAL.value, 'body.device.platform');
   const name = deviceName(d.get('name'), 'body.device.name');
   if (hostSign && !(await verify(hostSign, hostKeyBinding(account, generation, dh), hostSignProof))) throw new RosterFormatError(REFUSAL.hostProof, 'body.device.hostSignProof');
-  return { id: deviceIdText, dh, sign, signAlg, presence, webauthn, kind, platform, name, hostSign, hostSignAlg, hostSignProof };
+  if (capSign && !(await verify(capSign, capSignBinding(account, generation, dh), capSignProof))) throw new RosterFormatError(REFUSAL.capProof, 'body.device.capSignProof');
+  return { id: deviceIdText, dh, sign, signAlg, presence, webauthn, kind, platform, name, hostSign, hostSignAlg, hostSignProof, capSign, capSignAlg, capSignProof };
 }
 
 const CREDENTIAL_FIELDS = ['rpId', 'credentialId', 'key', 'attested', 'backupEligible'];
@@ -209,13 +233,13 @@ export function isRpId(rpId) {
   return rpId.split('.').every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
 }
 
-function parseApproval(node, op) {
+function parseApproval(node, op, version) {
   const fail = (what) => new RosterFormatError(REFUSAL.approval, `body.approval${what}`);
   if (node.t !== 'object' || !node.has('method') || node.get('method').t !== 'string') throw fail('.method');
   const method = node.get('method').v;
   const fields = { code: ['method', 'transcript'], qr: ['method', 'transcript', 'shown'], grandfather: ['method'], genesis: ['method'] }[method];
   if (!fields || !Object.hasOwn({ code: 1, qr: 1, grandfather: 1, genesis: 1 }, method)) throw fail('.method');
-  if ((op === 'genesis') !== (method === 'genesis')) throw fail('.method');
+  if ((op === 'genesis') !== (method === 'genesis') || (version === 3 && method === 'grandfather')) throw fail('.method');
   for (const [name] of node.members) if (!fields.includes(name)) throw fail(`.${name}`);
   if (node.members.length !== fields.length) throw fail('');
   let transcript = null;

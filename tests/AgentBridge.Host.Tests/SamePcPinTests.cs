@@ -29,7 +29,7 @@ public sealed class SamePcPinTests : IDisposable
     RelayRoster Relay() => new("off", w.GenerationId, [.. w.Labels.Select(l => w.Entry(l).Canonical())]);
     HostRosterReader Reader() => new(PinPath, () => w.Now);
     SamePcPinHandoff Handoff(HostRosterReader? reader = null) =>
-        new(profile, () => hostAccount, _ => { fetches++; return Task.FromResult<RelayRoster?>(Relay()); }, reader ?? Reader(), () => w.Now);
+        new(profile, () => hostAccount, _ => { fetches++; return Task.FromResult<RelayRoster?>(Relay()); }, reader ?? Reader(), () => w.Now, _ => true);
 
     SamePcPinRequest Request(string device = "B")
     {
@@ -73,12 +73,50 @@ public sealed class SamePcPinTests : IDisposable
 
         Assert.Equal(SamePcPinProtocol.Pinned, await Hand(Request(), serving));
 
-        Assert.Equal("verified", serving.Update(Relay(), RosterFixture.Account).Outcome);
         Assert.NotNull(serving.Pinned(RosterFixture.Account));
+        Assert.NotNull(new AgentBridge.Host.Fleet.FleetTrust(serving, profile, () => hostAccount).Membership());
         Assert.Equal("verified", unnotified.Update(Relay(), RosterFixture.Account).Outcome);
         Assert.NotNull(unnotified.Pinned(RosterFixture.Account));
         Assert.Equal("pin-mismatch", other.Update(Relay() with { Generation = new string('0', 32) }, RosterFixture.Account).Outcome);
         Assert.Equal(w.Entry("G").Hash, HostRosterReader.ReadPinned(PinPath).Genesis);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_fetch_paused_across_an_account_switch_writes_no_pin(bool switchBack)
+    {
+        var request = Request();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fetched = new TaskCompletionSource<RelayRoster?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handoff = new SamePcPinHandoff(profile, () => hostAccount,
+            _ => { started.SetResult(); return fetched.Task; }, Reader(), () => w.Now, _ => true);
+        var pending = handoff.HandleAsync(Json(request), default);
+        await started.Task;
+        handoff.AccountChanged(() => hostAccount = "other@example");
+        if (switchBack) { handoff.AccountChanged(() => hostAccount = RosterFixture.Account); }
+        fetched.SetResult(Relay());
+        Assert.Equal("account-mismatch", (await pending).State);
+        Assert.False(File.Exists(PinPath));
+    }
+
+    [Theory]
+    [InlineData("generation")]
+    [InlineData("genesis")]
+    [InlineData("head")]
+    [InlineData("heads")]
+    public async Task Null_request_values_are_invalid_before_any_relay_read(string field)
+    {
+        var good = Request();
+        var data = new Dictionary<string, object?>
+        {
+            ["account"] = good.Account, ["generation"] = good.Generation, ["genesis"] = good.Genesis,
+            ["heads"] = good.Heads, ["device"] = good.Device,
+        };
+        data[field == "head" ? "heads" : field] = field == "head" ? new string?[] { null } : null;
+        Assert.Equal("invalid-request", (await Handoff().HandleAsync(Json(data), default)).State);
+        Assert.Equal(0, fetches);
+        Assert.False(File.Exists(PinPath));
     }
 
     [Fact]

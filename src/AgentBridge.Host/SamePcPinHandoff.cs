@@ -17,19 +17,34 @@ public sealed class SamePcPinHandoff
     readonly Func<CancellationToken, Task<RelayRoster?>> fetch;
     readonly HostRosterReader reader;
     readonly Func<TimeSpan> clock;
+    readonly Func<byte[], bool>? isCapSignGenesis;
+    internal object AccountGate { get; } = new();
+    long accountVersion;
 
     public SamePcPinHandoff(string profileFolder, Func<string?> account, Func<CancellationToken, Task<RelayRoster?>> fetch,
-        HostRosterReader reader, Func<TimeSpan> clock) =>
-        (pinPath, this.account, this.fetch, this.reader, this.clock) = (HostRosterPinWriter.PinPath(profileFolder), account, fetch, reader, clock);
+        HostRosterReader reader, Func<TimeSpan> clock, Func<byte[], bool>? isCapSignGenesis = null) =>
+        (pinPath, this.account, this.fetch, this.reader, this.clock, this.isCapSignGenesis) =
+            (HostRosterPinWriter.PinPath(profileFolder), account, fetch, reader, clock, isCapSignGenesis);
 
     public async Task<SamePcPinResult> HandleAsync(JsonElement data, CancellationToken ct) => new(await StateAsync(data, ct));
+
+    internal void AccountChanged(Action change)
+    {
+        lock (AccountGate) { accountVersion++; change(); }
+    }
 
     async Task<string> StateAsync(JsonElement data, CancellationToken ct)
     {
         if (Parse(data) is not { } request) { return "invalid-request"; }
-        if (account() is not { Length: > 0 } own) { return "no-account"; }
-        if (request.Account != own) { return "account-mismatch"; }
-        if (File.Exists(pinPath)) { return "pin-exists"; }
+        string own;
+        long version;
+        lock (AccountGate)
+        {
+            if (account() is not { Length: > 0 } current) { return "no-account"; }
+            if (request.Account != current) { return "account-mismatch"; }
+            if (File.Exists(pinPath)) { return "pin-exists"; }
+            (own, version) = (current, accountVersion);
+        }
         RelayRoster? relay;
         try { relay = await fetch(ct); }
         catch (Exception e) when (e is not OperationCanceledException) { return "relay-unreachable"; }
@@ -47,9 +62,13 @@ public sealed class SamePcPinHandoff
         if (!request.HeadHashes.All(verifier.Holds)) { return "heads-missing"; }
         if (verifier.State.Device(request.Device)?.IsPerson != true) { return "not-person-device"; }
 
-        var state = HostRosterPinWriter.Write(pinPath, new PersonGenesis("same-pc-app", request.GenesisHash), relay, own, clock);
-        if (state == SamePcPinProtocol.Pinned) { reader.PinWritten(); }
-        return state;
+        lock (AccountGate)
+        {
+            if (version != accountVersion || account() != own) { return "account-mismatch"; }
+            ct.ThrowIfCancellationRequested();
+            var state = HostRosterPinWriter.Write(pinPath, new PersonGenesis("same-pc-app", request.GenesisHash), relay, own, clock, isCapSignGenesis);
+            return state == SamePcPinProtocol.Pinned && reader.Update(relay, own).Outcome != "verified" ? "pin-readback" : state;
+        }
     }
 
     sealed record Request(string Account, string Generation, byte[] GenesisHash, byte[][] HeadHashes, string Device);
@@ -63,8 +82,9 @@ public sealed class SamePcPinHandoff
             var names = data.EnumerateObject().Select(p => p.Name).ToArray();
             if (names.Length != 5 || !names.ToHashSet(StringComparer.Ordinal).SetEquals(["account", "generation", "genesis", "heads", "device"])) { return null; }
             var r = data.Deserialize<SamePcPinRequest>(ProtocolJson.Options);
-            if (r is null || string.IsNullOrEmpty(r.Account) || !Codec.IsId(r.Generation) || string.IsNullOrEmpty(r.Device) || r.Device.Length > 128
-                || r.Heads is not { Length: >= 1 and <= RosterVerifier.MaxHeads }) { return null; }
+            if (r is null || string.IsNullOrEmpty(r.Account) || r.Generation is null || !Codec.IsId(r.Generation)
+                || r.Genesis is null || string.IsNullOrEmpty(r.Device) || r.Device.Length > 128
+                || r.Heads is not { Length: >= 1 and <= RosterVerifier.MaxHeads } || r.Heads.Any(h => h is null)) { return null; }
             return new(r.Account, r.Generation, Codec.FromBase64Url(r.Genesis, 32, "genesis"),
                 [.. r.Heads.Select(h => Codec.FromBase64Url(h, 32, "head"))], r.Device);
         }

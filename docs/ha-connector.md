@@ -1037,7 +1037,19 @@ device.
   it is never taken for GitHub, which would be another channel. A press of Check that finds
   nothing newer says `current`, `Checked just now; <version> is the latest release.` for ten
   minutes, until a check finds a newer one. A press while a check is already under way gets a
-  check of its own once that one is done, so "just now" is never an earlier check's answer.
+  check of its own once that one is done, so "just now" is never an earlier check's answer;
+  if Install starts meanwhile and is still running, the queued press instead reports why it
+  was not checked. A press first revalidates the release list kept for background checks (#3441): the CDN's
+  copy may be most of an hour old, so a press asks GitHub (conditionally, on a list GitHub gave),
+  and uses the CDN's only while GitHub is rate-limited. If that pressed request fails for a
+  non-limit reason (such as a 500 or network failure), a still-fresh kept list that passes the
+  same channel, age and GitHub-revalidation rules as a background check answers instead,
+  without extending its freshness or starting a backoff for other profiles. The discovery log
+  says that the pressed request failed and the kept list answered; without an eligible list,
+  the failure still backs off. A real 403/429 limit still holds subsequent GitHub requests and
+  may use a validated CDN list within the logged grace window. Every press ends with a host log line,
+  `update check pressed:` and the newer release, `no newer release`, `failed: <why>`, or why
+  an update under way answers instead.
 * **Install.** A press shows `checking` at once (`in_progress`, the spinner), then looks for the
   newest release again, downloads it (`downloading` with `update_percentage`), records the
   attempt in the connector's state file (an attempt that cannot be recorded is not handed

@@ -135,8 +135,7 @@ if (command == "host-sign")
 if (command == "roster-pin")
 {
     if (arguments.ElementAtOrDefault(1) != "show" && Refused("pin this host's device roster", stateOnly: true)) { return 4; }
-    var callers = new CallerGuard(() => KnownAgents.Running(new SystemProcessInspector()), null,
-        hostImage: OperatingSystem.IsWindows() ? Environment.ProcessPath : null);
+    var callers = RosterPinCommands.Guard(() => KnownAgents.Running(new SystemProcessInspector()), () => Environment.ProcessPath);
     // The relay only supplies the chain; the person's typed fingerprint decides (HostRosterPinWriter).
     return await RosterPinCommands.RunAsync(arguments, Identity.DefaultRoot, () => callers.Classify(ProcessChain.Read(Environment.ProcessId)),
         !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_BRIDGE_TOKEN")), Console.IsInputRedirected ? null : Console.ReadLine,
@@ -757,6 +756,10 @@ async Task<int> ServeAsync(HostHandover handover)
         log: Log);
     var fleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder);
     var hostRoster = new HostRosterReader(HostRosterPinWriter.PinPath(identity.Folder), HostRoster.Now);
+    RelayClient? pinRelay = null;
+    var samePcPin = new SamePcPinHandoff(identity.Folder, () => identity.Account?.AccountId,
+        ct => Volatile.Read(ref pinRelay) is { } r ? r.GetRosterAsync(ct) : throw new InvalidOperationException("not connected"), hostRoster, HostRoster.Now);
+    var rosterObserve = new HostRosterObserve(hostRoster, () => settings.Security.Roster, HostRoster.Now, Log);
     var fleetTrust = new AgentBridge.Host.Fleet.FleetTrust(hostRoster, identity.Folder, () => identity.Account?.AccountId);
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
         name: fleetNames.Get, log: Log, sign: fleetTrust.Sign);
@@ -871,6 +874,22 @@ async Task<int> ServeAsync(HostHandover handover)
     }
     await using var agentVerification = OperatingSystem.IsWindows()
         ? new AgentVerificationService(source, launcher, intake, VerificationUnavailable, Log, stop.Token) : null;
+    // Approve-gesture enrollment (#3450, brief 184): one attempt holder per signed-in account, app-only on the pipe.
+    var enrollmentGate = new object();
+    HostEnrollment? enrollment = null;
+    HostEnrollment? Enrollment()
+    {
+        lock (enrollmentGate)
+        {
+            var id = identity.Account?.AccountId;
+            if (enrollment?.Account != id)
+            {
+                enrollment?.Dispose();
+                enrollment = id is null ? null : new HostEnrollment(hostRoster, id, null, name: machine.Name);
+            }
+            return enrollment;
+        }
+    }
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -908,12 +927,14 @@ async Task<int> ServeAsync(HostHandover handover)
         SignInDevices = signIn is null ? null : self => PersonDevices.View(personRoster, rosterAccount(), self),
         AgentVerification = agentVerification,
         AgentSignIn = agentSignIn,
+        EnrollDescribe = () => Enrollment()?.Describe(identity.Folder, identity.Key.Public) ?? (null, "signed-out"),
+        EnrollStatus = () => Enrollment()?.Status(null, "") ?? "not-enrolled",
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
             return await SignIn.DeviceFlowAsync(http, relay, show, ct);
         },
-        SignedIn = (result, relay) =>
+        SignedIn = (result, relay) => samePcPin.AccountChanged(() =>
         {
             // Before anything says the new account: other machines' readings kept for the one before
             // are never served under it, even while the relay reconnects.
@@ -925,7 +946,7 @@ async Task<int> ServeAsync(HostHandover handover)
             // Whatever connection there is belongs to the account before; start over.
             connection?.Cancel();
             wake.Release();
-        },
+        }),
         Stop = () => stop.Cancel(),
         PrepareStop = PrepareStop,
         Restart = RestartHost,
@@ -944,10 +965,6 @@ async Task<int> ServeAsync(HostHandover handover)
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
     var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    RelayClient? pinRelay = null;
-    // Same-PC trust (#3450): the app's handoff reads the chain over this host's live relay connection.
-    var samePcPin = new SamePcPinHandoff(identity.Folder, () => identity.Account?.AccountId,
-        ct => Volatile.Read(ref pinRelay) is { } r ? r.GetRosterAsync(ct) : throw new InvalidOperationException("not connected"), hostRoster, HostRoster.Now);
     try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: agentAudit, samePcPin: samePcPin), Log); }
     catch (EndpointInUseException e)
     {
@@ -1049,14 +1066,11 @@ async Task<int> ServeAsync(HostHandover handover)
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff.Reset();
-            // Off mode: read and verify the roster in the background, log what it says, enforce nothing.
-            _ = Task.Run(async () =>
-            {
-                var check = await HostRoster.SyncAsync(relay, HostRoster.Now, current.Token, hostRoster);
-                Log($"device roster (security.roster {settings.Security.Roster}): {check.Summary}");
-            });
+            // security.roster: off reads, verifies and logs once; observe keeps the pinned reader fed, read-only.
+            _ = Task.Run(() => rosterObserve.ConnectedAsync(relay.GetRosterAsync, relay.AccountId, relay.Completion, current.Token));
             since.Restart();
-            await fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token);
+            await fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token,
+                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability));
             (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);
             diagnosticsJournal.Record(JournalEvents.RelayClosed(endedWith, since.Elapsed, HostVersion()));
             Log($"connection ended after {since.Elapsed.TotalMinutes:F1} min: {(int?)relay.CloseStatus} {relay.CloseReason}");
@@ -1102,6 +1116,7 @@ async Task<int> ServeAsync(HostHandover handover)
             transfers.Attach(null, null);
             liteLink.Attach(null, null);
             fleetRoster.Attach(null);
+            Volatile.Write(ref pinRelay, null);
             usagePeers?.Attach(null, null);
             trustAnswers.Attach(null);
             escapedApprovals.Attach(null);
@@ -1128,13 +1143,19 @@ async Task<int> ServeAsync(HostHandover handover)
         {
             try { if (await wake.WaitAsync(TimeSpan.FromSeconds(5), stop.Token)) { return true; } }
             catch (OperationCanceledException) { return false; }
-            if (identity.ReloadAccount())
+            lock (samePcPin.AccountGate)
             {
-                peerUsage?.Bind(identity.Account!.AccountId);
-                signedInRelay = SavedRelay(identity) ?? signedInRelay;
-                PublishCredential();
-                Log($"signed in as {identity.Account!.Login} by another process");
-                return true;
+                if (identity.ReloadAccount())
+                {
+                    samePcPin.AccountChanged(() =>
+                    {
+                        peerUsage?.Bind(identity.Account!.AccountId);
+                        signedInRelay = SavedRelay(identity) ?? signedInRelay;
+                        PublishCredential();
+                        Log($"signed in as {identity.Account!.Login} by another process");
+                    });
+                    return true;
+                }
             }
         }
     }

@@ -163,6 +163,7 @@ public sealed partial class HaConnector
         {
             updateCheckQueued = false;
             if (!UpdateBusy) { StartCheck(now, pressed: true); }
+            else { log(PressedDuringUpdate); }
         }
         var touched = Interlocked.Exchange(ref updateTouched, 0) == 1;
         if (options.ConsumeAnswers && (touched || now >= nextUpdateSweep))
@@ -187,6 +188,7 @@ public sealed partial class HaConnector
                 log("Home Assistant connector: update check requested from Home Assistant");
                 StartCheck(now, pressed: true);
             }
+            else if (check.Fresh) { log(PressedDuringUpdate); }
         }
         if (await PressedAsync("install_update", installPressSeen, ct) is { } install)
         {
@@ -209,6 +211,9 @@ public sealed partial class HaConnector
         }
     }
 
+    // A press of Check during an install, which looks for itself and says what it found.
+    const string PressedDuringUpdate = "Home Assistant connector: update check pressed: not checked, as an update is under way here and reports what it finds";
+
     // A press not seen before, and whether it was made since this connector started.
     async Task<(string Value, bool Fresh, string Driver)?> PressedAsync(string key, string? seen, CancellationToken ct)
     {
@@ -230,7 +235,7 @@ public sealed partial class HaConnector
         }
         updateCheckPressed = pressed;
         updateCheckEpoch = installEpoch;
-        updateCheck = Begin(() => updates!.CheckAsync(updateCancel.Token).WaitAsync(options.UpdateCheckTimeout, time));
+        updateCheck = Begin(() => updates!.CheckAsync(updateCancel.Token, pressed).WaitAsync(options.UpdateCheckTimeout, time));
     }
 
     static Task<T> Begin<T>(Func<Task<T>> start)
@@ -246,7 +251,11 @@ public sealed partial class HaConnector
         // An install looks for itself, and what it found is what the entity shows until it ends.
         // Cancelled only matters when the connector is stopping: otherwise it is a request that
         // timed out (HttpClient's timeout is a cancellation), and as much a failure as any other.
-        if ((done.IsCanceled && updateCancel.IsCancellationRequested) || UpdateBusy) { return; }
+        if ((done.IsCanceled && updateCancel.IsCancellationRequested) || UpdateBusy)
+        {
+            if (pressed && !updateCancel.IsCancellationRequested) { log(PressedDuringUpdate); }
+            return;
+        }
         if (updateCheckEpoch != installEpoch)
         {
             // Begun before an install that has since looked for itself: older news. A press it was
@@ -259,6 +268,8 @@ public sealed partial class HaConnector
         {
             var why = done.Exception is { } failed ? failed.InnerException?.Message ?? failed.Message : "the request timed out";
             Problem("update-check", $"Home Assistant connector update check failed: {why}");
+            // Problem says a failure once; a press answers for itself whatever was said before (#3441).
+            if (pressed) { log($"Home Assistant connector: update check pressed: failed: {why}"); }
             nextUpdateCheck = now + options.UpdateRetry;
             // Not "failed": a check that could not be made is not a failed update (#92). The
             // explanation goes in the notes, and the entity, with no latest version known, reads
@@ -301,6 +312,12 @@ public sealed partial class HaConnector
             }
         }
         if (announce) { log($"Home Assistant connector: update available: {Installed} -> {release!.Version}"); }
+        if (pressed)
+        {
+            log(release is null
+                ? $"Home Assistant connector: update check pressed: no newer release; {Installed}, installed here, is the latest"
+                : $"Home Assistant connector: update check pressed: {release.Version} is newer than {Installed}, installed here");
+        }
     }
 
     // A press of Install: refused while an update runs (#196), otherwise the spinner at once and

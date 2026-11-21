@@ -66,15 +66,16 @@ public static class HostRoster
         new(why, relay.Mode, relay.Entries.Count, 0, 0, 0, 0, unreadable, [], []);
 
     // Reads and verifies once; never throws, so a relay that cannot answer, or says something this
-    // host cannot make sense of, costs a log line and nothing else.
-    public static async Task<RosterCheck> SyncAsync(RelayClient relay, Func<TimeSpan> clock, CancellationToken ct, HostRosterReader? retained = null)
+    // host cannot make sense of, costs a log line and nothing else. Off mode: never the retained reader.
+    internal static async Task<RosterCheck> SyncAsync(Func<CancellationToken, Task<RelayRoster?>> get, string account, Func<TimeSpan> clock,
+        CancellationToken ct)
     {
         try
         {
-            var roster = await relay.GetRosterAsync(ct);
+            var roster = await get(ct);
             return roster is null
                 ? new RosterCheck("the relay gave no roster", "", 0, 0, 0, 0, 0, 0, [], [])
-                : retained?.Update(roster, relay.AccountId) ?? Verify(roster, relay.AccountId, clock);
+                : Verify(roster, account, clock);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

@@ -5,14 +5,16 @@ namespace AgentBridge.Host;
 // config.json's security section (docs/host-config.md):
 //
 //   roster   how this host uses the account's signed device roster (docs/protocol/devices.md):
-//            "off" is the only mode this build has. The host reads the relay's copy and verifies
-//            it for itself, and reports what it found, but enforces nothing and refuses no
-//            connection. "observe" and "enforce" come with the later slices of the roster work.
+//            "off" (the default) reads the relay's copy, verifies it for itself and reports what it
+//            found, but enforces nothing and refuses no connection. "observe" also feeds that copy
+//            to the retained pinned reader, read-only (HostRosterObserve), so a host with a pin can
+//            supply the fleet gate its verified roster. "enforce" comes with a later slice.
 //
 // A value this build does not have is read as off, and said so.
 public sealed record SecuritySettings
 {
     public const string Off = "off";
+    public const string Observe = "observe";
 
     public static readonly SecuritySettings Default = new();
 
@@ -27,7 +29,11 @@ public sealed record SecuritySettings
             problems.Add("security is not an object, so security.roster is off");
             return (Default, problems);
         }
-        if (s.TryGetProperty("roster", out var roster) && roster.ValueKind != JsonValueKind.Null
+        if (s.TryGetProperty("roster", out var roster) && roster.ValueKind == JsonValueKind.String && roster.GetString() == Observe)
+        {
+            return (new SecuritySettings { Roster = Observe }, problems);
+        }
+        if (s.TryGetProperty("roster", out roster) && roster.ValueKind != JsonValueKind.Null
             && !(roster.ValueKind == JsonValueKind.String && roster.GetString() == Off))
         {
             problems.Add("security.roster is not \"off\", the only mode this host has, so it is off");

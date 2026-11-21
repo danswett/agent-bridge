@@ -70,8 +70,8 @@ namespace AgentBridge.Host;
 // absent. A value that is not true or false turns everything off, as remoteApproval's does.
 //
 // security.roster: what is done with the account's signed device roster (SecuritySettings,
-// HostRoster). Only "off" so far: verify and log, enforce nothing; anything else is said and read
-// as off.
+// HostRoster, HostRosterObserve). "off" (default) verifies and logs; "observe" also feeds the pinned
+// reader, read-only; enforce nothing either way; anything else is said and read as off.
 //
 // version: the schema's. A file from a newer schema is not guessed at: both are off.
 public sealed record HostSettings(bool RemoteApproval)

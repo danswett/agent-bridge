@@ -105,8 +105,12 @@ are refused with a reason. This slice adds no app view or launch-policy enforcem
 `host.roster.pin` (#3450, same-PC trust) takes exactly `{ "account", "generation",
 "genesis", "heads", "device" }` from the signed-in app's own verified roster and answers
 `{ "state": "pinned" }` or a closed refusal code (`pin-exists`, `account-mismatch`,
-`genesis-mismatch`, `heads-missing`, `not-person-device`, ...). The same caller rule applies:
-a fresh local app without an agent credential; everything else is refused before any read.
+`genesis-mismatch`, `heads-missing`, `not-person-device`, ...). Null values and malformed shapes
+return `invalid-request` before any fetch. The same caller rule applies: a freshly classified
+App on a LocalChannel without agent or script credentials; everything else is refused before any read.
+An existing pin refuses before the relay is asked. Account replacement invalidates pending handoffs
+and shares a gate with the final account check and pin commit. Success immediately populates the
+serving reader from the fetched, verified roster without a restart; the writer's capSign gate still applies.
 
 Design §6.3 invariant 13: no session the bridge launched, nor any agent process, may stop or
 restart its host. On 2026-10-15 an agent ran `agent-ha-bridge restart`. The new daemon took
@@ -402,6 +406,8 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `manage.*` | any | Refused to every caller, the app included: `managing a machine from another device goes through the relay; on this machine, use the app's Settings`. Managing a machine from another device ([v1-sessions.md](v1-sessions.md#managing-a-machine)) is through the relay only, so the #67 guard on `host.restart` and `host.stop` gains no way around it |
 | `host.update.report` | `{ "state": UpdateState, "taken"?: [request], "carriesUpdateNow"?: bool }`: what the app's updater is doing, the presses in `updateAsks` it has taken on, and whether it can carry out an Update now (#1159; absent from an older app, whose machine then offers none, `updateNowWhy` `old-app`) ([v1-update.md](v1-update.md)) | `{ "ok": true }`. The host serves the state to the account's other devices (`update.*`) until the app's connection closes, then says the app is not running, and drops the presses taken from `updateAsks`. `canUpdateNow`, `updateNowWhy`, `updateNowAt` and `busy` are the host's own, and dropped from what the app reports. Refused to anything but the app: `only the Slipgates app beside this host reports its updates, and takes other devices' presses of Install` |
 | `host.update.depart` | `{ "request": UUID }`: an Update now's press (#1159) the app is carrying, its download checked and its probe hold over | `{ "outcome": "committed" \| "waiting" \| "refused", "code"?, "transition"? }` ([v1-update.md](v1-update.md#going-the-lease-and-the-departure), step 3). The host takes #805's quiet lease as purpose `Update`, compares what is busy with what the person confirmed, announces and commits: `committed` (the host refuses new deliveries until it exits; the app then stops it with `host.stop` and installs), `waiting` (`code` is `turn-running`, `question-waiting` or `unknown`; the app keeps the download for the next quiet moment) or `refused` (`code` says why; the host serves on). An unknown outcome reads as `refused`. A request that isn't a UUID is an error. This is #870's departure step, wired minimally until that lane lands it. Refused to anything but the app, as `host.update.report` is; an older host answers `unknown op`, and the press ends refused |
+| `host.enroll.describe` | none | `{ "device"?: object, "refusal"?: string }`: this host's enrollment descriptor for an approve gesture ([devices.md](devices.md#host-descriptor-foundation-2289)), a v1 host while host-sign v2 is off, opening the profile's one 5-minute attempt; or a closed refusal code (`attempt-already-open`, `account`, `signed-out`, ...). Writes no pin. Refused to anything but the app; never reached through the relay |
+| `host.enroll.status` | none | `{ "state": "not-enrolled" \| "pending" \| "enrolled" }` for the open attempt. Refused to anything but the app |
 
 `HostStatus`:
 

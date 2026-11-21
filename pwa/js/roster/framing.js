@@ -16,6 +16,8 @@ export const LABEL = Object.freeze({
   personCommand: 'agent-bridge person command v1',
   veto: 'agent-bridge reset veto v1',
   hostKeyBinding: 'agent-bridge host key binding v1',
+  verifierKeyBinding: 'agent-bridge verifier key binding v1',
+  enrollCapSign: 'agent-bridge enroll capSign v1',
 });
 
 const encoder = new TextEncoder();
