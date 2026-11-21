@@ -31,7 +31,7 @@ public sealed class QualificationGrantTests
             lock (gate)
             {
                 if (!Available) { throw new IOException("receipt store unavailable"); }
-                if (Find(next.Id) != expected) { return false; }
+                if (Find(next.Id) != expected || FindChallenge(next.Binding.Challenge) != expected) { return false; }
                 Entries.Add(next); return true;
             }
         }
@@ -243,11 +243,10 @@ public sealed class QualificationGrantTests
     }
 
     [Theory]
-    [InlineData("pid")][InlineData("started")][InlineData("console")][InlineData("consoleZero")][InlineData("mode")]
-    [InlineData("cliPath")][InlineData("cliVersion")][InlineData("cliHash")][InlineData("injectorPath")]
-    [InlineData("injectorVersion")][InlineData("injectorHash")][InlineData("protocol")][InlineData("allDefault")]
-    [InlineData("nullTarget")][InlineData("head")][InlineData("vm")][InlineData("run")][InlineData("host")]
-    [InlineData("nonce")][InlineData("shortNonce")][InlineData("approval")]
+    [InlineData("pid")][InlineData("started")][InlineData("console")][InlineData("consoleZero")][InlineData("mode")][InlineData("cliPath")]
+    [InlineData("cliVersion")][InlineData("cliHash")][InlineData("injectorPath")][InlineData("injectorVersion")][InlineData("injectorHash")]
+    [InlineData("protocol")][InlineData("allDefault")][InlineData("nullTarget")][InlineData("head")][InlineData("vm")][InlineData("run")]
+    [InlineData("host")][InlineData("nonce")][InlineData("shortNonce")][InlineData("approval")]
     public void Every_empty_zero_or_default_binding_field_refuses_issue(string field)
     {
         var run = new Run(); var b = run.Trust.Binding; var t = b.Target; var approval = run.Id;
@@ -286,10 +285,8 @@ public sealed class QualificationGrantTests
         var run = new Run(); run.Issue(); var consumed = new Run(); consumed.Issue();
         var grant = Assert.IsType<QualificationGrant>(consumed.Consume().Grant);
         var clock = new WallClock(grant.Issued.AddMinutes(61));
-        var issued = new QualificationGrants(run.Trust, run.Journal, clock);
-        var current = new QualificationGrants(consumed.Trust, consumed.Journal, clock);
-        Assert.NotNull(issued.Consume(run.Id, run.Trust.Binding.Target, run.Challenge).Refusal);
-        Assert.False(current.IsCurrent(grant, consumed.Trust.Binding.Target, consumed.Challenge));
+        Assert.NotNull(new QualificationGrants(run.Trust, run.Journal, clock).Consume(run.Id, run.Trust.Binding.Target, run.Challenge).Refusal);
+        Assert.False(new QualificationGrants(consumed.Trust, consumed.Journal, clock).IsCurrent(grant, consumed.Trust.Binding.Target, consumed.Challenge));
         clock.Now = grant.Issued.AddMinutes(30);
         Assert.NotNull(run.Grants().Consume(run.Id, run.Trust.Binding.Target, run.Challenge).Refusal);
         Assert.False(consumed.Current(grant));

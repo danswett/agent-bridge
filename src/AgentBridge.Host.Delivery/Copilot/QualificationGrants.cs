@@ -23,8 +23,10 @@ internal interface IQualificationTrust
 internal interface IQualificationGrantJournal
 {
     QualificationGrant? Find(Guid id);
-    // Atomically compare the complete previous entry and append+durably flush the next.
-    // Null means never issued, including revoked/expired history. No overwrite or deletion.
+    // Latest entry holding this challenge nonce under any id or state, durable across restart.
+    QualificationGrant? FindChallenge(string nonce);
+    // Atomically require the latest entries for next.Id AND next's nonce both to equal expected
+    // (null: neither ever journaled, in any state), then append+durably flush. No overwrite or deletion.
     bool TryAppend(QualificationGrant? expected, QualificationGrant next);
 }
 
@@ -33,6 +35,8 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
     IQualificationGrantJournal? journal = null, TimeProvider? clock = null)
 {
     readonly TimeProvider time = clock ?? TimeProvider.System;
+    readonly object gate = new();
+    DateTimeOffset latest = DateTimeOffset.MinValue;
 
     internal QualificationGrantDecision Issue(Guid approval, TimeSpan lifetime)
     {
@@ -41,7 +45,10 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
         var binding = trust!.Binding;
         if (approval == Guid.Empty || !Valid(binding) || lifetime <= TimeSpan.Zero || lifetime > TimeSpan.FromMinutes(60))
         { return QualificationGrantDecision.Refuse("qualification approval binding or lifetime invalid"); }
-        var now = time.GetUtcNow();
+        // A nonce names one queued turn; reuse under another approval id could bless a second target.
+        if (journal.FindChallenge(binding.Challenge) is not null)
+        { return QualificationGrantDecision.Refuse("qualification challenge nonce already used"); }
+        var now = Now();
         var next = new QualificationGrant(approval, binding, now, now + lifetime, QualificationGrantState.Issued);
         return journal.TryAppend(null, next) ? new(next, null)
             : QualificationGrantDecision.Refuse("qualification approval already used");
@@ -53,7 +60,7 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
         { return QualificationGrantDecision.Refuse("qualification.start requires SRE CLI on the approved disposable run"); }
         var old = journal.Find(id);
         if (id == Guid.Empty || old is null || old.Id != id || old.State != QualificationGrantState.Issued
-            || !Matches(old) || !MatchesAttempt(old, target, challenge))
+            || !Live(old) || !Matches(old) || !MatchesAttempt(old, target, challenge))
         { return QualificationGrantDecision.Refuse("qualification grant missing, expired, used or mismatched"); }
         var next = old with { State = QualificationGrantState.Consumed };
         if (!journal.TryAppend(old, next))
@@ -64,15 +71,16 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
 
     internal bool IsCurrent(QualificationGrant grant, QueueTarget? target, QueueQualification.Challenge? challenge) =>
         Authorized(start: true) && journal is not null && grant.State == QualificationGrantState.Consumed
-        && Matches(grant) && MatchesAttempt(grant, target, challenge) && journal.Find(grant.Id) == grant;
+        && journal.Find(grant.Id) == grant && Live(grant) && Matches(grant) && MatchesAttempt(grant, target, challenge);
 
     internal QualificationGrantDecision Revoke(Guid id)
     {
-        if (trust?.Access != QualificationAccess.SreCli || journal is null)
+        if (trust?.Access != QualificationAccess.SreCli || trust.HostKind != QualificationHostKind.Disposable || journal is null)
         { return QualificationGrantDecision.Refuse("qualification revocation requires SRE CLI"); }
         var old = journal.Find(id);
-        if (id == Guid.Empty || old is null || old.Id != id || old.State == QualificationGrantState.Revoked)
-        { return QualificationGrantDecision.Refuse("qualification grant missing or already revoked"); }
+        if (id == Guid.Empty || old is null || old.Id != id || old.Binding != trust.Binding
+            || old.State == QualificationGrantState.Revoked)
+        { return QualificationGrantDecision.Refuse("qualification grant missing, foreign or already revoked"); }
         var next = old with { State = QualificationGrantState.Revoked };
         return journal.TryAppend(old, next) ? new(next, null)
             : QualificationGrantDecision.Refuse("qualification grant concurrently changed");
@@ -81,9 +89,21 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
     bool Authorized(bool start) => trust?.HostKind == QualificationHostKind.Disposable
         && (trust.Access == QualificationAccess.SreCli || !start && trust.Access == QualificationAccess.OwnerApproval);
 
+    // Wall time never runs backwards within one controller; restarts rely on journaled expiry.
+    DateTimeOffset Now() { lock (gate) { var now = time.GetUtcNow(); return latest = now > latest ? now : latest; } }
+
+    // Journal expiry on first observation so a later wall-clock rollback cannot revive the grant.
+    bool Live(QualificationGrant grant)
+    {
+        if (journal!.FindChallenge(grant.Binding.Challenge) != grant) { return false; }
+        if (Now() < grant.Expires) { return true; }
+        journal.TryAppend(grant, grant with { State = QualificationGrantState.Expired });
+        return false;
+    }
+
     bool Matches(QualificationGrant grant)
     {
-        var now = time.GetUtcNow();
+        var now = Now();
         return Valid(grant.Binding) && grant.Binding == trust?.Binding && grant.Issued <= now && now < grant.Expires
             && grant.Expires - grant.Issued <= TimeSpan.FromMinutes(60);
     }
@@ -94,10 +114,19 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
     static bool Valid(QualificationBinding binding)
     {
         const string prefix = "agent-bridge-qualify:";
-        return binding.Head is { Length: 40 } && binding.Head.All(char.IsAsciiHexDigit)
-            && binding.Vm != Guid.Empty && binding.Run != Guid.Empty && binding.Host != Guid.Empty
-            && binding.Target is not null && binding.Challenge is { } nonce
-            && nonce.Length == prefix.Length + 64 && nonce.StartsWith(prefix, StringComparison.Ordinal)
-            && nonce.Skip(prefix.Length).All(char.IsAsciiHexDigit);
+        return Hex(binding.Head, 40) && binding.Vm != Guid.Empty && binding.Run != Guid.Empty && binding.Host != Guid.Empty
+            && Complete(binding.Target) && binding.Challenge is { } nonce && nonce.StartsWith(prefix, StringComparison.Ordinal)
+            && Hex(nonce[prefix.Length..], 64);
     }
+
+    // Every QueueTarget field must be the decoded live identity shape; a default target binds nothing.
+    static bool Complete(QueueTarget? t) => t is { ProcessId: > 0, StartedAt: > 0, InputMode: not 0 }
+        && t.ConsoleId?.Split(':') is [var window, var owner, var started] && Positive(window) && Positive(owner) && Positive(started)
+        && new[] { t.CliPath, t.CliVersion, t.InjectorPath, t.InjectorVersion }.All(x => !string.IsNullOrWhiteSpace(x))
+        && Hex(t.CliHash, 64) && Hex(t.InjectorHash, 64) && t.Protocol == KeyPlan.Header;
+
+    static bool Hex(string? value, int length) => value?.Length == length && value.All(char.IsAsciiHexDigit);
+
+    static bool Positive(string value) =>
+        value.Length is > 0 and <= 20 && value.All(char.IsAsciiDigit) && value.Any(c => c != '0');
 }
