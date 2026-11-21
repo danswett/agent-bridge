@@ -326,12 +326,10 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(new LiteDelivery(false, "noSuchSession"), await Send(f));
         Assert.Empty(f.Typed);
     }
-    [Theory]
-    [InlineData(SessionStatus.Working)]
-    [InlineData(SessionStatus.Waiting)]
-    public async Task A_session_that_is_not_idle_is_refused_as_busy(SessionStatus status)
+    [Fact]
+    public async Task A_session_waiting_on_a_prompt_is_refused_as_busy()
     {
-        var f = new Fixture { Status = status }; f.Launch(LaunchProtocol.Ask);
+        var f = new Fixture { Status = SessionStatus.Waiting }; f.Launch(LaunchProtocol.Ask);
         Assert.Equal(new LiteDelivery(false, "busy"), await Send(f));
         Assert.Empty(f.Typed);
     }
@@ -343,18 +341,18 @@ public sealed class AgentLiteDeliveryTests
         Assert.Empty(f.Typed);
     }
     [Fact]
-    public async Task A_session_that_goes_busy_after_the_decision_is_refused_before_the_keys_go()
+    public async Task A_session_that_starts_working_after_the_decision_can_receive_the_queued_message()
     {
         var f = new Fixture { FlipAfterFirstGet = true }; f.Launch(LaunchProtocol.Ask);
-        Assert.Equal(new LiteDelivery(false, "busy"), await Send(f));
-        Assert.Empty(f.Typed);
+        Assert.Equal(new LiteDelivery(true, null), await Send(f));
+        Assert.False(Assert.Single(f.Typed).RequireIdle);
     }
     [Theory]
-    [InlineData(true, SessionStatus.Working, false)]
+    [InlineData(true, SessionStatus.Working, true)]
     [InlineData(true, SessionStatus.Waiting, false)]
     [InlineData(true, SessionStatus.Idle, true)]
     [InlineData(false, SessionStatus.Working, true)]
-    public async Task Lite_rechecks_idle_after_waiting_for_the_typing_slot_but_a_person_can_still_reply_while_working(
+    public async Task Lite_accepts_working_but_not_waiting_after_the_typing_slot_and_a_person_can_still_reply_while_working(
         bool lite, SessionStatus afterWait, bool typed)
     {
         using var home = new global::Fixture();
@@ -393,6 +391,55 @@ public sealed class AgentLiteDeliveryTests
         }
         else { Assert.Equal(AnswerOutcome.Delivered, (await reply!.WaitAsync(TimeSpan.FromSeconds(10))).Outcome); }
         Assert.Equal(typed ? 1 : 0, f.Plans.Count);
+    }
+
+    [Fact]
+    public async Task A_working_target_receives_the_message_only_when_the_CLI_takes_its_queue_after_the_turn()
+    {
+        using var home = new global::Fixture();
+        var events = home.CopilotSession(Target, 42);
+        global::Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2));
+        home.Processes.Run(AgentKind.Copilot, 42);
+        var f = new Fixture { Status = SessionStatus.Working };
+        f.Launch(LaunchProtocol.Ask);
+        var queued = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.OnInject = plan => queued.TrySetResult(plan.Sends[0].Text);
+        var replier = new ReplyService(new DeliveryGate(), f, home.Processes, new NoBridge(), new NoGuard(), f,
+            new ReplyOptions { CopilotHome = home.CopilotHome, PlatformSupported = true, PreRead = false,
+                ConfirmTimeout = TimeSpan.FromSeconds(5), PollInterval = TimeSpan.FromMilliseconds(10) });
+        var deliver = new LiteDeliver([new ForcedAskGate(f.Launches)], f, replier, f, f.Log.Add);
+        var delivery = deliver.DeliverAsync(Envelope("hi"), "hi", default);
+        var words = await queued.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(delivery.IsCompleted);
+        global::Fixture.Append(events, Copilot.TurnEnd(3));
+        f.Status = SessionStatus.Idle;
+        global::Fixture.Append(events, Copilot.Event("user.message", new { content = words, delivery = "queued" }, 4));
+        Assert.Equal(new LiteDelivery(true, null), await delivery.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Single(f.Plans);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_working_target_with_a_permission_or_folder_trust_prompt_gets_no_keys(bool folderTrust)
+    {
+        using var home = new global::Fixture();
+        var events = home.CopilotSession(Target, 42);
+        if (folderTrust) { File.Delete(events); }
+        else
+        {
+            global::Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2),
+                Copilot.Event("permission.requested", new { requestId = "r1", permissionRequest = new { kind = "shell" } }, 3));
+        }
+        home.Processes.Run(AgentKind.Copilot, 42);
+        var f = new Fixture { Status = SessionStatus.Working };
+        f.Launch(LaunchProtocol.Ask);
+        if (folderTrust) { f.Rows = ["Do you trust the files in this folder?", "Yes", "No"]; }
+        var replier = new ReplyService(new DeliveryGate(), f, home.Processes, new NoBridge(), new NoGuard(), f,
+            new ReplyOptions { CopilotHome = home.CopilotHome, PlatformSupported = true, PreRead = false });
+        var deliver = new LiteDeliver([new ForcedAskGate(f.Launches)], f, replier, f, f.Log.Add);
+        Assert.False((await deliver.DeliverAsync(Envelope("hi"), "hi", default)).Typed);
+        Assert.Empty(f.Plans);
     }
 
     sealed class NoBridge : IAgentHaBridgeProbe { public string? Active() => null; }
