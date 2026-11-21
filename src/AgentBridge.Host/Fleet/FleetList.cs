@@ -273,12 +273,12 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
     }
 
     // fleet.find (#1399, design "Names and lookup"): a filter over the same roster. The name is
-    // trimmed, exact and case-sensitive, and never echoed back. An own-account lite match is
+    // normalized, exact and active-only, and never echoed back. An own-account lite match is
     // routing metadata, never roster verification; its distinct trust is for messaging only.
     public async Task<object?> FindAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default, AgentAuditLog? auditLog = null)
     {
         var caller = Authorize(channel, FindOp);
-        var name = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString()!.Trim() : "";
+        var name = FleetSessionMatch.Normalize(data.ValueKind == JsonValueKind.Object && data.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null);
         if (name.Length is 0 or > 64) { throw new InvalidOperationException("refused: fleet.find needs a \"name\" of 1 to 64 characters"); }
         string? machine = null;
         if (data.TryGetProperty("machine", out var m) && m.ValueKind != JsonValueKind.Null)
@@ -289,22 +289,34 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
                 throw new InvalidOperationException("refused: fleet.find \"machine\" must be 1 to 64 of letters, digits, '.', '_', '-'");
             }
         }
+        string? machineName = null;
+        if (data.TryGetProperty("machineName", out var label) && label.ValueKind != JsonValueKind.Null)
+        {
+            machineName = label.ValueKind == JsonValueKind.String ? label.GetString() : null;
+            if (machineName is null || machineName.Length is 0 or > 64 || machineName.Any(char.IsControl))
+            { throw new InvalidOperationException("refused: fleet.find \"machineName\" needs an exact machine name or id of 1 to 64 characters"); }
+        }
         LocalApi.AuditAgentAction(credentials!, caller, FindOp, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
         if (RoutingRoster is not IScopedFleetRoster scoped) { throw new InvalidOperationException("refused: fleet.find needs an authenticated account-scoped registry"); }
-        var snapshot = await scoped.ReadScopedAsync(ct);
+        FleetRosterSnapshot snapshot;
+        try { snapshot = await scoped.ReadScopedAsync(ct); }
+        catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidDataException or IOException or HttpRequestException or TimeoutException
+            || e is InvalidOperationException && !e.Message.StartsWith("refused:", StringComparison.Ordinal))
+        { throw new InvalidOperationException($"fleet.find registry-get: {e.Message}", e); }
         var fleetScope = snapshot.FleetScope;
         if (string.IsNullOrWhiteSpace(fleetScope)) { throw new InvalidOperationException("refused: fleet.find has no authenticated account scope"); }
-        return snapshot.CompleteRead(() => Complete(caller, Find(snapshot, name, machine)));
+        return snapshot.CompleteRead(() => Complete(caller, Find(snapshot, name, machine, machineName)));
     }
 
-    static object Find(FleetRosterSnapshot snapshot, string name, string? machine)
+    static object Find(FleetRosterSnapshot snapshot, string name, string? machine, string? machineName)
     {
         var fleetScope = snapshot.FleetScope;
-        var scope = snapshot.Machines.Where(x => machine is null || x.Id == machine).ToList();
+        var scope = snapshot.Machines.Where(x => (machine is null || x.Id == machine)
+            && (machineName is null || x.Name == machineName || x.Id == machineName)).ToList();
         var incomplete = scope.Where(x => x.Online && x.Truncated).Select(x => x.Id).ToList();
         if (incomplete.Count > 0) { return new { result = "incomplete", fleetScope, machines = incomplete }; }
-        var hits = scope.Select(x => (Machine: x, Sessions: x.Sessions.Where(s => string.Equals(s.Name, name, StringComparison.Ordinal)).ToList())).Where(h => h.Sessions.Count > 0).ToList();
+        var hits = scope.Select(x => (Machine: x, Sessions: x.Sessions.Where(s => FleetSessionMatch.Matches(s, name)).ToList())).Where(h => h.Sessions.Count > 0).ToList();
         var live = hits.Where(h => h.Machine.Online).ToList();
         var stale = hits.Where(h => !h.Machine.Online).ToList();
         if (live.Any(h => !h.Machine.Verified && h.Machine.MessagingTrust != LiteFleetRoster.Trust)) { return new { result = "unverified", fleetScope, machines = live.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name, Online: true)) }; }

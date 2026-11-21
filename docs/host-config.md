@@ -11,6 +11,19 @@ Until the app has a settings screen, it is edited with the host's own commands, 
 machine (below), or by hand. The app will edit the same file; this page is the schema both
 follow.
 
+## Finding a live session
+
+`agent-bridge-host sessions find --name "<exact>" [--machine <name>] [--json]`
+uses this machine's local host pipe and the session's `AGENT_BRIDGE_TOKEN`, with
+the same own-account lite identity, off and kill gates as `fleet.find`; no HA fallback.
+Names are trimmed, whitespace collapsed, and `Copilot: ` / `Claude: ` and ` Status`
+decorations removed before case-sensitive exact matching. Only idle, working, agents
+and shell sessions on online machines qualify. `--machine` pins an exact machine id or name.
+Each match has `node`, `machine`, `state`, `name`; JSON has `result` and `matches`.
+Exits: 0 one live match; 3 notFound; 4 ambiguous (all candidate machines shown);
+5 refused with reason; 6 unreachable/invalid host response with stage and reason.
+Fleet scripts will call this command in S5; this change does not update those scripts.
+
 ## Host enrollment descriptor (dormant)
 
 `agent-bridge-host devices descriptor` is reserved for a person at the machine.

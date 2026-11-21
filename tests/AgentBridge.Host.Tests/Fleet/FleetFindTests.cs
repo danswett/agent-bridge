@@ -115,6 +115,63 @@ public sealed class FleetFindTests : IDisposable
         public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) { var result = await inner.ReadScopedAsync(ct); after(); return result; }
     }
 
+    [Fact]
+    public async Task Normalized_exact_live_names_ignore_successors_and_ended_or_dead_rows()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var live = M("a", true, "Copilot: SG  Engineering Lead Status", verified: true) with { Name = "VM-A" };
+        var successor = M("b", true, "SG Engineering Lead Successor", verified: true);
+        var ended = M("c", true, "SG Engineering Lead", verified: true) with
+        { Sessions = [new("n-c", "SG Engineering Lead", "ended", Started), new("n-d", "SG Engineering Lead", "dead", Started)] };
+        var found = await Find(Op(live, successor, ended), new { name = "SG Engineering Lead" });
+        Assert.Equal("found", found.GetProperty("result").GetString());
+        Assert.Equal("a", found.GetProperty("session").GetProperty("machine").GetString());
+        Assert.Equal("found", (await Find(Op(live, successor, ended), new { name = "SG Engineering Lead", machineName = "VM-A" })).GetProperty("result").GetString());
+        Assert.Equal("notFound", (await Find(Op(live, successor), new { name = "SG Engineering Lead", machineName = "VM-B" })).GetProperty("result").GetString());
+        Assert.Equal("notFound", (await Find(Op(ended), new { name = "SG Engineering Lead" })).GetProperty("result").GetString());
+        Assert.Equal("notFound", (await Find(Op(live, successor), new { name = "SG Engineering" })).GetProperty("result").GetString());
+        var duplicate = live with { Id = "e", Name = "VM-E" };
+        var ambiguous = await Find(Op(live, duplicate, ended), new { name = "Claude: SG Engineering Lead Status" });
+        Assert.Equal("ambiguous", ambiguous.GetProperty("result").GetString());
+        Assert.Equal(new[] { "VM-A", "VM-E" }, ambiguous.GetProperty("candidates").EnumerateArray()
+            .Select(c => c.GetProperty("machineName").GetString()));
+    }
+
+    [Theory]
+    [InlineData("idle", false, "found")]
+    [InlineData("working", false, "found")]
+    [InlineData("agents", false, "found")]
+    [InlineData("shell", false, "found")]
+    [InlineData("ended", false, "notFound")]
+    [InlineData("dead", false, "notFound")]
+    [InlineData("idle", true, "notFound")]
+    public async Task Only_active_nonstale_rows_qualify(string state, bool stale, string expected)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var row = new FleetSession("n-a", "SG Lead", state, Started, Evidence: SessionEvidence.Read(Body(new { stale })));
+        var result = await Find(Op(M("a", true, null, verified: true) with { Sessions = [row] }), new { name = "SG Lead" });
+        Assert.Equal(expected, result.GetProperty("result").GetString());
+        var ended = row with { State = "ended" };
+        if (expected == "found")
+        { Assert.Equal("found", (await Find(Op(M("a", true, null, verified: true) with { Sessions = [ended, row] }), new { name = "SG Lead" })).GetProperty("result").GetString()); }
+    }
+
+    [Theory]
+    [InlineData("malformed")]
+    [InlineData("503")]
+    public async Task Registry_errors_preserve_the_read_stage_instead_of_becoming_notFound(string failure)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var frames = new FrameRoster(new RelayFleetRoster(), Body(new { machine = "a", online = true,
+            record = new { sessions = new[] { new { name = "SG Lead" } } } }));
+        if (failure == "503") { frames.BeforeRead = () => throw new HttpRequestException("HTTP 503 unavailable"); }
+        var op = new FleetList(store, frames, audit: new AgentAuditLog(root));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { name = "SG Lead" }));
+        Assert.Contains("fleet.find registry-get:", error.Message);
+        Assert.Contains(failure == "503" ? "503" : "key", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("notFound", error.Message);
+    }
+
     [Theory, InlineData(true), InlineData(false)]
     public async Task Switching_identity_after_trust_projection_but_before_the_fleet_result_refuses_find_and_list(bool find)
     {
