@@ -20,7 +20,8 @@ public sealed class LiteDeliver(
     ISessionReplier replier,
     IConsoleInjector injector,
     Action<string> log,
-    TimeProvider? clock = null) : ILiteDeliver
+    TimeProvider? clock = null,
+    Func<string, Func<bool>>? targetFence = null) : ILiteDeliver
 {
     public const int MaxChars = 4096;
     public const int MaxPerMinute = 6;
@@ -51,6 +52,7 @@ public sealed class LiteDeliver(
         var byNode = false;
         if (session is null && FromNodeId(target) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
         if (session is null) { return Refused(LiteCodes.NoSuchSession); }
+        var stillAllowed = targetFence?.Invoke(id);
         if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
         if (session.Agent != AgentKind.Copilot || session.ProcessId is not { } pid) { return Refused(LiteCodes.NotReplyTarget); }
         if (!Idle(session)) { return Refused(LiteCodes.Busy); }
@@ -62,8 +64,9 @@ public sealed class LiteDeliver(
         if (!Idle(now)) { return Refused(LiteCodes.Busy); }
         if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
-        // just before the injector starts (Stale, refused below as noSuchSession); a full id gets no fence, as on main.
-        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true, StillCurrent = byNode ? () => FromNodeId(target) == id : null };
+        // just before the injector starts. The host rechecks kill, remote, current grant and process generation at both fences.
+        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true,
+            StillCurrent = byNode || stillAllowed is not null ? () => (!byNode || FromNodeId(target) == id) && (stillAllowed?.Invoke() ?? true) : null };
         var result = await replier.ReplyAsync(reply, null, ct);
         return result.Outcome switch
         {

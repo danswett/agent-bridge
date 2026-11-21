@@ -36,7 +36,9 @@ public sealed class AgentLiteDeliveryTests
         public readonly List<KeyPlan> Plans = [];
         int reads;
         public readonly List<ReplyRequest> Typed = []; public readonly List<string> Log = [];
-        public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches = new();
+        public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches;
+        public DateTimeOffset ProcessAt = DateTimeOffset.UnixEpoch;
+        public Fixture() => Launches = new(id => id == Target && Exists ? new SessionProcess(42, ProcessAt) : null);
         public LiteDeliver Build() => new([
             new ForcedAskGate(Launches),
             new AllowlistedAllTargetsGate(Launches, () => new AgentMessagingSettings
@@ -45,7 +47,7 @@ public sealed class AgentLiteDeliveryTests
                 AllowAllTargets = AllowAllTargets,
                 AllowAllTargetSessions = AllowAllTargetSessions
             })
-        ], this, this, this, Log.Add, Clock);
+        ], this, this, this, Log.Add, Clock, id => () => Launches.PermissionsOf(id) is not null);
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -184,7 +186,7 @@ public sealed class AgentLiteDeliveryTests
     {
         var f = new Fixture { Held = Hold }; f.Launch(LaunchProtocol.Ask);
         Assert.True((await SendTo(f, Target)).Typed);
-        Assert.Null(Assert.Single(f.Typed).StillCurrent);
+        Assert.True(Assert.Single(f.Typed).StillCurrent!());
         Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
         f.Held = null;
         Assert.True((await SendTo(f, Node)).Typed);
@@ -297,7 +299,7 @@ public sealed class AgentLiteDeliveryTests
         var f = new Fixture { AllowAllTargets = true }; f.Launch(LaunchProtocol.AllowAll);
         const string text = "private message excluded from gate audits";
         Assert.False((await Send(f, text)).Typed);
-        Assert.Contains(f.Log, l => l.Contains($"request {Req} gate AllowlistedAllTargetsGate: refused: the allow-all session is not enabled and listed", StringComparison.Ordinal));
+        Assert.Contains(f.Log, l => l.Contains($"request {Req} gate AllowlistedAllTargetsGate: refused: the allow-all session is not a live launch here with an enabled grant", StringComparison.Ordinal));
         f.AllowAllTargetSessions = [Target];
         Assert.True((await Send(f, text)).Typed);
         Assert.Contains(f.Log, l => l.Contains($"request {Req} gate AllowlistedAllTargetsGate: allowed", StringComparison.Ordinal));
@@ -305,6 +307,17 @@ public sealed class AgentLiteDeliveryTests
         Assert.True((await Send(f, text)).Typed);
         Assert.Contains(f.Log, l => l.Contains($"request {Req} gate ForcedAskGate: allowed", StringComparison.Ordinal));
         Assert.DoesNotContain(f.Log, l => l.Contains(text, StringComparison.Ordinal));
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Pid_reuse_during_composer_read_or_waiting_for_the_typing_slot_never_types_to_the_replacement(bool inSlot)
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        Action reuse = () => f.ProcessAt = f.ProcessAt.AddTicks(1);
+        if (inSlot) { f.OnReply = reuse; } else { f.OnReadScreen = reuse; }
+        Assert.Equal(new LiteDelivery(false, "noSuchSession"), await Send(f));
+        Assert.Empty(f.Typed);
     }
     [Fact]
     public async Task An_unknown_session_is_refused_with_nothing_typed()
