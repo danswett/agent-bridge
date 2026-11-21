@@ -90,6 +90,18 @@ static partial class SelfTest
                 var first = frames;
                 return await Until(() => frames >= first + 2, TimeSpan.FromSeconds(5));
             }
+            async Task<bool> ReachMeasuredBottom()
+            {
+                var stable = 0;
+                void Seek(object? sender, object args)
+                {
+                    if (Math.Abs(scroll.VerticalOffset - scroll.ScrollableHeight) <= 1.5) { stable++; }
+                    else { stable = 0; scroll.ChangeView(null, scroll.ScrollableHeight, null, disableAnimation: true); }
+                }
+                CompositionTarget.Rendering += Seek;
+                try { return await Until(() => stable >= 2, TimeSpan.FromSeconds(5)); }
+                finally { CompositionTarget.Rendering -= Seek; }
+            }
             scroll.ViewChanged += Changed;
             scroll.LayoutUpdated += Layout;
             CompositionTarget.Rendering += Frame;
@@ -103,8 +115,9 @@ static partial class SelfTest
                     view.ReleasePin();
                     var chosen = bottom ? scroll.ScrollableHeight : Math.Round(scroll.ScrollableHeight / 2);
                     scroll.ChangeView(null, chosen, null, disableAnimation: true);
-                    var reached = await Until(() => Math.Abs(scroll.VerticalOffset - chosen) <= 1.5, TimeSpan.FromSeconds(5));
-                    var settled = reached && await Rendered();
+                    var reached = bottom ? await ReachMeasuredBottom()
+                        : await Until(() => Math.Abs(scroll.VerticalOffset - chosen) <= 1.5, TimeSpan.FromSeconds(5));
+                    var settled = reached && (bottom || await Rendered());
                     before = scroll.VerticalOffset;
                     retained = Visible();
                     var ready = settled && before > scroll.ViewportHeight
@@ -157,7 +170,12 @@ static partial class SelfTest
                     var originalRows = ReadRows();
                     var mark = StoredTurn(1);
                     mark = mark with { Prompt = mark.Prompt! with { From = UserMessageFrom.Agent } };
-                    stored.AddLive(mark);
+                    fixture = fixture with
+                    {
+                        UpdatedAt = fixture.UpdatedAt.AddSeconds(1),
+                        Activity = fixture.Activity! with { Notice = mark },
+                    };
+                    await demo.PutAsync(fixture);
                     var marked = await Until(() => ReadRows().FirstOrDefault(r => r.Id == mark.Id)?.Disclosure is not null, TimeSpan.FromSeconds(5));
                     check(marked && await Rendered(), "scroll-preserve driver: adds a late Sent by an agent mark and collapsed prompt above the viewport");
                     var afterMark = Visible();
