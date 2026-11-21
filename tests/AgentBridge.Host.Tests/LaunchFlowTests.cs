@@ -77,8 +77,19 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         if (relay is not null) { await relay.DisposeAsync(); }
         await source.DisposeAsync();
         await clock.DisposeAsync();
-        foreach (var file in Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories)) { File.SetAttributes(file, FileAttributes.Normal); }
+        NormalizeFiles(Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories));
         f.Dispose();
+    }
+
+    internal static void NormalizeFiles(IEnumerable<string> files)
+    {
+        foreach (var file in files)
+        {
+            try { File.SetAttributes(file, FileAttributes.Normal); }
+            // Started is reported before the follower's finally releases its git worktree lock.
+            // A lock removed since enumeration already needs no cleanup; other I/O errors still fail.
+            catch (FileNotFoundException) { }
+        }
     }
 
     private protected LaunchConfig Config(Func<LaunchConfig, LaunchConfig>? change = null)
