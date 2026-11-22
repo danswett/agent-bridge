@@ -343,6 +343,28 @@ public sealed class GrantStoreTests : IDisposable
     }
 
     [Fact]
+    public void A_forged_maximal_legacy_cutoff_cannot_resurrect_a_rolled_back_revoked_grant()
+    {
+        Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
+        var grant = Issued();
+        var auditFolder = Path.Combine(Folder, "audit");
+        var head = Path.Combine(auditFolder, "agents.head");
+        var file = Directory.GetFiles(auditFolder, "agents-*.jsonl").Single();
+        var honest = JsonNode.Parse(File.ReadAllText(head))!;
+        var old = new[] { PathName, file }.ToDictionary(f => f, File.ReadAllBytes);
+        Assert.True(Open().Revoke(grant.Id, 1).Usable);
+        foreach (var (saved, bytes) in old) { File.WriteAllBytes(saved, bytes); }
+        File.Delete(head);
+        Assert.True(Audit.Bootstrap());
+        // Copy the honest cutoff (header and agent.send, zero gates) onto the re-adopted head; only those fields change.
+        var json = JsonNode.Parse(File.ReadAllText(head))!;
+        foreach (var field in new[] { "adoptedGatedRows", "adoptedPrefix" }) { json[field] = honest[field]?.DeepClone(); }
+        File.WriteAllText(head, json.ToJsonString());
+        Assert.True(Audit.Verify().Intact);
+        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
+    }
+
+    [Fact]
     public void Replaying_an_old_valid_mac_file_cannot_resurrect_revocation_in_a_running_or_restarted_receiver()
     {
         var grant = Grant();
