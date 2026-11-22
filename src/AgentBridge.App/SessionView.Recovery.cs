@@ -12,7 +12,7 @@ public sealed partial class SessionView
     void RecoverReading()
     {
         restoreReading = Recovery?.Current is { } saved && saved.Key == Card?.Row?.Key ? saved.Position : null;
-        pinEnd = restoreReading?.AtEnd ?? true;
+        SetEndPin(restoreReading?.AtEnd ?? true);
     }
 
     void SaveReading()
@@ -33,7 +33,7 @@ public sealed partial class SessionView
         // A live block needs the same live, untruncated reply: cutting its prefix renumbers the blocks.
         if (!saved.AtEnd && saved.Turn is null && (string.IsNullOrEmpty(saved.ResponseTurn) || saved.ResponseTurn != Card?.Session.Activity.ResponseTurn
             || saved.ResponseTurn != Card?.LiveTurn || Card?.ResponseTruncated == true))
-        { restoreReading = null; anchor = null; pinEnd = true; return false; }
+        { restoreReading = null; anchor = null; SetEndPin(true); return false; }
         if (history is { State: HistoryLoad.Loading } or { State: HistoryLoad.Idle, HasOlder: false, Start: null }) { return true; }
         applyingReading = true;
         try
@@ -60,7 +60,7 @@ public sealed partial class SessionView
                 target = block.OffsetFor(scroll.VerticalOffset, Top(container, scroll), scroll.ScrollableHeight);
             }
             restoreReading = null;
-            pinEnd = saved.AtEnd;
+            SetEndPin(saved.AtEnd);
             anchor = saved.Block;
             Anchoring(scroll, target);
         }

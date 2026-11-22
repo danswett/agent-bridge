@@ -1,6 +1,8 @@
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
@@ -124,6 +126,28 @@ static partial class SelfTest
             CompositionTarget.Rendering += Frame;
             try
             {
+                check(await ReachMeasuredBottom() && view.FollowsConversationEnd,
+                    $"scroll-preserve UIA: starts at the measured end with the pin engaged; {view.PinState()}");
+                var provider = FrameworkElementAutomationPeer.CreatePeerForElement(scroll)?.GetPattern(PatternInterface.Scroll) as IScrollProvider;
+                check(provider is not null, "scroll-preserve UIA: obtains the native ScrollPattern");
+                if (provider is null) { return; }
+                check(view.ConversationAnchoringMode == ItemsUpdatingScrollMode.KeepLastItemInView,
+                    "scroll-preserve SDK: native panel follows the pinned end");
+                view.HoldConversationPointer(349);
+                check(view.ConversationAnchoringMode == ItemsUpdatingScrollMode.KeepItemsInView,
+                    "scroll-preserve SDK: pointer hold yields native anchoring to the reader");
+                check(await Rendered() && view.FollowsConversationEnd,
+                    $"scroll-preserve SDK: the pointer hold does not consume the pin; {view.PinState()}");
+                view.ReleaseConversationPointer(349);
+                check(view.ConversationAnchoringMode == ItemsUpdatingScrollMode.KeepLastItemInView,
+                    "scroll-preserve SDK: ending the hold restores native end anchoring");
+                view.DuringConversationLayout(() =>
+                {
+                    provider.SetScrollPercent(-1, 100 * (scroll.ScrollableHeight - 299) / scroll.ScrollableHeight);
+                    return 0;
+                });
+                check(await Until(() => !view.FollowsConversationEnd && scroll.ScrollableHeight - scroll.VerticalOffset > 8, TimeSpan.FromSeconds(5)),
+                    $"scroll-preserve UIA: direct retreat issued during layout ownership releases the pin without wheel, key or pointer input; {view.PinState()}");
                 var update = 0;
                 foreach (var bottom in new[] { false, true })
                 {
