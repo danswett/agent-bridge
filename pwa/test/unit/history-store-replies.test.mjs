@@ -72,6 +72,28 @@ test('finished history parts replace live slots by identity without duplicating 
   assert.equal(currentReply(store.get('h', ID), session('second')), 'Same answer\n\nSame answer');
 });
 
+test('Codex live revisions after history replace the same part without accepting stale snapshots', async () => {
+  let page = [];
+  const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
+    history: async () => readHistoryResult({ turns: page }),
+  } }) });
+  await store.open('h', ID);
+  const session = (response, seconds, responseTruncated = false) => readSession({ id: ID, agent: 'codex',
+    updatedAt: `2026-11-22T11:00:0${seconds}Z`, activity: { turn: 'owner', responseTurn: 'owner',
+      responseId: 'answer', response, responseTruncated } });
+  store.live('h', session('Partial answer', 0));
+  page = [{ id: 'owner', at: '2026-11-22T11:00:00Z',
+    parts: [{ id: 'answer', kind: 'response', text: 'Partial answer', at: '2026-11-22T11:00:00Z' }] }];
+  await store.open('h', ID);
+  store.live('h', session('Complete answer', 2));
+  assert.equal(currentReply(store.get('h', ID), session('Complete answer', 2)), 'Complete answer');
+  store.live('h', session('Partial answer', 1));
+  assert.equal(currentReply(store.get('h', ID), session('Partial answer', 1)), 'Complete answer');
+  store.live('h', session('Cut', 3, true));
+  assert.equal(currentReply(store.get('h', ID), session('Cut', 3, true)), 'Complete answer');
+  assert.deepEqual(store.get('h', ID).turns[0].parts.map((p) => p.id), ['answer']);
+});
+
 for (const cut of [{ truncated: true }, { partsMore: 1 }]) {
   test(`a late budgeted page cannot hide the current identified streaming reply: ${JSON.stringify(cut)}`, async () => {
     const page = { id: 'owner', at: '2026-11-21T22:00:00Z', ...cut,

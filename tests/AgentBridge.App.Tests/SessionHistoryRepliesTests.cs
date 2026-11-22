@@ -55,6 +55,37 @@ public sealed class SessionHistoryRepliesTests
     };
 
     [Fact]
+    public async Task Codex_live_revisions_after_history_replace_the_same_part_without_accepting_stale_snapshots()
+    {
+        await using var host = Serving(() => 0);
+        host.Start();
+        await using var connection = host.Connect();
+        await connection.WhenConnectedAsync().WaitAsync(FakeHost.Patience);
+        var partial = Snapshot("owner", "Question", "Partial answer", "owner") with { Agent = AgentKind.Codex };
+        partial = partial with { Activity = partial.Activity with { ResponseId = "answer" } };
+        var card = Card(connection, partial);
+        try
+        {
+            _ = card.Stored;
+            host.On(HistoryProtocol.Op, _ => new HistoryResult
+            {
+                Turns = [new HistoryTurn { Id = "owner", At = T0, Parts = [
+                    new HistoryPart { Id = "answer", Kind = HistoryPartKind.Response, Text = "Partial answer", At = T0 }] }],
+            });
+            await card.Stored!.LoadNewestAsync();
+            var complete = partial with { UpdatedAt = T0.AddSeconds(2), Activity = partial.Activity with { Response = "Complete answer" } };
+            card.Update(complete);
+            Assert.Equal("Complete answer", card.Response);
+            card.Update(partial with { UpdatedAt = T0.AddSeconds(1) });
+            Assert.Equal("Complete answer", card.Response);
+            card.Update(complete with { UpdatedAt = T0.AddSeconds(3), Activity = complete.Activity with { Response = "Cut", ResponseTruncated = true } });
+            Assert.Equal("Complete answer", card.Response);
+            Assert.Equal("answer", Assert.Single(card.Stored.Turns.Single().Parts).Id);
+        }
+        finally { card.Detach(); }
+    }
+
+    [Fact]
     public async Task Finished_history_parts_replace_live_slots_by_identity_including_an_answer_present_when_opening()
     {
         await using var host = Serving(() => 0);
