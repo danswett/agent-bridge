@@ -90,7 +90,7 @@ public sealed class AuditRotationTests : IDisposable
     }
 
     [Theory]
-    [InlineData("none"), InlineData("genesis-length"), InlineData("genesis-by-machine"), InlineData("genesis-later"),
+    [InlineData("none"), InlineData("genesis-length"), InlineData("genesis-by-machine"), InlineData("genesis-later"), InlineData("genesis-null"), InlineData("command-null"),
         InlineData("retired-edited"), InlineData("retired-missing"), InlineData("active-rollback")]
     public void Grants_trust_only_a_stream_whose_signed_genesis_and_any_retired_file_still_match(string fault)
     {
@@ -106,7 +106,8 @@ public sealed class AuditRotationTests : IDisposable
         if (fault == "genesis-length") { genesis["rotation"]!["length"] = (long)genesis["rotation"]!["length"]! + 1; }
         if (fault == "genesis-by-machine")
         { genesis["rotation"]!["command"] = JsonSerializer.SerializeToNode(Sign(device, device, seal, clock.GetUtcNow(), request: request), JsonSerializerOptions.Web); }
-        if (fault.StartsWith("genesis-", StringComparison.Ordinal)) { lines[0] = genesis.ToJsonString(); }
+        if (fault is "genesis-null" or "command-null") { genesis["rotation"]!["command"] = null; if (fault == "genesis-null") { genesis["rotation"] = null; } }
+        if (fault.StartsWith("genesis-", StringComparison.Ordinal) || fault == "command-null") { lines[0] = genesis.ToJsonString(); }
         if (fault == "genesis-later") { lines = [lines[0], lines[0], .. lines[1..]]; }
         File.WriteAllText(day, string.Join('\n', lines) + "\n");
         if (fault == "retired-edited") { File.AppendAllText(retired, "\n"); }

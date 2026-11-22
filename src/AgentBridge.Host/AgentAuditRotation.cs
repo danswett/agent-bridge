@@ -19,7 +19,7 @@ public sealed partial class AgentAuditLog
     sealed record GenesisRotation([property: JsonRequired] string Retired, [property: JsonRequired] long Length,
         [property: JsonRequired] string Sha256, [property: JsonRequired] SignedCommand Command);
     static readonly JsonSerializerOptions Strict = new(JsonSerializerDefaults.Web)
-    { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, RespectRequiredConstructorParameters = true };
+    { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, RespectRequiredConstructorParameters = true, RespectNullableAnnotations = true };
     static readonly bool[] Streams = [false, true];
     // Verifies genesis signatures; without it a rotated stream never fully verifies and nothing rotates.
     public P256KeyPair? DeviceKey { get; init; }
@@ -110,8 +110,7 @@ public sealed partial class AgentAuditLog
             if (Files(folder, launch).FirstOrDefault() is not { } first) { return null; }
             using var doc = JsonDocument.Parse(File.ReadLines(first).First());
             if (!doc.RootElement.TryGetProperty("rotation", out var element)) { return null; }
-            var rotation = element.Deserialize<GenesisRotation>(Strict)!;
-            if (Signed(key, rotation.Command) is not { } c || Sealed(c) is not { } seal) { return null; }
+            if (element.Deserialize<GenesisRotation>(Strict) is not { } rotation || Signed(key, rotation.Command) is not { } c || Sealed(c) is not { } seal) { return null; }
             var mine = launch ? seal.Launches : seal.Agents;
             var path = Path.Combine(folder, rotation.Retired);
             return rotation.Retired == RetiredName(launch, c.Request) && rotation.Length == mine.Length && rotation.Sha256 == mine.Sha256
