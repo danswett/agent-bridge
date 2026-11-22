@@ -7,6 +7,23 @@ rulings 6867525734, 6867631192, 6867667571, 6867669427; owner evidence 686754007
 - **12:12:** "Perhaps you need two GUIDs: one for the unique session and one for its role (SRE, Chief, etc). That lets you not rely on friendly name which could easily misfire."
 - **12:27:** the recorded decision says "The role-ID design is approved (12:27)." Person-signed assignments and per-successor approval are detailed in [#3334](https://github.com/danswett/agent-bridge/pull/3334) and [role-ids.md](design/role-ids.md).
 **Nov 21, 2026, 17:05 PT:** the owner re-approved ID-first addressing, per Chief S9 relay to Engineering R6 / brief 313; not yet recorded on main's owner-decisions.md at this edit. This is relayed provenance, not a direct owner quote. Role-ID code remains paused (Nov 19, 17:58 PT); this doc claims no built role routing.
+## Inactive qualification source (A-ii-1)
+The source-only producer remains unwired: no launch, reply, submit planner, hooks
+verification or API invokes it. The later authorized controller/SRE control entry
+(A-ii-2) and submit/delivery wiring (B) remain held. No live qualification was run.
+`WorkerInjector.CaptureIdentityAsync` uses a read-only worker handshake with the
+target process handle held and its PID/creation FILETIME checked. Its snapshot
+contains target and injector image paths, file versions/SHA-256, console window
+and owner-process incarnation, input mode and key-plan protocol. Missing evidence stays Unknown.
+`QueueQualification` captures that snapshot at launch through its host-only seam.
+A controller must supply a cursor-bound raw transcript reader for that same target
+and an explicit challenge lifetime. Only the exact host-generated, one-shot nonce
+in a main-target raw `user.message` with `data.delivery="queued"` while working,
+before monotonic expiry and with unchanged identity before/after reading, yields
+Verified. Replay, another host/target, stripped delivery, key-write success and
+hooks/provider confirmation cannot qualify. No caller supplies a Verified flag.
+The older design below does not authorize an idle-Enter fallback or capability table.
+
 ## Problem and cause
 Copilot CLI joins steers pending mid-turn with `\n\n` into one user turn (6 of 692 turns in one transcript). The host types bare text (`HaReplies.cs:26`) and only Lite and `RetryEpisode` set
 `RequireIdle` (`ReplyService.cs:422`), so replies land in a working session with no sender boundary
