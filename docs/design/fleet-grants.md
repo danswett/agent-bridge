@@ -10,6 +10,16 @@ and no eviction. Every generation requires its matching intact audit intent/term
 an incomplete transaction or replay refuses all use rather than repairing/resetting state.
 Issuance uses full G1 validation against the receiver's required known-options snapshot.
 Retired audit coverage refuses, including when the store is missing; it cannot reset tombstones.
+G4 adds the Windows person-only local CLI and read-only verified listing; no acting adapter or counters.
+G7 core adds `App.Core.Grants` receiver contracts and the issuance view model: the
+receiver prepares the exact document/digest, the app displays its fields and narrower
+policy, and only a matching authenticated receiver receipt makes the row Active.
+The receiver interface is a trusted verification boundary, not a caller-set "signed"
+flag: implementations must authenticate receipts/counters and recheck person ancestry
+before signing through G4's writer. G7b supplies that production adapter and WinUI
+wiring separately; this core has no issuing transport, signing key or enabled UI.
+G8 read/revoke contracts require verified snapshots and a confirmation bound to
+account/profile/receiver/id/generation/action; G4's unsigned CLI tombstone is not proof.
 Grants require ONE audit rotation per VM, done automatically by its first grant issue (owner Nov 21 21:41 PT,
 superseding the person-signed command first proposed for #3566); no cutoff is inferred and heads are never trusted.
 - Trigger: only `GrantStore.Issue`, inside the G4 person-confirmed issuance (same caller guard and confirmation),
@@ -34,7 +44,6 @@ superseding the person-signed command first proposed for #3566); no cutoff is in
 Residuals: rolling back every file (store, streams, heads) to a post-rotation point still needs the keyed or
 external anchor (#3569); anything holding this host's device key could compute a genesis (#3569); retention
 pruning the genesis day refuses grants; an operation in flight across the rotation stays unresolved.
-G4 adds the Windows person-only local CLI and read-only verified listing; no acting adapter or counters.
 
 ## Authority and existing boundaries
 
