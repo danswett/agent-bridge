@@ -48,7 +48,7 @@ public sealed partial class MainWindow
             };
             dialog.Closing += (_, args) => args.Cancel = view.IsSubmitting;
             await dialog.ShowAsync();
-            if (model.Active && GrantsPage.ViewModel is { } list) { await list.RefreshAsync(); }
+            if ((model.Active || model.State == "Unconfirmed") && GrantsPage.ViewModel is { } list) { await list.RefreshAsync(); }
         }
         catch (Exception error) when (error is COMException or InvalidOperationException)
         { AppLog.Write($"grants: cannot open issue dialog ({error.GetType().Name})"); }

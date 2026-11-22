@@ -11,7 +11,7 @@ public sealed partial class GrantIssueView : UserControl
 {
     GrantIssueViewModel? viewModel;
     bool busy;
-    public bool IsSubmitting => busy;
+    public bool IsSubmitting { get; private set; }
     string? reviewedDocument;
     string? shownDigest, shownState;
 
@@ -59,6 +59,7 @@ public sealed partial class GrantIssueView : UserControl
         using (document)
         {
             busy = true;
+            IsSubmitting = true;
             var source = SourceDocument.Text;
             try
             {
@@ -88,10 +89,10 @@ public sealed partial class GrantIssueView : UserControl
             StatusLine.Text = "Unconfirmed";
             AppLog.Write($"grants: issue unconfirmed ({error.GetType().Name})");
         }
-        finally { busy = false; PersonDigest.Text = ""; }
+        finally { IsSubmitting = false; busy = false; PersonDigest.Text = ""; }
     }
 
     static bool ExpectedFailure(Exception error) => error is IOException or InvalidDataException or JsonException
-        or CryptographicException or ArgumentException or InvalidOperationException or KeyNotFoundException
+        or CryptographicException or ArgumentException or FormatException or InvalidOperationException or KeyNotFoundException
         or TimeoutException or OperationCanceledException or HttpRequestException or UnauthorizedAccessException;
 }

@@ -14,11 +14,12 @@ public sealed class GrantIssueViewFailureTests
     static readonly Lazy<Type> View = new(CompileView);
 
     [Theory]
-    [InlineData(false, "Not issued")]
-    [InlineData(true, "Unconfirmed")]
-    public void Invalid_receiver_data_is_reported_without_escaping_the_UI_handler(bool confirming, string outcome)
+    [InlineData(false, "Not issued", false)]
+    [InlineData(true, "Unconfirmed", false)]
+    [InlineData(true, "Unconfirmed", true)]
+    public void Invalid_receiver_data_is_reported_without_escaping_the_UI_handler(bool confirming, string outcome, bool format)
     {
-        var model = new GrantIssueViewModel(new ThrowingReceiver(confirming));
+        var model = new GrantIssueViewModel(new ThrowingReceiver(confirming, format));
         var view = Activator.CreateInstance(View.Value)!;
         View.Value.GetProperty("ViewModel")!.SetValue(view, model);
         View.Value.GetMethod("Prepare")!.Invoke(view, ["{}"]);
@@ -52,14 +53,15 @@ public sealed class GrantIssueViewFailureTests
         return Assembly.Load(output.ToArray()).GetType("AgentBridge.App.GrantIssueView")!;
     }
 
-    sealed class ThrowingReceiver(bool confirming) : IGrantIssueReceiver
+    sealed class ThrowingReceiver(bool confirming, bool format) : IGrantIssueReceiver
     {
+        Exception Error => format ? new FormatException("receiver-format") : new InvalidDataException("receiver-proof");
         public string Receiver => new('1', 32);
         public bool Online => true;
         public string? Problem => null;
         public Task<GrantPrepareResult> PrepareIssueAsync(JsonElement input, CancellationToken ct = default)
         {
-            if (!confirming) { return Task.FromException<GrantPrepareResult>(new InvalidDataException("receiver-proof")); }
+            if (!confirming) { return Task.FromException<GrantPrepareResult>(Error); }
             var id = Guid.NewGuid();
             var document = JsonSerializer.Serialize(new { id, generation = 1, audience = new { device = Receiver, profile = "default" },
                 caps = new { hourly = 1, daily = 2, live = 1 } });
@@ -67,7 +69,7 @@ public sealed class GrantIssueViewFailureTests
             return Task.FromResult(new GrantPrepareResult(new(id, 1, Receiver, "default", document, digest, new(1, 2, 1), "ask", []), null));
         }
         public Task<GrantIssueResult> ConfirmIssueAsync(Guid id, long generation, string digest, CancellationToken ct = default) =>
-            Task.FromException<GrantIssueResult>(new InvalidDataException("receiver-proof"));
+            Task.FromException<GrantIssueResult>(Error);
         public Task<GrantReadResult> ReadAsync(CancellationToken ct = default) => Task.FromResult(new GrantReadResult([], null));
         public Task<GrantRevokePreview> PrepareRevokeAsync(Guid id, long generation, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<GrantRevokeReceipt> ConfirmRevokeAsync(Guid id, long generation, string digest, CancellationToken ct = default) => throw new NotSupportedException();
