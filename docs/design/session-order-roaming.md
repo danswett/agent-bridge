@@ -10,6 +10,11 @@ the [group decision](https://github.com/danswett/agent-bridge/issues/767) and
 [roaming](https://github.com/danswett/agent-bridge/issues/759), not a new design or epic.
 They are not built and do not lift the role-ID implementation pause or sync prerequisites.
 
+CHANGE index: C1 = scoped/general presentation identity (§11); C2 = verified launch
+succession (§12); C3 = migration/retention (§13); C4 = visibility/undo/forget (§14);
+C5 = safe row projection (ui.md); C6 = canonical reconciliation and slice planning (§15).
+Implementation slice IDs below are PC*, not owner-approval CHANGE IDs.
+
 ## 1. What the person gets
 
 One order of sessions on all of their devices, one read state, and a way to keep a different
@@ -50,6 +55,7 @@ Rules:
 |---|---|---|
 | Your order: row positions, pins | yes | order record |
 | Group names and membership (#767; at most 32 groups) | yes | order record |
+| Stable keys, follow/adoption/forget registers (CHANGE C1-C4) | with their containing order only | versioned order record; local-only orders never roam |
 | Sort choice | no, per device | local |
 | This device's order and the active order | no | local |
 | Collapsed state of a group | no | local |
@@ -70,7 +76,8 @@ inside the 1 MiB account limit.
 Byte budget for one order object (sealed size, after JSON and encryption overhead): at most 100
 bytes per row on average and **500 rows at most**, about 50 KiB; 32 groups (the `ui.md` limit) of up
 to 40 characters, about 6 KiB at worst; the remaining 8 KiB is for tombstones. A row key is a
-machine id plus a session id. The marker record is separate and sized by Engineering (about 60 KiB
+machine id plus a session id in today's schema; CHANGE C1's versioned stable key and metadata
+are specified in §§11-14, not fields already shipped. The marker record is separate and sized by Engineering (about 60 KiB
 at 1,500 sessions).
 
 If an order would exceed 64 KiB: tombstones older than 30 days go first, then rows of ended
@@ -204,7 +211,7 @@ No automatic group creation, role-name grouping or special treatment of any grou
 Consume the committed, person-approved succession link specified in
 [role-ids.md: presentation continuity](role-ids.md#presentation-continuity-change-c1-c2).
 The link binds exact predecessor and successor activations, scoped ROLE ID, assignment
-version/epoch and launch request; its person-visible effect is inheritance or separation.
+version/epoch and opaque launch request ID; its person-visible effect is inheritance or separation.
 Names, prompt text, a host-only signature and a launch/stop grant cannot supply consent.
 The signed registry/role ledger publishes identity evidence, never private preferences.
 Hosts publish execution bindings and proof references; independently enrolled clients verify
@@ -229,6 +236,11 @@ replicated role ledger; preferences live locally now and in sealed account recor
 Ordinary same-provider-ID resume keeps today's legacy behavior until adopted. A fresh
 activation, cross-host transfer/fork, rename or copied conversation alone proves no succession.
 Unlinked sessions remain independent, unpinned/ungrouped new rows under the existing default.
+After adoption, even a same-provider-ID manual resume needs explicit Approve continuation
+through the existing person role-assignment UI to occupy that slot. Disclose this at adoption:
+"Manual resumes stay separate until approved as a continuation." A retained legacy alias
+never auto-matches a new activation. The slot keeps its choices while approval is pending;
+this intentional post-adoption change is C3, not a regression hidden behind migration.
 Cross-host approved succession preserves manual rank, not a false machine label/filter:
 Machine sort and machine tabs use the successor's actual verified host.
 
@@ -252,7 +264,7 @@ cannot be rediscovered from old host snapshots; importing old schema requires ex
 adoption again, not background migration. Cross-generation/account adoption is never automatic.
 
 Stable preferences do not expire after 30 days without a listed execution. Keep vacant,
-paused and retired slots until the person forgets them; a retired ROLE ID is never reusable.
+unavailable and retired slots until the person forgets them; a retired ROLE ID is never reusable.
 The existing 30-day rule remains for legacy session memberships. Role-authority retirement
 tombstones are permanent security records, separate from disposable preference tombstones.
 Use the existing 500-row/32-group/64-KiB/1-MiB limits. Stable rows and migration/detach metadata
@@ -277,6 +289,21 @@ not copied over, then remove its independent presentation alias atomically.
 Neither action revokes/reassigns the role, ends a session, grants permissions, or retargets a
 draft. Undoing the operational handover is a separate person-approved role-management action.
 
+Manage continuity also offers "Move saved choices to this session" and "Forget saved slot",
+for the selected order or all existing orders, with the scope disclosed before confirmation.
+Moving is an explicit preference choice: select a verified independent session or separately
+enrolled new role, preview replacing its existing choices, then move pin/rank/membership and
+tombstone the source in one durable transaction per order. A shared operation ID makes retries
+idempotent; all-order work reports any pending order, not global atomic success. No old role
+is resurrected or assigned; a retired/conflicting/stop-unconfirmed slot can be left behind
+without changing operational custody or its unresolved reservations.
+Forget tombstones the slot's preference registers and prevents background re-import.
+Both actions free its logical row quota immediately. Retained alias/forget tombstones still
+count as bytes and are compacted only after admitted new-schema writers acknowledge the
+cutover; a removed writer cannot write again. Missing acknowledgements show the waiting
+devices in Manage continuity and retain Not fully synced if needed; only a person may remove
+a device through existing device management. No silent eviction or fabricated acknowledgement.
+
 Account switching clears projections immediately. Sealed sync contains IDs, registers and
 person-entered group names only, never titles, paths, prompts, history or host credentials.
 Agents/hosts cannot write these records or promote themselves into someone's saved pins.
@@ -286,6 +313,11 @@ Agents/hosts cannot write these records or promote themselves into someone's sav
 UI behavior belongs to [ui.md: verified successors](ui.md#verified-successors-change-c4-c5).
 Apply binding changes under its input/focus holds; old replies/answers never silently attach
 to the new occupant. Most recent/Machine remain derived views, not exact-rank promises.
+Slot states are active, awaiting successor (vacant/quiescing), unavailable (stale/incomplete),
+identity conflict, retired and detached (follow=false); "paused" adds no authority state.
+Every retained slot consumes one of 500 logical rows, including dormant ones, not one per
+successor. Ended remains execution history: an adopted old activation is available in slot
+details, not a duplicate Ended/pinned/group row. Legacy unadopted Ended/30-day behavior stays.
 
 CHANGE C6 also reconciles the stale group-move sentence in §2 and "sort roams" wording in
 ui.md with the already-decided roaming rules; it does not newly enable roaming sort choice.
@@ -293,13 +325,18 @@ These slices extend the existing issues above and the ordered role-ID and roamin
 rollout, automatic end or new session is authorized. Each budget is additions plus deletions,
 including tests/docs; split before exceeding it, never consume a parent/carry allowance.
 
-| Slice | Maximum WHOLE | Prerequisites | Failing-first acceptance |
-|---|---|---|---|
-| C1 identity/schema vectors | 220 | Owner approves C1-C6; role-ID types | Full scoped role versus activation IDs; plain labels never alias; old schema cannot overwrite |
-| C2 signed launch-link seam | 240 | C1; role-ID assignment/CAS/stop/host-proof slices | Two simultaneous successors; replay, unsigned request, expired approval, unknown stop; unsupported receiver refuses before launch |
-| C3 pure preference migration/merge | 240 | C1; existing JS/C# merge ports | Pin/manual rank/all orders and arbitrary groups; late user edit/delete wins; duplicate/out-of-order link; crash before/after commit; byte limits |
-| C4 PWA local projection and undo | 240 | C2-C3; verified registry reader | Pinned/unpinned recycle; hidden membership; vacant/conflicting/retired slot; reload; persistent opt-out; no new focus/action target |
-| C5 Windows local projection and undo | 240 | C2-C3; existing Windows group model/UI | Same vectors and interaction cases; failed save keeps original record/safe fallback; actual cross-host filter |
-| C6 sealed-record sync integration | 240 | C4-C5; signed-roster enforcement and existing roaming S2-S4 | Two devices miss recycle, concurrent move/unpin/delete/detach converge; offline reconnect; mixed-client schema refusal; no host-readable group state |
-| C7 Fleet launch-lead adapter | 220 | C2; role-ID enrollment and person approval UI | Structured exact predecessor/request, not PredNode prompt; lost result does not inherit or relaunch; grants not inherited |
-| C8 Apple/other client parity, one client per PR | 220 | C2-C3; that client's groups/verified reader | Same general-group, pin/rank, undo, conflict and answer-target cases; no simulated live agent sessions |
+Sensitivity follows the current Fleet register; no historical Opus requirement is authority.
+Role-ID numbers below reference that canonical doc's existing ordered slices.
+
+| Slice | Maximum WHOLE | Prerequisites | Sensitive | Failing-first acceptance |
+|---|---|---|---|---|
+| PC1 identity/assignment schema vectors | 220 | Owner approves CHANGE C1-C6; role-ID 1 | yes | Typed IDs, continuity signed-body fields and opaque/salted request commitment; old schema cannot overwrite |
+| PC2a negotiated launch preparation/proof | 240 | PC1; role-ID 3-4,6; existing host launch | yes | Capability/refusal before dispatch; independently authorized prepared activation; exact request/proof; unsupported receiver launches nothing |
+| PC2b person link approval/commit/publication | 240 | PC2a; role-ID 2,5-9,14 | yes | Extend assignment/CAS and approval rendering; competing successors, replay, expired approval, unknown stop, no automatic reapproval |
+| PC3 pure preference migration/merge | 240 | PC1; existing JS/C# merge ports | no | Pin/rank/all orders/arbitrary groups; late edits/delete; duplicate/out-of-order link; crash; byte limits; resume alias cannot auto-adopt |
+| PC4 PWA local projection/management | 240 | PC2b,PC3; role-ID 9,12; PWA groups | yes | Pinned/unpinned, hidden membership, conflict/retired/reload, detach/rejoin/move/forget, no changed answer target |
+| PC5a Windows verified continuity reader | 220 | PC1; role-ID 4,6,9 | yes | Full proof/epoch/account validation; incomplete, stale, split-brain and legacy publication refuse |
+| PC5b Windows projection/management | 240 | PC2b,PC3,PC5a; existing Windows group model/UI | yes | Shared vectors and interaction cases; failed save fallback; actual-host filter; safe manual-resume approval |
+| PC6 sealed-record sync integration | 240 | PC4,PC5b; signed roster and existing roaming S2-S4 | yes | Missed recycle/concurrent edits/detach converge; offline/mixed clients; forget cutover acknowledgement; no host-readable preferences |
+| PC7 Fleet launch-lead adapter | 220 | PC2b; role-ID 9-10,14 | yes | Structured predecessor/request, not prompt; lost result cannot inherit/relaunch; no inherited grants |
+| PC8 other-client parity, one client per PR | 220 | PC2b,PC3; that client's groups and verified reader | yes | General groups/pin/rank/management/conflict/target cases; no live test-agent sessions |

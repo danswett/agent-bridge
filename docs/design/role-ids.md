@@ -209,13 +209,17 @@ Extend optional person enrollment to any personal continuity slot, not just flee
 Reuse ROLE GUIDs and this ledger; no extra lineage ID, name-to-role map or authority is added.
 
 Extend the exact person-signed successor assignment with `continuity`: the predecessor's
-`sessionId, hostAdd, holderEpoch, assignmentDigest`, the exact `launchRequest`, and
+`sessionId, hostAdd, holderEpoch, assignmentDigest`, opaque UUID `launchRequestId`,
+salted `launchIntentDigest`, and
 `presentation: inherit | separate`. Its successor is the existing assignment target tuple.
 The person sees both executions/hosts and the presentation effect before presence-gated
 approval. Sign these fields under section 2's assignment gates; an old approval lacking
 them, an agent request, prompt `PredNode`, grant, or host-only proof authorizes no inheritance.
 First adoption explicitly binds the current execution and legacy locator instead of claiming
-a predecessor. The authority's committed link/receipt binds the approved body digest.
+a predecessor. Only request ID and salted canonical-request commitment reach the authority/
+ledger/registry: never the plaintext request, prompt, workspace or path. Salt and plaintext
+stay on the person client and receiving host over E2E; the host proof binds tuple, ID and
+commitment. The committed link/receipt binds the person-approved assignment digest.
 
 An enrolled target host binds that request to the actual launched activation and proves
 possession; launch failure, uncertain result or a different activation cannot fulfill it.
@@ -234,6 +238,18 @@ The registry's current allow-list/byte limits still apply; unsupported relay con
 omit the proposed projection and cannot prove continuity. Capabilities never grant consent.
 [v1 launch](../protocol/v1-launch.md) and transfer keep their present provider-ID/fork
 semantics until those separately approved protocol slices land.
+
+Order the operation explicitly:
+1. Negotiate continuity support and prepare an opaque request ID/commitment; disclose the
+   intended inheritance. A separate existing launch authorization is still required.
+2. Launch the fresh activation as prepared, with no inherited role/presentation; the old
+   holder remains active. The host proves the actual tuple and request commitment.
+3. The person verifies that prepared tuple/hosts/effect and signs the exact successor
+   assignment with section 2's presence, nonce, replay, version and 60-second acceptance gates.
+4. Quiesce/drain/confirm old-holder stop under section 3; unknown outcome holds indefinitely.
+5. Recheck approval at commit. If it expired during drain/stop, obtain fresh person approval
+   with new command request/nonce and higher assignment version (same launch request ID).
+   Never auto-renew consent. Only then CAS/commit and publish the link/new occupant.
 
 Fleet's current `launch-lead -PredNode` puts a node in prompt text only; role-settings names
 are configuration/display labels. A future adapter must pass the structured request/link and
@@ -254,7 +270,10 @@ Below are ordered WHOLE-line budgets including tests/docs, each strictly below 2
 split further before exceeding its budget. They extend the linked existing work,
 not new issues or grants. Q1-Q3 are decided; implementation still requires dependency completion and explicit rollout authority.
 Repos: Bridge = [agent-bridge](https://github.com/danswett/agent-bridge); Fleet = [slipgates-fleet](https://github.com/danswett/slipgates-fleet).
-Sensitive means credentials, auth, trust, protocol, approval rendering or activation identity: every Yes requires a `claude-opus-5.5` builder plus two independent, distinct-family readers.
+**CHANGE C6 (canonical reconciliation):** sensitive means credentials, auth, trust, protocol,
+approval rendering or activation identity. Models and independent-reader requirements follow
+the [current Fleet register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md),
+not the historical Opus builder requirement. This is no implementation or rollout grant.
 Slice 1 is first. After 1, slices 2 and 3 can run in parallel; after 9, 10 and 12 can run in parallel; after 8, 14 can run alongside 9-13.
 
 | Order | Repo | Slice and maximum WHOLE lines | Depends on | Sensitive | Acceptance test |

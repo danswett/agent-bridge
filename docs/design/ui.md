@@ -956,6 +956,11 @@ Details show verified "Continues <predecessor>" and the person-visible handover 
 persistent opt-out rules in [the same record design](session-order-roaming.md#14-person-visibility-and-undo-change-c4).
 Undo is preference-only: it never activates/stops a holder, re-pins the old session or
 grants a successor permissions. Ordinary unlinked sessions keep today's new-session defaults.
+Manage continuity also offers Move saved choices to this session and Forget saved slot;
+scope, overwrite preview, idempotence and device-acknowledged cleanup follow that record design.
+Dormant slots consume saved-row quota but no live/Ended count; prior adopted activations
+remain in slot details, not duplicate Ended/group rows. Adoption explicitly warns that a
+manual provider-ID resume stays separate until the person approves its continuation.
 
 **A machine away (#269).** A host's relay link drops now and then (a restart, an update, a
 network blip), often for under a minute. While its machine has left the relay's presence, and the
