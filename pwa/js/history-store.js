@@ -433,6 +433,8 @@ export class HistoryStore {
   }
 
   #keepRevisions(e, turns, started) {
+    const held = new Set(turns.map((turn) => turn.id));
+    for (const id of e.revisions.keys()) { if (!held.has(id)) { e.revisions.delete(id); } }
     return turns.map((turn) => {
       const reply = e.revisions.get(turn.id);
       return reply?.version > started ? { ...turn, parts: keepReplies(mergeParts(turn.parts,
