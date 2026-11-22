@@ -40,7 +40,7 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
             var reservation = new GrantReservation(request, grant, generation, subject, binding, now, GrantReservationState.Pending);
             state = state with { Reservations = [.. state.Reservations, reservation] };
             return (state, new(GrantCounterProblem.None, Reservation: reservation, Usage: Count(state, grant, now)));
-        });
+        }, request: request, caller: subject);
 
     public GrantCounterResult Read(Guid grant, long generation) => Run(grant, generation, false,
         (state, _, now) => (state, new(GrantCounterProblem.None, Usage: Count(state, grant, now))));
@@ -61,7 +61,7 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
             return next is null ? (state, new(GrantCounterProblem.Binding, Reservation: reservation))
                 : (state with { Reservations = state.Reservations.Select(r => r.Request == request ? next : r).ToArray() },
                     new(GrantCounterProblem.None, Reservation: next));
-        });
+        }, request: request);
 
     public GrantCounterResult Reconcile(Guid grant, Func<GrantReservation, GrantReconciliation> lookup,
         Func<int, GrantProcessObservation> inspect) => Run(Guid.Empty, 0, false, (state, _, _) =>
@@ -96,31 +96,41 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
 
     GrantCounterResult Run(Guid grant, long generation, bool admission,
         Func<GrantCounterState, GrantDocument?, DateTimeOffset, (GrantCounterState State, GrantCounterResult Result)> change,
-        Guid auditGrant = default)
+        Guid auditGrant = default, Guid request = default, GrantSubject? caller = null)
     {
         GrantCounterResult result = new(GrantCounterProblem.Store);
         var stored = store.Transaction(state =>
         {
             var now = clock.GetUtcNow();
             var counters = state.Counters ?? new GrantCounterState(now, []);
-            if (now < counters.ObservedAt) { result = new(GrantCounterProblem.Clock); return (null, new(GrantStoreProblem.None)); }
+            var backwards = now < (state.AuditAt > counters.ObservedAt ? state.AuditAt : counters.ObservedAt);
             var found = grant == Guid.Empty ? new GrantStoreResult(GrantStoreProblem.None)
                 : store.Find(state, grant, generation, checkTime: admission, observedAt: now);
-            if (!found.Usable && found.Problem != GrantStoreProblem.Expired) { return (null, found); }
-            var (next, outcome) = found.Usable ? change(counters, found.Grant, now)
+            var hasRequest = admission && request != Guid.Empty
+                && (state.Grants.Any(g => g.Id == grant) || state.Tombstones.Contains(grant));
+            if (!backwards && !found.Usable && found.Problem != GrantStoreProblem.Expired && !hasRequest) { return (null, found); }
+            var (next, outcome) = backwards ? (counters, new GrantCounterResult(GrantCounterProblem.Clock))
+                : found.Usable ? change(counters, found.Grant, now)
                 : (counters, new GrantCounterResult(GrantCounterProblem.Store, found.Problem));
             result = outcome;
-            next = next with { ObservedAt = now };
-            if (state.Counters is { } current && current.ObservedAt == next.ObservedAt
+            next = next with { ObservedAt = backwards ? counters.ObservedAt : now };
+            // Completion records keep the initiator from this request's durable binding, not the newest admission.
+            var bound = outcome.Reservation ?? (admission ? null : counters.Reservations.SingleOrDefault(r => r.Request == request));
+            GrantOperation? use = hasRequest ? new(request, GrantValidator.Subject(caller) ? caller!.Session : null,
+                    outcome.Problem, outcome.StoreProblem)
+                : bound is { } reservation ? new(reservation.Request, reservation.Subject.Session,
+                    outcome.Problem, outcome.StoreProblem, IsRequest: false) : null;
+            if (backwards && use is null) { return (null, new(GrantStoreProblem.None)); }
+            if ((use is null || !admission && outcome.Accepted) && state.Counters is { } current && current.ObservedAt == next.ObservedAt
                 && current.Reservations.SequenceEqual(next.Reservations)) { return (null, new(GrantStoreProblem.None)); }
             var id = grant != Guid.Empty ? grant : outcome.Reservation?.Grant ?? auditGrant;
             if (id == Guid.Empty) { return (null, new(GrantStoreProblem.None)); }
-            return (GrantStore.Next(state with { Counters = next }, id, admission && outcome.Accepted ? "grant.reserve" : "grant.update"),
+            return (GrantStore.Next(state with { Counters = next }, id, admission && outcome.Accepted ? "grant.reserve" : "grant.update", use),
                 new(GrantStoreProblem.None));
         }, allowNew: false);
         return stored.Usable ? result : new(GrantCounterProblem.Store, stored.Problem);
     }
-    static GrantUsage Count(GrantCounterState state, Guid grant, DateTimeOffset now)
+    internal static GrantUsage Count(GrantCounterState state, Guid grant, DateTimeOffset now)
     {
         var spent = state.Reservations.Where(r => r.Grant == grant && r.State != GrantReservationState.NotLaunched).ToArray();
         return new(spent.Count(r => now - r.AdmittedAt < TimeSpan.FromHours(1)),

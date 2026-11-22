@@ -12,7 +12,13 @@ public sealed class GrantCountersTests : IDisposable
     const string Device = "0123456789abcdef0123456789abcdef";
     static readonly GrantScope Scope = new([Device], ["repo"], ["copilot"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
     string Folder => Path.Combine(root, "default");
-    GrantStore Store(Action<string, byte[]>? write = null) => new(Folder, key, new(Folder, clock), Scope, clock, write);
+    AgentAuditLog Audit => new(Folder, clock) { DeviceKey = key };
+    bool rotated;
+    GrantStore Store(Action<string, byte[]>? write = null)
+    {
+        if (!rotated) { Assert.Null(AuditRotationTests.Rotate(Audit, key)); rotated = true; }
+        return new(Folder, key, Audit, Scope, clock, write);
+    }
     GrantCounters Open(Action<string, byte[]>? write = null) => new(Store(write), clock);
     GrantDocument Issue(GrantCaps caps)
     {
@@ -245,7 +251,8 @@ public sealed class GrantCountersTests : IDisposable
         clock.AdjustTime(grant.NotBefore.AddHours(1));
         Assert.Equal(GrantCounterProblem.Clock, Reserve(Open(), grant).Problem);
         Assert.False(Store().TryGetUsable(grant.Id, 1).Usable);
-        var store = new GrantStore(Folder, key, new(Folder, new FakeTimeProvider(grant.NotBefore.AddHours(25))), Scope, clock);
+        var store = new GrantStore(Folder, key,
+            new(Folder, new FakeTimeProvider(grant.NotBefore.AddHours(25))) { DeviceKey = key }, Scope, clock);
         Assert.True(store.Revoke(grant.Id, 1).Usable);
     }
 
@@ -281,6 +288,40 @@ public sealed class GrantCountersTests : IDisposable
             : Open().Commit(reservation.Request, target);
         Assert.True(result.Accepted);
         Assert.Equal(before, GateAuditProjection.Load(Folder).Rows.Count);
+    }
+
+    [Theory]
+    [InlineData(false, 20)]
+    [InlineData(false, 55)]
+    [InlineData(true, 20)]
+    [InlineData(true, 55)]
+    public void Later_day_issue_or_revoke_makes_a_rolled_back_request_a_nonlatching_clock_refusal(bool revoke, int minute)
+    {
+        clock.SetUtcNow(new(2026, 11, 21, 23, 30, 0, TimeSpan.Zero));
+        var other = Issue(new(3, 3, 3));
+        var grant = Issue(new(3, 3, 3));
+        var counters = Open();
+        clock.SetUtcNow(new(2026, 11, 21, 23, 40, 0, TimeSpan.Zero));
+        Assert.True(Reserve(counters, grant).Accepted);
+        var day1 = Path.Combine(Folder, "audit", "agents-2026-11-21.jsonl");
+        clock.SetUtcNow(new(2026, 11, 22, 0, 10, 0, TimeSpan.Zero));
+        if (revoke) { Assert.True(Store().Revoke(other.Id, 1).Usable); }
+        else { Issue(new(3, 3, 3)); }
+        var before = File.ReadAllBytes(day1);
+        clock.AdjustTime(new(2026, 11, 21, 23, minute, 0, TimeSpan.Zero));
+        var refused = Reserve(counters, grant);
+        Assert.Equal(GrantCounterProblem.Clock, refused.Problem);
+        Assert.Equal(GrantStoreProblem.None, refused.StoreProblem);
+        Assert.Equal(before, File.ReadAllBytes(day1));
+        Assert.Equal(new DateTimeOffset(2026, 11, 22, 0, 10, 0, TimeSpan.Zero), GateAuditProjection.Load(Folder).Rows.Last().At);
+        Assert.False(Store().TryGetUsable(grant.Id, 1).Usable);
+        clock.AdjustTime(new(2026, 11, 22, 0, 20, 0, TimeSpan.Zero));
+        Assert.True(counters.Read(grant.Id, 1).Accepted);
+        Assert.True(Store().TryGetUsable(grant.Id, 1).Usable);
+        var last = Assert.Single(Store().Snapshot().Grants, g => g.Grant.Id == grant.Id).LastOperation!;
+        Assert.Equal(GrantCounterProblem.Clock, last.Outcome);
+        Assert.Equal(grant.Subjects[0].Session, last.Caller);
+        Assert.True(last.IsRequest);
     }
 
     [Fact]
