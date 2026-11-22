@@ -14,7 +14,7 @@ public sealed class FleetStopTests : IDisposable
     readonly P256KeyPair key = P256KeyPair.Generate();
     readonly DateTimeOffset started = DateTimeOffset.UtcNow;
     readonly string id = Guid.NewGuid().ToString();
-    readonly FleetPublisherTests.Source source = new();
+    readonly Source source = new();
     readonly AgentCredentials credentials;
     readonly AgentCredential caller;
     readonly Control control;
@@ -34,10 +34,10 @@ public sealed class FleetStopTests : IDisposable
     public FleetStopTests()
     {
         Directory.CreateDirectory(Folder);
-        File.WriteAllText(Path.Combine(Folder, HostSettings.FileName), """{"agents":{"enabled":true}}""");
+        Settings();
         var events = f.CopilotSession(id, 700);
         Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
-        source.Sessions = [FleetPublisherTests.NewSession(1) with { Id = id }];
+        source.Sessions = [FleetPublisherTests.NewSession(1) with { Id = id, Cwd = f.Root }];
         source.Binding = _ => new(700, started);
         f.Processes.Run(AgentKind.Copilot, 700, startedAt: started);
         credentials = new(Folder, Device);
@@ -56,6 +56,9 @@ public sealed class FleetStopTests : IDisposable
         counters = new(store);
     }
     public void Dispose() { key.Dispose(); f.Dispose(); }
+    void Settings(string label = "repo", bool excluded = false) => File.WriteAllText(Path.Combine(Folder, HostSettings.FileName),
+        JsonSerializer.Serialize(new { agents = new { enabled = true, inbound = new { exclude = new { workspaces = excluded ? new[] { label } : [] } } },
+            launch = new { workspaces = new[] { new { label, path = f.Root, isolate = true } } } }));
     void Own()
     {
         Assert.True(counters.Reserve(grant.Id, 1, launch, grant.Subjects[0], new('b', 64)).Accepted);
@@ -138,6 +141,61 @@ public sealed class FleetStopTests : IDisposable
         Assert.Equal("grant-revoked", (await End()).Reason);
         Assert.Equal(0, injector.Calls);
     }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_exception_in_an_excluded_workspace_is_refused_at_prepare_and_dispatch(bool dispatch)
+    {
+        grant = grant with { Id = Guid.NewGuid(), StopTargets = [Target] };
+        Assert.True(store.Issue(grant).Usable);
+        if (dispatch) { control.Before = () => { if (control.Opens == 2) { Settings("protected", true); } }; }
+        else { Settings("protected", true); }
+        Assert.Equal("scope", (await End()).Reason);
+        Assert.Equal(0, injector.Calls);
+    }
+    [Theory]
+    [InlineData("revoke")]
+    [InlineData("prompt")]
+    [InlineData("question")]
+    [InlineData("working")]
+    [InlineData("held")]
+    [InlineData("pid")]
+    [InlineData("policy")]
+    [InlineData("workspace")]
+    public async Task Changes_while_showing_ending_refuse_agent_stop_without_keys(string change)
+    {
+        Own();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.BeforeEnding = async () => { entered.SetResult(); await release.Task; };
+        var run = End();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            switch (change)
+            {
+                case "revoke": Assert.True(store.Revoke(grant.Id, 1).Usable); break;
+                case "prompt": stops.LaunchHeld = _ => "startup question"; break;
+                case "question": Fixture.Append(Path.Combine(f.CopilotHome, "session-state", id, "events.jsonl"), Copilot.ToolStart("q9", "ask_user", new { message = "Which?" }, 5)); break;
+                case "working": source.Sessions[0] = source.Sessions[0] with { Status = SessionStatus.Working }; break;
+                case "held": source.Held = new("unknown", [AgentKind.Copilot]); break;
+                case "pid": source.Binding = _ => new(700, started.AddSeconds(1)); break;
+                case "policy": File.WriteAllText(Path.Combine(Folder, HostSettings.FileName), """{"agents":{"enabled":false}}"""); break;
+                case "workspace": Settings("other"); break;
+            }
+        }
+        finally { release.SetResult(); }
+        Assert.Equal("refused", (await run).Outcome);
+        Assert.Equal(0, injector.Calls);
+        Assert.Equal(0, control.Terminations);
+    }
+    [Fact]
+    public async Task Person_stop_keeps_its_existing_path_while_showing_ending()
+    {
+        source.BeforeEnding = () => { stops.LaunchHeld = _ => "startup question"; return Task.CompletedTask; };
+        Assert.Equal(StopOutcome.Ended, (await stops.StopAsync(new() { Id = id, Request = Guid.NewGuid().ToString() })).Outcome);
+        Assert.Equal(1, injector.Calls);
+    }
     [Fact]
     public async Task Own_launches_release_only_proven_live_capacity_not_hourly_or_daily_use()
     {
@@ -151,6 +209,26 @@ public sealed class FleetStopTests : IDisposable
         Assert.Equal(0, control.Terminations);
     }
     sealed class Probe : IAgentHaBridgeProbe { public string? Active() => null; }
+    sealed class Source : ISessionSource
+    {
+        public List<Session> Sessions = [];
+        public Func<string, SessionProcess?> Binding = _ => null;
+        public Func<Task>? BeforeEnding;
+        bool ending;
+        public DiscoveryHeld? Held { get; set; }
+        public SessionProcess? ProcessOf(string id) => Binding(id);
+        public long Revision => 0;
+        public event EventHandler<SessionChange>? Changed { add { } remove { } }
+        public IReadOnlyList<Session> Snapshot() => Sessions;
+        public SessionList List(string? cursor = null) => new(Snapshot(), 0);
+        public Session? GetForStop(string id) => Sessions.Find(s => s.Id == id);
+        public Session? Get(string id) => GetForStop(id) is { } s && ending ? s with { Status = SessionStatus.Ending } : GetForStop(id);
+        public SessionSubscription Subscribe() => throw new NotSupportedException();
+        public async Task SetEndingAsync(string id, bool value) { if (value && BeforeEnding is not null) { await BeforeEnding(); } ending = value; }
+        public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
     sealed class Control : IProcessControl
     {
         public bool Exited, GoneOnSecond, ExitOnTyping = true;

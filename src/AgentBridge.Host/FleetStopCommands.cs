@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Fleet.Grants;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -29,6 +30,7 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
         FleetStopInput? input = null;
         GrantDocument? grant = null;
         StopTarget? target = null;
+        WorkspaceConfig? workspace = null;
         string principal = credentials.PrincipalOf(caller);
         AgentAuditEntry? intent = null;
         FleetStopReceipt Receipt(string outcome, string? reason) =>
@@ -76,10 +78,13 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 var (settings, problem) = HostSettings.Load(folder);
                 if (problem is not null || settings.SectionProblems.Any() || !credentials.IsLive(caller)) { return "policy"; }
                 if (settings.ReadOnly || sessions.ReadOnly?.Invoke() is not null || !settings.Agents.Enabled || !settings.Launch.Enabled) { return "kill-switch"; }
+                var approved = source.Get(target.Session)?.Cwd is { } cwd && Path.IsPathFullyQualified(cwd)
+                    ? Folders.Exactly(settings.Launch.Workspaces, cwd) ?? Worktrees.Managed(settings.Launch.Workspaces, cwd)?.Workspace : null;
+                if (approved is null || workspace is not null && workspace != approved
+                    || settings.Agents.ExcludedWorkspaces.Contains(approved.Label)) { return "scope"; }
+                workspace = approved;
                 if (settings.Agents.ExcludedSessions.Contains(caller.Session) || settings.Agents.ExcludedSessions.Contains(target.Session)
-                    || settings.Agents.ExcludedSessions.Contains(sessions.FleetNames?.Get(target.Session) ?? "")
-                    || grant.Scope.Workspaces.Any(settings.Agents.ExcludedWorkspaces.Contains)
-                    || source.Get(target.Session)?.Cwd is { } cwd && settings.Agents.ExcludedWorkspaces.Contains(cwd))
+                    || settings.Agents.ExcludedSessions.Contains(sessions.FleetNames?.Get(target.Session) ?? ""))
                 { return "scope"; }
                 var policy = new HostPolicySnapshot(account() ?? "", new(device, Path.GetFileName(folder)), subject,
                     grant.Scope, grant.Caps, false, true, Launches: [.. own], StopTargets: [target]);

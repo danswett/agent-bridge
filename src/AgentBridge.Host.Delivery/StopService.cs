@@ -285,8 +285,20 @@ public sealed class StopService : ISessionStopper
                     if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
                     return AskAgain(session.Id, pid, startedAt, doing, "the session is no longer idle");
                 }
-                if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
+                if (personConfirmation && beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
                 await SetEndingAsync(session.Id, true);
+                if (!personConfirmation)
+                {
+                    if (probe.Active() is { } changed) { return Refused(changed); }
+                    if (source.Held is not null || source.GetForStop(session.Id) is not { Status: SessionStatus.Idle } current)
+                    { return new(StopOutcome.Confirm, "person-required"); }
+                    if (source.ProcessOf(session.Id) is not { StartedAt: { } bound } instance || instance.Id != pid || !Same(bound, startedAt)
+                        || processes.GetAgentProcesses(current.Agent).FirstOrDefault(p => p.Id == pid) is not { StartedAt: { } live } || !Same(live, startedAt))
+                    { return Stale("the session's process has changed"); }
+                    asking = MayBeAsking(current, out notReady);
+                    if (ConfirmationHint(current, asking) is not null) { return new(StopOutcome.Confirm, "person-required"); }
+                    if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
+                }
                 if (ownsTyping && !asking)
                 {
                     InjectionResult typing;
