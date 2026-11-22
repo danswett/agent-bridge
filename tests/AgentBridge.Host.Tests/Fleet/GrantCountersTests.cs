@@ -106,8 +106,10 @@ public sealed class GrantCountersTests : IDisposable
         clock.Advance(TimeSpan.FromMinutes(30));
         Assert.True(Open().Read(grant.Id, 1).Accepted);
         clock.AdjustTime(clock.GetUtcNow().AddMinutes(-20));
+        Assert.False(Store().TryGetUsable(grant.Id, 1).Usable);
         Assert.Equal(GrantCounterProblem.Clock, Reserve(Open(), grant).Problem);
         clock.Advance(TimeSpan.FromMinutes(20));
+        Assert.True(Store().TryGetUsable(grant.Id, 1).Usable);
         Assert.Equal(GrantCounterProblem.Hourly, Reserve(Open(), grant).Problem);
     }
 
@@ -230,15 +232,20 @@ public sealed class GrantCountersTests : IDisposable
         Assert.True(Reserve(Open(), grant).Accepted);
     }
 
-    [Fact]
-    public void R4rl_expiry_refusal_prevents_admission_after_restart_and_clock_rollback()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Expiry_refusal_prevents_timed_lookup_after_restart_and_clock_rollback(bool priorReservation)
     {
         var grant = Issue(new(3, 3, 3));
-        Assert.True(Reserve(Open(), grant).Accepted);
+        if (priorReservation) { Assert.True(Reserve(Open(), grant).Accepted); }
         clock.Advance(TimeSpan.FromHours(25));
         Assert.Equal(GrantStoreProblem.Expired, Reserve(Open(), grant).StoreProblem);
+        Assert.True(Open().Read(grant.Id, 1).Accepted);
         clock.AdjustTime(grant.NotBefore.AddHours(1));
         Assert.Equal(GrantCounterProblem.Clock, Reserve(Open(), grant).Problem);
+        Assert.False(Store().TryGetUsable(grant.Id, 1).Usable);
+        Assert.True(Store().Revoke(grant.Id, 1).Usable);
     }
 
     [Theory]
