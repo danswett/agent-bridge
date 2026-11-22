@@ -1,74 +1,75 @@
 # Message delivery: envelope, lanes and journal (#2568)
-Status: design (slice 0), corrected 2026-11-14 PT per ruling 6870556195 (not yet accepted). Inputs: #2568
-rulings 6867525734, 6867631192, 6867667571, 6867669427; owner evidence 6867540072. **Change**: a departure.
+Status: design (slice 0), corrected 2026-11-14 PT per ruling 6870556195 (not yet accepted); ID-first addressing updated 2026-11-21 PT. Inputs: #2568
+rulings 6867525734, 6867631192, 6867667571, 6867669427; owner evidence 6867540072. **Change**: a departure, with ID-first addressing approved below.
+## Owner decisions cited
+[Owner decisions](https://github.com/danswett/slipgates-fleet/blob/main/docs/owner-decisions.md#nov-19), Nov 19, 2026 PT:
+- **12:10:** "It should use GUIDs not names to message. Friendly name should be display only."
+- **12:12:** "Perhaps you need two GUIDs: one for the unique session and one for its role (SRE, Chief, etc). That lets you not rely on friendly name which could easily misfire."
+- **12:27:** the recorded decision says "The role-ID design is approved (12:27)." Person-signed assignments and per-successor approval are detailed in [#3334](https://github.com/danswett/agent-bridge/pull/3334) and [role-ids.md](design/role-ids.md).
+**Nov 21, 2026, 17:05 PT:** the owner re-approved ID-first addressing, per Chief S9 relay to Engineering R6 / brief 313; not yet recorded on main's owner-decisions.md at this edit. This is relayed provenance, not a direct owner quote. Role-ID code remains paused (Nov 19, 17:58 PT); this doc claims no built role routing.
 ## Problem and cause
-Copilot CLI joins steers pending mid-turn with `\n\n` into one user turn (6 of 692 turns in one
-transcript). The host types bare text (`HaReplies.cs:26`) and only Lite and `RetryEpisode` set
+Copilot CLI joins steers pending mid-turn with `\n\n` into one user turn (6 of 692 turns in one transcript). The host types bare text (`HaReplies.cs:26`) and only Lite and `RetryEpisode` set
 `RequireIdle` (`ReplyService.cs:422`), so replies land in a working session with no sender boundary
 and only the agent's clock. Fix without CLI changes: self-describing deliveries, and no steered fyi.
 ## Overlap and dependencies, named before any code
 - **PR 2546 (#2538, merged)** records the HA sender principal (`PrincipalOf`); reused. Rendering stays there.
 - **Host-typing hotfix** (agent text via ctrl+q, default off: `KeyPlan.cs`, `CopilotReply.cs`, `Injector/`),
   then **PR 2469** (#2468, strict `queue|steer` mode, `Protocol/ReplyMode.cs`), then slice 2.
-- **#2574:** a session resolves only by its exact active name (no substring or HA fallback), else holds.
+- **[#2574](https://github.com/danswett/agent-bridge/issues/2574):** sends target a SESSION ID or ROLE ID; names are display only and never route.
+  A ROLE ID reaches its ONE verified live holder; none or two is refused. A stale or unknown ID fails loudly and holds: NO name, HA or substring fallback.
+  Role claims and succession require person-signed approval per [#3334](https://github.com/danswett/agent-bridge/pull/3334) / [role-ids.md](design/role-ids.md); role-ID code stays paused, not built.
 - **Protected shared store** (own dependency, in no slice estimate): partition identity, lease, fencing, CAS,
   migration. It holds protected queued payloads and cross-node state; if missing, hold (no local fallback).
   **Locality:** the host journal is node-bound injector evidence, not the cross-node payload, outbox or lease
   ledger. Host lost: its unresolved items stay `unconfirmed`; no node infers non-delivery or replays keys.
 ## Envelope (slice 1)
-`[ab:from=<sender>|id=<id>|seq=<lane><n>|at=<time>|pri=<urgent|normal|fyi>|n=<chars>] <text>`, one line.
+`[ab:from=<sender>|id=<id>|seq=<lane><n>|at=<time>|pri=<urgent|normal|fyi>|n=<chars>] <text>`, one line. No target field: delivery is to the session the host already resolved by ID.
 - **One formatter and parser** in `AgentBridge.Protocol` (`DeliveryEnvelope`), shared by host and app,
   called by `ReplyService` and `LiteDeliver.Frame`. The formatter adds `id` (HA `rid` or request UUID).
-- **`from`** is the authenticated class, never text: `owner` (his HA user or paired device), `system`
-  (the host), `agent:<label>` (agent token or Lite principal; the cleaned label `[A-Za-z0-9 ._-]{1,48}`
-  is shown, never trusted). Slice 1 carries the press's HA user id into `ReplyRequest`; unknown is `agent`.
+- **`from`** displays the authenticated sender class and label, never a routing address: `owner` (his HA user or paired device), `system` (the host), `agent:<label>` (agent token or Lite principal; cleaned label `[A-Za-z0-9 ._-]{1,48}`, shown, never trusted). Slice 1 carries the press's HA user id into `ReplyRequest`; unknown is `agent`.
+  Sender and target IDs belong in journal/receipt records, not routing from envelope or body text; receipt names are display labels only. Envelope `id` is the delivery request ID, not a sender or target ID.
 - **`at`** is the host's receipt time, Pacific, to the second with offset; it never changes, and any
   clock in the body is ignored. The time typed goes to the journal.
 - **`seq`** is per session and lane (`u7`, `q12`), reserved by the flushed pre-key `handoff` record.
   **Change** (ruling: at enqueue): priority and drops reorder the queue; a crash can skip a number.
-- **Escape:** the text typed is NFKC with format characters removed; any `[` before text whose UTS 39
-  skeleton is `ab:` (any case) becomes `(`. **`n`** counts UTF-16 units: `héllo 👍` is `n=8`.
+- **Escape:** the text typed is NFKC with format characters removed; any `[` before text whose UTS 39 skeleton is `ab:` (any case) becomes `(`. **`n`** counts UTF-16 units: `héllo 👍` is `n=8`.
 - **Parser:** a header counts only at the start of a turn or right after `\n\n`. Its body is the next
   `n` units (the host types one collapsed line, so `n` is known). The rest, up to the next header, is
   `from=console` text kept verbatim, blank lines included: words typed at the machine, which the
   host never sees. **Change:** the ruling labels those `owner`; the host cannot see who typed them.
   If `n` does not match, the body runs to the next `\n\n` and the entry is flagged.
-- **Trust:** a header is verified only if it matches this session's journal `handoff` (id, from, seq,
-  at, n and body HMAC); the host checks, the app shows the verdict. Anything else, a pasted header
+- **Trust:** a header is verified only if it matches this session's journal `handoff` (id, from, seq, at, n and body HMAC); the host checks, the app shows the verdict. Anything else, a pasted header
   included, stays `console`, unverified, and never confirms, dedupes or attributes a delivery.
 ## Lanes and key path (slice 2)
 - **Urgent lane:** owner and system; agent-urgent from slice 3. Text, then Enter (steer), one at a time
   via `DeliveryGate`, by class (owner, system, agent), then arrival. Bound 10 per session: an owner item
   always enters, moving the newest agent (then system) urgent to the queueable lane, journaled and the
-  sender told; an 11th owner item, or any other urgent at the bound, is refused by name.
+  sender told; an 11th owner item, or any other urgent at the bound, is refused, naming the target ID.
 - **Every lane** types only into an empty box; half-typed words at the machine make the item wait.
 - **Queueable lane:** everything else, FIFO per session: envelope text, then ctrl+q, so the CLI queues it
   as its own turn. The host hands the CLI at most 2 and never sends ctrl+c, esc esc or Up. `KeySend.Enter`
   becomes a submit key (none, Enter, Queue); ctrl+q is a console key record (VK `Q`, left-ctrl).
-- **Capability:** per terminal kind, default not capable. Not capable or unknown means fail closed:
-  wait for idle, then Enter; queueable text never steers a working session (urgent does, by ruling).
+- **Capability:** per terminal kind, default not capable. Not capable or unknown means fail closed: wait for idle, then Enter; queueable text never steers a working session (urgent does, by ruling).
   **Change:** no live probe on owner machines; a reviewable per-kind table filled by live test 4.
 - `RequireIdle` is the default except on the urgent lane; nothing from an agent is urgent until slice 3.
   The HA ack gains `queued` and `pending` (rule 3); `reply-session.ps1` maps both to exit 6 (today: refused).
 ## Priority authority (slice 3) and hygiene (slice 4), as ruled
-- **Priority:** `-Priority urgent -Reason '<text>'`; no reason is refused by name; over 3 per principal
+- **Priority:** `-Priority urgent -Reason '<text>'`; no reason is refused, naming the target ID; over 3 per principal
   per hour is demoted to normal (owner: no quota). Requests, grants and demotions are journaled and shown
   on the status surface, never paged; the ack says which. **Known limit:** every HA agent shares one
   token, so the quota is per token until host-signed principals exist (follow-up to be filed).
 - **Hygiene:** `-Topic` replaces an unsent item from the same principal and topic, in its queue place.
   TTL: fyi 30 min, normal 4 h, urgent none. Each delivery carries a summary line (`q=3 Quality 2, SRE 1`).
 ## Guarantees, each with its hosted-CI test (fakes for console, clock and transcript)
-1. **Identity and journal.** Every delivery has `from`, `id`, `at`, and a `seq` once reserved. The journal is
-   JSON lines beside the host diagnostics journal: metadata, length and an HMAC-SHA256 under a
+1. **Identity and journal.** Every delivery has `from`, `id`, `at`, and a `seq` once reserved. The journal is JSON lines beside the host diagnostics journal: metadata (including sender/target IDs), length and an HMAC-SHA256 under a
    DPAPI-protected host key, never text. `enqueued` (flushed before any ack), `handoff` (pre-key
    reservation), `typed` (post-key: injector result, box check, time), `delivered` (verified header in a user
    turn), `acked`, `dropped`, `unconfirmed`. Failed `enqueued` write: no ack. Failed `handoff` write: no
    keys, no new success ack; an accepted item and its stored payload stay owed. After the first key, a failed
    `typed` write, timeout or unknown result keeps `handoff`: `unconfirmed`, never success or blind retry.
-   Tests: records in order, no text; full disk refuses; post-key write failure stays `unconfirmed`.
+   Tests: records in order, sender/target IDs, display-only labels and no text; full disk refuses; post-key write failure stays `unconfirmed`; stale/unknown IDs or zero/two role holders refuse and hold without name/HA/substring fallback.
 2. **Ordering.** Per session: urgent before queueable; urgent by class, then arrival; queueable FIFO.
-   Once idle, each lane's `seq` is checked against user turns, skipping numbers the journal explains
-   (dropped, or reserved before a crash); any other gap or reorder is journaled and a status warning,
+   Once idle, each lane's `seq` is checked against user turns, skipping numbers the journal explains (dropped, or reserved before a crash); any other gap or reorder is journaled and a status warning,
    never a page. Tests: an urgent overtaking 20 queued warns nothing; a lost `q5` warns once.
 3. **No silent drops.** Proven removals (TTL, supersede, overflow, restart before handoff of a `pending`
    item) write `dropped` with the reason in the summary line; ctrl+c, esc esc and other handoffs follow rules
@@ -91,12 +92,11 @@ and only the agent's clock. Fix without CLI changes: self-describing deliveries,
 5. **Fault injection.** A `handoff` record (session, lane, seq, id, at) is flushed before the first key. On
    start, replay classifies before it queues: an item with a `handoff` is `delivered` on a verified
    transcript sighting, else `unconfirmed` with no keys. Only accepted, recoverable items proven never handed
-   off re-enter the queue, by id; never-handed-off `pending` ones drop (`dropped: restart`, rule 3); a
-   re-offer never turns uncertainty into a new handoff. `seq` resumes above the highest reserved. Tests: kill
+   off re-enter the queue, by id; never-handed-off `pending` ones drop (`dropped: restart`, rule 3); a re-offer never turns uncertainty into a new handoff. `seq` resumes above the highest reserved. Tests: kill
    before the record, between record and keys, and after the first key before `typed` (absent or delayed
    transcript: `unconfirmed`, no second keys); store outage holds. CLI busy: stays queued. Key not accepted:
    rule 4. Duplicate request: one entry. Clock skew: a 1-hour delay and a false body time leave `at` as
-   receipt time. Overflow: 50 queueable per session (oldest fyi first, then a new normal is refused by name);
+   receipt time. Overflow: 50 queueable per session (oldest fyi first, then a new normal is refused, naming the target ID);
    urgent per Lanes; an owner item at the bound enters, moving the newest agent urgent. Flood: 200 fyi + 1
    owner: owner first.
 6. **One page:** at most 120 lines. Also tested: two agent replies plus an owner message in one second
