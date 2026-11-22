@@ -139,6 +139,24 @@ public sealed class SessionHistoryRepliesTests
         finally { card.Detach(); }
     }
 
+    [Fact]
+    public async Task Codex_accepted_truncated_revisions_reject_older_snapshots()
+    {
+        await using var connection = HostConnection.ForProfile("not-connected", new LockedDispatcher());
+        var initial = Snapshot("owner", "Question", "Partial old", "owner", 1) with { Agent = AgentKind.Codex };
+        initial = initial with { Activity = initial.Activity with { ResponseId = "answer", ResponseTruncated = true } };
+        var card = Card(connection, initial);
+        try
+        {
+            _ = card.Stored;
+            card.Update(initial with { UpdatedAt = T0.AddSeconds(2), Activity = initial.Activity with { Response = "Partial new" } });
+            Assert.Equal("Partial new", card.Stored!.Turns.Single().Parts.Single().Text);
+            card.Update(initial);
+            Assert.Equal("Partial new", card.Stored.Turns.Single().Parts.Single().Text);
+        }
+        finally { card.Detach(); }
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
