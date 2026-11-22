@@ -62,12 +62,14 @@ public static class GrantCommands
                     ApprovedWorkspaces(settings, offered.Workspaces),
                     [.. agents.Select(a => a.Id)], Common(agents.Select(a => a.Models)),
                     Common(agents.Select(a => a.Id == "agency" ? (IReadOnlyList<string>)[.. (a.Profiles ?? []).Where(p => inbound.Profiles.Contains(p))] : ["default"])),
-                    Common(agents.Select(a => a.Efforts)), Common(agents.Select(a => a.Contexts)), ["ask"]);
+                    Common(agents.Select(a => a.Efforts)), Common(agents.Select(a => a.Contexts)),
+                    inbound.AllowAllLaunch ? ["ask", "allowAll"] : ["ask"]);
                 var limits = settings.Agents.Limits.Launch;
                 if (candidate.Subjects.Any(s => settings.Agents.ExcludedSessions.Contains(s.Session)))
                 { error.WriteLine("refused: excluded subject"); return 4; }
                 policy = new(identity.Account.AccountId, new(device, profile), candidate.Subjects[0], scope,
-                    new(Math.Min(limits.LaunchesPerOriginPerHour, limits.LaunchesPerMachinePerHour), 5000, limits.LiveAgentLaunched), true, true);
+                    new(Math.Min(limits.LaunchesPerOriginPerHour, limits.LaunchesPerMachinePerHour), 5000, limits.LiveAgentLaunched),
+                    true, true, inbound.AllowAllLaunch);
             }
             return Run(args, Refused, audit, () => new(folder, key, audit, policy?.Scope!),
                 () => RecheckPolicy(folder, acceptedSettings, policy ?? throw new InvalidOperationException("policy unavailable")),
@@ -178,6 +180,7 @@ public static class GrantCommands
     static bool Within(GrantDocument grant, HostPolicySnapshot policy, DateTimeOffset now) =>
         grant.Account == policy.Account && grant.Audience == policy.Audience && policy.LaunchAllowed
         && (!grant.Actions.Contains("stop") || policy.StopAllowed) && grant.Issuer.IssuedAt <= now && grant.ExpiresAt > now
+        && (!grant.Scope.Permissions.Contains("allowAll") || grant.AllowAllLaunch && policy.AllowAll)
         && grant.Caps.Hourly <= policy.Caps.Hourly && grant.Caps.Daily <= policy.Caps.Daily && grant.Caps.Live <= policy.Caps.Live;
 
     static int Deny(string[] args, AgentAuditLog audit, TextWriter error)

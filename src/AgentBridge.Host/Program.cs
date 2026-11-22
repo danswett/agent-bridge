@@ -97,6 +97,7 @@ if (command == "stop")
 }
 if (command == "grants") { return await GrantCommands.RunAsync(args, Identity.DefaultRoot, Console.Out, Console.Error); }
 if (command == "fleet" && args.Length > 1 && args[1] == "end") { return await FleetEndCommands.RunAsync(args, Identity.DefaultRoot, Console.Out, Console.Error); }
+if (command == "fleet") { return await FleetLaunchCommands.RunAsync(args, Identity.DefaultRoot, Console.Out, Console.Error); }
 if (command == "launches")
 {
     return await LaunchStatusCommands.RunAsync(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
@@ -996,7 +997,7 @@ async Task<int> ServeAsync(HostHandover handover)
             : AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(identity.Folder, TimeProvider.System);
         grantPipe = new AgentPipeLaunch(identity.Folder, grantCredentials, service, agentAudit, grantRequests, grantRequestsProblem,
             fleetGrants: new FleetGrantLaunch(identity.Folder, identity.Key, () => identity.Account?.AccountId,
-                Wire.DeviceId(identity.Key.Public), grantCredentials, service, launcher));
+                Wire.DeviceId(identity.Key.Public), grantCredentials, launcher));
         if (homeAssistant is not null && !ReferenceEquals(grantPipe.Requests, homeAssistant.LaunchRequests))
         { throw new InvalidOperationException("HA and grant launches must share one request-store writer."); }
         launcher.RequestRegistered += (id, session) => grantPipe.Registered(id, session);

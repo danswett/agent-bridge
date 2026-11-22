@@ -69,7 +69,7 @@ fields, enum values and versions exit 2.
   "request": "3f1c0a52-8d0e-4b8a-9a63-0c1e5f7a2b10",
   "grant": "b7e5a0de-4f3c-4a52-8e1f-2d9c6a1b7c33",
   "target": "<node id, optional>",
-  "name": "SG Builder 263 CLI Contract",
+  "name": "SG Builder 263",
   "workspace": "<approved workspace identity or label>",
   "agent": "<agent id>",
   "model": "<launch-tuning id, e.g. opus[1m]>",

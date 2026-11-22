@@ -233,14 +233,33 @@ public sealed class GrantAuthorityTests
         Assert.False(GrantEvaluator.Evaluate(Grant(), Policy() with { Scope = wide, AllowAll = true }, request, Now).Allowed);
     }
 
-    [Fact]
-    public void Allow_all_requires_explicit_current_policy()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void Explicit_allow_all_requires_both_person_flag_and_receiver_policy(bool flag, bool enabled)
     {
         var scope = Scope with { Permissions = ["allowAll"] };
-        var grant = Grant() with { Scope = scope };
-        var policy = Policy() with { Scope = scope };
-        Assert.Equal(GrantRefusal.Permission, GrantEvaluator.Evaluate(grant, policy, Request(), Now).Reason);
-        Assert.True(GrantEvaluator.Evaluate(grant, policy with { AllowAll = true }, Request(), Now).Allowed);
+        var result = GrantEvaluator.Evaluate(Grant() with { Scope = scope, AllowAllLaunch = flag },
+            Policy() with { Scope = scope, AllowAll = enabled }, Request() with { Permission = "allowAll" }, Now);
+        Assert.Equal(flag && enabled, result.Allowed);
+    }
+
+    [Fact]
+    public void Omitted_permissions_never_implicitly_select_allow_all_even_with_both_flags()
+    {
+        var scope = Scope with { Permissions = ["allowAll"] };
+        Assert.Equal(GrantRefusal.Permission, GrantEvaluator.Evaluate(Grant() with { Scope = scope, AllowAllLaunch = true },
+            Policy() with { Scope = scope, AllowAll = true }, Request(), Now).Reason);
+    }
+
+    [Fact]
+    public void Omitted_tuning_uses_recorded_grant_order_not_receiver_default_order()
+    {
+        var grant = Grant() with { Scope = Scope with { Models = ["large", "small"] } };
+        Assert.Equal("large", GrantEvaluator.Evaluate(grant,
+            Policy() with { Scope = Scope with { Models = ["small", "large"] } }, Request(), Now).Launch!.Model);
     }
 
     [Theory]

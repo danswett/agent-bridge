@@ -175,8 +175,8 @@ public static class GrantEvaluator
         var profile = Resolve(request.Profile, grant.Scope.Profiles, policy.Scope.Profiles);
         var effort = Resolve(request.Effort, grant.Scope.Efforts, policy.Scope.Efforts);
         var context = Resolve(request.Context, grant.Scope.Contexts, policy.Scope.Contexts);
-        var permissions = policy.Scope.Permissions.Where(p => p != LaunchProtocol.AllowAll || policy.AllowAll).ToImmutableArray();
-        var permission = Resolve(request.Permission ?? (Both(LaunchProtocol.Ask, grant.Scope.Permissions, permissions) ? LaunchProtocol.Ask : null),
+        var permissions = policy.Scope.Permissions.Where(p => p != LaunchProtocol.AllowAll || policy.AllowAll && grant.AllowAllLaunch).ToImmutableArray();
+        var permission = Resolve(request.Permission ?? LaunchProtocol.Ask,
             grant.Scope.Permissions, permissions);
         if (model is null || profile is null || effort is null || context is null) { return new(GrantRefusal.Scope); }
         if (permission is null) { return new(GrantRefusal.Permission); }
@@ -186,5 +186,5 @@ public static class GrantEvaluator
     static bool Both(string value, ImmutableArray<string> grant, ImmutableArray<string> policy) =>
         grant.Contains(value, StringComparer.Ordinal) && policy.Contains(value, StringComparer.Ordinal);
     static string? Resolve(string? value, ImmutableArray<string> grant, ImmutableArray<string> policy) =>
-        value is null ? policy.FirstOrDefault(v => grant.Contains(v, StringComparer.Ordinal)) : Both(value, grant, policy) ? value : null;
+        value is null ? grant.FirstOrDefault(v => policy.Contains(v, StringComparer.Ordinal)) : Both(value, grant, policy) ? value : null;
 }
