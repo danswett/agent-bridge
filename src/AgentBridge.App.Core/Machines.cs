@@ -1,3 +1,4 @@
+using AgentBridge.AgentEnvelope;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -167,6 +168,8 @@ public interface IFleetLink : IAsyncDisposable
     // shown, and what the confirmation showed (accept, null on a quiet machine). uncheckedPolicy:
     // the person confirmed PolicyLine (#3307). Null when it cannot be signed now. None in a stand-in.
     SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request, bool uncheckedPolicy = false) => null;
+    SignedCommand? SignGrantConfirmation(byte[]? machinePublic, FleetGrantProofContext context,
+        FleetGrantConfirmation args, DateTimeOffset now) => null;
     // This app's own device id on the relay, which a machine approves to answer folder-trust
     // questions from; and the people's devices (the PWA, this app elsewhere) the relay lists now.
     string? DeviceId => null;
@@ -778,6 +781,12 @@ public sealed class RelayFleetLink : IFleetLink
     public SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request, bool uncheckedPolicy = false) =>
         machinePublic is { } k && Wire.DeviceId(k) == machine
             ? Transfers.SignUpdateNow(key, k, release, accept, DateTimeOffset.UtcNow, request, uncheckedPolicy)
+            : null;
+
+    public SignedCommand? SignGrantConfirmation(byte[]? machinePublic, FleetGrantProofContext context,
+        FleetGrantConfirmation args, DateTimeOffset now) =>
+        machinePublic is { } publicKey && Wire.DeviceId(publicKey) == context.Receiver
+            ? Transfers.SignGrantConfirmation(key, publicKey, context, args, now)
             : null;
 
     public async ValueTask DisposeAsync()
