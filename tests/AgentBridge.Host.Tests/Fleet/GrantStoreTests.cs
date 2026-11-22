@@ -135,6 +135,7 @@ public sealed class GrantStoreTests : IDisposable
     [Theory]
     [InlineData(false, "none")]
     [InlineData(true, "none")]
+    [InlineData(true, "retry")]
     [InlineData(false, "missing")]
     [InlineData(false, "broken")]
     public void Retiring_only_legacy_adopted_files_keeps_a_recent_grant_usable(bool interrupted, string archiveProof)
@@ -150,12 +151,13 @@ public sealed class GrantStoreTests : IDisposable
         var grant = Grant();
         Assert.True(Open().Issue(grant).Usable);
         clock.Advance(TimeSpan.FromHours(1));
-        using (var held = interrupted ? File.Open(old[0], FileMode.Open, FileAccess.Read, FileShare.Read) : null)
+        var heldFile = archiveProof == "retry" ? old[^1] : old[0];
+        using (var held = interrupted ? File.Open(heldFile, FileMode.Open, FileAccess.Read, FileShare.Read) : null)
         {
             Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
             if (interrupted && OperatingSystem.IsWindows())
             {
-                Assert.True(File.Exists(old[0]));
+                Assert.True(File.Exists(heldFile));
                 Assert.NotNull(JsonNode.Parse(File.ReadAllText(Path.Combine(Folder, "audit", "agents.head")))!["retiringRoot"]);
             }
             Assert.True(Open().TryGetUsable(grant.Id, 1).Usable);
@@ -165,7 +167,7 @@ public sealed class GrantStoreTests : IDisposable
         Assert.Equal(0, AgentAuditLog.RetainedThrough(Path.Combine(Folder, "audit")));
         var proofFile = Path.Combine(Folder, "audit", "archive", "agents-legacy-adoption.jsonl");
         Assert.True(File.Exists(proofFile));
-        if (archiveProof != "none")
+        if (archiveProof is "missing" or "broken")
         {
             if (archiveProof == "missing") { File.Delete(proofFile); }
             else { var bytes = File.ReadAllBytes(proofFile); bytes[^2] ^= 1; File.WriteAllBytes(proofFile, bytes); }

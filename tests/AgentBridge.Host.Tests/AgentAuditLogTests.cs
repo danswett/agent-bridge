@@ -23,6 +23,22 @@ public sealed class AgentAuditLogTests : IDisposable
         new("local", "req-1", "agent:m1/s1", ["agent:m1/s1"], action, "m2/s2", outcome, "fine");
 
     [Theory]
+    [InlineData(false), InlineData(true)]
+    public void Legacy_adoption_does_not_block_later_non_grant_gated_appends(bool unproven)
+    {
+        var op = Guid.NewGuid(); var gated = new AgentAuditEntry("local", op.ToString(), "person:local", [], "session.stop", op.ToString(), "reserved", Gate: new(1, op, Guid.Empty, 0, "intent", "local", "person-client", op, "none"));
+        Assert.True(Log().Append(Entry())); Assert.True(Log().Append(gated with { Action = "session.launch" }));
+        if (unproven)
+        {
+            var head = Path.Combine(Audit, "agents.head"); var json = JsonNode.Parse(File.ReadAllText(head))!;
+            json.AsObject().Remove("adoptedGatedRows"); json.AsObject().Remove("adoptedPrefix"); File.WriteAllText(head, json.ToJsonString());
+        }
+        else { Assert.True(Log().Append(Entry())); }
+        Assert.True(Log().Append(gated));
+        Assert.Equal(!unproven, AgentAuditLog.LegacyOnlyAdoption(Audit));
+    }
+
+    [Theory]
     [InlineData(false, "none"), InlineData(true, "none")]
     [InlineData(false, "gated"), InlineData(true, "gated")]
     [InlineData(false, "revoke"), InlineData(true, "revoke")]
