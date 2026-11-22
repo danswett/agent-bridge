@@ -333,7 +333,8 @@ second copy. Clients must not infer message boundaries from text prefixes. The
 existing text/count caps still apply. If `responseId` is absent, the legacy
 single-live-reply fallback is unchanged; Codex and older hosts omit it.
 Older clients ignore the optional field and continue reading `response`/`own.response`.
-Claude keeps the first part id across contiguous blocks with the same message id.
+Claude keeps the first part id across contiguous blocks with the same message id;
+a marked delegate notice breaks that continuity, even when live ignores its stale run.
 It omits identity for composite legacy text, text after a tool in the same record,
 duplicate records, unread/skimmed/skipped beginnings, or more than 4,096 assistant records
 in a turn. A readable new prompt reestablishes identity; text never supplies an id.

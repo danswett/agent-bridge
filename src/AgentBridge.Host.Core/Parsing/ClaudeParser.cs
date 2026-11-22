@@ -422,6 +422,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         if (Prompt(e) is not { } text) { return; }
         if (IsNotice(e, text))
         {
+            _responseContiguous = false;
             // A turn of the main agent's, about a delegate or a command that stopped: neither
             // the person's message nor a prompt counted, and the text in it is the delegate's.
             S.UncountedTurn = true;
