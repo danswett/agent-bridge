@@ -21,7 +21,7 @@ internal sealed class CodexReplyIds(bool known = false)
     public bool Validate(CodexReplyKey key)
     {
         if (!_known) { return false; }
-        if (key.Ambiguous || key.Turn is { } turn && _turn is not null && turn != _turn)
+        if (key.Ambiguous || key.Turn is { } turn && (_turn is not null ? turn != _turn : _parts.Count > 0))
         {
             Reset(false);
             return false;

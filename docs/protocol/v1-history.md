@@ -338,9 +338,14 @@ and non-truncated text are not completion markers. Clients accept newer live
 revisions, reject older or truncated snapshots that would regress a full reply,
 and preserve each revised item received while a history request was in flight,
 including when a later item is unchanged. Rejected replies do not freeze tool or
-reasoning updates. Codex validates native-turn scope on every decoded record,
+reasoning updates. Accepted partial snapshots also set the freshness floor;
+completeness-only updates are item revisions. Codex validates scope on every decoded record,
 including non-replies; conflicting or ambiguous metadata disables correlation
-until a readable prompt. Legacy text dedup counts currently retained texts only.
+until a readable prompt. A native turn first appearing after items were identified
+without native scope cannot authenticate those earlier items retroactively.
+Once established, omitted optional native metadata alone does not change scope;
+only exact item IDs correlate within the still-known readable prompt.
+Legacy text dedup counts currently retained texts only.
 Claude keeps the first part id across contiguous blocks with the same message id;
 a marked delegate notice breaks that continuity, even when live ignores its stale run.
 It omits identity for composite legacy text, text after a tool in the same record,

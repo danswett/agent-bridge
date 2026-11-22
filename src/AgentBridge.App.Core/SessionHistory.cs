@@ -116,14 +116,14 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 var at = held.FindIndex(t => t.Id == turn.Id);
                 if (at >= 0) { turn = turn with { Prompt = turn.Prompt ?? held[at].Prompt, Parts = turn.Parts.Count == 0 ? held[at].Parts : turn.Parts }; }
                 if (at >= 0 && held[at] == turn with { Parts = held[at].Parts } && held[at].Parts.SequenceEqual(turn.Parts)) { return; }
-                var replied = at < 0 || !held[at].Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => (p.Id, p.Text))
-                    .SequenceEqual(turn.Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => (p.Id, p.Text)));
+                var replied = at < 0 || !held[at].Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => (p.Id, p.Text, p.Truncated))
+                    .SequenceEqual(turn.Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => (p.Id, p.Text, p.Truncated)));
                 if (replied)
                 {
                     if (!live.TryGetValue(turn.Id, out var versions)) { live[turn.Id] = versions = []; }
                     foreach (var part in turn.Parts.Where(p => p.Kind == HistoryPartKind.Response))
                     {
-                        if (at < 0 || !held[at].Parts.Any(p => p.Id == part.Id && p.Text == part.Text)) { versions[part.Id] = ++observed; }
+                        if (at < 0 || !held[at].Parts.Any(p => p.Id == part.Id && p.Text == part.Text && p.Truncated == part.Truncated)) { versions[part.Id] = ++observed; }
                     }
                 }
                 if (at >= 0) { held[at] = turn; }
@@ -175,7 +175,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                     }
                     Keep(turn with { Parts = parts }, before: true);
                 }
-                if (mutable && current && !voice.ResponseTruncated && a.ResponseId is { } responseId)
+                if (mutable && current && (!voice.ResponseTruncated || !finished) && a.ResponseId is { } responseId)
                 {
                     if (items is null) { revisions[a.ResponseTurn] = items = []; }
                     items[responseId] = (session.UpdatedAt == default ? prior.At : session.UpdatedAt, voice.Response);
@@ -384,7 +384,8 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
             var at = parts.FindIndex(p => p.Id == part.Id);
             if (at >= 0)
             {
-                if (!(keepItems?.Contains(part.Id) ?? keepLive) || part.Text == parts[at].Text) { parts[at] = part; }
+                if (!(keepItems?.Contains(part.Id) ?? keepLive)
+                    || part.Text == parts[at].Text && !(part.Truncated == true && parts[at].Truncated != true)) { parts[at] = part; }
                 previous = at;
                 continue;
             }
