@@ -45,7 +45,7 @@ public class HaltPolicyReaderTests
     [InlineData("\"size\":1234", "\"size\":1234,\"size\":1234")]
     [InlineData("\"v\":1,", "\"v\":2,")]
     [InlineData("\"v\":1,", "\"v\":1,\"extra\":0,")]
-    [InlineData("\"v\":1,", "\"v\":1,\"x\":[[[[1]]]],")]
+    [InlineData("[\"0.1.7214\"]", "[[[\"0.1.7214\"]]]")]
     [InlineData("\"repository\":\"danswett/agent-bridge\"", "\"repository\":\"danswett/agent-bridge-fork\"")]
     [InlineData("update-halt-policy", "update-release-list")]
     [InlineData("\"sequence\":42,", "")]
@@ -166,6 +166,8 @@ public class HaltPolicyReaderTests
         var served = new Anchor((_, _) => Ok(Encoding.UTF8.GetBytes(Valid)));
         await Assert.ThrowsAsync<HaltPolicyUnavailableException>(() => HaltPolicyReader.ReadAsync(new Fixed(Good with { CoversBody = false }), Pin, served));
         await Assert.ThrowsAsync<HaltPolicyUnavailableException>(() => HaltPolicyReader.ReadAsync(new Cancels(), Pin, served));
+        await Assert.ThrowsAsync<HaltPolicyUnavailableException>(() => HaltPolicyReader.ReadAsync(new Fixed(null!), Pin, served));
+        await Assert.ThrowsAsync<HaltPolicyUnavailableException>(() => HaltPolicyReader.ReadAsync(new Fixed(Good), Pin, new Anchor((_, _) => throw new InvalidOperationException())));
     }
     sealed class Cancels : IHaltCatalogVerifier { public HaltCatalogEvidence Inspect(byte[] catalog, byte[] body) => throw new OperationCanceledException(); }
 

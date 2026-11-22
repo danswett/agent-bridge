@@ -233,7 +233,7 @@ public sealed partial class ReplyService : ISessionReplier
         // authority cannot inherit escrow, even with the same device and request UUID.
         var owner = (peer ?? "", request.Id, request.ClearConfirmation, request.ClearDraftSource,
             request.ClearConfirmation is null ? null : request.IntentSource,
-            request.ClearConfirmation is null ? ReplyIntent.Unknown : request.Intent);
+            request.ClearConfirmation is null ? ReplyIntent.Unknown : request.Intent, request.HandoffText);
         return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "reply", key, log), t => DeliverAsync(request, key, peer ?? "", t), result =>
             log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({ReplyReasons.Shared(result.Reason)})")}"),
             owner: owner, foreign: () => Task.FromResult(Refused("the request belongs to another sender, target or authorization; use a new request")));
@@ -249,6 +249,9 @@ public sealed partial class ReplyService : ISessionReplier
             if (!options.PlatformSupported) { return Refused("replying is not supported on this platform yet; reply at the machine"); }
             if (probe.Active() is { } active) { return Refused(active); }
             if (Replies.Check(request) is { } invalid) { return Refused(invalid); }
+            if (request.HandoffText is not null && (request.StillCurrent is null || request.ClearConfirmation is not null ||
+                request.Attachments is { Count: > 0 }) || request.QueueSubmit && QueueSubmitPolicy.Capabilities[DeliveryTerminalKind.Unknown] != Copilot.QueueCapability.Verified)
+            { return Refused("delivery handoff requires a fenced text-only reply and current queue capability"); }
             var refs = request.Attachments ?? [];
             if (refs.Count > 0 && attachments is null) { return Refused("this host does not take attachments; send the text alone, or attach at the machine"); }
             var session = source.Get(request.Id);
@@ -520,7 +523,7 @@ public sealed partial class ReplyService : ISessionReplier
             keys = new KeyPlan(
             [
                 line with { Submit = SubmitKey.None, EnterDelayMs = 0, PauseAfterMs = line.EnterDelayMs, Expect = box.Rows, Checks = mode },
-                new KeySend("", line.Submit, 0, line.PauseAfterMs, [box.Rows[^1]], [.. mode, new(box.Rows[1].Row, ScreenCheck.NotStartingWith, CopilotInputBoxReader.Bang)]),
+                new KeySend("", request.QueueSubmit ? SubmitKey.Queue : line.Submit, 0, line.PauseAfterMs, [box.Rows[^1]], [.. mode, new(box.Rows[1].Row, ScreenCheck.NotStartingWith, CopilotInputBoxReader.Bang)]),
             ]);
             if (stillCurrent is not null)
             {
@@ -528,7 +531,9 @@ public sealed partial class ReplyService : ISessionReplier
                 {
                     if (probe.Active() is not null || LaunchHeld?.Invoke(session.Id) is not null || guard.Refuse(pid) is not null)
                         return Changed();
-                    if (source.Get(session.Id) is not { Agent: AgentKind.Copilot, Status: SessionStatus.Idle, Question: null } live
+                    if (source.Get(session.Id) is not { Agent: AgentKind.Copilot, Question: null } live
+                        || (request.HandoffText is null || requireIdle) && live.Status != SessionStatus.Idle
+                        || live.Status is not (SessionStatus.Idle or SessionStatus.Working)
                         || live.ProcessId != pid || process is not { StartedAt: not null } || source.ProcessOf(session.Id) != process
                         || !processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid && p.StartedAt == process.StartedAt))
                         return Changed();
@@ -548,6 +553,12 @@ public sealed partial class ReplyService : ISessionReplier
                 if (keys.Proceed() is { } changed) { return Done(Refused(changed)); }
             }
 
+            if (request.HandoffText is { } handoff)
+            {
+                if (keys.Proceed?.Invoke() is { } changed) { return Done(Stale(changed)); }
+                words = InjectableText.Collapse(handoff());
+                keys = keys with { Sends = [keys.Sends[0] with { Text = words }, keys.Sends[1]] };
+            }
             timeline.InjectStart();
             try { result = await injector.InjectAsync(pid, keys); }
             catch (Exception e)

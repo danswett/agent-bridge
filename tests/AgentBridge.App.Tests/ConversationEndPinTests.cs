@@ -4,6 +4,124 @@ namespace AgentBridge.App.Tests;
 
 public sealed class ConversationEndPinTests
 {
+    [Theory, InlineData(18), InlineData(299), InlineData(596)]
+    public void Native_layout_ownership_keeps_the_end_pin_but_the_same_UIA_retreat_outside_layout_releases_it(double drop)
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (299, 50216);
+        view.Moved(50216);
+        view.LayoutForProbe(() => view.Moved(50216 - drop));
+        Assert.True(view.Pinned, view.PinState());
+        Assert.Equal(0, view.Releases);
+        view.Follow();
+        Assert.Equal(50216, Assert.Single(view.Scroller.Targets));
+        view.Moved(50216);
+        view.Moved(50216 - drop);
+        view.Scroller.Targets.Clear();
+        view.Follow();
+        Assert.False(view.Pinned);
+        Assert.Equal(1, view.Releases);
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Theory, InlineData("wheel"), InlineData("bar"), InlineData("navigation"), InlineData("hold")]
+    public void Owned_layout_restore_does_not_overwrite_input_or_a_hold_started_during_measurement(string input)
+    {
+        var view = new SessionView { MeasuredExtent = 200 };
+        view.Moved(200);
+        view.LayoutDuringMeasure = () =>
+        {
+            if (input == "wheel") { view.Scroller.Wheel(); }
+            else if (input == "bar") { view.Scroller.Press(new Microsoft.UI.Xaml.Controls.Primitives.ScrollBar { Parent = view.Scroller }); }
+            else if (input == "navigation") { view.Scroller.Bring(new Microsoft.UI.Xaml.FrameworkElement()); }
+            else { view.FollowState.PointerOver(7); }
+            view.Moved(100);
+        };
+        view.ReplyForProbe();
+        view.DrainForProbe();
+        Assert.Empty(view.Scroller.Targets);
+        Assert.Equal(100, view.Scroller.VerticalOffset);
+        Assert.Equal(input == "hold", view.Pinned);
+    }
+
+    [Fact]
+    public void Nested_native_layout_keeps_the_outer_ownership_until_a_later_UIA_retreat()
+    {
+        var view = new SessionView();
+        view.Moved(200);
+        view.LayoutForProbe(() =>
+        {
+            view.LayoutForProbe(() => view.Moved(181));
+            view.Moved(150);
+        });
+        Assert.True(view.Pinned);
+        view.Moved(200);
+        view.Moved(150);
+        Assert.False(view.Pinned);
+    }
+
+    [Fact]
+    public void Failed_native_layout_does_not_suppress_the_next_UIA_retreat()
+    {
+        var view = new SessionView();
+        view.Moved(200);
+        Assert.Throws<InvalidOperationException>(() => view.LayoutForProbe(() => throw new InvalidOperationException("Layout probe failed.")));
+        view.Moved(150);
+        Assert.False(view.Pinned);
+    }
+
+    [Theory, InlineData("hover"), InlineData("touch"), InlineData("press"), InlineData("pan")]
+    public void Native_anchoring_follows_a_pin_but_yields_to_each_real_hold_and_to_UIA_retreat(string hold)
+    {
+        var view = new SessionView();
+        view.Moved(200);
+        view.Follow();
+        Assert.Equal(Microsoft.UI.Xaml.Controls.ItemsUpdatingScrollMode.KeepLastItemInView, view.NativeMode);
+        if (hold == "hover") { view.FollowState.PointerOver(7); }
+        else if (hold == "touch") { view.FollowState.TouchDown(7); }
+        else if (hold == "press") { view.FollowState.Pressed(7); }
+        else { view.FollowState.PanStarted(); }
+        view.Follow();
+        Assert.Equal(Microsoft.UI.Xaml.Controls.ItemsUpdatingScrollMode.KeepItemsInView, view.NativeMode);
+        if (hold == "hover") { view.FollowState.PointerLeft(7); }
+        else if (hold == "touch") { view.FollowState.TouchUp(7); }
+        else if (hold == "press") { view.FollowState.Released(7); }
+        else { view.FollowState.PanEnded(); }
+        Assert.Equal(Microsoft.UI.Xaml.Controls.ItemsUpdatingScrollMode.KeepLastItemInView, view.NativeMode);
+        view.Moved(150);
+        Assert.False(view.Pinned);
+        Assert.Equal(Microsoft.UI.Xaml.Controls.ItemsUpdatingScrollMode.KeepItemsInView, view.NativeMode);
+    }
+
+    [Fact]
+    public void Intermediate_layout_scrolling_is_not_reader_ownership_of_native_anchoring()
+    {
+        var view = new SessionView();
+        view.Moved(200);
+        view.Scrolling();
+        view.Follow();
+        Assert.True(view.Pinned);
+        Assert.Equal(Microsoft.UI.Xaml.Controls.ItemsUpdatingScrollMode.KeepLastItemInView, view.NativeMode);
+    }
+
+    [Fact]
+    public void Near_end_return_acquires_native_anchoring_before_bound_history_notifications()
+    {
+        var view = new SessionView();
+        view.PrepareHistoryForProbe();
+        var extent = view.Scroller.ScrollableHeight;
+        view.Moved(extent);
+        view.Moved(extent - 100);
+        view.Moved(extent - 4);
+        var observed = new List<bool>();
+        view.ObserveHistoryForProbe(() => observed.Add(view.Pinned &&
+            view.NativeMode == Microsoft.UI.Xaml.Controls.ItemsUpdatingScrollMode.KeepLastItemInView));
+        view.AppendHistoryForProbe();
+        view.DrainForProbe();
+        Assert.NotEmpty(observed);
+        Assert.All(observed, pinned => Assert.True(pinned));
+    }
+
     [Theory, InlineData(1), InlineData(2), InlineData(3), InlineData(4), InlineData(5), InlineData(6), InlineData(7), InlineData(8), InlineData(11), InlineData(299)]
     public void Returning_near_the_end_reengages_replies_but_a_reader_remaining_back_is_not_pulled(double gap)
     {

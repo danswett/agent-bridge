@@ -12,6 +12,34 @@ public sealed class ReplyClearTests
     const string Id = "99999999-9999-4999-8999-999999999999";
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Canonical_handoff_is_flushed_inside_ReplyService_slot_and_failure_types_zero_keys(bool fail, bool working)
+    {
+        await using var h = await Harness.Create(); h.Draft = "";
+        if (working) await h.Work();
+        var broken = false;
+        using var journal = new DeliveryJournal(new byte[32], _ => { if (broken) throw new IOException("full"); }, _ => { });
+        var body = "e\u00AD\u0301";
+        var header = new DeliveryHeader("agent:user", Guid.NewGuid().ToString(), null, DateTimeOffset.UtcNow, "normal", 0);
+        journal.Write(Id, header, body, DeliveryState.Enqueued);
+        broken = fail;
+        var request = h.Request() with { Text = body, ClearConfirmation = null, ClearDraftSource = null,
+            Sender = new("user", Owner: working), RequireIdle = !working, StillCurrent = () => true, HandoffText = () =>
+            {
+                Assert.Null(h.Gate.TryExclude(TimeSpan.FromSeconds(1), out var blocker));
+                Assert.Equal(DeliveryGate.Blocker.Typing, blocker);
+                return DeliveryEnvelope.Format(journal.ReserveHandoff(Id, header, body, 'q'), body);
+            } };
+        var result = await h.Replier.ReplyAsync(request);
+        Assert.Equal(fail ? AnswerOutcome.Refused : AnswerOutcome.Delivered, result.Outcome);
+        Assert.Equal(fail ? 0 : 1, h.Replies);
+        Assert.Equal(fail ? DeliveryState.Enqueued : DeliveryState.Handoff, journal.State(Id, header.Id));
+        Assert.DoesNotContain("handoffText", JsonSerializer.Serialize(request, ProtocolJson.Options));
+    }
+
+    [Theory]
     [InlineData("remote", false)]
     [InlineData("remote", true)]
     [InlineData("grant", false)]
@@ -299,6 +327,11 @@ public sealed class ReplyClearTests
         {
             Fixture.Append(events, Copilot.Event("permission.requested",
                 new { requestId = "r", permissionRequest = new { kind = "shell" } }, 5));
+            await source.RefreshAsync();
+        }
+        public async Task Work()
+        {
+            Fixture.Append(events, Copilot.TurnStart(4));
             await source.RefreshAsync();
         }
         public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default)

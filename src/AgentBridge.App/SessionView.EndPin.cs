@@ -13,6 +13,39 @@ public sealed partial class SessionView
     readonly HashSet<uint> scrollbarPointers = [];
     Func<bool>? navigationPending;
     bool programmaticScroll;
+    int conversationLayoutDepth;
+    internal bool FollowsConversationEnd => pinEnd;
+
+    internal T DuringConversationLayout<T>(Func<T> layout)
+    {
+        conversationLayoutDepth++;
+        try { return layout(); }
+        finally { conversationLayoutDepth--; }
+    }
+
+    void UpdateConversationLayout(FrameworkElement content) =>
+        DuringConversationLayout(() => { content.UpdateLayout(); return 0; });
+
+    internal ItemsUpdatingScrollMode? ConversationAnchoringMode =>
+        (ConversationList.ItemsPanelRoot as ItemsStackPanel)?.ItemsUpdatingScrollMode;
+
+    void SetEndPin(bool value) { pinEnd = value; SyncConversationAnchoring(); }
+
+    void SyncConversationAnchoring()
+    {
+        if (ConversationList.ItemsPanelRoot is not ItemsStackPanel panel) { return; }
+        // IsIntermediate also belongs to SDK layout, not just reader input.
+        var mode = pinEnd && !follow.Held && !panning && keyTarget is null
+            && scrollbarPointers.Count == 0 && navigationPending is null && ConversationList.IsLoaded
+            ? ItemsUpdatingScrollMode.KeepLastItemInView : ItemsUpdatingScrollMode.KeepItemsInView;
+        if (panel.ItemsUpdatingScrollMode != mode)
+        {
+            DuringConversationLayout(() => { panel.ItemsUpdatingScrollMode = mode; return 0; });
+        }
+    }
+
+    internal void HoldConversationPointer(uint pointer) { follow.PointerOver(pointer); SyncConversationAnchoring(); }
+    internal void ReleaseConversationPointer(uint pointer) => follow.PointerLeft(pointer);
 
     // Our own ScrollIntoView (a restore) raises the same bring request as question navigation;
     // it must not take the person's navigation custody, or nothing clears it after our anchor.
@@ -108,7 +141,9 @@ public sealed partial class SessionView
     {
         RememberStillExtent(scroll);
         var (offset, extent) = (scroll.VerticalOffset, scroll.ScrollableHeight);
-        if ((pinEnd || anchoring is { } pending && Math.Abs(pending - extent) <= ConversationFollow.EndFollowSlack) && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5)
+        // Native measure/arrange can coerce the offset before returning to the UI dispatcher.
+        // Only that synchronous layout owns these moves; reader input still releases directly.
+        if (conversationLayoutDepth == 0 && (pinEnd || anchoring is { } pending && Math.Abs(pending - extent) <= ConversationFollow.EndFollowSlack) && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5)
         {
             var (change, drop, gap) = (was.Extent - extent, was.Offset - offset, extent - offset);
             var remeasure = Math.Max(Math.Abs(change), stationaryRemeasure);
@@ -120,12 +155,13 @@ public sealed partial class SessionView
                 || Math.Max(remeasure, was.Offset - was.Extent) > 8 && Math.Abs(gap - scroll.ViewportHeight) <= 8;
             if (!layoutOnly && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5)) { ReleasePin(); }
         }
-        if (anchoring is { } target && Math.Abs(target - extent) <= ConversationFollow.EndFollowSlack && Math.Abs(offset - extent) <= ConversationFollow.EndFollowSlack) { pinEnd = true; }
+        if (anchoring is { } target && Math.Abs(target - extent) <= ConversationFollow.EndFollowSlack && Math.Abs(offset - extent) <= ConversationFollow.EndFollowSlack) { SetEndPin(true); }
         if (seen is { } moved && Math.Abs(offset - moved.Offset) >= 0.5)
         {
             (stationaryRemeasure, stationaryChange) = (0, 0); stationaryFromEnd = false;
         }
         seen = (offset, extent);
+        SyncConversationAnchoring();
     }
     // A final event can belong to a correction queued before this navigation request.
     void CompleteNavigation() { if (navigationPending?.Invoke() == false) { navigationPending = null; } }
@@ -134,7 +170,8 @@ public sealed partial class SessionView
     internal void ReleasePin([System.Runtime.CompilerServices.CallerMemberName] string by = "", [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
     {
         restoreReading = null; pinEnd = false; navigationPending = null; anchoring = null; stationaryRemeasure = stationaryChange = 0; stationaryFromEnd = false; pinReleases++;
-        RecordPin(pinReleased, $"{by}:{line} at ({ConversationScroll?.VerticalOffset}, {ConversationScroll?.ScrollableHeight}) seen={seen}");
+        RecordPin(pinReleased, $"{by}:{line} at ({ConversationScroll?.VerticalOffset}, {ConversationScroll?.ScrollableHeight}) seen={seen} layoutDepth={conversationLayoutDepth}");
+        SyncConversationAnchoring();
         if (historyFirstFrame is null && history is { } stored && historyVisible < stored.Turns.Count) { historyDraw?.Start(); }
     }
 
@@ -146,6 +183,7 @@ public sealed partial class SessionView
     void FollowPinnedEnd()
     {
         if (ConversationScroll is { } still) { RememberStillExtent(still); }
+        SyncConversationAnchoring();
         if (follow.Held || scrollbarPointers.Count > 0 || panning || scrolling && anchoring is null || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
         if (ConversationEndPin.Correction(pinEnd, scroll.VerticalOffset, scroll.ScrollableHeight, anchoring) is { } to) { Anchoring(scroll, to); }
     }

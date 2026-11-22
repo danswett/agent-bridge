@@ -60,6 +60,29 @@ public class LiteReceiverTests
 
     static string Id(string n) => new Guid(int.Parse(n), 0, 0, new byte[8]).ToString("D");
 
+    sealed class Querying : ILiteDeliver, ILiteReplayQuery
+    {
+        public int Offers, Queries;
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct)
+        { Offers++; return Task.FromResult(new LiteDelivery(false, null) { Outcome = LiteKind.Pending }); }
+        public Task<LiteDelivery> QueryAsync(VerifiedEnvelope envelope, string text, CancellationToken ct)
+        { Queries++; return Task.FromResult(new LiteDelivery(false, null) { Outcome = LiteKind.Unconfirmed }); }
+    }
+
+    [Fact]
+    public async Task A_verified_reoffer_queries_prior_lane_state_without_another_offer_or_bypassing_trust()
+    {
+        var delivery = new Querying();
+        using var r = new Rig(custom: delivery);
+        var request = r.Request();
+        Assert.Equal("pending", (await r.Send(request)).Status);
+        Assert.Equal("unconfirmed", (await r.Send(request)).Status);
+        Assert.Equal((1, 1), (delivery.Offers, delivery.Queries));
+        r.Channel = r.Channel with { InPresence = false };
+        Refused(await r.Send(request), LiteReceiver.NotSameAccount);
+        Assert.Equal((1, 1), (delivery.Offers, delivery.Queries));
+    }
+
     static void Refused(LiteAck ack, string code)
     {
         Assert.Equal("refused", ack.Status);

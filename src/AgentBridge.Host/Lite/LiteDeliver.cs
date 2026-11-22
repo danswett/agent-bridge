@@ -11,8 +11,8 @@ using AgentBridge.Protocol;
 namespace AgentBridge.Host.Lite;
 
 // L5 of the temporary AP5-lite mode (#1353): types a verified own-agent message into an idle
-// session. It refuses anything it is not sure of and types nothing then; there is no queue and no
-// retry. The caller (L4) has verified the signature; the text is re-bound to the envelope here
+// session, or offers it to the host-only lane adapter when supplied. No production lane is wired.
+// The caller (L4) has verified the signature; the text is re-bound to the envelope here
 // because this is the last step before keys go to a live agent.
 public sealed class LiteDeliver(
     IReadOnlyList<IReplyTargetGate> gates,
@@ -22,7 +22,7 @@ public sealed class LiteDeliver(
     Action<string> log,
     TimeProvider? clock = null,
     Func<string, Func<bool>>? targetFence = null,
-    Func<string?>? account = null) : ILiteDeliver
+    Func<string?>? account = null) : ILiteDeliver, ILiteReplayQuery
 {
     public const int MaxChars = 4096;
     public const int MaxPerMinute = 6;
@@ -30,6 +30,7 @@ public sealed class LiteDeliver(
 
     readonly TimeProvider time = clock ?? TimeProvider.System;
     readonly ConcurrentDictionary<string, Queue<DateTimeOffset>> recent = new(StringComparer.Ordinal);
+    internal DeliveryLaneScheduler? Lane { get; init; }
 
     public async Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct)
     {
@@ -41,25 +42,64 @@ public sealed class LiteDeliver(
         return outcome;
     }
 
-    async Task<LiteDelivery> DecideAsync(VerifiedEnvelope envelope, string text, string target, CancellationToken ct)
+    Task<LiteDelivery> ILiteReplayQuery.QueryAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) =>
+        DecideAsync(envelope, text, envelope.Body.Target.Session ?? "", ct, query: true);
+
+    async Task<LiteDelivery> DecideAsync(VerifiedEnvelope envelope, string text, string target, CancellationToken ct, bool query = false)
     {
+        ct.ThrowIfCancellationRequested();
+        if (query && Lane is null) { return Refused(LiteReceiver.Replay); }
         var body = envelope.Body;
         string safe;
-        try { safe = Escape(text); }
+        try { safe = Escape(Lane is null ? text : DeliveryEnvelope.NormalizeBody(text)); }
         catch (ArgumentException) { return Refused(LiteCodes.NotReplyTarget); } // not valid Unicode
         if (string.IsNullOrEmpty(text) || text.Length > MaxChars || !body.BindsData(Encoding.UTF8.GetBytes(text)) || target.Length == 0 || !Guid.TryParseExact(body.Request, "D", out _)) { return Refused(LiteCodes.NotReplyTarget); }
         var id = target;
-        var session = source.Get(target);
+        Session? session = null;
         var byNode = false;
-        if (session is null && FromNodeId(target) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
-        if (session is null) { return Refused(LiteCodes.NoSuchSession); }
+        void Resolve()
+        {
+            session = source.Get(target);
+            if (session is null && FromNodeId(target) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
+        }
+        if (Lane is null) { Resolve(); }
+        var sender = new DeliverySender(body.Principal.Kind == "script" ? body.Principal.SenderId :
+            $"{body.Principal.Machine}/{body.Principal.SenderId}");
+        var request = Guid.Parse(body.Request);
+        // Journal NFKC must not restore an escaped attachment token.
+        var laneBody = safe.Replace("\uFF20", "(at)", StringComparison.Ordinal);
         // The text was signed for one account, and a local send checks it only before this await (#3595): an account
         // switch (or no account) while the composer is read or the typing slot is awaited types nothing, here and at both replier fences.
         bool Signed() => account is null || account() == body.Account;
         if (!Signed()) { return Refused(LiteReceiver.NotSameAccount); }
+        if (Lane is { } history)
+        {
+            // A known UUID's authenticated target is history, not renewed node routing.
+            if (history.BoundTarget(request, sender) is { } bound && HaContract.NodeId(bound) == target) { id = bound; }
+            var prior = history.Query(request, id, sender);
+            // A false fence forbids new admission while Offer verifies the existing body's HMAC.
+            if (prior.State != DeliveryOfferState.Refused) { return FromLane(history.Offer(request, id, sender, laneBody, () => false)); }
+            if (query) { return FromLane(prior); }
+        }
+        if (Lane is not null) { Resolve(); }
+        if (session is null) { return Refused(LiteCodes.NoSuchSession); }
         var stillAllowed = targetFence?.Invoke(id);
         if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
         if (session.Agent != AgentKind.Copilot || session.ProcessId is not { } pid) { return Refused(LiteCodes.NotReplyTarget); }
+        if (Lane is { } lane)
+        {
+            if (stillAllowed is null) { return Refused(LiteCodes.NotReplyTarget); }
+            if (session.Question is not null || session.Status is not (SessionStatus.Idle or SessionStatus.Working))
+            { return Refused(LiteCodes.Busy); }
+            var incarnation = source.ProcessOf(id) is { Id: > 0, StartedAt: not null } captured && captured.Id == pid ? captured : null;
+            bool Revoked() => account?.Invoke() is { Length: > 0 } signedIn && signedIn != body.Account ||
+                incarnation is not null && source.ProcessOf(id) is { Id: > 0, StartedAt: not null } live && live != incarnation;
+            bool Current() => Signed() && stillAllowed() && (!byNode || FromNodeId(target) == id) &&
+                source.Get(id) is { Agent: AgentKind.Copilot, Question: null } live && live.ProcessId == pid &&
+                live.Status is SessionStatus.Idle or SessionStatus.Working;
+            if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
+            return FromLane(lane.Offer(request, id, sender, laneBody, Current, Revoked));
+        }
         if (!Idle(session)) { return Refused(LiteCodes.Busy); }
         if (!await ComposerEmptyAsync(pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
         // Check before handing off; RequireIdle also rechecks once the replier holds the typing slot.
@@ -82,6 +122,18 @@ public sealed class LiteDeliver(
             _ => Refused(result.Refusal switch { ReplyRefusal.Asking or ReplyRefusal.Busy => LiteCodes.Busy, ReplyRefusal.ComposerUnverified or ReplyRefusal.Occupied => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
         };
     }
+
+    static LiteDelivery FromLane(DeliveryOfferStatus status) => new(status.State == DeliveryOfferState.Delivered, status.Reason)
+    {
+        Outcome = status.State switch
+        {
+            DeliveryOfferState.Pending => LiteKind.Pending,
+            DeliveryOfferState.Queued => LiteKind.Queued,
+            DeliveryOfferState.Unconfirmed => LiteKind.Unconfirmed,
+            DeliveryOfferState.Delivered => LiteKind.Delivered,
+            _ => LiteKind.Refused,
+        },
+    };
 
     // Any gate allowing is enough (forced-ask OR allowlisted); one that throws allows nothing.
     async Task<bool> AllowedAsync(VerifiedEnvelope envelope, string target)
