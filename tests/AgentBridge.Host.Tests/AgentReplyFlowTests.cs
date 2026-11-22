@@ -348,6 +348,36 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Equal((5, drawn), (enter.Expect![1].Row, enter.Expect[1].Text));
     }
 
+    // Codex review of #3743: the Enter pressed again once Claude took the first as part of the paste is a send
+    // like the first, so a fenced reply (Lite) whose authority is lost meanwhile presses nothing more.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_fenced_Claude_reply_presses_Enter_again_only_while_its_fence_holds_and_holds_the_keys_to_it(bool lost)
+    {
+        console.Rows = ClaudeIdle();
+        var current = true;
+        console.OnInject = plan =>
+        {
+            if (plan.Sends is [{ Text: "", Enter: true }]) { Fixture.Append(claude, ClaudePrompt("a long reply")); return; }
+            console.Rows = [.. ClaudeIdle().Take(5), "> a long reply", .. ClaudeIdle().Skip(6)];
+            if (lost) { current = false; } // messaging killed, grant revoked or account changed while the paste was taken in
+        };
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "a long reply", StillCurrent = () => current };
+
+        var result = await (replier ??= Replier()).ReplyAsync(request, Peer);
+
+        if (lost)
+        {
+            Assert.Single(console.Plans);
+            Assert.NotEqual(AnswerOutcome.Delivered, result.Outcome);
+            return;
+        }
+        Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
+        Assert.Equal(2, console.Plans.Count);
+        Assert.NotNull(console.Plans[1].Plan.Proceed);
+    }
+
     [Fact]
     public async Task No_Enter_is_pressed_again_once_a_prompt_has_taken_the_input_box_and_the_reply_is_unconfirmed()
     {

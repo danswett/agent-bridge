@@ -704,6 +704,14 @@ public sealed partial class ReplyService : ISessionReplier
         // The process as it was when the sender was checked: a fenced send types only into this incarnation.
         var process = stillCurrent is null ? null : source.ProcessOf(session.Id);
         const string changedReason = "the send is no longer current, so nothing was typed";
+        // The send's authority as it was when checked: the injector asks again just before the first key, and
+        // SubmitAsync before each Enter pressed again (the Copilot path's fence, for Claude).
+        string? Fence() => probe.Active() is not null || LaunchHeld?.Invoke(session.Id) is not null || guard.Refuse(pid) is not null
+            || source.Get(session.Id) is not { Agent: AgentKind.Claude, Question: null } live
+            || requireIdle && live.Status != SessionStatus.Idle || live.Status is not (SessionStatus.Idle or SessionStatus.Working)
+            || live.ProcessId != pid || process is not { StartedAt: not null } || source.ProcessOf(session.Id) != process
+            || !processes.GetAgentProcesses(agent).Any(p => p.Id == pid && p.StartedAt == process.StartedAt) || stillCurrent!() == false
+            ? changedReason : null;
 
         IReadOnlyList<string> staged = [];
         if (claim is not null)
@@ -769,13 +777,6 @@ public sealed partial class ReplyService : ISessionReplier
             // prompt typed now: reading from here, it does not parse.
             from = Jsonl.Length(transcript);
             result = new InjectionResult(InjectionStatus.Typed, "ok");
-            // Checked again by the injector just before its first key, as the Copilot path does.
-            string? Fence() => probe.Active() is not null || LaunchHeld?.Invoke(session.Id) is not null || guard.Refuse(pid) is not null
-                || source.Get(session.Id) is not { Agent: AgentKind.Claude, Question: null } live
-                || requireIdle && live.Status != SessionStatus.Idle || live.Status is not (SessionStatus.Idle or SessionStatus.Working)
-                || live.ProcessId != pid || process is not { StartedAt: not null } || source.ProcessOf(session.Id) != process
-                || !processes.GetAgentProcesses(agent).Any(p => p.Id == pid && p.StartedAt == process.StartedAt) || stillCurrent!() == false
-                ? changedReason : null;
             foreach (var send in plan.Sends)
             {
                 if (send.After is { } after)
@@ -822,7 +823,7 @@ public sealed partial class ReplyService : ISessionReplier
                 return new Attempt(Unconfirmed($"{DeliveryReasons.Of(result.Detail)}; part of the reply may have reached the session"), null, KeysWent: true);
         }
 
-        await SubmitAsync(session.Id, agent, pid, transcript, from, plan, timeline);
+        await SubmitAsync(session.Id, agent, pid, transcript, from, plan, timeline, stillCurrent is null ? null : Fence);
         return Typing(agent, () => FirstOf(Prompts(agent, transcript, from).Prompts, plan.Says, p => p.At),
             seen => ConfirmAgentAsync(agent, transcript, from, plan, timeline, seen));
 
@@ -849,7 +850,7 @@ public sealed partial class ReplyService : ISessionReplier
     // still empty, or showing only the start of the reply, may not have taken all of it in yet
     // (Codex takes keys in slowly while it streams, seen live), so it is looked at again rather
     // than given up on.
-    async Task SubmitAsync(string sessionId, AgentKind agent, int pid, string transcript, long from, AgentReply plan, DeliveryTimeline timeline)
+    async Task SubmitAsync(string sessionId, AgentKind agent, int pid, string transcript, long from, AgentReply plan, DeliveryTimeline timeline, Func<string?>? fence = null)
     {
         var pressed = 0;
         var began = options.Time.GetTimestamp();
@@ -875,6 +876,8 @@ public sealed partial class ReplyService : ISessionReplier
                 // An Enter goes wherever the session's input is now: never while agent-ha-bridge
                 // runs, and only into the box holding this reply, so never into a prompt.
                 if (probe.Active() is not null) { return; }
+                // A fenced send (Lite) whose authority is gone presses nothing more: killed, revoked or another account.
+                if (fence?.Invoke() is { } lost) { log($"not pressing Enter again in {Short(sessionId)}: {lost}"); return; }
                 if (Prompts(agent, transcript, from).Prompts.Any(plan.Says)) { return; }
                 if (!processes.GetAgentProcesses(agent).Any(p => p.Id == pid) || guard.Refuse(pid) is not null) { return; }
                 var screen = await injector.ReadScreenAsync(pid);
@@ -892,7 +895,7 @@ public sealed partial class ReplyService : ISessionReplier
                 }
                 var box = Find(agent, screen.Rows!)!;
                 InjectionResult enter;
-                try { enter = await injector.InjectAsync(pid, new KeyPlan([new KeySend("", true, 0, 0, box.Rows)])); }
+                try { enter = await injector.InjectAsync(pid, new KeyPlan([new KeySend("", true, 0, 0, box.Rows)]) { Proceed = fence }); }
                 finally { timeline.InjectEnd(); }
                 pressed++;
                 log($"pressed Enter again in {Short(sessionId)} (pid {pid}): the reply was still in its input box -> {enter.Status} {enter.Detail}");
