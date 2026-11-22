@@ -97,15 +97,28 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
 
     public void Reasoning(string text, DateTimeOffset at) => Add(Blank(HistoryPartKind.Reasoning, at) with { Text = text });
 
-    // A reply or reasoning an agent writes in two streams (Codex's events and its response items,
-    // and the final reply again at the turn's end): the same text already in the turn is not
-    // added twice.
-    public void Said(HistoryPartKind kind, string text, DateTimeOffset at)
+    // Explicit Codex ids update only their own part. Text dedup remains solely the legacy fallback.
+    public void Said(HistoryPartKind kind, string text, DateTimeOffset at, CodexReplyKey reply = default)
     {
+        if (Truncated) { _replyIds.Reset(false); }
+        var part = kind == HistoryPartKind.Response ? _replyIds.Match(reply, _record, _index) : null;
+        if (part is not null)
+        {
+            _said.Add((kind, text));
+            if (_replyParts.TryGetValue(part, out var i)) { _parts[i] = _parts[i] with { Text = text }; }
+            else
+            {
+                Add(Blank(kind, at) with { Text = text });
+                _replyParts[part] = _parts.Count - 1;
+            }
+            return;
+        }
         if (!_said.Add((kind, text))) { return; }
         Add(Blank(kind, at) with { Text = text });
     }
 
+    readonly CodexReplyIds _replyIds = new(known: true);
+    readonly Dictionary<string, int> _replyParts = new(StringComparer.Ordinal);
     readonly HashSet<(HistoryPartKind, string)> _said = [];
 
     public void ToolStarted(string callId, string name, string? summary, DateTimeOffset at)
