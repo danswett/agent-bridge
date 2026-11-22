@@ -95,7 +95,7 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var folderLock = Lock(folder, timing: LockTiming);
-                if (entry.Gate is not null) { Bootstrap(folder, nativeLaunchOrStop: entry.Action is "session.launch" or "session.stop"); }
+                if (entry.Gate is not null) { Bootstrap(folder); }
                 if (entry.Gate is { } metadata)
                 {
                     metadata = metadata with { Sequence = checked(new[] { LastGateSequence(folder, false), LastGateSequence(folder, true),
@@ -112,7 +112,6 @@ public sealed class AgentAuditLog
                 var launch = entry.Action == "session.launch";
                 var anchored = entry.Gate is not null || HasHeads(folder);
                 var expected = ReadHead(folder, launch);
-                var extendLegacy = entry.Gate is null && expected is { Adopted: true, AdoptedGatedRows: 0 } && AdoptionProofMatches(folder, launch, expected, out var adoptedCount) && adoptedCount == 0;
                 string[] faults = anchored ? new[] { Continuity(profile, false, log), Continuity(profile, true, log) } : [];
                 var fault = faults.Contains("coverage-break") ? "coverage-break" : faults.FirstOrDefault(f => f != "none") ?? "none";
                 var file = Path.Combine(folder, FileFor(now, launch));
@@ -145,7 +144,7 @@ public sealed class AgentAuditLog
                 }
                 if (OperatingSystem.IsWindows()) { NarrowFileWindows(file); }
                 else { File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
-                if (anchored) { WriteHead(folder, launch, expected, line.Gate?.Sequence ?? expected?.Sequence ?? 0, fault, extendLegacy: extendLegacy); }
+                if (anchored) { WriteHead(folder, launch, expected, line.Gate?.Sequence ?? expected?.Sequence ?? 0, fault); }
                 if (failing) { failing = false; log("agent audit log is writing again"); }
                 // The line is already written: a retention fault is its own problem, not a lost event.
                 try { if (!launch) { Retain(folder, now); retentionFailing = false; } }
@@ -180,7 +179,7 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var held = Lock(folder);
-                Bootstrap(folder, nativeLaunchOrStop: true);
+                Bootstrap(folder);
             }
             return true;
         }
@@ -188,24 +187,9 @@ public sealed class AgentAuditLog
         { log($"agent audit bootstrap refused: {e.GetType().Name}"); return false; }
     }
 
-    void Bootstrap(string folder, bool nativeLaunchOrStop = false)
+    void Bootstrap(string folder)
     {
-        if (HasHeads(folder))
-        {
-            foreach (var launch in new[] { false, true })
-            {
-                if (ReadHead(folder, launch) is not { Adopted: true } head) { continue; }
-                if (head.AdoptedGatedRows is null && head.AdoptedPrefix is null) { continue; }
-                if (nativeLaunchOrStop && head.RetainedThrough > 0 && head.AdoptedPrefix?.Empty != true) { continue; }
-                if (!AdoptionProofMatches(folder, launch, head, out var count))
-                { throw new IOException("adoption proof contradicts audit evidence"); }
-                if (head.AdoptedPrefix?.Empty != true) { continue; }
-                var actual = CaptureHead(folder, launch);
-                SaveHead(folder, launch, head with { AdoptedPrefix =
-                    new(actual.Root, actual.RootSha256, actual.Tail, actual.TailSha256, actual.Length, 0) });
-            }
-            return;
-        }
+        if (HasHeads(folder)) { return; }
         var streams = new[] { false, true }.Where(launch => Files(folder, launch).Any()).ToArray();
         var candidates = new List<(bool Launch, string Fault)>();
         foreach (var launch in streams)
@@ -284,9 +268,7 @@ public sealed class AgentAuditLog
         [property: JsonRequired] string Root, [property: JsonRequired] string RootSha256,
         [property: JsonRequired] string Tail, [property: JsonRequired] string TailSha256,
         [property: JsonRequired] long Length, [property: JsonRequired] long Sequence = 0,
-        [property: JsonRequired] string Fault = "none", long RetainedThrough = 0, string? RetiringRoot = null, bool Adopted = false,
-        long? AdoptedGatedRows = null, AdoptionPrefix? AdoptedPrefix = null);
-    sealed record AdoptionPrefix(string Root, string RootSha256, string Tail, string TailSha256, long Length, long Sequence, bool Empty = false);
+        [property: JsonRequired] string Fault = "none", long RetainedThrough = 0, string? RetiringRoot = null, bool Adopted = false);
     static string HeadFile(string folder, bool launch) => Path.Combine(folder, launch ? "launches.head" : "agents.head");
     internal static bool HasHeads(string folder) => File.Exists(HeadFile(folder, false)) || File.Exists(HeadFile(folder, true));
     static Head? ReadHead(string folder, bool launch)
@@ -301,114 +283,6 @@ public sealed class AgentAuditLog
     }
     internal static long RetainedThrough(string folder) => ReadHead(folder, false)?.RetainedThrough ?? 0;
     internal static bool Adopted(string folder) => ReadHead(folder, false)?.Adopted == true || ReadHead(folder, true)?.Adopted == true;
-    internal static bool LegacyOnlyAdoption(string folder)
-    {
-        foreach (var launch in new[] { false, true })
-        {
-            var head = ReadHead(folder, launch);
-            if (head?.Adopted != true) { continue; }
-            if (!AdoptionProofMatches(folder, launch, head, out var count) || count != 0) { return false; }
-        }
-        return true;
-    }
-    static bool AdoptionProofMatches(string folder, bool launch, Head head, out long count)
-    {
-        count = 0;
-        return head.AdoptedGatedRows is { } expected && head.AdoptedPrefix is { } prefix
-            && TryCountAdoptedRows(folder, launch, prefix, out count) && count == expected;
-    }
-    static bool TryCountAdoptedRows(string folder, bool launch, AdoptionPrefix prefix, out long count)
-    {
-        count = 0;
-        try
-        {
-            if (prefix.Empty)
-            {
-                if (prefix is not { Root: "", RootSha256: "", Tail: "", TailSha256: "", Length: 0, Sequence: 0 }) { return false; }
-                // Empty is a claim about all surviving files, not an alternative to checking them.
-                foreach (var stream in new[] { false, true })
-                {
-                    var head = ReadHead(folder, stream);
-                    if (head is { Sequence: > 0 } or { RetainedThrough: > 0 } or { AdoptedGatedRows: > 0 }
-                        or { AdoptedPrefix.Sequence: > 0 }) { return false; }
-                    if (!Files(folder, stream).Any()) { if (head is not null) { return false; } continue; }
-                    var actual = CaptureHead(folder, stream);
-                    if (!TryCountAdoptedRows(folder, stream,
-                        new(actual.Root, actual.RootSha256, actual.Tail, actual.TailSha256, actual.Length, 0), out var found)
-                        || found != 0) { return false; }
-                }
-                return true;
-            }
-            var surviving = Files(folder, launch).ToArray();
-            var files = surviving.Where(f => StringComparer.Ordinal.Compare(Path.GetFileName(f), prefix.Root) >= 0
-                && StringComparer.Ordinal.Compare(Path.GetFileName(f), prefix.Tail) <= 0).ToArray();
-            if (files.Length == 0 || Path.GetFileName(files[0]) != prefix.Root || Path.GetFileName(files[^1]) != prefix.Tail
-                || prefix.Length <= 0 || prefix.Sequence < 0
-                || files.Any(f => new FileInfo(f).Length == 0) || new FileInfo(files[^1]).Length < prefix.Length
-                || Hash(Encoding.UTF8.GetBytes(File.ReadLines(files[0]).First())) != prefix.RootSha256
-                || !PrefixIntact(files[^1], new(1, prefix.Root, prefix.RootSha256, prefix.Tail, prefix.TailSha256, prefix.Length)))
-            { throw new IOException("adopted audit prefix does not match its snapshot"); }
-            var archive = Path.Combine(folder, "archive", launch ? "launches-legacy-adoption.jsonl" : "agents-legacy-adoption.jsonl");
-            long sequence = 0;
-            string? link = null;
-            var legacy = false; var shortPrefix = false;
-            foreach (var file in (File.Exists(archive) ? new[] { archive }.Concat(surviving) : surviving).Reverse())
-            {
-                using var stream = File.OpenRead(file);
-                if (stream.Length == 0 || EndsWithoutNewline(file)) { throw new IOException("incomplete adoption evidence"); }
-                var end = stream.Length;
-                while (end > 0)
-                {
-                    var start = PreviousNewline(stream, end - 1) + 1;
-                    if (file == files[^1] && start < prefix.Length && end > prefix.Length) { throw new IOException("adoption cutoff splits a row"); }
-                    var before = file == archive || StringComparer.Ordinal.Compare(Path.GetFileName(file), prefix.Tail) < 0
-                        || file == files[^1] && end <= prefix.Length;
-                    var bytes = new byte[checked((int)(end - start))];
-                    stream.Position = start; stream.ReadExactly(bytes); end = start;
-                    using var doc = JsonDocument.Parse(bytes);
-                    var row = doc.RootElement;
-                    if (row.ValueKind != JsonValueKind.Object || !row.TryGetProperty("v", out var version)
-                        || version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var v) || v != 1
-                        || !row.TryGetProperty("previousSha256", out var previous) || previous.ValueKind != JsonValueKind.String
-                        || previous.GetString() is not { Length: 64 } hash || hash.Any(c => !char.IsAsciiHexDigitLower(c))
-                        || link is not null && Hash(bytes[..^1]) != link) { throw new IOException("invalid adoption chain"); }
-                    link = hash;
-                    if (row.EnumerateObject().Any(p => p.Name.Equals("gate", StringComparison.OrdinalIgnoreCase) && p.Name != "gate"))
-                    { throw new IOException("noncanonical gate field"); }
-                    if (row.TryGetProperty("gate", out var metadata))
-                    {
-                        if (metadata.ValueKind != JsonValueKind.Object || !metadata.TryGetProperty("sequence", out var field)
-                            || field.ValueKind != JsonValueKind.Number || !field.TryGetInt64(out var value) || value <= 0)
-                        { throw new IOException("invalid adopted gate sequence"); }
-                        if (before) { count++; sequence = Math.Max(sequence, value); }
-                        legacy = false; shortPrefix = false;
-                    }
-                    else if (row.TryGetProperty("action", out var action))
-                    {
-                        if (action.GetString() is "grant.issue" or "grant.revoke") { throw new IOException("unproven adopted grant history"); }
-                        legacy = true; shortPrefix |= !before;
-                    }
-                }
-            }
-            if (sequence != prefix.Sequence || count == 0 && (!legacy || shortPrefix))
-            { throw new IOException("adoption cutoff is not the maximal legacy run"); }
-            return true;
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or OverflowException)
-        { return false; }
-    }
-    static AdoptionPrefix? RetireAdoptedPrefix(string folder, Head head, string retiring, string next, string nextHash)
-    {
-        var prefix = head.AdoptedPrefix;
-        if (!head.Adopted || prefix is null || prefix.Empty || prefix.Root != retiring) { return prefix; }
-        if (!TryCountAdoptedRows(folder, false, prefix, out var count) || count != head.AdoptedGatedRows) { return null; }
-        // A positive bootstrap count is never cleared, even after its evidence is retired.
-        if (count != 0) { return prefix; }
-        // Keep a file-backed boundary before newer gated rows instead of claiming an empty history.
-        return prefix.Root == prefix.Tail ? new(next, nextHash, next, nextHash,
-                Encoding.UTF8.GetByteCount(File.ReadLines(Path.Combine(folder, next)).First()) + 1L, 0)
-            : prefix with { Root = next, RootSha256 = nextHash };
-    }
     static Head CaptureHead(string folder, bool launch, string? retiringRoot = null)
     {
         var files = Files(folder, launch).Where(f => Path.GetFileName(f) != retiringRoot).ToArray();
@@ -462,20 +336,13 @@ public sealed class AgentAuditLog
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
         { log($"agent audit continuity unavailable: {e.GetType().Name}"); return "audit-incomplete"; }
     }
-    static void WriteHead(string folder, bool launch, Head? previous, long sequence, string fault, bool adopted = false, bool extendLegacy = false)
+    static void WriteHead(string folder, bool launch, Head? previous, long sequence, string fault, bool adopted = false)
     {
         var head = CaptureHead(folder, launch);
         // Advancing the head must not bless a suffix after its original root was lost.
         head = head with { Root = previous?.Root ?? head.Root, RootSha256 = previous?.RootSha256 ?? head.RootSha256,
             Sequence = sequence, Fault = fault, RetainedThrough = previous?.RetainedThrough ?? 0,
-            RetiringRoot = previous?.RetiringRoot, Adopted = previous?.Adopted ?? adopted,
-            AdoptedGatedRows = previous?.AdoptedGatedRows, AdoptedPrefix = previous?.AdoptedPrefix };
-        if ((adopted && previous is null || extendLegacy) && fault == "none")
-        {
-            var prefix = new AdoptionPrefix(head.Root, head.RootSha256, head.Tail, head.TailSha256, head.Length, sequence);
-            if (TryCountAdoptedRows(folder, launch, prefix, out var count) && (!extendLegacy || count == 0))
-            { head = head with { AdoptedPrefix = prefix, AdoptedGatedRows = count }; }
-        }
+            RetiringRoot = previous?.RetiringRoot, Adopted = previous?.Adopted ?? adopted };
         SaveHead(folder, launch, head);
     }
     static void SaveHead(string folder, bool launch, Head head)
@@ -667,24 +534,17 @@ public sealed class AgentAuditLog
             if (day > anchor.AddDays(-KeepDays) && (archive || total <= maxBytes)) { break; }
             var size = info.Length;
             string? destination = null;
-            var legacyProof = expected is { Adopted: true, AdoptedGatedRows: 0, AdoptedPrefix: { } prefix }
-                && (prefix.Root == info.Name && prefix.Tail == info.Name
-                    || expected.RetiringRoot == info.Name && prefix.Root == prefix.Tail
-                        && prefix.Length == Encoding.UTF8.GetByteCount(File.ReadLines(files.First(f => f.Day > day).Info.FullName).First()) + 1L)
-                && LastGateSequence(folder, false, info.FullName) == 0 && AdoptionProofMatches(folder, false, expected, out var adoptedCount) && adoptedCount == 0;
-            if (archive || legacyProof)
+            if (archive)
             {
                 var archiveFolder = PrivateFolder.Ensure(Path.Combine(folder, "archive"), "the audit archive", "nothing is archived");
-                destination = Path.Combine(archiveFolder, legacyProof ? "agents-legacy-adoption.jsonl" : info.Name);
+                destination = Path.Combine(archiveFolder, info.Name);
                 if (Path.Exists(destination)) { throw new IOException("audit archive destination already exists"); }
             }
             if (expected is not null)
             {
                 var next = files.First(f => f.Day > day).Info;
                 var removed = LastGateSequence(folder, false, info.FullName);
-                var nextHash = Hash(Encoding.UTF8.GetBytes(File.ReadLines(next.FullName).First()));
-                expected = expected with { Root = next.Name, RootSha256 = nextHash,
-                    AdoptedPrefix = RetireAdoptedPrefix(folder, expected, info.Name, next.Name, nextHash),
+                expected = expected with { Root = next.Name, RootSha256 = Hash(Encoding.UTF8.GetBytes(File.ReadLines(next.FullName).First())),
                     RetiringRoot = info.Name, RetainedThrough = Math.Max(expected.RetainedThrough, removed), Sequence = Math.Max(expected.Sequence, removed) };
                 // Commit the exact authorized retirement before removing evidence; a crash may leave this one file present.
                 SaveHead(folder, false, expected);

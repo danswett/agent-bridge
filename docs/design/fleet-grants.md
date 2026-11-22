@@ -10,16 +10,12 @@ and no eviction. Every generation requires its matching intact audit intent/term
 an incomplete transaction or replay refuses all use rather than repairing/resetting state.
 Issuance uses full G1 validation against the receiver's required known-options snapshot.
 Retired audit coverage refuses, including when the store is missing; it cannot reset tombstones.
-Legacy-only adoption requires file-backed proof of zero adopted gated rows.
-An empty adoption sentinel is accepted only when the surviving audit files and
-head have no gated or grant history; the head's zero count alone is not proof.
-The cutoff ends the maximal leading v1 non-gated action run and advances only
-during a validated gate-free non-gated Append. Headers alone are not provenance.
-Every later row retains global sequence and issue/revoke checks; arbitrary prefixes prove nothing.
-Legacy retention preserves only the last zero-gated legacy file needed for proof
-in `audit/archive/agents-legacy-adoption.jsonl`. Its intact chain must link to the
-next surviving file's header; a missing/broken archive refuses with AuditIncomplete.
-No migration: missing retired proof refuses grants; only native launch/stop bypass stale non-Empty retired proof. Empty checks stay.
+Adopted audit history fails closed for grants: any adopted stream refuses with AuditIncomplete.
+Bootstrap adopts existing files whenever no head exists, including after an attacker
+deletes a head over rolled-back store and audit files. Heads are never trusted to prove a
+legacy-only cutoff, and nothing else tamper-evident proves one, so no adoption claim is accepted.
+No migration: grants are unshipped and legacy profiles stay refused. Native launch/stop gates
+and the launch preflight are unaffected.
 
 ## Authority and existing boundaries
 

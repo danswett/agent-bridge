@@ -29,74 +29,15 @@ public sealed class GrantStoreTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Legacy_only_adoption_preserves_a_new_grant_across_restart(bool bothStreams)
+    public void Legacy_adoption_refuses_grants_without_migration(bool bothStreams)
     {
-        Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
-        clock.Advance(TimeSpan.FromDays(1));
         Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
         if (bothStreams) { Assert.True(Audit.Append(new("local", "fixture", "person:local", [], "session.launch", "fixture", "started"))); }
         var grant = Grant();
-        var store = Open();
-        Assert.True(store.Issue(grant).Usable);
+        Open().Issue(grant);
         Assert.True(AgentAuditLog.Adopted(Path.Combine(Folder, "audit")));
-        Assert.True(store.TryGetUsable(grant.Id, 1).Usable);
-        Assert.True(Open().TryGetUsable(grant.Id, 1).Usable);
-        Assert.True(Open().Revoke(grant.Id, 1).Usable);
-        Assert.Equal(GrantStoreProblem.Revoked, Open().TryGetUsable(grant.Id, 1).Problem);
-    }
-
-    [Theory]
-    [InlineData("adoptedGatedRows")]
-    [InlineData("adoptedPrefix")]
-    [InlineData("rootSha256")]
-    [InlineData("length")]
-    [InlineData("sequence")]
-    public void Missing_or_mismatched_adoption_proof_refuses_legacy_adoption(string field)
-    {
-        Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
-        var grant = Grant();
-        Assert.True(Open().Issue(grant).Usable);
-        var head = Path.Combine(Folder, "audit", "agents.head");
-        var json = JsonNode.Parse(File.ReadAllText(head))!;
-        if (field is "adoptedGatedRows" or "adoptedPrefix") { json.AsObject().Remove(field); }
-        else if (field == "rootSha256") { json["adoptedPrefix"]![field] = new string('0', 64); }
-        else { json["adoptedPrefix"]![field] = 1; }
-        File.WriteAllText(head, json.ToJsonString());
         Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
-    }
-
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public void Tampering_an_adopted_gated_prefix_count_to_zero_refuses(bool launch, bool empty)
-    {
-        var grant = Grant();
-        Assert.True(Open().Issue(grant).Usable);
-        var auditFolder = Path.Combine(Folder, "audit");
-        var head = Path.Combine(auditFolder, launch ? "launches.head" : "agents.head");
-        var agents = Path.Combine(auditFolder, "agents.head");
-        if (launch)
-        {
-            var op = Guid.NewGuid();
-            var gate = new GateAuditMetadata(1, op, Guid.Empty, 0, "intent", "local", "person-client", op, "none", LaunchBinding: new('a', 64));
-            Assert.True(Audit.Append(new("local", op.ToString(), "person:local", [], "session.launch", op.ToString(), "reserved", Gate: gate)));
-        }
-        var originalAgents = File.ReadAllBytes(agents);
-        File.Delete(agents);
-        if (launch) { File.Delete(head); }
-        Assert.True(Audit.Bootstrap());
-        var json = JsonNode.Parse(File.ReadAllText(head))!;
-        Assert.True(json["adoptedGatedRows"]!.GetValue<long>() > 0);
-        json["adoptedGatedRows"] = 0;
-        if (empty) { json["adoptedPrefix"] = JsonNode.Parse("""{"root":"","rootSha256":"","tail":"","tailSha256":"","length":0,"sequence":0,"empty":true}"""); }
-        File.WriteAllText(head, json.ToJsonString());
-        if (launch)
-        {
-            File.WriteAllBytes(agents, originalAgents);
-        }
-        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
+        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().Issue(Grant()).Problem);
     }
 
     [Fact]
@@ -129,71 +70,9 @@ public sealed class GrantStoreTests : IDisposable
         Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
         clock.Advance(TimeSpan.FromDays(1));
         Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
-        Assert.Equal(!legacy, JsonNode.Parse(File.ReadAllText(head))!["adoptedGatedRows"]!.GetValue<long>() > 0);
         var op = Guid.NewGuid();
         Assert.True(Audit.Append(new("local", op.ToString(), "person:local", [], "session.stop", op.ToString(), "reserved", Gate: new(1, op, Guid.Empty, 0, "intent", "local", "person-client", op, "none"))));
         Assert.True(Audit.Bootstrap());
-        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
-    }
-
-    [Theory]
-    [InlineData(false, "none")]
-    [InlineData(true, "none")]
-    [InlineData(true, "retry")]
-    [InlineData(false, "missing")]
-    [InlineData(false, "broken")]
-    public void Retiring_only_legacy_adopted_files_keeps_a_recent_grant_usable(bool interrupted, string archiveProof)
-    {
-        var now = clock.GetUtcNow().Date.AddHours(23).AddMinutes(30);
-        var legacyClock = new FakeTimeProvider(new DateTimeOffset(now, TimeSpan.Zero).AddDays(-31));
-        var legacyAudit = new AgentAuditLog(Folder, legacyClock);
-        Assert.True(legacyAudit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
-        legacyClock.Advance(TimeSpan.FromDays(1));
-        Assert.True(legacyAudit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
-        var old = Directory.GetFiles(Path.Combine(Folder, "audit"), "agents-*.jsonl");
-        clock.SetUtcNow(new DateTimeOffset(now, TimeSpan.Zero));
-        var grant = Grant();
-        Assert.True(Open().Issue(grant).Usable);
-        clock.Advance(TimeSpan.FromHours(1));
-        var heldFile = archiveProof == "retry" ? old[^1] : old[0];
-        using (var held = interrupted ? File.Open(heldFile, FileMode.Open, FileAccess.Read, FileShare.Read) : null)
-        {
-            Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
-            if (interrupted && OperatingSystem.IsWindows())
-            {
-                Assert.True(File.Exists(heldFile));
-                Assert.NotNull(JsonNode.Parse(File.ReadAllText(Path.Combine(Folder, "audit", "agents.head")))!["retiringRoot"]);
-            }
-            Assert.True(Open().TryGetUsable(grant.Id, 1).Usable);
-        }
-        Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
-        Assert.All(old, file => Assert.False(File.Exists(file)));
-        Assert.Equal(0, AgentAuditLog.RetainedThrough(Path.Combine(Folder, "audit")));
-        var proofFile = Path.Combine(Folder, "audit", "archive", "agents-legacy-adoption.jsonl");
-        Assert.True(File.Exists(proofFile));
-        if (archiveProof is "missing" or "broken")
-        {
-            if (archiveProof == "missing") { File.Delete(proofFile); }
-            else { var bytes = File.ReadAllBytes(proofFile); bytes[^2] ^= 1; File.WriteAllBytes(proofFile, bytes); }
-            Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
-            Assert.False(Audit.Bootstrap());
-            return;
-        }
-        var next = Grant();
-        Assert.True(Open().Issue(next).Usable);
-        Assert.True(Open().TryGetUsable(next.Id, 1).Usable);
-        Assert.True(Open().TryGetUsable(grant.Id, 1).Usable);
-    }
-
-    [Fact]
-    public void Legacy_adoption_refuses_a_store_revision_not_proven_by_its_audit()
-    {
-        Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
-        var grant = Grant();
-        Assert.True(Open().Issue(grant).Usable);
-        var old = File.ReadAllBytes(PathName);
-        Assert.True(Open().Revoke(grant.Id, 1).Usable);
-        File.WriteAllBytes(PathName, old);
         Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
     }
 
@@ -307,7 +186,8 @@ public sealed class GrantStoreTests : IDisposable
         var head = Path.Combine(auditFolder, "agents.head");
         var file = Directory.GetFiles(auditFolder, "agents-*.jsonl").Single();
         var old = new[] { PathName, head, file }.ToDictionary(f => f, File.ReadAllBytes);
-        Assert.True(Open().Revoke(grant.Id, 1).Usable);
+        // A legacy-adopted store refuses even the revoke; the rollback below must refuse either way.
+        Assert.Equal(proof != "short-legacy", Open().Revoke(grant.Id, 1).Usable);
         foreach (var (savedFile, bytes) in old) { File.WriteAllBytes(savedFile, bytes); }
         if (proof == "gate-case")
         {
@@ -339,7 +219,8 @@ public sealed class GrantStoreTests : IDisposable
         File.WriteAllText(head, json.ToJsonString());
         Assert.True(Audit.Verify().Intact);
         Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
-        Assert.False(Audit.Bootstrap());
+        // Grants refuse; the native launch preflight stays available.
+        Assert.True(Audit.Bootstrap());
     }
 
     [Fact]
@@ -352,7 +233,8 @@ public sealed class GrantStoreTests : IDisposable
         var file = Directory.GetFiles(auditFolder, "agents-*.jsonl").Single();
         var honest = JsonNode.Parse(File.ReadAllText(head))!;
         var old = new[] { PathName, file }.ToDictionary(f => f, File.ReadAllBytes);
-        Assert.True(Open().Revoke(grant.Id, 1).Usable);
+        // Fail-closed adoption refuses this revoke; the rollback must refuse whether or not it landed.
+        Open().Revoke(grant.Id, 1);
         foreach (var (saved, bytes) in old) { File.WriteAllBytes(saved, bytes); }
         File.Delete(head);
         Assert.True(Audit.Bootstrap());

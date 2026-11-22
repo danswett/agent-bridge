@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -21,59 +20,6 @@ public sealed class AgentAuditLogTests : IDisposable
 
     static AgentAuditEntry Entry(string action = "send", string outcome = "ok") =>
         new("local", "req-1", "agent:m1/s1", ["agent:m1/s1"], action, "m2/s2", outcome, "fine");
-
-    [Theory]
-    [InlineData(false), InlineData(true)]
-    public void Legacy_adoption_does_not_block_later_non_grant_gated_appends(bool unproven)
-    {
-        var op = Guid.NewGuid(); var gated = new AgentAuditEntry("local", op.ToString(), "person:local", [], "session.stop", op.ToString(), "reserved", Gate: new(1, op, Guid.Empty, 0, "intent", "local", "person-client", op, "none"));
-        Assert.True(Log().Append(Entry())); Assert.True(Log().Append(gated with { Action = "session.launch" }));
-        if (unproven)
-        {
-            var head = Path.Combine(Audit, "agents.head"); var json = JsonNode.Parse(File.ReadAllText(head))!;
-            json.AsObject().Remove("adoptedGatedRows"); json.AsObject().Remove("adoptedPrefix"); File.WriteAllText(head, json.ToJsonString());
-        }
-        else { Assert.True(Log().Append(Entry())); }
-        Assert.True(Log().Append(gated));
-        Assert.Equal(!unproven, AgentAuditLog.LegacyOnlyAdoption(Audit));
-    }
-
-    [Theory]
-    [InlineData(false, "none"), InlineData(true, "none")]
-    [InlineData(false, "gated"), InlineData(true, "gated")]
-    [InlineData(false, "revoke"), InlineData(true, "revoke")]
-    [InlineData(false, "sequence"), InlineData(true, "sequence")]
-    [InlineData(false, "count"), InlineData(true, "count")]
-    [InlineData(false, "missing"), InlineData(true, "missing")]
-    public void Empty_adoption_is_checked_against_files_by_both_read_and_bootstrap(bool launch, string fault)
-    {
-        var action = launch ? "session.launch" : "send";
-        Assert.True(Log().Append(Entry(action)));
-        Assert.True(Log().Bootstrap());
-        var op = Guid.NewGuid();
-        var gate = new GateAuditMetadata(1, op, Guid.Empty, 0, "intent", "local", "person-client", op, "none");
-        var gated = new AgentAuditEntry("local", op.ToString(), "person:local", [], launch ? "session.launch" : "session.stop", op.ToString(), "reserved", Gate: gate);
-        if (fault == "gated")
-        {
-            Assert.True(Log().Append(gated));
-        }
-        if (fault == "revoke") { Assert.True(Log().Append(Entry("grant.revoke"))); }
-        var head = Path.Combine(Audit, launch ? "launches.head" : "agents.head");
-        var json = JsonNode.Parse(File.ReadAllText(head))!;
-        json["adoptedGatedRows"] = fault == "count" ? 1 : 0;
-        json["adoptedPrefix"] = JsonNode.Parse("""{"root":"","rootSha256":"","tail":"","tailSha256":"","length":0,"sequence":0,"empty":true}""");
-        if (fault is "sequence" or "gated") { json["sequence"] = fault == "sequence" ? 1 : 0; }
-        File.WriteAllText(head, json.ToJsonString());
-        if (fault == "missing") { File.Delete(Directory.GetFiles(Audit, $"{(launch ? "launches" : "agents")}-*.jsonl").Single()); }
-        Assert.Equal(fault == "none", AgentAuditLog.LegacyOnlyAdoption(Audit));
-        Assert.Equal(fault == "none", Log().Bootstrap());
-        if (fault == "none")
-        {
-            Assert.True(Log().Append(gated));
-            Assert.True(AgentAuditLog.LegacyOnlyAdoption(Audit));
-            Assert.True(Log().Bootstrap());
-        }
-    }
 
     [Fact]
     public void A_second_writer_is_refused_while_the_folder_lock_is_held_and_can_retry_after_release()
